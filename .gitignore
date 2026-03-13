@@ -1,0 +1,34 @@
+# ── Database (contains client data — never commit) ──
+*.db
+*.db-shm
+*.db-wal
+
+# ── Environment & secrets ──
+.env
+.env.*
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ── Node ──
+node_modules/
+package-lock.json
+
+# ── Uploads (user documents — never commit) ──
+arie-backend/uploads/
+
+# ── OS files ──
+.DS_Store
+Thumbs.db
+.fuse_hidden*
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
