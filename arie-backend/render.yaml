@@ -1,0 +1,39 @@
+# Render.com — Blueprint spec for Onboarda
+services:
+  - type: web
+    name: onboarda-api
+    runtime: python
+    plan: starter  # starter plan supports persistent disk
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 server.py
+    healthCheckPath: /api/health
+    # Persistent disk for SQLite database (survives deploys)
+    disk:
+      name: onboarda-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DB_PATH
+        value: /data/onboarda.db
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      - key: ALLOWED_ORIGIN
+        sync: false  # Set to your frontend domain
+      - key: OPENSANCTIONS_API_KEY
+        sync: false
+      - key: OPENCORPORATES_API_KEY
+        sync: false
+      - key: SUMSUB_APP_TOKEN
+        sync: false
+      - key: SUMSUB_SECRET_KEY
+        sync: false
+      - key: SUMSUB_WEBHOOK_SECRET
+        sync: false
+      - key: ADMIN_INITIAL_PASSWORD
+        sync: false  # Set once for first deploy, then remove
