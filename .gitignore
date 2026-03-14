@@ -32,3 +32,9 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# ── Temp files ──
+~$*
+*.b64
+transfer.html
+arie-backend/=2.0.0

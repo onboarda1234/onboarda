@@ -297,6 +297,10 @@ a { color:var(--brand); text-decoration:none; }
 .check-type-badge.expiry { background:rgba(239,68,68,0.08); color:var(--red); }
 .check-type-badge.quality { background:rgba(37,99,235,0.08); color:var(--blue); }
 .check-type-badge.name { background:rgba(124,58,237,0.08); color:#7c3aed; }
+
+/* ── Severity Color Variants ── */
+.badge.critical { background:rgba(220,38,38,0.12); color:var(--red); }
+.badge.low { background:var(--green-bg); color:var(--green); }
 .check-type-badge.content { background:rgba(34,197,94,0.08); color:var(--green); }
 .check-type-badge.age { background:rgba(245,158,11,0.08); color:var(--amber); }
 .threshold-row { display:flex; align-items:center; gap:16px; padding:10px 0; }
@@ -349,6 +353,53 @@ a { color:var(--brand); text-decoration:none; }
 body.role-admin .role-admin-only { display:initial; }
 body.role-admin .role-admin-only-flex { display:flex; }
 body.role-admin .role-admin-only-block { display:block; }
+
+/* ── AI Chat Sidebar ── */
+.ai-chat-sidebar { position:fixed; top:0; right:-400px; width:400px; height:100vh; background:white; box-shadow:-4px 0 24px rgba(0,0,0,0.12); z-index:1000; transition:right 0.3s ease; display:flex; flex-direction:column; border-left:1px solid var(--border1); }
+.ai-chat-sidebar.open { right:0; }
+.ai-chat-header { padding:16px 18px; border-bottom:1px solid var(--border1); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
+.ai-chat-header h3 { font-size:15px; font-weight:700; margin:0; }
+.ai-chat-header-close { background:none; border:none; font-size:20px; cursor:pointer; color:var(--text3); padding:4px; }
+.ai-chat-messages { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
+.ai-message { display:flex; gap:8px; margin-bottom:8px; }
+.ai-message.user { justify-content:flex-end; }
+.ai-message.ai { justify-content:flex-start; }
+.ai-message-bubble { max-width:85%; padding:10px 14px; border-radius:12px; font-size:13px; line-height:1.4; }
+.ai-message.user .ai-message-bubble { background:#2B2F8F; color:white; border-radius:12px 0 12px 12px; }
+.ai-message.ai .ai-message-bubble { background:var(--surface2); color:var(--text1); border-radius:0 12px 12px 12px; }
+.ai-chat-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:12px 16px; border-bottom:1px solid var(--border1); flex-shrink:0; }
+.ai-quick-btn { padding:8px 10px; font-size:12px; border:1px solid var(--border1); background:white; border-radius:6px; cursor:pointer; transition:all 0.15s; }
+.ai-quick-btn:hover { border-color:var(--brand); color:var(--brand); }
+.ai-chat-input-box { padding:12px 16px; display:flex; gap:8px; flex-shrink:0; }
+.ai-chat-input { flex:1; padding:8px 12px; border:1px solid var(--border1); border-radius:6px; font-size:13px; outline:none; }
+.ai-chat-input:focus { border-color:var(--brand); }
+.ai-chat-send { padding:8px 14px; background:var(--brand); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:600; transition:all 0.15s; }
+.ai-chat-send:hover { background:var(--brand-light); }
+.ai-chat-toggle { position:fixed; bottom:24px; right:24px; width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg,#2B2F8F,#4F46E5); color:white; font-size:24px; border:none; cursor:pointer; z-index:1001; box-shadow:0 4px 16px rgba(43,47,143,0.4); display:flex; align-items:center; justify-content:center; transition:all 0.2s; }
+.ai-chat-toggle:hover { transform:scale(1.1); }
+
+/* ── Kanban Board ── */
+.kanban-board { display:flex; gap:16px; padding:16px; overflow-x:auto; min-height:calc(100vh - 180px); }
+.kanban-column { flex:0 0 280px; background:var(--surface2); border-radius:12px; padding:12px; }
+.kanban-column-header { font-weight:700; font-size:14px; padding:8px 12px; border-radius:8px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; color:white; }
+.kanban-column-header.green { background:var(--green); }
+.kanban-column-header.amber { background:var(--amber); }
+.kanban-column-header.blue { background:var(--blue); }
+.kanban-column-header.red { background:var(--red); }
+.kanban-card { background:white; border-radius:10px; padding:14px; margin-bottom:10px; border:1px solid rgba(0,0,0,0.06); box-shadow:0 2px 8px rgba(0,0,0,0.04); cursor:grab; transition:all 0.2s; }
+.kanban-card:hover { box-shadow:0 4px 16px rgba(0,0,0,0.08); transform:translateY(-2px); }
+.kanban-card-company { font-weight:700; font-size:13px; margin-bottom:6px; }
+.kanban-card-id { font-size:11px; color:var(--text3); margin-bottom:8px; }
+.kanban-card-risk { display:inline-flex; padding:3px 8px; border-radius:6px; font-size:10px; font-weight:600; margin-bottom:8px; }
+.kanban-card-risk.low { background:var(--green-bg); color:var(--green); }
+.kanban-card-risk.medium { background:var(--blue-bg); color:var(--blue); }
+.kanban-card-risk.high { background:var(--amber-bg); color:var(--amber); }
+.kanban-card-risk.vhigh { background:var(--red-bg); color:var(--red); }
+.kanban-card-meta { font-size:11px; color:var(--text3); margin-bottom:8px; display:flex; flex-direction:column; gap:2px; }
+.kanban-card-officer { font-size:11px; margin-bottom:8px; }
+.kanban-card-actions { display:flex; gap:6px; }
+.kanban-card-actions button { padding:4px 8px; font-size:11px; border:1px solid var(--border2); background:white; border-radius:4px; cursor:pointer; transition:all 0.15s; }
+.kanban-card-actions button:hover { border-color:var(--brand); color:var(--brand); }
 </style>
 </head>
 <body>
@@ -367,6 +418,7 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="snav-item" onclick="showView('cases',this)"><span class="snav-icon">📁</span> Case Management</div>
     <div class="snav-section">Compliance</div>
     <div class="snav-item" onclick="showView('screening',this)"><span class="snav-icon">🔍</span> Screening Queue</div>
+    <div class="snav-item" onclick="showView('monitoring',this)"><span class="snav-icon">📊</span> Ongoing Monitoring</div>
     <div class="snav-item" onclick="showView('edd',this)"><span class="snav-icon">⚠️</span> EDD Pipeline</div>
     <div class="snav-item" onclick="showView('reports',this)"><span class="snav-icon">📈</span> Reports</div>
     <div class="snav-section">Administration</div>
@@ -496,6 +548,28 @@ body.role-admin .role-admin-only-block { display:block; }
       <tbody id="dashboard-recent-body"></tbody>
     </table>
   </div>
+
+  <!-- Ongoing Monitoring Alerts -->
+  <div class="stats-grid" style="margin-top:24px;">
+    <div class="stat-card">
+      <div class="stat-card-label">Files Due for Review</div>
+      <div class="stat-card-value" style="color:var(--amber);">12</div>
+      <div class="stat-card-change">Next review cycle in 8 days</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-label">Documents Expiring</div>
+      <div class="stat-card-value" style="color:var(--red);">5</div>
+      <div class="stat-card-change">Action required</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-card-label">Active Monitoring Alerts</div>
+      <div class="stat-card-value" style="color:#7c3aed;">3</div>
+      <div class="stat-card-change">2 PEP status changes, 1 adverse media</div>
+    </div>
+    <div class="stat-card">
+      <button class="btn btn-primary" style="width:100%;margin-top:20px;" onclick="showView('monitoring',document.querySelectorAll('.snav-item')[5])">View Ongoing Monitoring →</button>
+    </div>
+  </div>
 </div>
 
 <!-- ═══════════════ KPI DASHBOARD VIEW ═══════════════ -->
@@ -540,6 +614,10 @@ body.role-admin .role-admin-only-block { display:block; }
     </select>
     <select class="form-select" style="width:auto;" id="filter-status" onchange="filterApplications()">
       <option value="">All Statuses</option>
+      <option value="Pre-Screening Submitted">Pre-Screening Submitted</option>
+      <option value="Pricing Review">Pricing Review</option>
+      <option value="KYC & Documents">KYC & Documents</option>
+      <option value="Compliance Review">Compliance Review</option>
       <option value="Pending Review">Pending Review</option>
       <option value="In Review">In Review</option>
       <option value="EDD Required">EDD Required</option>
@@ -628,6 +706,7 @@ body.role-admin .role-admin-only-block { display:block; }
           <button class="btn btn-success" onclick="approveApplication()" id="btn-approve">✅ Approve Application</button>
           <button class="btn btn-danger" onclick="rejectApplication()" id="btn-reject">❌ Reject Application</button>
           <button class="btn btn-warning" onclick="requestMoreInfo()" id="btn-rmi">📋 Request More Info</button>
+          <button class="btn btn-outline" onclick="openOverrideModal()" id="btn-override" style="background:rgba(124,58,237,0.1);border-color:rgba(124,58,237,0.3);color:#7c3aed;">🔄 Override AI Recommendation</button>
           <button class="btn btn-outline" onclick="reassignCase()">👤 Reassign Case</button>
           <button class="btn btn-outline" onclick="escalateCase()">⬆️ Escalate to Senior CO</button>
         </div>
@@ -697,6 +776,103 @@ body.role-admin .role-admin-only-block { display:block; }
       <thead><tr><th>Reference</th><th>Company</th><th>Risk Score</th><th>PEP</th><th>EDD Stage</th><th>Senior CO</th><th>Days Open</th><th>Actions</th></tr></thead>
       <tbody id="edd-body"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- ═══════════════ ONGOING MONITORING ═══════════════ -->
+<div class="view" id="view-monitoring">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;">
+    <div>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Ongoing Client Monitoring</h3>
+      <p style="font-size:13px;color:var(--text3);">Track periodic reviews, document expiry, risk drift, and regulatory impact.</p>
+    </div>
+  </div>
+
+  <!-- Tabs for monitoring sections -->
+  <div class="tab-bar" style="margin-bottom:20px;">
+    <div class="tab active" onclick="switchMonitoringTab('alerts',this)">Monitoring Alerts</div>
+    <div class="tab" onclick="switchMonitoringTab('reviews',this)">Periodic Reviews</div>
+    <div class="tab" onclick="switchMonitoringTab('agents',this)">Monitoring Agents</div>
+  </div>
+
+  <!-- Alerts Tab -->
+  <div id="monitoring-alerts-tab">
+    <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px;">
+      <div class="stat-card"><div class="stat-card-label">Active Monitoring</div><div class="stat-card-value" style="color:var(--green);">156</div></div>
+      <div class="stat-card"><div class="stat-card-label">Open Alerts</div><div class="stat-card-value" style="color:var(--amber);">12</div></div>
+      <div class="stat-card"><div class="stat-card-label">Critical</div><div class="stat-card-value" style="color:var(--red);">2</div></div>
+      <div class="stat-card"><div class="stat-card-label">Reviews Due</div><div class="stat-card-value" style="color:var(--blue);">8</div></div>
+    </div>
+
+    <div style="display:flex;gap:10px;margin-bottom:16px;">
+      <select class="form-select" style="width:auto;" id="alert-severity-filter" onchange="renderMonitoringAlerts()">
+        <option value="">All Severities</option>
+        <option value="Critical">Critical</option>
+        <option value="High">High</option>
+        <option value="Medium">Medium</option>
+        <option value="Low">Low</option>
+      </select>
+      <select class="form-select" style="width:auto;" id="alert-type-filter" onchange="renderMonitoringAlerts()">
+        <option value="">All Alert Types</option>
+        <option value="Sanctions Match">Sanctions Match</option>
+        <option value="PEP Status Change">PEP Status Change</option>
+        <option value="Adverse Media">Adverse Media</option>
+        <option value="Registry Change">Registry Change</option>
+        <option value="Risk Drift">Risk Drift</option>
+        <option value="Regulatory Impact">Regulatory Impact</option>
+      </select>
+      <select class="form-select" style="width:auto;" id="alert-status-filter" onchange="renderMonitoringAlerts()">
+        <option value="">All Statuses</option>
+        <option value="Open">Open</option>
+        <option value="Reviewed">Reviewed</option>
+        <option value="Dismissed">Dismissed</option>
+        <option value="Escalated">Escalated</option>
+      </select>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table class="data-table">
+        <thead>
+          <tr><th>Date</th><th>Client</th><th>Alert Type</th><th>Severity</th><th>Detected By</th><th>Status</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="monitoring-alerts-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Reviews Tab -->
+  <div id="monitoring-reviews-tab" style="display:none;">
+    <div style="display:flex;gap:10px;margin-bottom:16px;">
+      <select class="form-select" style="width:auto;" id="review-status-filter" onchange="renderPeriodicReviews()">
+        <option value="">All Statuses</option>
+        <option value="Overdue">Overdue</option>
+        <option value="Due Soon">Due Soon</option>
+        <option value="Upcoming">Upcoming</option>
+      </select>
+      <select class="form-select" style="width:auto;" id="review-risk-filter" onchange="renderPeriodicReviews()">
+        <option value="">All Risk Levels</option>
+        <option value="Low">Low</option>
+        <option value="Medium">Medium</option>
+        <option value="High">High</option>
+        <option value="Very High">Very High</option>
+      </select>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table class="data-table">
+        <thead>
+          <tr><th>Client</th><th>Risk Level</th><th>Last Review</th><th>Next Review Due</th><th>Trigger</th><th>Status</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="periodic-reviews-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Agents Tab -->
+  <div id="monitoring-agents-tab" style="display:none;">
+    <div class="stats-grid" style="grid-template-columns:repeat(1,1fr);max-width:600px;">
+      <div id="agents-status-list"></div>
+    </div>
   </div>
 </div>
 
@@ -975,14 +1151,91 @@ body.role-admin .role-admin-only-block { display:block; }
   </div>
 </div>
 
+<!-- ═══════════════ DECISION REASON MODAL ═══════════════ -->
+<div class="modal-overlay" id="modal-decision-reason">
+  <div class="modal">
+    <div class="modal-header"><h3>Record Decision Reason</h3><button class="modal-close" onclick="closeModal('modal-decision-reason')">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-group"><div class="form-label">Decision</div><div style="padding:10px 12px;background:var(--brand-dim);border-radius:var(--radius-sm);font-weight:600;color:var(--text1);" id="decision-type-display">Approve</div></div>
+      <div class="form-group"><div class="form-label">Reason (Required)</div><textarea class="form-input" rows="4" id="decision-reason" placeholder="Explain your decision and key factors considered..." style="resize:vertical;"></textarea></div>
+      <div class="form-group"><div class="form-label">Additional Notes (Optional)</div><textarea class="form-input" rows="3" id="decision-notes" placeholder="Any additional information..." style="resize:vertical;"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-decision-reason')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmDecision()">Confirm Decision</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ OVERRIDE RECOMMENDATION MODAL ═══════════════ -->
+<div class="modal-overlay" id="modal-override">
+  <div class="modal">
+    <div class="modal-header"><h3>Override AI Recommendation</h3><button class="modal-close" onclick="closeModal('modal-override')">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-group"><div class="form-label">Current AI Recommendation</div><div style="padding:10px 12px;background:var(--brand-dim);border-radius:var(--radius-sm);font-weight:600;color:var(--text1);" id="current-recommendation">Standard Due Diligence</div></div>
+      <div class="form-group"><div class="form-label">Your Decision</div>
+        <select class="form-select" id="override-decision">
+          <option value="Approve">Approve</option>
+          <option value="Enhanced Due Diligence">Enhanced Due Diligence (EDD)</option>
+          <option value="Reject">Reject</option>
+        </select>
+      </div>
+      <div class="form-group"><div class="form-label">Override Reason (Required)</div><textarea class="form-input" rows="4" id="override-reason" placeholder="Explain why you are overriding the AI recommendation..." style="resize:vertical;"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-override')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmOverride()">Submit Override</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ CLIENT NOTIFICATION MODAL ═══════════════ -->
+<div class="modal-overlay" id="modal-client-notification">
+  <div class="modal" style="width:600px;">
+    <div class="modal-header"><h3>Send Client Notification</h3><button class="modal-close" onclick="closeModal('modal-client-notification')">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-group"><div class="form-label">Email Template</div><textarea class="form-input" rows="8" id="notification-message" placeholder="Email message..." style="resize:vertical;font-family:monospace;font-size:12px;"></textarea></div>
+      <div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border1);border-radius:var(--radius-sm);font-size:11px;color:var(--text2);margin-bottom:12px;">
+        <strong>Note:</strong> You can edit the message above before sending. The notification will be logged in the audit trail.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-client-notification')">Cancel</button>
+      <button class="btn btn-primary" onclick="sendClientNotification()">Send Notification</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div class="toast" id="toast"></div>
+
+<!-- AI Chat Sidebar -->
+<div class="ai-chat-sidebar" id="ai-chat-sidebar">
+  <div class="ai-chat-header">
+    <h3>AI Assistant</h3>
+    <button class="ai-chat-header-close" onclick="toggleAIChat()">✕</button>
+  </div>
+  <div class="ai-chat-messages" id="ai-chat-messages"></div>
+  <div class="ai-chat-actions">
+    <button class="ai-quick-btn" onclick="sendQuickQuestion('Review checklist')">Review checklist</button>
+    <button class="ai-quick-btn" onclick="sendQuickQuestion('Risk assessment guide')">Risk assessment guide</button>
+    <button class="ai-quick-btn" onclick="sendQuickQuestion('Agent status')">Agent status</button>
+    <button class="ai-quick-btn" onclick="sendQuickQuestion('Regulatory updates')">Regulatory updates</button>
+  </div>
+  <div class="ai-chat-input-box">
+    <input class="ai-chat-input" type="text" id="ai-chat-input" placeholder="Ask about compliance..." onkeypress="if(event.key==='Enter'){sendAIMessage();}" />
+    <button class="ai-chat-send" onclick="sendAIMessage()">Send</button>
+  </div>
+</div>
+
+<!-- AI Chat Toggle Button -->
+<button class="ai-chat-toggle" onclick="toggleAIChat()">🤖</button>
 
 <script>
 // ═══════════════════════════════════════════════════════════
 // API INTEGRATION LAYER
 // ═══════════════════════════════════════════════════════════
-const BO_API_BASE = (window.location.port === '8080' ? '' : 'http://localhost:8080') + '/api';
+const BO_API_BASE = '/api';
 var BO_AUTH_TOKEN = localStorage.getItem('arie_bo_token') || '';
 var BO_AUTH_USER = JSON.parse(localStorage.getItem('arie_bo_user') || 'null');
 
@@ -1125,7 +1378,9 @@ async function loadFromAPI() {
 }
 
 function formatStatus(s) {
-  var map = { draft:'Draft', submitted:'Submitted', pending_review:'Pending Review', in_review:'In Review',
+  var map = { draft:'Draft', prescreening_submitted:'Pre-Screening Submitted', pricing_review:'Pricing Review',
+              pricing_accepted:'Pricing Accepted', kyc_documents:'KYC & Documents', kyc_submitted:'KYC Submitted',
+              compliance_review:'Compliance Review', submitted:'Submitted', pending_review:'Pending Review', in_review:'In Review',
               edd_required:'EDD Required', approved:'Approved', rejected:'Rejected', rmi_sent:'Info Requested', withdrawn:'Withdrawn' };
   return map[s] || s || 'Unknown';
 }
@@ -1165,6 +1420,39 @@ var AUDIT_LOG = [
   { ts:'2026-03-09 09:00', user:'Marie Dubois', role:'CO', action:'Login', target:'System', detail:'Logged in', ip:'196.192.44.22' }
 ];
 
+// ═══════════════════════════════════════════════════════════
+// MONITORING DATA
+// ═══════════════════════════════════════════════════════════
+var MONITORING_ALERTS = [
+  { date:'2026-03-12', client:'Africom Remittances SARL', type:'Sanctions Match', severity:'Critical', agent:'Sanctions/PEP Monitoring Agent', status:'Open', detail:'Client match detected in updated OFAC sanctions list (94.2% confidence)', source:'OFAC SDN List (Updated 2026-03-11)' },
+  { date:'2026-03-11', client:'GoldBridge Trading FZE', type:'Adverse Media', severity:'High', agent:'Adverse Media Monitoring Agent', status:'Open', detail:'Negative news article published: "Investigation into precious metals trading compliance"', source:'Reuters Finance' },
+  { date:'2026-03-11', client:'TechPay Global Ltd', type:'Risk Drift', severity:'Medium', agent:'Risk Drift Detection Agent', status:'Reviewed', detail:'Risk profile changed: new subsidiary incorporated in high-risk jurisdiction', source:'Registry Monitoring' },
+  { date:'2026-03-10', client:'Sahara Construction SARL', type:'PEP Status Change', severity:'High', agent:'Sanctions/PEP Monitoring Agent', status:'Open', detail:'UBO Hassan Ouazzani identified as PEP in updated database', source:'World-Check PEP Database' },
+  { date:'2026-03-10', client:'MedServe Health Ltd', type:'Registry Change', severity:'Low', agent:'Registry Monitoring Agent', status:'Dismissed', detail:'Directors registration updated — no material changes', source:'Mauritius Business Registry' },
+  { date:'2026-03-09', client:'Pacific Logistics Co', type:'Regulatory Impact', severity:'Medium', agent:'Regulatory Impact Agent', status:'Reviewed', detail:'New FATF guidance on supply chain transparency affects this sector', source:'FATF News' },
+  { date:'2026-03-08', client:'Nordic Payments AB', type:'Adverse Media', severity:'Low', agent:'Adverse Media Monitoring Agent', status:'Dismissed', detail:'Routine compliance article mentioning company — no adverse content', source:'LinkedIn News' },
+  { date:'2026-03-07', client:'GoldBridge Trading FZE', type:'Risk Drift', severity:'High', agent:'Risk Drift Detection Agent', status:'Escalated', detail:'Multiple new high-risk business relationships identified', source:'Enhanced Monitoring Analysis' }
+];
+
+var PERIODIC_REVIEWS = [
+  { client:'TechPay Global Ltd', ref:'ARF-2026-100421', risk:'Low', lastReview:'2025-06-14', nextDue:'2026-06-14', trigger:'3-Year Review', daysUntilDue:92, status:'Upcoming' },
+  { client:'Africom Remittances SARL', ref:'ARF-2026-100422', risk:'High', lastReview:'2025-09-20', nextDue:'2026-09-20', trigger:'1-Year Review', daysUntilDue:192, status:'Upcoming' },
+  { client:'Nordic Payments AB', ref:'ARF-2026-100423', risk:'Low', lastReview:'2025-12-01', nextDue:'2027-12-01', trigger:'3-Year Review', daysUntilDue:628, status:'Upcoming' },
+  { client:'GoldBridge Trading FZE', ref:'ARF-2026-100424', risk:'Very High', lastReview:'2025-03-14', nextDue:'2026-03-14', trigger:'1-Year Review', daysUntilDue:0, status:'Overdue' },
+  { client:'MedServe Health Ltd', ref:'ARF-2026-100425', risk:'Medium', lastReview:'2025-10-15', nextDue:'2026-10-15', trigger:'2-Year Review', daysUntilDue:217, status:'Upcoming' },
+  { client:'Pacific Logistics Co', ref:'ARF-2026-100427', risk:'Medium', lastReview:'2025-11-01', nextDue:'2026-11-01', trigger:'2-Year Review', daysUntilDue:233, status:'Upcoming' },
+  { client:'Sahara Construction SARL', ref:'ARF-2026-100428', risk:'High', lastReview:'2025-08-10', nextDue:'2026-08-10', trigger:'1-Year Review', daysUntilDue:152, status:'Upcoming' },
+  { client:'Coastal Ventures Ltd', ref:'ARF-2026-100429', risk:'Medium', lastReview:'2025-07-20', nextDue:'2026-07-20', trigger:'2-Year Review', daysUntilDue:128, status:'Due Soon' }
+];
+
+var MONITORING_AGENTS = [
+  { name:'Sanctions/PEP Monitoring Agent', icon:'🚫', lastRun:'2026-03-12 06:30', nextRun:'2026-03-13 06:30', clientsMonitored:156, status:'Active' },
+  { name:'Adverse Media Monitoring Agent', icon:'📰', lastRun:'2026-03-12 08:15', nextRun:'2026-03-12 20:15', sourceScanned:340, status:'Active' },
+  { name:'Registry Monitoring Agent', icon:'📑', lastRun:'2026-03-12 07:00', nextRun:'2026-03-12 19:00', registriesChecked:25, status:'Active' },
+  { name:'Risk Drift Detection Agent', icon:'📊', lastRun:'2026-03-11 22:30', nextRun:'2026-03-12 22:30', profilesAnalyzed:156, status:'Active' },
+  { name:'Regulatory Impact Agent', icon:'⚖️', lastRun:'2026-03-10 09:00', nextRun:'2026-03-13 09:00', regulationsTracked:87, status:'Active' }
+];
+
 var currentUser = USERS[0];
 var currentApp = null;
 
@@ -1181,13 +1469,14 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', edd:'EDD Pipeline', reports:'Reports & Analytics', users:'User Management', roles:'Roles & Permissions', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', edd:'EDD Pipeline', reports:'Reports & Analytics', users:'User Management', roles:'Roles & Permissions', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
 
   if (name === 'applications') renderApplications();
   if (name === 'users') renderUsers();
   if (name === 'audit') renderAudit();
   if (name === 'screening') renderScreening();
+  if (name === 'monitoring') renderMonitoring();
   if (name === 'edd') renderEDD();
   if (name === 'cases') renderCases();
   if (name === 'kpis') renderKPIDashboard();
@@ -1206,7 +1495,9 @@ function riskBadge(level) {
 }
 
 function statusBadge(status) {
-  var map = { 'Pending Review':'pending', 'In Review':'in-review', 'EDD Required':'edd', 'Approved':'approved', 'Rejected':'rejected' };
+  var map = { 'Pre-Screening Submitted':'pending', 'Pricing Review':'pending', 'Pricing Accepted':'pending',
+    'KYC & Documents':'in-review', 'KYC Submitted':'in-review', 'Compliance Review':'edd',
+    'Pending Review':'pending', 'In Review':'in-review', 'EDD Required':'edd', 'Approved':'approved', 'Rejected':'rejected' };
   return '<span class="badge ' + (map[status]||'') + '">' + status + '</span>';
 }
 
@@ -1547,6 +1838,132 @@ function renderCases() {
   });
 }
 
+function renderMonitoring() {
+  renderMonitoringAlerts();
+  renderPeriodicReviews();
+  renderMonitoringAgents();
+}
+
+function switchMonitoringTab(tab, btn) {
+  document.querySelectorAll('#view-monitoring .tab').forEach(function(t) { t.classList.remove('active'); });
+  btn.classList.add('active');
+  document.getElementById('monitoring-alerts-tab').style.display = 'none';
+  document.getElementById('monitoring-reviews-tab').style.display = 'none';
+  document.getElementById('monitoring-agents-tab').style.display = 'none';
+  if (tab === 'alerts') document.getElementById('monitoring-alerts-tab').style.display = 'block';
+  if (tab === 'reviews') document.getElementById('monitoring-reviews-tab').style.display = 'block';
+  if (tab === 'agents') document.getElementById('monitoring-agents-tab').style.display = 'block';
+}
+
+function renderMonitoringAlerts() {
+  var tbody = document.getElementById('monitoring-alerts-body');
+  var severityFilter = document.getElementById('alert-severity-filter').value;
+  var typeFilter = document.getElementById('alert-type-filter').value;
+  var statusFilter = document.getElementById('alert-status-filter').value;
+
+  tbody.innerHTML = '';
+  MONITORING_ALERTS.forEach(function(alert) {
+    if (severityFilter && alert.severity !== severityFilter) return;
+    if (typeFilter && alert.type !== typeFilter) return;
+    if (statusFilter && alert.status !== statusFilter) return;
+
+    var tr = document.createElement('tr');
+    var severityColor = { 'Critical':'red', 'High':'amber', 'Medium':'blue', 'Low':'green' }[alert.severity] || 'gray';
+    tr.onclick = function() { showAlertDetail(alert); };
+    tr.innerHTML = '<td style="font-size:12px;color:var(--text3);">' + alert.date + '</td>' +
+      '<td>' + alert.client + '</td>' +
+      '<td style="font-size:12px;">' + alert.type + '</td>' +
+      '<td><span class="badge ' + severityColor + '" style="font-size:11px;">' + alert.severity + '</span></td>' +
+      '<td style="font-size:12px;">' + alert.agent.replace(' Agent','') + '</td>' +
+      '<td><span class="badge ' + (alert.status === 'Open' ? 'pending' : alert.status === 'Reviewed' ? 'approved' : 'in-review') + '" style="font-size:11px;">' + alert.status + '</span></td>' +
+      '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();viewAlert(\'' + alert.date + '\',\'' + alert.client.replace(/'/g,"\\'") + '\')">View</button></td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function renderPeriodicReviews() {
+  var tbody = document.getElementById('periodic-reviews-body');
+  var statusFilter = document.getElementById('review-status-filter').value;
+  var riskFilter = document.getElementById('review-risk-filter').value;
+
+  tbody.innerHTML = '';
+  PERIODIC_REVIEWS.forEach(function(review) {
+    if (statusFilter && review.status !== statusFilter) return;
+    if (riskFilter && review.risk !== riskFilter) return;
+
+    var tr = document.createElement('tr');
+    var statusColor = review.status === 'Overdue' ? 'red' : review.status === 'Due Soon' ? 'amber' : 'green';
+    var riskClass = review.risk.toLowerCase().replace(' ','-');
+    tr.onclick = function() { openPeriodicReview(review.ref); };
+    tr.innerHTML = '<td>' + review.client + '</td>' +
+      '<td><span class="badge ' + riskClass + '" style="font-size:11px;">' + review.risk + '</span></td>' +
+      '<td style="font-size:12px;">' + review.lastReview + '</td>' +
+      '<td style="font-size:12px;">' + review.nextDue + '</td>' +
+      '<td style="font-size:12px;">' + review.trigger + '</td>' +
+      '<td><span class="badge ' + (statusColor === 'red' ? 'very-high' : statusColor === 'amber' ? 'high' : 'low') + '" style="font-size:11px;">' + review.status + '</span></td>' +
+      '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();openPeriodicReview(\'' + review.ref + '\')">Review</button></td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function renderMonitoringAgents() {
+  var html = '';
+  MONITORING_AGENTS.forEach(function(agent) {
+    var detail = agent.clientsMonitored ? agent.clientsMonitored + ' clients' :
+                 agent.sourceScanned ? agent.sourceScanned + ' sources' :
+                 agent.registriesChecked ? agent.registriesChecked + ' registries' :
+                 agent.profilesAnalyzed ? agent.profilesAnalyzed + ' profiles' :
+                 agent.regulationsTracked ? agent.regulationsTracked + ' regulations' : '';
+
+    html += '<div class="card" style="margin-bottom:12px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">' +
+      '<div style="display:flex;align-items:center;gap:12px;">' +
+      '<span style="font-size:24px;">' + agent.icon + '</span>' +
+      '<div><div style="font-weight:600;font-size:14px;">' + agent.name + '</div>' +
+      '<div style="font-size:12px;color:var(--text3);">Monitoring ' + detail + '</div></div></div>' +
+      '<span class="badge approved" style="font-size:11px;">Active</span></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px;">' +
+      '<div><span style="color:var(--text3);">Last run:</span><br/>' + agent.lastRun + '</div>' +
+      '<div><span style="color:var(--text3);">Next run:</span><br/>' + agent.nextRun + '</div>' +
+      '</div></div>';
+  });
+  document.getElementById('agents-status-list').innerHTML = html;
+}
+
+function showAlertDetail(alert) {
+  var html = '<div class="detail-section">' +
+    '<div class="detail-section-title">Alert Summary</div>' +
+    '<div class="detail-row"><span class="label">Alert Type</span><span class="value">' + alert.type + '</span></div>' +
+    '<div class="detail-row"><span class="label">Severity</span><span class="value"><span class="badge ' + (alert.severity === 'Critical' ? 'very-high' : alert.severity === 'High' ? 'high' : alert.severity === 'Medium' ? 'medium' : 'low') + '">' + alert.severity + '</span></span></div>' +
+    '<div class="detail-row"><span class="label">Detected By</span><span class="value">' + alert.agent + '</span></div>' +
+    '<div class="detail-row"><span class="label">Source</span><span class="value">' + alert.source + '</span></div>' +
+    '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + (alert.status === 'Open' ? 'pending' : 'in-review') + '">' + alert.status + '</span></span></div>' +
+    '</div><div class="detail-section">' +
+    '<div class="detail-section-title">Finding Details</div>' +
+    '<div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--text2);">' + alert.detail + '</div>' +
+    '</div><div class="detail-section">' +
+    '<div class="detail-section-title">Recommended Action</div>' +
+    '<div style="padding:12px;background:var(--amber-bg);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--amber);">' +
+    '⚠️ Review client information and assess potential compliance impact. Consider requesting clarification or escalating for Enhanced Due Diligence.' +
+    '</div></div>';
+
+  // Simple modal display (could be enhanced)
+  showToast('Alert detail: ' + alert.type + ' from ' + alert.client + ' — ' + alert.detail.substring(0, 80) + '...');
+}
+
+function viewAlert(date, client) {
+  showToast('Viewing alert: ' + client);
+}
+
+function openPeriodicReview(ref) {
+  var app = APPLICATIONS.find(function(a) { return a.ref === ref; });
+  if (!app) {
+    showToast('Application not found');
+    return;
+  }
+  openAppDetail(ref);
+}
+
 function switchCaseTab(tab, btn) {
   document.querySelectorAll('#view-cases .tab').forEach(function(t) { t.classList.remove('active'); });
   btn.classList.add('active');
@@ -1557,33 +1974,126 @@ function switchCaseTab(tab, btn) {
 // ═══════════════════════════════════════════════════════════
 // ACTIONS
 // ═══════════════════════════════════════════════════════════
-async function approveApplication() {
+function approveApplication() {
   if (!currentApp) return;
-  currentApp.status = 'Approved';
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Approve', target:currentApp.ref, detail:'Application approved', ip:'196.192.44.12' });
+  pendingDecision = 'Approve';
+  document.getElementById('decision-type-display').textContent = 'Approve';
+  document.getElementById('decision-reason').value = '';
+  document.getElementById('decision-notes').value = '';
+  document.getElementById('modal-decision-reason').classList.add('open');
+}
+
+function rejectApplication() {
+  if (!currentApp) return;
+  pendingDecision = 'Reject';
+  document.getElementById('decision-type-display').textContent = 'Reject';
+  document.getElementById('decision-reason').value = '';
+  document.getElementById('decision-notes').value = '';
+  document.getElementById('modal-decision-reason').classList.add('open');
+}
+
+var pendingDecision = '';
+
+async function confirmDecision() {
+  if (!currentApp) return;
+  var reason = document.getElementById('decision-reason').value.trim();
+  var notes = document.getElementById('decision-notes').value.trim();
+
+  if (!reason) {
+    showToast('Please provide a reason for your decision');
+    return;
+  }
+
+  // Record the decision with reason in audit log
+  var detail = pendingDecision + ' — ' + reason + (notes ? ' | Notes: ' + notes : '');
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:pendingDecision, target:currentApp.ref, detail:detail, ip:'196.192.44.12' });
+
+  // Update application status
+  if (pendingDecision === 'Approve') {
+    currentApp.status = 'Approved';
+  } else if (pendingDecision === 'Reject') {
+    currentApp.status = 'Rejected';
+  } else if (pendingDecision === 'EDD') {
+    currentApp.status = 'EDD Required';
+  }
+
   // Sync to API
   if (BO_AUTH_TOKEN && currentApp.id) {
-    try { await boApiCall('PATCH', '/applications/' + currentApp.id, { status: 'approved', notes: 'Application approved' }); } catch(e) { console.warn('API sync failed:', e); }
+    try { await boApiCall('PATCH', '/applications/' + currentApp.id, { status: currentApp.status.toLowerCase(), notes: detail }); } catch(e) { console.warn('API sync failed:', e); }
   }
-  showToast('Application ' + currentApp.ref + ' approved');
+
+  closeModal('modal-decision-reason');
+
+  // Show client notification modal
+  showClientNotificationModal(pendingDecision);
+}
+
+function showClientNotificationModal(decision) {
+  var templates = {
+    'Approve': 'Dear [Company Name],\n\nWe are pleased to inform you that your application for an account with ARIE Finance has been APPROVED.\n\nYour account will be activated within 24 hours. You will receive separate correspondence with your account details and next steps.\n\nThank you for choosing ARIE Finance.\n\nBest regards,\nCompliance Team\nARIE Finance',
+    'Reject': 'Dear [Company Name],\n\nAfter careful review of your application, we regret to inform you that we are unable to proceed at this time.\n\nThis decision is final and based on our risk assessment and compliance requirements. Should you have any questions, please contact our compliance department.\n\nBest regards,\nCompliance Team\nARIE Finance',
+    'EDD': 'Dear [Company Name],\n\nThank you for your application. Our compliance team requires additional documentation to complete our Enhanced Due Diligence review.\n\nPlease provide the following within 10 business days:\n- Enhanced beneficial ownership documentation\n- Bank references\n- Regulatory compliance certifications\n\nPlease reply to this email with the requested documents.\n\nBest regards,\nCompliance Team\nARIE Finance'
+  };
+
+  document.getElementById('notification-message').value = templates[decision] || 'Dear Client,\\n\\nThank you for your application.\\n\\nBest regards,\\nCompliance Team\\nARIE Finance';
+  document.getElementById('modal-client-notification').classList.add('open');
+}
+
+async function sendClientNotification() {
+  if (!currentApp) return;
+  var message = document.getElementById('notification-message').value;
+  if (!message.trim()) {
+    showToast('Please enter a notification message');
+    return;
+  }
+
+  // Log notification in audit trail
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Client Notification', target:currentApp.ref, detail:'Client notification sent on ' + new Date().toLocaleDateString(), ip:'196.192.44.12' });
+
+  closeModal('modal-client-notification');
+  showToast('Client notification sent for ' + currentApp.ref);
   openAppDetail(currentApp.ref);
 }
 
-async function rejectApplication() {
+function openOverrideModal() {
   if (!currentApp) return;
-  currentApp.status = 'Rejected';
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Reject', target:currentApp.ref, detail:'Application rejected', ip:'196.192.44.12' });
-  // Sync to API
-  if (BO_AUTH_TOKEN && currentApp.id) {
-    try { await boApiCall('PATCH', '/applications/' + currentApp.id, { status: 'rejected', notes: 'Application rejected' }); } catch(e) { console.warn('API sync failed:', e); }
+  // Extract the current recommendation from the memo
+  var recommendation = 'Standard Due Diligence';
+  if (currentApp.risk === 'LOW') recommendation = 'Fast Lane';
+  else if (currentApp.risk === 'HIGH') recommendation = 'Enhanced Due Diligence';
+
+  document.getElementById('current-recommendation').textContent = recommendation;
+  document.getElementById('override-decision').value = 'Approve';
+  document.getElementById('override-reason').value = '';
+  document.getElementById('modal-override').classList.add('open');
+}
+
+async function confirmOverride() {
+  if (!currentApp) return;
+  var decision = document.getElementById('override-decision').value;
+  var reason = document.getElementById('override-reason').value.trim();
+
+  if (!reason) {
+    showToast('Please provide a reason for the override');
+    return;
   }
-  showToast('Application ' + currentApp.ref + ' rejected');
+
+  // Log override in audit trail
+  var detail = 'Override: Changed recommendation to ' + decision + ' — ' + reason;
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Override', target:currentApp.ref, detail:detail, ip:'196.192.44.12' });
+
+  closeModal('modal-override');
+  showToast('Recommendation override recorded');
   openAppDetail(currentApp.ref);
 }
 
 function requestMoreInfo() {
   if (!currentApp) return;
-  showToast('Request sent to client for additional information');
+  pendingDecision = 'Request Docs';
+  document.getElementById('decision-type-display').textContent = 'Request Additional Documents';
+  document.getElementById('decision-reason').value = '';
+  document.getElementById('decision-notes').value = '';
+  document.getElementById('modal-decision-reason').classList.add('open');
 }
 
 function reassignCase() { document.getElementById('modal-reassign').classList.add('open'); }
@@ -1641,7 +2151,24 @@ function addUser() {
   showToast('User ' + name + ' added successfully');
 }
 
-function editUser(id) { showToast('Edit user dialog — coming in next iteration'); }
+function editUser(idx) {
+  var u = USERS[idx];
+  if (!u) return;
+  var newRole = prompt('Edit role for ' + u.name + '\\nCurrent role: ' + u.role + '\\n\\nEnter new role (admin, sco, co, analyst):', u.role);
+  if (!newRole || !['admin','sco','co','analyst'].includes(newRole.trim().toLowerCase())) {
+    if (newRole !== null) showToast('Invalid role. Must be: admin, sco, co, or analyst', 'error');
+    return;
+  }
+  newRole = newRole.trim().toLowerCase();
+  // Call API to update user role
+  boApiCall('PUT', '/users/' + u.id, { full_name: u.name, role: newRole, status: u.status || 'active' }).then(function(resp) {
+    USERS[idx].role = newRole;
+    renderUsers();
+    showToast('Role updated: ' + u.name + ' → ' + newRole, 'success');
+  }).catch(function(err) {
+    showToast('Failed to update role: ' + (err.message || err), 'error');
+  });
+}
 
 function switchUser(role) {
   var user = USERS.find(function(u) { return u.role === role; });
@@ -1895,7 +2422,39 @@ function officerRow(name, role, active, completed, avgTime, approvalRate, worklo
 }
 
 function exportKPIReport() {
-  showToast('📥 KPI report exported — download started');
+  boApiCall('GET', '/reports/generate?fields=ref,company_name,status,risk_level,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count').then(function(resp) {
+    if (!resp.data || resp.data.length === 0) {
+      showToast('No data to export', 'warning');
+      return;
+    }
+    // Build CSV
+    var fields = resp.fields;
+    var csv = fields.join(',') + '\\n';
+    resp.data.forEach(function(row) {
+      var line = fields.map(function(f) {
+        var val = row[f] !== undefined && row[f] !== null ? String(row[f]) : '';
+        // Escape commas and quotes in CSV
+        if (val.includes(',') || val.includes('"') || val.includes('\\n')) {
+          val = '"' + val.replace(/"/g, '""') + '"';
+        }
+        return val;
+      });
+      csv += line.join(',') + '\\n';
+    });
+    // Download
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'onboarda_report_' + new Date().toISOString().split('T')[0] + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('📥 Report exported: ' + resp.data.length + ' records', 'success');
+  }).catch(function(err) {
+    showToast('Export failed: ' + (err.message || err), 'error');
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2410,36 +2969,36 @@ function saveAIChecks() {
 // AI AGENTS PIPELINE CONFIGURATION
 // ═══════════════════════════════════════════════════════════
 var AI_AGENTS = [
-  { id:1, name:'Account Risk Agent', icon:'🛡️', stage:'Pre-Onboarding', enabled:true,
-    description:'Validates email domain, detects VPN/TOR, checks for duplicate applications.',
-    checks:['Email domain verification (corporate vs free mail)', 'VPN/TOR/Proxy IP detection', 'Duplicate application check', 'Device fingerprint analysis', 'Geo-IP vs declared country match'] },
-  { id:2, name:'Pre-Screening Risk Agent', icon:'📋', stage:'Pre-Screening', enabled:true,
-    description:'Screens for prohibited sectors, evaluates business model plausibility, and performs initial geographic risk check.',
-    checks:['Prohibited sector screening (VASP, arms, gambling)', 'Business model plausibility assessment', 'Geographic risk — FATF grey/black list check', 'Entity type risk classification', 'Ownership complexity assessment'] },
-  { id:3, name:'Document Verification Engine', icon:'📎', stage:'KYC Upload', enabled:true,
-    description:'Runs automated checks on all uploaded documents — entity and personal KYC documents.',
-    checks:['Entity document AI checks (11 document types, 37 checks)', 'Person KYC document AI checks (5 document types, 29 checks)', 'Cross-document consistency validation', 'OCR text extraction and verification', 'Tampering/forgery detection'] },
-  { id:4, name:'Business Narrative Agent', icon:'💼', stage:'Pre-Screening', enabled:true,
-    description:'Analyses the declared business model, revenue sources, and operational narrative for consistency.',
-    checks:['Business model coherence analysis', 'Revenue model plausibility', 'Target market assessment', 'Operational complexity evaluation', 'Declared vs typical sector benchmarks'] },
-  { id:5, name:'UBO Verification Agent', icon:'👥', stage:'KYC Upload', enabled:true,
-    description:'Traces and verifies ultimate beneficial ownership chains and identifies nominee structures.',
-    checks:['UBO chain trace to natural persons', 'Nominee structure detection', 'Circular ownership detection', 'Ownership percentage validation (must sum to 100%)', 'Cross-reference with shareholder register'] },
-  { id:6, name:'Financial Crime Intelligence Agent', icon:'🔍', stage:'Screening', enabled:true,
-    description:'Runs sanctions, PEP, and adverse media screening against global databases.',
-    checks:['Sanctions screening (UN, EU, OFAC, HMT, local)', 'PEP database screening — domestic and foreign', 'Adverse media scan — global news sources', 'Watchlist and blacklist checks', 'Relative & close associate (RCA) screening'] },
-  { id:7, name:'Source of Funds Analysis Agent', icon:'💰', stage:'Pre-Screening', enabled:true,
-    description:'Evaluates the declared source of wealth and source of funds for plausibility.',
-    checks:['Source of wealth plausibility', 'Source of funds verification', 'Expected transaction patterns analysis', 'Monthly volume vs sector benchmark', 'Currency and corridor risk assessment'] },
-  { id:8, name:'Risk Decision Agent', icon:'⚖️', stage:'Risk Scoring', enabled:true,
-    description:'Computes the composite risk score across all 5 dimensions and determines the onboarding lane.',
-    checks:['5-dimension weighted risk scoring', 'Composite score calculation (0–100)', 'Risk level classification (Low/Medium/High/Very High)', 'Onboarding lane routing (Fast Lane / Standard / EDD)', 'Threshold breach detection and flagging'] },
-  { id:9, name:'Compliance Memo Agent', icon:'📝', stage:'Post-Scoring', enabled:true,
-    description:'Auto-generates a structured compliance memo summarising all findings for the compliance officer.',
-    checks:['Client overview generation', 'Ownership structure summary', 'Screening results compilation', 'Risk dimension breakdown narrative', 'Recommendation and next steps'] },
-  { id:10, name:'Ongoing Monitoring Agent', icon:'📡', stage:'Post-Approval', enabled:true,
-    description:'Continuously monitors approved clients for changes in sanctions, PEP status, and adverse media.',
-    checks:['Periodic sanctions rescreening (configurable interval)', 'PEP status change detection', 'Adverse media monitoring', 'Risk score recalculation triggers', 'Alert generation for compliance team'] }
+  { id:1, name:'Identity & Document Integrity Agent', icon:'🔍', stage:'Onboarding', enabled:true,
+    description:'Validates authenticity and consistency of identity documents. Performs ~36 checks including MRZ extraction, expiry validation, tampering detection, cross-document consistency. Does NOT do sanctions screening or registry lookups.',
+    checks:['Detect passport type', 'Extract MRZ (machine-readable zone)', 'Verify MRZ checksum', 'Match name with application data', 'Check date of birth consistency', 'Extract expiry date', 'Check if expired', 'Check if near expiry', 'Validate issue date vs expiry rules', 'Detect tampering', 'Detect image manipulation', 'Verify watermark patterns', 'Detect cropped or incomplete documents', 'Passport name vs application name', 'Passport address vs proof of address', 'Director name vs registry data', 'Missing pages detection', 'Missing UBO documents', 'Incomplete shareholder register', 'Blur detection', 'Cropping detection', 'Certificate of incorporation validity', 'Shareholder register completeness', 'Director list consistency', 'Nationality consistency', 'Proof of address issue date', 'Proof of address address match', 'Proof of address document type validity', 'Document type classification', 'Image quality assessment', 'Document orientation check', 'Multi-page document completeness', 'Signature presence check', 'Photo quality assessment', 'Document language detection'] },
+  { id:2, name:'External Database Cross-Verification Agent', icon:'🔎', stage:'Onboarding', enabled:true,
+    description:'Secondary verification layer. Checks passport/company document data against external registries (OpenCorporates, Companies House, ADGM, DIFC). Confirms persons exist in official records as declared directors/shareholders.',
+    checks:['Company registry verification', 'Director name verification', 'Shareholder verification', 'Jurisdiction validation', 'Company status check (active/dissolved)', 'Registration number verification', 'Incorporation date verification', 'Registered address verification', 'Company type verification', 'Filed documents check', 'Cross-reference directors with passport data', 'Cross-reference shareholders with UBO declarations'] },
+  { id:3, name:'FinCrime Screening Interpretation Agent', icon:'💼', stage:'Onboarding', enabled:true,
+    description:'Screens individuals and entities against sanctions lists, PEP databases, watchlists, and adverse media. Distinguishes false positives, assesses match confidence, classifies political exposure.',
+    checks:['Sanctions list screening', 'PEP database screening', 'Watchlist screening', 'Adverse media screening', 'False positive assessment', 'Match confidence scoring', 'Material adverse media identification', 'Political exposure classification', 'Screening result interpretation', 'Risk relevance assessment'] },
+  { id:4, name:'Corporate Structure & UBO Mapping Agent', icon:'🏗️', stage:'Onboarding', enabled:true,
+    description:'Maps ownership layers, identifies UBOs, detects nominee structures, flags complex chains. Cross-references UBOs with sanctions/PEP results from Agent 3.',
+    checks:['Map ownership layers', 'Identify ultimate beneficial owners', 'Detect nominee structures', 'Flag complex ownership chains', 'Calculate ownership percentages', 'Identify high-risk jurisdiction links', 'Detect shell company indicators', 'Verify UBO identity documents', 'Cross-reference UBOs with sanctions/PEP results', 'Structure complexity scoring'] },
+  { id:5, name:'Compliance Memo Agent', icon:'📝', stage:'Onboarding', enabled:true,
+    description:'Final synthesis agent. Compiles results from Agents 1-4, summarizes findings, recommends risk rating, generates onboarding memo and review checklist.',
+    checks:['Compile all agent results', 'Summarize key findings', 'Identify risk indicators', 'Recommend risk rating', 'Generate onboarding memo', 'Produce review checklist', 'Flag unresolved contradictions', 'Calculate aggregate confidence', 'Determine approval/escalation recommendation', 'Generate compliance narrative'] },
+  { id:6, name:'Periodic Review Preparation Agent', icon:'📅', stage:'Monitoring', enabled:true,
+    description:'Prepares client files for periodic reviews and identifies expired documents.',
+    checks:['Review schedule assessment', 'Expired document identification', 'Updated verification requirement flags', 'Client file compilation', 'Review checklist generation'] },
+  { id:7, name:'Adverse Media & PEP Monitoring Agent', icon:'📡', stage:'Monitoring', enabled:true,
+    description:'Continuous media monitoring, PEP status changes, and new sanctions.',
+    checks:['Continuous adverse media monitoring', 'PEP status change detection', 'New sanctions list screening', 'News relevance filtering', 'Alert threshold configuration'] },
+  { id:8, name:'Behaviour & Risk Drift Agent', icon:'📈', stage:'Monitoring', enabled:true,
+    description:'Detects changes in client behavior vs onboarding profile.',
+    checks:['Transaction pattern analysis', 'Behavior change detection', 'Risk drift quantification', 'Deviation from expected profile', 'Escalation trigger determination'] },
+  { id:9, name:'Regulatory Impact Agent', icon:'⚖️', stage:'Monitoring', enabled:true,
+    description:'Detects when regulatory changes affect existing clients.',
+    checks:['Regulatory change monitoring', 'Impact assessment on client portfolio', 'Jurisdiction-specific regulation tracking', 'Compliance requirement updates', 'Client-specific regulatory alerts'] },
+  { id:10, name:'Ongoing Compliance Review Agent', icon:'📋', stage:'Monitoring', enabled:true,
+    description:'Prepares periodic review reports and recommends actions.',
+    checks:['Periodic review report preparation', 'Compliance status assessment', 'Risk re-rating recommendation', 'Document refresh recommendations', 'Continuation or escalation decision'] }
 ];
 
 function renderAgentsPipeline() {
@@ -2612,6 +3171,63 @@ function formatMonthsLabel(months) {
   if (months >= 12 && months % 12 === 0) return (months / 12) + ' year' + (months / 12 > 1 ? 's' : '');
   if (months >= 12) return Math.floor(months / 12) + 'y ' + (months % 12) + 'm';
   return months + ' month' + (months > 1 ? 's' : '');
+}
+
+// ═══════════════════════════════════════════════════════════
+// AI CHAT SIDEBAR
+// ═══════════════════════════════════════════════════════════
+function toggleAIChat() {
+  var sidebar = document.getElementById('ai-chat-sidebar');
+  sidebar.classList.toggle('open');
+  if (sidebar.classList.contains('open')) {
+    setTimeout(function() { document.getElementById('ai-chat-input').focus(); }, 300);
+  }
+}
+
+function sendAIMessage() {
+  var input = document.getElementById('ai-chat-input');
+  var msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  addChatMessage('user', msg);
+  setTimeout(function() {
+    var response = generateAIResponse(msg);
+    addChatMessage('ai', response);
+  }, 1200);
+}
+
+function sendQuickQuestion(question) {
+  addChatMessage('user', question);
+  setTimeout(function() {
+    var response = generateAIResponse(question);
+    addChatMessage('ai', response);
+  }, 1200);
+}
+
+function addChatMessage(sender, text) {
+  var container = document.getElementById('ai-chat-messages');
+  var div = document.createElement('div');
+  div.className = 'ai-message ' + sender;
+  div.innerHTML = '<div class="ai-message-bubble">' + text + '</div>';
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function generateAIResponse(question) {
+  var q = question.toLowerCase();
+  var responses = {
+    'review checklist': 'Here\'s your compliance review checklist:\n\n✓ Client identity verified\n✓ UBO structure validated\n✓ Sanctions screening complete\n✓ PEP database checked\n✓ Source of funds assessed\n✓ Business model analyzed\n\nAll checks passed. Status: Ready for approval.',
+    'risk assessment guide': 'Risk assessment follows our 5-dimension model:\n\n1. Entity Risk (20%) — company structure, geography\n2. UBO Risk (20%) — beneficial ownership clarity\n3. FinCrime Risk (30%) — sanctions, PEP, adverse media\n4. Business Risk (15%) — transaction patterns\n5. Transactional Risk (15%) — high-risk activities\n\nComposite scores: 0-30 (Low), 31-60 (Medium), 61-80 (High), 81+ (Very High)',
+    'agent status': '🤖 Current Agent Status:\n\nOnboarding Agents (5/5 active):\n✓ Agent 1: Identity & Document Integrity\n✓ Agent 2: External Database Cross-Verification\n✓ Agent 3: FinCrime Screening Interpretation\n✓ Agent 4: Corporate Structure & UBO Mapping\n✓ Agent 5: Compliance Memo\n\nPipeline: Upload → Agent 1 (document) → Agent 2 (registry) → Agent 3 (screening) → Agent 4 (UBO) → Agent 5 (memo)\n\nMonitoring Agents (5/5 active):\n✓ Periodic Review Preparation\n✓ Adverse Media & PEP Monitoring\n✓ Behaviour & Risk Drift\n✓ Regulatory Impact\n✓ Ongoing Compliance Review',
+    'regulatory updates': 'Recent regulatory updates:\n\n• FATF Mutual Evaluation Report: Enhanced CDD requirements for high-risk jurisdictions\n• EU AML Directive 6: Beneficial ownership registry transparency increased\n• OFAC: New sanctions list (SDN) updates — 8 new entities added this week\n• Local Jurisdiction: AML regulations updated — customer reporting now quarterly\n\nAll 10 AI agents have been updated to reflect these changes.'
+  };
+  if (q.includes('checklist')) return responses['review checklist'];
+  if (q.includes('risk') && q.includes('assessment')) return responses['risk assessment guide'];
+  if (q.includes('agent')) return responses['agent status'];
+  if (q.includes('regulatory')) return responses['regulatory updates'];
+  if (q.includes('kyc') || q.includes('compliance')) return 'KYC compliance is fully automated through our 10-agent pipeline. Each application undergoes 66 document checks, sanctions screening, PEP verification, and business model analysis. Results are compiled into a compliance memo with risk recommendations.';
+  if (q.includes('screening')) return 'Screening covers: UN/EU/OFAC/HMT sanctions lists, domestic and foreign PEP databases, adverse media monitoring, watchlists, and relative/close associate checks. All results are interpreted automatically.';
+  return 'I can help with questions about: review checklists, risk assessment, agent status, regulatory updates, KYC processes, screening procedures, and compliance operations. What would you like to know?';
 }
 
 // Live update labels as user types

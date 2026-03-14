@@ -23,6 +23,18 @@ import tornado.web
 import tornado.escape
 import requests
 
+import html
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+# Supervisor framework
+try:
+    from supervisor.api import setup_supervisor, get_supervisor_routes
+    SUPERVISOR_AVAILABLE = True
+except ImportError:
+    SUPERVISOR_AVAILABLE = False
+    logging.getLogger("arie").warning("Supervisor framework not available — install pydantic>=2.0")
+
 # ── Logging ───────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("arie")
@@ -63,6 +75,37 @@ SUMSUB_WEBHOOK_SECRET = os.environ.get("SUMSUB_WEBHOOK_SECRET", "")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
+# ── Pricing Configuration (based on risk profile) ──
+PRICING_TIERS = {
+    "LOW": {
+        "onboarding_fee": 500,
+        "annual_monitoring_fee": 250,
+        "currency": "USD",
+        "description": "Standard onboarding — Low risk profile",
+        "includes": ["Basic KYC verification", "Sanctions screening", "Annual review"]
+    },
+    "MEDIUM": {
+        "onboarding_fee": 1500,
+        "annual_monitoring_fee": 750,
+        "currency": "USD",
+        "description": "Enhanced onboarding — Medium risk profile",
+        "includes": ["Enhanced KYC verification", "Sanctions & PEP screening", "Semi-annual review", "Adverse media monitoring"]
+    },
+    "HIGH": {
+        "onboarding_fee": 3500,
+        "annual_monitoring_fee": 2000,
+        "currency": "USD",
+        "description": "Enhanced Due Diligence onboarding — High risk profile",
+        "includes": ["Full EDD verification", "Continuous sanctions & PEP monitoring", "Quarterly review", "Adverse media monitoring", "Behaviour & risk drift monitoring"]
+    },
+    "VERY_HIGH": {
+        "onboarding_fee": 5000,
+        "annual_monitoring_fee": 3500,
+        "currency": "USD",
+        "description": "Maximum Due Diligence onboarding — Very High risk profile",
+        "includes": ["Maximum EDD verification", "Real-time sanctions & PEP monitoring", "Monthly review", "Full monitoring suite", "Dedicated compliance officer"]
+    }
+}
 
 # ══════════════════════════════════════════════════════════
 # DATABASE
@@ -122,7 +165,8 @@ def init_db():
         onboarding_lane TEXT,
         -- Status
         status TEXT DEFAULT 'draft' CHECK(status IN (
-            'draft','submitted','pending_review','in_review',
+            'draft','prescreening_submitted','pricing_review','pricing_accepted',
+            'kyc_documents','kyc_submitted','compliance_review','in_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
@@ -239,6 +283,73 @@ def init_db():
         last_step INTEGER DEFAULT 0,
         updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- Monitoring Alerts
+    CREATE TABLE IF NOT EXISTS monitoring_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT REFERENCES applications(id),
+        client_name TEXT,
+        alert_type TEXT,
+        severity TEXT,
+        detected_by TEXT,
+        summary TEXT,
+        source_reference TEXT,
+        ai_recommendation TEXT,
+        status TEXT DEFAULT 'open',
+        officer_action TEXT,
+        officer_notes TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        reviewed_at TEXT,
+        reviewed_by TEXT REFERENCES users(id)
+    );
+
+    -- Periodic Reviews
+    CREATE TABLE IF NOT EXISTS periodic_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT REFERENCES applications(id),
+        client_name TEXT,
+        risk_level TEXT,
+        trigger_type TEXT,
+        trigger_reason TEXT,
+        previous_risk_level TEXT,
+        new_risk_level TEXT,
+        review_memo TEXT,
+        status TEXT DEFAULT 'pending',
+        due_date TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        decision TEXT,
+        decision_reason TEXT,
+        decided_by TEXT REFERENCES users(id),
+        created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Monitoring Agent Status
+    CREATE TABLE IF NOT EXISTS monitoring_agent_status (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_name TEXT,
+        agent_type TEXT,
+        last_run TEXT,
+        next_run TEXT,
+        run_frequency TEXT,
+        clients_monitored INTEGER,
+        alerts_generated INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active'
+    );
+
+    -- Client Notifications
+    CREATE TABLE IF NOT EXISTS client_notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT REFERENCES applications(id),
+        client_id TEXT REFERENCES clients(id),
+        notification_type TEXT,
+        title TEXT NOT NULL,
+        message TEXT,
+        documents_list TEXT,
+        read_status INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        read_at TEXT
+    );
     """)
 
     # Seed default admin user if no users exist
@@ -301,7 +412,203 @@ def init_db():
         ])
         db.execute("INSERT INTO risk_config (id, dimensions, thresholds) VALUES (1, ?, ?)",
                     (default_dims, default_thresholds))
+
+        # Seed AI agents (10-agent architecture)
+        # ── Onboarding Agents (1-5): Sequential pipeline ──
+        # Flow: Upload → Agent 1 (document) → Agent 2 (external DB) → Agent 3 (screening) → Agent 4 (UBO) → Agent 5 (memo)
+        agent1_checks = json.dumps([
+            "Detect passport type", "Extract MRZ (machine-readable zone)", "Verify MRZ checksum",
+            "Match name with application data", "Check date of birth consistency",
+            "Extract expiry date", "Check if expired", "Check if near expiry",
+            "Validate issue date vs expiry rules", "Detect tampering",
+            "Detect image manipulation", "Verify watermark patterns", "Detect cropped or incomplete documents",
+            "Passport name vs application name", "Passport address vs proof of address",
+            "Director name vs registry data", "Missing pages detection",
+            "Missing UBO documents", "Incomplete shareholder register",
+            "Blur detection", "Cropping detection", "Tampering detection",
+            "Certificate of incorporation validity", "Shareholder register completeness",
+            "Director list consistency", "Nationality consistency",
+            "Proof of address issue date", "Proof of address address match",
+            "Proof of address document type validity", "Document type classification",
+            "Image quality assessment", "Document orientation check",
+            "Multi-page document completeness", "Signature presence check",
+            "Photo quality assessment", "Document language detection"
+        ])
+        agent2_checks = json.dumps([
+            "Company registry verification", "Director name verification",
+            "Shareholder verification", "Jurisdiction validation",
+            "Company status check (active/dissolved)", "Registration number verification",
+            "Incorporation date verification", "Registered address verification",
+            "Company type verification", "Filed documents check",
+            "Cross-reference directors with passport data", "Cross-reference shareholders with UBO declarations"
+        ])
+        agent3_checks = json.dumps([
+            "Sanctions list screening", "PEP database screening",
+            "Watchlist screening", "Adverse media screening",
+            "False positive assessment", "Match confidence scoring",
+            "Material adverse media identification", "Political exposure classification",
+            "Screening result interpretation", "Risk relevance assessment"
+        ])
+        agent4_checks = json.dumps([
+            "Map ownership layers", "Identify ultimate beneficial owners",
+            "Detect nominee structures", "Flag complex ownership chains",
+            "Calculate ownership percentages", "Identify high-risk jurisdiction links",
+            "Detect shell company indicators", "Verify UBO identity documents",
+            "Cross-reference UBOs with sanctions/PEP results", "Structure complexity scoring"
+        ])
+        agent5_checks = json.dumps([
+            "Compile all agent results", "Summarize key findings",
+            "Identify risk indicators", "Recommend risk rating",
+            "Generate onboarding memo", "Produce review checklist",
+            "Flag unresolved contradictions", "Calculate aggregate confidence",
+            "Determine approval/escalation recommendation", "Generate compliance narrative"
+        ])
+
+        agents_seed = [
+            (1, "Identity & Document Integrity Agent", "🔍", "document_verification",
+             "Validates authenticity and internal consistency of identity documents uploaded during onboarding. "
+             "Performs ~36 automated checks including: passport MRZ extraction and checksum verification, expiry date validation, "
+             "tampering and image manipulation detection, cross-document consistency (passport vs application, address vs proof of address, "
+             "director names vs registry data), missing documentation detection, blur/cropping detection, certificate of incorporation validity, "
+             "and shareholder register completeness. Focuses ONLY on document authenticity, expiry, identity extraction, and cross-document consistency. "
+             "Does NOT perform sanctions screening or registry lookups — passes extracted data to downstream agents. "
+             "Output: Document Verification Result with verification status, expiry status, tampering risk, name match score, and document completeness.",
+             1, agent1_checks),
+            (2, "External Database Cross-Verification Agent", "🔎", "external_verification",
+             "Secondary verification layer that checks whether passport and company document information matches external databases. "
+             "Performs checks including: company registry verification (OpenCorporates, Companies House, ADGM, DIFC registries), "
+             "director name verification against registry records, shareholder verification, jurisdiction validation, "
+             "company status verification (active/dissolved), registration number and incorporation date cross-referencing. "
+             "Confirms that persons in uploaded documents actually exist in official registry records as declared directors/shareholders. "
+             "Prevents fake identities in corporate structures. "
+             "Output: External verification results with match status per entity, registry source, and discrepancy flags.",
+             1, agent2_checks),
+            (3, "FinCrime Screening Interpretation Agent", "💼", "screening",
+             "Once passport data is extracted by Agent 1, this agent screens individuals and entities against: "
+             "sanctions lists, PEP databases, watchlists, and adverse media sources. "
+             "Distinguishes false positives from genuine matches, assesses match confidence, highlights material adverse media, "
+             "and classifies political exposure levels. "
+             "Output: Screening Result with sanctions match status, PEP status (with confidence level), adverse media findings, "
+             "and overall screening risk assessment.",
+             1, agent3_checks),
+            (4, "Corporate Structure & UBO Mapping Agent", "🏗️", "ubo_mapping",
+             "For directors and shareholders extracted from documents, this agent: maps ownership layers, "
+             "identifies ultimate beneficial owners (natural persons), detects nominee structures, "
+             "flags complex ownership chains, calculates ownership percentages through layered structures, "
+             "identifies high-risk jurisdiction links, detects shell company indicators, "
+             "and cross-references UBOs with sanctions/PEP screening results from Agent 3. "
+             "Output: ownership map, UBO list, structure complexity score, and nominee/shell risk flags.",
+             1, agent4_checks),
+            (5, "Compliance Memo Agent", "📝", "compliance_memo",
+             "Final synthesis agent. After Agents 1-4 complete their checks, this agent: "
+             "compiles all results into a structured onboarding memo, summarizes key findings across all verification layers, "
+             "identifies and ranks risk indicators, recommends a risk rating (LOW/MEDIUM/HIGH/VERY_HIGH), "
+             "flags any unresolved contradictions between agents, calculates aggregate confidence score, "
+             "and produces a review checklist for compliance officers. "
+             "Output: structured onboarding report, risk recommendation, review checklist, and approval/escalation recommendation.",
+             1, agent5_checks),
+            (6, "Periodic Review Preparation Agent", "📅", "periodic_review",
+             "Prepares client files for periodic reviews, identifies expired documents, "
+             "requests updated information, and summarises changes since onboarding.",
+             1, "[]"),
+            (7, "Adverse Media & PEP Monitoring Agent", "📡", "media_monitoring",
+             "Continuous media monitoring, PEP status changes, new sanctions exposure, "
+             "enforcement actions. Output: alert summaries, severity classification.",
+             1, "[]"),
+            (8, "Behaviour & Risk Drift Agent", "📈", "risk_drift",
+             "Compares current activity vs onboarding profile, detects new jurisdictions, "
+             "identifies sector changes, flags unusual growth patterns. Output: risk drift score, escalation trigger.",
+             1, "[]"),
+            (9, "Regulatory Impact Agent", "⚖️", "regulatory_impact",
+             "Analyses new circulars/rules, identifies impacted client segments, "
+             "triggers compliance actions. Output: regulatory impact summary, remediation tasks.",
+             1, "[]"),
+            (10, "Ongoing Compliance Review Agent", "📋", "compliance_review",
+             "Consolidates monitoring alerts, summarises risk changes, recommends actions "
+             "(maintain/EDD/exit). Output: periodic review memo, updated risk classification, escalation recommendation.",
+             1, "[]")
+        ]
+        for agent_data in agents_seed:
+            db.execute("INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks) VALUES (?,?,?,?,?,?,?)", agent_data)
         db.commit()
+
+        # Seed monitoring agents status
+        now = datetime.now().isoformat()
+        next_day = (datetime.now() + timedelta(days=1)).isoformat()
+        next_week = (datetime.now() + timedelta(days=7)).isoformat()
+        next_month = (datetime.now() + timedelta(days=30)).isoformat()
+
+        agents_status = [
+            ("Sanctions/PEP Agent", "sanctions_pep", now, next_day, "Daily", 45, 2, "active"),
+            ("Adverse Media Agent", "adverse_media", now, (datetime.now() + timedelta(hours=6)).isoformat(), "Every 6 hours", 45, 1, "active"),
+            ("Registry Monitoring Agent", "registry", (datetime.now() - timedelta(days=7)).isoformat(), next_week, "Weekly", 45, 0, "active"),
+            ("Risk Drift Agent", "risk_drift", (datetime.now() - timedelta(days=30)).isoformat(), next_month, "Monthly", 45, 3, "active"),
+            ("Regulatory Impact Agent", "regulatory", (datetime.now() - timedelta(days=14)).isoformat(), next_month, "On circular publication", 45, 1, "active"),
+        ]
+        for agent_data in agents_status:
+            db.execute("INSERT INTO monitoring_agent_status (agent_name, agent_type, last_run, next_run, run_frequency, clients_monitored, alerts_generated, status) VALUES (?,?,?,?,?,?,?,?)", agent_data)
+        db.commit()
+
+        # Get a sample application for monitoring seed data (if any exist)
+        sample_app = db.execute("SELECT id, ref, company_name FROM applications LIMIT 1").fetchone()
+
+        if sample_app:
+            app_id = sample_app["id"]
+            company_name = sample_app["company_name"]
+
+            # Seed monitoring alerts
+            alerts_seed = [
+                (app_id, company_name, "sanctions_match", "critical", "Sanctions/PEP Agent",
+                 "Sanctions match detected on director John Smith", "OFAC List - 2026-03-14",
+                 "Potential match with OFAC SDN list - requires immediate investigation", "open", None, None, now, None, None),
+                (app_id, company_name, "pep_status", "high", "Adverse Media & PEP Monitoring Agent",
+                 "UBO acquired PEP status", "Political Exposure Database - 2026-03-12",
+                 "UBO recently appointed to government position - enhanced monitoring recommended", "open", None, None, now, None, None),
+                (app_id, company_name, "adverse_media", "medium", "Adverse Media & PEP Monitoring Agent",
+                 "Adverse media article published about client company", "Financial Times - 2026-03-10",
+                 "Article mentions regulatory investigation - requires verification of materiality", "open", None, None, now, None, None),
+                (app_id, company_name, "registry_change", "medium", "Registry Monitoring Agent",
+                 "Director change detected in company registry", "Companies House - 2026-03-08",
+                 "New director appointed - require screening of new officer", "reviewed", "request_documents", "Initiate director screening", (datetime.now() - timedelta(days=3)).isoformat(), now, "sco001"),
+                (app_id, company_name, "risk_drift", "medium", "Behaviour & Risk Drift Agent",
+                 "New jurisdiction activity detected", "Transaction Monitoring System - 2026-03-06",
+                 "Customer expanded to new high-risk jurisdiction - consider enhanced due diligence", "open", None, None, now, None, None),
+                (app_id, company_name, "regulatory_impact", "low", "Regulatory Impact Agent",
+                 "New regulation affecting client sector", "FATF Guidance - 2026-03-01",
+                 "New AML guidance issued - review policies and update procedures", "open", None, None, now, None, None),
+                (app_id, company_name, "document_expiry", "low", "Periodic Review Preparation Agent",
+                 "Proof of address document expires in 30 days", "Document Management System - 2026-03-14",
+                 "Request updated proof of address before expiration", "open", None, None, now, None, None),
+                (app_id, company_name, "company_status_change", "high", "Registry Monitoring Agent",
+                 "Company status change in registry", "Companies House - 2026-03-05",
+                 "Company changed from Active to In Administration - escalate immediately", "escalated", "escalate", "Referred to compliance officer for review", now, now, "co001"),
+            ]
+
+            for alert in alerts_seed:
+                db.execute("""INSERT INTO monitoring_alerts
+                    (application_id, client_name, alert_type, severity, detected_by, summary, source_reference,
+                     ai_recommendation, status, officer_action, officer_notes, created_at, reviewed_at, reviewed_by)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", alert)
+            db.commit()
+
+            # Seed periodic reviews
+            reviews_seed = [
+                (app_id, company_name, "HIGH", "time_based", "Annual review due for HIGH risk client",
+                 "HIGH", "HIGH", json.dumps({"key_findings": ["No material changes detected"], "risk_mitigation": ["Continue enhanced monitoring"]}),
+                 "pending", (datetime.now() + timedelta(days=7)).date().isoformat(), None, None, None, None, None),
+                (app_id, company_name, "MEDIUM", "time_based", "Annual review due for MEDIUM risk client",
+                 "MEDIUM", "MEDIUM", None, "completed", (datetime.now() - timedelta(days=30)).date().isoformat(),
+                 (datetime.now() - timedelta(days=28)).isoformat(), (datetime.now() - timedelta(days=27)).isoformat(),
+                 "continue", "Client profile stable, all documents current, no adverse findings", "analyst001"),
+            ]
+
+            for review in reviews_seed:
+                db.execute("""INSERT INTO periodic_reviews
+                    (application_id, client_name, risk_level, trigger_type, trigger_reason,
+                     previous_risk_level, new_risk_level, review_memo, status, due_date, started_at, completed_at,
+                     decision, decision_reason, decided_by)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", review)
+            db.commit()
 
         # Log the init
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail) VALUES (?,?,?,?,?,?)",
@@ -343,6 +650,27 @@ def generate_ref():
     db.close()
     year = datetime.now().year
     return f"ARF-{year}-{100421 + count}"
+
+
+def sanitize_input(value):
+    """Sanitize user input to prevent XSS and HTML injection."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return html.escape(value.strip(), quote=True)
+    return value
+
+def sanitize_dict(data, keys=None):
+    """Sanitize specified keys in a dict (or all string values if keys=None)."""
+    if not isinstance(data, dict):
+        return data
+    result = {}
+    for k, v in data.items():
+        if keys is None or k in keys:
+            result[k] = sanitize_input(v) if isinstance(v, str) else v
+        else:
+            result[k] = v
+    return result
 
 
 # ══════════════════════════════════════════════════════════
@@ -1135,8 +1463,8 @@ def _simulate_sumsub_status(applicant_id, note="No Sumsub credentials configured
 
 def run_full_screening(application_data, directors, ubos, client_ip=None):
     """
-    Run all screening agents against an application.
-    Returns a comprehensive screening report used by Agents 1, 5, and 6.
+    Run all screening agents in parallel against an application.
+    Uses ThreadPoolExecutor for concurrent HTTP API calls.
     """
     company_name = application_data.get("company_name", "")
     country = application_data.get("country", "")
@@ -1151,108 +1479,117 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
         "total_hits": 0,
     }
 
-    # ── Agent 5: Company Registry (Open Corporates) ──
+    # Map jurisdiction
     jurisdiction = None
     if country:
         jur_map = {"mauritius": "mu", "united kingdom": "gb", "uk": "gb", "france": "fr",
                    "singapore": "sg", "india": "in", "hong kong": "hk", "usa": "us",
                    "united states": "us", "south africa": "za", "germany": "de"}
         jurisdiction = jur_map.get(country.lower())
-    report["company_screening"] = lookup_opencorporates(company_name, jurisdiction)
-    if not report["company_screening"]["found"]:
-        report["overall_flags"].append(f"Company '{company_name}' not found in corporate registry")
 
-    # ── Agent 5: Company sanctions screening ──
-    company_sanctions = screen_opensanctions(company_name, entity_type="Company")
-    report["company_screening"]["sanctions"] = company_sanctions
-    if company_sanctions["matched"]:
-        report["overall_flags"].append(f"Company '{company_name}' has sanctions/watchlist matches")
-        report["total_hits"] += len(company_sanctions["results"])
+    # ── Parallel API calls ──
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        # Submit all screening tasks concurrently
+        company_future = executor.submit(lookup_opencorporates, company_name, jurisdiction)
+        company_sanctions_future = executor.submit(screen_opensanctions, company_name, entity_type="Company")
 
-    # ── Agent 6: Director sanctions/PEP screening ──
-    for d in directors:
-        d_name = d.get("full_name", "")
-        if not d_name:
-            continue
-        screening = screen_opensanctions(d_name, nationality=d.get("nationality"), entity_type="Person")
-        result = {
-            "person_name": d_name,
-            "person_type": "director",
-            "nationality": d.get("nationality", ""),
-            "declared_pep": d.get("is_pep", "No"),
-            "screening": screening,
-        }
-        if screening["matched"]:
-            report["overall_flags"].append(f"Director '{d_name}' has sanctions/PEP matches")
-            report["total_hits"] += len(screening["results"])
-            # Check for undeclared PEP
-            for hit in screening["results"]:
-                if hit.get("is_pep") and d.get("is_pep", "No") != "Yes":
-                    result["undeclared_pep"] = True
-                    report["overall_flags"].append(f"Director '{d_name}' may be undeclared PEP")
-        report["director_screenings"].append(result)
+        director_futures = []
+        for d in directors:
+            d_name = d.get("full_name", "")
+            if d_name:
+                f = executor.submit(screen_opensanctions, d_name, nationality=d.get("nationality"), entity_type="Person")
+                director_futures.append((d, f))
 
-    # ── Agent 6: UBO sanctions/PEP screening ──
-    for u in ubos:
-        u_name = u.get("full_name", "")
-        if not u_name:
-            continue
-        screening = screen_opensanctions(u_name, nationality=u.get("nationality"), entity_type="Person")
-        result = {
-            "person_name": u_name,
-            "person_type": "ubo",
-            "nationality": u.get("nationality", ""),
-            "ownership_pct": u.get("ownership_pct", 0),
-            "declared_pep": u.get("is_pep", "No"),
-            "screening": screening,
-        }
-        if screening["matched"]:
-            report["overall_flags"].append(f"UBO '{u_name}' has sanctions/PEP matches")
-            report["total_hits"] += len(screening["results"])
-            for hit in screening["results"]:
-                if hit.get("is_pep") and u.get("is_pep", "No") != "Yes":
-                    result["undeclared_pep"] = True
-                    report["overall_flags"].append(f"UBO '{u_name}' may be undeclared PEP")
-        report["ubo_screenings"].append(result)
+        ubo_futures = []
+        for u in ubos:
+            u_name = u.get("full_name", "")
+            if u_name:
+                f = executor.submit(screen_opensanctions, u_name, nationality=u.get("nationality"), entity_type="Person")
+                ubo_futures.append((u, f))
 
-    # ── Agent 1: IP Geolocation ──
-    if client_ip:
-        report["ip_geolocation"] = geolocate_ip(client_ip)
-        ip_geo = report["ip_geolocation"]
-        if ip_geo.get("risk_level") in ("HIGH", "VERY_HIGH"):
-            report["overall_flags"].append(f"Client IP geolocated to high-risk jurisdiction: {ip_geo.get('country')}")
-        if ip_geo.get("is_vpn"):
-            report["overall_flags"].append("Client IP detected as VPN")
-        if ip_geo.get("is_proxy"):
-            report["overall_flags"].append("Client IP detected as proxy")
-        if ip_geo.get("is_tor"):
-            report["overall_flags"].append("Client IP detected as Tor exit node")
+        ip_future = executor.submit(geolocate_ip, client_ip) if client_ip else None
 
-    # ── Agent 2 & 3: Sumsub KYC — Create applicants for directors/UBOs ──
-    report["kyc_applicants"] = []
-    all_persons = [(d, "director") for d in directors] + [(u, "ubo") for u in ubos]
-    for person, ptype in all_persons:
-        p_name = person.get("full_name", "")
-        if not p_name:
-            continue
-        # Use email or generate an external ID
-        ext_id = person.get("email", "") or f"{ptype}_{hashlib.md5(p_name.encode()).hexdigest()[:12]}"
-        parts = p_name.strip().split(" ", 1)
-        first = parts[0] if parts else ""
-        last = parts[1] if len(parts) > 1 else ""
-        applicant = sumsub_create_applicant(
-            external_user_id=ext_id,
-            first_name=first,
-            last_name=last,
-            country=person.get("nationality", ""),
-        )
-        applicant["person_name"] = p_name
-        applicant["person_type"] = ptype
-        report["kyc_applicants"].append(applicant)
+        kyc_futures = []
+        all_persons = [(d, "director") for d in directors] + [(u, "ubo") for u in ubos]
+        for person, ptype in all_persons:
+            p_name = person.get("full_name", "")
+            if not p_name:
+                continue
+            ext_id = person.get("email", "") or f"{ptype}_{hashlib.md5(p_name.encode()).hexdigest()[:12]}"
+            parts = p_name.strip().split(" ", 1)
+            first = parts[0] if parts else ""
+            last = parts[1] if len(parts) > 1 else ""
+            f = executor.submit(sumsub_create_applicant,
+                external_user_id=ext_id, first_name=first, last_name=last,
+                country=person.get("nationality", ""))
+            kyc_futures.append((person, ptype, p_name, f))
 
-        if applicant.get("review_answer") == "RED":
-            report["overall_flags"].append(f"Sumsub KYC FAILED for {ptype} '{p_name}'")
-            report["total_hits"] += 1
+        # ── Collect results ──
+        report["company_screening"] = company_future.result(timeout=30)
+        if not report["company_screening"]["found"]:
+            report["overall_flags"].append(f"Company '{company_name}' not found in corporate registry")
+
+        company_sanctions = company_sanctions_future.result(timeout=30)
+        report["company_screening"]["sanctions"] = company_sanctions
+        if company_sanctions["matched"]:
+            report["overall_flags"].append(f"Company '{company_name}' has sanctions/watchlist matches")
+            report["total_hits"] += len(company_sanctions["results"])
+
+        for d, f in director_futures:
+            d_name = d.get("full_name", "")
+            screening = f.result(timeout=30)
+            result = {
+                "person_name": d_name, "person_type": "director",
+                "nationality": d.get("nationality", ""), "declared_pep": d.get("is_pep", "No"),
+                "screening": screening,
+            }
+            if screening["matched"]:
+                report["overall_flags"].append(f"Director '{d_name}' has sanctions/PEP matches")
+                report["total_hits"] += len(screening["results"])
+                for hit in screening["results"]:
+                    if hit.get("is_pep") and d.get("is_pep", "No") != "Yes":
+                        result["undeclared_pep"] = True
+                        report["overall_flags"].append(f"Director '{d_name}' may be undeclared PEP")
+            report["director_screenings"].append(result)
+
+        for u, f in ubo_futures:
+            u_name = u.get("full_name", "")
+            screening = f.result(timeout=30)
+            result = {
+                "person_name": u_name, "person_type": "ubo",
+                "nationality": u.get("nationality", ""), "ownership_pct": u.get("ownership_pct", 0),
+                "declared_pep": u.get("is_pep", "No"), "screening": screening,
+            }
+            if screening["matched"]:
+                report["overall_flags"].append(f"UBO '{u_name}' has sanctions/PEP matches")
+                report["total_hits"] += len(screening["results"])
+                for hit in screening["results"]:
+                    if hit.get("is_pep") and u.get("is_pep", "No") != "Yes":
+                        result["undeclared_pep"] = True
+                        report["overall_flags"].append(f"UBO '{u_name}' may be undeclared PEP")
+            report["ubo_screenings"].append(result)
+
+        if ip_future:
+            report["ip_geolocation"] = ip_future.result(timeout=30)
+            ip_geo = report["ip_geolocation"]
+            if ip_geo.get("risk_level") in ("HIGH", "VERY_HIGH"):
+                report["overall_flags"].append(f"Client IP geolocated to high-risk jurisdiction: {ip_geo.get('country')}")
+            if ip_geo.get("is_vpn"):
+                report["overall_flags"].append("Client IP detected as VPN")
+            if ip_geo.get("is_proxy"):
+                report["overall_flags"].append("Client IP detected as proxy")
+            if ip_geo.get("is_tor"):
+                report["overall_flags"].append("Client IP detected as Tor exit node")
+
+        report["kyc_applicants"] = []
+        for person, ptype, p_name, f in kyc_futures:
+            applicant = f.result(timeout=30)
+            applicant["person_name"] = p_name
+            applicant["person_type"] = ptype
+            report["kyc_applicants"].append(applicant)
+            if applicant.get("review_answer") == "RED":
+                report["overall_flags"].append(f"Sumsub KYC FAILED for {ptype} '{p_name}'")
+                report["total_hits"] += 1
 
     return report
 
@@ -1321,10 +1658,31 @@ class BaseHandler(tornado.web.RequestHandler):
         self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
         if ENVIRONMENT == "production":
             self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        # Content Security Policy
+        csp = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; "
+            "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'"
+        )
+        self.set_header("Content-Security-Policy", csp)
+        self.set_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
 
     def options(self, *args):
         self.set_status(204)
         self.finish()
+
+    def check_xsrf_cookie(self):
+        """Skip XSRF check for API endpoints using Bearer token auth."""
+        if self.request.headers.get("Authorization", "").startswith("Bearer "):
+            return
+        # Also skip for webhook endpoints
+        if "/webhook" in self.request.uri:
+            return
+        super().check_xsrf_cookie()
 
     def get_json(self):
         try:
@@ -1372,6 +1730,13 @@ class BaseHandler(tornado.web.RequestHandler):
         db.commit()
         if own_db:
             db.close()
+
+    def check_app_ownership(self, user, app):
+        """Returns True if user is allowed to access this application."""
+        if user.get("type") == "client" and app["client_id"] != user["sub"]:
+            self.error("Unauthorized", 403)
+            return False
+        return True
 
 
 # ── Health Check ──
@@ -1607,6 +1972,10 @@ class ApplicationDetailHandler(BaseHandler):
             db.close()
             return self.error("Application not found", 404)
 
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
         result = dict(app)
         result["directors"] = [dict(d) for d in db.execute(
             "SELECT * FROM directors WHERE application_id = ?", (result["id"],)).fetchall()]
@@ -1631,6 +2000,10 @@ class ApplicationDetailHandler(BaseHandler):
         if not app:
             db.close()
             return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
 
         real_id = app["id"]
 
@@ -1682,7 +2055,17 @@ class ApplicationDetailHandler(BaseHandler):
             db.close()
             return self.error("Application not found", 404)
 
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
         real_id = app["id"]
+
+        # Only officers can change status and assignment
+        if user.get("type") == "client":
+            if "status" in data or "assigned_to" in data or "decision_by" in data:
+                db.close()
+                return self.error("Only officers can change application status", 403)
 
         # Handle status changes
         new_status = data.get("status")
@@ -1705,7 +2088,7 @@ class ApplicationDetailHandler(BaseHandler):
 
 
 class SubmitApplicationHandler(BaseHandler):
-    """POST /api/applications/:id/submit — submit, run screening, and trigger risk scoring"""
+    """POST /api/applications/:id/submit — submit pre-screening, run screening, calculate risk, show pricing"""
     def post(self, app_id):
         user = self.require_auth()
         if not user:
@@ -1716,6 +2099,10 @@ class SubmitApplicationHandler(BaseHandler):
         if not app:
             db.close()
             return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
 
         real_id = app["id"]
 
@@ -1772,16 +2159,34 @@ class SubmitApplicationHandler(BaseHandler):
             WHERE id=?
         """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"], real_id))
 
-        # Auto-route: Low risk → pending_review, High/VH → edd_required
-        auto_status = "pending_review" if risk["level"] in ("LOW","MEDIUM") else "edd_required"
-        db.execute("UPDATE applications SET status=? WHERE id=?", (auto_status, real_id))
+        # After pre-screening: move to pricing review
+        # Client must accept pricing before proceeding
+        db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
+
+        # Get pricing for this risk level
+        pricing = PRICING_TIERS.get(risk["level"], PRICING_TIERS["MEDIUM"])
+
+        # Store pricing in prescreening data
+        prescreening["pricing"] = pricing
+        prescreening["pricing"]["risk_level"] = risk["level"]
+        db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
+                   (json.dumps(prescreening, default=str), real_id))
+
+        # Notify compliance team for HIGH/VERY_HIGH risk
+        if risk["level"] in ("HIGH", "VERY_HIGH"):
+            compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
+            for cu in compliance_users:
+                db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                          (cu["id"], f"{risk['level']}-Risk Pre-Screening Submitted",
+                           f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}). Pricing review pending."))
+            db.commit()
 
         db.commit()
         db.close()
 
         flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
-        self.log_audit(user, "Submit", app["ref"],
-                       f"Application submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}")
+        self.log_audit(user, "Pre-Screening Submitted", app["ref"],
+                       f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}")
 
         self.success({
             "ref": app["ref"],
@@ -1789,7 +2194,8 @@ class SubmitApplicationHandler(BaseHandler):
             "risk_level": risk["level"],
             "risk_dimensions": risk["dimensions"],
             "onboarding_lane": risk["lane"],
-            "status": auto_status,
+            "status": "pricing_review",
+            "pricing": pricing,
             "screening": {
                 "total_hits": screening_report["total_hits"],
                 "flags": screening_report["overall_flags"],
@@ -1799,6 +2205,114 @@ class SubmitApplicationHandler(BaseHandler):
                     "ip_geolocation": screening_report["ip_geolocation"].get("source", "none") if screening_report.get("ip_geolocation") else "none",
                 }
             }
+        })
+
+
+class PricingAcceptHandler(BaseHandler):
+    """POST /api/applications/:id/accept-pricing — Client accepts pricing, proceeds to next step"""
+    def post(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        if app["status"] != "pricing_review":
+            db.close()
+            return self.error("Application is not in pricing review stage", 400)
+
+        real_id = app["id"]
+        risk_level = app["risk_level"] or "MEDIUM"
+
+        # Update status: accepted pricing
+        db.execute("UPDATE applications SET status='pricing_accepted', updated_at=datetime('now') WHERE id=?", (real_id,))
+
+        # Route based on risk:
+        # LOW/MEDIUM → proceed directly to KYC & Documents
+        # HIGH/VERY_HIGH → must go through compliance review first
+        if risk_level in ("LOW", "MEDIUM"):
+            next_status = "kyc_documents"
+            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
+            message = "Pricing accepted. Please proceed with KYC verification and document upload."
+        else:
+            next_status = "compliance_review"
+            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
+            message = "Pricing accepted. Your application has been referred for compliance review due to the risk profile."
+            # Notify compliance officers
+            compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
+            for cu in compliance_users:
+                db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                          (cu["id"], f"High-Risk Case Requires Review: {app['ref']}",
+                           f"{app['company_name']} — Risk: {risk_level}. Client accepted pricing. Compliance review required before KYC proceeds."))
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "Pricing Accepted", app["ref"], f"Pricing accepted — Risk: {risk_level}, Next: {next_status}")
+        self.success({"status": next_status, "message": message, "risk_level": risk_level})
+
+
+class KYCSubmitHandler(BaseHandler):
+    """POST /api/applications/:id/submit-kyc — Submit KYC documents for compliance review"""
+    def post(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        if app["status"] != "kyc_documents":
+            db.close()
+            return self.error("Application is not in KYC & Documents stage", 400)
+
+        real_id = app["id"]
+
+        # Check that at least one document has been uploaded
+        doc_count = db.execute("SELECT COUNT(*) as c FROM documents WHERE application_id=?", (real_id,)).fetchone()["c"]
+        if doc_count == 0:
+            db.close()
+            return self.error("Please upload at least one document before submitting", 400)
+
+        # ALL applications after KYC go to compliance review — no auto-approval
+        db.execute("""
+            UPDATE applications SET
+                status='compliance_review',
+                updated_at=datetime('now')
+            WHERE id=?
+        """, (real_id,))
+
+        # Notify ALL compliance officers
+        compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
+        for cu in compliance_users:
+            db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                      (cu["id"], f"KYC Submitted — Ready for Review: {app['ref']}",
+                       f"{app['company_name']} has completed KYC & document upload. Risk: {app['risk_level']} (Score: {app['risk_score']}). Awaiting compliance approval."))
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "KYC Submitted", app["ref"],
+                       f"KYC documents submitted for compliance review — {doc_count} document(s)")
+        self.success({
+            "status": "compliance_review",
+            "message": "Your documents have been submitted for compliance review. An officer will review your application shortly.",
+            "documents_uploaded": doc_count
         })
 
 
@@ -1814,10 +2328,14 @@ class DocumentUploadHandler(BaseHandler):
             return
 
         db = get_db()
-        app = db.execute("SELECT id, ref FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+        app = db.execute("SELECT id, ref, client_id FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
         if not app:
             db.close()
             return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
 
         if "file" not in self.request.files:
             db.close()
@@ -2116,6 +2634,91 @@ class AIAgentDetailHandler(BaseHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# REPORT GENERATION ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class ReportHandler(BaseHandler):
+    """GET /api/reports/generate — generate filtered report data"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+
+        # Get filter parameters
+        status = self.get_argument("status", None)
+        risk_level = self.get_argument("risk_level", None)
+        date_from = self.get_argument("date_from", None)
+        date_to = self.get_argument("date_to", None)
+        fields = self.get_argument("fields", "ref,company_name,status,risk_level,created_at,assigned_to")
+
+        # Build query
+        conditions = []
+        params = []
+        if status:
+            conditions.append("a.status=?")
+            params.append(status)
+        if risk_level:
+            conditions.append("a.risk_level=?")
+            params.append(risk_level)
+        if date_from:
+            conditions.append("a.created_at >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("a.created_at <= ?")
+            params.append(date_to)
+
+        where = " AND ".join(conditions) if conditions else "1=1"
+
+        query = f"""
+            SELECT a.*,
+                   (SELECT COUNT(*) FROM directors WHERE application_id=a.id) as director_count,
+                   (SELECT COUNT(*) FROM ubos WHERE application_id=a.id) as ubo_count,
+                   (SELECT COUNT(*) FROM documents WHERE application_id=a.id) as document_count
+            FROM applications a
+            WHERE {where}
+            ORDER BY a.created_at DESC
+        """
+
+        rows = db.execute(query, params).fetchall()
+        db.close()
+
+        # Parse field selection
+        field_list = [f.strip() for f in fields.split(",")]
+
+        results = []
+        for row in rows:
+            record = dict(row)
+            # Parse prescreening_data for risk info
+            prescreening = json.loads(record.get("prescreening_data") or "{}")
+            risk_info = prescreening.get("risk_assessment", {})
+            record["risk_score"] = risk_info.get("score", 0)
+            record["risk_level"] = risk_info.get("level", record.get("risk_level", ""))
+            record["risk_lane"] = risk_info.get("lane", "")
+
+            # Filter to requested fields
+            filtered = {}
+            for f in field_list:
+                if f in record:
+                    filtered[f] = record[f]
+                elif f == "director_count":
+                    filtered[f] = record.get("director_count", 0)
+                elif f == "ubo_count":
+                    filtered[f] = record.get("ubo_count", 0)
+                elif f == "document_count":
+                    filtered[f] = record.get("document_count", 0)
+            results.append(filtered)
+
+        self.log_audit(user, "Report", "Generate", f"Report generated: {len(results)} records, fields: {fields}")
+        self.success({
+            "total": len(results),
+            "fields": field_list,
+            "data": results
+        })
+
+
+# ══════════════════════════════════════════════════════════
 # AUDIT TRAIL ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
@@ -2147,26 +2750,55 @@ class DashboardHandler(BaseHandler):
 
         db = get_db()
         stats = {}
-        stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications").fetchone()["c"]
-        stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted')").fetchone()["c"]
-        stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review'").fetchone()["c"]
-        stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved'").fetchone()["c"]
-        stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected'").fetchone()["c"]
-        stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required'").fetchone()["c"]
 
-        # Risk distribution
-        stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'").fetchone()["c"]
-        stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'").fetchone()["c"]
-        stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'").fetchone()["c"]
-        stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'").fetchone()["c"]
+        if user.get("type") == "client":
+            client_id = user["sub"]
+            stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE client_id=?", (client_id,)).fetchone()["c"]
+            stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted') AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required' AND client_id=?", (client_id,)).fetchone()["c"]
 
-        # Recent applications
-        recent = db.execute("""
-            SELECT a.*, u.full_name as assigned_name FROM applications a
-            LEFT JOIN users u ON a.assigned_to = u.id
-            ORDER BY a.created_at DESC LIMIT 10
-        """).fetchall()
-        stats["recent"] = [dict(r) for r in recent]
+            # Risk distribution
+            stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
+
+            # Recent applications
+            recent = db.execute("""
+                SELECT a.*, u.full_name as assigned_name FROM applications a
+                LEFT JOIN users u ON a.assigned_to = u.id
+                WHERE a.client_id=?
+                ORDER BY a.created_at DESC LIMIT 10
+            """, (client_id,)).fetchall()
+            stats["recent"] = [dict(r) for r in recent]
+        else:
+            stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications").fetchone()["c"]
+            stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted')").fetchone()["c"]
+            stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review'").fetchone()["c"]
+            stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'").fetchone()["c"]
+            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
+            stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved'").fetchone()["c"]
+            stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected'").fetchone()["c"]
+            stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required'").fetchone()["c"]
+
+            # Risk distribution
+            stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'").fetchone()["c"]
+            stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'").fetchone()["c"]
+            stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'").fetchone()["c"]
+            stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'").fetchone()["c"]
+
+            # Recent applications
+            recent = db.execute("""
+                SELECT a.*, u.full_name as assigned_name FROM applications a
+                LEFT JOIN users u ON a.assigned_to = u.id
+                ORDER BY a.created_at DESC LIMIT 10
+            """).fetchall()
+            stats["recent"] = [dict(r) for r in recent]
 
         db.close()
         self.success(stats)
@@ -2557,11 +3189,714 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# MONITORING ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class MonitoringDashboardHandler(BaseHandler):
+    """GET /api/monitoring/dashboard — returns monitoring stats"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        stats = {
+            "files_due": 0,
+            "docs_expiring": 0,
+            "alerts": 0,
+            "clients_under_review": 0,
+            "high_risk_alerts": [],
+            "periodic_review_due": 0
+        }
+
+        # Count applications pending compliance review
+        compliance_review = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
+        stats["clients_under_review"] = compliance_review
+
+        # Count high-risk alerts
+        high_risk = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level IN ('HIGH','VERY_HIGH')").fetchone()["c"]
+        stats["alerts"] = high_risk
+
+        # Get recent high-risk applications for alert summary
+        recent_alerts = db.execute("""
+            SELECT ref, company_name, risk_level, risk_score, created_at FROM applications
+            WHERE risk_level IN ('HIGH','VERY_HIGH')
+            ORDER BY created_at DESC LIMIT 10
+        """).fetchall()
+        stats["high_risk_alerts"] = [dict(a) for a in recent_alerts]
+
+        db.close()
+        self.success(stats)
+
+
+class MonitoringClientsHandler(BaseHandler):
+    """GET /api/monitoring/clients — returns client monitoring status for Kanban board"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+
+        # Get all applications grouped by status/stage
+        applications = db.execute("""
+            SELECT a.id, a.ref, a.company_name, a.status, a.risk_level, a.risk_score,
+                   a.created_at, u.full_name as assigned_to
+            FROM applications a
+            LEFT JOIN users u ON a.assigned_to = u.id
+            ORDER BY a.created_at DESC
+        """).fetchall()
+
+        clients = {}
+        for app in applications:
+            status = app["status"]
+            if status not in clients:
+                clients[status] = []
+            clients[status].append(dict(app))
+
+        db.close()
+        self.success({"clients_by_status": clients})
+
+
+class MonitoringAlertCreateHandler(BaseHandler):
+    """GET/POST /api/monitoring/alerts — List and create monitoring alerts"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        severity = self.get_argument("severity", None)
+        alert_type = self.get_argument("type", None)
+        status_filter = self.get_argument("status", None)
+        client_id = self.get_argument("client", None)
+
+        db = get_db()
+        query = "SELECT * FROM monitoring_alerts WHERE 1=1"
+        params = []
+
+        if severity:
+            query += " AND severity = ?"
+            params.append(severity)
+        if alert_type:
+            query += " AND alert_type = ?"
+            params.append(alert_type)
+        if status_filter:
+            query += " AND status = ?"
+            params.append(status_filter)
+        if client_id:
+            query += " AND application_id = ?"
+            params.append(client_id)
+
+        query += " ORDER BY created_at DESC"
+        alerts = db.execute(query, params).fetchall()
+
+        result = [dict(a) for a in alerts]
+        db.close()
+        self.success({"alerts": result, "total": len(result)})
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        # Create notification for relevant users
+        alert_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
+        for u in alert_users:
+            db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                      (u["id"], data.get("title", "Monitoring Alert"),
+                       data.get("message", "")))
+
+        db.commit()
+        db.close()
+        self.log_audit(user, "Alert", "Monitoring", f"Alert created: {data.get('title','')}")
+        self.success({"status": "created"}, 201)
+
+
+# ══════════════════════════════════════════════════════════
+# COMPLIANCE MEMO ENDPOINT (Step 5)
+# ══════════════════════════════════════════════════════════
+
+class ComplianceMemoHandler(BaseHandler):
+    """POST /api/applications/:id/memo — Generate compliance memo from application data"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        real_id = app["id"]
+
+        # Fetch related data
+        directors = [dict(d) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
+        ubos = [dict(u) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+        documents = [dict(d) for d in db.execute("SELECT * FROM documents WHERE application_id=?", (real_id,)).fetchall()]
+
+        # Generate memo structure
+        memo = {
+            "application_ref": app["ref"],
+            "company_name": app["company_name"],
+            "memo_generated": datetime.now().isoformat(),
+            "client_overview": {
+                "company_name": app["company_name"],
+                "entity_type": app["entity_type"],
+                "country": app["country"],
+                "sector": app["sector"],
+                "brn": app["brn"]
+            },
+            "ownership_structure": {
+                "structure_description": app["ownership_structure"],
+                "directors_count": len(directors),
+                "ubos_count": len(ubos),
+                "directors": [{"name": d["full_name"], "nationality": d["nationality"], "is_pep": d["is_pep"]} for d in directors],
+                "ubos": [{"name": u["full_name"], "ownership_pct": u["ownership_pct"], "is_pep": u["is_pep"]} for u in ubos]
+            },
+            "screening_results": {
+                "sanctions_status": "No matches" if not any(d["is_pep"]=="Yes" for d in directors + ubos) else "Potential matches - Review required",
+                "pep_matches": [d["full_name"] for d in directors if d["is_pep"]=="Yes"] + [u["full_name"] for u in ubos if u["is_pep"]=="Yes"],
+                "documents_verified": len([d for d in documents if d["verification_status"]=="verified"]),
+                "documents_total": len(documents)
+            },
+            "risk_indicators": {
+                "risk_score": app["risk_score"],
+                "risk_level": app["risk_level"],
+                "onboarding_lane": app["onboarding_lane"]
+            },
+            "ai_recommendation": "Approve" if app["risk_level"]=="LOW" else "Review required" if app["risk_level"] in ("MEDIUM","HIGH") else "Escalate",
+            "review_checklist": [
+                "✓ Company identity verified",
+                "✓ UBO chain mapped",
+                "✓ PEP screening completed",
+                "✓ Adverse media review conducted",
+                "✓ Source of funds verified",
+                "✓ Business model plausibility confirmed"
+            ]
+        }
+
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"], f"Compliance memo generated for {app['company_name']}", self.get_client_ip()))
+        db.commit()
+        db.close()
+
+        self.success(memo)
+
+
+# ══════════════════════════════════════════════════════════
+# DECISION WORKFLOW ENDPOINTS (Step 7)
+# ══════════════════════════════════════════════════════════
+
+class ApplicationDecisionHandler(BaseHandler):
+    """POST /api/applications/:id/decision — Submit application decision with override support"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        real_id = app["id"]
+
+        # Validate required fields
+        decision = data.get("decision")
+        decision_reason = data.get("decision_reason")
+        override_ai = data.get("override_ai", False)
+        override_reason = data.get("override_reason", "")
+
+        valid_decisions = ["approve", "reject", "escalate_edd", "request_documents"]
+        if decision not in valid_decisions:
+            db.close()
+            return self.error(f"Invalid decision. Must be one of: {', '.join(valid_decisions)}", 400)
+
+        if not decision_reason:
+            db.close()
+            return self.error("decision_reason is required", 400)
+
+        if override_ai and not override_reason:
+            db.close()
+            return self.error("override_reason is required when override_ai is true", 400)
+
+        # Handle request_documents
+        required_documents = []
+        if decision == "request_documents":
+            required_documents = data.get("documents_list", [])
+            if not required_documents:
+                db.close()
+                return self.error("documents_list is required for request_documents decision", 400)
+
+        # Update application status
+        new_status = {
+            "approve": "approved",
+            "reject": "rejected",
+            "escalate_edd": "edd_required",
+            "request_documents": "kyc_documents"
+        }[decision]
+
+        detail_info = {
+            "decision": decision,
+            "decision_reason": decision_reason,
+            "override_ai": override_ai,
+            "override_reason": override_reason if override_ai else None,
+            "required_documents": required_documents if decision == "request_documents" else None
+        }
+
+        db.execute("""
+            UPDATE applications SET
+                status=?, decided_at=datetime('now'), decision_by=?, decision_notes=?, updated_at=datetime('now')
+            WHERE id=?
+        """, (new_status, user["sub"], json.dumps(detail_info), real_id))
+
+        # Log audit trail with full detail
+        audit_detail = f"Decision: {decision} | Reason: {decision_reason}"
+        if override_ai:
+            audit_detail += f" | AI Override: {override_reason}"
+        if required_documents:
+            audit_detail += f" | Documents Required: {', '.join(required_documents)}"
+
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip()))
+
+        db.commit()
+        db.close()
+
+        self.success({"status": "decision_recorded", "decision": decision, "application_status": new_status}, 201)
+
+
+# ══════════════════════════════════════════════════════════
+# CLIENT NOTIFICATION ENDPOINTS (Step 9)
+# ══════════════════════════════════════════════════════════
+
+class ClientNotificationHandler(BaseHandler):
+    """POST /api/applications/:id/notify — Send notification to client"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        notification_type = data.get("notification_type")
+        message = data.get("message")
+        documents_list = data.get("documents_list", [])
+
+        valid_types = ["approved", "documents_required", "rejected"]
+        if notification_type not in valid_types:
+            db.close()
+            return self.error(f"Invalid notification_type. Must be one of: {', '.join(valid_types)}", 400)
+
+        if not message:
+            db.close()
+            return self.error("message is required", 400)
+
+        # Create notification
+        title_map = {
+            "approved": "Application Approved",
+            "documents_required": "Documents Required",
+            "rejected": "Application Rejected"
+        }
+
+        db.execute("""
+            INSERT INTO client_notifications (application_id, client_id, notification_type, title, message, documents_list, read_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))
+        """, (app["id"], app.get("client_id"), notification_type, title_map[notification_type], message,
+              json.dumps(documents_list) if documents_list else None))
+
+        # Log audit trail
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Notify Client", app["ref"],
+                    f"Sent {notification_type} notification to client", self.get_client_ip()))
+
+        db.commit()
+        db.close()
+
+        self.success({"status": "notification_sent", "notification_type": notification_type}, 201)
+
+
+class GetClientNotificationsHandler(BaseHandler):
+    """GET /api/notifications — Get notifications for logged-in client"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        # Only clients can retrieve their notifications
+        if user.get("type") != "client":
+            return self.error("Only clients can retrieve notifications", 403)
+
+        db = get_db()
+        notifications = db.execute("""
+            SELECT id, application_id, notification_type, title, message, documents_list, read_status, created_at
+            FROM client_notifications
+            WHERE client_id = ?
+            ORDER BY created_at DESC
+        """, (user["sub"],)).fetchall()
+
+        result = [dict(n) for n in notifications]
+        for n in result:
+            if n["documents_list"]:
+                n["documents_list"] = json.loads(n["documents_list"])
+
+        db.close()
+        self.success({"notifications": result})
+
+
+class MarkNotificationReadHandler(BaseHandler):
+    """PATCH /api/notifications/:id/read — Mark notification as read"""
+    def patch(self, notif_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        notif = db.execute("SELECT * FROM client_notifications WHERE id = ?", (notif_id,)).fetchone()
+        if not notif:
+            db.close()
+            return self.error("Notification not found", 404)
+
+        if notif["client_id"] != user["sub"]:
+            db.close()
+            return self.error("Unauthorized", 403)
+
+        db.execute("UPDATE client_notifications SET read_status=1, read_at=datetime('now') WHERE id=?", (notif_id,))
+        db.commit()
+        db.close()
+
+        self.success({"status": "marked_read"})
+
+
+# ══════════════════════════════════════════════════════════
+# MONITORING ENDPOINTS (Ongoing Monitoring)
+# ══════════════════════════════════════════════════════════
+
+class MonitoringAlertDetailHandler(BaseHandler):
+    """GET/PATCH /api/monitoring/alerts/:id — Get alert detail and update status"""
+    def get(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        alert = db.execute("SELECT * FROM monitoring_alerts WHERE id = ?", (alert_id,)).fetchone()
+        if not alert:
+            db.close()
+            return self.error("Alert not found", 404)
+
+        result = dict(alert)
+        db.close()
+        self.success(result)
+
+    def patch(self, alert_id):
+        """Update alert status (dismiss, escalate, trigger_review)"""
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        alert = db.execute("SELECT * FROM monitoring_alerts WHERE id = ?", (alert_id,)).fetchone()
+        if not alert:
+            db.close()
+            return self.error("Alert not found", 404)
+
+        action = data.get("action")
+        reason = data.get("reason", "")
+
+        valid_actions = ["dismiss", "escalate", "trigger_review"]
+        if action not in valid_actions:
+            db.close()
+            return self.error(f"Invalid action. Must be one of: {', '.join(valid_actions)}", 400)
+
+        new_status = {
+            "dismiss": "dismissed",
+            "escalate": "escalated",
+            "trigger_review": "escalated"
+        }[action]
+
+        db.execute("""
+            UPDATE monitoring_alerts SET
+                status=?, reviewed_at=datetime('now'), reviewed_by=?, officer_notes=?, officer_action=?
+            WHERE id=?
+        """, (new_status, user["sub"], reason, action, alert_id))
+
+        # Log audit
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Alert Action", f"Alert {alert_id}",
+                    f"Action: {action}, Reason: {reason}", self.get_client_ip()))
+
+        db.commit()
+        db.close()
+
+        self.success({"status": "alert_updated", "new_status": new_status})
+
+
+class MonitoringAgentsHandler(BaseHandler):
+    """GET /api/monitoring/agents — Get status of monitoring agents"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        agents = db.execute("""
+            SELECT id, agent_name, agent_type, last_run, next_run, run_frequency, clients_monitored, alerts_generated, status
+            FROM monitoring_agent_status
+            ORDER BY agent_name
+        """).fetchall()
+
+        result = [dict(a) for a in agents]
+        db.close()
+        self.success({"agents": result})
+
+
+class MonitoringAgentRunHandler(BaseHandler):
+    """POST /api/monitoring/agents/:id/run — Manually trigger agent run"""
+    def post(self, agent_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        agent = db.execute("SELECT * FROM monitoring_agent_status WHERE id = ?", (agent_id,)).fetchone()
+        if not agent:
+            db.close()
+            return self.error("Agent not found", 404)
+
+        # Simulate agent run - in production, this would trigger actual monitoring logic
+        now = datetime.now().isoformat()
+        db.execute("""
+            UPDATE monitoring_agent_status SET last_run=?, alerts_generated=alerts_generated+1 WHERE id=?
+        """, (now, agent_id))
+
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Agent Run", agent["agent_name"],
+                    f"Manual run triggered for {agent['agent_name']}", self.get_client_ip()))
+
+        db.commit()
+        db.close()
+
+        self.success({"status": "agent_run_initiated", "agent": agent["agent_name"], "run_time": now})
+
+
+class PeriodicReviewsListHandler(BaseHandler):
+    """GET /api/monitoring/reviews — List periodic reviews"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        status_filter = self.get_argument("status", None)
+        db = get_db()
+
+        query = "SELECT * FROM periodic_reviews WHERE 1=1"
+        params = []
+
+        if status_filter:
+            query += " AND status = ?"
+            params.append(status_filter)
+
+        query += " ORDER BY due_date ASC"
+        reviews = db.execute(query, params).fetchall()
+
+        result = [dict(r) for r in reviews]
+        db.close()
+        self.success({"reviews": result})
+
+
+class PeriodicReviewDetailHandler(BaseHandler):
+    """GET /api/monitoring/reviews/:id — Get review detail"""
+    def get(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        review = db.execute("SELECT * FROM periodic_reviews WHERE id = ?", (review_id,)).fetchone()
+        if not review:
+            db.close()
+            return self.error("Review not found", 404)
+
+        result = dict(review)
+        if result["review_memo"]:
+            result["review_memo"] = json.loads(result["review_memo"])
+
+        db.close()
+        self.success(result)
+
+
+class PeriodicReviewDecisionHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/decision — Submit review decision"""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        review = db.execute("SELECT * FROM periodic_reviews WHERE id = ?", (review_id,)).fetchone()
+        if not review:
+            db.close()
+            return self.error("Review not found", 404)
+
+        decision = data.get("decision")
+        decision_reason = data.get("decision_reason")
+
+        valid_decisions = ["continue", "enhanced_monitoring", "request_info", "exit_relationship"]
+        if decision not in valid_decisions:
+            db.close()
+            return self.error(f"Invalid decision. Must be one of: {', '.join(valid_decisions)}", 400)
+
+        if not decision_reason:
+            db.close()
+            return self.error("decision_reason is required", 400)
+
+        db.execute("""
+            UPDATE periodic_reviews SET
+                status='completed', decision=?, decision_reason=?, decided_by=?, completed_at=datetime('now')
+            WHERE id=?
+        """, (decision, decision_reason, user["sub"], review_id))
+
+        # Log audit
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Review Decision", f"Review {review_id}",
+                    f"Decision: {decision}, Reason: {decision_reason}", self.get_client_ip()))
+
+        db.commit()
+        db.close()
+
+        self.success({"status": "decision_recorded", "decision": decision})
+
+
+class PeriodicReviewScheduleHandler(BaseHandler):
+    """POST /api/monitoring/reviews/schedule — Check and create due reviews"""
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+
+        # Find applications due for periodic review based on risk level
+        # LOW: every 2 years, MEDIUM: annual, HIGH: semi-annual, VERY_HIGH: quarterly
+        now = datetime.now()
+        today = now.date().isoformat()
+
+        risk_intervals = {
+            "LOW": 730,  # days
+            "MEDIUM": 365,
+            "HIGH": 180,
+            "VERY_HIGH": 90
+        }
+
+        created_count = 0
+        for risk_level, days in risk_intervals.items():
+            # Find applications with this risk level that haven't been reviewed recently
+            cutoff_date = (now - timedelta(days=days)).isoformat()
+            apps = db.execute("""
+                SELECT a.id, a.ref, a.company_name, a.risk_level
+                FROM applications a
+                WHERE a.risk_level = ? AND a.status IN ('approved', 'rmi_sent')
+                AND NOT EXISTS (
+                    SELECT 1 FROM periodic_reviews pr
+                    WHERE pr.application_id = a.id AND pr.created_at > ?
+                )
+            """, (risk_level, cutoff_date)).fetchall()
+
+            for app in apps:
+                due_date = (now + timedelta(days=7)).date().isoformat()
+                db.execute("""
+                    INSERT INTO periodic_reviews (application_id, client_name, risk_level, trigger_type, trigger_reason, status, due_date, created_at)
+                    VALUES (?, ?, ?, 'time_based', ?, 'pending', ?, datetime('now'))
+                """, (app["id"], app["company_name"], app["risk_level"], f"Periodic review due for {risk_level} risk client", due_date))
+                created_count += 1
+
+        db.commit()
+        db.close()
+
+        self.success({"status": "schedule_check_complete", "reviews_created": created_count})
+
+
+# ══════════════════════════════════════════════════════════
+# AI ASSISTANT ENDPOINT
+# ══════════════════════════════════════════════════════════
+
+class AIAssistantHandler(BaseHandler):
+    """POST /api/ai/assistant — AI assistant for compliance topics"""
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        data = self.get_json()
+        message = data.get("message", "").strip()
+
+        if not message:
+            self.error("Message cannot be empty", 400)
+            return
+
+        # Simulated AI response about compliance topics
+        # In production, this would integrate with an LLM API
+        compliance_keywords = ["kyc", "aml", "sanctions", "pep", "risk", "screening", "compliance", "due diligence"]
+        is_compliance_topic = any(kw in message.lower() for kw in compliance_keywords)
+
+        if is_compliance_topic:
+            response = self._get_compliance_response(message)
+        else:
+            response = "I can help with compliance and KYC-related questions. Please ask about AML, sanctions screening, PEP verification, risk assessment, or due diligence procedures."
+
+        self.success({"response": response, "topic": "compliance" if is_compliance_topic else "general"})
+
+    def _get_compliance_response(self, message):
+        """Return contextual compliance guidance based on the message"""
+        msg_lower = message.lower()
+
+        if any(w in msg_lower for w in ["kyc", "know your customer"]):
+            return "KYC (Know Your Customer) involves verifying customer identity, conducting beneficial ownership analysis, and assessing risk profile. Core elements: identity verification, address verification, source of funds, business purpose, and beneficial ownership structure."
+
+        elif any(w in msg_lower for w in ["sanctions", "screening"]):
+            return "Sanctions and PEP screening is mandatory. Check against OFAC, UN, EU sanctions lists and PEP databases. Document all screening results. Update screening annually or when customer information changes. Maintain audit trail of all checks."
+
+        elif any(w in msg_lower for w in ["pep", "politically exposed"]):
+            return "PEP (Politically Exposed Persons) are individuals holding prominent public positions. Enhanced due diligence required including: source of wealth verification, beneficial ownership analysis, and ongoing monitoring. Document political exposure and relationships."
+
+        elif any(w in msg_lower for w in ["risk", "assessment"]):
+            return "Risk assessment evaluates customer risk across dimensions: entity risk, geographic risk, product risk, sector risk. Consider: entity type, ownership structure, jurisdiction, business model, transaction patterns. Document risk rating and mitigation measures."
+
+        elif any(w in msg_lower for w in ["ubo", "beneficial owner"]):
+            return "Ultimate Beneficial Owner (UBO) identification requires mapping full ownership chain to identify natural persons. Detect nominee structures, complex layering, and high-risk jurisdictions. Verify UBO identity and screen against sanctions/PEP lists."
+
+        elif any(w in msg_lower for w in ["aml", "anti-money laundering"]):
+            return "AML compliance requires: customer due diligence, sanctions screening, ongoing monitoring, transaction monitoring, suspicious activity reporting, and record retention. Maintain policies, procedures, and staff training programs."
+
+        else:
+            return "I can assist with compliance questions including KYC procedures, sanctions screening, PEP verification, risk assessment, UBO identification, and AML compliance. What specific area would you like to know more about?"
+
+
+# ══════════════════════════════════════════════════════════
 # APP SETUP & ROUTES
 # ══════════════════════════════════════════════════════════
 
 def make_app():
-    return tornado.web.Application([
+    routes = [
         # Health
         (r"/api/health", HealthHandler),
 
@@ -2573,6 +3908,11 @@ def make_app():
 
         # Applications (more specific routes first)
         (r"/api/applications/([^/]+)/submit", SubmitApplicationHandler),
+        (r"/api/applications/([^/]+)/accept-pricing", PricingAcceptHandler),
+        (r"/api/applications/([^/]+)/submit-kyc", KYCSubmitHandler),
+        (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
+        (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
+        (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/documents", DocumentUploadHandler),
         (r"/api/applications/([^/]+)", ApplicationDetailHandler),
         (r"/api/applications", ApplicationsHandler),
@@ -2603,24 +3943,80 @@ def make_app():
         (r"/api/kyc/document", SumsubDocumentHandler),
         (r"/api/kyc/webhook", SumsubWebhookHandler),
 
+        # Reports
+        (r"/api/reports/generate", ReportHandler),
+
         # Audit
         (r"/api/audit", AuditHandler),
 
         # Dashboard
         (r"/api/dashboard", DashboardHandler),
 
+        # Client Notifications
+        (r"/api/notifications", GetClientNotificationsHandler),
+        (r"/api/notifications/([^/]+)/read", MarkNotificationReadHandler),
+
+        # Monitoring
+        (r"/api/monitoring/dashboard", MonitoringDashboardHandler),
+        (r"/api/monitoring/clients", MonitoringClientsHandler),
+        # Alerts (more specific routes first)
+        (r"/api/monitoring/alerts/([^/]+)", MonitoringAlertDetailHandler),
+        (r"/api/monitoring/alerts", MonitoringAlertCreateHandler),
+        # Agents
+        (r"/api/monitoring/agents/([^/]+)/run", MonitoringAgentRunHandler),
+        (r"/api/monitoring/agents", MonitoringAgentsHandler),
+        # Periodic Reviews (more specific routes first)
+        (r"/api/monitoring/reviews/schedule", PeriodicReviewScheduleHandler),
+        (r"/api/monitoring/reviews/([^/]+)/decision", PeriodicReviewDecisionHandler),
+        (r"/api/monitoring/reviews/([^/]+)", PeriodicReviewDetailHandler),
+        (r"/api/monitoring/reviews", PeriodicReviewsListHandler),
+
+        # AI Assistant
+        (r"/api/ai/assistant", AIAssistantHandler),
+
         # Save & Resume
         (r"/api/save-resume", SaveResumeHandler),
+
+        # Root redirect
+        (r"/", tornado.web.RedirectHandler, {"url": "/portal"}),
 
         # Serve portal HTML files and static assets
         (r"/portal", PortalHandler),
         (r"/backoffice", BackOfficeHandler),
         (r"/static/(.*)", tornado.web.StaticFileHandler, {"path": STATIC_DIR}),
-    ], debug=os.environ.get("DEBUG", "0") == "1")
+    ]
+
+    # Integrate supervisor routes
+    if SUPERVISOR_AVAILABLE:
+        routes.extend(get_supervisor_routes())
+        logger.info("Supervisor API endpoints registered (%d routes)", len(get_supervisor_routes()))
+
+    return tornado.web.Application(routes,
+        debug=os.environ.get("DEBUG", "0") == "1",
+        xsrf_cookies=False,  # Disabled for API-only server using Bearer tokens
+        max_body_size=20 * 1024 * 1024,  # 20MB max request body
+    )
 
 
 if __name__ == "__main__":
     init_db()
+
+    # Run database migrations
+    try:
+        from migrations.runner import run_all_migrations
+        run_all_migrations(DB_PATH)
+    except Exception as e:
+        logger.warning("Migration runner unavailable: %s", e)
+
+    # Initialize supervisor framework
+    if SUPERVISOR_AVAILABLE:
+        try:
+            setup_supervisor(DB_PATH)
+            logger.info("✅ Supervisor framework initialized")
+        except Exception as e:
+            logger.error("Failed to initialize supervisor: %s", e)
+            SUPERVISOR_AVAILABLE = False
+
     app = make_app()
     # Bind to 0.0.0.0 for cloud deployment (Railway, Render, etc.)
     app.listen(PORT, address="0.0.0.0")

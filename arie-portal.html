@@ -1408,9 +1408,9 @@
 <!-- ══ Global Client Sidebar (persistent for logged-in views) ══ -->
 <aside id="global-client-sidebar">
   <div class="dash-user-block" style="margin-bottom:18px;">
-    <div class="dash-avatar">JD</div>
-    <div class="dash-user-name">John Doe</div>
-    <div class="dash-user-email">john.doe@techpay.com</div>
+    <div class="dash-avatar" id="dash-avatar-initials">--</div>
+    <div class="dash-user-name" id="dash-user-name">Loading...</div>
+    <div class="dash-user-email" id="dash-user-email">...</div>
   </div>
 
   <div class="dash-sidebar-label">Navigation</div>
@@ -1438,7 +1438,7 @@
 
   <div class="dash-nav-sep"></div>
   <div class="dash-sidebar-label">Account</div>
-  <button type="button" class="dash-nav-item" onclick="showView('company-lookup')">
+  <button type="button" class="dash-nav-item" onclick="showView('prescreening')">
     <span class="dash-nav-icon">➕</span> New Application
   </button>
   <button type="button" class="dash-nav-item" onclick="showView('status-lookup')">
@@ -1640,7 +1640,7 @@
     <div class="dash-main" style="padding-top:80px;">
 
         <div class="dash-greeting">
-          <h1>Welcome back, John 👋</h1>
+          <h2 style="margin-bottom:1.5rem;" id="welcome-heading">Welcome back 👋</h2>
           <p>You have <strong>1 application</strong> awaiting action. Here's your overview.</p>
         </div>
 
@@ -1648,17 +1648,17 @@
         <div class="dash-stats">
           <div class="dash-stat-card highlight">
             <div class="dash-stat-label">Total Applications</div>
-            <div class="dash-stat-value">3</div>
+            <div class="dash-stat-value" id="stat-total">3</div>
             <div class="dash-stat-sub">Since Jan 2026</div>
           </div>
           <div class="dash-stat-card">
             <div class="dash-stat-label">In Progress</div>
-            <div class="dash-stat-value" style="color:var(--amber);">2</div>
+            <div class="dash-stat-value" style="color:var(--amber);" id="stat-progress">2</div>
             <div class="dash-stat-sub">Awaiting review or docs</div>
           </div>
           <div class="dash-stat-card">
             <div class="dash-stat-label">Approved</div>
-            <div class="dash-stat-value" style="color:var(--green);">1</div>
+            <div class="dash-stat-value" style="color:var(--green);" id="stat-approved">1</div>
             <div class="dash-stat-sub">Account active</div>
           </div>
         </div>
@@ -1672,7 +1672,7 @@
             <div style="margin-top:12px;font-size:11px;opacity:0.8;">Ref: ARF-2026-100421 &nbsp;·&nbsp; Last updated 10 Mar 2026</div>
             <div class="dash-cta-arrow">→</div>
           </div>
-          <div class="dash-cta-card secondary" onclick="showView('company-lookup')">
+          <div class="dash-cta-card secondary" onclick="showView('prescreening')">
             <div class="dash-cta-icon">➕</div>
             <div class="dash-cta-title">Start New Application</div>
             <div class="dash-cta-desc">Open an account for a new company. Our AI agent will pre-fill the form from global registries.</div>
@@ -1697,49 +1697,8 @@
                 <th>Last Updated</th>
               </tr>
             </thead>
-            <tbody>
-              <tr onclick="resumeApplication('ARF-2026-100421','onboarding')">
-                <td>
-                  <div class="app-tbl-name">TechPay Solutions Ltd</div>
-                  <div class="app-tbl-ref">🇬🇧 United Kingdom · Fintech</div>
-                </td>
-                <td><div class="app-tbl-ref">ARF-2026-100421</div></td>
-                <td style="font-size:12px;font-weight:600;">KYC Documents</td>
-                <td>
-                  <div class="app-progress-bar"><div class="app-progress-fill" style="width:75%"></div></div>
-                  <div style="font-size:10px;color:var(--text3);margin-top:3px;">Step 4 of 6</div>
-                </td>
-                <td><span class="app-status kyc">📄 Action Required</span></td>
-                <td style="font-size:12px;color:var(--text3);">10 Mar 2026</td>
-              </tr>
-              <tr onclick="resumeApplication('ARF-2026-100399','prescreening')">
-                <td>
-                  <div class="app-tbl-name">GlobalTrade Import Exports</div>
-                  <div class="app-tbl-ref">🇳🇬 Nigeria · Import / Export</div>
-                </td>
-                <td><div class="app-tbl-ref">ARF-2026-100399</div></td>
-                <td style="font-size:12px;font-weight:600;">Under Review</td>
-                <td>
-                  <div class="app-progress-bar"><div class="app-progress-fill" style="width:55%"></div></div>
-                  <div style="font-size:10px;color:var(--text3);margin-top:3px;">Step 3 of 6</div>
-                </td>
-                <td><span class="app-status review">⏳ Pending Review</span></td>
-                <td style="font-size:12px;color:var(--text3);">2 Mar 2026</td>
-              </tr>
-              <tr onclick="resumeApplication('ARF-2025-099812','approved')">
-                <td>
-                  <div class="app-tbl-name">MediaGroup Africa Ltd</div>
-                  <div class="app-tbl-ref">🇿🇦 South Africa · Media</div>
-                </td>
-                <td><div class="app-tbl-ref">ARF-2025-099812</div></td>
-                <td style="font-size:12px;font-weight:600;">Approved</td>
-                <td>
-                  <div class="app-progress-bar"><div class="app-progress-fill" style="width:100%;background:var(--green);"></div></div>
-                  <div style="font-size:10px;color:var(--text3);margin-top:3px;">Complete</div>
-                </td>
-                <td><span class="app-status approved">✅ Approved</span></td>
-                <td style="font-size:12px;color:var(--text3);">20 Jan 2026</td>
-              </tr>
+            <tbody id="my-apps-tbody">
+              <tr><td colspan="6" style="text-align:center;padding:2rem;color:#999;">Loading your applications...</td></tr>
             </tbody>
           </table>
         </div>
@@ -1801,12 +1760,14 @@
 
           <div class="form-group mb-2">
             <label>Company Name <span class="req">*</span></label>
-            <input type="text" id="lu-name" placeholder="e.g. TechPay Solutions Limited" required/>
+            <input type="text" id="lu-name" placeholder="e.g. TechPay Solutions Limited" required oninput="handleCompanyNameInput()"/>
+            <div id="lu-name-validation" style="display:none;margin-top:8px;font-size:12px;padding:8px;border-radius:var(--radius-sm);"></div>
           </div>
           <div class="form-grid cols-3 mb-2" style="margin-top:0">
             <div class="form-group span-2" style="grid-column:span 2">
               <label>Company Registration Number <span class="req">*</span></label>
-              <input type="text" id="lu-reg" placeholder="e.g. 11924857 or C12345678"/>
+              <input type="text" id="lu-reg" placeholder="e.g. 11924857 or C12345678" oninput="handleRegistrationInput()"/>
+              <div id="lu-reg-validation" style="display:none;margin-top:8px;font-size:12px;padding:8px;border-radius:var(--radius-sm);"></div>
             </div>
             <div class="form-group">
               <label>Country of Incorporation <span class="req">*</span><span class="ai-prefilled-badge">🤖 Auto-filled</span></label>
@@ -1814,6 +1775,11 @@
                 <option value="">Select…</option>
               </select>
             </div>
+          </div>
+          <!-- Real-time Registry Verification Results -->
+          <div id="registry-verification-panel" style="display:none;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:20px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:10px;color:var(--text2);">🔍 Real-time Registry Verification</div>
+            <div id="registry-results" style="display:flex;flex-direction:column;gap:8px;"></div>
           </div>
 
           <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:20px;">
@@ -1938,23 +1904,22 @@
       <!-- Steps -->
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Register</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Company Lookup</div></div>
-        <div class="step active" id="step-1"><div class="step-circle">3</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step" id="step-2"><div class="step-circle">4</div><div class="step-label">Review</div></div>
-        <div class="step" id="step-3"><div class="step-circle">5</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step" id="step-4"><div class="step-circle">6</div><div class="step-label">Approved</div></div>
+        <div class="step active" id="step-1"><div class="step-circle">2</div><div class="step-label">Pre-Screening</div></div>
+        <div class="step" id="step-2"><div class="step-circle">3</div><div class="step-label">AI Review</div></div>
+        <div class="step" id="step-3"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step" id="step-4"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-icon gold">🏢</div>
           <div>
-            <div class="card-title">Corporate Account Pre-Screening</div>
+            <div class="card-title">Corporate Account Application</div>
             <div class="card-sub">Complete all fields · Takes approx. 10 minutes</div>
           </div>
         </div>
 
-        <div id="prefill-notice" style="display:none;background:rgba(43,47,143,0.08);border:1px solid rgba(43,47,143,0.3);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;display:flex;align-items:flex-start;gap:12px;">
+        <div id="prefill-notice" class="hidden" style="background:rgba(43,47,143,0.08);border:1px solid rgba(43,47,143,0.3);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;display:flex;align-items:flex-start;gap:12px;">
             <div style="font-size:22px;flex-shrink:0;">🤖</div>
             <div>
               <div style="font-size:13px;font-weight:700;margin-bottom:3px;color:#8A9FE8;">Application Pre-filled by AI</div>
@@ -2791,7 +2756,7 @@
           </div>
 
           <button type="submit" class="btn-submit">
-            🔒 Submit Pre-Screening Application
+            🔒 Submit Application
           </button>
         </form>
       </div>
@@ -2806,10 +2771,9 @@
       <!-- Steps -->
       <div class="steps">
         <div class="step done" id="s2-1"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step active" id="s2-2"><div class="step-circle">2</div><div class="step-label">AI Risk Scoring</div></div>
-        <div class="step" id="s2-3"><div class="step-circle">3</div><div class="step-label">Pricing</div></div>
-        <div class="step" id="s2-4"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step" id="s2-5"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
+        <div class="step active" id="s2-2"><div class="step-circle">2</div><div class="step-label">AI Review</div></div>
+        <div class="step" id="s2-3"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step" id="s2-4"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="status-hero">
@@ -2885,10 +2849,9 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step active"><div class="step-circle">2</div><div class="step-label">AI Risk Scoring</div></div>
-        <div class="step"><div class="step-circle">3</div><div class="step-label">Pricing</div></div>
-        <div class="step"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
+        <div class="step active"><div class="step-circle">2</div><div class="step-label">AI Review</div></div>
+        <div class="step"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="risk-computing-overlay" id="risk-computing">
@@ -2901,6 +2864,61 @@
           <div class="risk-dim-row"><div class="risk-dim-label"><span>Product / Service Risk</span><span id="dim3-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim3-bar"></div></div></div>
           <div class="risk-dim-row"><div class="risk-dim-label"><span>Industry / Sector Risk</span><span id="dim4-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim4-bar"></div></div></div>
           <div class="risk-dim-row"><div class="risk-dim-label"><span>Delivery Channel Risk</span><span id="dim5-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim5-bar"></div></div></div>
+        </div>
+
+        <div style="margin-top:32px;border-top:1px solid var(--border2);padding-top:24px;">
+          <div style="font-size:13px;color:var(--text3);margin-bottom:16px;text-align:center;">Onboarding Agents Running...</div>
+          <div style="display:grid;grid-template-columns:1fr;gap:16px;max-width:100%;">
+            <div class="ai-agent-panel">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <span style="font-weight:600;font-size:13px;">🔍 Agent 1: Identity & Document Integrity</span>
+                <span class="ai-agent-badge clear" id="agent1-badge">Running…</span>
+              </div>
+              <div class="ai-agent-checks" id="agent1-checks"></div>
+            </div>
+            <div class="ai-agent-panel">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <span style="font-weight:600;font-size:13px;">🔎 Agent 2: External Database Verification</span>
+                <span class="ai-agent-badge clear" id="agent2-badge">Running…</span>
+              </div>
+              <div class="ai-agent-checks" id="agent2-checks"></div>
+            </div>
+            <div class="ai-agent-panel">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <span style="font-weight:600;font-size:13px;">💼 Agent 3: FinCrime Screening</span>
+                <span class="ai-agent-badge clear" id="agent3-badge">Running…</span>
+              </div>
+              <div class="ai-agent-checks" id="agent3-checks"></div>
+            </div>
+            <div class="ai-agent-panel">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <span style="font-weight:600;font-size:13px;">🏗️ Agent 4: Corporate Structure & UBO</span>
+                <span class="ai-agent-badge clear" id="agent4-badge">Running…</span>
+              </div>
+              <div class="ai-agent-checks" id="agent4-checks"></div>
+            </div>
+            <div class="ai-agent-panel">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <span style="font-weight:600;font-size:13px;">📝 Agent 5: Compliance Memo & Risk Recommendation</span>
+                <span class="ai-agent-badge clear" id="agent5-badge">Running…</span>
+              </div>
+              <div class="ai-agent-checks" id="agent5-checks"></div>
+            </div>
+          </div>
+
+          <!-- Consolidation Step -->
+          <div id="consolidation-step" style="display:none;margin-top:24px;border-top:1px solid var(--border2);padding-top:24px;text-align:center;">
+            <div class="ai-orbit" style="margin:0 auto 16px;width:40px;height:40px;"></div>
+            <div style="font-weight:600;font-size:14px;margin-bottom:8px;">🔧 AI Risk Engine Consolidating Results</div>
+            <div style="font-size:12px;color:var(--text3);">Aggregating findings from all agents...</div>
+          </div>
+
+          <!-- Memo Generation Step -->
+          <div id="memo-generation-step" style="display:none;margin-top:24px;border-top:1px solid var(--border2);padding-top:24px;text-align:center;">
+            <div class="ai-orbit" style="margin:0 auto 16px;width:40px;height:40px;"></div>
+            <div style="font-weight:600;font-size:14px;margin-bottom:8px;">📄 Compliance Memo Being Generated</div>
+            <div style="font-size:12px;color:var(--text3);">Creating comprehensive onboarding memo...</div>
+          </div>
         </div>
       </div>
 
@@ -2927,10 +2945,9 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Scoring</div></div>
-        <div class="step active"><div class="step-circle">3</div><div class="step-label">Compliance Review</div></div>
-        <div class="step"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
+        <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="compliance-referral-card">
@@ -2969,10 +2986,9 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Scoring</div></div>
-        <div class="step active"><div class="step-circle">3</div><div class="step-label">Pricing</div></div>
-        <div class="step"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
+        <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="pricing-view">
@@ -3025,10 +3041,9 @@
       <!-- Steps -->
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Scoring</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pricing</div></div>
-        <div class="step active"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
+        <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
 
       <!-- Progress -->
@@ -3575,9 +3590,8 @@
   <div id="view-submission-review" class="hidden">
     <div class="page">
       <div class="step-bar">
-        <div class="step done">Pre-Screening</div>
-        <div class="step done">Risk Scoring</div>
-        <div class="step done">Pricing</div>
+        <div class="step done">Application Form</div>
+        <div class="step done">AI Review</div>
         <div class="step done">KYC & Documents</div>
         <div class="step active">Review & Submit</div>
       </div>
@@ -3667,9 +3681,9 @@
 
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Review</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step active"><div class="step-circle">4</div><div class="step-label">Final Review</div></div>
+        <div class="step active"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="status-hero">
@@ -3692,6 +3706,138 @@
       <div style="text-align:center; margin-top:24px;">
         <p class="text-sm" style="color:var(--text3); margin-bottom:12px;">[ Demo Mode ]</p>
         <button class="btn btn-primary" onclick="simulateFinalApproval()">🎉 Simulate Final Approval</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       VIEW: CLIENT NOTIFICATIONS & STATUS
+  ══════════════════════════════════════ -->
+  <div id="view-client-notifications" class="hidden">
+    <div class="page">
+      <div class="steps">
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Application</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Submission</div></div>
+        <div class="step active"><div class="step-circle">9</div><div class="step-label">Status & Messages</div></div>
+      </div>
+
+      <!-- Status Tracker -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon blue">📊</div>
+          <div>
+            <div class="card-title">Application Status</div>
+            <div class="card-sub">Track your progress through our review process</div>
+          </div>
+        </div>
+
+        <div style="margin-top:24px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;align-items:center;margin-bottom:24px;">
+            <!-- Stage 1: Submitted -->
+            <div style="text-align:center;">
+              <div style="width:48px;height:48px;margin:0 auto 12px;background:var(--green-dim);border:2px solid var(--green);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;">✓</div>
+              <div style="font-weight:600;font-size:12px;margin-bottom:4px;">Submitted</div>
+              <div style="font-size:11px;color:var(--text3);">Your application received</div>
+            </div>
+
+            <!-- Arrow -->
+            <div style="text-align:center;color:var(--text3);">→</div>
+
+            <!-- Stage 2: Under Review -->
+            <div style="text-align:center;">
+              <div id="stage-under-review" style="width:48px;height:48px;margin:0 auto 12px;background:var(--blue-dim);border:2px solid var(--blue);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;">⏳</div>
+              <div style="font-weight:600;font-size:12px;margin-bottom:4px;">Under Review</div>
+              <div style="font-size:11px;color:var(--text3);">Being processed</div>
+            </div>
+
+            <!-- Arrow -->
+            <div style="text-align:center;color:var(--text3);">→</div>
+
+            <!-- Stage 3: Decision -->
+            <div style="text-align:center;">
+              <div id="stage-decision" style="width:48px;height:48px;margin:0 auto 12px;background:var(--bg3);border:2px solid var(--border2);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--text3);">?</div>
+              <div style="font-weight:600;font-size:12px;margin-bottom:4px;">Decision</div>
+              <div style="font-size:11px;color:var(--text3);">Pending</div>
+            </div>
+          </div>
+
+          <div style="padding:12px;background:var(--blue-dim);border-radius:var(--radius-sm);color:var(--blue);font-size:12px;text-align:center;">
+            <strong>Current Status:</strong> Your application is currently under review. Our compliance team is processing your documents and conducting risk assessments. You will be notified when a decision has been made.
+          </div>
+        </div>
+      </div>
+
+      <!-- Notifications/Messages Tab -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon blue">💬</div>
+          <div>
+            <div class="card-title">Messages from Compliance Team</div>
+            <div class="card-sub">Important updates and document requests</div>
+          </div>
+        </div>
+
+        <div id="notifications-container" style="margin-top:16px;display:flex;flex-direction:column;gap:12px;">
+          <!-- Message 1: Received -->
+          <div style="padding:12px;background:var(--green-dim);border-left:4px solid var(--green);border-radius:4px;">
+            <div style="font-weight:600;color:var(--green);font-size:13px;margin-bottom:4px;">✓ Application Received</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Your application (Ref: <strong id="notif-ref">ARF-2026-XXXXXX</strong>) has been successfully submitted to our compliance team.</div>
+            <div style="font-size:11px;color:var(--text3);">Submitted on <strong id="notif-date">Today at 2:34 PM</strong></div>
+          </div>
+
+          <!-- Message 2: Under Review (Simulated) -->
+          <div id="message-under-review" style="display:none;padding:12px;background:var(--blue-dim);border-left:4px solid var(--blue);border-radius:4px;">
+            <div style="font-weight:600;color:var(--blue);font-size:13px;margin-bottom:4px;">⏳ Application Under Review</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Your application is currently being reviewed by our compliance team. We will notify you as soon as a decision has been made.</div>
+            <div style="font-size:11px;color:var(--text3);">Expected response: <strong>Within 5-7 business days</strong></div>
+          </div>
+
+          <!-- Message 3: Additional Documents Required (Simulated) -->
+          <div id="message-docs-required" style="display:none;padding:12px;background:var(--amber-dim);border-left:4px solid var(--amber);border-radius:4px;">
+            <div style="font-weight:600;color:var(--amber);font-size:13px;margin-bottom:4px;">⚠️ Additional Documents Required</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Our compliance team has identified the following documents needed to complete your review:</div>
+            <ul style="font-size:12px;color:var(--text2);margin:8px 0;padding-left:20px;">
+              <li>Updated Director CV (PDF)</li>
+              <li>Bank reference letter (dated within last 6 months)</li>
+            </ul>
+            <div style="margin-top:10px;">
+              <button class="btn btn-primary" onclick="alert('Upload interface would appear here')" style="font-size:11px;padding:6px 12px;">📤 Upload Documents</button>
+            </div>
+          </div>
+
+          <!-- Message 4: Approved (Simulated) -->
+          <div id="message-approved" style="display:none;padding:12px;background:var(--green-dim);border-left:4px solid var(--green);border-radius:4px;">
+            <div style="font-weight:600;color:var(--green);font-size:13px;margin-bottom:4px;">✓ Application Approved</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Congratulations! Your application has been approved. Your account is being activated and a dedicated relationship manager will contact you shortly.</div>
+            <div style="font-size:11px;color:var(--text3);">Next step: Account activation</div>
+          </div>
+
+          <!-- Message 5: Declined (Simulated) -->
+          <div id="message-declined" style="display:none;padding:12px;background:var(--red-dim);border-left:4px solid var(--red);border-radius:4px;">
+            <div style="font-weight:600;color:var(--red);font-size:13px;margin-bottom:4px;">✗ Application Declined</div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">We regret to inform you that your application has not been approved at this time. A detailed explanation has been sent to your email address.</div>
+            <div style="font-size:11px;color:var(--text3);">You may contact our compliance team to request a review</div>
+          </div>
+
+          <!-- Message 6: Generic Update (Simulated) -->
+          <div id="message-generic" style="display:none;padding:12px;background:var(--bg3);border-left:4px solid var(--brand);border-radius:4px;">
+            <div style="font-weight:600;color:var(--brand);font-size:13px;margin-bottom:4px;">ℹ️ Application Update</div>
+            <div style="font-size:12px;color:var(--text2);">Your application is progressing well. One of our compliance officers will reach out if we need any clarification on the documents you submitted.</div>
+            <div style="font-size:11px;color:var(--text3);">Updated <strong>2 hours ago</strong></div>
+          </div>
+        </div>
+
+        <div style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border2);">
+          <div style="font-size:12px;color:var(--text2);margin-bottom:12px;"><strong>💡 Tip:</strong> Check this page regularly for updates. New messages will appear here as your application progresses.</div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="card">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <button class="btn btn-outline" style="padding:12px;font-size:12px;" onclick="simulateStatusUpdate('under-review')">🔄 Simulate: Under Review Update</button>
+          <button class="btn btn-outline" style="padding:12px;font-size:12px;" onclick="simulateStatusUpdate('approved')">✓ Simulate: Approval</button>
+        </div>
       </div>
     </div>
   </div>
@@ -4236,7 +4382,7 @@
 
 <script>
 // ─── API Configuration ──────────────────────────────────
-const API_BASE = (window.location.port === '8080' ? '' : 'http://localhost:8080') + '/api';
+const API_BASE = '/api';
 let AUTH_TOKEN = localStorage.getItem('arie_token') || '';
 let AUTH_USER = JSON.parse(localStorage.getItem('arie_user') || 'null');
 let currentApplicationId = localStorage.getItem('arie_current_app_id') || '';
@@ -4266,6 +4412,21 @@ function setAuth(token, user) {
   AUTH_USER = user;
   localStorage.setItem('arie_token', token);
   localStorage.setItem('arie_user', JSON.stringify(user));
+  updateUserDisplay();
+}
+
+function updateUserDisplay() {
+  if (AUTH_USER) {
+    var name = AUTH_USER.company_name || AUTH_USER.full_name || AUTH_USER.email || 'User';
+    var email = AUTH_USER.email || '';
+    var initials = name.split(' ').map(w => w[0]).join('').substring(0,2).toUpperCase() || '--';
+    var el1 = document.getElementById('dash-avatar-initials');
+    var el2 = document.getElementById('dash-user-name');
+    var el3 = document.getElementById('dash-user-email');
+    if (el1) el1.textContent = initials;
+    if (el2) el2.textContent = name;
+    if (el3) el3.textContent = email;
+  }
 }
 
 function clearAuth() {
@@ -4289,7 +4450,7 @@ function updateTotalRequiredDocs() {
 
 // ─── View switching ───────────────────────────────────────
 // Views where the persistent client sidebar is shown
-const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','onboarding','submission-review','docs-review','approved','rejected'];
+const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','onboarding','submission-review','docs-review','approved','rejected','client-notifications'];
 
 function showView(name) {
   document.querySelectorAll('[id^="view-"]').forEach(v => v.classList.add('hidden'));
@@ -4307,6 +4468,10 @@ function showView(name) {
   // Update active sidebar nav item
   setSidebarActive(name);
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  // Load applications if viewing my-apps
+  if (name === 'my-apps' || name === 'view-my-apps') {
+    loadMyApplications();
+  }
 }
 
 function setSidebarActive(viewName) {
@@ -4319,9 +4484,67 @@ function setSidebarActive(viewName) {
 }
 
 function clientSignOut() {
+  clearAuth();
   document.getElementById('global-client-sidebar').classList.remove('open');
   document.body.classList.remove('sidebar-active');
   showView('landing');
+}
+
+async function loadMyApplications() {
+  if (!AUTH_TOKEN) return;
+
+  // Update welcome heading
+  var heading = document.getElementById('welcome-heading');
+  if (heading && AUTH_USER) {
+    var firstName = (AUTH_USER.company_name || AUTH_USER.full_name || AUTH_USER.email || '').split(' ')[0];
+    heading.textContent = 'Welcome back, ' + firstName + ' 👋';
+  }
+
+  try {
+    var resp = await apiCall('GET', '/applications');
+    var apps = resp.applications || [];
+
+    // Update stats
+    var total = apps.length;
+    var inProgress = apps.filter(a => ['pending','in_review','edd_required'].includes(a.status)).length;
+    var approved = apps.filter(a => a.status === 'approved').length;
+    var el1 = document.getElementById('stat-total');
+    var el2 = document.getElementById('stat-progress');
+    var el3 = document.getElementById('stat-approved');
+    if (el1) el1.textContent = total;
+    if (el2) el2.textContent = inProgress;
+    if (el3) el3.textContent = approved;
+
+    // Render table
+    var tbody = document.getElementById('my-apps-tbody');
+    if (!tbody) return;
+
+    if (apps.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:#999;">No applications yet. Click "Start Application" to begin.</td></tr>';
+      return;
+    }
+
+    var html = '';
+    apps.forEach(function(app) {
+      var statusColors = {pending:'#f59e0b',in_review:'#3b82f6',approved:'#10b981',rejected:'#ef4444',edd_required:'#8b5cf6'};
+      var statusLabels = {pending:'Pending',in_review:'In Review',approved:'Approved',rejected:'Rejected',edd_required:'EDD Required'};
+      var color = statusColors[app.status] || '#999';
+      var label = statusLabels[app.status] || app.status;
+      var riskColors = {LOW:'#10b981',MEDIUM:'#f59e0b',HIGH:'#ef4444',VERY_HIGH:'#dc2626'};
+      var riskColor = riskColors[app.risk_level] || '#999';
+      var date = app.created_at ? new Date(app.created_at).toLocaleDateString() : '';
+      html += '<tr>';
+      html += '<td style="font-weight:600;">' + (app.ref || app.id) + '</td>';
+      html += '<td>' + (app.company_name || '-') + '</td>';
+      html += '<td><span style="background:' + color + '20;color:' + color + ';padding:4px 12px;border-radius:20px;font-size:0.85rem;">' + label + '</span></td>';
+      html += '<td><span style="color:' + riskColor + ';font-weight:600;">' + (app.risk_level || '-') + '</span></td>';
+      html += '<td>' + date + '</td>';
+      html += '</tr>';
+    });
+    tbody.innerHTML = html;
+  } catch(e) {
+    console.error('Failed to load applications:', e);
+  }
 }
 
 // ─── Generate reference ───────────────────────────────────
@@ -4342,16 +4565,261 @@ function showToast(type, title, msg) {
   setTimeout(() => t.classList.remove('show'), 4000);
 }
 
+// ═══════════════════════════════════════════════════════════
+// REAL-TIME AI VALIDATION DURING DATA ENTRY
+// ═══════════════════════════════════════════════════════════
+
+// Debounce utility for field validation
+let debounceTimers = {};
+function debounce(key, fn, delay = 800) {
+  clearTimeout(debounceTimers[key]);
+  debounceTimers[key] = setTimeout(fn, delay);
+}
+
+// ─── A. Real-time Registry Verification ────────────────────
+let registryValidationTimeout = null;
+function handleCompanyNameInput() {
+  const name = document.getElementById('lu-name').value.trim();
+  const reg = document.getElementById('lu-reg').value.trim();
+  if (name.length > 2) {
+    debounce('registry-check', () => triggerRegistryVerification(), 800);
+  }
+}
+function handleRegistrationInput() {
+  const name = document.getElementById('lu-name').value.trim();
+  const reg = document.getElementById('lu-reg').value.trim();
+  if (reg.length > 2) {
+    debounce('registry-check', () => triggerRegistryVerification(), 800);
+  }
+}
+
+function triggerRegistryVerification() {
+  const name = document.getElementById('lu-name').value.trim();
+  const reg = document.getElementById('lu-reg').value.trim();
+
+  if (name.length < 3 || reg.length < 2) return;
+
+  const panel = document.getElementById('registry-verification-panel');
+  const results = document.getElementById('registry-results');
+
+  // Show panel with loading state
+  panel.style.display = 'block';
+  results.innerHTML = '<div style="font-size:12px;color:var(--text2);">🔄 Checking registries...</div>';
+
+  // Simulate registry lookup with random results
+  setTimeout(() => {
+    const hasMatch = Math.random() > 0.15; // 85% success rate
+    let html = '';
+
+    if (hasMatch) {
+      html += '<div style="padding:8px;background:var(--green-dim);border:1px solid var(--green);border-radius:6px;color:var(--green);font-size:11px;"><strong>✓ Company Found</strong><br/>Status: Active | Jurisdiction: UK | Incorporation: 2018</div>';
+    } else {
+      html += '<div style="padding:8px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:6px;color:var(--amber);font-size:11px;"><strong>⚠️ No Match</strong><br/>Could not verify in registry. Proceed manually or refine your search.</div>';
+    }
+
+    results.innerHTML = html;
+  }, 1200);
+}
+
+// ─── B. Real-time Identity Verification on Document Upload ────────────────────
+function runRealtimePassportValidation(docId, fileName) {
+  // Find or create validation status element for this document
+  let statusEl = document.getElementById(docId + '-realtime-status');
+  if (!statusEl) {
+    const uploadArea = document.getElementById(docId);
+    if (uploadArea) {
+      statusEl = document.createElement('div');
+      statusEl.id = docId + '-realtime-status';
+      statusEl.style.cssText = 'margin-top:8px;font-size:11px;';
+      uploadArea.parentElement.appendChild(statusEl);
+    }
+  }
+
+  if (!statusEl) return;
+
+  // Show loading
+  statusEl.innerHTML = '<div style="padding:8px;background:var(--blue-dim);border-radius:6px;color:var(--blue);"><strong>🔍 AI Verification Running...</strong></div>';
+
+  // Simulate checks with staggered delays
+  const checks = [
+    { label: 'Facial match', delay: 400 },
+    { label: 'Liveness check', delay: 800 },
+    { label: 'Document authenticity', delay: 1200 }
+  ];
+
+  let allPass = true;
+  let checkResults = [];
+
+  checks.forEach((check) => {
+    setTimeout(() => {
+      const passed = Math.random() > 0.1; // 90% pass rate
+      allPass = allPass && passed;
+      const icon = passed ? '✅' : '⚠️';
+      const color = passed ? 'var(--green)' : 'var(--amber)';
+      checkResults.push(`<div style="color:${color};font-size:11px;margin:4px 0;">${icon} ${check.label}</div>`);
+
+      // Show final result after all checks
+      if (checkResults.length === checks.length) {
+        const finalColor = allPass ? 'var(--green-dim)' : 'var(--amber-dim)';
+        const finalBorder = allPass ? 'var(--green)' : 'var(--amber)';
+        const finalText = allPass ? 'All checks passed' : 'Review required';
+        statusEl.innerHTML = `<div style="padding:8px;background:${finalColor};border:1px solid ${finalBorder};border-radius:6px;color:${finalBorder};"><strong>${allPass ? '✓' : '⚠️'} ${finalText}</strong><br/>${checkResults.join('')}</div>`;
+      }
+    }, check.delay);
+  });
+}
+
+// ─── C. Real-time UBO Mapping during Shareholder Entry ────────────────────
+function addDirectorRowWithValidation() {
+  const tbody = document.getElementById('directors-body');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><select class="nat-select"><option value="">Nationality</option></select></td>
+    <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
+  `;
+  tbody.appendChild(tr);
+  populateNationalitySelects();
+  syncDirectorsUBOsToKYC();
+}
+
+function addUBORowWithValidation() {
+  const tbody = document.getElementById('ubos-body');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><select class="nat-select"><option value="">Nationality</option></select></td>
+    <td><input type="number" placeholder="% Ownership" min="0" max="100" oninput="runRealtimeUBOMappingAnalysis(this)"/></td>
+    <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
+  `;
+  tbody.appendChild(tr);
+  populateNationalitySelects();
+  syncDirectorsUBOsToKYC();
+}
+
+// ─── D. Background Screening on Name Entry ────────────────────
+function runRealtimeBackgroundScreening(inputEl) {
+  const name = inputEl.value.trim();
+  if (name.length < 3) return;
+
+  const indicator = inputEl.closest('tr').querySelector('.screening-indicator');
+  if (!indicator) return;
+
+  debounce('bg-screening-' + name, () => {
+    indicator.style.display = 'inline-block';
+    indicator.style.background = '#f59e0b'; // Amber = checking
+    indicator.title = 'Screening...';
+
+    // Simulate background check
+    setTimeout(() => {
+      const hasHit = Math.random() > 0.92; // 8% hit rate
+      if (hasHit) {
+        indicator.style.background = '#ef4444'; // Red = flag
+        indicator.innerHTML = '🚩';
+        indicator.title = 'Background screening flag - review required';
+      } else {
+        indicator.style.background = '#10b981'; // Green = clear
+        indicator.innerHTML = '✓';
+        indicator.title = 'Background screening passed';
+      }
+    }, 1000);
+  }, 600);
+}
+
+// ─── E. Real-time UBO Mapping Analysis ────────────────────
+function runRealtimeUBOMappingAnalysis(inputEl) {
+  const pctValue = parseFloat(inputEl.value) || 0;
+  const row = inputEl.closest('tr');
+
+  debounce('ubo-analysis', () => {
+    // Check if there are corporate shareholders (detect via pattern or flag)
+    let analysis = '';
+
+    if (pctValue > 25) {
+      analysis = '⚠️ High ownership stake detected - ensure UBO details are complete';
+    } else if (pctValue > 0) {
+      analysis = '✓ Ownership recorded';
+    }
+
+    // Look for analysis display area, or create one
+    let analysisEl = row.querySelector('.ubo-analysis');
+    if (!analysisEl) {
+      analysisEl = document.createElement('div');
+      analysisEl.className = 'ubo-analysis';
+      analysisEl.style.cssText = 'font-size:10px;color:var(--text2);margin-top:4px;padding:4px;background:var(--bg3);border-radius:4px;';
+      row.appendChild(analysisEl);
+    }
+
+    analysisEl.textContent = analysis;
+  }, 500);
+}
+
+// ─── F. Real-time Document Integrity Check ────────────────────
+function runRealtimeDocumentIntegrityCheck(docId, fileName) {
+  // Find or create validation status element for this document
+  let statusEl = document.getElementById(docId + '-integrity-status');
+  if (!statusEl) {
+    const uploadArea = document.getElementById(docId);
+    if (uploadArea) {
+      statusEl = document.createElement('div');
+      statusEl.id = docId + '-integrity-status';
+      statusEl.style.cssText = 'margin-top:8px;font-size:11px;';
+      uploadArea.parentElement.appendChild(statusEl);
+    }
+  }
+
+  if (!statusEl) return;
+
+  // Show loading
+  statusEl.innerHTML = '<div style="padding:8px;background:var(--blue-dim);border-radius:6px;color:var(--blue);"><strong>📄 Checking document integrity...</strong></div>';
+
+  // Simulate document checks with staggered delays
+  const checks = [
+    { label: 'Document age', delay: 400 },
+    { label: 'Expiry date verification', delay: 800 },
+    { label: 'Name consistency', delay: 1200 }
+  ];
+
+  let allPass = true;
+  let checkResults = [];
+
+  checks.forEach((check) => {
+    setTimeout(() => {
+      const passed = Math.random() > 0.15; // 85% pass rate for documents
+      allPass = allPass && passed;
+      const icon = passed ? '✅' : '⚠️';
+      const color = passed ? 'var(--green)' : 'var(--amber)';
+      let message = check.label;
+      if (!passed && check.label === 'Document age') {
+        message += ' — Proof of address older than 3 months. Please upload another document.';
+      }
+      checkResults.push(`<div style="color:${color};font-size:11px;margin:4px 0;">${icon} ${message}</div>`);
+
+      // Show final result after all checks
+      if (checkResults.length === checks.length) {
+        const finalColor = allPass ? 'var(--green-dim)' : 'var(--amber-dim)';
+        const finalBorder = allPass ? 'var(--green)' : 'var(--amber)';
+        const finalText = allPass ? 'All checks passed' : 'Document review required';
+        statusEl.innerHTML = `<div style="padding:8px;background:${finalColor};border:1px solid ${finalBorder};border-radius:6px;color:${finalBorder};"><strong>${allPass ? '✓' : '⚠️'} ${finalText}</strong><br/>${checkResults.join('')}</div>`;
+      }
+    }, check.delay);
+  });
+}
+
 // ─── Director / UBO rows ──────────────────────────────────
 function addDirectorRow() {
   const tbody = document.getElementById('directors-body');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" placeholder="First name"/></td>
-    <td><input type="text" placeholder="Last name"/></td>
+    <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
     <td><select class="nat-select"><option value="">Nationality</option></select></td>
     <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-    <td><button type="button" class="btn-icon" onclick="removeRow(this)">\u2715</button></td>
+    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
   `;
   tbody.appendChild(tr);
   populateNationalitySelects();
@@ -4361,12 +4829,12 @@ function addUBORow() {
   const tbody = document.getElementById('ubos-body');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="text" placeholder="First name"/></td>
-    <td><input type="text" placeholder="Last name"/></td>
+    <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
+    <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
     <td><select class="nat-select"><option value="">Nationality</option></select></td>
-    <td><input type="number" placeholder="% Ownership" min="0" max="100"/></td>
+    <td><input type="number" placeholder="% Ownership" min="0" max="100" oninput="runRealtimeUBOMappingAnalysis(this)"/></td>
     <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-    <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
+    <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
   `;
   tbody.appendChild(tr);
   populateNationalitySelects();
@@ -4567,7 +5035,7 @@ async function submitPrescreening(e) {
     localStorage.setItem('arie_current_app_id', currentApplicationId);
 
     btn.disabled = false;
-    btn.innerHTML = '🔒 Submit Pre-Screening Application';
+    btn.innerHTML = '🔒 Submit Application';
     showView('risk-scoring');
     showToast('success', 'Application Submitted', 'Reference: ' + appRef);
     startRiskScoring();
@@ -4576,7 +5044,7 @@ async function submitPrescreening(e) {
     console.warn('API create failed, using client-side fallback:', err);
     appRef = generateRef();
     btn.disabled = false;
-    btn.innerHTML = '🔒 Submit Pre-Screening Application';
+    btn.innerHTML = '🔒 Submit Application';
     showView('risk-scoring');
     showToast('success', 'Application Submitted', 'Reference: ' + appRef);
     startRiskScoring();
@@ -4732,16 +5200,20 @@ function startRiskScoring() {
 }
 
 function showRiskResult(result) {
-  // Client does NOT see the risk score — route directly based on level
-  if (result.level === 'LOW' || result.level === 'MEDIUM') {
-    // Go straight to pricing
-    showView('pricing');
-    populatePricing(computedRiskLevel);
-    showToast('success', 'Application Reviewed', 'Please review your pricing schedule to proceed.');
-  } else {
-    // High / Very High — send to compliance hold
-    showComplianceHold();
-  }
+  // Show client notifications view with application status
+  showClientNotifications(appRef);
+
+  // After a brief delay, show a prompt to proceed
+  setTimeout(() => {
+    // Route based on risk level after showing notifications
+    if (result.level === 'LOW' || result.level === 'MEDIUM') {
+      // Auto-proceed to KYC documents for low/medium risk
+      // User can continue from the notifications dashboard
+    } else {
+      // High / Very High — send to compliance hold for manual review
+      // User can see compliance requirements in notifications
+    }
+  }, 2000);
 }
 
 function showHighRiskDocs() {
@@ -4771,7 +5243,25 @@ function populatePricing(level) {
     '<tr><td><strong>Transaction Fee</strong><div class="fee-desc">Per-transaction processing fee (domestic and international)</div></td><td>$ ' + p.txn.toFixed(2) + '</td></tr>';
 }
 
-function acceptPricing() {
+async function acceptPricing() {
+  // Call backend to accept pricing and determine next step
+  if (AUTH_TOKEN && currentApplicationId) {
+    try {
+      var result = await apiCall('POST', '/applications/' + currentApplicationId + '/accept-pricing');
+      console.log('Pricing acceptance result:', result);
+
+      if (result.status === 'compliance_review') {
+        // HIGH/VERY_HIGH risk → goes to compliance review first
+        showComplianceHold();
+        showToast('info', 'Compliance Review Required', result.message || 'Your application has been referred for compliance review due to the risk profile.');
+        return;
+      }
+    } catch(err) {
+      console.warn('Pricing accept API failed, continuing with client-side flow:', err);
+    }
+  }
+
+  // LOW/MEDIUM risk → proceed directly to KYC & Documents
   showHighRiskDocs();
   updateTotalRequiredDocs();
   syncDirectorsUBOsToKYC();
@@ -5508,18 +5998,18 @@ function buildReviewScreen() {
 }
 
 async function finalSubmitFromReview() {
-  // Submit to API if we have an application ID
+  // Submit KYC documents for compliance review — ALL applications require officer approval
   if (AUTH_TOKEN && currentApplicationId) {
     try {
-      var result = await apiCall('POST', '/applications/' + currentApplicationId + '/submit');
-      console.log('API Submit result:', result);
+      var result = await apiCall('POST', '/applications/' + currentApplicationId + '/submit-kyc');
+      console.log('KYC Submit result:', result);
     } catch(err) {
-      console.warn('API submit failed, continuing with client-side flow:', err);
+      console.warn('KYC submit API failed, continuing with client-side flow:', err);
     }
   }
   generateComplianceMemo();
   showView('docs-review');
-  showToast('info', 'Application Submitted', 'Your application and all supporting documents have been submitted for compliance review. You will be notified by email.');
+  showToast('info', 'Submitted for Compliance Review', 'Your KYC documents have been submitted. A compliance officer will review your application and you will be notified by email.');
   // Clear the draft
   try { localStorage.removeItem(getSaveKey()); } catch(e) {}
   if (autoSaveTimer) clearInterval(autoSaveTimer);
@@ -5529,281 +6019,211 @@ async function finalSubmitFromReview() {
 // ═══════════════════════════════════════════════════════════
 // AGENT 1: Account Risk Agent
 // ═══════════════════════════════════════════════════════════
-var DISPOSABLE_DOMAINS = ['mailinator.com','guerrillamail.com','tempmail.com','throwaway.email','yopmail.com','10minutemail.com','trashmail.com','sharklasers.com','guerrillamail.info','grr.la','mailnesia.com'];
+// NEW 5 ONBOARDING AGENTS
+// ═══════════════════════════════════════════════════════════
 
-function runAccountRiskAgent(callback) {
-  var email = (document.getElementById('r-email').value || '').trim().toLowerCase();
-  var domain = email.split('@')[1] || '';
-  var signals = [];
-  var riskScore = 0;
-
-  // Check disposable email
-  if (DISPOSABLE_DOMAINS.indexOf(domain) !== -1) {
-    signals.push({ label: 'Disposable email domain detected', severity: 'high' });
-    riskScore += 40;
-  }
-
-  // Check free email providers (not blocked, but noted)
-  var freeProviders = ['gmail.com','yahoo.com','hotmail.com','outlook.com','aol.com','protonmail.com'];
-  if (freeProviders.indexOf(domain) !== -1) {
-    signals.push({ label: 'Free email provider (not corporate domain)', severity: 'low' });
-    riskScore += 5;
-  }
-
-  // Simulate additional checks
-  setTimeout(function() {
-    // Simulate VPN/Tor check
-    signals.push({ label: 'VPN / TOR detection', severity: 'none', result: 'No VPN detected' });
-    // Simulate geolocation
-    signals.push({ label: 'IP geolocation check', severity: 'none', result: 'Location consistent' });
-    // Simulate duplicate check
-    signals.push({ label: 'Duplicate registration check', severity: 'none', result: 'No prior applications' });
-
-    var decision = 'clear';
-    if (riskScore >= 40) decision = 'block';
-    else if (riskScore >= 15) decision = 'suspicious';
-
-    callback({ decision: decision, score: riskScore, signals: signals });
-  }, 800);
+function runAllScoringAgents() {
+  // Pipeline: Agent 1 (document) → Agent 2 (external DB) → Agent 3 (screening) → Agent 4 (UBO) → Agent 5 (memo)
+  runAgent1_IdentityDoc();
+  setTimeout(runAgent2_ExternalDB, 1500);
+  setTimeout(runAgent3_FinCrime, 3000);
+  setTimeout(runAgent4_CorporateUBO, 4500);
+  setTimeout(runAgent5_ComplianceMemo, 6500);
+  // Show consolidation step after agents complete
+  setTimeout(() => {
+    const consolidationEl = document.getElementById('consolidation-step');
+    if (consolidationEl) consolidationEl.style.display = 'block';
+  }, 8000);
+  // Show memo generation step
+  setTimeout(() => {
+    const memoEl = document.getElementById('memo-generation-step');
+    if (memoEl) memoEl.style.display = 'block';
+  }, 9500);
+  // Hide agents section and show result after memo generation
+  setTimeout(() => {
+    document.getElementById('risk-computing').classList.add('hidden');
+    document.getElementById('risk-result').classList.remove('hidden');
+    generateComplianceMemo();
+    showRiskResult();
+  }, 11500);
 }
 
-// ═══════════════════════════════════════════════════════════
-// AGENT 3: Corporate Data Agent — Mismatch Detection
-// ═══════════════════════════════════════════════════════════
-function runCorporateDataAgent() {
-  var panel = document.getElementById('corporate-data-agent-panel');
-  if (!panel) return;
-  panel.style.display = 'block';
-  var checksDiv = document.getElementById('cda-checks');
-  var badge = document.getElementById('cda-badge');
-  var summary = document.getElementById('cda-summary');
-  checksDiv.innerHTML = '';
+// Agent 1: Identity & Document Integrity Agent (36 checks)
+function runAgent1_IdentityDoc() {
+  var checks = document.getElementById('agent1-checks');
+  var badge = document.getElementById('agent1-badge');
+  if (!checks || !badge) return;
+  checks.innerHTML = '';
 
-  var checks = [
-    { label: 'Company name match (registry vs input)', delay: 600 },
-    { label: 'Registration number verification', delay: 1000 },
-    { label: 'Incorporation date cross-reference', delay: 1400 },
-    { label: 'Registered address verification', delay: 1800 },
-    { label: 'Director names consistency', delay: 2200 },
-    { label: 'Active/dissolved status check', delay: 2600 }
+  var items = [
+    { label: 'Passport MRZ extraction & checksum validation', delay: 200 },
+    { label: 'Name match: passport vs application form', delay: 400 },
+    { label: 'DOB consistency across all documents', delay: 600 },
+    { label: 'Document expiry date check', delay: 800 },
+    { label: 'Tampering & image manipulation detection', delay: 1000 },
+    { label: 'Watermark & security feature verification', delay: 1200 },
+    { label: 'Certificate of incorporation validation', delay: 1400 },
+    { label: 'Shareholder register completeness check', delay: 1600 },
+    { label: 'Director list consistency check', delay: 1800 },
+    { label: 'Address vs proof-of-address match', delay: 2000 },
+    { label: 'Document completeness assessment (36 checks)', delay: 2200 }
   ];
 
   var warnings = 0;
-  checks.forEach(function(check, idx) {
+  items.forEach(function(item, idx) {
     setTimeout(function() {
-      var passed = Math.random() > 0.15;
+      var passed = Math.random() > 0.1;
       if (!passed) warnings++;
       var icon = passed ? '✅' : '⚠️';
       var resultClass = passed ? 'pass' : 'warn';
-      var resultText = passed ? 'Matched' : 'Possible mismatch';
-      if (check.label.indexOf('Active') !== -1) { resultText = passed ? 'Active' : 'Check required'; }
+      var resultText = passed ? 'Verified' : 'Review required';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + resultClass + '">' + resultText + '</span></div>';
 
-      checksDiv.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + check.label + '</span><span class="check-result ' + resultClass + '">' + resultText + '</span></div>';
-
-      if (idx === checks.length - 1) {
-        badge.textContent = warnings > 0 ? warnings + ' Mismatches' : 'Verified';
+      if (idx === items.length - 1) {
+        badge.textContent = warnings > 0 ? warnings + ' flags' : 'Clear';
         badge.className = 'ai-agent-badge ' + (warnings > 0 ? 'review' : 'clear');
-        summary.style.display = 'block';
-        summary.className = 'ai-agent-summary ' + (warnings > 0 ? 'review' : 'clear');
-        summary.innerHTML = warnings > 0
-          ? '<strong>⚠️ ' + warnings + ' potential mismatch(es) detected.</strong> Please review highlighted fields against the registry data. Discrepancies will be flagged during compliance review.'
-          : '<strong>✅ All registry data verified.</strong> Company details match public records across all checked databases.';
       }
-    }, check.delay);
+    }, item.delay);
   });
 }
 
-// ═══════════════════════════════════════════════════════════
-// AGENTS 2,4,6,7,8: Run during risk scoring phase
-// ═══════════════════════════════════════════════════════════
-function runAllScoringAgents() {
-  runAgent2_PreScreeningRisk();
-  setTimeout(runAgent4_BusinessNarrative, 1200);
-  setTimeout(runAgent6_FinCrime, 2400);
-  setTimeout(runAgent7_SourceOfFunds, 3600);
-  setTimeout(runAgent8_RiskDecision, 5000);
-}
-
-// Agent 2: Pre-Screening Risk Agent
-function runAgent2_PreScreeningRisk() {
+// Agent 2: External Database Verification Agent (12 checks)
+function runAgent2_ExternalDB() {
   var checks = document.getElementById('agent2-checks');
   var badge = document.getElementById('agent2-badge');
   if (!checks || !badge) return;
   checks.innerHTML = '';
 
-  var sector = document.getElementById('f-sector') ? document.getElementById('f-sector').value : '';
-  var bizDesc = document.getElementById('f-biz-description') ? document.getElementById('f-biz-description').value : '';
-
   var items = [
-    { label: 'Sector screening (prohibited activities)', icon: '✅', result: 'No prohibited sectors', cls: 'pass' },
-    { label: 'Business model plausibility', icon: '✅', result: 'Description adequate', cls: 'pass' },
-    { label: 'Geographic risk appetite check', icon: '✅', result: 'Within appetite', cls: 'pass' },
-    { label: 'Transaction volume reasonableness', icon: '✅', result: 'Consistent with entity profile', cls: 'pass' },
-    { label: 'Payment corridor risk', icon: '✅', result: 'Standard corridors', cls: 'pass' }
+    { label: 'Company registry lookup (OpenCorporates)', delay: 300 },
+    { label: 'Registration number verification', delay: 600 },
+    { label: 'Incorporation date cross-check', delay: 900 },
+    { label: 'Active/dissolved status confirmation', delay: 1200 },
+    { label: 'Director name vs registry match', delay: 1500 },
+    { label: 'Registered address verification', delay: 1800 },
+    { label: 'Jurisdiction status check', delay: 2100 },
+    { label: 'Registry data confidence scoring', delay: 2400 }
   ];
 
-  // Simulate some flags based on form data
-  if (sector && (sector.toLowerCase().indexOf('crypto') !== -1 || sector.toLowerCase().indexOf('gambling') !== -1)) {
-    items[0] = { label: 'Sector screening (prohibited activities)', icon: '❌', result: 'PROHIBITED SECTOR', cls: 'fail' };
-  }
-
-  var delay = 300;
+  var warnings = 0;
   items.forEach(function(item, idx) {
     setTimeout(function() {
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + item.icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + item.cls + '">' + item.result + '</span></div>';
+      var passed = Math.random() > 0.12;
+      if (!passed) warnings++;
+      var icon = passed ? '✅' : '⚠️';
+      var resultClass = passed ? 'pass' : 'warn';
+      var resultText = passed ? 'Confirmed' : 'Mismatch';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + resultClass + '">' + resultText + '</span></div>';
+
       if (idx === items.length - 1) {
-        var hasFail = items.some(function(i) { return i.cls === 'fail'; });
-        var hasWarn = items.some(function(i) { return i.cls === 'warn'; });
-        badge.textContent = hasFail ? 'Outside Appetite' : (hasWarn ? 'Review Required' : 'Within Appetite');
-        badge.className = 'ai-agent-badge ' + (hasFail ? 'alert' : (hasWarn ? 'review' : 'clear'));
+        badge.textContent = warnings > 0 ? warnings + ' mismatches' : 'All confirmed';
+        badge.className = 'ai-agent-badge ' + (warnings > 0 ? 'review' : 'clear');
       }
-    }, delay * (idx + 1));
+    }, item.delay);
   });
 }
 
-// Agent 4: Business Narrative Agent
-function runAgent4_BusinessNarrative() {
+// Agent 3: FinCrime Screening Agent (10 checks)
+function runAgent3_FinCrime() {
+  var checks = document.getElementById('agent3-checks');
+  var badge = document.getElementById('agent3-badge');
+  if (!checks || !badge) return;
+  checks.innerHTML = '';
+
+  var pepSelects = document.querySelectorAll('.pep-select');
+  var hasPep = false;
+  pepSelects.forEach(function(s) { if (s.value === 'Yes') hasPep = true; });
+
+  var items = [
+    { label: 'Global sanctions screening (UN, EU, OFAC, HMT)', delay: 300, passed: !hasPep },
+    { label: 'PEP database screening', delay: 600, passed: !hasPep },
+    { label: 'Adverse media scan (100K+ sources)', delay: 900, passed: true },
+    { label: 'False positive analysis', delay: 1200, passed: !hasPep },
+    { label: 'Political exposure assessment', delay: 1500, passed: !hasPep },
+    { label: 'Country risk cross-reference', delay: 1800, passed: true },
+    { label: 'Screening summary generation', delay: 2100, passed: true }
+  ];
+
+  var warnings = hasPep ? 1 : 0;
+
+  items.forEach(function(item, idx) {
+    setTimeout(function() {
+      var icon = item.passed ? '✅' : '⚠️';
+      var resultClass = item.passed ? 'pass' : 'warn';
+      var resultText = item.passed ? 'Clear' : 'Match found';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + resultClass + '">' + resultText + '</span></div>';
+
+      if (idx === items.length - 1) {
+        badge.textContent = warnings > 0 ? 'PEP match' : 'All clear';
+        badge.className = 'ai-agent-badge ' + (warnings > 0 ? 'review' : 'clear');
+      }
+    }, item.delay);
+  });
+}
+
+// Agent 4: Corporate Structure & UBO Mapping Agent (10 checks)
+function runAgent4_CorporateUBO() {
   var checks = document.getElementById('agent4-checks');
   var badge = document.getElementById('agent4-badge');
   if (!checks || !badge) return;
   checks.innerHTML = '';
 
   var items = [
-    { label: 'Business description vs sector alignment', icon: '✅', result: 'Consistent', cls: 'pass' },
-    { label: 'Transaction volume vs company size', icon: '✅', result: 'Proportionate', cls: 'pass' },
-    { label: 'Geography vs business model logic', icon: '✅', result: 'Coherent', cls: 'pass' },
-    { label: 'Revenue model plausibility', icon: '✅', result: 'Reasonable', cls: 'pass' },
-    { label: 'Industry norm comparison', icon: '⚠️', result: 'Slightly above average volume', cls: 'warn' }
+    { label: 'Shareholder register parsing', delay: 300 },
+    { label: 'Ownership chain mapping', delay: 600 },
+    { label: 'Natural-person UBO identification', delay: 900 },
+    { label: 'Nominee structure detection', delay: 1200 },
+    { label: 'Layered structure analysis', delay: 1500 },
+    { label: 'High-risk jurisdiction scan', delay: 1800 },
+    { label: 'Circular ownership detection', delay: 2100 },
+    { label: 'Structure complexity scoring', delay: 2400 }
   ];
 
-  // Randomly adjust the last item for demo variation
-  if (Math.random() > 0.4) {
-    items[4] = { label: 'Industry norm comparison', icon: '✅', result: 'Within norms', cls: 'pass' };
-  }
-
-  var delay = 350;
+  var warnings = 0;
   items.forEach(function(item, idx) {
     setTimeout(function() {
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + item.icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + item.cls + '">' + item.result + '</span></div>';
+      var passed = Math.random() > 0.15;
+      if (!passed) warnings++;
+      var icon = passed ? '✅' : '⚠️';
+      var resultClass = passed ? 'pass' : 'warn';
+      var resultText = passed ? 'Assessed' : 'Risk detected';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + resultClass + '">' + resultText + '</span></div>';
+
       if (idx === items.length - 1) {
-        var hasWarn = items.some(function(i) { return i.cls === 'warn'; });
-        badge.textContent = hasWarn ? 'Needs Clarification' : 'Consistent';
-        badge.className = 'ai-agent-badge ' + (hasWarn ? 'review' : 'clear');
+        badge.textContent = warnings > 0 ? 'Complex' : 'Simple';
+        badge.className = 'ai-agent-badge ' + (warnings > 0 ? 'review' : 'clear');
       }
-    }, delay * (idx + 1));
+    }, item.delay);
   });
 }
 
-// Agent 6: Financial Crime Intelligence Agent
-function runAgent6_FinCrime() {
-  var checks = document.getElementById('agent6-checks');
-  var badge = document.getElementById('agent6-badge');
-  if (!checks || !badge) return;
-  checks.innerHTML = '';
-
-  var items = [
-    { label: 'Global sanctions screening (UN, EU, OFAC, HMT)', icon: '✅', result: 'No matches', cls: 'pass' },
-    { label: 'PEP database screening (World-Check, Dow Jones)', icon: '✅', result: 'No PEP hits', cls: 'pass' },
-    { label: 'Adverse media scan (100K+ sources)', icon: '✅', result: 'No relevant hits', cls: 'pass' },
-    { label: 'False positive analysis', icon: '✅', result: '0 hits to review', cls: 'pass' },
-    { label: 'Consolidated risk summary', icon: '✅', result: 'Clear — no escalation needed', cls: 'pass' }
-  ];
-
-  // Check if any PEP was marked in pre-screening
-  var pepSelects = document.querySelectorAll('.pep-select');
-  var hasPep = false;
-  pepSelects.forEach(function(s) { if (s.value === 'Yes') hasPep = true; });
-  if (hasPep) {
-    items[1] = { label: 'PEP database screening (World-Check, Dow Jones)', icon: '⚠️', result: '1 PEP match confirmed', cls: 'warn' };
-    items[3] = { label: 'False positive analysis', icon: '⚠️', result: '1 true positive — PEP confirmed', cls: 'warn' };
-    items[4] = { label: 'Consolidated risk summary', icon: '⚠️', result: 'Escalation recommended (PEP)', cls: 'warn' };
-  }
-
-  var delay = 400;
-  items.forEach(function(item, idx) {
-    setTimeout(function() {
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + item.icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + item.cls + '">' + item.result + '</span></div>';
-      if (idx === items.length - 1) {
-        var hasWarn = items.some(function(i) { return i.cls === 'warn'; });
-        badge.textContent = hasWarn ? 'Review Required' : 'All Clear';
-        badge.className = 'ai-agent-badge ' + (hasWarn ? 'review' : 'clear');
-      }
-    }, delay * (idx + 1));
-  });
-}
-
-// Agent 7: Source of Funds Analysis Agent
-function runAgent7_SourceOfFunds() {
-  var checks = document.getElementById('agent7-checks');
-  var badge = document.getElementById('agent7-badge');
-  if (!checks || !badge) return;
-  checks.innerHTML = '';
-
-  var sofEl = document.getElementById('f-sof');
-  var sowEl = document.getElementById('f-sow');
-  var sof = sofEl ? sofEl.value : '';
-  var sow = sowEl ? sowEl.value : '';
-
-  var items = [
-    { label: 'Source of funds matches business activity', icon: '✅', result: 'Supported', cls: 'pass' },
-    { label: 'Source of wealth consistent with entity profile', icon: '✅', result: 'Supported', cls: 'pass' },
-    { label: 'Expected volumes vs declared SoF', icon: '✅', result: 'Proportionate', cls: 'pass' },
-    { label: 'Documentation sufficiency assessment', icon: '✅', result: 'Adequate', cls: 'pass' }
-  ];
-
-  if (!sof && !sow) {
-    items[0] = { label: 'Source of funds matches business activity', icon: '⚠️', result: 'Limited info provided', cls: 'warn' };
-    items[3] = { label: 'Documentation sufficiency assessment', icon: '⚠️', result: 'May need additional docs', cls: 'warn' };
-  }
-
-  var delay = 350;
-  items.forEach(function(item, idx) {
-    setTimeout(function() {
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + item.icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + item.cls + '">' + item.result + '</span></div>';
-      if (idx === items.length - 1) {
-        var hasWarn = items.some(function(i) { return i.cls === 'warn'; });
-        badge.textContent = hasWarn ? 'Partially Supported' : 'Supported';
-        badge.className = 'ai-agent-badge ' + (hasWarn ? 'review' : 'clear');
-      }
-    }, delay * (idx + 1));
-  });
-}
-
-// Agent 8: Risk Decision Agent (enhanced with lane routing)
-function runAgent8_RiskDecision() {
-  var checks = document.getElementById('agent8-checks');
-  var badge = document.getElementById('agent8-badge');
+// Agent 5: Compliance Memo & Risk Recommendation Agent (10 checks)
+function runAgent5_ComplianceMemo() {
+  var checks = document.getElementById('agent5-checks');
+  var badge = document.getElementById('agent5-badge');
   if (!checks || !badge) return;
   checks.innerHTML = '';
 
   var level = computedRiskLevel || 'LOW';
-  var lane = 'Fast Lane';
-  var laneDesc = 'Streamlined onboarding — minimal additional checks required';
-  if (level === 'MEDIUM') { lane = 'Standard Review'; laneDesc = 'Standard due diligence pathway'; }
-  if (level === 'HIGH') { lane = 'Enhanced Due Diligence'; laneDesc = 'Enhanced CDD required — compliance officer review mandatory'; }
-  if (level === 'VERY_HIGH') { lane = 'Enhanced Due Diligence'; laneDesc = 'Full EDD required — senior compliance review and board approval'; }
 
   var items = [
-    { label: 'Jurisdiction risk (D2)', icon: '📍', result: level === 'HIGH' || level === 'VERY_HIGH' ? 'Elevated' : 'Standard', cls: level === 'HIGH' || level === 'VERY_HIGH' ? 'warn' : 'pass' },
-    { label: 'Industry risk (D4)', icon: '🏭', result: 'Assessed', cls: 'info' },
-    { label: 'Ownership complexity (D1)', icon: '🏗️', result: 'Assessed', cls: 'info' },
-    { label: 'Screening results integration', icon: '🔍', result: 'Incorporated', cls: 'info' },
-    { label: 'Document completeness signal', icon: '📄', result: 'Pre-screening phase', cls: 'info' },
-    { label: 'Composite risk score', icon: '⚖️', result: level.replace('_',' ') + ' RISK', cls: level === 'LOW' ? 'pass' : (level === 'MEDIUM' ? 'info' : 'warn') },
-    { label: 'Assigned onboarding lane', icon: '🛤️', result: lane, cls: level === 'LOW' ? 'pass' : (level === 'MEDIUM' ? 'info' : 'warn') }
+    { label: 'Agent outputs consolidation', delay: 300 },
+    { label: 'Risk factor identification', delay: 600 },
+    { label: 'Onboarding memo generation', delay: 900 },
+    { label: 'Risk rating recommendation', delay: 1200 },
+    { label: 'Review checklist creation', delay: 1500 }
   ];
 
-  var delay = 300;
   items.forEach(function(item, idx) {
     setTimeout(function() {
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + item.icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + item.cls + '">' + item.result + '</span></div>';
+      var icon = '✅';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result pass">Generated</span></div>';
+
       if (idx === items.length - 1) {
-        badge.textContent = lane;
+        badge.textContent = level.replace('_', ' ') + ' RISK';
         badge.className = 'ai-agent-badge ' + (level === 'LOW' ? 'clear' : (level === 'MEDIUM' ? 'clear' : 'review'));
-        // Add lane summary
-        checks.innerHTML += '<div class="ai-agent-summary ' + (level === 'HIGH' || level === 'VERY_HIGH' ? 'review' : 'clear') + '"><strong>🛤️ ' + lane + ':</strong> ' + laneDesc + '<br/><em style="font-size:11px;opacity:0.8;">Note: AI recommends the onboarding lane. Final decision rests with the compliance officer.</em></div>';
       }
-    }, delay * (idx + 1));
+    }, item.delay);
   });
 }
 
@@ -5928,6 +6348,16 @@ function handleUpload(docId, input) {
 
   // Run real-time AI document verification
   runAIDocVerification(docId, names);
+
+  // Trigger real-time passport/identity document validation
+  if (docId.includes('passport') || docId.includes('kyc-passport') || docId.includes('identity')) {
+    runRealtimePassportValidation(docId, names);
+  }
+
+  // Trigger document integrity checks
+  if (docId.includes('proof-address') || docId.includes('poa')) {
+    runRealtimeDocumentIntegrityCheck(docId, names);
+  }
 }
 
 function updateProgress() {
@@ -5965,6 +6395,61 @@ function lookupApplication() {
   setTimeout(() => {
     showToast('success', 'Status Found', 'Your application is currently under review. Ref: ' + (ref || 'N/A'));
   }, 1500);
+}
+
+// ─── Client Notification Functions ────────────────────────────────────────
+function showClientNotifications(ref) {
+  // Update the reference number in the notification
+  if (ref) {
+    const refElements = document.querySelectorAll('#notif-ref');
+    refElements.forEach(el => el.textContent = ref);
+  }
+
+  // Set the current date/time
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}) + ' at ' + now.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
+  const dateEls = document.querySelectorAll('#notif-date');
+  dateEls.forEach(el => el.textContent = dateStr);
+
+  showView('client-notifications');
+}
+
+function simulateStatusUpdate(status) {
+  const msgUnderReview = document.getElementById('message-under-review');
+  const msgDocsRequired = document.getElementById('message-docs-required');
+  const msgApproved = document.getElementById('message-approved');
+  const msgDeclined = document.getElementById('message-declined');
+  const stageReview = document.getElementById('stage-under-review');
+  const stageDecision = document.getElementById('stage-decision');
+
+  if (status === 'under-review') {
+    msgUnderReview.style.display = 'block';
+    showToast('info', 'Status Updated', 'Application moved to Under Review');
+  } else if (status === 'docs-required') {
+    msgDocsRequired.style.display = 'block';
+    stageReview.innerHTML = '📄';
+    showToast('info', 'Documents Needed', 'Additional documents requested for review');
+  } else if (status === 'approved') {
+    msgApproved.style.display = 'block';
+    stageReview.style.background = 'var(--green-dim)';
+    stageReview.style.borderColor = 'var(--green)';
+    stageReview.innerHTML = '✓';
+    stageDecision.style.background = 'var(--green-dim)';
+    stageDecision.style.borderColor = 'var(--green)';
+    stageDecision.style.color = 'var(--green)';
+    stageDecision.innerHTML = '✓';
+    showToast('success', 'Application Approved!', 'Your application has been approved');
+  } else if (status === 'declined') {
+    msgDeclined.style.display = 'block';
+    stageReview.style.background = 'var(--red-dim)';
+    stageReview.style.borderColor = 'var(--red)';
+    stageReview.innerHTML = '✗';
+    stageDecision.style.background = 'var(--red-dim)';
+    stageDecision.style.borderColor = 'var(--red)';
+    stageDecision.style.color = 'var(--red)';
+    stageDecision.innerHTML = '✗';
+    showToast('error', 'Application Declined', 'Your application was not approved');
+  }
 }
 
 // ─── Countries list ──────────────────────────────────────────
@@ -6231,37 +6716,25 @@ function submitRegister(e) {
   const btn = document.getElementById('register-btn');
   btn.disabled = true; btn.textContent = '⏳ Creating account…';
 
-  // Run client-side security checks first, then register with API
-  setTimeout(() => {
-    btn.textContent = '🔍 Running security checks…';
-    runAccountRiskAgent(async function(result) {
-      if (result.decision === 'block') {
-        btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
-        showToast('error', 'Registration Blocked', 'Our security checks flagged this registration. Please contact support.');
-        return;
-      }
-      if (result.decision === 'suspicious') {
-        showToast('warn', 'Additional Verification', 'We may require additional verification during onboarding.');
-      }
-      // Register with backend API
-      try {
-        const fname = document.getElementById('r-fname').value.trim();
-        const lname = document.getElementById('r-lname').value.trim();
-        const resp = await apiCall('POST', '/auth/client/register', {
-          email: email,
-          password: pwd,
-          company_name: fname + ' ' + lname + ' — Onboarding'
-        });
-        setAuth(resp.token, resp.client);
-        btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
-        showView('company-lookup');
-        showToast('success', 'Account created!', 'Welcome to ARIE Finance. Let\'s find your company.');
-      } catch (err) {
-        btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
-        showToast('error', 'Registration Failed', err.message || 'Could not create account. Please try again.');
-      }
-    });
-  }, 1500);
+  setTimeout(async () => {
+    try {
+      const fname = document.getElementById('r-fname').value.trim();
+      const lname = document.getElementById('r-lname').value.trim();
+      const resp = await apiCall('POST', '/auth/client/register', {
+        email: email,
+        password: pwd,
+        company_name: fname + ' ' + lname + ' — Onboarding'
+      });
+      setAuth(resp.token, resp.client);
+      btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
+      prefillApplicationForm();
+      showView('prescreening');
+      showToast('success', 'Account created!', 'Welcome to ARIE Finance. Let\'s complete your application.');
+    } catch (err) {
+      btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
+      showToast('error', 'Registration Failed', err.message || 'Could not create account. Please try again.');
+    }
+  }, 800);
 }
 
 // ─── Login ───────────────────────────────────────────────────
@@ -6393,8 +6866,7 @@ function showLookupResult(found) {
 function proceedToPreScreening() {
   prefillApplicationForm();
   showView('prescreening');
-  document.getElementById('prefill-notice').style.display = 'flex';
-  showToast('success', 'Form Pre-filled', 'Review the highlighted fields and complete your application.');
+  showToast('success', 'Application Ready', 'Please complete your application form.');
 }
 
 function prefillApplicationForm() {
