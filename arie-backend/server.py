@@ -1373,6 +1373,13 @@ class BaseHandler(tornado.web.RequestHandler):
         if own_db:
             db.close()
 
+    def check_app_ownership(self, user, app):
+        """Returns True if user is allowed to access this application."""
+        if user.get("type") == "client" and app["client_id"] != user["sub"]:
+            self.error("Unauthorized", 403)
+            return False
+        return True
+
 
 # ── Health Check ──
 class HealthHandler(BaseHandler):
@@ -1607,6 +1614,10 @@ class ApplicationDetailHandler(BaseHandler):
             db.close()
             return self.error("Application not found", 404)
 
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
         result = dict(app)
         result["directors"] = [dict(d) for d in db.execute(
             "SELECT * FROM directors WHERE application_id = ?", (result["id"],)).fetchall()]
@@ -1631,6 +1642,10 @@ class ApplicationDetailHandler(BaseHandler):
         if not app:
             db.close()
             return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
 
         real_id = app["id"]
 
@@ -1682,7 +1697,17 @@ class ApplicationDetailHandler(BaseHandler):
             db.close()
             return self.error("Application not found", 404)
 
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
         real_id = app["id"]
+
+        # Only officers can change status and assignment
+        if user.get("type") == "client":
+            if "status" in data or "assigned_to" in data or "decision_by" in data:
+                db.close()
+                return self.error("Only officers can change application status", 403)
 
         # Handle status changes
         new_status = data.get("status")
@@ -1716,6 +1741,10 @@ class SubmitApplicationHandler(BaseHandler):
         if not app:
             db.close()
             return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
 
         real_id = app["id"]
 
@@ -1814,10 +1843,14 @@ class DocumentUploadHandler(BaseHandler):
             return
 
         db = get_db()
-        app = db.execute("SELECT id, ref FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+        app = db.execute("SELECT id, ref, client_id FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
         if not app:
             db.close()
             return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
 
         if "file" not in self.request.files:
             db.close()
@@ -2116,6 +2149,91 @@ class AIAgentDetailHandler(BaseHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# REPORT GENERATION ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class ReportHandler(BaseHandler):
+    """GET /api/reports/generate — generate filtered report data"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+
+        # Get filter parameters
+        status = self.get_argument("status", None)
+        risk_level = self.get_argument("risk_level", None)
+        date_from = self.get_argument("date_from", None)
+        date_to = self.get_argument("date_to", None)
+        fields = self.get_argument("fields", "ref,company_name,status,risk_level,created_at,assigned_to")
+
+        # Build query
+        conditions = []
+        params = []
+        if status:
+            conditions.append("a.status=?")
+            params.append(status)
+        if risk_level:
+            conditions.append("a.risk_level=?")
+            params.append(risk_level)
+        if date_from:
+            conditions.append("a.created_at >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("a.created_at <= ?")
+            params.append(date_to)
+
+        where = " AND ".join(conditions) if conditions else "1=1"
+
+        query = f"""
+            SELECT a.*,
+                   (SELECT COUNT(*) FROM directors WHERE application_id=a.id) as director_count,
+                   (SELECT COUNT(*) FROM ubos WHERE application_id=a.id) as ubo_count,
+                   (SELECT COUNT(*) FROM documents WHERE application_id=a.id) as document_count
+            FROM applications a
+            WHERE {where}
+            ORDER BY a.created_at DESC
+        """
+
+        rows = db.execute(query, params).fetchall()
+        db.close()
+
+        # Parse field selection
+        field_list = [f.strip() for f in fields.split(",")]
+
+        results = []
+        for row in rows:
+            record = dict(row)
+            # Parse prescreening_data for risk info
+            prescreening = json.loads(record.get("prescreening_data") or "{}")
+            risk_info = prescreening.get("risk_assessment", {})
+            record["risk_score"] = risk_info.get("score", 0)
+            record["risk_level"] = risk_info.get("level", record.get("risk_level", ""))
+            record["risk_lane"] = risk_info.get("lane", "")
+
+            # Filter to requested fields
+            filtered = {}
+            for f in field_list:
+                if f in record:
+                    filtered[f] = record[f]
+                elif f == "director_count":
+                    filtered[f] = record.get("director_count", 0)
+                elif f == "ubo_count":
+                    filtered[f] = record.get("ubo_count", 0)
+                elif f == "document_count":
+                    filtered[f] = record.get("document_count", 0)
+            results.append(filtered)
+
+        self.log_audit(user, "Report", "Generate", f"Report generated: {len(results)} records, fields: {fields}")
+        self.success({
+            "total": len(results),
+            "fields": field_list,
+            "data": results
+        })
+
+
+# ══════════════════════════════════════════════════════════
 # AUDIT TRAIL ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
@@ -2147,26 +2265,51 @@ class DashboardHandler(BaseHandler):
 
         db = get_db()
         stats = {}
-        stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications").fetchone()["c"]
-        stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted')").fetchone()["c"]
-        stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review'").fetchone()["c"]
-        stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved'").fetchone()["c"]
-        stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected'").fetchone()["c"]
-        stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required'").fetchone()["c"]
 
-        # Risk distribution
-        stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'").fetchone()["c"]
-        stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'").fetchone()["c"]
-        stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'").fetchone()["c"]
-        stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'").fetchone()["c"]
+        if user.get("type") == "client":
+            client_id = user["sub"]
+            stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE client_id=?", (client_id,)).fetchone()["c"]
+            stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted') AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required' AND client_id=?", (client_id,)).fetchone()["c"]
 
-        # Recent applications
-        recent = db.execute("""
-            SELECT a.*, u.full_name as assigned_name FROM applications a
-            LEFT JOIN users u ON a.assigned_to = u.id
-            ORDER BY a.created_at DESC LIMIT 10
-        """).fetchall()
-        stats["recent"] = [dict(r) for r in recent]
+            # Risk distribution
+            stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
+
+            # Recent applications
+            recent = db.execute("""
+                SELECT a.*, u.full_name as assigned_name FROM applications a
+                LEFT JOIN users u ON a.assigned_to = u.id
+                WHERE a.client_id=?
+                ORDER BY a.created_at DESC LIMIT 10
+            """, (client_id,)).fetchall()
+            stats["recent"] = [dict(r) for r in recent]
+        else:
+            stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications").fetchone()["c"]
+            stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted')").fetchone()["c"]
+            stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review'").fetchone()["c"]
+            stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved'").fetchone()["c"]
+            stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected'").fetchone()["c"]
+            stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required'").fetchone()["c"]
+
+            # Risk distribution
+            stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'").fetchone()["c"]
+            stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'").fetchone()["c"]
+            stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'").fetchone()["c"]
+            stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'").fetchone()["c"]
+
+            # Recent applications
+            recent = db.execute("""
+                SELECT a.*, u.full_name as assigned_name FROM applications a
+                LEFT JOIN users u ON a.assigned_to = u.id
+                ORDER BY a.created_at DESC LIMIT 10
+            """).fetchall()
+            stats["recent"] = [dict(r) for r in recent]
 
         db.close()
         self.success(stats)
@@ -2602,6 +2745,9 @@ def make_app():
         (r"/api/kyc/status/([^/]+)", SumsubStatusHandler),
         (r"/api/kyc/document", SumsubDocumentHandler),
         (r"/api/kyc/webhook", SumsubWebhookHandler),
+
+        # Reports
+        (r"/api/reports/generate", ReportHandler),
 
         # Audit
         (r"/api/audit", AuditHandler),
