@@ -122,7 +122,7 @@ def init_db():
         onboarding_lane TEXT,
         -- Status
         status TEXT DEFAULT 'draft' CHECK(status IN (
-            'draft','submitted','pending_review','in_review',
+            'draft','submitted','pending_review','in_review','kyc_documents','compliance_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
@@ -301,6 +301,22 @@ def init_db():
         ])
         db.execute("INSERT INTO risk_config (id, dimensions, thresholds) VALUES (1, ?, ?)",
                     (default_dims, default_thresholds))
+
+        # Seed AI agents (10-agent architecture)
+        agents_seed = [
+            (1, "Identity & Document Integrity Agent", "🔍", "document_verification", "Performs 66 automated document checks + company registry verification (OpenCorporates, Companies House, ADGM, DIFC registries). Checks: company name, registration number, incorporation date, jurisdiction, company status, directors, shareholders.", 1, "[]"),
+            (2, "Corporate Structure & UBO Mapping Agent", "🏗️", "ubo_mapping", "Parses shareholder registers, maps ownership chains, identifies natural-person UBOs, detects nominee/layered structures, highlights high-risk jurisdictions. Output: ownership map, UBO list, structure complexity score.", 1, "[]"),
+            (3, "Business Model Plausibility Agent", "📊", "business_analysis", "Reviews business description, compares with industry benchmarks, detects vague/inconsistent narratives, flags high-risk sectors. Output: business summary, plausibility score, red flags.", 1, "[]"),
+            (4, "FinCrime Screening Interpretation Agent", "💼", "screening", "Conducts and summarises sanctions, PEP, adverse media screening. Distinguishes false positives, highlights material adverse media, flags political exposure. Output: screening summary, relevance assessment.", 1, "[]"),
+            (5, "Compliance Memo & Risk Recommendation Agent", "📝", "compliance_memo", "Combines outputs from other agents, generates onboarding memo, highlights key risks, recommends risk rating. Output: structured onboarding report, risk recommendation, review checklist.", 1, "[]"),
+            (6, "Periodic Review Preparation Agent", "📅", "periodic_review", "Prepares client files for periodic reviews, identifies expired documents, requests updated information, summarises changes since onboarding.", 1, "[]"),
+            (7, "Adverse Media & PEP Monitoring Agent", "📡", "media_monitoring", "Continuous media monitoring, PEP status changes, new sanctions exposure, enforcement actions. Output: alert summaries, severity classification.", 1, "[]"),
+            (8, "Behaviour & Risk Drift Agent", "📈", "risk_drift", "Compares current activity vs onboarding profile, detects new jurisdictions, identifies sector changes, flags unusual growth patterns. Output: risk drift score, escalation trigger.", 1, "[]"),
+            (9, "Regulatory Impact Agent", "⚖️", "regulatory_impact", "Analyses new circulars/rules, identifies impacted client segments, triggers compliance actions. Output: regulatory impact summary, remediation tasks.", 1, "[]"),
+            (10, "Ongoing Compliance Review Agent", "📋", "compliance_review", "Consolidates monitoring alerts, summarises risk changes, recommends actions (maintain/EDD/exit). Output: periodic review memo, updated risk classification, escalation recommendation.", 1, "[]")
+        ]
+        for agent_data in agents_seed:
+            db.execute("INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks) VALUES (?,?,?,?,?,?,?)", agent_data)
         db.commit()
 
         # Log the init
@@ -1801,9 +1817,18 @@ class SubmitApplicationHandler(BaseHandler):
             WHERE id=?
         """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"], real_id))
 
-        # Auto-route: Low risk → pending_review, High/VH → edd_required
-        auto_status = "pending_review" if risk["level"] in ("LOW","MEDIUM") else "edd_required"
+        # Auto-route: Low/Medium risk → kyc_documents (proceed to KYC), High/VH → compliance_review (referred to compliance)
+        auto_status = "kyc_documents" if risk["level"] in ("LOW","MEDIUM") else "compliance_review"
         db.execute("UPDATE applications SET status=? WHERE id=?", (auto_status, real_id))
+
+        # Create compliance team notification for high-risk applications
+        if risk["level"] in ("HIGH","VERY_HIGH"):
+            compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
+            for user in compliance_users:
+                db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                          (user["id"], "High-Risk Application Submitted",
+                           f"Application {app['ref']} ({app['company_name']}) requires compliance review. Risk Level: {risk['level']} (Score: {risk['score']})"))
+            db.commit()
 
         db.commit()
         db.close()
@@ -2271,6 +2296,8 @@ class DashboardHandler(BaseHandler):
             stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE client_id=?", (client_id,)).fetchone()["c"]
             stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted') AND client_id=?", (client_id,)).fetchone()["c"]
             stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required' AND client_id=?", (client_id,)).fetchone()["c"]
@@ -2293,6 +2320,8 @@ class DashboardHandler(BaseHandler):
             stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications").fetchone()["c"]
             stats["pending"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('pending_review','submitted')").fetchone()["c"]
             stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review'").fetchone()["c"]
+            stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'").fetchone()["c"]
+            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
             stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved'").fetchone()["c"]
             stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected'").fetchone()["c"]
             stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required'").fetchone()["c"]
@@ -2700,6 +2729,155 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# MONITORING ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class MonitoringDashboardHandler(BaseHandler):
+    """GET /api/monitoring/dashboard — returns monitoring stats"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        stats = {
+            "files_due": 0,
+            "docs_expiring": 0,
+            "alerts": 0,
+            "clients_under_review": 0,
+            "high_risk_alerts": [],
+            "periodic_review_due": 0
+        }
+
+        # Count applications pending compliance review
+        compliance_review = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
+        stats["clients_under_review"] = compliance_review
+
+        # Count high-risk alerts
+        high_risk = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level IN ('HIGH','VERY_HIGH')").fetchone()["c"]
+        stats["alerts"] = high_risk
+
+        # Get recent high-risk applications for alert summary
+        recent_alerts = db.execute("""
+            SELECT ref, company_name, risk_level, risk_score, created_at FROM applications
+            WHERE risk_level IN ('HIGH','VERY_HIGH')
+            ORDER BY created_at DESC LIMIT 10
+        """).fetchall()
+        stats["high_risk_alerts"] = [dict(a) for a in recent_alerts]
+
+        db.close()
+        self.success(stats)
+
+
+class MonitoringClientsHandler(BaseHandler):
+    """GET /api/monitoring/clients — returns client monitoring status for Kanban board"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+
+        # Get all applications grouped by status/stage
+        applications = db.execute("""
+            SELECT a.id, a.ref, a.company_name, a.status, a.risk_level, a.risk_score,
+                   a.created_at, u.full_name as assigned_to
+            FROM applications a
+            LEFT JOIN users u ON a.assigned_to = u.id
+            ORDER BY a.created_at DESC
+        """).fetchall()
+
+        clients = {}
+        for app in applications:
+            status = app["status"]
+            if status not in clients:
+                clients[status] = []
+            clients[status].append(dict(app))
+
+        db.close()
+        self.success({"clients_by_status": clients})
+
+
+class MonitoringAlertsHandler(BaseHandler):
+    """POST /api/monitoring/alerts — create monitoring alert"""
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        # Create notification for relevant users
+        alert_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
+        for u in alert_users:
+            db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                      (u["id"], data.get("title", "Monitoring Alert"),
+                       data.get("message", "")))
+
+        db.commit()
+        db.close()
+        self.log_audit(user, "Alert", "Monitoring", f"Alert created: {data.get('title','')}")
+        self.success({"status": "created"}, 201)
+
+
+# ══════════════════════════════════════════════════════════
+# AI ASSISTANT ENDPOINT
+# ══════════════════════════════════════════════════════════
+
+class AIAssistantHandler(BaseHandler):
+    """POST /api/ai/assistant — AI assistant for compliance topics"""
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        data = self.get_json()
+        message = data.get("message", "").strip()
+
+        if not message:
+            self.error("Message cannot be empty", 400)
+            return
+
+        # Simulated AI response about compliance topics
+        # In production, this would integrate with an LLM API
+        compliance_keywords = ["kyc", "aml", "sanctions", "pep", "risk", "screening", "compliance", "due diligence"]
+        is_compliance_topic = any(kw in message.lower() for kw in compliance_keywords)
+
+        if is_compliance_topic:
+            response = self._get_compliance_response(message)
+        else:
+            response = "I can help with compliance and KYC-related questions. Please ask about AML, sanctions screening, PEP verification, risk assessment, or due diligence procedures."
+
+        self.success({"response": response, "topic": "compliance" if is_compliance_topic else "general"})
+
+    def _get_compliance_response(self, message):
+        """Return contextual compliance guidance based on the message"""
+        msg_lower = message.lower()
+
+        if any(w in msg_lower for w in ["kyc", "know your customer"]):
+            return "KYC (Know Your Customer) involves verifying customer identity, conducting beneficial ownership analysis, and assessing risk profile. Core elements: identity verification, address verification, source of funds, business purpose, and beneficial ownership structure."
+
+        elif any(w in msg_lower for w in ["sanctions", "screening"]):
+            return "Sanctions and PEP screening is mandatory. Check against OFAC, UN, EU sanctions lists and PEP databases. Document all screening results. Update screening annually or when customer information changes. Maintain audit trail of all checks."
+
+        elif any(w in msg_lower for w in ["pep", "politically exposed"]):
+            return "PEP (Politically Exposed Persons) are individuals holding prominent public positions. Enhanced due diligence required including: source of wealth verification, beneficial ownership analysis, and ongoing monitoring. Document political exposure and relationships."
+
+        elif any(w in msg_lower for w in ["risk", "assessment"]):
+            return "Risk assessment evaluates customer risk across dimensions: entity risk, geographic risk, product risk, sector risk. Consider: entity type, ownership structure, jurisdiction, business model, transaction patterns. Document risk rating and mitigation measures."
+
+        elif any(w in msg_lower for w in ["ubo", "beneficial owner"]):
+            return "Ultimate Beneficial Owner (UBO) identification requires mapping full ownership chain to identify natural persons. Detect nominee structures, complex layering, and high-risk jurisdictions. Verify UBO identity and screen against sanctions/PEP lists."
+
+        elif any(w in msg_lower for w in ["aml", "anti-money laundering"]):
+            return "AML compliance requires: customer due diligence, sanctions screening, ongoing monitoring, transaction monitoring, suspicious activity reporting, and record retention. Maintain policies, procedures, and staff training programs."
+
+        else:
+            return "I can assist with compliance questions including KYC procedures, sanctions screening, PEP verification, risk assessment, UBO identification, and AML compliance. What specific area would you like to know more about?"
+
+
+# ══════════════════════════════════════════════════════════
 # APP SETUP & ROUTES
 # ══════════════════════════════════════════════════════════
 
@@ -2754,6 +2932,14 @@ def make_app():
 
         # Dashboard
         (r"/api/dashboard", DashboardHandler),
+
+        # Monitoring
+        (r"/api/monitoring/dashboard", MonitoringDashboardHandler),
+        (r"/api/monitoring/clients", MonitoringClientsHandler),
+        (r"/api/monitoring/alerts", MonitoringAlertsHandler),
+
+        # AI Assistant
+        (r"/api/ai/assistant", AIAssistantHandler),
 
         # Save & Resume
         (r"/api/save-resume", SaveResumeHandler),
