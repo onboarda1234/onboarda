@@ -2612,6 +2612,9 @@ def make_app():
         # Save & Resume
         (r"/api/save-resume", SaveResumeHandler),
 
+        # Root redirect
+        (r"/", tornado.web.RedirectHandler, {"url": "/portal"}),
+
         # Serve portal HTML files and static assets
         (r"/portal", PortalHandler),
         (r"/backoffice", BackOfficeHandler),
