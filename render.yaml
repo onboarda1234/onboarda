@@ -1,0 +1,38 @@
+# Render.com — Blueprint spec for ARIE Finance
+# Place this at the REPO ROOT (not inside arie-backend/)
+services:
+  - type: web
+    name: arie-finance
+    runtime: python
+    plan: starter
+    rootDir: .
+    buildCommand: pip install -r arie-backend/requirements.txt
+    startCommand: cd arie-backend && python3 server.py
+    healthCheckPath: /api/health
+    disk:
+      name: arie-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DB_PATH
+        value: /data/arie.db
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      - key: ALLOWED_ORIGIN
+        sync: false
+      - key: SUMSUB_APP_TOKEN
+        sync: false
+      - key: SUMSUB_SECRET_KEY
+        sync: false
+      - key: SUMSUB_WEBHOOK_SECRET
+        sync: false
+      - key: OPENCORPORATES_API_KEY
+        sync: false
+      - key: OPENSANCTIONS_API_KEY
+        sync: false

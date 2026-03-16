@@ -36,7 +36,34 @@ except ImportError:
     logging.getLogger("arie").warning("Supervisor framework not available — install pydantic>=2.0")
 
 # ── Logging ───────────────────────────────────────────────
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+# JSON structured logging for production, human-readable for development
+_log_format = os.environ.get("LOG_FORMAT", "text")  # "json" or "text"
+
+class JSONFormatter(logging.Formatter):
+    """JSON structured log formatter for production log aggregation."""
+    def format(self, record):
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+        if record.exc_info and record.exc_info[0]:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry)
+
+if _log_format == "json" or os.environ.get("ENVIRONMENT", "development") == "production":
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(JSONFormatter())
+    logging.root.handlers = []
+    logging.root.addHandler(_handler)
+    logging.root.setLevel(logging.INFO)
+else:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 logger = logging.getLogger("arie")
 
 # ── Configuration ──────────────────────────────────────────
@@ -51,7 +78,21 @@ if not _env_secret and ENVIRONMENT == "production":
     sys.exit(1)
 SECRET_KEY = _env_secret or secrets.token_hex(64)  # Random per-session in dev
 
+# Database: PostgreSQL (via DATABASE_URL) in production, SQLite for development
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "arie.db"))
+USE_POSTGRES = bool(DATABASE_URL)
+
+# PostgreSQL adapter (optional import)
+if USE_POSTGRES:
+    try:
+        import psycopg2
+        import psycopg2.extras
+        logger.info("PostgreSQL mode enabled via DATABASE_URL")
+    except ImportError:
+        logger.error("DATABASE_URL set but psycopg2 not installed. Run: pip install psycopg2-binary")
+        sys.exit(1)
+
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(os.path.dirname(__file__), "uploads", "documents"))
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..")  # Serves from arie-backend parent
 MAX_UPLOAD_MB = 10
@@ -74,6 +115,54 @@ SUMSUB_WEBHOOK_SECRET = os.environ.get("SUMSUB_WEBHOOK_SECRET", "")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
+
+# ── Prometheus Metrics (optional) ──────────────────────────
+try:
+    from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+    METRICS_ENABLED = True
+    REQUEST_COUNT = Counter("arie_http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"])
+    REQUEST_LATENCY = Histogram("arie_http_request_duration_seconds", "HTTP request latency", ["method", "endpoint"])
+    ACTIVE_CONNECTIONS = Gauge("arie_active_connections", "Active HTTP connections")
+    APPLICATION_COUNT = Gauge("arie_applications_total", "Total applications by status", ["status"])
+    SCREENING_COUNT = Counter("arie_screenings_total", "Total screenings run", ["source", "result"])
+    SAR_COUNT = Counter("arie_sar_reports_total", "Total SAR reports", ["status"])
+    logger.info("Prometheus metrics enabled")
+except ImportError:
+    METRICS_ENABLED = False
+    logger.info("prometheus-client not installed — metrics disabled")
+
+# ── Environment Validation ──────────────────────────────────
+def validate_environment():
+    """Validate required environment configuration on startup."""
+    warnings = []
+    errors = []
+
+    if ENVIRONMENT == "production":
+        if not SECRET_KEY or SECRET_KEY == "arie-dev-secret-change-in-production":
+            errors.append("SECRET_KEY must be set to a secure random value in production")
+        if not os.environ.get("ALLOWED_ORIGIN"):
+            warnings.append("ALLOWED_ORIGIN not set — CORS defaults to same-origin only")
+        if not DATABASE_URL:
+            warnings.append("DATABASE_URL not set — using SQLite (not recommended for production)")
+        if not OPENSANCTIONS_API_KEY:
+            warnings.append("OPENSANCTIONS_API_KEY not set — sanctions screening will be simulated")
+        if not SUMSUB_APP_TOKEN:
+            warnings.append("SUMSUB_APP_TOKEN not set — KYC verification will be simulated")
+    else:
+        if not SECRET_KEY:
+            warnings.append("SECRET_KEY not set — using auto-generated random key")
+
+    for w in warnings:
+        logger.warning("ENV CHECK: %s", w)
+    for e in errors:
+        logger.error("ENV CHECK: %s", e)
+
+    if errors:
+        logger.error("Environment validation failed — aborting startup")
+        sys.exit(1)
+
+    logger.info("Environment validation passed (%d warning(s))", len(warnings))
+    return {"warnings": warnings, "errors": errors}
 
 # ── Pricing Configuration (based on risk profile) ──
 PRICING_TIERS = {
@@ -110,8 +199,23 @@ PRICING_TIERS = {
 # ══════════════════════════════════════════════════════════
 # DATABASE
 # ══════════════════════════════════════════════════════════
+
+class PostgresRowWrapper:
+    """Wraps psycopg2 DictRow to behave like sqlite3.Row for compatibility."""
+    def __init__(self, row):
+        self._row = row
+    def __getitem__(self, key):
+        return self._row[key]
+    def keys(self):
+        return self._row.keys() if hasattr(self._row, 'keys') else []
+
 def get_db():
-    """Get a thread-local database connection."""
+    """Get a database connection — PostgreSQL if DATABASE_URL is set, otherwise SQLite."""
+    if USE_POSTGRES:
+        db = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        db.autocommit = False
+        return db
+
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
@@ -349,6 +453,45 @@ def init_db():
         read_status INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
         read_at TEXT
+    );
+
+    -- Suspicious Activity Reports (SAR)
+    CREATE TABLE IF NOT EXISTS sar_reports (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+        application_id TEXT REFERENCES applications(id),
+        alert_id INTEGER REFERENCES monitoring_alerts(id),
+        sar_reference TEXT UNIQUE,
+        report_type TEXT DEFAULT 'SAR' CHECK(report_type IN ('SAR','STR','CTR','MLRO')),
+        subject_name TEXT NOT NULL,
+        subject_type TEXT DEFAULT 'individual' CHECK(subject_type IN ('individual','entity')),
+        risk_level TEXT,
+        narrative TEXT NOT NULL,
+        indicators TEXT DEFAULT '[]',
+        transaction_details TEXT DEFAULT '{}',
+        supporting_documents TEXT DEFAULT '[]',
+        filing_status TEXT DEFAULT 'draft' CHECK(filing_status IN ('draft','pending_review','approved','filed','rejected','archived')),
+        prepared_by TEXT REFERENCES users(id),
+        reviewed_by TEXT REFERENCES users(id),
+        approved_by TEXT REFERENCES users(id),
+        filed_at TEXT,
+        regulatory_body TEXT DEFAULT 'FIU Mauritius',
+        external_reference TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Compliance Memo Versions (versioned audit trail for Agent 9 output)
+    CREATE TABLE IF NOT EXISTS compliance_memos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id),
+        version INTEGER DEFAULT 1,
+        memo_data TEXT NOT NULL,
+        generated_by TEXT REFERENCES users(id),
+        ai_recommendation TEXT,
+        review_status TEXT DEFAULT 'draft' CHECK(review_status IN ('draft','reviewed','approved','rejected')),
+        reviewed_by TEXT REFERENCES users(id),
+        review_notes TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
     );
     """)
 
@@ -623,23 +766,33 @@ def init_db():
 # AUTH HELPERS
 # ══════════════════════════════════════════════════════════
 def create_token(user_id, role, name, token_type="officer"):
+    """Create a JWT with session binding (jti) and issuer claim for security."""
+    jti = uuid.uuid4().hex  # Unique token ID for session tracking / revocation
     payload = {
         "sub": user_id,
         "role": role,
         "name": name,
         "type": token_type,
+        "jti": jti,
+        "iss": "arie-finance",
         "exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS),
-        "iat": datetime.utcnow()
+        "iat": datetime.utcnow(),
+        "nbf": datetime.utcnow(),  # Not valid before issuance
     }
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 
 def decode_token(token):
+    """Decode and validate JWT with issuer verification."""
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"],
+                          issuer="arie-finance",
+                          options={"require": ["exp", "iat", "sub"]})
     except jwt.ExpiredSignatureError:
+        logger.debug("Token expired")
         return None
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
+        logger.debug("Invalid token: %s", e)
         return None
 
 
@@ -1742,7 +1895,55 @@ class BaseHandler(tornado.web.RequestHandler):
 # ── Health Check ──
 class HealthHandler(BaseHandler):
     def get(self):
-        self.success({"status": "ok", "service": "ARIE Finance API", "version": "1.0.0"})
+        """Enhanced health check with database connectivity and dependency status."""
+        health = {
+            "status": "ok",
+            "service": "ARIE Finance API",
+            "version": "1.0.0",
+            "environment": ENVIRONMENT,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+
+        # Database connectivity check
+        try:
+            db = get_db()
+            if USE_POSTGRES:
+                cur = db.cursor()
+                cur.execute("SELECT 1")
+                cur.close()
+            else:
+                db.execute("SELECT 1")
+            db.close()
+            health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
+        except Exception as e:
+            health["database"] = {"status": "error", "error": str(e)[:200]}
+            health["status"] = "degraded"
+
+        # External API status
+        health["integrations"] = {
+            "opensanctions": "configured" if OPENSANCTIONS_API_KEY else "simulated",
+            "opencorporates": "configured" if OPENCORPORATES_API_KEY else "simulated",
+            "ip_geolocation": "live",
+            "sumsub_kyc": "configured" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
+        }
+
+        # Metrics status
+        health["metrics_enabled"] = METRICS_ENABLED
+
+        status_code = 200 if health["status"] == "ok" else 503
+        self.set_status(status_code)
+        self.write(json.dumps(health, default=str))
+
+
+class MetricsHandler(tornado.web.RequestHandler):
+    """GET /metrics — Prometheus metrics endpoint"""
+    def get(self):
+        if not METRICS_ENABLED:
+            self.set_status(404)
+            self.write("Metrics not enabled")
+            return
+        self.set_header("Content-Type", CONTENT_TYPE_LATEST)
+        self.write(generate_latest())
 
 
 # ══════════════════════════════════════════════════════════
@@ -3836,6 +4037,288 @@ class PeriodicReviewScheduleHandler(BaseHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# SAR (SUSPICIOUS ACTIVITY REPORT) ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class SARListHandler(BaseHandler):
+    """GET /api/sar — List SAR reports, POST — create new SAR"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        status_filter = self.get_argument("status", None)
+        db = get_db()
+
+        query = "SELECT * FROM sar_reports WHERE 1=1"
+        params = []
+        if status_filter:
+            query += " AND filing_status = ?"
+            params.append(status_filter)
+        query += " ORDER BY created_at DESC"
+
+        rows = db.execute(query, params).fetchall()
+        result = []
+        for r in rows:
+            row_dict = dict(r)
+            row_dict["indicators"] = json.loads(row_dict["indicators"]) if row_dict["indicators"] else []
+            row_dict["transaction_details"] = json.loads(row_dict["transaction_details"]) if row_dict["transaction_details"] else {}
+            row_dict["supporting_documents"] = json.loads(row_dict["supporting_documents"]) if row_dict["supporting_documents"] else []
+            result.append(row_dict)
+
+        db.close()
+        self.success({"sar_reports": result, "total": len(result)})
+
+    def post(self):
+        """Create a new SAR report — can be auto-triggered by alert or manually created."""
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        subject_name = data.get("subject_name", "").strip()
+        narrative = data.get("narrative", "").strip()
+
+        if not subject_name or not narrative:
+            return self.error("subject_name and narrative are required")
+
+        db = get_db()
+        sar_id = uuid.uuid4().hex[:16]
+
+        # Generate SAR reference number
+        count = db.execute("SELECT COUNT(*) as c FROM sar_reports").fetchone()["c"]
+        year = datetime.now().year
+        sar_ref = f"SAR-{year}-{10001 + count}"
+
+        db.execute("""
+            INSERT INTO sar_reports (id, application_id, alert_id, sar_reference, report_type,
+                subject_name, subject_type, risk_level, narrative, indicators,
+                transaction_details, supporting_documents, filing_status, prepared_by, regulatory_body)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            sar_id,
+            data.get("application_id"),
+            data.get("alert_id"),
+            sar_ref,
+            data.get("report_type", "SAR"),
+            subject_name,
+            data.get("subject_type", "individual"),
+            data.get("risk_level", "HIGH"),
+            narrative,
+            json.dumps(data.get("indicators", [])),
+            json.dumps(data.get("transaction_details", {})),
+            json.dumps(data.get("supporting_documents", [])),
+            "draft",
+            user["sub"],
+            data.get("regulatory_body", "FIU Mauritius"),
+        ))
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "SAR Created", sar_ref, f"SAR report created for {subject_name}")
+        if METRICS_ENABLED:
+            SAR_COUNT.labels(status="draft").inc()
+
+        self.success({"id": sar_id, "sar_reference": sar_ref, "status": "draft"}, 201)
+
+
+class SARDetailHandler(BaseHandler):
+    """GET/PUT /api/sar/:id — Get or update a SAR report"""
+    def get(self, sar_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        sar = db.execute("SELECT * FROM sar_reports WHERE id = ? OR sar_reference = ?", (sar_id, sar_id)).fetchone()
+        if not sar:
+            db.close()
+            return self.error("SAR report not found", 404)
+
+        result = dict(sar)
+        result["indicators"] = json.loads(result["indicators"]) if result["indicators"] else []
+        result["transaction_details"] = json.loads(result["transaction_details"]) if result["transaction_details"] else {}
+        result["supporting_documents"] = json.loads(result["supporting_documents"]) if result["supporting_documents"] else []
+
+        db.close()
+        self.success(result)
+
+    def put(self, sar_id):
+        """Update SAR report (edit narrative, indicators, etc.)"""
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        sar = db.execute("SELECT * FROM sar_reports WHERE id = ? OR sar_reference = ?", (sar_id, sar_id)).fetchone()
+        if not sar:
+            db.close()
+            return self.error("SAR report not found", 404)
+
+        if sar["filing_status"] == "filed":
+            db.close()
+            return self.error("Cannot modify a filed SAR report", 400)
+
+        real_id = sar["id"]
+        db.execute("""
+            UPDATE sar_reports SET
+                narrative=?, indicators=?, transaction_details=?,
+                supporting_documents=?, risk_level=?, updated_at=datetime('now')
+            WHERE id=?
+        """, (
+            data.get("narrative", sar["narrative"]),
+            json.dumps(data.get("indicators", json.loads(sar["indicators"] or "[]"))),
+            json.dumps(data.get("transaction_details", json.loads(sar["transaction_details"] or "{}"))),
+            json.dumps(data.get("supporting_documents", json.loads(sar["supporting_documents"] or "[]"))),
+            data.get("risk_level", sar["risk_level"]),
+            real_id,
+        ))
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "SAR Updated", sar["sar_reference"], "SAR report updated")
+        self.success({"status": "updated"})
+
+
+class SARWorkflowHandler(BaseHandler):
+    """POST /api/sar/:id/workflow — Advance SAR through workflow (review → approve → file)"""
+    def post(self, sar_id):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        data = self.get_json()
+        action = data.get("action")
+        notes = data.get("notes", "")
+
+        valid_actions = ["submit_review", "approve", "reject", "file", "archive"]
+        if action not in valid_actions:
+            return self.error(f"Invalid action. Must be one of: {', '.join(valid_actions)}")
+
+        db = get_db()
+        sar = db.execute("SELECT * FROM sar_reports WHERE id = ? OR sar_reference = ?", (sar_id, sar_id)).fetchone()
+        if not sar:
+            db.close()
+            return self.error("SAR report not found", 404)
+
+        real_id = sar["id"]
+        current_status = sar["filing_status"]
+
+        # Validate state transitions
+        valid_transitions = {
+            "draft": ["submit_review"],
+            "pending_review": ["approve", "reject"],
+            "approved": ["file"],
+            "filed": ["archive"],
+            "rejected": ["submit_review"],
+        }
+
+        if action not in valid_transitions.get(current_status, []):
+            db.close()
+            return self.error(f"Cannot {action} a SAR in '{current_status}' status", 400)
+
+        new_status = {
+            "submit_review": "pending_review",
+            "approve": "approved",
+            "reject": "rejected",
+            "file": "filed",
+            "archive": "archived",
+        }[action]
+
+        updates = "filing_status=?, updated_at=datetime('now')"
+        params = [new_status]
+
+        if action == "approve":
+            updates += ", approved_by=?"
+            params.append(user["sub"])
+        elif action == "submit_review":
+            updates += ", reviewed_by=?"
+            params.append(user["sub"])
+        elif action == "file":
+            updates += ", filed_at=datetime('now'), external_reference=?"
+            params.append(data.get("external_reference", ""))
+
+        params.append(real_id)
+        db.execute(f"UPDATE sar_reports SET {updates} WHERE id=?", params)
+
+        self.log_audit(user, f"SAR {action.replace('_',' ').title()}", sar["sar_reference"],
+                       f"SAR workflow: {current_status} → {new_status}. {notes}", db=db)
+
+        db.commit()
+        db.close()
+
+        if METRICS_ENABLED:
+            SAR_COUNT.labels(status=new_status).inc()
+
+        self.success({"status": new_status, "sar_reference": sar["sar_reference"]})
+
+
+class SARAutoTriggerHandler(BaseHandler):
+    """POST /api/sar/auto-trigger — Auto-create SAR from high-risk monitoring alert"""
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        alert_id = data.get("alert_id")
+
+        if not alert_id:
+            return self.error("alert_id is required")
+
+        db = get_db()
+        alert = db.execute("SELECT * FROM monitoring_alerts WHERE id = ?", (alert_id,)).fetchone()
+        if not alert:
+            db.close()
+            return self.error("Alert not found", 404)
+
+        # Check if SAR already exists for this alert
+        existing = db.execute("SELECT id, sar_reference FROM sar_reports WHERE alert_id = ?", (alert_id,)).fetchone()
+        if existing:
+            db.close()
+            return self.success({"existing": True, "sar_reference": existing["sar_reference"], "id": existing["id"]})
+
+        # Auto-populate SAR from alert data
+        sar_id = uuid.uuid4().hex[:16]
+        count = db.execute("SELECT COUNT(*) as c FROM sar_reports").fetchone()["c"]
+        sar_ref = f"SAR-{datetime.now().year}-{10001 + count}"
+
+        narrative = (
+            f"Auto-generated SAR from monitoring alert.\n\n"
+            f"Alert Type: {alert['alert_type']}\n"
+            f"Severity: {alert['severity']}\n"
+            f"Detected By: {alert['detected_by']}\n"
+            f"Summary: {alert['summary']}\n"
+            f"Source: {alert['source_reference']}\n"
+            f"AI Recommendation: {alert['ai_recommendation']}"
+        )
+
+        db.execute("""
+            INSERT INTO sar_reports (id, application_id, alert_id, sar_reference, report_type,
+                subject_name, subject_type, risk_level, narrative, filing_status, prepared_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            sar_id, alert["application_id"], alert_id, sar_ref, "SAR",
+            alert["client_name"], "entity", alert["severity"].upper(),
+            narrative, "draft", user["sub"],
+        ))
+
+        # Update alert to reflect SAR creation
+        db.execute("UPDATE monitoring_alerts SET officer_action='sar_filed', officer_notes=? WHERE id=?",
+                   (f"SAR {sar_ref} auto-created", alert_id))
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "SAR Auto-Trigger", sar_ref, f"SAR auto-created from alert #{alert_id}")
+        self.success({"id": sar_id, "sar_reference": sar_ref, "status": "draft"}, 201)
+
+
+# ══════════════════════════════════════════════════════════
 # AI ASSISTANT ENDPOINT
 # ══════════════════════════════════════════════════════════
 
@@ -3971,11 +4454,20 @@ def make_app():
         (r"/api/monitoring/reviews/([^/]+)", PeriodicReviewDetailHandler),
         (r"/api/monitoring/reviews", PeriodicReviewsListHandler),
 
+        # SAR (Suspicious Activity Reports)
+        (r"/api/sar/auto-trigger", SARAutoTriggerHandler),
+        (r"/api/sar/([^/]+)/workflow", SARWorkflowHandler),
+        (r"/api/sar/([^/]+)", SARDetailHandler),
+        (r"/api/sar", SARListHandler),
+
         # AI Assistant
         (r"/api/ai/assistant", AIAssistantHandler),
 
         # Save & Resume
         (r"/api/save-resume", SaveResumeHandler),
+
+        # Prometheus Metrics
+        (r"/metrics", MetricsHandler),
 
         # Root redirect
         (r"/", tornado.web.RedirectHandler, {"url": "/portal"}),
@@ -3999,6 +4491,9 @@ def make_app():
 
 
 if __name__ == "__main__":
+    # Validate environment before starting
+    validate_environment()
+
     init_db()
 
     # Run database migrations

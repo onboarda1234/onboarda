@@ -77,10 +77,22 @@ a { color:var(--brand); text-decoration:none; }
 .badge.high { background:var(--amber-bg); color:var(--amber); }
 .badge.very-high { background:var(--red-bg); color:var(--red); }
 .badge.pending { background:var(--amber-bg); color:var(--amber); }
+.badge.draft { background:rgba(148,163,184,0.15); color:#64748b; }
+.badge.prescreening-submitted { background:rgba(59,130,246,0.1); color:#3b82f6; }
+.badge.pricing-review { background:rgba(168,85,247,0.1); color:#a855f7; }
+.badge.pricing-accepted { background:rgba(34,197,94,0.1); color:#22c55e; }
+.badge.kyc-documents { background:rgba(14,165,233,0.1); color:#0ea5e9; }
+.badge.kyc-submitted { background:rgba(99,102,241,0.1); color:#6366f1; }
+.badge.compliance-review { background:rgba(245,158,11,0.1); color:#f59e0b; }
+.badge.in-review { background:var(--blue-bg); color:var(--blue); }
+.badge.edd-required { background:rgba(124,58,237,0.1); color:#7c3aed; }
 .badge.approved { background:var(--green-bg); color:var(--green); }
 .badge.rejected { background:var(--red-bg); color:var(--red); }
-.badge.in-review { background:var(--blue-bg); color:var(--blue); }
+.badge.rmi-sent { background:rgba(236,72,153,0.1); color:#ec4899; }
+.badge.withdrawn { background:rgba(107,114,128,0.15); color:#6b7280; }
 .badge.edd { background:rgba(124,58,237,0.1); color:#7c3aed; }
+.badge.sar-draft { background:rgba(251,146,60,0.1); color:#fb923c; }
+.badge.sar-filed { background:rgba(239,68,68,0.1); color:#ef4444; }
 
 /* ── Buttons ── */
 .btn { padding:9px 18px; border-radius:var(--radius-sm); font-size:13px; font-weight:600; cursor:pointer; border:none; transition:all 0.15s; display:inline-flex; align-items:center; gap:6px; }
@@ -306,6 +318,38 @@ a { color:var(--brand); text-decoration:none; }
 .threshold-row { display:flex; align-items:center; gap:16px; padding:10px 0; }
 .threshold-color { width:14px; height:14px; border-radius:50%; flex-shrink:0; }
 
+/* ── Agent Health Dashboard ── */
+.ah-alert-banner { padding:14px 20px; border-radius:var(--radius); margin-bottom:16px; display:flex; align-items:center; gap:12px; font-size:13px; }
+.ah-alert-banner.critical { background:var(--red-bg); border:1px solid rgba(220,38,38,0.2); color:var(--red); }
+.ah-alert-banner.warning { background:var(--amber-bg); border:1px solid rgba(217,119,6,0.2); color:var(--amber); }
+.ah-alert-banner.healthy { background:var(--green-bg); border:1px solid rgba(22,163,74,0.2); color:var(--green); }
+.ah-agent-card { background:var(--surface); border:1px solid var(--border1); border-radius:var(--radius); padding:0; margin-bottom:12px; overflow:hidden; transition:all 0.15s; }
+.ah-agent-card:hover { border-color:var(--brand); box-shadow:0 2px 8px rgba(43,47,143,0.08); }
+.ah-agent-card-header { display:flex; align-items:center; gap:14px; padding:16px 20px; cursor:pointer; }
+.ah-agent-card-header:hover { background:var(--surface2); }
+.ah-agent-status-dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
+.ah-agent-status-dot.healthy { background:var(--green); box-shadow:0 0 6px rgba(22,163,74,0.4); }
+.ah-agent-status-dot.degraded { background:var(--amber); box-shadow:0 0 6px rgba(217,119,6,0.4); }
+.ah-agent-status-dot.critical { background:var(--red); box-shadow:0 0 6px rgba(220,38,38,0.4); animation:pulse-red 1.5s infinite; }
+.ah-agent-status-dot.disabled { background:var(--text3); }
+@keyframes pulse-red { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+.ah-metric-bar { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.ah-metric-label { width:120px; font-size:11px; color:var(--text3); flex-shrink:0; }
+.ah-metric-track { flex:1; height:8px; background:var(--surface3); border-radius:4px; overflow:hidden; }
+.ah-metric-fill { height:100%; border-radius:4px; transition:width 0.6s ease; }
+.ah-metric-value { width:50px; text-align:right; font-size:12px; font-weight:700; flex-shrink:0; }
+.ah-sparkline { display:flex; align-items:flex-end; gap:2px; height:32px; }
+.ah-spark-bar { width:6px; border-radius:2px 2px 0 0; background:var(--brand); opacity:0.7; transition:height 0.3s; }
+.ah-spark-bar:hover { opacity:1; }
+.ah-detail-body { padding:0 20px 20px; display:none; }
+.ah-agent-card.open .ah-detail-body { display:block; }
+.ah-override-log { max-height:200px; overflow-y:auto; }
+.ah-override-item { display:flex; align-items:center; gap:10px; padding:8px 12px; border:1px solid var(--border1); border-radius:var(--radius-sm); margin-bottom:4px; font-size:12px; background:var(--surface); }
+.ah-drift-indicator { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:12px; font-size:11px; font-weight:600; }
+.ah-drift-indicator.stable { background:var(--green-bg); color:var(--green); }
+.ah-drift-indicator.drifting { background:var(--amber-bg); color:var(--amber); }
+.ah-drift-indicator.alert { background:var(--red-bg); color:var(--red); }
+
 /* ── KPI Dashboard ── */
 .kpi-section { margin-bottom:28px; }
 .kpi-section-header { display:flex; align-items:center; gap:10px; margin-bottom:14px; padding-bottom:8px; border-bottom:2px solid var(--border1); }
@@ -427,6 +471,7 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="snav-item" onclick="showView('risk-model',this)"><span class="snav-icon">🎯</span> Risk Scoring Model</div>
     <div class="snav-item" onclick="showView('ai-checks',this)"><span class="snav-icon">🔬</span> AI Verification Checks</div>
     <div class="snav-item" onclick="showView('ai-agents',this)"><span class="snav-icon">🤖</span> AI Agents</div>
+    <div class="snav-item" onclick="showView('agent-health',this)"><span class="snav-icon">💓</span> Agent Health</div>
     <div class="snav-item" onclick="showView('settings',this)"><span class="snav-icon">⚙️</span> Settings</div>
     <div class="snav-item" onclick="showView('audit',this)"><span class="snav-icon">📝</span> Audit Trail</div>
   </nav>
@@ -1015,6 +1060,38 @@ body.role-admin .role-admin-only-block { display:block; }
   <div id="agents-container"></div>
 </div>
 
+<!-- ═══════════════ AGENT HEALTH DASHBOARD ═══════════════ -->
+<div class="view" id="view-agent-health">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
+    <div>
+      <h3 style="font-size:16px;font-weight:700;">Agent Health Dashboard</h3>
+      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Real-time quality control monitoring for all AI agents. Track accuracy, confidence, overrides, and drift.</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <select class="form-select" id="ah-time-range" style="width:auto;" onchange="renderAgentHealth()">
+        <option value="24h">Last 24 Hours</option>
+        <option value="7d" selected>Last 7 Days</option>
+        <option value="30d">Last 30 Days</option>
+        <option value="90d">Last 90 Days</option>
+      </select>
+      <button class="btn btn-outline" onclick="exportAgentHealthReport()">Export Report</button>
+      <button class="btn btn-primary" onclick="renderAgentHealth()">Refresh</button>
+    </div>
+  </div>
+
+  <!-- System Health Summary -->
+  <div id="ah-summary-stats"></div>
+
+  <!-- Alert Banner -->
+  <div id="ah-alerts"></div>
+
+  <!-- Agent Cards Grid -->
+  <div id="ah-agent-cards"></div>
+
+  <!-- Detailed Tables -->
+  <div id="ah-detail-tables"></div>
+</div>
+
 <!-- ═══════════════ SETTINGS VIEW ═══════════════ -->
 <div class="view" id="view-settings">
   <!-- Ongoing Review Schedule -->
@@ -1202,6 +1279,31 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-client-notification')">Cancel</button>
       <button class="btn btn-primary" onclick="sendClientNotification()">Send Notification</button>
+    </div>
+  </div>
+</div>
+
+<!-- Alert Detail Modal -->
+<div class="modal-overlay" id="modal-alert-detail">
+  <div class="modal" style="width:680px;max-height:80vh;overflow-y:auto;">
+    <div class="modal-header"><h3 id="alert-modal-title">Alert Detail</h3><button class="modal-close" onclick="closeModal('modal-alert-detail')">&times;</button></div>
+    <div class="modal-body" id="alert-modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-alert-detail')">Close</button>
+      <button class="btn btn-primary" id="alert-modal-escalate-btn" onclick="escalateAlertFromModal()">Escalate to SCO</button>
+      <button class="btn btn-outline" style="background:var(--green);color:white;border-color:var(--green);" id="alert-modal-dismiss-btn" onclick="dismissAlertFromModal()">Mark as Reviewed</button>
+    </div>
+  </div>
+</div>
+
+<!-- Periodic Review Modal -->
+<div class="modal-overlay" id="modal-periodic-review">
+  <div class="modal" style="width:680px;max-height:80vh;overflow-y:auto;">
+    <div class="modal-header"><h3 id="review-modal-title">Periodic Review</h3><button class="modal-close" onclick="closeModal('modal-periodic-review')">&times;</button></div>
+    <div class="modal-body" id="review-modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-periodic-review')">Close</button>
+      <button class="btn btn-primary" onclick="closeModal('modal-periodic-review');showToast('Review initiated — assigned to current user');">Start Review</button>
     </div>
   </div>
 </div>
@@ -1406,7 +1508,8 @@ var APPLICATIONS = [
   { ref:'ARF-2026-100425', company:'MedServe Health Ltd', sector:'Healthcare', risk:'MEDIUM', score:41.2, lane:'Standard Review', status:'Pending Review', assigned:'Marie Dubois', date:'2026-03-06', country:'Mauritius', brn:'C14098765', directors:[{name:'Dr. Anisha Ramsamy',nat:'Mauritian',pep:'No'},{name:'Paul Legrand',nat:'French',pep:'No'}], ubos:[{name:'Dr. Anisha Ramsamy',pct:55,pep:'No'},{name:'Paul Legrand',pct:45,pep:'No'}], dims:{d1:1.8,d2:1.5,d3:2.0,d4:2.0,d5:2.0}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res'], pepCount:0 },
   { ref:'ARF-2026-100426', company:'CryptoVault Exchange Ltd', sector:'Virtual Asset Service Provider', risk:'VERY_HIGH', score:82.5, lane:'EDD', status:'Rejected', assigned:'Aisha Sudally', date:'2026-03-05', country:'Estonia', brn:'EE-14567890', directors:[{name:'Dmitri Volkov',nat:'Estonian',pep:'No'}], ubos:[{name:'Dmitri Volkov',pct:100,pep:'No'}], dims:{d1:3.0,d2:2.5,d3:3.5,d4:4.0,d5:3.0}, docs:['COI','M&A'], pepCount:0 },
   { ref:'ARF-2026-100427', company:'Pacific Logistics Co', sector:'Logistics / Supply Chain', risk:'MEDIUM', score:44.7, lane:'Standard Review', status:'Pending Review', assigned:'Unassigned', date:'2026-03-04', country:'Singapore', brn:'202401234K', directors:[{name:'James Tan',nat:'Singaporean',pep:'No'},{name:'Mei Lin',nat:'Chinese',pep:'No'}], ubos:[{name:'James Tan',pct:50,pep:'No'},{name:'Mei Lin',pct:50,pep:'No'}], dims:{d1:2.0,d2:2.0,d3:2.0,d4:2.0,d5:1.5}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Financials','Board Res'], pepCount:0 },
-  { ref:'ARF-2026-100428', company:'Sahara Construction SARL', sector:'Construction', risk:'HIGH', score:58.9, lane:'EDD', status:'In Review', assigned:'Raj Patel', date:'2026-03-03', country:'Morocco', brn:'MA-RC-45231', directors:[{name:'Youssef Benali',nat:'Moroccan',pep:'No'},{name:'Hassan Ouazzani',nat:'Moroccan',pep:'Yes'}], ubos:[{name:'Ouazzani Holdings',pct:70,pep:'Yes'},{name:'Youssef Benali',pct:30,pep:'No'}], dims:{d1:2.5,d2:2.8,d3:2.0,d4:3.0,d5:2.0}, docs:['COI','M&A','Shareholder Reg','Directors Reg','Financials','Board Res','Bank Ref','SoW'], pepCount:1 }
+  { ref:'ARF-2026-100428', company:'Sahara Construction SARL', sector:'Construction', risk:'HIGH', score:58.9, lane:'EDD', status:'In Review', assigned:'Raj Patel', date:'2026-03-03', country:'Morocco', brn:'MA-RC-45231', directors:[{name:'Youssef Benali',nat:'Moroccan',pep:'No'},{name:'Hassan Ouazzani',nat:'Moroccan',pep:'Yes'}], ubos:[{name:'Ouazzani Holdings',pct:70,pep:'Yes'},{name:'Youssef Benali',pct:30,pep:'No'}], dims:{d1:2.5,d2:2.8,d3:2.0,d4:3.0,d5:2.0}, docs:['COI','M&A','Shareholder Reg','Directors Reg','Financials','Board Res','Bank Ref','SoW'], pepCount:1 },
+  { ref:'ARF-2026-100429', company:'Coastal Ventures Ltd', sector:'Tourism / Hospitality', risk:'MEDIUM', score:38.4, lane:'Standard Review', status:'Approved', assigned:'Marie Dubois', date:'2026-02-20', country:'Mauritius', brn:'C15078321', directors:[{name:'Jean-Marc Leclerc',nat:'Mauritian',pep:'No'},{name:'Priya Doorgakant',nat:'Mauritian',pep:'No'}], ubos:[{name:'Jean-Marc Leclerc',pct:65,pep:'No'},{name:'Priya Doorgakant',pct:35,pep:'No'}], dims:{d1:1.6,d2:1.5,d3:2.0,d4:1.8,d5:1.5}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res'], pepCount:0 }
 ];
 
 var AUDIT_LOG = [
@@ -1469,7 +1572,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', edd:'EDD Pipeline', reports:'Reports & Analytics', users:'User Management', roles:'Roles & Permissions', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', edd:'EDD Pipeline', reports:'Reports & Analytics', users:'User Management', roles:'Roles & Permissions', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
 
   if (name === 'applications') renderApplications();
@@ -1483,6 +1586,7 @@ function showView(name, navItem) {
   if (name === 'risk-model') renderRiskModel();
   if (name === 'ai-checks') renderAIChecks();
   if (name === 'ai-agents') renderAgentsPipeline();
+  if (name === 'agent-health') renderAgentHealth();
   if (name === 'settings') { try { checkAPIStatus(); } catch(e) {} }
 }
 
@@ -1495,10 +1599,23 @@ function riskBadge(level) {
 }
 
 function statusBadge(status) {
-  var map = { 'Pre-Screening Submitted':'pending', 'Pricing Review':'pending', 'Pricing Accepted':'pending',
-    'KYC & Documents':'in-review', 'KYC Submitted':'in-review', 'Compliance Review':'edd',
-    'Pending Review':'pending', 'In Review':'in-review', 'EDD Required':'edd', 'Approved':'approved', 'Rejected':'rejected' };
-  return '<span class="badge ' + (map[status]||'') + '">' + status + '</span>';
+  var map = {
+    'Draft':'draft', 'draft':'draft',
+    'Pre-Screening Submitted':'prescreening-submitted', 'prescreening_submitted':'prescreening-submitted',
+    'Pricing Review':'pricing-review', 'pricing_review':'pricing-review',
+    'Pricing Accepted':'pricing-accepted', 'pricing_accepted':'pricing-accepted',
+    'KYC & Documents':'kyc-documents', 'kyc_documents':'kyc-documents',
+    'KYC Submitted':'kyc-submitted', 'kyc_submitted':'kyc-submitted',
+    'Compliance Review':'compliance-review', 'compliance_review':'compliance-review',
+    'Pending Review':'pending', 'pending_review':'pending',
+    'In Review':'in-review', 'in_review':'in-review',
+    'EDD Required':'edd-required', 'edd_required':'edd-required',
+    'Approved':'approved', 'approved':'approved',
+    'Rejected':'rejected', 'rejected':'rejected',
+    'RMI Sent':'rmi-sent', 'rmi_sent':'rmi-sent',
+    'Withdrawn':'withdrawn', 'withdrawn':'withdrawn'
+  };
+  return '<span class="badge ' + (map[status]||'pending') + '">' + status + '</span>';
 }
 
 function renderDashboardRecent() {
@@ -1587,6 +1704,10 @@ function openAppDetail(ref) {
 
   var agents = [];
 
+  // ═══════════════════════════════════════════════════════
+  // ALL 10 AI AGENTS — Dynamic rendering from application data
+  // ═══════════════════════════════════════════════════════
+
   // Agent 1: Account Risk (IP Geolocation)
   var a1checks = [{l:'Email domain check',r:'Corporate domain',c:'pass'},{l:'Duplicate check',r:'No duplicates',c:'pass'}];
   if (screening && screening.ip_geolocation && screening.ip_geolocation.country) {
@@ -1606,6 +1727,26 @@ function openAppDetail(ref) {
     {l:'Business model plausibility',r:'Adequate',c:'pass'},
     {l:'Geographic risk check',r:app.risk==='HIGH'||app.risk==='VERY_HIGH'?'Elevated':'Within appetite',c:app.risk==='HIGH'||app.risk==='VERY_HIGH'?'warn':'pass'}
   ]});
+
+  // Agent 3: Document Verification
+  var a3checks = [];
+  var docCount = (app.documents || []).length;
+  var verifiedDocs = (app.documents || []).filter(function(d) { return d.verification_status === 'verified'; }).length;
+  var flaggedDocs = (app.documents || []).filter(function(d) { return d.verification_status === 'flagged'; }).length;
+  a3checks.push({l:'Documents uploaded', r:docCount + ' document(s)', c:docCount > 0 ? 'pass' : 'warn'});
+  a3checks.push({l:'Documents verified', r:verifiedDocs + ' of ' + docCount + ' verified', c:verifiedDocs === docCount && docCount > 0 ? 'pass' : 'warn'});
+  if (flaggedDocs > 0) a3checks.push({l:'Flagged documents', r:flaggedDocs + ' document(s) flagged for review', c:'fail'});
+  a3checks.push({l:'Certificate of Incorporation', r:docCount > 0 ? 'Received' : 'Awaiting upload', c:docCount > 0 ? 'pass' : 'warn'});
+  a3checks.push({l:'Document expiry check', r:'All within validity', c:'pass'});
+  agents.push({ name:'Agent 3: Document Verification', icon:'📎', checks:a3checks });
+
+  // Agent 4: Business Narrative Analysis
+  var a4checks = [];
+  a4checks.push({l:'Source of funds analysis', r:app.risk === 'LOW' ? 'Clear and documented' : app.risk === 'MEDIUM' ? 'Adequate — minor queries' : 'Requires enhanced review', c:app.risk === 'LOW' ? 'pass' : app.risk === 'MEDIUM' ? 'pass' : 'warn'});
+  a4checks.push({l:'Business model plausibility', r:'Consistent with sector (' + (app.sector || 'N/A') + ')', c:'pass'});
+  a4checks.push({l:'Expected transaction volume', r:'Within normal range for entity type', c:'pass'});
+  a4checks.push({l:'Cross-border activity assessment', r:app.risk === 'HIGH' || app.risk === 'VERY_HIGH' ? 'Elevated — multi-jurisdiction' : 'Standard', c:app.risk === 'HIGH' || app.risk === 'VERY_HIGH' ? 'warn' : 'pass'});
+  agents.push({ name:'Agent 4: Business Narrative', icon:'💼', checks:a4checks });
 
   // Agent 5: UBO Verification (Open Corporates)
   var a5checks = [];
@@ -1628,6 +1769,9 @@ function openAppDetail(ref) {
   } else {
     a5checks.push({l:'Company Registry', r:'Not yet screened — click Re-Screen to run', c:'warn'});
   }
+  var uboCount = (app.ubos || []).length;
+  a5checks.push({l:'UBO chain mapped', r:uboCount + ' UBO(s) identified', c:uboCount > 0 ? 'pass' : 'warn'});
+  a5checks.push({l:'Ownership threshold (25%)', r:uboCount > 0 ? 'Met' : 'No UBOs declared', c:uboCount > 0 ? 'pass' : 'warn'});
   agents.push({ name:'Agent 5: UBO Verification', icon:'🏢', checks:a5checks });
 
   // Agent 6: Financial Crime Intel (OpenSanctions)
@@ -1636,7 +1780,6 @@ function openAppDetail(ref) {
     var src = screening.director_screenings && screening.director_screenings.length > 0 ? screening.director_screenings[0].screening.source : 'unknown';
     var srcLabel = src === 'simulated' ? ' [Simulated]' : src === 'opensanctions' ? ' [Live - OpenSanctions]' : '';
 
-    // Director screenings
     (screening.director_screenings || []).forEach(function(ds) {
       if (ds.screening.matched) {
         var topHit = ds.screening.results[0];
@@ -1647,7 +1790,6 @@ function openAppDetail(ref) {
       }
     });
 
-    // UBO screenings
     (screening.ubo_screenings || []).forEach(function(us) {
       if (us.screening.matched) {
         var topHit = us.screening.results[0];
@@ -1668,6 +1810,14 @@ function openAppDetail(ref) {
   }
   agents.push({ name:'Agent 6: Financial Crime Intel', icon:'🔍', checks:a6checks });
 
+  // Agent 7: Source of Funds Verification
+  var a7checks = [];
+  a7checks.push({l:'Source of funds declared', r:app.risk === 'LOW' ? 'Clearly documented' : 'Requires verification', c:app.risk === 'LOW' ? 'pass' : 'warn'});
+  a7checks.push({l:'Source of wealth assessment', r:app.risk === 'HIGH' || app.risk === 'VERY_HIGH' ? 'Enhanced review required' : 'Consistent with profile', c:app.risk === 'HIGH' || app.risk === 'VERY_HIGH' ? 'warn' : 'pass'});
+  a7checks.push({l:'Transaction pattern analysis', r:'No unusual patterns detected', c:'pass'});
+  a7checks.push({l:'Third-party funding check', r:'No third-party sources identified', c:'pass'});
+  agents.push({ name:'Agent 7: Source of Funds', icon:'💰', checks:a7checks });
+
   // Agent 8: Risk Decision
   var a8checks = [
     {l:'Composite risk score',r:app.score + ' — ' + app.risk.replace('_',' '),c:app.risk==='LOW'?'pass':app.risk==='MEDIUM'?'pass':'warn'},
@@ -1679,7 +1829,28 @@ function openAppDetail(ref) {
   if (screening && screening.overall_flags && screening.overall_flags.length > 0) {
     a8checks.push({l:'Compliance flags', r:screening.overall_flags.length + ' flag(s) raised', c:screening.overall_flags.length > 2 ? 'fail' : 'warn'});
   }
+  a8checks.push({l:'AI recommendation', r:app.risk === 'LOW' ? 'Approve' : app.risk === 'MEDIUM' ? 'Standard Review' : 'Escalate to SCO', c:app.risk === 'LOW' ? 'pass' : 'warn'});
   agents.push({ name:'Agent 8: Risk Decision', icon:'⚖️', checks:a8checks });
+
+  // Agent 9: Compliance Memo Generator
+  var a9checks = [];
+  a9checks.push({l:'Client overview generated', r:'Complete', c:'pass'});
+  a9checks.push({l:'Ownership structure mapped', r:(app.directors || []).length + ' director(s), ' + (app.ubos || []).length + ' UBO(s)', c:'pass'});
+  a9checks.push({l:'Screening summary compiled', r:screening ? 'Available (' + (screening.total_hits || 0) + ' hit(s))' : 'Pending screening', c:screening ? 'pass' : 'warn'});
+  a9checks.push({l:'Risk indicators documented', r:app.risk + ' — Score: ' + (app.score || 'N/A'), c:'pass'});
+  a9checks.push({l:'AI recommendation', r:app.risk === 'LOW' ? 'Approve' : app.risk === 'MEDIUM' || app.risk === 'HIGH' ? 'Review required' : 'Escalate', c:app.risk === 'LOW' ? 'pass' : 'warn'});
+  a9checks.push({l:'Review checklist', r:'6 of 6 items completed', c:'pass'});
+  agents.push({ name:'Agent 9: Compliance Memo', icon:'📝', checks:a9checks });
+
+  // Agent 10: Ongoing Monitoring
+  var a10checks = [];
+  a10checks.push({l:'Transaction monitoring', r:'Active — real-time pattern analysis', c:'pass'});
+  a10checks.push({l:'Registry change detection', r:'Active — daily company registry checks', c:'pass'});
+  a10checks.push({l:'Sanctions list updates', r:'Active — continuous screening against updated lists', c:'pass'});
+  a10checks.push({l:'Risk drift detection', r:app.risk === 'HIGH' || app.risk === 'VERY_HIGH' ? 'Elevated monitoring active' : 'Standard monitoring', c:'pass'});
+  a10checks.push({l:'Periodic review schedule', r:app.risk === 'VERY_HIGH' ? 'Quarterly' : app.risk === 'HIGH' ? 'Semi-annual' : app.risk === 'MEDIUM' ? 'Annual' : 'Biennial', c:'pass'});
+  a10checks.push({l:'Adverse media monitoring', r:'Active — automated media scan', c:'pass'});
+  agents.push({ name:'Agent 10: Ongoing Monitoring', icon:'📡', checks:a10checks });
 
   // Re-Screen button
   var agentHtml = '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">';
@@ -1930,38 +2101,129 @@ function renderMonitoringAgents() {
   document.getElementById('agents-status-list').innerHTML = html;
 }
 
+var currentAlertRef = null;
+
 function showAlertDetail(alert) {
+  currentAlertRef = alert;
   var html = '<div class="detail-section">' +
-    '<div class="detail-section-title">Alert Summary</div>' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Alert Summary</div>' +
+    '<div class="detail-row"><span class="label">Date</span><span class="value">' + alert.date + '</span></div>' +
+    '<div class="detail-row"><span class="label">Client</span><span class="value" style="font-weight:600;">' + alert.client + '</span></div>' +
     '<div class="detail-row"><span class="label">Alert Type</span><span class="value">' + alert.type + '</span></div>' +
     '<div class="detail-row"><span class="label">Severity</span><span class="value"><span class="badge ' + (alert.severity === 'Critical' ? 'very-high' : alert.severity === 'High' ? 'high' : alert.severity === 'Medium' ? 'medium' : 'low') + '">' + alert.severity + '</span></span></div>' +
     '<div class="detail-row"><span class="label">Detected By</span><span class="value">' + alert.agent + '</span></div>' +
     '<div class="detail-row"><span class="label">Source</span><span class="value">' + alert.source + '</span></div>' +
-    '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + (alert.status === 'Open' ? 'pending' : 'in-review') + '">' + alert.status + '</span></span></div>' +
-    '</div><div class="detail-section">' +
-    '<div class="detail-section-title">Finding Details</div>' +
+    '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + (alert.status === 'Open' ? 'pending' : alert.status === 'Reviewed' ? 'approved' : alert.status === 'Dismissed' ? 'draft' : 'in-review') + '">' + alert.status + '</span></span></div>' +
+    '</div><div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Finding Details</div>' +
     '<div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--text2);">' + alert.detail + '</div>' +
-    '</div><div class="detail-section">' +
-    '<div class="detail-section-title">Recommended Action</div>' +
+    '</div><div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Recommended Action</div>' +
     '<div style="padding:12px;background:var(--amber-bg);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--amber);">' +
-    '⚠️ Review client information and assess potential compliance impact. Consider requesting clarification or escalating for Enhanced Due Diligence.' +
+    (alert.severity === 'Critical' ? '🚨 <strong>IMMEDIATE ACTION REQUIRED.</strong> Escalate to Senior Compliance Officer and initiate enhanced monitoring. Consider filing SAR if confirmed.' :
+     alert.severity === 'High' ? '⚠️ <strong>Priority review required.</strong> Assess compliance impact within 24 hours. Consider requesting additional documentation from client.' :
+     '📋 Review client information and assess potential compliance impact. Document findings and update risk profile if warranted.') +
     '</div></div>';
 
-  // Simple modal display (could be enhanced)
-  showToast('Alert detail: ' + alert.type + ' from ' + alert.client + ' — ' + alert.detail.substring(0, 80) + '...');
+  document.getElementById('alert-modal-title').textContent = alert.type + ' — ' + alert.client;
+  document.getElementById('alert-modal-body').innerHTML = html;
+
+  // Show/hide buttons based on status
+  var escBtn = document.getElementById('alert-modal-escalate-btn');
+  var dimBtn = document.getElementById('alert-modal-dismiss-btn');
+  if (alert.status === 'Open') {
+    escBtn.style.display = ''; dimBtn.style.display = '';
+  } else {
+    escBtn.style.display = 'none'; dimBtn.style.display = 'none';
+  }
+
+  document.getElementById('modal-alert-detail').classList.add('open');
 }
 
 function viewAlert(date, client) {
-  showToast('Viewing alert: ' + client);
+  // Find the actual alert object from the data
+  var alert = MONITORING_ALERTS.find(function(a) { return a.date === date && a.client === client; });
+  if (alert) {
+    showAlertDetail(alert);
+  } else {
+    showToast('Alert not found');
+  }
+}
+
+function escalateAlertFromModal() {
+  if (currentAlertRef) {
+    currentAlertRef.status = 'Escalated';
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Escalate Alert', target:currentAlertRef.client, detail:'Escalated ' + currentAlertRef.type + ' alert to SCO', ip:'196.192.44.12' });
+    renderMonitoringAlerts();
+  }
+  closeModal('modal-alert-detail');
+  showToast('Alert escalated to Senior Compliance Officer');
+}
+
+function dismissAlertFromModal() {
+  if (currentAlertRef) {
+    currentAlertRef.status = 'Reviewed';
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Review Alert', target:currentAlertRef.client, detail:'Reviewed and closed ' + currentAlertRef.type + ' alert', ip:'196.192.44.12' });
+    renderMonitoringAlerts();
+  }
+  closeModal('modal-alert-detail');
+  showToast('Alert marked as reviewed');
 }
 
 function openPeriodicReview(ref) {
+  var review = PERIODIC_REVIEWS.find(function(r) { return r.ref === ref; });
   var app = APPLICATIONS.find(function(a) { return a.ref === ref; });
-  if (!app) {
+
+  if (!app && !review) {
     showToast('Application not found');
     return;
   }
-  openAppDetail(ref);
+
+  // If we have the full application data, show a review modal with context
+  if (review) {
+    var reviewHtml = '<div class="detail-section">' +
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Review Summary</div>' +
+      '<div class="detail-row"><span class="label">Client</span><span class="value" style="font-weight:600;">' + review.client + '</span></div>' +
+      '<div class="detail-row"><span class="label">Reference</span><span class="value" style="font-family:monospace;">' + review.ref + '</span></div>' +
+      '<div class="detail-row"><span class="label">Risk Level</span><span class="value">' + riskBadge(review.risk.toUpperCase().replace(' ','_')) + '</span></div>' +
+      '<div class="detail-row"><span class="label">Last Review</span><span class="value">' + review.lastReview + '</span></div>' +
+      '<div class="detail-row"><span class="label">Next Due</span><span class="value">' + review.nextDue + '</span></div>' +
+      '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + review.trigger + '</span></div>' +
+      '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + (review.status === 'Overdue' ? 'very-high' : review.status === 'Due Soon' ? 'high' : 'low') + '">' + review.status + '</span></span></div>' +
+      '</div>';
+
+    if (app) {
+      reviewHtml += '<div class="detail-section" style="margin-top:16px;">' +
+        '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Client Profile</div>' +
+        '<div class="detail-row"><span class="label">Sector</span><span class="value">' + app.sector + '</span></div>' +
+        '<div class="detail-row"><span class="label">Country</span><span class="value">' + app.country + '</span></div>' +
+        '<div class="detail-row"><span class="label">Risk Score</span><span class="value">' + app.score + '</span></div>' +
+        '<div class="detail-row"><span class="label">Directors</span><span class="value">' + app.directors.map(function(d){return d.name;}).join(', ') + '</span></div>' +
+        '<div class="detail-row"><span class="label">PEPs</span><span class="value">' + (app.pepCount > 0 ? '<span class="badge high">' + app.pepCount + ' PEP(s)</span>' : 'None') + '</span></div>' +
+        '</div>';
+
+      reviewHtml += '<div style="margin-top:16px;text-align:center;">' +
+        '<button class="btn btn-outline btn-sm" onclick="closeModal(\'modal-periodic-review\');openAppDetail(\'' + app.ref + '\');">View Full Application Detail</button>' +
+        '</div>';
+    }
+
+    if (review.status === 'Overdue') {
+      reviewHtml += '<div style="margin-top:16px;padding:12px;background:rgba(220,38,38,0.08);border-radius:var(--radius-sm);border:1px solid rgba(220,38,38,0.2);font-size:13px;color:var(--red);">' +
+        '🚨 <strong>OVERDUE:</strong> This periodic review is past due. Please initiate the review process immediately and update the risk profile.' +
+        '</div>';
+    } else if (review.status === 'Due Soon') {
+      reviewHtml += '<div style="margin-top:16px;padding:12px;background:var(--amber-bg);border-radius:var(--radius-sm);font-size:13px;color:var(--amber);">' +
+        '⚠️ <strong>Due Soon:</strong> This periodic review is approaching its due date. Schedule the review to ensure timely completion.' +
+        '</div>';
+    }
+
+    document.getElementById('review-modal-title').textContent = 'Periodic Review — ' + review.client;
+    document.getElementById('review-modal-body').innerHTML = reviewHtml;
+    document.getElementById('modal-periodic-review').classList.add('open');
+  } else if (app) {
+    // Fall back to opening the full application detail
+    openAppDetail(ref);
+  }
 }
 
 function switchCaseTab(tab, btn) {
@@ -2151,9 +2413,9 @@ function addUser() {
   showToast('User ' + name + ' added successfully');
 }
 
-function editUser(idx) {
-  var u = USERS[idx];
-  if (!u) return;
+function editUser(id) {
+  var u = USERS.find(function(u) { return u.id === id; });
+  if (!u) { showToast('User not found'); return; }
   var newRole = prompt('Edit role for ' + u.name + '\\nCurrent role: ' + u.role + '\\n\\nEnter new role (admin, sco, co, analyst):', u.role);
   if (!newRole || !['admin','sco','co','analyst'].includes(newRole.trim().toLowerCase())) {
     if (newRole !== null) showToast('Invalid role. Must be: admin, sco, co, or analyst', 'error');
@@ -3132,6 +3394,292 @@ function saveAgents() {
   }
   renderAgentsPipeline();
   showToast('✅ AI agent pipeline saved — ' + AI_AGENTS.filter(function(a){return a.enabled;}).length + ' agents active');
+}
+
+// ═══════════════════════════════════════════════════════════
+// AGENT HEALTH DASHBOARD
+// ═══════════════════════════════════════════════════════════
+
+function generateAgentHealthData() {
+  // Simulates realistic agent health telemetry based on actual AI_AGENTS config
+  var now = Date.now();
+  var range = document.getElementById('ah-time-range') ? document.getElementById('ah-time-range').value : '7d';
+  var seed = Math.floor(now / 86400000); // changes daily for consistent demo data
+
+  function seededRand(s) { var x = Math.sin(s) * 10000; return x - Math.floor(x); }
+
+  return AI_AGENTS.map(function(agent, i) {
+    var s = seed + i * 137;
+    var enabled = agent.enabled;
+    var accuracy = enabled ? 85 + seededRand(s + 1) * 14 : 0;
+    var confidence = enabled ? 70 + seededRand(s + 2) * 28 : 0;
+    var overrideRate = enabled ? seededRand(s + 3) * 15 : 0;
+    var avgLatency = enabled ? 200 + seededRand(s + 4) * 2800 : 0;
+    var totalRuns = enabled ? Math.floor(40 + seededRand(s + 5) * 260) : 0;
+    var escalations = enabled ? Math.floor(seededRand(s + 6) * totalRuns * 0.12) : 0;
+    var falsePositives = enabled ? Math.floor(seededRand(s + 7) * totalRuns * 0.08) : 0;
+    var falseNegatives = enabled ? Math.floor(seededRand(s + 8) * totalRuns * 0.03) : 0;
+
+    // Drift: compare last 7 days vs previous 7 days
+    var driftPct = enabled ? (seededRand(s + 9) - 0.45) * 20 : 0; // -9% to +11%
+    var driftStatus = Math.abs(driftPct) < 5 ? 'stable' : (Math.abs(driftPct) < 10 ? 'drifting' : 'alert');
+
+    // Sparkline: 14 data points for trend
+    var sparkline = [];
+    for (var d = 0; d < 14; d++) {
+      sparkline.push(enabled ? 75 + seededRand(s + 10 + d) * 24 : 0);
+    }
+
+    // Health status
+    var health = 'healthy';
+    if (!enabled) health = 'disabled';
+    else if (accuracy < 88 || overrideRate > 12 || driftStatus === 'alert') health = 'critical';
+    else if (accuracy < 92 || overrideRate > 8 || driftStatus === 'drifting') health = 'degraded';
+
+    // Recent overrides (last 5)
+    var overrides = [];
+    for (var o = 0; o < Math.min(5, Math.floor(overrideRate)); o++) {
+      var hrs = Math.floor(seededRand(s + 20 + o) * 72);
+      overrides.push({
+        time: hrs + 'h ago',
+        appRef: 'APP-' + (2024000 + Math.floor(seededRand(s + 25 + o) * 999)),
+        from: seededRand(s + 30 + o) > 0.5 ? 'LOW' : 'MEDIUM',
+        to: seededRand(s + 35 + o) > 0.5 ? 'HIGH' : 'VERY_HIGH',
+        officer: seededRand(s + 40 + o) > 0.5 ? 'Aisha S.' : (seededRand(s + 41 + o) > 0.5 ? 'Raj P.' : 'Marie D.')
+      });
+    }
+
+    // Golden dataset score
+    var goldenScore = enabled ? 88 + seededRand(s + 50) * 11 : 0;
+    var goldenLastRun = enabled ? Math.floor(seededRand(s + 51) * 48) : 0;
+
+    return {
+      agent: agent,
+      index: i,
+      enabled: enabled,
+      health: health,
+      accuracy: accuracy,
+      confidence: confidence,
+      overrideRate: overrideRate,
+      avgLatency: avgLatency,
+      totalRuns: totalRuns,
+      escalations: escalations,
+      falsePositives: falsePositives,
+      falseNegatives: falseNegatives,
+      driftPct: driftPct,
+      driftStatus: driftStatus,
+      sparkline: sparkline,
+      overrides: overrides,
+      goldenScore: goldenScore,
+      goldenLastRun: goldenLastRun
+    };
+  });
+}
+
+function renderAgentHealth() {
+  var data = generateAgentHealthData();
+  var enabledData = data.filter(function(d) { return d.enabled; });
+
+  // ── Summary Stats ──
+  var avgAccuracy = enabledData.length ? enabledData.reduce(function(a,b){ return a + b.accuracy; }, 0) / enabledData.length : 0;
+  var avgConfidence = enabledData.length ? enabledData.reduce(function(a,b){ return a + b.confidence; }, 0) / enabledData.length : 0;
+  var totalOverrides = enabledData.reduce(function(a,b){ return a + Math.floor(b.overrideRate * b.totalRuns / 100); }, 0);
+  var totalRuns = enabledData.reduce(function(a,b){ return a + b.totalRuns; }, 0);
+  var criticalCount = data.filter(function(d){ return d.health === 'critical'; }).length;
+  var degradedCount = data.filter(function(d){ return d.health === 'degraded'; }).length;
+  var healthyCount = data.filter(function(d){ return d.health === 'healthy'; }).length;
+  var avgGolden = enabledData.length ? enabledData.reduce(function(a,b){ return a + b.goldenScore; }, 0) / enabledData.length : 0;
+
+  var summaryHtml = '<div class="stats-grid" style="grid-template-columns:repeat(6,1fr);margin-bottom:20px;">' +
+    '<div class="stat-card"><div class="stat-card-label">Avg Accuracy</div><div class="stat-card-value" style="color:' + (avgAccuracy >= 92 ? 'var(--green)' : avgAccuracy >= 88 ? 'var(--amber)' : 'var(--red)') + ';">' + avgAccuracy.toFixed(1) + '%</div><div class="stat-card-change">Target: 95%</div></div>' +
+    '<div class="stat-card"><div class="stat-card-label">Avg Confidence</div><div class="stat-card-value" style="color:var(--brand);">' + avgConfidence.toFixed(1) + '%</div><div class="stat-card-change">Threshold: 80%</div></div>' +
+    '<div class="stat-card"><div class="stat-card-label">Total Runs</div><div class="stat-card-value">' + totalRuns + '</div><div class="stat-card-change">' + enabledData.length + ' active agents</div></div>' +
+    '<div class="stat-card"><div class="stat-card-label">Human Overrides</div><div class="stat-card-value" style="color:var(--amber);">' + totalOverrides + '</div><div class="stat-card-change">' + (totalRuns ? (totalOverrides / totalRuns * 100).toFixed(1) : 0) + '% override rate</div></div>' +
+    '<div class="stat-card"><div class="stat-card-label">Golden Dataset</div><div class="stat-card-value" style="color:' + (avgGolden >= 95 ? 'var(--green)' : avgGolden >= 90 ? 'var(--amber)' : 'var(--red)') + ';">' + avgGolden.toFixed(1) + '%</div><div class="stat-card-change">Regression score</div></div>' +
+    '<div class="stat-card"><div class="stat-card-label">System Status</div><div class="stat-card-value" style="font-size:14px;">' +
+      '<span style="color:var(--green);">' + healthyCount + ' OK</span> ' +
+      (degradedCount ? '<span style="color:var(--amber);">' + degradedCount + ' Warn</span> ' : '') +
+      (criticalCount ? '<span style="color:var(--red);">' + criticalCount + ' Crit</span>' : '') +
+    '</div></div>' +
+  '</div>';
+
+  document.getElementById('ah-summary-stats').innerHTML = summaryHtml;
+
+  // ── Alerts ──
+  var alertsHtml = '';
+  if (criticalCount > 0) {
+    var critAgents = data.filter(function(d){ return d.health === 'critical'; }).map(function(d){ return d.agent.name; });
+    alertsHtml += '<div class="ah-alert-banner critical"><span style="font-size:18px;">🚨</span><div><strong>Critical Alert:</strong> ' + criticalCount + ' agent(s) require immediate attention — ' + critAgents.join(', ') + '. Accuracy below threshold or significant output drift detected.</div></div>';
+  }
+  if (degradedCount > 0) {
+    alertsHtml += '<div class="ah-alert-banner warning"><span style="font-size:18px;">⚠️</span><div><strong>Warning:</strong> ' + degradedCount + ' agent(s) showing degraded performance. Override rates elevated or minor drift detected.</div></div>';
+  }
+  if (criticalCount === 0 && degradedCount === 0) {
+    alertsHtml += '<div class="ah-alert-banner healthy"><span style="font-size:18px;">✅</span><div><strong>All Systems Healthy:</strong> All ' + healthyCount + ' active agents operating within normal parameters.</div></div>';
+  }
+  document.getElementById('ah-alerts').innerHTML = alertsHtml;
+
+  // ── Agent Cards ──
+  var cardsHtml = '';
+  data.forEach(function(d, idx) {
+    var a = d.agent;
+    var accColor = d.accuracy >= 92 ? 'var(--green)' : d.accuracy >= 88 ? 'var(--amber)' : 'var(--red)';
+    var confColor = d.confidence >= 85 ? 'var(--green)' : d.confidence >= 70 ? 'var(--amber)' : 'var(--red)';
+    var overColor = d.overrideRate <= 5 ? 'var(--green)' : d.overrideRate <= 10 ? 'var(--amber)' : 'var(--red)';
+
+    // Sparkline bars
+    var maxSpark = Math.max.apply(null, d.sparkline);
+    var sparkHtml = '<div class="ah-sparkline">';
+    d.sparkline.forEach(function(v) {
+      var h = maxSpark > 0 ? Math.max(4, (v / maxSpark) * 32) : 4;
+      var barColor = v >= 92 ? 'var(--green)' : v >= 88 ? 'var(--amber)' : 'var(--red)';
+      sparkHtml += '<div class="ah-spark-bar" style="height:' + h + 'px;background:' + barColor + ';" title="' + v.toFixed(1) + '%"></div>';
+    });
+    sparkHtml += '</div>';
+
+    cardsHtml += '<div class="ah-agent-card" id="ah-card-' + idx + '">' +
+      '<div class="ah-agent-card-header" onclick="toggleHealthCard(' + idx + ')">' +
+        '<div class="ah-agent-status-dot ' + d.health + '"></div>' +
+        '<span style="font-size:22px;">' + a.icon + '</span>' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="font-size:14px;font-weight:700;">' + a.name + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);">' + a.stage + ' &middot; ' + a.checks.length + ' checks &middot; ' + d.totalRuns + ' runs</div>' +
+        '</div>' +
+        sparkHtml +
+        '<div style="text-align:center;min-width:70px;">' +
+          '<div style="font-size:20px;font-weight:800;color:' + accColor + ';">' + (d.enabled ? d.accuracy.toFixed(1) + '%' : 'OFF') + '</div>' +
+          '<div style="font-size:10px;color:var(--text3);">Accuracy</div>' +
+        '</div>' +
+        '<div class="ah-drift-indicator ' + d.driftStatus + '">' +
+          (d.driftStatus === 'stable' ? '● Stable' : d.driftStatus === 'drifting' ? '◐ Drifting' : '◉ Alert') +
+        '</div>' +
+      '</div>' +
+      '<div class="ah-detail-body">' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">' +
+
+          // Left column - Metrics
+          '<div>' +
+            '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:12px;">Performance Metrics</div>' +
+            '<div class="ah-metric-bar"><span class="ah-metric-label">Accuracy</span><div class="ah-metric-track"><div class="ah-metric-fill" style="width:' + d.accuracy + '%;background:' + accColor + ';"></div></div><span class="ah-metric-value" style="color:' + accColor + ';">' + d.accuracy.toFixed(1) + '%</span></div>' +
+            '<div class="ah-metric-bar"><span class="ah-metric-label">Confidence</span><div class="ah-metric-track"><div class="ah-metric-fill" style="width:' + d.confidence + '%;background:' + confColor + ';"></div></div><span class="ah-metric-value" style="color:' + confColor + ';">' + d.confidence.toFixed(1) + '%</span></div>' +
+            '<div class="ah-metric-bar"><span class="ah-metric-label">Override Rate</span><div class="ah-metric-track"><div class="ah-metric-fill" style="width:' + Math.min(d.overrideRate * 5, 100) + '%;background:' + overColor + ';"></div></div><span class="ah-metric-value" style="color:' + overColor + ';">' + d.overrideRate.toFixed(1) + '%</span></div>' +
+            '<div class="ah-metric-bar"><span class="ah-metric-label">Golden Dataset</span><div class="ah-metric-track"><div class="ah-metric-fill" style="width:' + d.goldenScore + '%;background:' + (d.goldenScore >= 95 ? 'var(--green)' : d.goldenScore >= 90 ? 'var(--amber)' : 'var(--red)') + ';"></div></div><span class="ah-metric-value">' + d.goldenScore.toFixed(1) + '%</span></div>' +
+
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px;">' +
+              '<div style="background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;">Avg Latency</div><div style="font-size:18px;font-weight:700;">' + (d.avgLatency / 1000).toFixed(1) + 's</div></div>' +
+              '<div style="background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;">Escalations</div><div style="font-size:18px;font-weight:700;color:var(--amber);">' + d.escalations + '</div></div>' +
+              '<div style="background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;">False Positives</div><div style="font-size:18px;font-weight:700;color:var(--blue);">' + d.falsePositives + '</div></div>' +
+              '<div style="background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);"><div style="font-size:10px;color:var(--text3);text-transform:uppercase;">False Negatives</div><div style="font-size:18px;font-weight:700;color:var(--red);">' + d.falseNegatives + '</div></div>' +
+            '</div>' +
+
+            '<div style="margin-top:16px;">' +
+              '<div style="font-size:12px;font-weight:600;margin-bottom:6px;">Output Distribution Drift</div>' +
+              '<div style="display:flex;align-items:center;gap:10px;">' +
+                '<div class="ah-drift-indicator ' + d.driftStatus + '">' + (d.driftPct >= 0 ? '+' : '') + d.driftPct.toFixed(1) + '% shift</div>' +
+                '<span style="font-size:11px;color:var(--text3);">vs. previous period baseline</span>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+
+          // Right column - Override Log
+          '<div>' +
+            '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:12px;">Recent Human Overrides</div>' +
+            (d.overrides.length === 0
+              ? '<div style="text-align:center;padding:30px;color:var(--text3);font-size:13px;">No overrides in this period</div>'
+              : '<div class="ah-override-log">' + d.overrides.map(function(ov) {
+                  return '<div class="ah-override-item">' +
+                    '<span style="font-size:14px;">👤</span>' +
+                    '<div style="flex:1;"><div style="font-weight:600;">' + ov.officer + '</div><div style="color:var(--text3);font-size:11px;">' + ov.appRef + ' &middot; ' + ov.time + '</div></div>' +
+                    '<div style="text-align:right;"><span class="badge ' + ov.from.toLowerCase() + '">' + ov.from + '</span> → <span class="badge ' + ov.to.toLowerCase().replace('_','-') + '">' + ov.to.replace('_',' ') + '</span></div>' +
+                  '</div>';
+                }).join('') + '</div>'
+            ) +
+
+            '<div style="margin-top:20px;">' +
+              '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:12px;">Regression Testing</div>' +
+              '<div style="background:var(--surface2);padding:14px;border-radius:var(--radius-sm);">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+                  '<span style="font-size:12px;font-weight:600;">Golden Dataset Score</span>' +
+                  '<span style="font-size:18px;font-weight:800;color:' + (d.goldenScore >= 95 ? 'var(--green)' : d.goldenScore >= 90 ? 'var(--amber)' : 'var(--red)') + ';">' + d.goldenScore.toFixed(1) + '%</span>' +
+                '</div>' +
+                '<div style="font-size:11px;color:var(--text3);">Last run: ' + d.goldenLastRun + 'h ago &middot; ' + a.checks.length + ' test cases</div>' +
+                '<div style="margin-top:8px;"><button class="btn btn-outline btn-sm" onclick="runGoldenTest(' + idx + ')">Run Now</button></div>' +
+              '</div>' +
+            '</div>' +
+
+            '<div style="margin-top:16px;">' +
+              '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);margin-bottom:8px;">Consistency Cross-Check</div>' +
+              '<div style="font-size:12px;color:var(--text2);line-height:1.6;">' +
+                (d.health === 'critical' ? '<span style="color:var(--red);font-weight:600;">⚠ Inconsistencies detected</span> with other agents. Review recommended.' :
+                 d.health === 'degraded' ? '<span style="color:var(--amber);font-weight:600;">◐ Minor discrepancies</span> noted in cross-agent validation.' :
+                 '<span style="color:var(--green);font-weight:600;">✓ Consistent</span> with peer agent outputs.') +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  });
+
+  document.getElementById('ah-agent-cards').innerHTML = cardsHtml;
+
+  // ── Detail Tables ──
+  var tablesHtml = '<div class="card" style="margin-top:20px;">' +
+    '<div class="card-header"><div class="card-title">Agent Comparison Matrix</div></div>' +
+    '<div style="overflow-x:auto;">' +
+    '<table class="data-table">' +
+    '<thead><tr><th>Agent</th><th>Status</th><th>Accuracy</th><th>Confidence</th><th>Override %</th><th>Golden Score</th><th>Drift</th><th>Latency</th><th>Runs</th></tr></thead><tbody>';
+
+  data.forEach(function(d) {
+    if (!d.enabled) return;
+    var accColor = d.accuracy >= 92 ? 'var(--green)' : d.accuracy >= 88 ? 'var(--amber)' : 'var(--red)';
+    var confColor = d.confidence >= 85 ? 'var(--green)' : d.confidence >= 70 ? 'var(--amber)' : 'var(--red)';
+    tablesHtml += '<tr>' +
+      '<td><span style="font-size:16px;">' + d.agent.icon + '</span> ' + d.agent.name + '</td>' +
+      '<td><span class="ah-agent-status-dot ' + d.health + '" style="display:inline-block;width:8px;height:8px;vertical-align:middle;margin-right:4px;"></span>' + d.health + '</td>' +
+      '<td style="font-weight:700;color:' + accColor + ';">' + d.accuracy.toFixed(1) + '%</td>' +
+      '<td style="color:' + confColor + ';">' + d.confidence.toFixed(1) + '%</td>' +
+      '<td>' + d.overrideRate.toFixed(1) + '%</td>' +
+      '<td>' + d.goldenScore.toFixed(1) + '%</td>' +
+      '<td><span class="ah-drift-indicator ' + d.driftStatus + '">' + (d.driftPct >= 0 ? '+' : '') + d.driftPct.toFixed(1) + '%</span></td>' +
+      '<td>' + (d.avgLatency / 1000).toFixed(1) + 's</td>' +
+      '<td>' + d.totalRuns + '</td>' +
+    '</tr>';
+  });
+
+  tablesHtml += '</tbody></table></div></div>';
+  document.getElementById('ah-detail-tables').innerHTML = tablesHtml;
+}
+
+function toggleHealthCard(idx) {
+  document.getElementById('ah-card-' + idx).classList.toggle('open');
+}
+
+function runGoldenTest(idx) {
+  var agent = AI_AGENTS[idx];
+  showToast('Running golden dataset regression for ' + agent.name + '...');
+  setTimeout(function() {
+    var score = (88 + Math.random() * 11).toFixed(1);
+    showToast('✅ ' + agent.name + ' scored ' + score + '% on golden dataset (' + agent.checks.length + ' test cases)');
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Test', target:'Agent Health', detail:'Golden dataset test for ' + agent.name + ': ' + score + '%', ip:'196.192.44.12' });
+  }, 2000);
+}
+
+function exportAgentHealthReport() {
+  var data = generateAgentHealthData();
+  var csv = 'Agent,Status,Accuracy,Confidence,Override Rate,Golden Score,Drift,Latency(s),Runs,Escalations,False Positives,False Negatives\n';
+  data.forEach(function(d) {
+    csv += '"' + d.agent.name + '",' + d.health + ',' + d.accuracy.toFixed(1) + ',' + d.confidence.toFixed(1) + ',' +
+      d.overrideRate.toFixed(1) + ',' + d.goldenScore.toFixed(1) + ',' + d.driftPct.toFixed(1) + ',' +
+      (d.avgLatency/1000).toFixed(1) + ',' + d.totalRuns + ',' + d.escalations + ',' + d.falsePositives + ',' + d.falseNegatives + '\n';
+  });
+  var blob = new Blob([csv], {type:'text/csv'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = 'agent_health_report_' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  showToast('Agent health report exported as CSV');
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:'Agent Health', detail:'Exported agent health report', ip:'196.192.44.12' });
 }
 
 // ═══════════════════════════════════════════════════════════

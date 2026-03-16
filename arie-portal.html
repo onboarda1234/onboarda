@@ -1770,7 +1770,7 @@
               <div id="lu-reg-validation" style="display:none;margin-top:8px;font-size:12px;padding:8px;border-radius:var(--radius-sm);"></div>
             </div>
             <div class="form-group">
-              <label>Country of Incorporation <span class="req">*</span><span class="ai-prefilled-badge">🤖 Auto-filled</span></label>
+              <label>Country of Incorporation <span class="req">*</span></label>
               <select id="lu-country" required>
                 <option value="">Select…</option>
               </select>
@@ -1827,7 +1827,7 @@
           </div>
 
           <div style="background:var(--bg3);border:1px solid rgba(43,47,143,0.3);border-radius:var(--radius);padding:20px;margin-bottom:20px;">
-            <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;">🤖 Auto-filled from registry data</div>
+            <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:12px;">Company Registry Data</div>
             <div class="prefill-rows" id="prefill-preview"></div>
           </div>
 
@@ -1846,7 +1846,7 @@
           </div>
 
           <div style="background:var(--amber-dim);border:1px solid rgba(245,158,11,0.25);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:20px;font-size:12px;color:var(--text2);">
-            <strong style="color:var(--amber);">⚠️ Please review carefully.</strong> Auto-filled data comes from public registries. Some fields may be outdated or incomplete. You can edit any field before submitting.
+            <strong style="color:var(--amber);">⚠️ Please review carefully.</strong> Data retrieved from public registries may be outdated or incomplete. Please verify and update any details before submitting.
           </div>
 
           <button class="btn-submit" onclick="proceedToPreScreening()">
@@ -1920,10 +1920,10 @@
         </div>
 
         <div id="prefill-notice" class="hidden" style="background:rgba(43,47,143,0.08);border:1px solid rgba(43,47,143,0.3);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;display:flex;align-items:flex-start;gap:12px;">
-            <div style="font-size:22px;flex-shrink:0;">🤖</div>
+            <div style="font-size:22px;flex-shrink:0;">📋</div>
             <div>
-              <div style="font-size:13px;font-weight:700;margin-bottom:3px;color:#8A9FE8;">Application Pre-filled by AI</div>
-              <div style="font-size:12px;color:var(--text2);">Fields marked <span class="ai-prefilled-badge">🤖 Auto-filled</span> were populated from public company registries. Please review and update any details that may have changed.</div>
+              <div style="font-size:13px;font-weight:700;margin-bottom:3px;color:#8A9FE8;">Registry Data Loaded</div>
+              <div style="font-size:12px;color:var(--text2);">Some fields were populated from public company registries. Please review and update any details that may have changed.</div>
             </div>
           </div>
           <form id="prescreening-form" onsubmit="submitPrescreening(event)">
@@ -1932,11 +1932,11 @@
           <div class="section-title">Entity Information</div>
           <div class="form-grid">
             <div class="form-group">
-              <label>Registered Entity Name <span class="req">*</span><span class="ai-prefilled-badge">🤖 Auto-filled</span></label>
+              <label>Registered Entity Name <span class="req">*</span></label>
               <input type="text" id="f-reg-name" placeholder="Full legal registered name" required />
             </div>
             <div class="form-group">
-              <label>Trading Name (if different)<span class="ai-prefilled-badge">🤖 Auto-filled</span></label>
+              <label>Trading Name (if different)</label>
               <input type="text" id="f-trade-name" placeholder="Trading / DBA name" />
             </div>
             <div class="form-group">
@@ -2183,7 +2183,7 @@
           <div class="section-title">Registered Address</div>
           <div class="form-grid cols-1">
             <div class="form-group">
-              <label>Registered Office Address <span class="req">*</span><span class="ai-prefilled-badge">🤖 Auto-filled</span></label>
+              <label>Registered Office Address <span class="req">*</span></label>
               <textarea id="f-reg-address" placeholder="Full registered office address including country" required></textarea>
             </div>
             <div class="form-group">
@@ -2196,11 +2196,11 @@
           <div class="section-title">Incorporation Details</div>
           <div class="form-grid cols-3">
             <div class="form-group">
-              <label>Incorporation Date <span class="req">*</span><span class="ai-prefilled-badge">🤖 Auto-filled</span></label>
+              <label>Incorporation Date <span class="req">*</span></label>
               <input type="date" id="f-inc-date" required />
             </div>
             <div class="form-group">
-              <label>Country of Incorporation <span class="req">*</span><span class="ai-prefilled-badge">🤖 Auto-filled</span></label>
+              <label>Country of Incorporation <span class="req">*</span></label>
               <select id="f-inc-country" required>
                 <option value="">Select country…</option>
                 <option>Afghanistan</option><option>Albania</option><option>Algeria</option>
@@ -2281,11 +2281,11 @@
               </select>
             </div>
             <div class="form-group">
-              <label>Registration / BRN Number <span class="req">*</span><span class="ai-prefilled-badge">🤖 Auto-filled</span></label>
+              <label>Registration / BRN Number <span class="req">*</span></label>
               <input type="text" id="f-brn" placeholder="e.g. C12345678" required />
             </div>
             <div class="form-group span-3">
-              <label>Website<span class="ai-prefilled-badge">🤖 Auto-filled</span></label>
+              <label>Website</label>
               <input type="text" id="f-website" placeholder="www.company.com" />
             </div>
           </div>
@@ -2778,9 +2778,24 @@
 
       <div class="status-hero">
         <div class="status-icon-lg pending">⏳</div>
-        <h2>Application Submitted</h2>
-        <p>Your pre-screening application has been received and is undergoing our automated AI review process. You will be notified by email within 24–48 hours.</p>
+        <h2>Application Submitted for Compliance Review</h2>
+        <p>Your application has been flagged for enhanced compliance review due to an elevated risk profile. Our compliance team will review your application and notify you by email within 24–48 hours.</p>
         <div class="ref-number" id="ref-display">ARF-2024-XXXXXX</div>
+      </div>
+
+      <!-- Risk Rating Card -->
+      <div class="card" id="pending-risk-card" style="border-left:4px solid var(--amber);background:rgba(245,158,11,0.06);">
+        <div style="display:flex;gap:14px;align-items:center;">
+          <div style="font-size:28px;flex-shrink:0;">📊</div>
+          <div style="flex:1;">
+            <div class="font-semibold" style="margin-bottom:4px;">Your Risk Assessment</div>
+            <p style="font-size:13px;color:var(--text2);margin-bottom:8px;">Based on the AI-powered 5-dimension risk scoring analysis of your application.</p>
+            <div style="display:flex;gap:16px;align-items:center;">
+              <div id="pending-risk-level-badge" style="display:inline-block;padding:6px 16px;border-radius:20px;font-weight:700;font-size:14px;letter-spacing:0.5px;background:#d97706;color:#fff;">HIGH RISK</div>
+              <div style="font-size:12px;color:var(--text3);">Score: <strong id="pending-risk-score">0</strong> / 100</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Compliance note for client -->
@@ -2788,8 +2803,8 @@
         <div style="display:flex;gap:14px;align-items:flex-start;">
           <div style="font-size:28px;flex-shrink:0;">🔒</div>
           <div>
-            <div class="font-semibold" style="margin-bottom:6px;">Undergoing Compliance Review</div>
-            <p style="font-size:13px;color:var(--text2);line-height:1.7;">Our compliance team is reviewing your application. This is a standard regulatory process for all new corporate accounts. We will notify you by email once a decision has been made.</p>
+            <div class="font-semibold" style="margin-bottom:6px;">Enhanced Compliance Review</div>
+            <p style="font-size:13px;color:var(--text2);line-height:1.7;">Due to the risk profile of your application, it has been referred for enhanced compliance review. This is a standard regulatory process for higher-risk corporate accounts. Our Senior Compliance Officer will assess your application and you will be notified by email once a decision has been made.</p>
           </div>
         </div>
       </div>
@@ -2992,6 +3007,13 @@
       </div>
 
       <div class="pricing-view">
+        <!-- Risk Rating Summary -->
+        <div id="pricing-risk-summary" style="background:linear-gradient(135deg,rgba(43,47,143,0.06),rgba(43,47,143,0.02));border:1px solid rgba(43,47,143,0.15);border-radius:var(--radius);padding:20px;margin-bottom:24px;text-align:center;">
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px;">Your Risk Assessment Result</div>
+          <div id="pricing-risk-badge" style="display:inline-block;padding:8px 24px;border-radius:24px;font-weight:700;font-size:16px;letter-spacing:0.5px;margin-bottom:8px;background:#16a34a;color:#fff;">LOW RISK</div>
+          <div style="font-size:13px;color:var(--text3);">Composite Score: <strong id="pricing-risk-score-display">0</strong> / 100</div>
+        </div>
+
         <div style="text-align:center;margin-bottom:24px;">
           <h2>Your Pricing Schedule</h2>
           <p style="color:var(--text3);font-size:14px;">Based on the risk profile of your application</p>
@@ -4450,7 +4472,7 @@ function updateTotalRequiredDocs() {
 
 // ─── View switching ───────────────────────────────────────
 // Views where the persistent client sidebar is shown
-const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','onboarding','submission-review','docs-review','approved','rejected','client-notifications'];
+const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','client-notifications'];
 
 function showView(name) {
   document.querySelectorAll('[id^="view-"]').forEach(v => v.classList.add('hidden'));
@@ -5193,27 +5215,37 @@ function startRiskScoring() {
     }, 600 + i * 500);
   });
 
-  // Show result after animation
-  setTimeout(function() {
-    showRiskResult(result);
-  }, 600 + dims.length * 500 + 800);
+  // The full scoring agent animation (runAllScoringAgents) handles the transition
+  // to the pending view after all agents complete at ~11.5s.
+  // No early showRiskResult call here — let the agents finish their animation first.
 }
 
 function showRiskResult(result) {
-  // Show client notifications view with application status
-  showClientNotifications(appRef);
+  // Show risk result briefly, then move to pending view
+  document.getElementById('risk-computing').classList.add('hidden');
+  document.getElementById('risk-result').classList.remove('hidden');
 
-  // After a brief delay, show a prompt to proceed
-  setTimeout(() => {
-    // Route based on risk level after showing notifications
-    if (result.level === 'LOW' || result.level === 'MEDIUM') {
-      // Auto-proceed to KYC documents for low/medium risk
-      // User can continue from the notifications dashboard
-    } else {
-      // High / Very High — send to compliance hold for manual review
-      // User can see compliance requirements in notifications
-    }
-  }, 2000);
+  // Display the computed risk level in the result panel
+  var levelLabel = result.level.replace('_',' ');
+  var resultEl = document.getElementById('risk-result');
+  if (resultEl) {
+    var levelColors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
+    var color = levelColors[result.level] || '#2563eb';
+    resultEl.innerHTML = '<div style="text-align:center;padding:24px;">' +
+      '<div style="font-size:48px;margin-bottom:12px;">' + (result.level === 'LOW' ? '✅' : result.level === 'MEDIUM' ? '🔵' : result.level === 'HIGH' ? '⚠️' : '🔴') + '</div>' +
+      '<h2 style="margin-bottom:8px;">Risk Assessment Complete</h2>' +
+      '<div style="font-size:20px;font-weight:700;color:' + color + ';margin-bottom:8px;">' + levelLabel + ' RISK</div>' +
+      '<div style="color:var(--text3);font-size:14px;">Composite Score: ' + (result.score || 0).toFixed(1) + ' / 100</div>' +
+      '<p style="margin-top:16px;color:var(--text2);font-size:13px;">Transitioning to pricing schedule...</p>' +
+      '</div>';
+  }
+
+  // After showing risk result, transition to pending view with simulate buttons
+  setTimeout(function() {
+    document.getElementById('ref-display').textContent = appRef || generateRef();
+    showView('pending');
+    showToast('info', 'Pre-Screening Complete', 'Your application is under review. Use the Simulate buttons below to proceed.');
+  }, 2500);
 }
 
 function showHighRiskDocs() {
@@ -5225,16 +5257,49 @@ function showHighRiskDocs() {
   });
 }
 
+function updatePendingRiskCard() {
+  var level = computedRiskLevel || 'HIGH';
+  var levelDisplay = level.replace('_',' ');
+  var badgeColors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
+  var badge = document.getElementById('pending-risk-level-badge');
+  var scoreEl = document.getElementById('pending-risk-score');
+  if (badge) {
+    badge.style.background = badgeColors[level] || '#d97706';
+    badge.textContent = levelDisplay + ' RISK';
+  }
+  if (scoreEl) {
+    scoreEl.textContent = (computedRiskScore || 0).toFixed(1);
+  }
+  // Update border color of the card
+  var card = document.getElementById('pending-risk-card');
+  if (card) {
+    card.style.borderLeftColor = badgeColors[level] || '#d97706';
+  }
+}
+
 function showPricingView() {
   showView('pricing');
   populatePricing(computedRiskLevel);
 }
 
 function populatePricing(level) {
+  if (!level) level = computedRiskLevel || 'LOW';
   var p = PRICING[level] || PRICING.LOW;
-  var levelDisplay = level.replace('_',' ');
+  var levelDisplay = (level || 'LOW').replace('_',' ');
   document.getElementById('pricing-risk-level').textContent = levelDisplay + ' RISK';
   document.getElementById('pricing-plan-title').textContent = 'Corporate Account — ' + (level === 'VERY_HIGH' ? 'Enhanced' : level === 'HIGH' ? 'Enhanced' : level === 'MEDIUM' ? 'Standard' : 'Standard');
+
+  // Update risk rating display on pricing page
+  var riskBadge = document.getElementById('pricing-risk-badge');
+  var riskScoreEl = document.getElementById('pricing-risk-score-display');
+  if (riskBadge) {
+    var badgeColors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
+    riskBadge.style.background = badgeColors[level] || '#2563eb';
+    riskBadge.textContent = levelDisplay + ' RISK';
+  }
+  if (riskScoreEl) {
+    riskScoreEl.textContent = (computedRiskScore || 0).toFixed(1);
+  }
 
   var tbody = document.getElementById('pricing-table-body');
   tbody.innerHTML = '' +
@@ -5271,7 +5336,8 @@ async function acceptPricing() {
 }
 
 function showComplianceHold() {
-  document.getElementById('compliance-risk-label').textContent = computedRiskLevel.replace('_',' ') + ' Risk';
+  var riskLvl = computedRiskLevel || 'HIGH';
+  document.getElementById('compliance-risk-label').textContent = riskLvl.replace('_',' ') + ' Risk';
   document.getElementById('compliance-ref-display').textContent = appRef || generateRef();
   showView('compliance-hold');
   showToast('info', 'Compliance Referral', 'Your application has been referred for manual compliance review.');
@@ -6044,7 +6110,19 @@ function runAllScoringAgents() {
     document.getElementById('risk-computing').classList.add('hidden');
     document.getElementById('risk-result').classList.remove('hidden');
     generateComplianceMemo();
-    showRiskResult();
+
+    // Route based on computed risk level
+    if (computedRiskLevel === 'LOW' || computedRiskLevel === 'MEDIUM') {
+      // LOW / MEDIUM risk → show pricing directly (client proceeds to KYC after accepting)
+      showPricingView();
+      showToast('success', 'Pre-Screening Approved', 'Risk level: ' + computedRiskLevel.replace('_',' ') + '. Please review the pricing schedule and accept to proceed to KYC documents.');
+    } else {
+      // HIGH / VERY_HIGH risk → submitted for compliance review (pending)
+      document.getElementById('ref-display').textContent = appRef || generateRef();
+      updatePendingRiskCard();
+      showView('pending');
+      showToast('warning', 'Submitted for Review', 'Risk level: ' + computedRiskLevel.replace('_',' ') + '. Your application has been referred for compliance review due to the elevated risk profile.');
+    }
   }, 11500);
 }
 
@@ -6290,8 +6368,8 @@ function generateComplianceMemo() {
 
 // ─── Simulation buttons ───────────────────────────────────
 function simulateApproval() {
-  showView('onboarding');
-  showToast('success', 'Pre-Screening Approved!', 'Please proceed to submit your KYC documents.');
+  showPricingView();
+  showToast('success', 'Pre-Screening Approved!', 'Please review the pricing and accept to proceed to KYC documents.');
 }
 function simulateRejection() {
   showView('rejected');
@@ -6690,14 +6768,8 @@ const MOCK_COMPANY_DATA = {
   incCountry:  '',
   brn:         '',
   website:     '',
-  directors: [
-    { first: 'James', last: 'Henderson', nat: 'United Kingdom' },
-    { first: 'Sarah', last: 'Mitchell',  nat: 'United Kingdom' }
-  ],
-  ubos: [
-    { first: 'Sarah', last: 'Mitchell', nat: 'United Kingdom', pct: '60' },
-    { first: 'Marcus', last: 'Webb',    nat: 'United Kingdom', pct: '40' }
-  ]
+  directors: [],
+  ubos: []
 };
 
 // ─── Register ────────────────────────────────────────────────
@@ -6858,8 +6930,8 @@ function showLookupResult(found) {
     { label:'Incorporated', val: d.incDate },
     { label:'Registered Address', val: d.regAddress },
     { label:'Website', val: d.website },
-    { label:'Directors Found', val: d.directors.map(x=>x.first+' '+x.last).join(', ') },
-    { label:'UBOs Found', val: d.ubos.map(x=>x.first+' '+x.last+' ('+x.pct+'%)').join(', ') }
+    { label:'Directors Found', val: d.directors.length > 0 ? d.directors.map(x=>x.first+' '+x.last).join(', ') : 'Please enter manually' },
+    { label:'UBOs Found', val: d.ubos.length > 0 ? d.ubos.map(x=>x.first+' '+x.last+' ('+x.pct+'%)').join(', ') : 'Please enter manually' }
   ].map(r => `<div class="prefill-row"><div class="prefill-label">${r.label}</div><div class="prefill-val">${r.val}</div></div>`).join('');
 }
 
@@ -6888,57 +6960,72 @@ function prefillApplicationForm() {
       }
     }
   }
-  // Directors
+  // Directors — if mock data has directors, prefill; otherwise leave one empty row
   const dirBody = document.getElementById('directors-body');
-  if (dirBody && d.directors.length) {
-    dirBody.innerHTML = '';
-    d.directors.forEach(dir => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td><input type="text" value="${dir.first}" class="prefilled-field"/></td>
-        <td><input type="text" value="${dir.last}" class="prefilled-field"/></td>
-        <td><select class="nat-select prefilled-field"><option value="">Nationality</option></select></td>
-        <td><select class="pep-select prefilled-field" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-        <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
-      `;
-      dirBody.appendChild(tr);
-    });
-    populateNationalitySelects();
-    // Set nationality after populating
-    setTimeout(() => {
-      dirBody.querySelectorAll('.nat-select').forEach((sel,i) => {
-        const nat = d.directors[i] ? d.directors[i].nat : '';
-        for (let j=0; j<sel.options.length; j++) {
-          if (sel.options[j].text === nat) { sel.selectedIndex=j; break; }
-        }
+  if (dirBody) {
+    if (d.directors && d.directors.length > 0) {
+      dirBody.innerHTML = '';
+      d.directors.forEach(dir => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><input type="text" value="${dir.first}" class="prefilled-field"/></td>
+          <td><input type="text" value="${dir.last}" class="prefilled-field"/></td>
+          <td><select class="nat-select prefilled-field"><option value="">Nationality</option></select></td>
+          <td><select class="pep-select prefilled-field" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+          <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
+        `;
+        dirBody.appendChild(tr);
       });
-    }, 100);
+      populateNationalitySelects();
+      setTimeout(() => {
+        dirBody.querySelectorAll('.nat-select').forEach((sel,i) => {
+          const nat = d.directors[i] ? d.directors[i].nat : '';
+          for (let j=0; j<sel.options.length; j++) {
+            if (sel.options[j].text === nat) { sel.selectedIndex=j; break; }
+          }
+        });
+      }, 100);
+    } else {
+      // Ensure at least one empty row for manual entry
+      if (dirBody.querySelectorAll('tr').length === 0) {
+        addDirectorRow();
+      }
+      populateNationalitySelects();
+    }
   }
-  // UBOs
+  // UBOs — if mock data has UBOs, prefill; otherwise leave one empty row
   const uboBody = document.getElementById('ubos-body');
-  if (uboBody && d.ubos.length) {
-    uboBody.innerHTML = '';
-    d.ubos.forEach(ubo => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td><input type="text" value="${ubo.first}" class="prefilled-field"/></td>
-        <td><input type="text" value="${ubo.last}" class="prefilled-field"/></td>
-        <td><select class="nat-select prefilled-field"><option value="">Nationality</option></select></td>
-        <td><input type="number" value="${ubo.pct}" class="prefilled-field" placeholder="% Ownership" min="0" max="100"/></td>
-        <td><select class="pep-select prefilled-field" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-        <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
-      `;
-      uboBody.appendChild(tr);
-    });
-    populateNationalitySelects();
-    setTimeout(() => {
-      uboBody.querySelectorAll('.nat-select').forEach((sel,i) => {
-        const nat = d.ubos[i] ? d.ubos[i].nat : '';
-        for (let j=0; j<sel.options.length; j++) {
-          if (sel.options[j].text === nat) { sel.selectedIndex=j; break; }
-        }
+  if (uboBody) {
+    if (d.ubos && d.ubos.length > 0) {
+      uboBody.innerHTML = '';
+      d.ubos.forEach(ubo => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><input type="text" value="${ubo.first}" class="prefilled-field"/></td>
+          <td><input type="text" value="${ubo.last}" class="prefilled-field"/></td>
+          <td><select class="nat-select prefilled-field"><option value="">Nationality</option></select></td>
+          <td><input type="number" value="${ubo.pct}" class="prefilled-field" placeholder="% Ownership" min="0" max="100"/></td>
+          <td><select class="pep-select prefilled-field" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
+          <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
+        `;
+        uboBody.appendChild(tr);
       });
-    }, 100);
+      populateNationalitySelects();
+      setTimeout(() => {
+        uboBody.querySelectorAll('.nat-select').forEach((sel,i) => {
+          const nat = d.ubos[i] ? d.ubos[i].nat : '';
+          for (let j=0; j<sel.options.length; j++) {
+            if (sel.options[j].text === nat) { sel.selectedIndex=j; break; }
+          }
+        });
+      }, 100);
+    } else {
+      // Ensure at least one empty row for manual entry
+      if (uboBody.querySelectorAll('tr').length === 0) {
+        addUBORow();
+      }
+      populateNationalitySelects();
+    }
   }
 }
 
