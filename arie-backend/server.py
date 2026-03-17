@@ -2072,13 +2072,24 @@ class ApplicationDetailHandler(BaseHandler):
                     400
                 )
 
-            # ── H-05 FIX: High-risk cases MUST go through under_review before approval ──
+            # v2.1: HIGH/VERY_HIGH risk MUST go through pre_approval_review before kyc_documents
             risk_level = app.get("risk_level", "").upper()
-            if new_status == "approved" and risk_level in ("HIGH", "VERY_HIGH"):
-                if current_status != "under_review" and current_status != "edd_required":
+            if new_status == "kyc_documents" and risk_level in ("HIGH", "VERY_HIGH"):
+                if app.get("pre_approval_decision") != "PRE_APPROVE":
                     db.close()
                     return self.error(
-                        f"HIGH/VERY_HIGH risk applications must undergo compliance review (under_review or edd_required) "
+                        "HIGH/VERY_HIGH risk applications must be pre-approved before KYC. "
+                        f"Pre-approval decision: {app.get('pre_approval_decision') or 'none'}",
+                        400
+                    )
+
+            # ── H-05 FIX: High-risk cases MUST go through compliance review before approval ──
+            if new_status == "approved" and risk_level in ("HIGH", "VERY_HIGH"):
+                review_states = ("under_review", "edd_required", "compliance_review", "in_review")
+                if current_status not in review_states:
+                    db.close()
+                    return self.error(
+                        f"HIGH/VERY_HIGH risk applications must undergo compliance review "
                         f"before approval. Current status: {current_status}",
                         400
                     )
@@ -2421,7 +2432,7 @@ class PreApprovalDecisionHandler(BaseHandler):
             db.close()
             return self.error(f"Invalid pre-approval decision. Must be one of: {', '.join(valid_decisions)}", 400)
 
-        notes = data.get("notes", "")
+        notes = sanitize_input(data.get("notes", ""))
         if not notes:
             db.close()
             return self.error("Pre-approval decision notes are required", 400)
