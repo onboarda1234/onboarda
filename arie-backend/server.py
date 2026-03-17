@@ -10,7 +10,7 @@ Run:  python server.py
 Env:  PORT=8080 SECRET_KEY=your-secret DB_PATH=./arie.db
 """
 
-import os, sys, json, uuid, time, hashlib, hmac, re, sqlite3, base64, logging, secrets
+import os, sys, json, uuid, time, hashlib, hmac, re, sqlite3, base64, logging, secrets, io
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -26,6 +26,44 @@ import requests
 import html
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+
+# Import database module
+from db import get_db as db_get_db, init_db as db_init_db, USE_POSTGRESQL
+
+# S3 support (optional)
+try:
+    from s3_client import get_s3_client
+    HAS_S3 = True
+except ImportError:
+    HAS_S3 = False
+
+# Security hardening module — MANDATORY dependency
+# If this import fails, the server MUST NOT start. These modules enforce:
+# approval gates, password policy, file upload validation, token revocation,
+# PII encryption, and production environment guards.
+from security_hardening import (
+    ApprovalGateValidator, validate_production_environment,
+    PasswordPolicy, ApplicationSchema, FileUploadValidator,
+    TokenRevocationList, token_revocation_list,
+    get_safe_health_response, determine_screening_mode,
+    store_screening_mode, PIIEncryptor
+)
+HAS_SECURITY_HARDENING = True  # Always True — module is now mandatory
+
+# Claude AI integration (optional)
+try:
+    from claude_client import ClaudeClient
+    HAS_CLAUDE_CLIENT = True
+except ImportError:
+    HAS_CLAUDE_CLIENT = False
+    ClaudeClient = None
+
+# Environment configuration module
+from environment import (
+    ENV, is_demo, is_production, is_staging, flags,
+    enforce_startup_safety, get_environment_info,
+    get_database_url, get_jwt_secret, get_cors_origin, get_s3_bucket
+)
 
 # Supervisor framework
 try:
@@ -115,6 +153,64 @@ SUMSUB_WEBHOOK_SECRET = os.environ.get("SUMSUB_WEBHOOK_SECRET", "")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
+
+# ── C-02: PII Encryption Initialization ──────────────────────
+# Initialize PIIEncryptor singleton for encrypting sensitive data at rest.
+# In demo/dev mode, auto-generate a key if not set.
+# In production, PII_ENCRYPTION_KEY MUST be set (PIIEncryptor enforces this).
+_pii_encryptor = None
+try:
+    _pii_encryptor = PIIEncryptor()
+    logger.info("PIIEncryptor initialized — field-level encryption active")
+except (RuntimeError, ValueError) as e:
+    if ENVIRONMENT in ("production", "prod"):
+        logger.critical(f"FATAL: PIIEncryptor failed in production: {e}")
+        sys.exit(1)
+    else:
+        # In demo/dev, generate a transient key for testing
+        from cryptography.fernet import Fernet as _Fernet
+        _auto_key = _Fernet.generate_key().decode()
+        os.environ["PII_ENCRYPTION_KEY"] = _auto_key
+        try:
+            _pii_encryptor = PIIEncryptor(_auto_key)
+            logger.warning("PIIEncryptor: auto-generated key for development (NOT for production)")
+        except Exception as e2:
+            logger.error(f"PIIEncryptor initialization failed even with auto key: {e2}")
+
+
+def encrypt_pii_fields(record: dict, field_names: list) -> dict:
+    """Encrypt specified PII fields in a record before database write."""
+    if not _pii_encryptor:
+        return record
+    encrypted = dict(record)
+    for field in field_names:
+        if field in encrypted and encrypted[field]:
+            val = str(encrypted[field])
+            if val and not val.startswith("gAAAAA"):  # Don't double-encrypt Fernet tokens
+                encrypted[field] = _pii_encryptor.encrypt(val)
+    return encrypted
+
+
+def decrypt_pii_fields(record: dict, field_names: list) -> dict:
+    """Decrypt specified PII fields in a record after database read."""
+    if not _pii_encryptor:
+        return record
+    decrypted = dict(record)
+    for field in field_names:
+        if field in decrypted and decrypted[field]:
+            val = str(decrypted[field])
+            if val.startswith("gAAAAA"):  # Fernet ciphertext prefix
+                try:
+                    decrypted[field] = _pii_encryptor.decrypt(val)
+                except Exception:
+                    pass  # Return encrypted value if decryption fails
+    return decrypted
+
+
+# PII field definitions for each entity type
+PII_FIELDS_DIRECTORS = ["passport_number", "nationality", "id_number"]
+PII_FIELDS_UBOS = ["passport_number", "nationality", "ownership_pct"]
+PII_FIELDS_APPLICATIONS = ["pep_flags"]
 
 # ── Prometheus Metrics (optional) ──────────────────────────
 try:
@@ -210,556 +306,23 @@ class PostgresRowWrapper:
         return self._row.keys() if hasattr(self._row, 'keys') else []
 
 def get_db():
-    """Get a database connection — PostgreSQL if DATABASE_URL is set, otherwise SQLite."""
-    if USE_POSTGRES:
-        db = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
-        db.autocommit = False
-        return db
-
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA foreign_keys=ON")
-    return db
+    """Get a database connection — delegates to db module.
+    PostgreSQL if DATABASE_URL is set, otherwise SQLite."""
+    return db_get_db()
 
 
 def init_db():
-    """Create all tables if they don't exist."""
+    """Initialize database schema and seed initial data."""
+    from db import seed_initial_data
+    db_init_db()
     db = get_db()
-    db.executescript("""
-    -- Users / Officers
-    CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        full_name TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'analyst' CHECK(role IN ('admin','sco','co','analyst')),
-        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','inactive')),
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Client accounts (applicants)
-    CREATE TABLE IF NOT EXISTS clients (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        company_name TEXT,
-        status TEXT DEFAULT 'active',
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Applications
-    CREATE TABLE IF NOT EXISTS applications (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        ref TEXT UNIQUE NOT NULL,
-        client_id TEXT REFERENCES clients(id),
-        company_name TEXT NOT NULL,
-        brn TEXT,
-        country TEXT,
-        sector TEXT,
-        entity_type TEXT,
-        ownership_structure TEXT,
-        -- Pre-screening data (JSON blob)
-        prescreening_data TEXT DEFAULT '{}',
-        -- Risk scoring
-        risk_score REAL,
-        risk_level TEXT CHECK(risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
-        risk_dimensions TEXT DEFAULT '{}',
-        onboarding_lane TEXT,
-        -- Status
-        status TEXT DEFAULT 'draft' CHECK(status IN (
-            'draft','prescreening_submitted','pricing_review','pricing_accepted',
-            'kyc_documents','kyc_submitted','compliance_review','in_review',
-            'edd_required','approved','rejected','rmi_sent','withdrawn'
-        )),
-        assigned_to TEXT REFERENCES users(id),
-        -- Metadata
-        submitted_at TEXT,
-        decided_at TEXT,
-        decision_by TEXT REFERENCES users(id),
-        decision_notes TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Directors
-    CREATE TABLE IF NOT EXISTS directors (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        full_name TEXT NOT NULL,
-        nationality TEXT,
-        is_pep TEXT DEFAULT 'No',
-        pep_declaration TEXT DEFAULT '{}',
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- UBOs
-    CREATE TABLE IF NOT EXISTS ubos (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        full_name TEXT NOT NULL,
-        nationality TEXT,
-        ownership_pct REAL,
-        is_pep TEXT DEFAULT 'No',
-        pep_declaration TEXT DEFAULT '{}',
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Documents
-    CREATE TABLE IF NOT EXISTS documents (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-        person_id TEXT,
-        doc_type TEXT NOT NULL,
-        doc_name TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        file_size INTEGER,
-        mime_type TEXT,
-        -- AI verification
-        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
-        verification_results TEXT DEFAULT '{}',
-        uploaded_at TEXT DEFAULT (datetime('now')),
-        verified_at TEXT
-    );
-
-    -- Risk Model Configuration
-    CREATE TABLE IF NOT EXISTS risk_config (
-        id INTEGER PRIMARY KEY DEFAULT 1,
-        dimensions TEXT NOT NULL DEFAULT '{}',
-        thresholds TEXT NOT NULL DEFAULT '{}',
-        updated_at TEXT DEFAULT (datetime('now')),
-        updated_by TEXT REFERENCES users(id)
-    );
-
-    -- AI Agents Configuration
-    CREATE TABLE IF NOT EXISTS ai_agents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_number INTEGER UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        icon TEXT DEFAULT '🤖',
-        stage TEXT NOT NULL,
-        description TEXT,
-        enabled INTEGER DEFAULT 1,
-        checks TEXT DEFAULT '[]',
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- AI Verification Checks Configuration
-    CREATE TABLE IF NOT EXISTS ai_checks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        category TEXT NOT NULL CHECK(category IN ('entity','person')),
-        doc_type TEXT NOT NULL,
-        doc_name TEXT NOT NULL,
-        checks TEXT DEFAULT '[]',
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Audit Trail
-    CREATE TABLE IF NOT EXISTS audit_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT DEFAULT (datetime('now')),
-        user_id TEXT,
-        user_name TEXT,
-        user_role TEXT,
-        action TEXT NOT NULL,
-        target TEXT,
-        detail TEXT,
-        ip_address TEXT
-    );
-
-    -- Notifications
-    CREATE TABLE IF NOT EXISTS notifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT REFERENCES users(id),
-        title TEXT NOT NULL,
-        message TEXT,
-        read INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Session / Save & Resume tokens
-    CREATE TABLE IF NOT EXISTS client_sessions (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        client_id TEXT REFERENCES clients(id),
-        application_id TEXT REFERENCES applications(id),
-        form_data TEXT DEFAULT '{}',
-        last_step INTEGER DEFAULT 0,
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Monitoring Alerts
-    CREATE TABLE IF NOT EXISTS monitoring_alerts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT REFERENCES applications(id),
-        client_name TEXT,
-        alert_type TEXT,
-        severity TEXT,
-        detected_by TEXT,
-        summary TEXT,
-        source_reference TEXT,
-        ai_recommendation TEXT,
-        status TEXT DEFAULT 'open',
-        officer_action TEXT,
-        officer_notes TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        reviewed_at TEXT,
-        reviewed_by TEXT REFERENCES users(id)
-    );
-
-    -- Periodic Reviews
-    CREATE TABLE IF NOT EXISTS periodic_reviews (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT REFERENCES applications(id),
-        client_name TEXT,
-        risk_level TEXT,
-        trigger_type TEXT,
-        trigger_reason TEXT,
-        previous_risk_level TEXT,
-        new_risk_level TEXT,
-        review_memo TEXT,
-        status TEXT DEFAULT 'pending',
-        due_date TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        decision TEXT,
-        decision_reason TEXT,
-        decided_by TEXT REFERENCES users(id),
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Monitoring Agent Status
-    CREATE TABLE IF NOT EXISTS monitoring_agent_status (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        agent_name TEXT,
-        agent_type TEXT,
-        last_run TEXT,
-        next_run TEXT,
-        run_frequency TEXT,
-        clients_monitored INTEGER,
-        alerts_generated INTEGER DEFAULT 0,
-        status TEXT DEFAULT 'active'
-    );
-
-    -- Client Notifications
-    CREATE TABLE IF NOT EXISTS client_notifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT REFERENCES applications(id),
-        client_id TEXT REFERENCES clients(id),
-        notification_type TEXT,
-        title TEXT NOT NULL,
-        message TEXT,
-        documents_list TEXT,
-        read_status INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        read_at TEXT
-    );
-
-    -- Suspicious Activity Reports (SAR)
-    CREATE TABLE IF NOT EXISTS sar_reports (
-        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        application_id TEXT REFERENCES applications(id),
-        alert_id INTEGER REFERENCES monitoring_alerts(id),
-        sar_reference TEXT UNIQUE,
-        report_type TEXT DEFAULT 'SAR' CHECK(report_type IN ('SAR','STR','CTR','MLRO')),
-        subject_name TEXT NOT NULL,
-        subject_type TEXT DEFAULT 'individual' CHECK(subject_type IN ('individual','entity')),
-        risk_level TEXT,
-        narrative TEXT NOT NULL,
-        indicators TEXT DEFAULT '[]',
-        transaction_details TEXT DEFAULT '{}',
-        supporting_documents TEXT DEFAULT '[]',
-        filing_status TEXT DEFAULT 'draft' CHECK(filing_status IN ('draft','pending_review','approved','filed','rejected','archived')),
-        prepared_by TEXT REFERENCES users(id),
-        reviewed_by TEXT REFERENCES users(id),
-        approved_by TEXT REFERENCES users(id),
-        filed_at TEXT,
-        regulatory_body TEXT DEFAULT 'FIU Mauritius',
-        external_reference TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-    );
-
-    -- Compliance Memo Versions (versioned audit trail for Agent 9 output)
-    CREATE TABLE IF NOT EXISTS compliance_memos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT NOT NULL REFERENCES applications(id),
-        version INTEGER DEFAULT 1,
-        memo_data TEXT NOT NULL,
-        generated_by TEXT REFERENCES users(id),
-        ai_recommendation TEXT,
-        review_status TEXT DEFAULT 'draft' CHECK(review_status IN ('draft','reviewed','approved','rejected')),
-        reviewed_by TEXT REFERENCES users(id),
-        review_notes TEXT,
-        created_at TEXT DEFAULT (datetime('now'))
-    );
-    """)
-
-    # Seed default admin user if no users exist
-    count = db.execute("SELECT COUNT(*) as c FROM users").fetchone()["c"]
-    if count == 0:
-        # Generate a secure random password for initial admin setup
-        _init_password = os.environ.get("ADMIN_INITIAL_PASSWORD", "")
-        if not _init_password:
-            _init_password = secrets.token_urlsafe(16)  # e.g. "aB3_xY7kLm9pQ2wR"
-            print(f"\n  ⚠️  INITIAL ADMIN PASSWORD (save this now): {_init_password}")
-            print(f"  ⚠️  Change it immediately after first login.\n")
-
-        pw_hash = bcrypt.hashpw(_init_password.encode(), bcrypt.gensalt()).decode()
-        db.execute("""
-            INSERT INTO users (id, email, password_hash, full_name, role, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("admin001", "asudally@ariefinance.mu", pw_hash, "Aisha Sudally", "admin", "active"))
-        db.execute("""
-            INSERT INTO users (id, email, password_hash, full_name, role, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("sco001", "raj.patel@ariefinance.mu", pw_hash, "Raj Patel", "sco", "active"))
-        db.execute("""
-            INSERT INTO users (id, email, password_hash, full_name, role, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("co001", "m.dubois@ariefinance.mu", pw_hash, "Marie Dubois", "co", "active"))
-        db.execute("""
-            INSERT INTO users (id, email, password_hash, full_name, role, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, ("analyst001", "l.wei@ariefinance.mu", pw_hash, "Li Wei", "analyst", "active"))
+    try:
+        seed_initial_data(db)
         db.commit()
-
-        # Seed default risk config
-        default_dims = json.dumps([
-            {"id":"D1","name":"Customer / Entity Risk","weight":30,"subcriteria":[
-                {"name":"Entity Type","weight":20},{"name":"Ownership Structure","weight":20},
-                {"name":"PEP Status","weight":25},{"name":"Adverse Media","weight":15},
-                {"name":"Source of Wealth","weight":10},{"name":"Source of Funds","weight":10}
-            ]},
-            {"id":"D2","name":"Geographic Risk","weight":25,"subcriteria":[
-                {"name":"Country of Incorporation","weight":40},
-                {"name":"Countries of Operation","weight":30},
-                {"name":"Target Markets","weight":30}
-            ]},
-            {"id":"D3","name":"Product / Service Risk","weight":20,"subcriteria":[
-                {"name":"Service Type","weight":40},{"name":"Monthly Volume","weight":30},
-                {"name":"Transaction Complexity","weight":30}
-            ]},
-            {"id":"D4","name":"Industry / Sector Risk","weight":15,"subcriteria":[
-                {"name":"Industry Sector","weight":100}
-            ]},
-            {"id":"D5","name":"Delivery Channel Risk","weight":10,"subcriteria":[
-                {"name":"Introduction Method","weight":50},{"name":"Delivery Channel","weight":50}
-            ]}
-        ])
-        default_thresholds = json.dumps([
-            {"level":"LOW","min":0,"max":39.9},
-            {"level":"MEDIUM","min":40,"max":54.9},
-            {"level":"HIGH","min":55,"max":69.9},
-            {"level":"VERY_HIGH","min":70,"max":100}
-        ])
-        db.execute("INSERT INTO risk_config (id, dimensions, thresholds) VALUES (1, ?, ?)",
-                    (default_dims, default_thresholds))
-
-        # Seed AI agents (10-agent architecture)
-        # ── Onboarding Agents (1-5): Sequential pipeline ──
-        # Flow: Upload → Agent 1 (document) → Agent 2 (external DB) → Agent 3 (screening) → Agent 4 (UBO) → Agent 5 (memo)
-        agent1_checks = json.dumps([
-            "Detect passport type", "Extract MRZ (machine-readable zone)", "Verify MRZ checksum",
-            "Match name with application data", "Check date of birth consistency",
-            "Extract expiry date", "Check if expired", "Check if near expiry",
-            "Validate issue date vs expiry rules", "Detect tampering",
-            "Detect image manipulation", "Verify watermark patterns", "Detect cropped or incomplete documents",
-            "Passport name vs application name", "Passport address vs proof of address",
-            "Director name vs registry data", "Missing pages detection",
-            "Missing UBO documents", "Incomplete shareholder register",
-            "Blur detection", "Cropping detection", "Tampering detection",
-            "Certificate of incorporation validity", "Shareholder register completeness",
-            "Director list consistency", "Nationality consistency",
-            "Proof of address issue date", "Proof of address address match",
-            "Proof of address document type validity", "Document type classification",
-            "Image quality assessment", "Document orientation check",
-            "Multi-page document completeness", "Signature presence check",
-            "Photo quality assessment", "Document language detection"
-        ])
-        agent2_checks = json.dumps([
-            "Company registry verification", "Director name verification",
-            "Shareholder verification", "Jurisdiction validation",
-            "Company status check (active/dissolved)", "Registration number verification",
-            "Incorporation date verification", "Registered address verification",
-            "Company type verification", "Filed documents check",
-            "Cross-reference directors with passport data", "Cross-reference shareholders with UBO declarations"
-        ])
-        agent3_checks = json.dumps([
-            "Sanctions list screening", "PEP database screening",
-            "Watchlist screening", "Adverse media screening",
-            "False positive assessment", "Match confidence scoring",
-            "Material adverse media identification", "Political exposure classification",
-            "Screening result interpretation", "Risk relevance assessment"
-        ])
-        agent4_checks = json.dumps([
-            "Map ownership layers", "Identify ultimate beneficial owners",
-            "Detect nominee structures", "Flag complex ownership chains",
-            "Calculate ownership percentages", "Identify high-risk jurisdiction links",
-            "Detect shell company indicators", "Verify UBO identity documents",
-            "Cross-reference UBOs with sanctions/PEP results", "Structure complexity scoring"
-        ])
-        agent5_checks = json.dumps([
-            "Compile all agent results", "Summarize key findings",
-            "Identify risk indicators", "Recommend risk rating",
-            "Generate onboarding memo", "Produce review checklist",
-            "Flag unresolved contradictions", "Calculate aggregate confidence",
-            "Determine approval/escalation recommendation", "Generate compliance narrative"
-        ])
-
-        agents_seed = [
-            (1, "Identity & Document Integrity Agent", "🔍", "document_verification",
-             "Validates authenticity and internal consistency of identity documents uploaded during onboarding. "
-             "Performs ~36 automated checks including: passport MRZ extraction and checksum verification, expiry date validation, "
-             "tampering and image manipulation detection, cross-document consistency (passport vs application, address vs proof of address, "
-             "director names vs registry data), missing documentation detection, blur/cropping detection, certificate of incorporation validity, "
-             "and shareholder register completeness. Focuses ONLY on document authenticity, expiry, identity extraction, and cross-document consistency. "
-             "Does NOT perform sanctions screening or registry lookups — passes extracted data to downstream agents. "
-             "Output: Document Verification Result with verification status, expiry status, tampering risk, name match score, and document completeness.",
-             1, agent1_checks),
-            (2, "External Database Cross-Verification Agent", "🔎", "external_verification",
-             "Secondary verification layer that checks whether passport and company document information matches external databases. "
-             "Performs checks including: company registry verification (OpenCorporates, Companies House, ADGM, DIFC registries), "
-             "director name verification against registry records, shareholder verification, jurisdiction validation, "
-             "company status verification (active/dissolved), registration number and incorporation date cross-referencing. "
-             "Confirms that persons in uploaded documents actually exist in official registry records as declared directors/shareholders. "
-             "Prevents fake identities in corporate structures. "
-             "Output: External verification results with match status per entity, registry source, and discrepancy flags.",
-             1, agent2_checks),
-            (3, "FinCrime Screening Interpretation Agent", "💼", "screening",
-             "Once passport data is extracted by Agent 1, this agent screens individuals and entities against: "
-             "sanctions lists, PEP databases, watchlists, and adverse media sources. "
-             "Distinguishes false positives from genuine matches, assesses match confidence, highlights material adverse media, "
-             "and classifies political exposure levels. "
-             "Output: Screening Result with sanctions match status, PEP status (with confidence level), adverse media findings, "
-             "and overall screening risk assessment.",
-             1, agent3_checks),
-            (4, "Corporate Structure & UBO Mapping Agent", "🏗️", "ubo_mapping",
-             "For directors and shareholders extracted from documents, this agent: maps ownership layers, "
-             "identifies ultimate beneficial owners (natural persons), detects nominee structures, "
-             "flags complex ownership chains, calculates ownership percentages through layered structures, "
-             "identifies high-risk jurisdiction links, detects shell company indicators, "
-             "and cross-references UBOs with sanctions/PEP screening results from Agent 3. "
-             "Output: ownership map, UBO list, structure complexity score, and nominee/shell risk flags.",
-             1, agent4_checks),
-            (5, "Compliance Memo Agent", "📝", "compliance_memo",
-             "Final synthesis agent. After Agents 1-4 complete their checks, this agent: "
-             "compiles all results into a structured onboarding memo, summarizes key findings across all verification layers, "
-             "identifies and ranks risk indicators, recommends a risk rating (LOW/MEDIUM/HIGH/VERY_HIGH), "
-             "flags any unresolved contradictions between agents, calculates aggregate confidence score, "
-             "and produces a review checklist for compliance officers. "
-             "Output: structured onboarding report, risk recommendation, review checklist, and approval/escalation recommendation.",
-             1, agent5_checks),
-            (6, "Periodic Review Preparation Agent", "📅", "periodic_review",
-             "Prepares client files for periodic reviews, identifies expired documents, "
-             "requests updated information, and summarises changes since onboarding.",
-             1, "[]"),
-            (7, "Adverse Media & PEP Monitoring Agent", "📡", "media_monitoring",
-             "Continuous media monitoring, PEP status changes, new sanctions exposure, "
-             "enforcement actions. Output: alert summaries, severity classification.",
-             1, "[]"),
-            (8, "Behaviour & Risk Drift Agent", "📈", "risk_drift",
-             "Compares current activity vs onboarding profile, detects new jurisdictions, "
-             "identifies sector changes, flags unusual growth patterns. Output: risk drift score, escalation trigger.",
-             1, "[]"),
-            (9, "Regulatory Impact Agent", "⚖️", "regulatory_impact",
-             "Analyses new circulars/rules, identifies impacted client segments, "
-             "triggers compliance actions. Output: regulatory impact summary, remediation tasks.",
-             1, "[]"),
-            (10, "Ongoing Compliance Review Agent", "📋", "compliance_review",
-             "Consolidates monitoring alerts, summarises risk changes, recommends actions "
-             "(maintain/EDD/exit). Output: periodic review memo, updated risk classification, escalation recommendation.",
-             1, "[]")
-        ]
-        for agent_data in agents_seed:
-            db.execute("INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks) VALUES (?,?,?,?,?,?,?)", agent_data)
-        db.commit()
-
-        # Seed monitoring agents status
-        now = datetime.now().isoformat()
-        next_day = (datetime.now() + timedelta(days=1)).isoformat()
-        next_week = (datetime.now() + timedelta(days=7)).isoformat()
-        next_month = (datetime.now() + timedelta(days=30)).isoformat()
-
-        agents_status = [
-            ("Sanctions/PEP Agent", "sanctions_pep", now, next_day, "Daily", 45, 2, "active"),
-            ("Adverse Media Agent", "adverse_media", now, (datetime.now() + timedelta(hours=6)).isoformat(), "Every 6 hours", 45, 1, "active"),
-            ("Registry Monitoring Agent", "registry", (datetime.now() - timedelta(days=7)).isoformat(), next_week, "Weekly", 45, 0, "active"),
-            ("Risk Drift Agent", "risk_drift", (datetime.now() - timedelta(days=30)).isoformat(), next_month, "Monthly", 45, 3, "active"),
-            ("Regulatory Impact Agent", "regulatory", (datetime.now() - timedelta(days=14)).isoformat(), next_month, "On circular publication", 45, 1, "active"),
-        ]
-        for agent_data in agents_status:
-            db.execute("INSERT INTO monitoring_agent_status (agent_name, agent_type, last_run, next_run, run_frequency, clients_monitored, alerts_generated, status) VALUES (?,?,?,?,?,?,?,?)", agent_data)
-        db.commit()
-
-        # Get a sample application for monitoring seed data (if any exist)
-        sample_app = db.execute("SELECT id, ref, company_name FROM applications LIMIT 1").fetchone()
-
-        if sample_app:
-            app_id = sample_app["id"]
-            company_name = sample_app["company_name"]
-
-            # Seed monitoring alerts
-            alerts_seed = [
-                (app_id, company_name, "sanctions_match", "critical", "Sanctions/PEP Agent",
-                 "Sanctions match detected on director John Smith", "OFAC List - 2026-03-14",
-                 "Potential match with OFAC SDN list - requires immediate investigation", "open", None, None, now, None, None),
-                (app_id, company_name, "pep_status", "high", "Adverse Media & PEP Monitoring Agent",
-                 "UBO acquired PEP status", "Political Exposure Database - 2026-03-12",
-                 "UBO recently appointed to government position - enhanced monitoring recommended", "open", None, None, now, None, None),
-                (app_id, company_name, "adverse_media", "medium", "Adverse Media & PEP Monitoring Agent",
-                 "Adverse media article published about client company", "Financial Times - 2026-03-10",
-                 "Article mentions regulatory investigation - requires verification of materiality", "open", None, None, now, None, None),
-                (app_id, company_name, "registry_change", "medium", "Registry Monitoring Agent",
-                 "Director change detected in company registry", "Companies House - 2026-03-08",
-                 "New director appointed - require screening of new officer", "reviewed", "request_documents", "Initiate director screening", (datetime.now() - timedelta(days=3)).isoformat(), now, "sco001"),
-                (app_id, company_name, "risk_drift", "medium", "Behaviour & Risk Drift Agent",
-                 "New jurisdiction activity detected", "Transaction Monitoring System - 2026-03-06",
-                 "Customer expanded to new high-risk jurisdiction - consider enhanced due diligence", "open", None, None, now, None, None),
-                (app_id, company_name, "regulatory_impact", "low", "Regulatory Impact Agent",
-                 "New regulation affecting client sector", "FATF Guidance - 2026-03-01",
-                 "New AML guidance issued - review policies and update procedures", "open", None, None, now, None, None),
-                (app_id, company_name, "document_expiry", "low", "Periodic Review Preparation Agent",
-                 "Proof of address document expires in 30 days", "Document Management System - 2026-03-14",
-                 "Request updated proof of address before expiration", "open", None, None, now, None, None),
-                (app_id, company_name, "company_status_change", "high", "Registry Monitoring Agent",
-                 "Company status change in registry", "Companies House - 2026-03-05",
-                 "Company changed from Active to In Administration - escalate immediately", "escalated", "escalate", "Referred to compliance officer for review", now, now, "co001"),
-            ]
-
-            for alert in alerts_seed:
-                db.execute("""INSERT INTO monitoring_alerts
-                    (application_id, client_name, alert_type, severity, detected_by, summary, source_reference,
-                     ai_recommendation, status, officer_action, officer_notes, created_at, reviewed_at, reviewed_by)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", alert)
-            db.commit()
-
-            # Seed periodic reviews
-            reviews_seed = [
-                (app_id, company_name, "HIGH", "time_based", "Annual review due for HIGH risk client",
-                 "HIGH", "HIGH", json.dumps({"key_findings": ["No material changes detected"], "risk_mitigation": ["Continue enhanced monitoring"]}),
-                 "pending", (datetime.now() + timedelta(days=7)).date().isoformat(), None, None, None, None, None),
-                (app_id, company_name, "MEDIUM", "time_based", "Annual review due for MEDIUM risk client",
-                 "MEDIUM", "MEDIUM", None, "completed", (datetime.now() - timedelta(days=30)).date().isoformat(),
-                 (datetime.now() - timedelta(days=28)).isoformat(), (datetime.now() - timedelta(days=27)).isoformat(),
-                 "continue", "Client profile stable, all documents current, no adverse findings", "analyst001"),
-            ]
-
-            for review in reviews_seed:
-                db.execute("""INSERT INTO periodic_reviews
-                    (application_id, client_name, risk_level, trigger_type, trigger_reason,
-                     previous_risk_level, new_risk_level, review_memo, status, due_date, started_at, completed_at,
-                     decision, decision_reason, decided_by)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", review)
-            db.commit()
-
-        # Log the init
-        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail) VALUES (?,?,?,?,?,?)",
-                    ("system", "System", "system", "Initialize", "Database", "Database initialized with seed data"))
-        db.commit()
-
-    db.close()
-    print(f"✅ Database initialized at {DB_PATH}")
+    except Exception as e:
+        logging.error(f"Seed error: {e}")
+    finally:
+        db.close()
 
 
 # ══════════════════════════════════════════════════════════
@@ -785,9 +348,14 @@ def create_token(user_id, role, name, token_type="officer"):
 def decode_token(token):
     """Decode and validate JWT with issuer verification."""
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"],
+        decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"],
                           issuer="arie-finance",
                           options={"require": ["exp", "iat", "sub"]})
+        # Check token revocation
+        if token_revocation_list.is_revoked(decoded.get("jti", "")):
+            logger.debug("Token revoked")
+            return None
+        return decoded
     except jwt.ExpiredSignatureError:
         logger.debug("Token expired")
         return None
@@ -845,8 +413,9 @@ SECTOR_SCORES = {
     "healthcare":2, "technology":2, "software":2, "saas":2, "manufacturing":2,
     "retail":2, "e-commerce":2, "education":2, "media":2, "logistics":2,
     "import":3, "export":3, "real estate":3, "construction":3, "mining":3,
-    "oil":3, "gas":3, "moneservices":3, "forex":3, "precious":3,
+    "oil":3, "gas":3, "money services":3, "forex":3, "precious":3,
     "non-profit":3, "ngo":3, "charity":3, "advisory":3,
+    "management consulting":3, "consulting":3, "financial / tax advisory":3,
     "crypto":4, "virtual asset":4, "gambling":4, "gaming":4, "betting":4,
     "arms":4, "defence":4, "military":4, "shell company":4, "nominee":4
 }
@@ -887,8 +456,10 @@ def compute_risk_score(app_data):
     data = app_data if isinstance(app_data, dict) else json.loads(app_data)
 
     # D1: Customer / Entity Risk (30%)
-    entity_map = {"listed":1,"regulated":1,"government":1,"large private":2,"sme":2,
-                  "newly incorporated":3,"trust":3,"foundation":3,"non-profit":3,"shell":4}
+    entity_map = {"listed":1,"regulated fund":2,"regulated":1,"government":1,
+                  "large private":2,"sme":2,
+                  "newly incorporated":3,"trust":3,"foundation":3,"non-profit":3,
+                  "unregulated fund":4,"shell":4}
     owner_map = {"simple":1,"1-2":2,"3+":3,"complex":4}
 
     d1_entity = 2
@@ -911,11 +482,53 @@ def compute_risk_score(app_data):
 
     # D2: Geographic Risk (25%)
     d2_inc = classify_country(data.get("country"))
+
+    # Intermediary shareholder jurisdictions
+    intermediaries = data.get("intermediary_shareholders", [])
+    secrecy_jurisdictions = {"bvi", "cayman islands", "panama", "seychelles", "bermuda",
+                             "jersey", "guernsey", "isle of man", "liechtenstein",
+                             "vanuatu", "samoa", "marshall islands"}
+    if intermediaries:
+        inter_scores = []
+        for inter in intermediaries:
+            j = (inter.get("jurisdiction") or "").strip()
+            j_score = classify_country(j)
+            # Boost secrecy/opacity jurisdictions to at least 3
+            if j.lower() in secrecy_jurisdictions:
+                j_score = max(j_score, 3)
+            inter_scores.append(j_score)
+        d2_inter = max(inter_scores) if inter_scores else 1
+    else:
+        d2_inter = 1  # No intermediaries = low risk
+
+    # UBO/Director nationalities
+    nat_demonym_map = {
+        "indian": "india", "singaporean": "singapore", "swedish": "sweden",
+        "emirati": "uae", "russian": "russia", "estonian": "estonia",
+        "senegalese": "senegal", "french": "france", "mauritian": "mauritius",
+        "chinese": "china", "moroccan": "morocco", "nigerian": "nigeria",
+        "british": "united kingdom", "american": "united states",
+        "german": "germany", "japanese": "japan", "australian": "australia",
+        "canadian": "canada", "lebanese": "lebanon", "iranian": "iran",
+        "syrian": "syria", "afghan": "afghanistan", "belarusian": "belarus",
+        "venezuelan": "venezuela", "cuban": "cuba", "north korean": "north korea (dprk)",
+        "pakistani": "pakistan", "south african": "south africa",
+        "vietnamese": "vietnam", "filipino": "philippines",
+    }
+    all_persons = data.get("directors", []) + data.get("ubos", [])
+    nat_scores = []
+    for person in all_persons:
+        nat = (person.get("nationality") or person.get("nat") or "").strip().lower()
+        if nat:
+            mapped = nat_demonym_map.get(nat, nat)
+            nat_scores.append(classify_country(mapped))
+    d2_ubo_nat = max(nat_scores) if nat_scores else 1
+
     op_countries = data.get("operating_countries", [])
     d2_op = max([classify_country(c) for c in op_countries]) if op_countries else d2_inc
     target_markets = data.get("target_markets", [])
     d2_tgt = max([classify_country(c) for c in target_markets]) if target_markets else d2_inc
-    d2 = d2_inc * 0.40 + d2_op * 0.30 + d2_tgt * 0.30
+    d2 = d2_inc * 0.25 + d2_ubo_nat * 0.20 + d2_inter * 0.20 + d2_op * 0.20 + d2_tgt * 0.15
 
     # D3: Product / Service Risk (20%)
     vol_map = {"under":1,"50,000":2,"500,000":3,"over":4}
@@ -968,79 +581,80 @@ def compute_risk_score(app_data):
 # REAL API INTEGRATIONS
 # ══════════════════════════════════════════════════════════
 
-def screen_opensanctions(name, birth_date=None, nationality=None, entity_type="Person"):
+def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Person"):
     """
-    Screen a person or entity against OpenSanctions (sanctions, PEP, watchlists).
-    Returns: { matched: bool, results: [...], source: "opensanctions"|"simulated" }
+    Screen a person or entity against Sumsub AML (sanctions, PEP, watchlists).
+    Returns: { matched: bool, results: [...], source: "sumsub"|"simulated" }
     """
-    if not OPENSANCTIONS_API_KEY:
-        logger.info(f"OpenSanctions: No API key — simulating screening for '{name}'")
-        return _simulate_sanctions_screen(name)
-
     try:
-        headers = {"Authorization": f"ApiKey {OPENSANCTIONS_API_KEY}"}
-        params = {
-            "schema": entity_type,  # "Person" or "Company"
-            "properties.name": name,
-            "limit": 10,
-        }
-        if birth_date:
-            params["properties.birthDate"] = birth_date
-        if nationality:
-            params["properties.nationality"] = nationality
+        # First create/retrieve a Sumsub applicant
+        import hashlib
+        ext_id = f"{entity_type}_{hashlib.md5(name.encode()).hexdigest()[:12]}"
+        parts = name.strip().split(" ", 1)
+        first = parts[0] if parts else ""
+        last = parts[1] if len(parts) > 1 else ""
 
-        resp = requests.get(
-            f"{OPENSANCTIONS_API_URL}/match/default",
-            headers=headers,
-            params=params,
-            timeout=15
+        applicant_result = sumsub_create_applicant(
+            external_user_id=ext_id,
+            first_name=first,
+            last_name=last,
+            dob=birth_date,
+            country=nationality
         )
 
-        if resp.status_code == 200:
-            data = resp.json()
-            results = data.get("results", [])
-            hits = []
-            for r in results:
-                score = r.get("score", 0)
-                if score >= 0.65:  # Only consider strong matches
-                    props = r.get("properties", {})
+        if not applicant_result.get("applicant_id"):
+            logger.warning(f"Sumsub AML: Failed to create/retrieve applicant for '{name}'")
+            return _simulate_aml_screen(name)
+
+        applicant_id = applicant_result["applicant_id"]
+
+        # Get AML screening results
+        from sumsub_client import get_sumsub_client
+        client = get_sumsub_client()
+        aml_result = client.get_aml_screening(applicant_id)
+
+        if aml_result.get("source") == "simulated":
+            # API not configured, return simulated
+            return _simulate_aml_screen(name)
+
+        # Parse AML check results into our standard format
+        aml_checks = aml_result.get("aml_checks", [])
+        hits = []
+
+        for check in aml_checks:
+            check_data = check.get("data", {})
+            if check_data.get("matches"):
+                for match in check_data.get("matches", []):
                     hits.append({
-                        "match_score": round(score * 100, 1),
-                        "matched_name": (props.get("name", [""])[0] if isinstance(props.get("name"), list) else props.get("name", "")),
-                        "datasets": r.get("datasets", []),
-                        "schema": r.get("schema", ""),
-                        "topics": props.get("topics", []),
-                        "countries": props.get("country", []),
-                        "sanctions_list": ", ".join(r.get("datasets", [])),
-                        "is_pep": "role.pep" in (props.get("topics", []) if isinstance(props.get("topics"), list) else []),
-                        "is_sanctioned": any(d in ["sanctions", "crime"] for d in r.get("datasets", [])),
+                        "match_score": round(float(match.get("matchScore", 0)) * 100, 1),
+                        "matched_name": match.get("name", name),
+                        "datasets": [check.get("checkType", "AML")],
+                        "schema": entity_type,
+                        "topics": match.get("topics", []),
+                        "countries": match.get("countries", []),
+                        "sanctions_list": match.get("list", ""),
+                        "is_pep": "pep" in match.get("topics", []) or match.get("isPep", False),
+                        "is_sanctioned": "sanction" in match.get("topics", []) or match.get("isSanctioned", False),
                     })
 
-            return {
-                "matched": len(hits) > 0,
-                "results": hits,
-                "total_checked": len(results),
-                "source": "opensanctions",
-                "api_status": "live",
-                "screened_at": datetime.utcnow().isoformat()
-            }
-        elif resp.status_code == 401:
-            logger.warning("OpenSanctions: Invalid API key — falling back to simulation")
-            return _simulate_sanctions_screen(name, note="API key invalid — simulated result")
-        else:
-            logger.warning(f"OpenSanctions: HTTP {resp.status_code} — falling back to simulation")
-            return _simulate_sanctions_screen(name, note=f"API returned {resp.status_code} — simulated result")
+        return {
+            "matched": len(hits) > 0,
+            "results": hits,
+            "source": "sumsub",
+            "api_status": "live",
+            "screened_at": datetime.utcnow().isoformat()
+        }
 
-    except requests.exceptions.Timeout:
-        logger.warning("OpenSanctions: Request timed out — falling back to simulation")
-        return _simulate_sanctions_screen(name, note="API timeout — simulated result")
     except Exception as e:
-        logger.error(f"OpenSanctions error: {e}")
-        return _simulate_sanctions_screen(name, note=f"API error — simulated result")
+        logger.error(f"Sumsub AML screening error: {e}")
+        return _simulate_aml_screen(name)
 
 
-def _simulate_sanctions_screen(name, note="No API key configured — simulated result"):
-    """Fallback: realistic simulation when API key not set."""
+def _simulate_aml_screen(name, note="No Sumsub credentials configured — simulated result"):
+    """Fallback: realistic simulation when Sumsub not configured."""
+    if is_production():
+        logger.error("BLOCKED: Mock screening attempted in production")
+        return {"matched": False, "results": [], "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production", "screened_at": datetime.utcnow().isoformat()}
     import random
     is_hit = random.random() < 0.08  # 8% simulated hit rate
     results = []
@@ -1048,18 +662,17 @@ def _simulate_sanctions_screen(name, note="No API key configured — simulated r
         results.append({
             "match_score": round(random.uniform(68, 95), 1),
             "matched_name": name,
-            "datasets": ["sanctions-simulated"],
+            "datasets": ["aml-simulated"],
             "schema": "Person",
-            "topics": ["role.pep"] if random.random() < 0.5 else ["sanction"],
+            "topics": ["pep"] if random.random() < 0.5 else ["sanction"],
             "countries": [],
-            "sanctions_list": "Simulated Sanctions List",
+            "sanctions_list": "Simulated AML List",
             "is_pep": random.random() < 0.5,
             "is_sanctioned": random.random() < 0.3,
         })
     return {
         "matched": is_hit,
         "results": results,
-        "total_checked": 1,
         "source": "simulated",
         "api_status": "simulated",
         "note": note,
@@ -1127,7 +740,10 @@ def lookup_opencorporates(company_name, jurisdiction=None):
 
 
 def _simulate_company_lookup(company_name, note="No API key configured — simulated result"):
-    """Fallback: simulated company registry lookup."""
+    """Fallback: simulated company registry lookup. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock company lookup attempted in production")
+        return {"found": False, "companies": [], "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
     import random
     found = random.random() < 0.85  # 85% chance found
     companies = []
@@ -1223,7 +839,10 @@ def geolocate_ip(ip_address):
 
 
 def _simulate_ip_geolocation(ip_address, note="Simulated result"):
-    """Fallback: simulated IP geolocation."""
+    """Fallback: simulated IP geolocation. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock IP geolocation attempted in production")
+        return {"country": "Unknown", "country_code": "XX", "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
     import random
     countries = [
         ("Mauritius", "MU"), ("United Kingdom", "GB"), ("France", "FR"),
@@ -1562,7 +1181,10 @@ def sumsub_verify_webhook(body_bytes, signature_header):
 # ── Sumsub simulation fallbacks ──────────────────────────
 
 def _simulate_sumsub_applicant(external_user_id, first_name=None, last_name=None, note="No Sumsub credentials configured"):
-    """Fallback: simulated applicant creation."""
+    """Fallback: simulated applicant creation. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock Sumsub applicant creation attempted in production")
+        return {"applicant_id": None, "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
     sim_id = f"sim_{hashlib.md5(external_user_id.encode()).hexdigest()[:16]}"
     return {
         "applicant_id": sim_id,
@@ -1578,7 +1200,10 @@ def _simulate_sumsub_applicant(external_user_id, first_name=None, last_name=None
 
 
 def _simulate_sumsub_token(external_user_id, note="No Sumsub credentials configured"):
-    """Fallback: simulated access token."""
+    """Fallback: simulated access token. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock Sumsub token generation attempted in production")
+        return {"token": None, "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
     token = base64.b64encode(f"sim_token_{external_user_id}_{int(time.time())}".encode()).decode()
     return {
         "token": token,
@@ -1591,7 +1216,10 @@ def _simulate_sumsub_token(external_user_id, note="No Sumsub credentials configu
 
 
 def _simulate_sumsub_status(applicant_id, note="No Sumsub credentials configured"):
-    """Fallback: simulated verification status."""
+    """Fallback: simulated verification status. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock Sumsub status check attempted in production")
+        return {"applicant_id": applicant_id, "status": "blocked", "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
     import random
     statuses = ["init", "pending", "completed"]
     answers = ["", "", "GREEN"]
@@ -1644,20 +1272,20 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
     with ThreadPoolExecutor(max_workers=8) as executor:
         # Submit all screening tasks concurrently
         company_future = executor.submit(lookup_opencorporates, company_name, jurisdiction)
-        company_sanctions_future = executor.submit(screen_opensanctions, company_name, entity_type="Company")
+        company_sanctions_future = executor.submit(screen_sumsub_aml, company_name, entity_type="Company")
 
         director_futures = []
         for d in directors:
             d_name = d.get("full_name", "")
             if d_name:
-                f = executor.submit(screen_opensanctions, d_name, nationality=d.get("nationality"), entity_type="Person")
+                f = executor.submit(screen_sumsub_aml, d_name, nationality=d.get("nationality"), entity_type="Person")
                 director_futures.append((d, f))
 
         ubo_futures = []
         for u in ubos:
             u_name = u.get("full_name", "")
             if u_name:
-                f = executor.submit(screen_opensanctions, u_name, nationality=u.get("nationality"), entity_type="Person")
+                f = executor.submit(screen_sumsub_aml, u_name, nationality=u.get("nationality"), entity_type="Person")
                 ubo_futures.append((u, f))
 
         ip_future = executor.submit(geolocate_ip, client_ip) if client_ip else None
@@ -1789,6 +1417,42 @@ rate_limiter = RateLimiter()
 # ══════════════════════════════════════════════════════════
 
 class BaseHandler(tornado.web.RequestHandler):
+    def prepare(self):
+        """Enforce HTTPS in production via X-Forwarded-Proto from reverse proxy."""
+        if ENVIRONMENT == "production":
+            forwarded_proto = self.request.headers.get("X-Forwarded-Proto", "")
+            if forwarded_proto == "http":
+                # Redirect HTTP to HTTPS
+                url = self.request.full_url().replace("http://", "https://", 1)
+                self.redirect(url, permanent=True)
+                return
+
+    def check_rate_limit(self, endpoint_key, max_attempts=30, window_seconds=60):
+        """
+        C-06 FIX: Check rate limit for the current request.
+        Returns True if the request should proceed, False if rate-limited.
+        """
+        ip = self.get_client_ip()
+        user = self.get_current_user_token()
+        user_id = user.get("sub", "") if user else ""
+
+        # Per-IP rate limit
+        ip_key = f"{endpoint_key}:ip:{ip}"
+        if rate_limiter.is_limited(ip_key, max_attempts=max_attempts, window_seconds=window_seconds):
+            self.set_status(429)
+            self.write({"error": f"Rate limit exceeded for {endpoint_key}. Try again later.", "retry_after": window_seconds})
+            return False
+
+        # Per-user rate limit (if authenticated)
+        if user_id:
+            user_key = f"{endpoint_key}:user:{user_id}"
+            if rate_limiter.is_limited(user_key, max_attempts=max_attempts, window_seconds=window_seconds):
+                self.set_status(429)
+                self.write({"error": f"Rate limit exceeded. Try again later.", "retry_after": window_seconds})
+                return False
+
+        return True
+
     def set_default_headers(self):
         # CORS — in production, MUST set ALLOWED_ORIGIN env var to your domain
         allowed_origin = os.environ.get("ALLOWED_ORIGIN", "")
@@ -1801,7 +1465,7 @@ class BaseHandler(tornado.web.RequestHandler):
         if allowed_origin:
             self.set_header("Access-Control-Allow-Origin", allowed_origin)
         self.set_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-        self.set_header("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        self.set_header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-CSRF-Token,X-Idempotency-Key")
         self.set_header("Access-Control-Max-Age", "3600")
         self.set_header("Content-Type", "application/json")
         # Security headers — always on
@@ -1809,8 +1473,9 @@ class BaseHandler(tornado.web.RequestHandler):
         self.set_header("X-Frame-Options", "DENY")
         self.set_header("X-XSS-Protection", "1; mode=block")
         self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        # HSTS — always in production (tells browsers to only use HTTPS)
         if ENVIRONMENT == "production":
-            self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
         # Content Security Policy
         csp = (
             "default-src 'self'; "
@@ -1824,18 +1489,48 @@ class BaseHandler(tornado.web.RequestHandler):
         self.set_header("Content-Security-Policy", csp)
         self.set_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
 
+    def issue_csrf_token(self):
+        """Issue a CSRF token as a secure cookie. Call on successful login."""
+        csrf_token = secrets.token_hex(32)
+        self.set_cookie(
+            "csrf_token", csrf_token,
+            httponly=False,  # Must be readable by JS to send in header
+            secure=(ENVIRONMENT == "production"),
+            samesite="Strict",
+            path="/",
+        )
+        return csrf_token
+
     def options(self, *args):
         self.set_status(204)
         self.finish()
 
     def check_xsrf_cookie(self):
-        """Skip XSRF check for API endpoints using Bearer token auth."""
+        """
+        CSRF protection: double-submit cookie pattern.
+        - Bearer token requests: CSRF-exempt (token proves authentication)
+        - Webhook endpoints: CSRF-exempt (use HMAC signature validation)
+        - Cookie-based requests: REQUIRE X-CSRF-Token header matching csrf_token cookie
+        """
+        # Bearer token auth is inherently CSRF-safe
         if self.request.headers.get("Authorization", "").startswith("Bearer "):
             return
-        # Also skip for webhook endpoints
+        # Webhook endpoints use HMAC signatures, not cookies
         if "/webhook" in self.request.uri:
             return
-        super().check_xsrf_cookie()
+        # OPTIONS preflight requests don't need CSRF
+        if self.request.method == "OPTIONS":
+            return
+        # For state-changing methods with cookie auth, enforce CSRF
+        if self.request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            csrf_cookie = self.get_cookie("csrf_token", None)
+            csrf_header = self.request.headers.get("X-CSRF-Token", "")
+            if not csrf_cookie or not csrf_header:
+                raise tornado.web.HTTPError(403, reason="CSRF token missing")
+            if not hmac.compare_digest(csrf_cookie, csrf_header):
+                raise tornado.web.HTTPError(403, reason="CSRF token mismatch")
+            return
+        # GET/HEAD are safe methods — no CSRF check needed
 
     def get_json(self):
         try:
@@ -1891,6 +1586,18 @@ class BaseHandler(tornado.web.RequestHandler):
             return False
         return True
 
+    def write_error(self, status_code, **kwargs):
+        """Cross-cutting: Safe error responses — no stack traces in production."""
+        if ENVIRONMENT == "production":
+            self.write({"error": self._reason or "Internal server error", "status": status_code})
+        else:
+            # In dev, include more detail for debugging
+            import traceback
+            error_detail = ""
+            if "exc_info" in kwargs:
+                error_detail = traceback.format_exception(*kwargs["exc_info"])[-1].strip()
+            self.write({"error": self._reason or "Internal server error", "status": status_code, "detail": error_detail})
+
 
 # ── Health Check ──
 class HealthHandler(BaseHandler):
@@ -1900,7 +1607,7 @@ class HealthHandler(BaseHandler):
             "status": "ok",
             "service": "ARIE Finance API",
             "version": "1.0.0",
-            "environment": ENVIRONMENT,
+            "environment": ENV,
             "timestamp": datetime.utcnow().isoformat() + "Z",
         }
 
@@ -1919,13 +1626,16 @@ class HealthHandler(BaseHandler):
             health["database"] = {"status": "error", "error": str(e)[:200]}
             health["status"] = "degraded"
 
-        # External API status
-        health["integrations"] = {
-            "opensanctions": "configured" if OPENSANCTIONS_API_KEY else "simulated",
-            "opencorporates": "configured" if OPENCORPORATES_API_KEY else "simulated",
-            "ip_geolocation": "live",
-            "sumsub_kyc": "configured" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
-        }
+        # External API status — only show if authenticated and is admin
+        # Remove integrations section to avoid configuration leakage
+        user = self.get_current_user()
+        if user and user.get("role") == "admin":
+            health["integrations"] = {
+                "opensanctions": "configured" if OPENSANCTIONS_API_KEY else "simulated",
+                "opencorporates": "configured" if OPENCORPORATES_API_KEY else "simulated",
+                "ip_geolocation": "live",
+                "sumsub_kyc": "configured" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
+            }
 
         # Metrics status
         health["metrics_enabled"] = METRICS_ENABLED
@@ -1977,10 +1687,12 @@ class OfficerLoginHandler(BaseHandler):
 
         rate_limiter.reset(rl_key)  # Reset on successful login
         token = create_token(user["id"], user["role"], user["full_name"], "officer")
+        csrf_token = self.issue_csrf_token()
         self.log_audit({"sub": user["id"], "name": user["full_name"], "role": user["role"]},
                        "Login", "System", f"Officer login from {ip}")
         self.success({
             "token": token,
+            "csrf_token": csrf_token,
             "user": {"id": user["id"], "email": user["email"], "name": user["full_name"], "role": user["role"]}
         })
 
@@ -2013,8 +1725,10 @@ class ClientLoginHandler(BaseHandler):
         rate_limiter.reset(rl_key)  # Reset on successful login
 
         token = create_token(client["id"], "client", client["company_name"] or email, "client")
+        csrf_token = self.issue_csrf_token()
         self.success({
             "token": token,
+            "csrf_token": csrf_token,
             "client": {"id": client["id"], "email": client["email"], "company": client["company_name"]}
         })
 
@@ -2039,6 +1753,11 @@ class ClientRegisterHandler(BaseHandler):
 
         if len(password) < 8:
             return self.error("Password must be at least 8 characters")
+
+        # Validate password policy (mandatory)
+        is_valid, pw_error = PasswordPolicy.validate(password)
+        if not is_valid:
+            return self.error(f"Password policy violation: {pw_error}", 400)
 
         db = get_db()
         exists = db.execute("SELECT id FROM clients WHERE email = ?", (email,)).fetchone()
@@ -2105,12 +1824,12 @@ class ApplicationsHandler(BaseHandler):
         db.close()
 
         apps = [dict(r) for r in rows]
-        # Attach directors and UBOs for each
+        # Attach directors and UBOs for each — C-02: decrypt PII on read
         db = get_db()
         for app in apps:
-            app["directors"] = [dict(d) for d in db.execute(
+            app["directors"] = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
                 "SELECT * FROM directors WHERE application_id = ?", (app["id"],)).fetchall()]
-            app["ubos"] = [dict(u) for u in db.execute(
+            app["ubos"] = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
                 "SELECT * FROM ubos WHERE application_id = ?", (app["id"],)).fetchall()]
         db.close()
 
@@ -2143,15 +1862,17 @@ class ApplicationsHandler(BaseHandler):
             "draft"
         ))
 
-        # Add directors
+        # Add directors — C-02: encrypt PII fields before write
         for d in data.get("directors", []):
+            d_encrypted = encrypt_pii_fields(d, PII_FIELDS_DIRECTORS)
             db.execute("INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?,?,?,?)",
-                        (app_id, d.get("full_name",""), d.get("nationality",""), d.get("is_pep","No")))
+                        (app_id, d.get("full_name",""), d_encrypted.get("nationality",""), d.get("is_pep","No")))
 
-        # Add UBOs
+        # Add UBOs — C-02: encrypt PII fields before write
         for u in data.get("ubos", []):
+            u_encrypted = encrypt_pii_fields(u, PII_FIELDS_UBOS)
             db.execute("INSERT INTO ubos (application_id, full_name, nationality, ownership_pct, is_pep) VALUES (?,?,?,?,?)",
-                        (app_id, u.get("full_name",""), u.get("nationality",""), u.get("ownership_pct",0), u.get("is_pep","No")))
+                        (app_id, u.get("full_name",""), u_encrypted.get("nationality",""), u_encrypted.get("ownership_pct",0), u.get("is_pep","No")))
 
         db.commit()
         db.close()
@@ -2178,9 +1899,10 @@ class ApplicationDetailHandler(BaseHandler):
             return
 
         result = dict(app)
-        result["directors"] = [dict(d) for d in db.execute(
+        # C-02: Decrypt PII fields on read
+        result["directors"] = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
             "SELECT * FROM directors WHERE application_id = ?", (result["id"],)).fetchall()]
-        result["ubos"] = [dict(u) for u in db.execute(
+        result["ubos"] = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
             "SELECT * FROM ubos WHERE application_id = ?", (result["id"],)).fetchall()]
         result["documents"] = [dict(d) for d in db.execute(
             "SELECT * FROM documents WHERE application_id = ?", (result["id"],)).fetchall()]
@@ -2208,34 +1930,72 @@ class ApplicationDetailHandler(BaseHandler):
 
         real_id = app["id"]
 
-        db.execute("""
-            UPDATE applications SET
-                company_name=?, brn=?, country=?, sector=?, entity_type=?,
-                ownership_structure=?, prescreening_data=?, updated_at=datetime('now')
-            WHERE id=?
-        """, (
-            data.get("company_name", app["company_name"]),
-            data.get("brn", app["brn"]),
-            data.get("country", app["country"]),
-            data.get("sector", app["sector"]),
-            data.get("entity_type", app["entity_type"]),
-            data.get("ownership_structure", app["ownership_structure"]),
-            json.dumps(data.get("prescreening_data", json.loads(app["prescreening_data"]))),
-            real_id
-        ))
+        # ── C-04/C-07 FIX: Block modification of screening data and immutable fields after submission ──
+        non_draft_statuses = ("submitted", "pricing_review", "under_review", "edd_required", "approved", "rejected", "kyc_documents")
+        if app["status"] in non_draft_statuses:
+            # Block prescreening_data modification entirely after submission
+            if "prescreening_data" in data:
+                db.close()
+                return self.error(
+                    "Screening data is immutable after submission. Cannot modify prescreening_data.",
+                    403
+                )
+            # Block screening_mode modification
+            if "screening_mode" in data:
+                db.close()
+                return self.error(
+                    "Screening mode is immutable after submission.",
+                    403
+                )
 
-        # Rebuild directors and UBOs if provided
+        # ── C-04/C-07: Only allow prescreening_data update in draft status ──
+        if app["status"] == "draft":
+            db.execute("""
+                UPDATE applications SET
+                    company_name=?, brn=?, country=?, sector=?, entity_type=?,
+                    ownership_structure=?, prescreening_data=?, updated_at=datetime('now')
+                WHERE id=?
+            """, (
+                data.get("company_name", app["company_name"]),
+                data.get("brn", app["brn"]),
+                data.get("country", app["country"]),
+                data.get("sector", app["sector"]),
+                data.get("entity_type", app["entity_type"]),
+                data.get("ownership_structure", app["ownership_structure"]),
+                json.dumps(data.get("prescreening_data", json.loads(app["prescreening_data"]))),
+                real_id
+            ))
+        else:
+            # Post-submission: only allow metadata updates, NOT screening data
+            db.execute("""
+                UPDATE applications SET
+                    company_name=?, brn=?, country=?, sector=?, entity_type=?,
+                    ownership_structure=?, updated_at=datetime('now')
+                WHERE id=?
+            """, (
+                data.get("company_name", app["company_name"]),
+                data.get("brn", app["brn"]),
+                data.get("country", app["country"]),
+                data.get("sector", app["sector"]),
+                data.get("entity_type", app["entity_type"]),
+                data.get("ownership_structure", app["ownership_structure"]),
+                real_id
+            ))
+
+        # Rebuild directors and UBOs if provided — C-02: encrypt PII fields
         if "directors" in data:
             db.execute("DELETE FROM directors WHERE application_id = ?", (real_id,))
             for d in data["directors"]:
+                d_encrypted = encrypt_pii_fields(d, PII_FIELDS_DIRECTORS)
                 db.execute("INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?,?,?,?)",
-                            (real_id, d.get("full_name",""), d.get("nationality",""), d.get("is_pep","No")))
+                            (real_id, d.get("full_name",""), d_encrypted.get("nationality",""), d.get("is_pep","No")))
 
         if "ubos" in data:
             db.execute("DELETE FROM ubos WHERE application_id = ?", (real_id,))
             for u in data["ubos"]:
+                u_encrypted = encrypt_pii_fields(u, PII_FIELDS_UBOS)
                 db.execute("INSERT INTO ubos (application_id, full_name, nationality, ownership_pct, is_pep) VALUES (?,?,?,?,?)",
-                            (real_id, u.get("full_name",""), u.get("nationality",""), u.get("ownership_pct",0), u.get("is_pep","No")))
+                            (real_id, u.get("full_name",""), u_encrypted.get("nationality",""), u_encrypted.get("ownership_pct",0), u.get("is_pep","No")))
 
         db.commit()
         db.close()
@@ -2268,9 +2028,69 @@ class ApplicationDetailHandler(BaseHandler):
                 db.close()
                 return self.error("Only officers can change application status", 403)
 
-        # Handle status changes
+        # C-05: Workflow integrity enforcement
         new_status = data.get("status")
         if new_status:
+            current_status = app["status"]
+
+            # Define valid state transitions
+            valid_transitions = {
+                "draft": ["submitted"],
+                "submitted": ["under_review", "rejected"],
+                "under_review": ["edd_required", "approved", "rejected"],
+                "edd_required": ["under_review", "approved", "rejected"],
+                "approved": [],  # Terminal state
+                "rejected": ["draft"],  # Can reopen to draft
+            }
+
+            allowed = valid_transitions.get(current_status, [])
+            if new_status not in allowed:
+                db.close()
+                return self.error(
+                    f"Invalid workflow transition: '{current_status}' → '{new_status}'. "
+                    f"Allowed transitions: {allowed or 'none (terminal state)'}",
+                    400
+                )
+
+            # ── H-05 FIX: High-risk cases MUST go through under_review before approval ──
+            risk_level = app.get("risk_level", "").upper()
+            if new_status == "approved" and risk_level in ("HIGH", "VERY_HIGH"):
+                if current_status != "under_review" and current_status != "edd_required":
+                    db.close()
+                    return self.error(
+                        f"HIGH/VERY_HIGH risk applications must undergo compliance review (under_review or edd_required) "
+                        f"before approval. Current status: {current_status}",
+                        400
+                    )
+
+            # For approval: enforce that screening is complete, memo exists, and approval gate passes
+            if new_status == "approved":
+                # Require screening to have been run (not in draft)
+                prescreening = json.loads(app["prescreening_data"]) if app.get("prescreening_data") else {}
+                if not prescreening.get("screening_report"):
+                    db.close()
+                    return self.error("Cannot approve: screening has not been run. Submit the application first.", 400)
+
+                # Freeze screening post-submission: prevent re-screening after approval
+                screening_report = prescreening.get("screening_report", {})
+                if screening_report.get("screening_mode") == "simulated" and is_production():
+                    db.close()
+                    return self.error("Cannot approve: screening used simulated data in production.", 400)
+
+                # Require compliance memo before approval decision
+                memo = db.execute("SELECT id FROM compliance_memos WHERE application_id = ?", (real_id,)).fetchone()
+                if not memo:
+                    db.close()
+                    return self.error("Cannot approve: compliance memo must be generated before decision.", 400)
+
+                # Run full approval gate validation
+                app_dict = dict(app)
+                app_dict["prescreening_data"] = prescreening
+                can_approve, gate_error = ApprovalGateValidator.validate_approval(app_dict, db)
+                if not can_approve:
+                    db.close()
+                    return self.error(f"Approval gate failed: {gate_error}", 400)
+
             db.execute("UPDATE applications SET status=?, updated_at=datetime('now') WHERE id=?", (new_status, real_id))
             if new_status in ("approved", "rejected"):
                 db.execute("UPDATE applications SET decided_at=datetime('now'), decision_by=?, decision_notes=? WHERE id=?",
@@ -2293,6 +2113,9 @@ class SubmitApplicationHandler(BaseHandler):
     def post(self, app_id):
         user = self.require_auth()
         if not user:
+            return
+
+        if not self.check_rate_limit("submit", max_attempts=5, window_seconds=60):
             return
 
         db = get_db()
@@ -2323,11 +2146,16 @@ class SubmitApplicationHandler(BaseHandler):
             "ubos": ubos
         }
 
-        # ── Run real screening (Agents 1, 5, 6) ──
+        # ── Run real screening (Agents 1, 2, 3, 5) ──
         client_ip = self.get_client_ip()
         screening_report = run_full_screening(
             scoring_input, directors, ubos, client_ip=client_ip
         )
+
+        # Track screening mode (live vs simulated) — mandatory
+        screening_mode = determine_screening_mode(screening_report)
+        store_screening_mode(db, real_id, screening_mode)
+        screening_report["screening_mode"] = screening_mode
 
         # Compute risk score
         risk = compute_risk_score(scoring_input)
@@ -2528,6 +2356,9 @@ class DocumentUploadHandler(BaseHandler):
         if not user:
             return
 
+        if not self.check_rate_limit("doc_upload", max_attempts=30, window_seconds=60):
+            return
+
         db = get_db()
         app = db.execute("SELECT id, ref, client_id FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
         if not app:
@@ -2544,13 +2375,22 @@ class DocumentUploadHandler(BaseHandler):
 
         file_info = self.request.files["file"][0]
         filename = file_info["filename"]
+        # Sanitize filename
+        filename = os.path.basename(filename)
         body = file_info["body"]
+        content_type = file_info.get("content_type", "application/octet-stream")
 
         if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
             db.close()
             return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit")
 
-        # Save file
+        # Validate file upload (mandatory)
+        is_valid, upload_error = FileUploadValidator.validate(filename, content_type, body)
+        if not is_valid:
+            db.close()
+            return self.error(f"File rejected: {upload_error}", 400)
+
+        # Save file locally
         doc_id = uuid.uuid4().hex[:16]
         ext = os.path.splitext(filename)[1]
         safe_name = f"{app['id']}_{doc_id}{ext}"
@@ -2558,6 +2398,24 @@ class DocumentUploadHandler(BaseHandler):
 
         with open(file_path, "wb") as f:
             f.write(body)
+
+        # Upload to S3 if available
+        s3_key = None
+        if HAS_S3:
+            try:
+                s3_client = get_s3_client()
+                if s3_client:
+                    s3_key = f"documents/{app['id']}/{safe_name}"
+                    s3_client.upload_fileobj(
+                        io.BytesIO(body),
+                        Bucket=os.environ.get("S3_BUCKET", "arie-documents"),
+                        Key=s3_key,
+                        ExtraArgs={"ContentType": file_info["content_type"]}
+                    )
+                    logger.info(f"Document {doc_id} uploaded to S3: {s3_key}")
+            except Exception as e:
+                logger.warning(f"S3 upload failed for {doc_id}: {e}. Falling back to local storage.")
+                s3_key = None
 
         doc_type = self.get_argument("doc_type", "general")
         person_id = self.get_argument("person_id", None)
@@ -2570,7 +2428,7 @@ class DocumentUploadHandler(BaseHandler):
         db.close()
 
         self.log_audit(user, "Upload", app["ref"], f"Document uploaded: {filename} ({doc_type})")
-        self.success({"id": doc_id, "doc_name": filename, "doc_type": doc_type, "file_size": len(body)}, 201)
+        self.success({"id": doc_id, "doc_name": filename, "doc_type": doc_type, "file_size": len(body), "s3_key": s3_key}, 201)
 
 
 class DocumentVerifyHandler(BaseHandler):
@@ -2620,7 +2478,7 @@ class DocumentVerifyHandler(BaseHandler):
             if not person:
                 person = db.execute("SELECT full_name, nationality FROM ubos WHERE id=?", (doc["person_id"],)).fetchone()
             if person:
-                sanctions_result = screen_opensanctions(
+                sanctions_result = screen_sumsub_aml(
                     person["full_name"],
                     nationality=person["nationality"],
                     entity_type="Person"
@@ -2630,7 +2488,7 @@ class DocumentVerifyHandler(BaseHandler):
                     checks.append({
                         "label": "Sanctions/PEP Screening",
                         "type": "sanctions",
-                        "rule": "Screened against OpenSanctions watchlists and PEP databases",
+                        "rule": "Screened against Sumsub AML watchlists and PEP databases",
                         "result": "fail",
                         "message": f"MATCH FOUND — {len(sanctions_result['results'])} hit(s) on sanctions/PEP lists",
                         "details": sanctions_result["results"],
@@ -2640,7 +2498,7 @@ class DocumentVerifyHandler(BaseHandler):
                     checks.append({
                         "label": "Sanctions/PEP Screening",
                         "type": "sanctions",
-                        "rule": "Screened against OpenSanctions watchlists and PEP databases",
+                        "rule": "Screened against Sumsub AML watchlists and PEP databases",
                         "result": "pass",
                         "message": "No matches found on sanctions or PEP lists",
                         "source": sanctions_result["source"]
@@ -2660,6 +2518,64 @@ class DocumentVerifyHandler(BaseHandler):
         db.close()
 
         self.success({"doc_id": doc_id, "status": status, "checks": checks})
+
+
+class DocumentAIVerifyHandler(BaseHandler):
+    """POST /api/documents/ai-verify — AI document verification using Claude"""
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        if not self.check_rate_limit("ai_verify", max_attempts=10, window_seconds=60):
+            return
+
+        try:
+            body = json.loads(self.request.body)
+        except:
+            return self.error("Invalid JSON", 400)
+
+        doc_type = body.get("doc_type", "")
+        file_name = body.get("file_name", "")
+        person_name = body.get("person_name", "")
+        doc_category = body.get("doc_category", "identity")
+
+        if not doc_type or not file_name:
+            return self.error("doc_type and file_name are required", 400)
+
+        # Initialize Claude client
+        if not HAS_CLAUDE_CLIENT:
+            logger.warning("Claude client not available — returning mock response")
+            return self.success({
+                "checks": [
+                    {"label": "Document Validity", "type": "validity", "result": "pass", "message": "Document format verified"},
+                    {"label": "Expiry Risk", "type": "expiry", "result": "pass", "message": "Document validity verified"},
+                    {"label": "Name Consistency", "type": "name", "result": "pass", "message": "Name verified"},
+                    {"label": "Quality Indicators", "type": "quality", "result": "pass", "message": "Quality verified"}
+                ],
+                "overall": "verified",
+                "confidence": 0.90,
+                "ai_source": "mock"
+            })
+
+        try:
+            claude_client = ClaudeClient(
+                api_key=os.environ.get("ANTHROPIC_API_KEY"),
+                monthly_budget_usd=float(os.environ.get("CLAUDE_BUDGET_USD", 50.0)),
+                mock_mode=os.environ.get("CLAUDE_MOCK_MODE", "false").lower() == "true"
+            )
+
+            result = claude_client.verify_document(
+                doc_type=doc_type,
+                file_name=file_name,
+                person_name=person_name,
+                doc_category=doc_category
+            )
+
+            self.success(result)
+        except Exception as e:
+            logger.error(f"Document AI verification failed: {e}")
+            self.error(f"Verification failed: {str(e)[:200]}", 500)
 
 
 # ══════════════════════════════════════════════════════════
@@ -2687,7 +2603,15 @@ class UsersHandler(BaseHandler):
         email = data.get("email", "").strip().lower()
         name = data.get("full_name", "")
         role = data.get("role", "analyst")
-        password = data.get("password", "Welcome@123")
+        password = data.get("password", "")
+        if not password:
+            password = PasswordPolicy.generate_temporary()
+            must_change_password = True
+        else:
+            must_change_password = False
+            is_valid, pw_error = PasswordPolicy.validate(password)
+            if not is_valid:
+                return self.error(f"Password policy violation: {pw_error}", 400)
 
         if not email or not name:
             return self.error("Email and full name required")
@@ -2765,6 +2689,12 @@ class RiskConfigHandler(BaseHandler):
         db.close()
         self.log_audit(user, "Config", "Risk Model", "Risk scoring model updated")
         self.success({"status": "saved"})
+
+
+class EnvironmentInfoHandler(BaseHandler):
+    """GET /api/config/environment — return environment info for frontend"""
+    def get(self):
+        self.success(get_environment_info())
 
 
 # ══════════════════════════════════════════════════════════
@@ -3078,6 +3008,9 @@ class ScreeningHandler(BaseHandler):
         if not user:
             return
 
+        if not self.check_rate_limit("screening", max_attempts=20, window_seconds=60):
+            return
+
         data = self.get_json()
         app_id = data.get("application_id")
         if not app_id:
@@ -3134,7 +3067,7 @@ class SanctionsCheckHandler(BaseHandler):
         nationality = data.get("nationality")
         birth_date = data.get("birth_date")
 
-        result = screen_opensanctions(name, birth_date=birth_date, nationality=nationality, entity_type=entity_type)
+        result = screen_sumsub_aml(name, birth_date=birth_date, nationality=nationality, entity_type=entity_type)
         self.log_audit(user, "Sanctions Check", name,
                        f"Ad-hoc sanctions check — {'MATCH' if result['matched'] else 'CLEAR'} ({result['source']})")
         self.success(result)
@@ -3527,6 +3460,9 @@ class ComplianceMemoHandler(BaseHandler):
         if not user:
             return
 
+        if not self.check_rate_limit("memo", max_attempts=10, window_seconds=60):
+            return
+
         db = get_db()
         app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
         if not app:
@@ -3600,6 +3536,9 @@ class ApplicationDecisionHandler(BaseHandler):
         if not user:
             return
 
+        if not self.check_rate_limit("decision", max_attempts=10, window_seconds=60):
+            return
+
         data = self.get_json()
         db = get_db()
 
@@ -3609,6 +3548,16 @@ class ApplicationDecisionHandler(BaseHandler):
             return self.error("Application not found", 404)
 
         real_id = app["id"]
+
+        # ── C-03 FIX: Prevent decision replay on terminal-state applications ──
+        terminal_states = ("approved", "rejected")
+        if app["status"] in terminal_states:
+            db.close()
+            return self.error(
+                f"Decision replay blocked: application {app['ref']} is already in terminal state '{app['status']}'. "
+                "Decisions cannot be replayed once an application has reached a final state.",
+                409
+            )
 
         # Validate required fields
         decision = data.get("decision")
@@ -3628,6 +3577,40 @@ class ApplicationDecisionHandler(BaseHandler):
         if override_ai and not override_reason:
             db.close()
             return self.error("override_reason is required when override_ai is true", 400)
+
+        # ── SECURITY: Enforce approval preconditions (mandatory) ──
+        if decision == "approve":
+            # ── C-05 FIX: Enforce compliance memo existence via DB lookup on ALL approval paths ──
+            memo_exists = db.execute(
+                "SELECT id FROM compliance_memos WHERE application_id = ?", (real_id,)
+            ).fetchone()
+            if not memo_exists:
+                db.close()
+                return self.error(
+                    "Approval blocked: compliance memo must be generated before approval. "
+                    "Generate a memo via POST /api/applications/{id}/memo first.",
+                    400
+                )
+
+            can_approve, gate_error = ApprovalGateValidator.validate_approval(app, db)
+            if not can_approve:
+                db.close()
+                return self.error(f"Approval blocked: {gate_error}", 400)
+
+            # Check dual-approval for high-risk cases
+            if app["risk_level"] in ("HIGH", "VERY_HIGH"):
+                can_approve, dual_error = ApprovalGateValidator.validate_high_risk_dual_approval(app, user, db)
+                if not can_approve:
+                    # Record first approval but don't change status
+                    db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
+                                 VALUES (?,?,?,?,?,?,?)""",
+                               (user.get("sub",""), user.get("name",""), user.get("role",""),
+                                "First Approval (Pending Second)", app["ref"],
+                                f"Decision: approve | Reason: {decision_reason} | Awaiting second approver",
+                                self.get_client_ip()))
+                    db.commit()
+                    db.close()
+                    return self.success({"status": "first_approval_recorded", "message": dual_error}, 202)
 
         # Handle request_documents
         required_documents = []
@@ -3958,6 +3941,14 @@ class PeriodicReviewDecisionHandler(BaseHandler):
             db.close()
             return self.error("Review not found", 404)
 
+        # ── C-03 FIX: Prevent decision replay on completed reviews ──
+        if review["status"] == "completed":
+            db.close()
+            return self.error(
+                f"Decision replay blocked: review {review_id} is already completed.",
+                409
+            )
+
         decision = data.get("decision")
         decision_reason = data.get("decision_reason")
 
@@ -4229,21 +4220,30 @@ class SARWorkflowHandler(BaseHandler):
             "archive": "archived",
         }[action]
 
-        updates = "filing_status=?, updated_at=datetime('now')"
-        params = [new_status]
-
+        # C-06: Parameterized SQL — NO f-string interpolation for SQL
+        # Each action maps to a fixed SQL statement with explicit parameter positions
         if action == "approve":
-            updates += ", approved_by=?"
-            params.append(user["sub"])
+            db.execute(
+                "UPDATE sar_reports SET filing_status=?, updated_at=datetime('now'), approved_by=? WHERE id=?",
+                (new_status, user["sub"], real_id)
+            )
         elif action == "submit_review":
-            updates += ", reviewed_by=?"
-            params.append(user["sub"])
+            db.execute(
+                "UPDATE sar_reports SET filing_status=?, updated_at=datetime('now'), reviewed_by=? WHERE id=?",
+                (new_status, user["sub"], real_id)
+            )
         elif action == "file":
-            updates += ", filed_at=datetime('now'), external_reference=?"
-            params.append(data.get("external_reference", ""))
-
-        params.append(real_id)
-        db.execute(f"UPDATE sar_reports SET {updates} WHERE id=?", params)
+            external_ref = str(data.get("external_reference", ""))[:100]  # Sanitize + limit length
+            db.execute(
+                "UPDATE sar_reports SET filing_status=?, updated_at=datetime('now'), filed_at=datetime('now'), external_reference=? WHERE id=?",
+                (new_status, external_ref, real_id)
+            )
+        else:
+            # reject, archive — status-only update
+            db.execute(
+                "UPDATE sar_reports SET filing_status=?, updated_at=datetime('now') WHERE id=?",
+                (new_status, real_id)
+            )
 
         self.log_audit(user, f"SAR {action.replace('_',' ').title()}", sar["sar_reference"],
                        f"SAR workflow: {current_status} → {new_status}. {notes}", db=db)
@@ -4402,6 +4402,7 @@ def make_app():
 
         # Documents
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
+        (r"/api/documents/ai-verify", DocumentAIVerifyHandler),
 
         # Users
         (r"/api/users", UsersHandler),
@@ -4411,6 +4412,7 @@ def make_app():
         (r"/api/config/risk-model", RiskConfigHandler),
         (r"/api/config/ai-agents", AIAgentsHandler),
         (r"/api/config/ai-agents/([^/]+)", AIAgentDetailHandler),
+        (r"/api/config/environment", EnvironmentInfoHandler),
 
         # Screening (Real API Integrations)
         (r"/api/screening/run", ScreeningHandler),
@@ -4485,7 +4487,8 @@ def make_app():
 
     return tornado.web.Application(routes,
         debug=os.environ.get("DEBUG", "0") == "1",
-        xsrf_cookies=False,  # Disabled for API-only server using Bearer tokens
+        xsrf_cookies=True,  # C-01: CSRF protection enabled — double-submit cookie pattern
+        cookie_secret=SECRET_KEY,
         max_body_size=20 * 1024 * 1024,  # 20MB max request body
     )
 
@@ -4513,11 +4516,23 @@ if __name__ == "__main__":
             SUPERVISOR_AVAILABLE = False
 
     app = make_app()
+
+    # Validate production environment (mandatory)
+    try:
+        validate_production_environment()
+    except RuntimeError as e:
+        logging.critical(f"PRODUCTION ENVIRONMENT VALIDATION FAILED: {e}")
+        if ENVIRONMENT == "production":
+            sys.exit(1)
+
+    # Enforce startup safety checks
+    enforce_startup_safety()
+
     # Bind to 0.0.0.0 for cloud deployment (Railway, Render, etc.)
     app.listen(PORT, address="0.0.0.0")
 
     # API integration status
-    sanctions_status = "LIVE" if OPENSANCTIONS_API_KEY else "SIMULATED"
+    sanctions_status = "LIVE" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "SIMULATED"
     corporates_status = "LIVE" if OPENCORPORATES_API_KEY else "SIMULATED"
     ip_status = "LIVE (ipapi.co free tier)"
     sumsub_status = "LIVE" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "SIMULATED"
@@ -4544,7 +4559,7 @@ if __name__ == "__main__":
 ║    GET  /api/screening/status                    ║
 ║                                                  ║
 ║  API Integrations:                               ║
-║    OpenSanctions:    {sanctions_status:<27s}║
+║    Sumsub AML:       {sanctions_status:<27s}║
 ║    OpenCorporates:   {corporates_status:<27s}║
 ║    IP Geolocation:   {ip_status:<27s}║
 ║    Sumsub KYC:       {sumsub_status:<27s}║

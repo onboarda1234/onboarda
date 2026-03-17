@@ -24,8 +24,14 @@ gunicorn>=21.2.0
 # PostgreSQL Support (production database)
 psycopg2-binary>=2.9.0
 
+# AWS S3 Support (document storage)
+boto3>=1.28.0
+
 # Observability & Monitoring
 prometheus-client>=0.17.0
+
+# Async SQLite Support (for resilience layer)
+aiosqlite>=0.17.0
 
 # ── Testing ───────────────────────────────────────────────
 pytest>=7.0.0

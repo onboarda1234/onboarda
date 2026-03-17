@@ -321,10 +321,12 @@ class IdentityDocumentOutput(AgentOutputBase):
 
 
 class ExternalDatabaseOutput(AgentOutputBase):
-    """Agent 2: External Database Cross-Verification Agent
+    """Agent 2 (sub-component): External Database Cross-Verification
 
-    Secondary verification layer. Checks passport/company document info against
-    external databases (OpenCorporates, Companies House, ADGM, DIFC).
+    Part of Agent 2 (Corporate Structure & UBO Mapping Agent) per the official
+    AI Agent Registry. This sub-component handles registry cross-referencing:
+    checks passport/company document info against external databases
+    (OpenCorporates, Companies House, ADGM, DIFC).
     Confirms persons exist in registry records as declared directors/shareholders.
     """
     agent_type: AgentType = AgentType.EXTERNAL_DATABASE_VERIFICATION
@@ -342,11 +344,11 @@ class ExternalDatabaseOutput(AgentOutputBase):
 
 
 class CorporateStructureUBOOutput(AgentOutputBase):
-    """Agent 4: Corporate Structure & UBO Mapping Agent
+    """Agent 2: Corporate Structure & UBO Mapping Agent
 
-    Maps ownership layers, identifies UBOs, detects nominee structures,
+    Maps ownership chains, identifies UBOs, detects nominee structures,
     flags complex chains, cross-references UBOs with screening results.
-    Runs AFTER FinCrime Screening (Agent 3) in the pipeline.
+    Runs AFTER Identity & Document Integrity (Agent 1) in the pipeline.
     """
     agent_type: AgentType = AgentType.CORPORATE_STRUCTURE_UBO
 
@@ -362,7 +364,11 @@ class CorporateStructureUBOOutput(AgentOutputBase):
 
 
 class BusinessModelOutput(AgentOutputBase):
-    """Business Model Plausibility Agent (monitoring/supplementary)"""
+    """Agent 3: Business Model Plausibility Agent
+
+    Evaluates business story, sector alignment, transaction benchmarking,
+    source of funds consistency. Part of the onboarding pipeline.
+    """
     agent_type: AgentType = AgentType.BUSINESS_MODEL_PLAUSIBILITY
 
     business_description_analysis: Optional[Dict[str, Any]] = None
@@ -376,12 +382,12 @@ class BusinessModelOutput(AgentOutputBase):
 
 
 class FinCrimeScreeningOutput(AgentOutputBase):
-    """Agent 3: FinCrime Screening Interpretation Agent
+    """Agent 4: FinCrime Screening Interpretation Agent
 
     Screens individuals/entities against sanctions lists, PEP databases,
     watchlists, and adverse media. Distinguishes false positives,
     assesses match confidence, classifies political exposure.
-    Runs AFTER Identity Agent (Agent 1) and External DB Agent (Agent 2).
+    Runs AFTER Identity Agent (Agent 1) and Corporate Structure Agent (Agent 2).
     """
     agent_type: AgentType = AgentType.FINCRIME_SCREENING
 
@@ -399,11 +405,11 @@ class FinCrimeScreeningOutput(AgentOutputBase):
 
 
 class ComplianceMemoOutput(AgentOutputBase):
-    """Agent 5: Compliance Memo Agent
+    """Agent 5: Compliance Memo & Risk Recommendation Agent
 
     Final synthesis agent. Compiles results from Agents 1-4,
-    summarizes findings, recommends risk rating, produces
-    onboarding memo and review checklist for compliance officers.
+    computes 5-dimension composite risk scoring, recommends risk rating,
+    produces onboarding memo and review checklist for compliance officers.
     """
     agent_type: AgentType = AgentType.COMPLIANCE_MEMO_RISK
 
@@ -421,7 +427,7 @@ class ComplianceMemoOutput(AgentOutputBase):
 
 
 class PeriodicReviewOutput(AgentOutputBase):
-    """Agent 7: Periodic Review Preparation Agent"""
+    """Agent 6: Periodic Review Preparation Agent"""
     agent_type: AgentType = AgentType.PERIODIC_REVIEW_PREPARATION
 
     review_trigger: Optional[str] = None
@@ -437,7 +443,7 @@ class PeriodicReviewOutput(AgentOutputBase):
 
 
 class AdverseMediaPEPOutput(AgentOutputBase):
-    """Agent 8: Adverse Media & PEP Monitoring Agent"""
+    """Agent 7: Adverse Media & PEP Monitoring Agent"""
     agent_type: AgentType = AgentType.ADVERSE_MEDIA_PEP_MONITORING
 
     new_media_hits: List[Dict[str, Any]] = Field(default_factory=list)
@@ -451,7 +457,7 @@ class AdverseMediaPEPOutput(AgentOutputBase):
 
 
 class BehaviourRiskDriftOutput(AgentOutputBase):
-    """Agent 9: Behaviour & Risk Drift Agent"""
+    """Agent 8: Behaviour & Risk Drift Agent"""
     agent_type: AgentType = AgentType.BEHAVIOUR_RISK_DRIFT
 
     risk_drift_detected: bool = False

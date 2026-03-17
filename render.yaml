@@ -1,30 +1,47 @@
+# ═══════════════════════════════════════════════════════════════
 # Render.com — Blueprint spec for ARIE Finance
+# Two services: LIVE (production) and DEMO (demo mode)
 # Place this at the REPO ROOT (not inside arie-backend/)
+# ═══════════════════════════════════════════════════════════════
+
 services:
+  # ─────────────────────────────────────────────────────────────
+  # 1. LIVE — Production Environment
+  # ─────────────────────────────────────────────────────────────
   - type: web
-    name: arie-finance
+    name: arie-finance-live
     runtime: python
     plan: starter
     rootDir: .
     buildCommand: pip install -r arie-backend/requirements.txt
     startCommand: cd arie-backend && python3 server.py
     healthCheckPath: /api/health
+    autoDeploy: false          # Manual deploy for production safety
     disk:
-      name: arie-data
+      name: arie-data-live
       mountPath: /data
       sizeGB: 1
     envVars:
       - key: PORT
         value: 10000
-      - key: ENVIRONMENT
+      - key: ENV
         value: production
       - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET
         generateValue: true
       - key: DB_PATH
         value: /data/arie.db
       - key: UPLOAD_DIR
         value: /data/uploads
+      # ── Required secrets (set manually in Render dashboard) ──
+      - key: ANTHROPIC_API_KEY
+        sync: false
       - key: ALLOWED_ORIGIN
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: DATABASE_URL
         sync: false
       - key: SUMSUB_APP_TOKEN
         sync: false
@@ -36,3 +53,103 @@ services:
         sync: false
       - key: OPENSANCTIONS_API_KEY
         sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      # ── Production feature flags (all demo features OFF) ──
+      - key: ENABLE_DEMO_MODE
+        value: "false"
+      - key: ENABLE_MOCK_FALLBACKS
+        value: "false"
+      - key: ENABLE_SIMULATED_SCREENING
+        value: "false"
+      - key: ENABLE_DEMO_DATA_SEEDING
+        value: "false"
+      - key: ENABLE_DEMO_BANNER
+        value: "false"
+      - key: ENABLE_ROLE_SWITCHER
+        value: "false"
+      - key: ENABLE_DEBUG_ENDPOINTS
+        value: "false"
+      - key: ENABLE_SHORTCUT_LOGIN
+        value: "false"
+      - key: ENABLE_SUMSUB_LIVE
+        value: "true"
+      - key: ENABLE_REAL_SCREENING
+        value: "true"
+
+  # ─────────────────────────────────────────────────────────────
+  # 2. DEMO — Demo Environment (simulated APIs + sample data)
+  # ─────────────────────────────────────────────────────────────
+  - type: web
+    name: arie-finance-demo
+    runtime: python
+    plan: starter
+    rootDir: .
+    buildCommand: pip install -r arie-backend/requirements.txt
+    startCommand: cd arie-backend && python3 server.py
+    healthCheckPath: /api/health
+    autoDeploy: true           # Auto-deploy on push for demo
+    disk:
+      name: arie-data-demo
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: ENV
+        value: demo
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET
+        value: demo-dev-secret-not-for-production
+      - key: DB_PATH
+        value: /data/arie_demo.db
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      - key: ALLOWED_ORIGIN
+        value: "*"
+      - key: CORS_ORIGIN
+        value: "*"
+      # ── Demo feature flags (all demo features ON) ──
+      - key: ENABLE_DEMO_MODE
+        value: "true"
+      - key: ENABLE_DEMO_BANNER
+        value: "true"
+      - key: ENABLE_DEMO_DATA_SEEDING
+        value: "true"
+      - key: ENABLE_MOCK_FALLBACKS
+        value: "true"
+      - key: ENABLE_ROLE_SWITCHER
+        value: "true"
+      - key: ENABLE_PHASE2_FEATURES
+        value: "true"
+      - key: ENABLE_REGULATORY_INTELLIGENCE_FULL
+        value: "true"
+      - key: ENABLE_MONITORING_DASHBOARD
+        value: "true"
+      - key: ENABLE_SAR_WORKFLOW
+        value: "true"
+      - key: ENABLE_AI_SUPERVISOR
+        value: "true"
+      - key: ENABLE_KPI_DEMO_DATA
+        value: "true"
+      - key: ENABLE_DOCUMENT_AI_ANALYSIS
+        value: "true"
+      - key: ENABLE_SUMSUB_LIVE
+        value: "false"
+      - key: ENABLE_SUMSUB_SANDBOX
+        value: "true"
+      - key: ENABLE_REAL_SCREENING
+        value: "false"
+      - key: ENABLE_SIMULATED_SCREENING
+        value: "true"
+      - key: REQUIRE_REAL_API_KEYS
+        value: "false"
+      - key: ENABLE_DEBUG_ENDPOINTS
+        value: "true"
+      - key: ENABLE_SHORTCUT_LOGIN
+        value: "true"

@@ -112,6 +112,6 @@ def mock_screening(monkeypatch):
         }
 
     import server
-    monkeypatch.setattr(server, "screen_opensanctions", mock_sanctions)
+    monkeypatch.setattr(server, "screen_sumsub_aml", mock_sanctions)
     monkeypatch.setattr(server, "lookup_opencorporates", mock_company)
     monkeypatch.setattr(server, "geolocate_ip", mock_geolocate)

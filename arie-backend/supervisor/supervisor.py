@@ -56,22 +56,23 @@ logger = logging.getLogger("arie.supervisor")
 # Which agents run for each trigger type
 PIPELINE_AGENTS: Dict[TriggerType, List[AgentType]] = {
     TriggerType.ONBOARDING: [
-        AgentType.IDENTITY_DOCUMENT_INTEGRITY,       # Agent 1: Document verification
-        AgentType.EXTERNAL_DATABASE_VERIFICATION,     # Agent 2: Registry cross-check
-        AgentType.FINCRIME_SCREENING,                 # Agent 3: Sanctions/PEP/media
-        AgentType.CORPORATE_STRUCTURE_UBO,            # Agent 4: UBO mapping
-        AgentType.COMPLIANCE_MEMO_RISK,               # Agent 5: Final memo + recommendation
+        AgentType.IDENTITY_DOCUMENT_INTEGRITY,       # Agent 1: Identity & Document Integrity
+        AgentType.EXTERNAL_DATABASE_VERIFICATION,     # Agent 2 (sub): Registry cross-check
+        AgentType.CORPORATE_STRUCTURE_UBO,            # Agent 2: Corporate Structure & UBO Mapping
+        AgentType.BUSINESS_MODEL_PLAUSIBILITY,        # Agent 3: Business Model Plausibility
+        AgentType.FINCRIME_SCREENING,                 # Agent 4: FinCrime Screening Interpretation
+        AgentType.COMPLIANCE_MEMO_RISK,               # Agent 5: Compliance Memo & Risk Recommendation
     ],
     TriggerType.PERIODIC_REVIEW: [
-        AgentType.PERIODIC_REVIEW_PREPARATION,        # Agent 7
-        AgentType.FINCRIME_SCREENING,                 # Agent 5 (re-run)
-        AgentType.ADVERSE_MEDIA_PEP_MONITORING,       # Agent 8
-        AgentType.BEHAVIOUR_RISK_DRIFT,               # Agent 9
-        AgentType.ONGOING_COMPLIANCE_REVIEW,          # Agent 10
+        AgentType.PERIODIC_REVIEW_PREPARATION,        # Agent 6: Periodic Review Preparation
+        AgentType.FINCRIME_SCREENING,                 # Agent 4 (re-run)
+        AgentType.ADVERSE_MEDIA_PEP_MONITORING,       # Agent 7: Adverse Media & PEP Monitoring
+        AgentType.BEHAVIOUR_RISK_DRIFT,               # Agent 8: Behaviour & Risk Drift
+        AgentType.ONGOING_COMPLIANCE_REVIEW,          # Agent 10: Ongoing Compliance Review
     ],
     TriggerType.MONITORING_ALERT: [
-        AgentType.ADVERSE_MEDIA_PEP_MONITORING,       # Agent 8
-        AgentType.BEHAVIOUR_RISK_DRIFT,               # Agent 9
+        AgentType.ADVERSE_MEDIA_PEP_MONITORING,       # Agent 7: Adverse Media & PEP Monitoring
+        AgentType.BEHAVIOUR_RISK_DRIFT,               # Agent 8: Behaviour & Risk Drift
     ],
     TriggerType.MANUAL_TRIGGER: [],  # Dynamically configured
 }

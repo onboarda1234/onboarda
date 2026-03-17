@@ -100,7 +100,7 @@ echo "    Email:    asudally@ariefinance.mu"
 echo "    Password: (generated on first run — check server output above)"
 echo ""
 echo "  API Keys:"
-echo "    OpenSanctions:  ${OPENSANCTIONS_API_KEY:+configured ✅}${OPENSANCTIONS_API_KEY:-not set (simulated mode)}"
+echo "    Sumsub AML:     ${SUMSUB_APP_TOKEN:+configured ✅}${SUMSUB_APP_TOKEN:-not set (simulated mode)}"
 echo "    OpenCorporates: ${OPENCORPORATES_API_KEY:+configured ✅}${OPENCORPORATES_API_KEY:-not set (simulated mode)}"
 echo "    IP Geolocation: live (free tier)
     Sumsub KYC:     ${SUMSUB_APP_TOKEN:+configured ✅}${SUMSUB_APP_TOKEN:-not set (simulated mode)}"

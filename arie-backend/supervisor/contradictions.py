@@ -162,7 +162,7 @@ class ContradictionDetector:
                 agent_b_finding="Company not found in official registry",
                 description=(
                     "Identity & Document Integrity Agent verified the documents as authentic, "
-                    "but the External Database Verification Agent could not find the company "
+                    "but the Corporate Structure & UBO Mapping Agent could not find the company "
                     "in the official registry. This could indicate fraudulent documents or "
                     "an unregistered entity."
                 ),
@@ -311,8 +311,8 @@ class ContradictionDetector:
                 agent_b_type=memo.agent_type,
                 agent_b_finding="Compliance memo states all information validated",
                 description=(
-                    "The External Database Verification Agent found registry discrepancies "
-                    "or director mismatches, but the Compliance Memo Agent states all "
+                    "The Corporate Structure & UBO Mapping Agent found registry discrepancies "
+                    "or director mismatches, but the Compliance Memo & Risk Recommendation Agent states all "
                     "information has been validated. The memo may not have incorporated "
                     "the registry verification results."
                 ),

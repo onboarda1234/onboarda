@@ -1836,7 +1836,7 @@
             <div class="ai-agent-header">
               <div class="ai-agent-icon blue">🏛️</div>
               <div>
-                <div class="ai-agent-name">Corporate Data Agent</div>
+                <div class="ai-agent-name">Corporate Structure & UBO Mapping Agent</div>
                 <div class="ai-agent-sub">Registry vs. client input cross-reference</div>
               </div>
               <span class="ai-agent-badge running" id="cda-badge">Analysing</span>
@@ -1949,7 +1949,10 @@
                 <option value="Large Private Company (revenue > USD 10m)">Large Private Company (revenue > USD 10m)</option>
                 <option value="SME / Private Company">SME / Private Company</option>
                 <option value="Newly Incorporated Company (< 1 year)">Newly Incorporated Company (&lt; 1 year)</option>
-                <option value="Trust / Foundation / Fund Structure">Trust / Foundation / Fund Structure</option>
+                <option value="Trust">Trust</option>
+                <option value="Foundation">Foundation</option>
+                <option value="Regulated Fund (CIS / Licensed)">Regulated Fund (CIS / Licensed)</option>
+                <option value="Unregulated Fund / SPV">Unregulated Fund / SPV</option>
                 <option value="Non-Profit Organisation / NGO">Non-Profit Organisation / NGO</option>
                 <option value="Shell Company / Special Purpose Vehicle">Shell Company / Special Purpose Vehicle</option>
               </select>
@@ -2320,6 +2323,20 @@
           </div>
           <button type="button" class="btn-add" onclick="addDirectorRow()">+ Add Director</button>
 
+          <!-- 5b. Intermediary Shareholders -->
+          <div class="section-title">Intermediary Shareholders (if applicable)</div>
+          <p style="font-size:12px;color:var(--text3);margin:-8px 0 12px 0;">Add any corporate entities that hold shares between the UBOs and the applicant company (e.g., holding companies, SPVs, trusts acting as shareholders)</p>
+          <div id="intermediaries-container">
+            <table class="dyn-table" id="intermediaries-table">
+              <thead>
+                <tr><th>Name</th><th>Country of Incorporation</th><th>% Ownership</th><th></th></tr>
+              </thead>
+              <tbody id="intermediaries-body">
+              </tbody>
+            </table>
+          </div>
+          <button type="button" class="btn-add" onclick="addIntermediaryRow()">+ Add Intermediary Shareholder</button>
+
           <!-- 6. UBOs -->
           <div class="section-title">Ultimate Beneficial Owners (≥ 20% ownership)</div>
           <div id="ubos-container">
@@ -2405,6 +2422,8 @@
                 <option>Real Estate (Development)</option>
                 <option>Corporate Services Provider</option>
                 <option>Trust / Fiduciary Services</option>
+                <option>Management Consulting</option>
+                <option>Financial / Tax Advisory</option>
                 </optgroup>
                 <optgroup label="── Other Industries ──">
                 <option>Travel & Hospitality</option>
@@ -2893,21 +2912,21 @@
             </div>
             <div class="ai-agent-panel">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <span style="font-weight:600;font-size:13px;">🔎 Agent 2: External Database Verification</span>
+                <span style="font-weight:600;font-size:13px;">🔎 Agent 2: Corporate Structure & UBO Mapping</span>
                 <span class="ai-agent-badge clear" id="agent2-badge">Running…</span>
               </div>
               <div class="ai-agent-checks" id="agent2-checks"></div>
             </div>
             <div class="ai-agent-panel">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <span style="font-weight:600;font-size:13px;">💼 Agent 3: FinCrime Screening</span>
+                <span style="font-weight:600;font-size:13px;">💼 Agent 3: Business Model Plausibility</span>
                 <span class="ai-agent-badge clear" id="agent3-badge">Running…</span>
               </div>
               <div class="ai-agent-checks" id="agent3-checks"></div>
             </div>
             <div class="ai-agent-panel">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <span style="font-weight:600;font-size:13px;">🏗️ Agent 4: Corporate Structure & UBO</span>
+                <span style="font-weight:600;font-size:13px;">🏗️ Agent 4: FinCrime Screening Interpretation</span>
                 <span class="ai-agent-badge clear" id="agent4-badge">Running…</span>
               </div>
               <div class="ai-agent-checks" id="agent4-checks"></div>
@@ -2947,6 +2966,26 @@
             <p style="font-size:13px;color:var(--text3);">Composite Risk Score (0–100)</p>
           </div>
           <div class="risk-detail-grid" id="risk-detail-grid"></div>
+
+          <!-- AI Explainability Summary (Client-Facing) -->
+          <div id="portal-explain-section" style="margin-top:24px;text-align:left;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border1);">
+              <span style="font-size:18px;">🧠</span>
+              <span style="font-size:14px;font-weight:700;color:var(--brand);">How was this score calculated?</span>
+              <span style="font-size:10px;color:var(--text3);margin-left:auto;">AI Transparency</span>
+            </div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:14px;">
+              Your application was assessed by our AI-powered compliance pipeline, which evaluates risk across <strong>5 weighted dimensions</strong> using a combination of rule-based scoring and AI verification. Each dimension is scored from 1 (Low Risk) to 4 (Very High Risk), then combined into a composite score out of 100.
+            </div>
+            <div id="portal-explain-dimensions" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;"></div>
+            <div id="portal-explain-summary" style="padding:12px 16px;border-radius:8px;font-size:12px;line-height:1.6;"></div>
+            <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
+              <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">📐 Scoring Model v1.4</span>
+              <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">🏦 FATF Risk-Based Approach</span>
+              <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">🤖 10 AI Agents</span>
+            </div>
+          </div>
+
           <div id="risk-result-action" style="text-align:center;margin-top:28px;"></div>
         </div>
       </div>
@@ -3502,14 +3541,17 @@
         <!-- AI checks handled in back office only -->
       </div>
 
-      <!-- Section C: Business Documents -->
+      <!-- Section C: Business Documents (ALL OPTIONAL) -->
       <div class="card">
         <div class="card-header">
           <div class="card-icon green">📄</div>
           <div>
             <div class="card-title">C — Business Operating Documents</div>
-            <div class="card-sub">Evidence of business activity and operations</div>
+            <div class="card-sub">Optional supporting evidence of business activity and operations</div>
           </div>
+        </div>
+        <div style="padding:6px 16px 12px;background:#f0fdf4;border-radius:8px;margin:0 16px 12px;font-size:12px;color:#166534;border-left:3px solid #22c55e;">
+          All documents in this section are <strong>optional</strong>. You can proceed to submission without uploading any of these. However, providing them may speed up your compliance review.
         </div>
         <div class="doc-grid">
           <div class="doc-item" id="doc-contracts">
@@ -3520,7 +3562,7 @@
                 <div class="doc-item-desc">Client or supplier contracts evidencing business</div>
               </div>
             </div>
-            <span class="doc-optional">If applicable</span>
+            <span class="doc-optional">Optional</span>
             <div class="doc-upload-area" onclick="triggerUpload('doc-contracts')">
               <span>📎</span> <span id="doc-contracts-label">Click to upload</span>
             </div>
@@ -3535,7 +3577,7 @@
                 <div class="doc-item-desc">Documentation supporting origin of entity's accumulated capital</div>
               </div>
             </div>
-            <span class="doc-required">Required — High / Very High Risk</span>
+            <span class="doc-optional">Optional — Recommended for High Risk</span>
             <div class="doc-upload-area" onclick="triggerUpload('doc-source-wealth-proof')">
               <span>📎</span> <span id="doc-source-wealth-proof-label">Click to upload</span>
             </div>
@@ -3550,7 +3592,7 @@
                 <div class="doc-item-desc">Bank statements, investment records, or equivalent</div>
               </div>
             </div>
-            <span class="doc-required">Required — High / Very High Risk</span>
+            <span class="doc-optional">Optional — Recommended for High Risk</span>
             <div class="doc-upload-area" onclick="triggerUpload('doc-source-funds-proof')">
               <span>📎</span> <span id="doc-source-funds-proof-label">Click to upload</span>
             </div>
@@ -3565,7 +3607,7 @@
                 <div class="doc-item-desc">Statements from primary operating bank account</div>
               </div>
             </div>
-            <span class="doc-required">Required — High / Very High Risk</span>
+            <span class="doc-optional">Optional — Recommended for High Risk</span>
             <div class="doc-upload-area" onclick="triggerUpload('doc-bank-statements')">
               <span>📎</span> <span id="doc-bank-statements-label">Click to upload</span>
             </div>
@@ -3580,12 +3622,34 @@
                 <div class="doc-item-desc">Entity's own AML/CFT compliance policy (if regulated)</div>
               </div>
             </div>
-            <span class="doc-optional">If applicable</span>
+            <span class="doc-optional">Optional</span>
             <div class="doc-upload-area" onclick="triggerUpload('doc-aml-policy')">
               <span>📎</span> <span id="doc-aml-policy-label">Click to upload</span>
             </div>
             <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" onchange="handleUpload('doc-aml-policy', this)" />
           </div>
+        </div>
+      </div>
+
+      <!-- Section D: Other Documents (Dynamic) -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;">📂</div>
+          <div>
+            <div class="card-title">D — Other Documents</div>
+            <div class="card-sub">Upload any additional supporting documents not covered above</div>
+          </div>
+        </div>
+        <div style="padding:6px 16px 12px;background:#f5f3ff;border-radius:8px;margin:0 16px 12px;font-size:12px;color:#5b21b6;border-left:3px solid #8b5cf6;">
+          Use this section to upload any additional documents that may support your application — such as additional contracts, compliance certifications, legal opinions, or any other relevant documentation.
+        </div>
+        <div id="section-d-docs" class="doc-grid">
+          <!-- Dynamically added documents will appear here -->
+        </div>
+        <div style="padding:12px 16px;">
+          <button type="button" class="btn-add" onclick="addSectionDDocument()" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;border:none;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">
+            <span style="font-size:16px;">+</span> Add Document
+          </button>
         </div>
       </div>
 
@@ -3646,8 +3710,14 @@
 
       <!-- Section C Review -->
       <div class="review-section">
-        <div class="review-section-header">🏢 Section C — Business Operating Documents</div>
+        <div class="review-section-header">🏢 Section C — Business Operating Documents <span style="font-size:11px;font-weight:normal;color:var(--text3);margin-left:8px;">(Optional)</span></div>
         <div class="review-items" id="review-section-c"></div>
+      </div>
+
+      <!-- Section D Review -->
+      <div class="review-section" id="review-section-d-wrapper" style="display:none;">
+        <div class="review-section-header">📂 Section D — Other Documents</div>
+        <div class="review-items" id="review-section-d"></div>
       </div>
 
       <!-- AI Verification Summary -->
@@ -4403,11 +4473,49 @@
 </div><!-- /app -->
 
 <script>
+// ─── Security Utilities ──────────────────────────────────
+function escapeHtml(str) {
+  if (typeof str !== 'string') return String(str || '');
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+
 // ─── API Configuration ──────────────────────────────────
 const API_BASE = '/api';
-let AUTH_TOKEN = localStorage.getItem('arie_token') || '';
-let AUTH_USER = JSON.parse(localStorage.getItem('arie_user') || 'null');
-let currentApplicationId = localStorage.getItem('arie_current_app_id') || '';
+let AUTH_TOKEN = '';
+let AUTH_USER = null;
+let currentApplicationId = '';
+
+// ─── Environment Detection ────────────────────────────────
+var ARIE_ENV = 'demo';
+var FEATURE_FLAGS = {};
+
+async function loadEnvironment() {
+  try {
+    const data = await apiCall('GET', '/config/environment');
+    ARIE_ENV = data.environment || 'demo';
+    FEATURE_FLAGS = data.features || {};
+    applyEnvironmentUI();
+  } catch (e) {
+    console.warn('Could not load environment config:', e);
+  }
+}
+
+function applyEnvironmentUI() {
+  // Demo banner
+  if (FEATURE_FLAGS.ENABLE_DEMO_BANNER) {
+    var banner = document.createElement('div');
+    banner.id = 'demo-env-banner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(90deg,#f59e0b,#d97706);color:#fff;text-align:center;padding:6px 12px;font-size:12px;font-weight:600;letter-spacing:0.5px;';
+    banner.textContent = '⚠️ DEMO ENVIRONMENT — No Real Client Data — For Demonstration Purposes Only';
+    document.body.prepend(banner);
+    document.body.style.paddingTop = '32px';
+  }
+
+  // Hide features not enabled
+  if (!FEATURE_FLAGS.ENABLE_PHASE2_FEATURES) {
+    document.querySelectorAll('[data-phase2]').forEach(function(el) { el.style.display = 'none'; });
+  }
+}
 
 async function apiCall(method, path, body, isFormData) {
   const opts = { method, headers: {} };
@@ -4432,8 +4540,7 @@ async function apiCall(method, path, body, isFormData) {
 function setAuth(token, user) {
   AUTH_TOKEN = token;
   AUTH_USER = user;
-  localStorage.setItem('arie_token', token);
-  localStorage.setItem('arie_user', JSON.stringify(user));
+  document.cookie = 'arie_token=' + encodeURIComponent(token) + '; path=/; SameSite=Strict; Secure';
   updateUserDisplay();
 }
 
@@ -4455,9 +4562,7 @@ function clearAuth() {
   AUTH_TOKEN = '';
   AUTH_USER = null;
   currentApplicationId = '';
-  localStorage.removeItem('arie_token');
-  localStorage.removeItem('arie_user');
-  localStorage.removeItem('arie_current_app_id');
+  document.cookie = 'arie_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict; Secure';
 }
 
 // ─── State ───────────────────────────────────────────────
@@ -4556,11 +4661,11 @@ async function loadMyApplications() {
       var riskColor = riskColors[app.risk_level] || '#999';
       var date = app.created_at ? new Date(app.created_at).toLocaleDateString() : '';
       html += '<tr>';
-      html += '<td style="font-weight:600;">' + (app.ref || app.id) + '</td>';
-      html += '<td>' + (app.company_name || '-') + '</td>';
-      html += '<td><span style="background:' + color + '20;color:' + color + ';padding:4px 12px;border-radius:20px;font-size:0.85rem;">' + label + '</span></td>';
-      html += '<td><span style="color:' + riskColor + ';font-weight:600;">' + (app.risk_level || '-') + '</span></td>';
-      html += '<td>' + date + '</td>';
+      html += '<td style="font-weight:600;">' + escapeHtml(app.ref || app.id) + '</td>';
+      html += '<td>' + escapeHtml(app.company_name || '-') + '</td>';
+      html += '<td><span style="background:' + color + '20;color:' + color + ';padding:4px 12px;border-radius:20px;font-size:0.85rem;">' + escapeHtml(label) + '</span></td>';
+      html += '<td><span style="color:' + riskColor + ';font-weight:600;">' + escapeHtml(app.risk_level || '-') + '</span></td>';
+      html += '<td>' + escapeHtml(date) + '</td>';
       html += '</tr>';
     });
     tbody.innerHTML = html;
@@ -4724,22 +4829,25 @@ function addUBORowWithValidation() {
 }
 
 // ─── D. Background Screening on Name Entry ────────────────────
-function runRealtimeBackgroundScreening(inputEl) {
+async function runRealtimeBackgroundScreening(inputEl) {
   const name = inputEl.value.trim();
   if (name.length < 3) return;
 
   const indicator = inputEl.closest('tr').querySelector('.screening-indicator');
   if (!indicator) return;
 
-  debounce('bg-screening-' + name, () => {
+  debounce('bg-screening-' + name, async () => {
     indicator.style.display = 'inline-block';
     indicator.style.background = '#f59e0b'; // Amber = checking
     indicator.title = 'Screening...';
 
-    // Simulate background check
-    setTimeout(() => {
-      const hasHit = Math.random() > 0.92; // 8% hit rate
-      if (hasHit) {
+    try {
+      const result = await apiCall('POST', '/api/screening/sanctions', {
+        name: name,
+        entity_type: 'Person'
+      });
+
+      if (result.matched) {
         indicator.style.background = '#ef4444'; // Red = flag
         indicator.innerHTML = '🚩';
         indicator.title = 'Background screening flag - review required';
@@ -4748,7 +4856,11 @@ function runRealtimeBackgroundScreening(inputEl) {
         indicator.innerHTML = '✓';
         indicator.title = 'Background screening passed';
       }
-    }, 1000);
+    } catch (error) {
+      indicator.style.background = '#f59e0b'; // Amber = error
+      indicator.title = 'Screening error - unable to complete check';
+      console.error('Background screening error:', error);
+    }
   }, 600);
 }
 
@@ -4781,7 +4893,7 @@ function runRealtimeUBOMappingAnalysis(inputEl) {
 }
 
 // ─── F. Real-time Document Integrity Check ────────────────────
-function runRealtimeDocumentIntegrityCheck(docId, fileName) {
+async function runRealtimeDocumentIntegrityCheck(docId, fileName) {
   // Find or create validation status element for this document
   let statusEl = document.getElementById(docId + '-integrity-status');
   if (!statusEl) {
@@ -4796,40 +4908,46 @@ function runRealtimeDocumentIntegrityCheck(docId, fileName) {
 
   if (!statusEl) return;
 
-  // Show loading
+  // Show loading state
   statusEl.innerHTML = '<div style="padding:8px;background:var(--blue-dim);border-radius:6px;color:var(--blue);"><strong>📄 Checking document integrity...</strong></div>';
 
-  // Simulate document checks with staggered delays
-  const checks = [
-    { label: 'Document age', delay: 400 },
-    { label: 'Expiry date verification', delay: 800 },
-    { label: 'Name consistency', delay: 1200 }
-  ];
+  try {
+    // Call API to verify document
+    const response = await apiCall('POST', '/api/documents/ai-verify', {
+      doc_type: docId,
+      file_name: fileName,
+      person_name: '',
+      doc_category: 'company'
+    });
 
-  let allPass = true;
-  let checkResults = [];
+    // Process API response
+    let allPass = true;
+    let checkResults = [];
+    const checks = response.checks || [];
 
-  checks.forEach((check) => {
-    setTimeout(() => {
-      const passed = Math.random() > 0.15; // 85% pass rate for documents
+    // Render each check result
+    checks.forEach((check) => {
+      const passed = check.result === 'pass';
       allPass = allPass && passed;
       const icon = passed ? '✅' : '⚠️';
       const color = passed ? 'var(--green)' : 'var(--amber)';
-      let message = check.label;
-      if (!passed && check.label === 'Document age') {
-        message += ' — Proof of address older than 3 months. Please upload another document.';
+      let message = escapeHtml(check.label);
+      if (check.message) {
+        message += ' — ' + escapeHtml(check.message);
       }
       checkResults.push(`<div style="color:${color};font-size:11px;margin:4px 0;">${icon} ${message}</div>`);
+    });
 
-      // Show final result after all checks
-      if (checkResults.length === checks.length) {
-        const finalColor = allPass ? 'var(--green-dim)' : 'var(--amber-dim)';
-        const finalBorder = allPass ? 'var(--green)' : 'var(--amber)';
-        const finalText = allPass ? 'All checks passed' : 'Document review required';
-        statusEl.innerHTML = `<div style="padding:8px;background:${finalColor};border:1px solid ${finalBorder};border-radius:6px;color:${finalBorder};"><strong>${allPass ? '✓' : '⚠️'} ${finalText}</strong><br/>${checkResults.join('')}</div>`;
-      }
-    }, check.delay);
-  });
+    // Show final result
+    const finalColor = allPass ? 'var(--green-dim)' : 'var(--amber-dim)';
+    const finalBorder = allPass ? 'var(--green)' : 'var(--amber)';
+    const finalText = allPass ? 'All checks passed' : 'Document review required';
+    statusEl.innerHTML = `<div style="padding:8px;background:${finalColor};border:1px solid ${finalBorder};border-radius:6px;color:${finalBorder};"><strong>${allPass ? '✓' : '⚠️'} ${finalText}</strong><br/>${checkResults.join('')}</div>`;
+
+  } catch (err) {
+    console.error('Document verification error:', err);
+    statusEl.innerHTML = '<div style="padding:8px;background:var(--amber-dim);border-radius:6px;color:var(--amber);"><strong>⚠️ Verification unavailable</strong><br/><span style="font-size:10px;">Could not complete verification. Please try again.</span></div>';
+  }
 }
 
 // ─── Director / UBO rows ──────────────────────────────────
@@ -4862,9 +4980,83 @@ function addUBORow() {
   populateNationalitySelects();
   syncDirectorsUBOsToKYC();
 }
+
+function addIntermediaryRow() {
+  const tbody = document.getElementById('intermediaries-body');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" placeholder="Entity name" /></td>
+    <td><select class="nat-select"><option value="">Country</option></select></td>
+    <td><input type="number" placeholder="% Ownership" min="0" max="100" /></td>
+    <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
+  `;
+  tbody.appendChild(tr);
+  populateNationalitySelects();
+}
+
 function removeRow(btn) {
   btn.closest('tr').remove();
   syncDirectorsUBOsToKYC();
+}
+
+// ─── Build upload panel content based on person type ───────────
+function buildUploadPanelHTML(p) {
+  if (p.type === 'intermediary') {
+    return '<div style="display:flex;flex-direction:column;gap:10px;">' +
+      '<div>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128221; Certificate of Incorporation</label>' +
+        '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-cert-inc-' + p.id + '\')" id="kyc-cert-inc-area-' + p.id + '"><span>&#128206;</span><span id="kyc-cert-inc-lbl-' + p.id + '">Click to upload</span></div>' +
+        '<input type="file" id="kyc-cert-inc-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'cert_inc\',this)" />' +
+      '</div>' +
+      '<div>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128218; Register of Directors</label>' +
+        '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-reg-dir-' + p.id + '\')" id="kyc-reg-dir-area-' + p.id + '"><span>&#128206;</span><span id="kyc-reg-dir-lbl-' + p.id + '">Click to upload</span></div>' +
+        '<input type="file" id="kyc-reg-dir-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'reg_dir\',this)" />' +
+      '</div>' +
+      '<div>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128218; Register of Shareholders</label>' +
+        '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-reg-sh-' + p.id + '\')" id="kyc-reg-sh-area-' + p.id + '"><span>&#128206;</span><span id="kyc-reg-sh-lbl-' + p.id + '">Click to upload</span></div>' +
+        '<input type="file" id="kyc-reg-sh-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'reg_sh\',this)" />' +
+      '</div>' +
+      '<div>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128221; Certificate of Good Standing</label>' +
+        '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-cert-gs-' + p.id + '\')" id="kyc-cert-gs-area-' + p.id + '"><span>&#128206;</span><span id="kyc-cert-gs-lbl-' + p.id + '">Click to upload</span></div>' +
+        '<input type="file" id="kyc-cert-gs-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'cert_gs\',this)" />' +
+      '</div>' +
+      '<div>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128212; Latest Financial Statements</label>' +
+        '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-fin-stmt-' + p.id + '\')" id="kyc-fin-stmt-area-' + p.id + '"><span>&#128206;</span><span id="kyc-fin-stmt-lbl-' + p.id + '">Click to upload</span></div>' +
+        '<input type="file" id="kyc-fin-stmt-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'fin_stmt\',this)" />' +
+      '</div>' +
+    '</div>';
+  } else {
+    return '<div style="display:flex;flex-direction:column;gap:10px;">' +
+      '<div>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128706; Passport / Government ID</label>' +
+        '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-passport-' + p.id + '\')" id="kyc-passport-area-' + p.id + '"><span>&#128206;</span><span id="kyc-passport-lbl-' + p.id + '">Click to upload</span></div>' +
+        '<input type="file" id="kyc-passport-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'passport\',this)" />' +
+      '</div>' +
+      '<div>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#127968; Proof of Address</label>' +
+        '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-poa-' + p.id + '\')" id="kyc-poa-area-' + p.id + '"><span>&#128206;</span><span id="kyc-poa-lbl-' + p.id + '">Click to upload</span></div>' +
+        '<input type="file" id="kyc-poa-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'poa\',this)" />' +
+      '</div>' +
+      '<div>' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128196; CV / LinkedIn Profile</label>' +
+        '<div style="display:flex;gap:8px;align-items:center;">' +
+          '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-cv-' + p.id + '\')" id="kyc-cv-area-' + p.id + '" style="flex:1;"><span>&#128206;</span><span id="kyc-cv-lbl-' + p.id + '">Upload CV</span></div>' +
+          '<span style="font-size:11px;color:var(--text3);">or</span>' +
+          '<input type="url" id="kyc-linkedin-' + p.id + '" placeholder="LinkedIn profile URL" style="flex:1;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />' +
+        '</div>' +
+        '<input type="file" id="kyc-cv-' + p.id + '" style="display:none" accept=".pdf,.doc,.docx" onchange="handleKYCUpload(\'' + p.id + '\',\'cv\',this)" />' +
+      '</div>' +
+      '<div class="pep-bank-ref-doc" id="pep-bankref-row-' + p.id + '" style="display:' + (p.isPEP ? 'block' : 'none') + ';">' +
+        '<label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#127974; Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>' +
+        '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-bankref-' + p.id + '\')" id="kyc-bankref-area-' + p.id + '"><span>&#128206;</span><span id="kyc-bankref-lbl-' + p.id + '">Click to upload bank reference letter</span></div>' +
+        '<input type="file" id="kyc-bankref-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'bankref\',this)" />' +
+      '</div>' +
+    '</div>';
+  }
 }
 
 // ─── Sync Directors/UBOs table to KYC Persons list ───────────
@@ -4896,6 +5088,20 @@ function syncDirectorsUBOsToKYC() {
     persons.push({ id: 'ubo' + (i + 1), type: 'ubo', first: first, last: last, isPEP: isPEP, pct: pct });
   });
 
+  // Collect intermediary shareholders
+  var intRows = document.querySelectorAll('#intermediaries-body tr');
+  intRows.forEach(function(row, i) {
+    var nameInput = row.querySelector('input[type="text"]');
+    var name = nameInput ? nameInput.value.trim() : '';
+    var countrySelect = row.querySelector('.nat-select');
+    var country = countrySelect ? countrySelect.value : '';
+    var pctInput = row.querySelector('input[type="number"]');
+    var pct = pctInput ? pctInput.value : '';
+    if (name) {
+      persons.push({ id: 'int' + (i + 1), type: 'intermediary', first: name, last: '(' + (country || 'Country N/A') + ')', isPEP: false, pct: pct });
+    }
+  });
+
   // Remove all existing synced cards (keep manually added 'extra' cards)
   var existingCards = container.querySelectorAll('.kyc-person-card');
   existingCards.forEach(function(card) {
@@ -4907,14 +5113,15 @@ function syncDirectorsUBOsToKYC() {
   // Get the "Add Person" button (insert cards before it)
   var addBtn = container.parentElement.querySelector('.btn-add[onclick*="addKYCPerson"]');
 
-  // Generate KYC person cards for each director/UBO
+  // Generate KYC person cards for each director/UBO/Intermediary
   persons.forEach(function(p) {
     var cardId = 'kyc-person-' + p.id;
-    var name = (p.first && p.last) ? (p.first + ' ' + p.last) : (p.type === 'director' ? 'Director' : 'UBO') + ' ' + p.id.replace(/[a-z]+/, '');
-    var typeLabel = p.type === 'ubo' ? 'UBO' : 'Director';
+    var name = (p.first && p.last) ? (p.first + ' ' + p.last) : (p.type === 'director' ? 'Director' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'UBO') + ' ' + p.id.replace(/[a-z]+/, '');
+    var typeLabel = p.type === 'ubo' ? 'UBO' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'Director';
     var dirActive = p.type === 'director' ? 'active' : '';
     var uboActive = p.type === 'ubo' ? 'active' : '';
-    var holdingVisible = p.type === 'ubo' ? ' visible' : '';
+    var intermediaryActive = p.type === 'intermediary' ? 'active' : '';
+    var holdingVisible = (p.type === 'ubo' || p.type === 'intermediary') ? ' visible' : '';
     var holdingVal = p.pct || '';
 
     var card = document.createElement('div');
@@ -4923,13 +5130,14 @@ function syncDirectorsUBOsToKYC() {
     card.innerHTML =
       '<div class="kyc-person-header">' +
         '<div>' +
-          '<div class="kyc-person-name" id="kyc-name-' + p.id + '">' + name + '</div>' +
+          '<div class="kyc-person-name" id="kyc-name-' + p.id + '">' + escapeHtml(name) + '</div>' +
           '<span class="kyc-status-badge pending" id="kyc-badge-' + p.id + '">&#9203; Pending</span>' +
         '</div>' +
         '<div style="display:flex;align-items:center;gap:8px;">' +
           '<div class="kyc-type-toggle">' +
             '<button type="button" class="kyc-type-btn ' + dirActive + '" onclick="setKYCType(\'' + p.id + '\',\'director\',this)">Director</button>' +
             '<button type="button" class="kyc-type-btn ' + uboActive + '" onclick="setKYCType(\'' + p.id + '\',\'ubo\',this)">UBO</button>' +
+            '<button type="button" class="kyc-type-btn ' + intermediaryActive + '" onclick="setKYCType(\'' + p.id + '\',\'intermediary\',this)">Intermediary</button>' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -4938,37 +5146,18 @@ function syncDirectorsUBOsToKYC() {
         '<input type="number" id="kyc-holding-' + p.id + '" min="0" max="100" placeholder="e.g. 25" value="' + holdingVal + '" />' +
         '<span>% ownership of the company</span>' +
       '</div>' +
-      '<div class="kyc-method-tabs">' +
-        '<button type="button" class="kyc-tab active" onclick="switchKYCTab(\'' + p.id + '\',\'upload\')">&#128206; Upload Documents</button>' +
-        '<button type="button" class="kyc-tab" onclick="switchKYCTab(\'' + p.id + '\',\'link\')">&#128231; Send Self-Submission Link</button>' +
-      '</div>' +
+      (p.type === 'intermediary'
+        ? '<div class="kyc-method-tabs">' +
+            '<button type="button" class="kyc-tab active" onclick="switchKYCTab(\'' + p.id + '\',\'upload\')">&#128206; Upload Corporate Documents</button>' +
+          '</div>' +
+          '<div style="padding:6px 12px;background:#fffbeb;border-radius:6px;margin-bottom:8px;font-size:11px;color:#92400e;">&#128712; Intermediary shareholders are corporate entities — documents must be uploaded directly by the applicant. Self-submission links are not available for companies.</div>'
+        : '<div class="kyc-method-tabs">' +
+            '<button type="button" class="kyc-tab active" onclick="switchKYCTab(\'' + p.id + '\',\'upload\')">&#128206; Upload Documents</button>' +
+            '<button type="button" class="kyc-tab" onclick="switchKYCTab(\'' + p.id + '\',\'link\')">&#128231; Send Self-Submission Link</button>' +
+          '</div>'
+      ) +
       '<div class="kyc-upload-panel active" id="kyc-upload-' + p.id + '">' +
-        '<div style="display:flex;flex-direction:column;gap:10px;">' +
-          '<div>' +
-            '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128706; Passport / Government ID</label>' +
-            '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-passport-' + p.id + '\')" id="kyc-passport-area-' + p.id + '"><span>&#128206;</span><span id="kyc-passport-lbl-' + p.id + '">Click to upload</span></div>' +
-            '<input type="file" id="kyc-passport-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'passport\',this)" />' +
-          '</div>' +
-          '<div>' +
-            '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#127968; Proof of Address</label>' +
-            '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-poa-' + p.id + '\')" id="kyc-poa-area-' + p.id + '"><span>&#128206;</span><span id="kyc-poa-lbl-' + p.id + '">Click to upload</span></div>' +
-            '<input type="file" id="kyc-poa-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'poa\',this)" />' +
-          '</div>' +
-          '<div>' +
-            '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128196; CV / LinkedIn Profile</label>' +
-            '<div style="display:flex;gap:8px;align-items:center;">' +
-              '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-cv-' + p.id + '\')" id="kyc-cv-area-' + p.id + '" style="flex:1;"><span>&#128206;</span><span id="kyc-cv-lbl-' + p.id + '">Upload CV</span></div>' +
-              '<span style="font-size:11px;color:var(--text3);">or</span>' +
-              '<input type="url" id="kyc-linkedin-' + p.id + '" placeholder="LinkedIn profile URL" style="flex:1;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />' +
-            '</div>' +
-            '<input type="file" id="kyc-cv-' + p.id + '" style="display:none" accept=".pdf,.doc,.docx" onchange="handleKYCUpload(\'' + p.id + '\',\'cv\',this)" />' +
-          '</div>' +
-          '<div class="pep-bank-ref-doc" id="pep-bankref-row-' + p.id + '" style="display:' + (p.isPEP ? 'block' : 'none') + ';">' +
-            '<label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#127974; Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>' +
-            '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-bankref-' + p.id + '\')" id="kyc-bankref-area-' + p.id + '"><span>&#128206;</span><span id="kyc-bankref-lbl-' + p.id + '">Click to upload bank reference letter</span></div>' +
-            '<input type="file" id="kyc-bankref-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'bankref\',this)" />' +
-          '</div>' +
-        '</div>' +
+        buildUploadPanelHTML(p) +
       '</div>' +
       '<div class="pep-declaration-panel' + (p.isPEP ? ' visible' : '') + '" id="pep-panel-' + p.id + '">' +
         '<h4>&#9888;&#65039; PEP Declaration Form</h4>' +
@@ -4981,15 +5170,18 @@ function syncDirectorsUBOsToKYC() {
           '<div><label>&#128206; Upload Supporting Documents</label><div class="doc-upload-area" onclick="document.getElementById(\'pep-docs-' + p.id + '\').click()" style="margin-top:4px;"><span>&#128206;</span> <span id="pep-docs-lbl-' + p.id + '">Click to upload supporting documents</span></div><input type="file" id="pep-docs-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" multiple onchange="handlePEPUpload(\'' + p.id + '\',this)" /></div>' +
         '</div>' +
       '</div>' +
-      '<div class="kyc-link-panel" id="kyc-link-' + p.id + '">' +
-        '<div class="kyc-link-form">' +
-          '<div class="kyc-link-input-row">' +
-            '<div style="flex:1"><label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">Email Address</label><input type="email" id="kyc-email-' + p.id + '" placeholder="person@company.com" /></div>' +
-            '<button type="button" class="kyc-send-btn" onclick="sendKYCLink(\'' + p.id + '\')">&#128231; Send Link</button>' +
-          '</div>' +
-          '<div class="kyc-link-sent" id="kyc-sent-' + p.id + '">&#10004; Secure link sent! They will receive an email to upload their documents directly.</div>' +
-        '</div>' +
-      '</div>';
+      (p.type !== 'intermediary'
+        ? '<div class="kyc-link-panel" id="kyc-link-' + p.id + '">' +
+            '<div class="kyc-link-form">' +
+              '<div class="kyc-link-input-row">' +
+                '<div style="flex:1"><label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">Email Address</label><input type="email" id="kyc-email-' + p.id + '" placeholder="person@company.com" /></div>' +
+                '<button type="button" class="kyc-send-btn" onclick="sendKYCLink(\'' + p.id + '\')">&#128231; Send Link</button>' +
+              '</div>' +
+              '<div class="kyc-link-sent" id="kyc-sent-' + p.id + '">&#10004; Secure link sent! They will receive an email to upload their documents directly.</div>' +
+            '</div>' +
+          '</div>'
+        : '' /* No self-submission link panel for intermediary companies */
+      );
 
     container.appendChild(card);
   });
@@ -5054,7 +5246,7 @@ async function submitPrescreening(e) {
     var resp = await apiCall('POST', '/applications', payload);
     appRef = resp.ref;
     currentApplicationId = resp.id;
-    localStorage.setItem('arie_current_app_id', currentApplicationId);
+    // Security: application ID kept in memory only, not in localStorage
 
     btn.disabled = false;
     btn.innerHTML = '🔒 Submit Application';
@@ -5238,6 +5430,46 @@ function showRiskResult(result) {
       '<div style="color:var(--text3);font-size:14px;">Composite Score: ' + (result.score || 0).toFixed(1) + ' / 100</div>' +
       '<p style="margin-top:16px;color:var(--text2);font-size:13px;">Transitioning to pricing schedule...</p>' +
       '</div>';
+  }
+
+  // Populate AI Explainability section
+  var dimNames = ['Customer / Entity','Geographic','Product / Service','Industry / Sector','Delivery Channel'];
+  var dimWeights = ['30%','25%','20%','15%','10%'];
+  var dimDescriptions = [
+    'Entity type, ownership complexity, PEP status, adverse media, source of wealth/funds',
+    'Country of incorporation, countries of operation, payment corridor risk',
+    'Service type, expected transaction volume, transaction complexity',
+    'Business sector classification against 26-sector risk model',
+    'Application channel, introduction method, KYC interaction type'
+  ];
+  var dimKeys = ['d1','d2','d3','d4','d5'];
+  var portalDimHtml = '';
+  dimKeys.forEach(function(k, i) {
+    var val = result.dims[k] || 0;
+    var pct = (val / 4) * 100;
+    var clr = val <= 1.5 ? '#16a34a' : val <= 2.5 ? '#2563eb' : val <= 3.2 ? '#d97706' : '#dc2626';
+    portalDimHtml += '<div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
+      '<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;">' + dimNames[i] + ' <span style="color:var(--text3);font-weight:400;">(' + dimWeights[i] + ')</span></div>' +
+      '<div style="font-size:18px;font-weight:800;color:' + clr + ';">' + val.toFixed(2) + '<span style="font-size:10px;color:var(--text3);font-weight:400;"> / 4.00</span></div>' +
+      '<div style="height:4px;background:var(--surface3);border-radius:2px;margin:4px 0;overflow:hidden;"><div style="height:100%;width:' + pct + '%;background:' + clr + ';border-radius:2px;"></div></div>' +
+      '<div style="font-size:10px;color:var(--text3);line-height:1.4;">' + dimDescriptions[i] + '</div>' +
+    '</div>';
+  });
+  var portalDimEl = document.getElementById('portal-explain-dimensions');
+  if (portalDimEl) portalDimEl.innerHTML = portalDimHtml;
+
+  var riskExplain = {
+    LOW: { bg:'rgba(22,163,74,0.06)', border:'rgba(22,163,74,0.2)', text:'Your application has been classified as <strong>Low Risk</strong>. This means all risk dimensions scored within acceptable thresholds. You are eligible for Simplified Due Diligence (SDD) and Fast Lane processing.' },
+    MEDIUM: { bg:'rgba(37,99,235,0.06)', border:'rgba(37,99,235,0.2)', text:'Your application has been classified as <strong>Medium Risk</strong>. One or more risk dimensions showed moderate elevation. Standard Customer Due Diligence (CDD) applies with normal document requirements.' },
+    HIGH: { bg:'rgba(217,119,6,0.06)', border:'rgba(217,119,6,0.2)', text:'Your application has been classified as <strong>High Risk</strong>. Enhanced Due Diligence (EDD) is required. A senior compliance officer will review your application. Additional documentation may be requested.' },
+    VERY_HIGH: { bg:'rgba(220,38,38,0.06)', border:'rgba(220,38,38,0.2)', text:'Your application has been classified as <strong>Very High Risk</strong>. Mandatory compliance officer approval is required. Your application will undergo thorough review and you may be contacted for additional information.' }
+  };
+  var re = riskExplain[result.level] || riskExplain.MEDIUM;
+  var portalSumEl = document.getElementById('portal-explain-summary');
+  if (portalSumEl) {
+    portalSumEl.style.background = re.bg;
+    portalSumEl.style.border = '1px solid ' + re.border;
+    portalSumEl.innerHTML = re.text;
   }
 
   // After showing risk result, transition to pending view with simulate buttons
@@ -5578,7 +5810,7 @@ function runAIDocVerification(docId, fileName) {
   var resultsDiv = document.createElement('div');
   resultsDiv.className = 'doc-verify-results';
   resultsDiv.style.cssText = 'margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--surface3);font-size:12px;';
-  resultsDiv.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><span class="spinner-sm"></span><span style="font-weight:600;color:var(--text2);">AI Verifying: ' + rules.name + '...</span></div>';
+  resultsDiv.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><span class="spinner-sm"></span><span style="font-weight:600;color:var(--text2);">AI Verifying: ' + escapeHtml(rules.name) + '...</span></div>';
   item.appendChild(resultsDiv);
 
   // Simulate checks one by one
@@ -5611,9 +5843,9 @@ function runAIDocVerification(docId, fileName) {
       var resultHTML = '<div class="doc-verify-row" style="display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-top:1px solid var(--border1);">' +
         '<span>' + icon + '</span>' +
         '<div style="flex:1;">' +
-          '<div style="font-weight:600;color:var(--text1);">' + check.label + '</div>' +
-          '<div style="color:var(--text3);font-size:11px;">' + check.rule + '</div>' +
-          (message ? '<div style="color:' + color + ';font-size:11px;margin-top:2px;font-weight:500;">' + message + '</div>' : '') +
+          '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(check.label) + '</div>' +
+          '<div style="color:var(--text3);font-size:11px;">' + escapeHtml(check.rule) + '</div>' +
+          (message ? '<div style="color:' + color + ';font-size:11px;margin-top:2px;font-weight:500;">' + escapeHtml(message) + '</div>' : '') +
         '</div>' +
       '</div>';
 
@@ -5639,7 +5871,7 @@ function runAIDocVerification(docId, fileName) {
   });
 }
 
-function runAIPersonDocVerification(personId, docType, fileName) {
+async function runAIPersonDocVerification(personId, docType, fileName) {
   var rules = KYC_PERSON_DOC_RULES[docType];
   if (!rules) return;
 
@@ -5654,29 +5886,40 @@ function runAIPersonDocVerification(personId, docType, fileName) {
   var resultsDiv = document.createElement('div');
   resultsDiv.className = 'doc-verify-results';
   resultsDiv.style.cssText = 'margin-top:6px;padding:8px 10px;border-radius:8px;background:var(--surface3);font-size:12px;';
-  resultsDiv.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><span class="spinner-sm"></span><span style="font-weight:600;color:var(--text2);">Verifying ' + rules.name + '...</span></div>';
+  resultsDiv.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><span class="spinner-sm"></span><span style="font-weight:600;color:var(--text2);">Verifying ' + escapeHtml(rules.name) + '...</span></div>';
   parent.appendChild(resultsDiv);
 
-  var checks = rules.checks;
-  var delay = 700;
-  checks.forEach(function(check, idx) {
-    setTimeout(function() {
-      var passed = true;
-      var message = '';
-      var severity = 'pass';
+  try {
+    // Extract person name from KYC card header if available
+    var personName = '';
+    var cardHeader = parent.closest('[data-person-name]');
+    if (cardHeader) {
+      personName = cardHeader.getAttribute('data-person-name') || '';
+    }
 
-      if (check.type === 'expiry' && Math.random() < 0.15) {
-        passed = false; severity = 'fail';
-        message = 'Document appears expired or nearing expiry. Please upload a valid document with at least 6 months remaining.';
-      } else if (check.type === 'age' && Math.random() < 0.12) {
-        passed = false; severity = 'warn';
-        message = 'Document may be older than ' + (check.maxMonths || 3) + ' months. Please provide a more recent version.';
-      } else if (check.type === 'quality' && Math.random() < 0.10) {
-        passed = false; severity = 'warn';
-        message = 'Image quality is low or text is not clearly legible. Please re-upload a clearer copy.';
-      } else if (check.type === 'name' && Math.random() < 0.08) {
-        passed = false; severity = 'warn';
-        message = 'Name could not be confidently matched. Please verify spelling matches exactly.';
+    // Call API to verify document
+    var response = await apiCall('POST', '/api/documents/ai-verify', {
+      doc_type: docType,
+      file_name: fileName,
+      person_name: personName,
+      doc_category: 'kyc'
+    });
+
+    // Process API response
+    var apiChecks = response.checks || [];
+    var fails = 0;
+    var warns = 0;
+
+    // Render check results using API response but display labels from KYC_PERSON_DOC_RULES
+    rules.checks.forEach(function(ruleCheck, idx) {
+      var apiCheck = apiChecks.find(function(c) { return c.type === ruleCheck.type; }) || {};
+      var passed = apiCheck.result === 'pass' || apiCheck.result === undefined;
+      var severity = apiCheck.result || (passed ? 'pass' : 'warn');
+      var message = apiCheck.message || '';
+
+      if (!passed) {
+        if (severity === 'fail') fails++;
+        else warns++;
       }
 
       var icon = passed ? '✅' : (severity === 'fail' ? '❌' : '⚠️');
@@ -5684,33 +5927,35 @@ function runAIPersonDocVerification(personId, docType, fileName) {
       var resultHTML = '<div style="display:flex;align-items:flex-start;gap:6px;padding:3px 0;border-top:1px solid var(--border1);">' +
         '<span style="font-size:11px;">' + icon + '</span>' +
         '<div style="flex:1;">' +
-          '<span style="font-weight:600;color:var(--text1);font-size:11px;">' + check.label + '</span>' +
-          (message ? '<div style="color:' + color + ';font-size:11px;margin-top:1px;">' + message + '</div>' : '') +
+          '<span style="font-weight:600;color:var(--text1);font-size:11px;">' + escapeHtml(ruleCheck.label) + '</span>' +
+          (message ? '<div style="color:' + color + ';font-size:11px;margin-top:1px;">' + escapeHtml(message) + '</div>' : '') +
         '</div>' +
       '</div>';
 
-      if (idx === checks.length - 1) {
-        var spinner = resultsDiv.querySelector('.spinner-sm');
-        if (spinner) spinner.parentElement.remove();
-        var warns = 0; var fails = 0;
-        resultsDiv.querySelectorAll('div[style]').forEach(function(d) {
-          if (d.style.color === 'var(--red)') fails++;
-          if (d.style.color && d.style.color.indexOf('d97706') !== -1) warns++;
-        });
-        var summaryColor = fails > 0 ? 'var(--red)' : (warns > 0 ? '#d97706' : 'var(--green)');
-        var summaryText = fails > 0 ? '❌ Issues found' : (warns > 0 ? '⚠️ Please review' : '✅ Verified');
-        resultsDiv.insertAdjacentHTML('afterbegin', '<div style="font-weight:500;color:' + summaryColor + ';margin-bottom:4px;font-size:11px;">' + summaryText + '</div>');
-
-        if (fails > 0) {
-          showToast('error', 'Document Issue', 'Your ' + rules.name + ' has issues that need attention. Please review and re-upload if needed.');
-        } else if (warns > 0) {
-          showToast('warn', 'Document Warning', 'Your ' + rules.name + ' has warnings. Please review the comments.');
-        }
-      }
-
       resultsDiv.insertAdjacentHTML('beforeend', resultHTML);
-    }, delay * (idx + 1));
-  });
+    });
+
+    // Remove spinner
+    var spinner = resultsDiv.querySelector('.spinner-sm');
+    if (spinner) spinner.parentElement.remove();
+
+    // Add summary
+    var summaryColor = fails > 0 ? 'var(--red)' : (warns > 0 ? '#d97706' : 'var(--green)');
+    var summaryText = fails > 0 ? '❌ Issues found' : (warns > 0 ? '⚠️ Please review' : '✅ Verified');
+    resultsDiv.insertAdjacentHTML('afterbegin', '<div style="font-weight:500;color:' + summaryColor + ';margin-bottom:4px;font-size:11px;">' + summaryText + '</div>');
+
+    if (fails > 0) {
+      showToast('error', 'Document Issue', 'Your ' + rules.name + ' has issues that need attention. Please review and re-upload if needed.');
+    } else if (warns > 0) {
+      showToast('warn', 'Document Warning', 'Your ' + rules.name + ' has warnings. Please review the comments.');
+    }
+
+  } catch (err) {
+    console.error('Document verification error:', err);
+    var spinner = resultsDiv.querySelector('.spinner-sm');
+    if (spinner) spinner.parentElement.remove();
+    resultsDiv.insertAdjacentHTML('beforeend', '<div style="padding:8px;color:var(--amber);font-size:11px;"><strong>⚠️ Verification unavailable</strong><br/>Could not complete verification. Please try again.</div>');
+  }
 }
 
 
@@ -5798,8 +6043,8 @@ function collectFormData() {
 
 async function saveDraft() {
   var data = collectFormData();
-  // Always save to localStorage as backup
-  try { localStorage.setItem(getSaveKey(), JSON.stringify(data)); } catch(e) {}
+  // Security: PII no longer stored in localStorage — API-only save
+  // Draft data kept in memory only for session duration
 
   // Also save to API if authenticated
   if (AUTH_TOKEN) {
@@ -5830,11 +6075,12 @@ function getCurrentStep() {
 }
 
 function loadDraft(ref) {
+  // Security: PII no longer loaded from localStorage
+  // Draft data is loaded from API only (see apiCall for /save-resume)
   try {
     var key = DRAFT_STORAGE_KEY + ref;
-    var saved = localStorage.getItem(key);
-    if (!saved) return false;
-    var data = JSON.parse(saved);
+    // Skip localStorage, load from API instead
+    return false;
 
     // Restore state
     appRef = data.appRef || ref;
@@ -5921,12 +6167,15 @@ var SECTION_A_DOCS = [
 ];
 
 var SECTION_C_DOCS = [
-  { id: 'doc-contracts', name: 'Sample Contracts / Agreements', required: true, conditional: false },
-  { id: 'doc-source-wealth-proof', name: 'Source of Wealth Evidence', required: true, conditional: 'high-risk' },
-  { id: 'doc-source-funds-proof', name: 'Source of Funds Evidence', required: true, conditional: 'high-risk' },
-  { id: 'doc-bank-statements', name: 'Bank Statements (Last 6 Months)', required: true, conditional: 'high-risk' },
+  { id: 'doc-contracts', name: 'Sample Contracts / Agreements', required: false, conditional: false },
+  { id: 'doc-source-wealth-proof', name: 'Source of Wealth Evidence', required: false, conditional: 'high-risk' },
+  { id: 'doc-source-funds-proof', name: 'Source of Funds Evidence', required: false, conditional: 'high-risk' },
+  { id: 'doc-bank-statements', name: 'Bank Statements (Last 6 Months)', required: false, conditional: 'high-risk' },
   { id: 'doc-aml-policy', name: 'AML/CFT Policy', required: false, conditional: false }
 ];
+
+var SECTION_D_DOCS = [];
+var sectionDCounter = 0;
 
 function buildReviewScreen() {
   var isHighRisk = (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH');
@@ -5957,7 +6206,7 @@ function buildReviewScreen() {
     var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : (doc.required ? 'missing' : 'optional');
     var statusText = isUploaded ? (hasWarning ? '⚠️ Uploaded — Warnings' : '✅ Uploaded') : (doc.required ? '❌ Missing' : '➖ Optional');
 
-    sectionA.innerHTML += '<div class="review-item"><span class="review-item-name">' + doc.name + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(High Risk)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
+    sectionA.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(High Risk)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
 
   // Section B — persons
@@ -5983,7 +6232,7 @@ function buildReviewScreen() {
     if (hasPassport) uploadedCount++;
     if (hasPoa) uploadedCount++;
 
-    sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + personName + '</strong></span><span class="review-status ' + (hasPassport && hasPoa ? 'uploaded' : 'missing') + '">' + (hasPassport && hasPoa ? '✅ ID + PoA Uploaded' : '❌ Documents Missing') + '</span></div>';
+    sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong></span><span class="review-status ' + (hasPassport && hasPoa ? 'uploaded' : 'missing') + '">' + (hasPassport && hasPoa ? '✅ ID + PoA Uploaded' : '❌ Documents Missing') + '</span></div>';
 
     // Check PEP declaration
     var pepPanel = document.getElementById('pep-panel-' + personId);
@@ -5995,7 +6244,7 @@ function buildReviewScreen() {
     }
   });
 
-  // Section C
+  // Section C (all optional — never blocks submission)
   var sectionC = document.getElementById('review-section-c');
   sectionC.innerHTML = '';
   SECTION_C_DOCS.forEach(function(doc) {
@@ -6012,14 +6261,33 @@ function buildReviewScreen() {
     }
 
     if (isUploaded) uploadedCount++;
-    else if (doc.required) missingCount++;
+    // Section C is fully optional — never increment missingCount
     if (hasWarning && isUploaded) warningCount++;
 
-    var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : (doc.required ? 'missing' : 'optional');
-    var statusText = isUploaded ? (hasWarning ? '⚠️ Uploaded — Warnings' : '✅ Uploaded') : (doc.required ? '❌ Missing' : '➖ Optional');
+    var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : 'optional';
+    var statusText = isUploaded ? (hasWarning ? '⚠️ Uploaded — Warnings' : '✅ Uploaded') : '➖ Optional';
 
-    sectionC.innerHTML += '<div class="review-item"><span class="review-item-name">' + doc.name + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(High Risk)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
+    sectionC.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(Recommended for High Risk)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
+
+  // Section D (dynamic other documents)
+  var sectionDWrapper = document.getElementById('review-section-d-wrapper');
+  var sectionD = document.getElementById('review-section-d');
+  if (sectionD) {
+    sectionD.innerHTML = '';
+    if (SECTION_D_DOCS.length > 0) {
+      sectionDWrapper.style.display = '';
+      SECTION_D_DOCS.forEach(function(doc) {
+        var isUploaded = uploadedDocs.has(doc.id);
+        if (isUploaded) uploadedCount++;
+        var statusClass = isUploaded ? 'uploaded' : 'optional';
+        var statusText = isUploaded ? '✅ Uploaded' : '➖ Not Uploaded';
+        sectionD.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
+      });
+    } else {
+      sectionDWrapper.style.display = 'none';
+    }
+  }
 
   // AI Summary
   var aiSummary = document.getElementById('review-ai-summary');
@@ -6083,17 +6351,17 @@ async function finalSubmitFromReview() {
 
 
 // ═══════════════════════════════════════════════════════════
-// AGENT 1: Account Risk Agent
+// AGENTS 1-5: Onboarding Pipeline
 // ═══════════════════════════════════════════════════════════
 // NEW 5 ONBOARDING AGENTS
 // ═══════════════════════════════════════════════════════════
 
 function runAllScoringAgents() {
-  // Pipeline: Agent 1 (document) → Agent 2 (external DB) → Agent 3 (screening) → Agent 4 (UBO) → Agent 5 (memo)
+  // Pipeline: Agent 1 (document integrity) → Agent 2 (corporate structure & UBO) → Agent 3 (business plausibility) → Agent 4 (fincrime screening) → Agent 5 (compliance memo & risk)
   runAgent1_IdentityDoc();
-  setTimeout(runAgent2_ExternalDB, 1500);
-  setTimeout(runAgent3_FinCrime, 3000);
-  setTimeout(runAgent4_CorporateUBO, 4500);
+  setTimeout(runAgent2_CorporateUBO, 1500);
+  setTimeout(runAgent3_BusinessPlausibility, 3000);
+  setTimeout(runAgent4_FinCrime, 4500);
   setTimeout(runAgent5_ComplianceMemo, 6500);
   // Show consolidation step after agents complete
   setTimeout(() => {
@@ -6155,7 +6423,7 @@ function runAgent1_IdentityDoc() {
       var icon = passed ? '✅' : '⚠️';
       var resultClass = passed ? 'pass' : 'warn';
       var resultText = passed ? 'Verified' : 'Review required';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + resultClass + '">' + resultText + '</span></div>';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result ' + resultClass + '">' + escapeHtml(resultText) + '</span></div>';
 
       if (idx === items.length - 1) {
         badge.textContent = warnings > 0 ? warnings + ' flags' : 'Clear';
@@ -6165,8 +6433,8 @@ function runAgent1_IdentityDoc() {
   });
 }
 
-// Agent 2: External Database Verification Agent (12 checks)
-function runAgent2_ExternalDB() {
+// Agent 2: Corporate Structure & UBO Mapping Agent (12 checks)
+function runAgent2_CorporateUBO() {
   var checks = document.getElementById('agent2-checks');
   var badge = document.getElementById('agent2-badge');
   if (!checks || !badge) return;
@@ -6191,7 +6459,7 @@ function runAgent2_ExternalDB() {
       var icon = passed ? '✅' : '⚠️';
       var resultClass = passed ? 'pass' : 'warn';
       var resultText = passed ? 'Confirmed' : 'Mismatch';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + resultClass + '">' + resultText + '</span></div>';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result ' + resultClass + '">' + escapeHtml(resultText) + '</span></div>';
 
       if (idx === items.length - 1) {
         badge.textContent = warnings > 0 ? warnings + ' mismatches' : 'All confirmed';
@@ -6201,8 +6469,8 @@ function runAgent2_ExternalDB() {
   });
 }
 
-// Agent 3: FinCrime Screening Agent (10 checks)
-function runAgent3_FinCrime() {
+// Agent 3: Business Model Plausibility Agent (10 checks)
+function runAgent3_BusinessPlausibility() {
   var checks = document.getElementById('agent3-checks');
   var badge = document.getElementById('agent3-badge');
   if (!checks || !badge) return;
@@ -6229,7 +6497,7 @@ function runAgent3_FinCrime() {
       var icon = item.passed ? '✅' : '⚠️';
       var resultClass = item.passed ? 'pass' : 'warn';
       var resultText = item.passed ? 'Clear' : 'Match found';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + resultClass + '">' + resultText + '</span></div>';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result ' + resultClass + '">' + escapeHtml(resultText) + '</span></div>';
 
       if (idx === items.length - 1) {
         badge.textContent = warnings > 0 ? 'PEP match' : 'All clear';
@@ -6239,8 +6507,8 @@ function runAgent3_FinCrime() {
   });
 }
 
-// Agent 4: Corporate Structure & UBO Mapping Agent (10 checks)
-function runAgent4_CorporateUBO() {
+// Agent 4: FinCrime Screening Interpretation Agent (10 checks)
+function runAgent4_FinCrime() {
   var checks = document.getElementById('agent4-checks');
   var badge = document.getElementById('agent4-badge');
   if (!checks || !badge) return;
@@ -6265,7 +6533,7 @@ function runAgent4_CorporateUBO() {
       var icon = passed ? '✅' : '⚠️';
       var resultClass = passed ? 'pass' : 'warn';
       var resultText = passed ? 'Assessed' : 'Risk detected';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result ' + resultClass + '">' + resultText + '</span></div>';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result ' + resultClass + '">' + escapeHtml(resultText) + '</span></div>';
 
       if (idx === items.length - 1) {
         badge.textContent = warnings > 0 ? 'Complex' : 'Simple';
@@ -6295,7 +6563,7 @@ function runAgent5_ComplianceMemo() {
   items.forEach(function(item, idx) {
     setTimeout(function() {
       var icon = '✅';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + item.label + '</span><span class="check-result pass">Generated</span></div>';
+      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result pass">Generated</span></div>';
 
       if (idx === items.length - 1) {
         badge.textContent = level.replace('_', ' ') + ' RISK';
@@ -6317,9 +6585,9 @@ function generateComplianceMemo() {
 
   // Client Overview
   var overview = document.getElementById('memo-client-overview');
-  overview.innerHTML = '<strong>' + companyName + '</strong> (BRN: ' + brn + ') is a corporate entity incorporated in ' + country + '. The entity has applied for Payment Intermediary Services through ARIE Finance Ltd. ' +
-    'The application was submitted on ' + new Date().toLocaleDateString('en-GB', {day:'numeric',month:'long',year:'numeric'}) + ' under reference <strong>' + (appRef || 'N/A') + '</strong>. ' +
-    'The AI risk scoring engine has assigned a <strong>' + level.replace('_',' ') + ' RISK</strong> classification based on a 5-dimension weighted assessment.';
+  overview.innerHTML = '<strong>' + escapeHtml(companyName) + '</strong> (BRN: ' + escapeHtml(brn) + ') is a corporate entity incorporated in ' + escapeHtml(country) + '. The entity has applied for Payment Intermediary Services through ARIE Finance Ltd. ' +
+    'The application was submitted on ' + new Date().toLocaleDateString('en-GB', {day:'numeric',month:'long',year:'numeric'}) + ' under reference <strong>' + escapeHtml(appRef || 'N/A') + '</strong>. ' +
+    'The AI risk scoring engine has assigned a <strong>' + escapeHtml(level.replace('_',' ')) + ' RISK</strong> classification based on a 5-dimension weighted assessment.';
 
   // Ownership
   var ownership = document.getElementById('memo-ownership');
@@ -6583,7 +6851,7 @@ function initMultiSelect(id, options) {
     const div = document.createElement('div');
     div.className = 'ms-option';
     div.dataset.value = opt;
-    div.innerHTML = `<input type="checkbox" /><span>${opt}</span>`;
+    div.innerHTML = `<input type="checkbox" /><span>${escapeHtml(opt)}</span>`;
     div.addEventListener('click', e => { e.stopPropagation(); toggleMSOption(id, opt, div); });
     container.appendChild(div);
   });
@@ -6605,10 +6873,10 @@ function renderMSTags(id) {
   const placeholder = wrap ? wrap.dataset.placeholder : 'Select…';
   const selected = [...msState[id]];
   if (selected.length === 0) {
-    tagsDiv.innerHTML = `<span class="ms-placeholder">${placeholder}</span>`;
+    tagsDiv.innerHTML = `<span class="ms-placeholder">${escapeHtml(placeholder)}</span>`;
   } else {
     tagsDiv.innerHTML = selected.map(v =>
-      `<span class="ms-tag">${v}<span class="ms-tag-x" onclick="removeMSTag('${id}','${v.replace(/'/g,"\\'")}',event)">✕</span></span>`
+      `<span class="ms-tag">${escapeHtml(v)}<span class="ms-tag-x" onclick="removeMSTag('${escapeHtml(id)}','${escapeHtml(v.replace(/'/g,"\\'"'))}',event)">✕</span></span>`
     ).join('');
   }
 }
@@ -6685,6 +6953,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (window.location.hash === '#backoffice') {
     toggleBackOffice();
   }
+  loadEnvironment();
 });
 
 function populateLookupCountry() {
@@ -6816,28 +7085,49 @@ async function submitLogin(e) {
   const email = document.getElementById('l-email').value.trim();
   const password = document.getElementById('l-password').value;
   btn.disabled = true; btn.textContent = '⏳ Signing in…';
+  const DEMO_PORTAL_PASSWORD = 'Arie2026!';
   try {
-    const resp = await apiCall('POST', '/auth/client/login', { email, password });
+    let resp;
+    let isOffline = false;
+
+    try {
+      resp = await apiCall('POST', '/auth/client/login', { email, password });
+    } catch(apiErr) {
+      // Backend not running — demo/offline mode
+      if (password === DEMO_PORTAL_PASSWORD || password === 'demo123') {
+        isOffline = true;
+        const demoName = email.split('@')[0].replace(/[._]/g,' ').replace(/\b\w/g, c => c.toUpperCase());
+        resp = {
+          token: 'demo_' + btoa(email + ':' + Date.now()),
+          client: { id: 'demo-' + Date.now(), name: demoName, email: email, company: 'Demo Company Ltd' }
+        };
+      } else {
+        throw apiErr;
+      }
+    }
+
     setAuth(resp.token, resp.client);
     btn.disabled = false; btn.textContent = '🔒 Sign In';
 
-    // Try to load any saved session from API
-    try {
-      const session = await apiCall('GET', '/save-resume');
-      if (session && session.application_id) {
-        currentApplicationId = session.application_id;
-        localStorage.setItem('arie_current_app_id', currentApplicationId);
-        if (session.form_data && session.form_data.appRef) {
-          appRef = session.form_data.appRef;
+    if (!isOffline) {
+      // Try to load any saved session from API
+      try {
+        const session = await apiCall('GET', '/save-resume');
+        if (session && session.application_id) {
+          currentApplicationId = session.application_id;
+          // Security: application ID kept in memory only
+          if (session.form_data && session.form_data.appRef) {
+            appRef = session.form_data.appRef;
+          }
         }
-      }
-    } catch(e) { /* No saved session, that's fine */ }
+      } catch(e) { /* No saved session, that's fine */ }
+    }
 
     showView('my-apps');
-    showToast('success', 'Welcome back!', 'Pick up where you left off.');
+    showToast('success', isOffline ? 'Demo Mode' : 'Welcome back!', isOffline ? 'Signed in offline — explore the portal demo.' : 'Pick up where you left off.');
   } catch (err) {
     btn.disabled = false; btn.textContent = '🔒 Sign In';
-    showToast('error', 'Login Failed', err.message || 'Invalid email or password.');
+    showToast('error', 'Login Failed', 'Invalid credentials. Try password: Arie2026!');
   }
 }
 
@@ -6932,7 +7222,7 @@ function showLookupResult(found) {
     { label:'Website', val: d.website },
     { label:'Directors Found', val: d.directors.length > 0 ? d.directors.map(x=>x.first+' '+x.last).join(', ') : 'Please enter manually' },
     { label:'UBOs Found', val: d.ubos.length > 0 ? d.ubos.map(x=>x.first+' '+x.last+' ('+x.pct+'%)').join(', ') : 'Please enter manually' }
-  ].map(r => `<div class="prefill-row"><div class="prefill-label">${r.label}</div><div class="prefill-val">${r.val}</div></div>`).join('');
+  ].map(r => `<div class="prefill-row"><div class="prefill-label">${escapeHtml(r.label)}</div><div class="prefill-val">${escapeHtml(r.val)}</div></div>`).join('');
 }
 
 function proceedToPreScreening() {
@@ -6968,8 +7258,8 @@ function prefillApplicationForm() {
       d.directors.forEach(dir => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td><input type="text" value="${dir.first}" class="prefilled-field"/></td>
-          <td><input type="text" value="${dir.last}" class="prefilled-field"/></td>
+          <td><input type="text" value="${escapeHtml(dir.first)}" class="prefilled-field"/></td>
+          <td><input type="text" value="${escapeHtml(dir.last)}" class="prefilled-field"/></td>
           <td><select class="nat-select prefilled-field"><option value="">Nationality</option></select></td>
           <td><select class="pep-select prefilled-field" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
           <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
@@ -7001,10 +7291,10 @@ function prefillApplicationForm() {
       d.ubos.forEach(ubo => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td><input type="text" value="${ubo.first}" class="prefilled-field"/></td>
-          <td><input type="text" value="${ubo.last}" class="prefilled-field"/></td>
+          <td><input type="text" value="${escapeHtml(ubo.first)}" class="prefilled-field"/></td>
+          <td><input type="text" value="${escapeHtml(ubo.last)}" class="prefilled-field"/></td>
           <td><select class="nat-select prefilled-field"><option value="">Nationality</option></select></td>
-          <td><input type="number" value="${ubo.pct}" class="prefilled-field" placeholder="% Ownership" min="0" max="100"/></td>
+          <td><input type="number" value="${escapeHtml(String(ubo.pct))}" class="prefilled-field" placeholder="% Ownership" min="0" max="100"/></td>
           <td><select class="pep-select prefilled-field" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
           <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
         `;
@@ -7081,19 +7371,123 @@ function handleKYCUpload(personId, docType, input) {
   runAIPersonDocVerification(personId, docType, fileName);
 }
 
+// ─── Section D: Add dynamic "Other" documents ─────────────────────────
+function addSectionDDocument() {
+  sectionDCounter++;
+  var docId = 'doc-other-' + sectionDCounter;
+  var container = document.getElementById('section-d-docs');
+
+  // Prompt for document name
+  var docName = prompt('Enter a name/description for this document:\n\n(e.g. "Legal Opinion Letter", "Tax Compliance Certificate", "Partnership Agreement")');
+  if (!docName || !docName.trim()) return;
+  docName = docName.trim();
+
+  // Register in the tracking array
+  SECTION_D_DOCS.push({ id: docId, name: docName, required: false, conditional: false });
+
+  // Create the upload card
+  var docItem = document.createElement('div');
+  docItem.className = 'doc-item';
+  docItem.id = docId;
+  docItem.innerHTML =
+    '<div class="doc-item-top">' +
+      '<span class="doc-item-icon">📂</span>' +
+      '<div style="flex:1;">' +
+        '<div class="doc-item-name">' + escapeHtml(docName) + '</div>' +
+        '<div class="doc-item-desc">Additional supporting document</div>' +
+      '</div>' +
+      '<button type="button" onclick="removeSectionDDocument(\'' + escapeHtml(docId) + '\')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;padding:2px 6px;" title="Remove this document">&times;</button>' +
+    '</div>' +
+    '<span class="doc-optional">Optional</span>' +
+    '<div class="doc-upload-area" onclick="triggerUpload(\'' + escapeHtml(docId) + '\')">' +
+      '<span>📎</span> <span id="' + escapeHtml(docId) + '-label">Click to upload</span>' +
+    '</div>' +
+    '<input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xlsx,.xls,.csv,.txt,.zip" onchange="handleUpload(\'' + escapeHtml(docId) + '\', this)" multiple />';
+
+  container.appendChild(docItem);
+  showToast('info', 'Document Slot Added', 'Upload area created for: ' + docName);
+}
+
+function removeSectionDDocument(docId) {
+  // Remove from DOM
+  var el = document.getElementById(docId);
+  if (el) el.remove();
+
+  // Remove from tracking array
+  SECTION_D_DOCS = SECTION_D_DOCS.filter(function(d) { return d.id !== docId; });
+
+  // Remove from uploaded set if it was uploaded
+  uploadedDocs.delete(docId);
+
+  showToast('info', 'Document Removed', 'The document slot has been removed.');
+}
+
 // ─── KYC: send self-submission link ────────────────────────────────────
-function sendKYCLink(personId) {
+async function sendKYCLink(personId) {
   const emailInput = document.getElementById('kyc-email-' + personId);
   const email = emailInput ? emailInput.value.trim() : '';
   if (!email || !email.includes('@')) {
     showToast('warn', 'Invalid Email', 'Please enter a valid email address.');
     return;
   }
-  const sentDiv = document.getElementById('kyc-sent-' + personId);
-  sentDiv.style.display = 'flex';
-  const badge = document.getElementById('kyc-badge-' + personId);
-  if (badge) { badge.className = 'kyc-status-badge sent'; badge.textContent = '📧 Link Sent'; }
-  showToast('success', 'Link Sent!', 'Self-submission link sent to ' + email);
+
+  // Get person's name from the UI
+  const nameEl = document.getElementById('kyc-name-' + personId);
+  const fullName = nameEl ? nameEl.textContent.trim() : 'Person ' + personId;
+
+  // Parse name into first and last name
+  const nameParts = fullName.split(' ');
+  const firstName = nameParts[0] || 'User';
+  const lastName = nameParts.slice(1).join(' ') || personId;
+
+  // Set loading state on button
+  const card = document.getElementById('kyc-person-' + personId);
+  const sendBtn = card ? card.querySelector('.kyc-send-btn') : null;
+  if (sendBtn) {
+    sendBtn.disabled = true;
+    sendBtn.textContent = '⏳ Sending...';
+  }
+
+  try {
+    // Call backend to create/retrieve Sumsub applicant
+    const applicantRes = await apiCall('POST', '/api/kyc/applicant', {
+      external_user_id: personId,
+      first_name: firstName,
+      last_name: lastName,
+      email: email,
+      country: 'US' // Default country; can be made dynamic if needed
+    });
+
+    // Generate WebSDK access token
+    const tokenRes = await apiCall('POST', '/api/kyc/token', {
+      external_user_id: personId,
+      level_name: 'individual'
+    });
+
+    // Show success state in UI
+    const sentDiv = document.getElementById('kyc-sent-' + personId);
+    if (sentDiv) sentDiv.style.display = 'flex';
+
+    const badge = document.getElementById('kyc-badge-' + personId);
+    if (badge) {
+      badge.className = 'kyc-status-badge sent';
+      badge.textContent = '📧 Link Sent';
+    }
+
+    // Show success toast with applicant ID
+    const applicantId = applicantRes.applicantId || applicantRes.id || 'created';
+    showToast('success', 'Link Sent!', 'Applicant ' + applicantId + ' created. Link sent to ' + email);
+
+  } catch (err) {
+    console.error('KYC Link Error:', err);
+    showToast('error', 'Failed to Send', 'Could not send KYC link. Please try again.');
+  } finally {
+    // Restore button state
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = '📧 Send Link';
+    }
+  }
 }
 
 // ─── KYC: update status badge based on uploads ─────────────────────────
