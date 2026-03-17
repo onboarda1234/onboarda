@@ -6876,7 +6876,7 @@ function renderMSTags(id) {
     tagsDiv.innerHTML = `<span class="ms-placeholder">${escapeHtml(placeholder)}</span>`;
   } else {
     tagsDiv.innerHTML = selected.map(v =>
-      `<span class="ms-tag">${escapeHtml(v)}<span class="ms-tag-x" onclick="removeMSTag('${escapeHtml(id)}','${escapeHtml(v.replace(/'/g,"\\'"'))}',event)">✕</span></span>`
+      `<span class="ms-tag">${escapeHtml(v)}<span class="ms-tag-x" onclick="removeMSTag('${id}','${v.replace(/'/g,"\\'")}',event)">✕</span></span>`
     ).join('');
   }
 }
