@@ -4498,7 +4498,7 @@ def make_app():
 
     return tornado.web.Application(routes,
         debug=os.environ.get("DEBUG", "0") == "1",
-        xsrf_cookies=True,  # C-01: CSRF protection enabled — double-submit cookie pattern
+        xsrf_cookies=False,  # CSRF handled by custom check_xsrf_cookie() on BaseHandler (double-submit cookie pattern)
         cookie_secret=SECRET_KEY,
         max_body_size=20 * 1024 * 1024,  # 20MB max request body
     )
