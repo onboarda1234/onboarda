@@ -2993,7 +2993,87 @@
   </div>
 
   <!-- ══════════════════════════════════════
-       VIEW: COMPLIANCE REFERRAL (High/Very High)
+       VIEW: PRE-APPROVAL HOLD (High/Very High Risk)
+       Shown after risk scoring when risk is HIGH/VERY_HIGH.
+       Client cannot proceed to KYC until officer pre-approves.
+  ══════════════════════════════════════ -->
+  <div id="view-pre-approval-hold" class="hidden">
+    <div class="page">
+      <div class="steps">
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
+        <div class="step active"><div class="step-circle">3</div><div class="step-label">Pre-Approval</div></div>
+        <div class="step"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
+      </div>
+
+      <div class="status-hero">
+        <div class="status-icon-lg pending">🔍</div>
+        <h2>Initial Compliance Review In Progress</h2>
+        <p style="color:var(--text2);max-width:520px;margin:8px auto 20px;line-height:1.7;font-size:14px;">
+          Your application is undergoing an initial compliance review before document submission.
+          This is a standard regulatory procedure for applications with an elevated risk profile.
+        </p>
+        <div class="ref-number" id="pre-approval-ref-display"></div>
+      </div>
+
+      <!-- Risk Rating Card -->
+      <div class="card" id="pre-approval-risk-card" style="border-left:4px solid var(--amber);background:rgba(245,158,11,0.06);">
+        <div style="display:flex;gap:14px;align-items:center;">
+          <div style="font-size:28px;flex-shrink:0;">📊</div>
+          <div style="flex:1;">
+            <div class="font-semibold" style="margin-bottom:4px;">Your Risk Assessment</div>
+            <p style="font-size:13px;color:var(--text2);margin-bottom:8px;">Based on AI-powered 5-dimension risk scoring of your pre-screening data.</p>
+            <div style="display:flex;gap:16px;align-items:center;">
+              <div id="pre-approval-risk-badge" style="display:inline-block;padding:6px 16px;border-radius:20px;font-weight:700;font-size:14px;letter-spacing:0.5px;background:#d97706;color:#fff;">HIGH RISK</div>
+              <div style="font-size:12px;color:var(--text3);">Score: <strong id="pre-approval-risk-score">0</strong> / 100</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status tracker -->
+      <div class="card" style="border-color:var(--brand-dim);background:rgba(43,47,143,0.04);">
+        <div style="display:flex;gap:14px;align-items:flex-start;">
+          <div style="font-size:28px;flex-shrink:0;">🔒</div>
+          <div>
+            <div class="font-semibold" style="margin-bottom:6px;">Pre-Approval Review</div>
+            <p style="font-size:13px;color:var(--text2);line-height:1.7;">
+              A compliance officer is reviewing your pre-screening data and screening results.
+              No documents are required at this stage. You will be notified once a decision has been made.
+            </p>
+            <div style="margin-top:12px;padding:10px 14px;background:rgba(245,158,11,0.1);border-radius:8px;display:inline-flex;align-items:center;gap:8px;">
+              <span class="spinner-sm"></span>
+              <span style="font-weight:600;font-size:13px;color:var(--amber);">Pre-Approval Review (In Progress)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="text-align:left;">
+        <div style="font-weight:600;margin-bottom:8px;">What happens next?</div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.8;">
+          1. A compliance officer reviews your pre-screening data and screening results<br/>
+          2. You may be contacted if additional pre-screening information is needed<br/>
+          3. If pre-approved, you will be shown pricing and can proceed to KYC document submission<br/>
+          4. If not pre-approved, you will be notified with reasons
+        </div>
+      </div>
+
+      <!-- Demo controls -->
+      <div style="text-align:center;margin-top:24px;">
+        <p class="text-sm" style="color:var(--text3);margin-bottom:12px;">[ Demo Mode — Simulate pre-approval decision ]</p>
+        <div class="btn-group">
+          <button class="btn btn-primary" onclick="simulatePreApproval()">✅ Simulate Pre-Approval</button>
+          <button class="btn btn-outline" onclick="simulatePreApprovalRMI()">📋 Simulate Request Info</button>
+          <button class="btn btn-outline" onclick="simulateRejection()">❌ Simulate Rejection</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       VIEW: COMPLIANCE REFERRAL (legacy — now used as post-KYC hold)
   ══════════════════════════════════════ -->
   <div id="view-compliance-hold" class="hidden">
     <div class="page">
@@ -3006,18 +3086,17 @@
 
       <div class="compliance-referral-card">
         <div class="cr-icon">🔍</div>
-        <h3>Application Referred to Compliance</h3>
+        <h3>Application Under Compliance Review</h3>
         <p style="color:var(--text2);max-width:480px;margin:8px auto 20px;line-height:1.7;font-size:14px;">
-          Your application has been assessed as <strong id="compliance-risk-label"></strong> and has been referred to our compliance team for manual review. This is a standard procedure for enhanced due diligence requirements.
+          Your application has been assessed as <strong id="compliance-risk-label"></strong> and is being reviewed by our compliance team.
         </p>
         <div class="ref-number" id="compliance-ref-display"></div>
         <div class="card" style="text-align:left;margin-top:24px;max-width:480px;margin-left:auto;margin-right:auto;">
           <div style="font-weight:600;margin-bottom:8px;">What happens next?</div>
           <div style="font-size:13px;color:var(--text2);line-height:1.8;">
-            1. A senior compliance officer will review your application<br/>
+            1. A senior compliance officer will review your application and documents<br/>
             2. You may be contacted for additional information or documentation<br/>
-            3. A decision will be communicated via email within 3–5 business days<br/>
-            4. If approved, you will proceed to pricing and KYC document submission
+            3. A decision will be communicated via email within 3–5 business days
           </div>
         </div>
       </div>
@@ -4577,7 +4656,7 @@ function updateTotalRequiredDocs() {
 
 // ─── View switching ───────────────────────────────────────
 // Views where the persistent client sidebar is shown
-const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','client-notifications'];
+const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','client-notifications'];
 
 function showView(name) {
   document.querySelectorAll('[id^="view-"]').forEach(v => v.classList.add('hidden'));
@@ -5472,11 +5551,17 @@ function showRiskResult(result) {
     portalSumEl.innerHTML = re.text;
   }
 
-  // After showing risk result, transition to pending view with simulate buttons
+  // After showing risk result, route based on risk level
   setTimeout(function() {
-    document.getElementById('ref-display').textContent = appRef || generateRef();
-    showView('pending');
-    showToast('info', 'Pre-Screening Complete', 'Your application is under review. Use the Simulate buttons below to proceed.');
+    if (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH') {
+      // HIGH/VERY_HIGH → Pre-Approval Hold (KYC blocked until officer pre-approves)
+      showPreApprovalHold();
+      showToast('info', 'Pre-Approval Required', 'Your application requires initial compliance review before you can proceed.');
+    } else {
+      // LOW/MEDIUM → Show pricing immediately (straight-through flow)
+      showPricingView();
+      showToast('success', 'Risk Assessment Complete', 'Please review and accept the pricing to proceed.');
+    }
   }, 2500);
 }
 
@@ -5546,19 +5631,14 @@ async function acceptPricing() {
     try {
       var result = await apiCall('POST', '/applications/' + currentApplicationId + '/accept-pricing');
       console.log('Pricing acceptance result:', result);
-
-      if (result.status === 'compliance_review') {
-        // HIGH/VERY_HIGH risk → goes to compliance review first
-        showComplianceHold();
-        showToast('info', 'Compliance Review Required', result.message || 'Your application has been referred for compliance review due to the risk profile.');
-        return;
-      }
     } catch(err) {
       console.warn('Pricing accept API failed, continuing with client-side flow:', err);
     }
   }
 
-  // LOW/MEDIUM risk → proceed directly to KYC & Documents
+  // After pricing acceptance → proceed to KYC & Documents
+  // For HIGH/VERY_HIGH: pre-approval already happened before pricing was shown
+  // For LOW/MEDIUM: straight-through flow continues
   showHighRiskDocs();
   updateTotalRequiredDocs();
   syncDirectorsUBOsToKYC();
@@ -5579,6 +5659,39 @@ function complianceApproved() {
   showView('pricing');
   populatePricing(computedRiskLevel);
   showToast('success', 'Compliance Approved', 'Your application has been approved. Please review pricing to proceed.');
+}
+
+// ─── Pre-Approval Hold Flow (v2.1) ──────────────────────────
+function showPreApprovalHold() {
+  var level = computedRiskLevel || 'HIGH';
+  var levelDisplay = level.replace('_', ' ');
+  var badgeColors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
+
+  var refEl = document.getElementById('pre-approval-ref-display');
+  if (refEl) refEl.textContent = appRef || generateRef();
+
+  var badge = document.getElementById('pre-approval-risk-badge');
+  if (badge) {
+    badge.style.background = badgeColors[level] || '#d97706';
+    badge.textContent = levelDisplay + ' RISK';
+  }
+
+  var scoreEl = document.getElementById('pre-approval-risk-score');
+  if (scoreEl) scoreEl.textContent = (computedRiskScore || 0).toFixed(1);
+
+  showView('pre-approval-hold');
+}
+
+function simulatePreApproval() {
+  // Simulate officer pre-approving → client sees pricing
+  showPricingView();
+  showToast('success', 'Pre-Approval Granted', 'Your application has been pre-approved. Please review and accept the pricing to proceed to KYC document submission.');
+}
+
+function simulatePreApprovalRMI() {
+  // Simulate officer requesting more info → client returns to edit
+  showView('prescreening');
+  showToast('info', 'Additional Information Required', 'The compliance team has requested additional information. Please update your pre-screening data and resubmit.');
 }
 
 

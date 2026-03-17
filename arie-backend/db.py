@@ -234,6 +234,7 @@ def _get_postgres_schema() -> str:
         onboarding_lane TEXT,
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','prescreening_submitted','pricing_review','pricing_accepted',
+            'pre_approval_review','pre_approved',
             'kyc_documents','kyc_submitted','compliance_review','in_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
@@ -242,6 +243,10 @@ def _get_postgres_schema() -> str:
         decided_at TIMESTAMP,
         decision_by TEXT REFERENCES users(id),
         decision_notes TEXT,
+        pre_approval_decision TEXT,
+        pre_approval_notes TEXT,
+        pre_approval_officer_id TEXT REFERENCES users(id),
+        pre_approval_timestamp TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -513,6 +518,7 @@ def _get_sqlite_schema() -> str:
         onboarding_lane TEXT,
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','prescreening_submitted','pricing_review','pricing_accepted',
+            'pre_approval_review','pre_approved',
             'kyc_documents','kyc_submitted','compliance_review','in_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
@@ -521,6 +527,10 @@ def _get_sqlite_schema() -> str:
         decided_at TEXT,
         decision_by TEXT REFERENCES users(id),
         decision_notes TEXT,
+        pre_approval_decision TEXT,
+        pre_approval_notes TEXT,
+        pre_approval_officer_id TEXT REFERENCES users(id),
+        pre_approval_timestamp TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -748,11 +758,36 @@ def init_db():
         db.executescript(schema)
         db.commit()
         logger.info("Database schema initialized")
+
+        # ── Migration: Add pre-approval columns if missing (v2.1) ──
+        _run_migrations(db)
+        db.commit()
     except Exception as e:
         logger.error(f"Error initializing database schema: {e}")
         raise
     finally:
         db.close()
+
+
+def _run_migrations(db: DBConnection):
+    """Run incremental schema migrations for existing databases."""
+    # Check if pre_approval columns exist on applications table
+    try:
+        db.execute("SELECT pre_approval_decision FROM applications LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.1: Adding pre-approval columns to applications table")
+        migration_cols = [
+            "ALTER TABLE applications ADD COLUMN pre_approval_decision TEXT",
+            "ALTER TABLE applications ADD COLUMN pre_approval_notes TEXT",
+            "ALTER TABLE applications ADD COLUMN pre_approval_officer_id TEXT",
+            "ALTER TABLE applications ADD COLUMN pre_approval_timestamp TEXT",
+        ]
+        for stmt in migration_cols:
+            try:
+                db.execute(stmt)
+            except Exception as e:
+                logger.debug(f"Migration column may already exist: {e}")
+        logger.info("Migration v2.1: Pre-approval columns added")
 
 
 # ============================================================================

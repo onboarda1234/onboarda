@@ -79,6 +79,8 @@ a { color:var(--brand); text-decoration:none; }
 .badge.pending { background:var(--amber-bg); color:var(--amber); }
 .badge.draft { background:rgba(148,163,184,0.15); color:#64748b; }
 .badge.prescreening-submitted { background:rgba(59,130,246,0.1); color:#3b82f6; }
+.badge.pre-approval-review { background:rgba(217,119,6,0.15); color:#d97706; font-weight:700; }
+.badge.pre-approved { background:rgba(34,197,94,0.15); color:#16a34a; }
 .badge.pricing-review { background:rgba(168,85,247,0.1); color:#a855f7; }
 .badge.pricing-accepted { background:rgba(34,197,94,0.1); color:#22c55e; }
 .badge.kyc-documents { background:rgba(14,165,233,0.1); color:#0ea5e9; }
@@ -816,6 +818,8 @@ body.role-admin .role-admin-only-block { display:block; }
     <select class="form-select" style="width:auto;" id="filter-status" onchange="filterApplications()">
       <option value="">All Statuses</option>
       <option value="Pre-Screening Submitted">Pre-Screening Submitted</option>
+      <option value="Pre-Approval Review">Pre-Approval Review</option>
+      <option value="Pre-Approved">Pre-Approved</option>
       <option value="Pricing Review">Pricing Review</option>
       <option value="KYC & Documents">KYC & Documents</option>
       <option value="Compliance Review">Compliance Review</option>
@@ -953,7 +957,23 @@ body.role-admin .role-admin-only-block { display:block; }
     <!-- Right sidebar -->
     <div>
       <!-- Actions -->
-      <div class="card">
+      <!-- Pre-Approval Actions (shown only for pre_approval_review status) -->
+      <div class="card" id="pre-approval-actions-card" style="display:none;border-left:4px solid #d97706;background:rgba(217,119,6,0.04);">
+        <div class="card-title" style="margin-bottom:4px;color:#d97706;">Pre-Approval Decision</div>
+        <p style="font-size:12px;color:var(--text3);margin-bottom:12px;">This HIGH/VERY_HIGH risk application requires pre-approval before the client can proceed to KYC. Review the pre-screening data and screening results below.</p>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <button class="btn btn-success" onclick="preApproveApplication()">✅ Pre-Approve (Unlock KYC)</button>
+          <button class="btn btn-danger" onclick="preApprovalReject()">❌ Reject at Pre-Approval</button>
+          <button class="btn btn-warning" onclick="preApprovalRequestInfo()">📋 Request Additional Info</button>
+        </div>
+        <div style="margin-top:10px;">
+          <div class="form-label">Pre-Approval Notes (required)</div>
+          <textarea class="form-input" rows="3" placeholder="Provide rationale for your pre-approval decision..." id="pre-approval-notes" style="resize:vertical;"></textarea>
+        </div>
+      </div>
+
+      <!-- Standard Actions (hidden during pre-approval review) -->
+      <div class="card" id="standard-actions-card">
         <div class="card-title" style="margin-bottom:12px;">Actions</div>
         <div style="display:flex;flex-direction:column;gap:8px;">
           <button class="btn btn-success" onclick="approveApplication()" id="btn-approve">✅ Approve Application</button>
@@ -1036,6 +1056,7 @@ body.role-admin .role-admin-only-block { display:block; }
 <div class="view" id="view-cases">
   <div class="tab-bar">
     <div class="tab active" onclick="switchCaseTab('my-cases',this)">My Cases</div>
+    <div class="tab" onclick="switchCaseTab('pre-approval',this)" style="position:relative;">Pre-Approval Queue <span id="pre-approval-badge" class="tab-badge" style="display:none;background:#d97706;color:#fff;padding:1px 6px;border-radius:10px;font-size:10px;position:absolute;top:-4px;right:-8px;">0</span></div>
     <div class="tab" onclick="switchCaseTab('unassigned',this)">Unassigned</div>
     <div class="tab" onclick="switchCaseTab('all-cases',this)">All Cases</div>
   </div>
@@ -2397,6 +2418,8 @@ function statusBadge(status) {
   var map = {
     'Draft':'draft', 'draft':'draft',
     'Pre-Screening Submitted':'prescreening-submitted', 'prescreening_submitted':'prescreening-submitted',
+    'Pre-Approval Review':'pre-approval-review', 'pre_approval_review':'pre-approval-review',
+    'Pre-Approved':'pre-approved', 'pre_approved':'pre-approved',
     'Pricing Review':'pricing-review', 'pricing_review':'pricing-review',
     'Pricing Accepted':'pricing-accepted', 'pricing_accepted':'pricing-accepted',
     'KYC & Documents':'kyc-documents', 'kyc_documents':'kyc-documents',
@@ -3006,6 +3029,13 @@ function openAppDetail(ref) {
   if (app.status === 'Rejected') actHtml += '<div class="activity-item"><div class="activity-dot warning"></div><div class="activity-content"><div class="activity-text" style="color:var(--red);font-weight:600;">Application rejected</div><div class="activity-time">' + app.date + ' 15:00</div></div></div>';
   document.getElementById('detail-activity').innerHTML = actHtml;
 
+  // Toggle pre-approval vs standard action panels based on status
+  var isPreApproval = (app.status === 'Pre-Approval Review' || app.status === 'pre_approval_review');
+  var preApprovalCard = document.getElementById('pre-approval-actions-card');
+  var standardCard = document.getElementById('standard-actions-card');
+  if (preApprovalCard) preApprovalCard.style.display = isPreApproval ? '' : 'none';
+  if (standardCard) standardCard.style.display = isPreApproval ? 'none' : '';
+
   showView('app-detail');
   document.getElementById('topbar-title').textContent = 'Application Review — ' + app.ref;
 }
@@ -3065,14 +3095,32 @@ function renderEDD() {
   });
 }
 
+var activeCaseTab = 'my-cases';
+
 function renderCases() {
   var tbody = document.getElementById('cases-body');
   tbody.innerHTML = '';
   APPLICATIONS.forEach(function(app) {
+    // Filter by active tab
+    if (activeCaseTab === 'pre-approval') {
+      if (app.status !== 'Pre-Approval Review' && app.status !== 'pre_approval_review') return;
+    }
     var tr = document.createElement('tr');
+    // Highlight pre-approval cases
+    if (app.status === 'Pre-Approval Review' || app.status === 'pre_approval_review') {
+      tr.style.background = 'rgba(217,119,6,0.06)';
+    }
     tr.innerHTML = '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadge(app.risk) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td><td><button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + escapeHtml(app.ref) + '\')">Open</button></td>';
     tbody.appendChild(tr);
   });
+
+  // Update pre-approval badge count
+  var preApprovalCount = APPLICATIONS.filter(function(a) { return a.status === 'Pre-Approval Review' || a.status === 'pre_approval_review'; }).length;
+  var badge = document.getElementById('pre-approval-badge');
+  if (badge) {
+    badge.textContent = preApprovalCount;
+    badge.style.display = preApprovalCount > 0 ? '' : 'none';
+  }
 }
 
 function renderMonitoring() {
@@ -3295,7 +3343,7 @@ function openPeriodicReview(ref) {
 function switchCaseTab(tab, btn) {
   document.querySelectorAll('#view-cases .tab').forEach(function(t) { t.classList.remove('active'); });
   btn.classList.add('active');
-  // Filter logic (simplified)
+  activeCaseTab = tab;
   renderCases();
 }
 
@@ -3459,6 +3507,70 @@ function addNote() {
   showToast('Note added');
   if (currentApp) openAppDetail(currentApp.ref);
 }
+
+// ═══════════════════════════════════════════════════════════
+// PRE-APPROVAL ACTIONS (v2.1: Risk-Gated Flow)
+// ═══════════════════════════════════════════════════════════
+async function preApproveApplication() {
+  if (!currentApp) return;
+  var notes = document.getElementById('pre-approval-notes').value.trim();
+  if (!notes) { showToast('Please provide pre-approval notes before making a decision'); return; }
+
+  // Call backend API
+  if (BO_AUTH_TOKEN && currentApp.id) {
+    try {
+      await boApiCall('POST', '/applications/' + currentApp.id + '/pre-approval-decision', {
+        decision: 'PRE_APPROVE', notes: notes
+      });
+    } catch(e) { console.warn('Pre-approval API error:', e); }
+  }
+
+  // Update local state
+  currentApp.status = 'Pricing Review';
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approve', target:currentApp.ref, detail:'Pre-approved: ' + notes, ip:'196.192.44.12' });
+  showToast('Application pre-approved. Client can now proceed to pricing and KYC.');
+  openAppDetail(currentApp.ref);
+}
+
+async function preApprovalReject() {
+  if (!currentApp) return;
+  var notes = document.getElementById('pre-approval-notes').value.trim();
+  if (!notes) { showToast('Please provide rejection notes'); return; }
+
+  if (BO_AUTH_TOKEN && currentApp.id) {
+    try {
+      await boApiCall('POST', '/applications/' + currentApp.id + '/pre-approval-decision', {
+        decision: 'REJECT', notes: notes
+      });
+    } catch(e) { console.warn('Pre-approval reject API error:', e); }
+  }
+
+  currentApp.status = 'Rejected';
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approval Reject', target:currentApp.ref, detail:'Rejected at pre-approval: ' + notes, ip:'196.192.44.12' });
+  showToast('Application rejected at pre-approval stage.');
+  showClientNotificationModal('Reject');
+  openAppDetail(currentApp.ref);
+}
+
+async function preApprovalRequestInfo() {
+  if (!currentApp) return;
+  var notes = document.getElementById('pre-approval-notes').value.trim();
+  if (!notes) { showToast('Please specify what information is required'); return; }
+
+  if (BO_AUTH_TOKEN && currentApp.id) {
+    try {
+      await boApiCall('POST', '/applications/' + currentApp.id + '/pre-approval-decision', {
+        decision: 'REQUEST_INFO', notes: notes
+      });
+    } catch(e) { console.warn('Pre-approval RMI API error:', e); }
+  }
+
+  currentApp.status = 'Draft';
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approval RMI', target:currentApp.ref, detail:'Requested info at pre-approval: ' + notes, ip:'196.192.44.12' });
+  showToast('Additional information requested. Client will be notified to update pre-screening data.');
+  openAppDetail(currentApp.ref);
+}
+
 
 // ═══════════════════════════════════════════════════════════
 // USER MANAGEMENT

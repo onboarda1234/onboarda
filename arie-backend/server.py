@@ -2044,12 +2044,21 @@ class ApplicationDetailHandler(BaseHandler):
         if new_status:
             current_status = app["status"]
 
-            # Define valid state transitions
+            # Define valid state transitions (v2.1: includes pre-approval flow)
             valid_transitions = {
-                "draft": ["submitted"],
+                "draft": ["submitted", "prescreening_submitted"],
+                "prescreening_submitted": ["pricing_review", "pre_approval_review"],
+                "pre_approval_review": ["pre_approved", "rejected", "draft"],  # officer pre-approval decisions
+                "pre_approved": ["pricing_review"],
+                "pricing_review": ["pricing_accepted"],
+                "pricing_accepted": ["kyc_documents"],
+                "kyc_documents": ["kyc_submitted", "compliance_review"],
+                "kyc_submitted": ["compliance_review"],
                 "submitted": ["under_review", "rejected"],
+                "compliance_review": ["in_review", "edd_required", "approved", "rejected"],
+                "in_review": ["edd_required", "approved", "rejected"],
                 "under_review": ["edd_required", "approved", "rejected"],
-                "edd_required": ["under_review", "approved", "rejected"],
+                "edd_required": ["under_review", "in_review", "approved", "rejected"],
                 "approved": [],  # Terminal state
                 "rejected": ["draft"],  # Can reopen to draft
             }
@@ -2195,13 +2204,19 @@ class SubmitApplicationHandler(BaseHandler):
             UPDATE applications SET
                 status='submitted', submitted_at=datetime('now'),
                 risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                pre_approval_decision=NULL, pre_approval_notes=NULL,
+                pre_approval_officer_id=NULL, pre_approval_timestamp=NULL,
                 updated_at=datetime('now')
             WHERE id=?
         """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"], real_id))
 
-        # After pre-screening: move to pricing review
-        # Client must accept pricing before proceeding
-        db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
+        # After pre-screening: route based on risk level
+        # HIGH/VERY_HIGH → pre-approval review (KYC blocked until officer pre-approves)
+        # LOW/MEDIUM → pricing review (straight-through flow)
+        if risk["level"] in ("HIGH", "VERY_HIGH"):
+            db.execute("UPDATE applications SET status='pre_approval_review' WHERE id=?", (real_id,))
+        else:
+            db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
 
         # Get pricing for this risk level
         pricing = PRICING_TIERS.get(risk["level"], PRICING_TIERS["MEDIUM"])
@@ -2212,13 +2227,15 @@ class SubmitApplicationHandler(BaseHandler):
         db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
 
-        # Notify compliance team for HIGH/VERY_HIGH risk
+        # Notify compliance team for HIGH/VERY_HIGH risk — requires pre-approval
         if risk["level"] in ("HIGH", "VERY_HIGH"):
             compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
             for cu in compliance_users:
                 db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
-                          (cu["id"], f"{risk['level']}-Risk Pre-Screening Submitted",
-                           f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}). Pricing review pending."))
+                          (cu["id"], f"PRE-APPROVAL REQUIRED: {risk['level']}-Risk Application {app['ref']}",
+                           f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}). "
+                           f"This application requires pre-approval before the client can proceed to KYC. "
+                           f"Review pre-screening data and screening results in the Pre-Approval Queue."))
             db.commit()
 
         db.commit()
@@ -2228,13 +2245,15 @@ class SubmitApplicationHandler(BaseHandler):
         self.log_audit(user, "Pre-Screening Submitted", app["ref"],
                        f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}")
 
+        result_status = "pre_approval_review" if risk["level"] in ("HIGH", "VERY_HIGH") else "pricing_review"
         self.success({
             "ref": app["ref"],
             "risk_score": risk["score"],
             "risk_level": risk["level"],
             "risk_dimensions": risk["dimensions"],
             "onboarding_lane": risk["lane"],
-            "status": "pricing_review",
+            "status": result_status,
+            "requires_pre_approval": risk["level"] in ("HIGH", "VERY_HIGH"),
             "pricing": pricing,
             "screening": {
                 "total_hits": screening_report["total_hits"],
@@ -2275,23 +2294,13 @@ class PricingAcceptHandler(BaseHandler):
         # Update status: accepted pricing
         db.execute("UPDATE applications SET status='pricing_accepted', updated_at=datetime('now') WHERE id=?", (real_id,))
 
-        # Route based on risk:
-        # LOW/MEDIUM → proceed directly to KYC & Documents
-        # HIGH/VERY_HIGH → must go through compliance review first
-        if risk_level in ("LOW", "MEDIUM"):
-            next_status = "kyc_documents"
-            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
-            message = "Pricing accepted. Please proceed with KYC verification and document upload."
-        else:
-            next_status = "compliance_review"
-            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
-            message = "Pricing accepted. Your application has been referred for compliance review due to the risk profile."
-            # Notify compliance officers
-            compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
-            for cu in compliance_users:
-                db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
-                          (cu["id"], f"High-Risk Case Requires Review: {app['ref']}",
-                           f"{app['company_name']} — Risk: {risk_level}. Client accepted pricing. Compliance review required before KYC proceeds."))
+        # Route to KYC & Documents for ALL risk levels after pricing acceptance.
+        # For HIGH/VERY_HIGH: pre-approval already happened before pricing was shown,
+        # so they can now proceed to KYC like LOW/MEDIUM.
+        # For LOW/MEDIUM: straight-through flow continues.
+        next_status = "kyc_documents"
+        db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
+        message = "Pricing accepted. Please proceed with KYC verification and document upload."
 
         db.commit()
         db.close()
@@ -2357,6 +2366,166 @@ class KYCSubmitHandler(BaseHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# PRE-APPROVAL DECISION ENDPOINT (v2.1: Risk-Gated Flow)
+# ══════════════════════════════════════════════════════════
+
+class PreApprovalDecisionHandler(BaseHandler):
+    """POST /api/applications/:id/pre-approval-decision
+
+    Allows compliance officers to pre-approve, reject, or request info
+    on HIGH/VERY_HIGH risk applications BEFORE KYC stage.
+
+    Decisions:
+      PRE_APPROVE   → status = pre_approved → pricing shown → KYC unlocked
+      REJECT        → status = rejected (terminal)
+      REQUEST_INFO  → status = draft (client re-edits pre-screening)
+    """
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not self.check_rate_limit("pre_approval", max_attempts=10, window_seconds=60):
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        real_id = app["id"]
+
+        # Enforce: only allowed when status = pre_approval_review
+        if app["status"] != "pre_approval_review":
+            db.close()
+            return self.error(
+                f"Pre-approval decision not allowed: application is in '{app['status']}' status. "
+                "Only applications in 'pre_approval_review' can receive pre-approval decisions.",
+                400
+            )
+
+        # Validate decision
+        decision = (data.get("decision") or "").upper()
+        valid_decisions = ["PRE_APPROVE", "REJECT", "REQUEST_INFO"]
+        if decision not in valid_decisions:
+            db.close()
+            return self.error(f"Invalid pre-approval decision. Must be one of: {', '.join(valid_decisions)}", 400)
+
+        notes = data.get("notes", "")
+        if not notes:
+            db.close()
+            return self.error("Pre-approval decision notes are required", 400)
+
+        # Idempotency: check if a decision was already recorded
+        if app.get("pre_approval_decision"):
+            db.close()
+            return self.error(
+                f"Pre-approval decision already recorded: {app['pre_approval_decision']}. "
+                "Duplicate decisions are blocked for audit integrity.",
+                409
+            )
+
+        # Apply decision
+        if decision == "PRE_APPROVE":
+            new_status = "pre_approved"
+            message = "Application pre-approved. Client will be shown pricing and can proceed to KYC."
+            # Auto-transition to pricing_review so client sees pricing next
+            db.execute("""
+                UPDATE applications SET
+                    status='pricing_review',
+                    pre_approval_decision='PRE_APPROVE',
+                    pre_approval_notes=?,
+                    pre_approval_officer_id=?,
+                    pre_approval_timestamp=datetime('now'),
+                    updated_at=datetime('now')
+                WHERE id=?
+            """, (notes, user["sub"], real_id))
+
+            # Notify the client
+            if app.get("client_id"):
+                db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
+                          (app["client_id"], real_id,
+                           "Application Pre-Approved — Proceed to Pricing",
+                           f"Your application {app['ref']} has passed initial compliance review. "
+                           f"You can now review pricing and proceed with document submission.",
+                           "pre_approval"))
+
+        elif decision == "REJECT":
+            new_status = "rejected"
+            message = "Application rejected at pre-approval stage."
+            db.execute("""
+                UPDATE applications SET
+                    status='rejected',
+                    pre_approval_decision='REJECT',
+                    pre_approval_notes=?,
+                    pre_approval_officer_id=?,
+                    pre_approval_timestamp=datetime('now'),
+                    decided_at=datetime('now'),
+                    decision_by=?,
+                    decision_notes=?,
+                    updated_at=datetime('now')
+                WHERE id=?
+            """, (notes, user["sub"], user["sub"], f"Rejected at pre-approval: {notes}", real_id))
+
+            # Notify the client
+            if app.get("client_id"):
+                db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
+                          (app["client_id"], real_id,
+                           "Application Update",
+                           f"Your application {app['ref']} has been reviewed. "
+                           f"Unfortunately, we are unable to proceed with your application at this time. "
+                           f"Please contact our compliance team for further information.",
+                           "pre_approval_reject"))
+
+        elif decision == "REQUEST_INFO":
+            new_status = "draft"
+            message = "Additional information requested. Client can re-edit pre-screening data."
+            db.execute("""
+                UPDATE applications SET
+                    status='draft',
+                    pre_approval_decision='REQUEST_INFO',
+                    pre_approval_notes=?,
+                    pre_approval_officer_id=?,
+                    pre_approval_timestamp=datetime('now'),
+                    updated_at=datetime('now')
+                WHERE id=?
+            """, (notes, user["sub"], real_id))
+
+            # Notify the client
+            if app.get("client_id"):
+                db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
+                          (app["client_id"], real_id,
+                           "Additional Information Required",
+                           f"Our compliance team requires additional information for application {app['ref']}. "
+                           f"Please update your pre-screening data and resubmit. Officer notes: {notes}",
+                           "pre_approval_rmi"))
+
+        # Audit trail
+        db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
+                     VALUES (?,?,?,?,?,?,?)""",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""),
+                    f"Pre-Approval: {decision}", app["ref"],
+                    f"Pre-approval decision: {decision} | Risk: {app['risk_level']} (Score: {app['risk_score']}) | Notes: {notes}",
+                    self.get_client_ip()))
+
+        db.commit()
+        db.close()
+
+        self.log_audit(user, f"Pre-Approval {decision}", app["ref"],
+                       f"Pre-approval decision: {decision} — {notes}")
+
+        self.success({
+            "status": "decision_recorded",
+            "decision": decision,
+            "application_status": new_status,
+            "message": message
+        }, 201)
+
+
+# ══════════════════════════════════════════════════════════
 # DOCUMENT UPLOAD ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
@@ -2371,7 +2540,7 @@ class DocumentUploadHandler(BaseHandler):
             return
 
         db = get_db()
-        app = db.execute("SELECT id, ref, client_id FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+        app = db.execute("SELECT id, ref, client_id, risk_level, status, pre_approval_decision FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
         if not app:
             db.close()
             return self.error("Application not found", 404)
@@ -2379,6 +2548,17 @@ class DocumentUploadHandler(BaseHandler):
         if not self.check_app_ownership(user, app):
             db.close()
             return
+
+        # v2.1: KYC access control — HIGH/VERY_HIGH risk requires pre-approval before document upload
+        risk_level = (app.get("risk_level") or "").upper()
+        if risk_level in ("HIGH", "VERY_HIGH"):
+            if app.get("pre_approval_decision") != "PRE_APPROVE":
+                db.close()
+                return self.error(
+                    "Pre-approval required: HIGH/VERY_HIGH risk applications must be pre-approved "
+                    "by a compliance officer before KYC documents can be uploaded.",
+                    403
+                )
 
         if "file" not in self.request.files:
             db.close()
@@ -4403,6 +4583,7 @@ def make_app():
         # Applications (more specific routes first)
         (r"/api/applications/([^/]+)/submit", SubmitApplicationHandler),
         (r"/api/applications/([^/]+)/accept-pricing", PricingAcceptHandler),
+        (r"/api/applications/([^/]+)/pre-approval-decision", PreApprovalDecisionHandler),
         (r"/api/applications/([^/]+)/submit-kyc", KYCSubmitHandler),
         (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
         (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
