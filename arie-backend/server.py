@@ -106,7 +106,7 @@ logger = logging.getLogger("arie")
 
 # ── Configuration ──────────────────────────────────────────
 PORT = int(os.environ.get("PORT", 8080))
-ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+ENVIRONMENT = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development"))
 
 # SECRET_KEY: In production, MUST be set via env var. In dev, auto-generate a random key per session.
 _env_secret = os.environ.get("SECRET_KEY", "")
@@ -1510,6 +1510,7 @@ class BaseHandler(tornado.web.RequestHandler):
         CSRF protection: double-submit cookie pattern.
         - Bearer token requests: CSRF-exempt (token proves authentication)
         - Webhook endpoints: CSRF-exempt (use HMAC signature validation)
+        - Auth endpoints (login/register): CSRF-exempt (no session exists yet)
         - Cookie-based requests: REQUIRE X-CSRF-Token header matching csrf_token cookie
         """
         # Bearer token auth is inherently CSRF-safe
@@ -1517,6 +1518,16 @@ class BaseHandler(tornado.web.RequestHandler):
             return
         # Webhook endpoints use HMAC signatures, not cookies
         if "/webhook" in self.request.uri:
+            return
+        # Auth endpoints (login, register) are pre-session — no CSRF token exists yet
+        # These are protected by rate limiting instead
+        _csrf_exempt_paths = (
+            "/api/auth/officer/login",
+            "/api/auth/client/login",
+            "/api/auth/client/register",
+            "/api/health",
+        )
+        if self.request.uri in _csrf_exempt_paths:
             return
         # OPTIONS preflight requests don't need CSRF
         if self.request.method == "OPTIONS":
