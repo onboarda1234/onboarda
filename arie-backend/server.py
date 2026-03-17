@@ -2049,9 +2049,9 @@ class ApplicationDetailHandler(BaseHandler):
                 "draft": ["submitted", "prescreening_submitted"],
                 "prescreening_submitted": ["pricing_review", "pre_approval_review"],
                 "pre_approval_review": ["pre_approved", "rejected", "draft"],  # officer pre-approval decisions
-                "pre_approved": ["pricing_review"],
+                "pre_approved": ["kyc_documents"],
                 "pricing_review": ["pricing_accepted"],
-                "pricing_accepted": ["kyc_documents"],
+                "pricing_accepted": ["kyc_documents", "pre_approval_review"],
                 "kyc_documents": ["kyc_submitted", "compliance_review"],
                 "kyc_submitted": ["compliance_review"],
                 "submitted": ["under_review", "rejected"],
@@ -2210,13 +2210,9 @@ class SubmitApplicationHandler(BaseHandler):
             WHERE id=?
         """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"], real_id))
 
-        # After pre-screening: route based on risk level
-        # HIGH/VERY_HIGH → pre-approval review (KYC blocked until officer pre-approves)
-        # LOW/MEDIUM → pricing review (straight-through flow)
-        if risk["level"] in ("HIGH", "VERY_HIGH"):
-            db.execute("UPDATE applications SET status='pre_approval_review' WHERE id=?", (real_id,))
-        else:
-            db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
+        # After pre-screening: ALL risk levels see pricing first
+        # Routing to pre-approval (HIGH/VERY_HIGH) happens after pricing acceptance
+        db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
 
         # Get pricing for this risk level
         pricing = PRICING_TIERS.get(risk["level"], PRICING_TIERS["MEDIUM"])
@@ -2245,7 +2241,7 @@ class SubmitApplicationHandler(BaseHandler):
         self.log_audit(user, "Pre-Screening Submitted", app["ref"],
                        f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}")
 
-        result_status = "pre_approval_review" if risk["level"] in ("HIGH", "VERY_HIGH") else "pricing_review"
+        result_status = "pricing_review"
         self.success({
             "ref": app["ref"],
             "risk_score": risk["score"],
@@ -2294,13 +2290,24 @@ class PricingAcceptHandler(BaseHandler):
         # Update status: accepted pricing
         db.execute("UPDATE applications SET status='pricing_accepted', updated_at=datetime('now') WHERE id=?", (real_id,))
 
-        # Route to KYC & Documents for ALL risk levels after pricing acceptance.
-        # For HIGH/VERY_HIGH: pre-approval already happened before pricing was shown,
-        # so they can now proceed to KYC like LOW/MEDIUM.
-        # For LOW/MEDIUM: straight-through flow continues.
-        next_status = "kyc_documents"
-        db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
-        message = "Pricing accepted. Please proceed with KYC verification and document upload."
+        # Route based on risk level after pricing acceptance:
+        # LOW/MEDIUM → proceed directly to KYC & Documents (straight-through)
+        # HIGH/VERY_HIGH → pre-approval review (KYC blocked until officer pre-approves)
+        if risk_level in ("HIGH", "VERY_HIGH"):
+            next_status = "pre_approval_review"
+            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
+            message = "Pricing accepted. Your application is now undergoing an initial compliance review before document submission."
+            # Notify compliance officers
+            compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
+            for cu in compliance_users:
+                db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                          (cu["id"], f"PRE-APPROVAL REQUIRED: {app['ref']}",
+                           f"{app['company_name']} — Risk: {risk_level}. Client accepted pricing. "
+                           f"Pre-approval required before KYC proceeds."))
+        else:
+            next_status = "kyc_documents"
+            db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
+            message = "Pricing accepted. Please proceed with KYC verification and document upload."
 
         db.commit()
         db.close()
@@ -2430,12 +2437,12 @@ class PreApprovalDecisionHandler(BaseHandler):
 
         # Apply decision
         if decision == "PRE_APPROVE":
-            new_status = "pre_approved"
-            message = "Application pre-approved. Client will be shown pricing and can proceed to KYC."
-            # Auto-transition to pricing_review so client sees pricing next
+            new_status = "kyc_documents"
+            message = "Application pre-approved. Client can now proceed to KYC document submission."
+            # Auto-transition to kyc_documents (pricing was already accepted before pre-approval)
             db.execute("""
                 UPDATE applications SET
-                    status='pricing_review',
+                    status='kyc_documents',
                     pre_approval_decision='PRE_APPROVE',
                     pre_approval_notes=?,
                     pre_approval_officer_id=?,
@@ -2448,9 +2455,9 @@ class PreApprovalDecisionHandler(BaseHandler):
             if app.get("client_id"):
                 db.execute("INSERT INTO client_notifications (client_id, application_id, title, message, notification_type) VALUES (?,?,?,?,?)",
                           (app["client_id"], real_id,
-                           "Application Pre-Approved — Proceed to Pricing",
+                           "Application Pre-Approved — Proceed to KYC Documents",
                            f"Your application {app['ref']} has passed initial compliance review. "
-                           f"You can now review pricing and proceed with document submission.",
+                           f"You can now proceed with KYC verification and document submission.",
                            "pre_approval"))
 
         elif decision == "REJECT":

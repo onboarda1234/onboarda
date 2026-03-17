@@ -3525,10 +3525,10 @@ async function preApproveApplication() {
     } catch(e) { console.warn('Pre-approval API error:', e); }
   }
 
-  // Update local state
-  currentApp.status = 'Pricing Review';
+  // Update local state — pricing already accepted, so go straight to KYC Documents
+  currentApp.status = 'KYC & Documents';
   AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approve', target:currentApp.ref, detail:'Pre-approved: ' + notes, ip:'196.192.44.12' });
-  showToast('Application pre-approved. Client can now proceed to pricing and KYC.');
+  showToast('Application pre-approved. Client can now proceed to KYC document submission.');
   openAppDetail(currentApp.ref);
 }
 

@@ -3002,9 +3002,10 @@
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
-        <div class="step active"><div class="step-circle">3</div><div class="step-label">Pre-Approval</div></div>
-        <div class="step"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
-        <div class="step"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pricing</div></div>
+        <div class="step active"><div class="step-circle">4</div><div class="step-label">Pre-Approval</div></div>
+        <div class="step"><div class="step-circle">5</div><div class="step-label">KYC & Documents</div></div>
+        <div class="step"><div class="step-circle">6</div><div class="step-label">Approved</div></div>
       </div>
 
       <div class="status-hero">
@@ -5551,17 +5552,10 @@ function showRiskResult(result) {
     portalSumEl.innerHTML = re.text;
   }
 
-  // After showing risk result, route based on risk level
+  // After showing risk result, ALL risk levels see pricing first
   setTimeout(function() {
-    if (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH') {
-      // HIGH/VERY_HIGH → Pre-Approval Hold (KYC blocked until officer pre-approves)
-      showPreApprovalHold();
-      showToast('info', 'Pre-Approval Required', 'Your application requires initial compliance review before you can proceed.');
-    } else {
-      // LOW/MEDIUM → Show pricing immediately (straight-through flow)
-      showPricingView();
-      showToast('success', 'Risk Assessment Complete', 'Please review and accept the pricing to proceed.');
-    }
+    showPricingView();
+    showToast('success', 'Risk Assessment Complete', 'Please review and accept the pricing to proceed.');
   }, 2500);
 }
 
@@ -5636,15 +5630,20 @@ async function acceptPricing() {
     }
   }
 
-  // After pricing acceptance → proceed to KYC & Documents
-  // For HIGH/VERY_HIGH: pre-approval already happened before pricing was shown
-  // For LOW/MEDIUM: straight-through flow continues
-  showHighRiskDocs();
-  updateTotalRequiredDocs();
-  syncDirectorsUBOsToKYC();
-  checkPEPAndShowDeclaration();
-  showView('onboarding');
-  showToast('success', 'Pricing Accepted', 'Please proceed to submit your KYC documents.');
+  // After pricing acceptance: route based on risk level
+  if (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH') {
+    // HIGH/VERY_HIGH → Pre-Approval Hold (KYC blocked until officer pre-approves)
+    showPreApprovalHold();
+    showToast('info', 'Pre-Approval Required', 'Pricing accepted. Your application now requires initial compliance review before document submission.');
+  } else {
+    // LOW/MEDIUM → proceed directly to KYC & Documents
+    showHighRiskDocs();
+    updateTotalRequiredDocs();
+    syncDirectorsUBOsToKYC();
+    checkPEPAndShowDeclaration();
+    showView('onboarding');
+    showToast('success', 'Pricing Accepted', 'Please proceed to submit your KYC documents.');
+  }
 }
 
 function showComplianceHold() {
@@ -5683,9 +5682,13 @@ function showPreApprovalHold() {
 }
 
 function simulatePreApproval() {
-  // Simulate officer pre-approving → client sees pricing
-  showPricingView();
-  showToast('success', 'Pre-Approval Granted', 'Your application has been pre-approved. Please review and accept the pricing to proceed to KYC document submission.');
+  // Simulate officer pre-approving → client proceeds to KYC (pricing already accepted)
+  showHighRiskDocs();
+  updateTotalRequiredDocs();
+  syncDirectorsUBOsToKYC();
+  checkPEPAndShowDeclaration();
+  showView('onboarding');
+  showToast('success', 'Pre-Approval Granted', 'Your application has been pre-approved. Please proceed with KYC verification and document submission.');
 }
 
 function simulatePreApprovalRMI() {
