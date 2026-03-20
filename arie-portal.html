@@ -7152,30 +7152,33 @@ function toggleMSOption(id, value, div) {
   if (msState[id].has(value)) {
     msState[id].delete(value); cb.checked = false; div.classList.remove('selected');
   } else {
-    // Check for sanctioned countries in country multi-selects
-    if ((id === 'ms-op-countries' || id === 'ms-target-markets') && isSanctionedCountry(value)) {
-      showSanctionWarning(id, value);
-    }
     msState[id].add(value); cb.checked = true; div.classList.add('selected');
   }
   renderMSTags(id);
+  recheckMSSanctions(id);
 }
 
 function isSanctionedCountry(val) {
   return SANCTIONED_COUNTRIES_LIST.some(function(c) { return val.toLowerCase() === c.toLowerCase(); });
 }
 
-function showSanctionWarning(containerId, country) {
-  var wrap = document.getElementById(containerId);
-  if (!wrap) return;
-  var errId = containerId + '-sanction-warn';
+function recheckMSSanctions(id) {
+  if (id !== 'ms-op-countries' && id !== 'ms-target-markets') return;
+  var errId = id + '-sanction-warn';
   var existing = document.getElementById(errId);
   if (existing) existing.remove();
-  var err = document.createElement('div');
-  err.id = errId;
-  err.style.cssText = 'color:#dc2626;font-size:12px;font-weight:600;margin-top:6px;padding:8px 12px;background:rgba(220,38,38,0.06);border:1px solid rgba(220,38,38,0.15);border-radius:8px;';
-  err.textContent = 'ARIE Finance cannot onboard clients involved in sanctioned or prohibited jurisdictions. "' + country + '" is a restricted jurisdiction.';
-  wrap.parentElement.appendChild(err);
+  // Check if any currently selected country is sanctioned
+  var flagged = [];
+  msState[id].forEach(function(c) { if (isSanctionedCountry(c)) flagged.push(c); });
+  if (flagged.length > 0) {
+    var wrap = document.getElementById(id);
+    if (!wrap) return;
+    var err = document.createElement('div');
+    err.id = errId;
+    err.style.cssText = 'color:#dc2626;font-size:12px;font-weight:600;margin-top:6px;padding:8px 12px;background:rgba(220,38,38,0.06);border:1px solid rgba(220,38,38,0.15);border-radius:8px;';
+    err.textContent = 'ARIE Finance cannot onboard clients involved in sanctioned or prohibited jurisdictions. Restricted: ' + flagged.join(', ') + '.';
+    wrap.parentElement.appendChild(err);
+  }
 }
 
 function renderMSTags(id) {
@@ -7203,6 +7206,7 @@ function removeMSTag(id, value, event) {
     }
   });
   renderMSTags(id);
+  recheckMSSanctions(id);
 }
 
 function toggleMultiSelect(id) {
