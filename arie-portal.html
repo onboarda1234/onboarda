@@ -5301,6 +5301,34 @@ async function submitPrescreening(e) {
     showToast('error', 'Restricted Jurisdiction', 'ARIE Finance cannot onboard clients from sanctioned jurisdictions.');
     return;
   }
+  // Check ALL country fields — multi-selects, nationality dropdowns
+  var sanctionedFound = false;
+  var sanctionedField = '';
+  // Countries of Operation
+  if (msState['ms-op-countries']) {
+    msState['ms-op-countries'].forEach(function(c) { if (isSanctionedCountry(c)) { sanctionedFound = true; sanctionedField = 'Countries of Operation: ' + c; } });
+  }
+  // Target Markets
+  if (msState['ms-target-markets']) {
+    msState['ms-target-markets'].forEach(function(c) { if (isSanctionedCountry(c)) { sanctionedFound = true; sanctionedField = 'Target Markets: ' + c; } });
+  }
+  // Director nationalities
+  document.querySelectorAll('#directors-body .nat-select').forEach(function(sel) {
+    if (sel.value && isSanctionedCountry(sel.value)) { sanctionedFound = true; sanctionedField = 'Director nationality: ' + sel.value; }
+  });
+  // UBO nationalities
+  document.querySelectorAll('#ubos-body .nat-select').forEach(function(sel) {
+    if (sel.value && isSanctionedCountry(sel.value)) { sanctionedFound = true; sanctionedField = 'UBO nationality: ' + sel.value; }
+  });
+  // Intermediary countries
+  document.querySelectorAll('#intermediaries-body .nat-select').forEach(function(sel) {
+    if (sel.value && isSanctionedCountry(sel.value)) { sanctionedFound = true; sanctionedField = 'Intermediary country: ' + sel.value; }
+  });
+  if (sanctionedFound) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Restricted Jurisdiction', 'ARIE Finance cannot onboard clients involved in sanctioned or prohibited jurisdictions. Flagged: ' + sanctionedField);
+    return;
+  }
   // Incorporation date validation
   var incDate = document.getElementById('f-inc-date');
   if (incDate && incDate.value && new Date(incDate.value) > new Date()) {
@@ -7124,9 +7152,30 @@ function toggleMSOption(id, value, div) {
   if (msState[id].has(value)) {
     msState[id].delete(value); cb.checked = false; div.classList.remove('selected');
   } else {
+    // Check for sanctioned countries in country multi-selects
+    if ((id === 'ms-op-countries' || id === 'ms-target-markets') && isSanctionedCountry(value)) {
+      showSanctionWarning(id, value);
+    }
     msState[id].add(value); cb.checked = true; div.classList.add('selected');
   }
   renderMSTags(id);
+}
+
+function isSanctionedCountry(val) {
+  return SANCTIONED_COUNTRIES_LIST.some(function(c) { return val.toLowerCase() === c.toLowerCase(); });
+}
+
+function showSanctionWarning(containerId, country) {
+  var wrap = document.getElementById(containerId);
+  if (!wrap) return;
+  var errId = containerId + '-sanction-warn';
+  var existing = document.getElementById(errId);
+  if (existing) existing.remove();
+  var err = document.createElement('div');
+  err.id = errId;
+  err.style.cssText = 'color:#dc2626;font-size:12px;font-weight:600;margin-top:6px;padding:8px 12px;background:rgba(220,38,38,0.06);border:1px solid rgba(220,38,38,0.15);border-radius:8px;';
+  err.textContent = 'ARIE Finance cannot onboard clients involved in sanctioned or prohibited jurisdictions. "' + country + '" is a restricted jurisdiction.';
+  wrap.parentElement.appendChild(err);
 }
 
 function renderMSTags(id) {
@@ -7240,6 +7289,11 @@ function populateLookupCountry() {
 function populateNationalitySelects() {
   const nationalities = ALL_COUNTRIES.filter(c => !c.startsWith('──') && !c.includes('Region') && !c.includes('Pacific') && !c.includes('Africa') && !c.includes('America') && !c.includes('Europe') && !c.includes('Middle East') && !c.includes('Gulf') && !c.includes('Caribbean') && !c.includes('Asia') && !c.includes('Global') && c !== 'Oceania');
   document.querySelectorAll('.nat-select').forEach(sel => {
+    // Add sanctions check on change for all nationality/country dropdowns
+    if (!sel.hasAttribute('data-sanction-bound')) {
+      sel.setAttribute('data-sanction-bound', '1');
+      sel.addEventListener('change', function() { checkSanctionedCountry(this); });
+    }
     if (sel.options.length <= 1) {
       nationalities.forEach(c => {
         const opt = document.createElement('option');
