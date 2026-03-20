@@ -2574,18 +2574,22 @@
             <div class="form-group span-2">
               <label>Currencies Required <span class="req">*</span></label>
               <p style="font-size:11px;color:var(--text3);margin:-2px 0 8px 0;">Select all currencies your account will need to operate with.</p>
-              <div id="currency-checkboxes" style="display:flex;gap:12px;flex-wrap:wrap;">
-                <label style="display:flex;align-items:center;gap:6px;padding:10px 16px;border:1.5px solid var(--border2);border-radius:var(--radius-sm);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s;" class="currency-option">
-                  <input type="checkbox" value="USD" name="currencies" style="accent-color:var(--gold);width:16px;height:16px;" /> USD — US Dollar
+              <div class="purpose-grid" id="currency-checkboxes">
+                <label class="purpose-option" onclick="togglePurpose(this)">
+                  <input type="checkbox" value="USD" name="currencies" />
+                  <span>💵 USD — US Dollar</span>
                 </label>
-                <label style="display:flex;align-items:center;gap:6px;padding:10px 16px;border:1.5px solid var(--border2);border-radius:var(--radius-sm);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s;" class="currency-option">
-                  <input type="checkbox" value="EUR" name="currencies" style="accent-color:var(--gold);width:16px;height:16px;" /> EUR — Euro
+                <label class="purpose-option" onclick="togglePurpose(this)">
+                  <input type="checkbox" value="EUR" name="currencies" />
+                  <span>💶 EUR — Euro</span>
                 </label>
-                <label style="display:flex;align-items:center;gap:6px;padding:10px 16px;border:1.5px solid var(--border2);border-radius:var(--radius-sm);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s;" class="currency-option">
-                  <input type="checkbox" value="GBP" name="currencies" style="accent-color:var(--gold);width:16px;height:16px;" /> GBP — British Pound
+                <label class="purpose-option" onclick="togglePurpose(this)">
+                  <input type="checkbox" value="GBP" name="currencies" />
+                  <span>💷 GBP — British Pound</span>
                 </label>
-                <label style="display:flex;align-items:center;gap:6px;padding:10px 16px;border:1.5px solid var(--border2);border-radius:var(--radius-sm);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s;" class="currency-option">
-                  <input type="checkbox" value="AED" name="currencies" style="accent-color:var(--gold);width:16px;height:16px;" /> AED — UAE Dirham
+                <label class="purpose-option" onclick="togglePurpose(this)">
+                  <input type="checkbox" value="AED" name="currencies" />
+                  <span>🏦 AED — UAE Dirham</span>
                 </label>
               </div>
               <span class="field-error hidden" id="currency-err" style="margin-top:4px;">Please select at least one currency.</span>
