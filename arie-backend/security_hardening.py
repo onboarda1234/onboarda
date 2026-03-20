@@ -1051,10 +1051,9 @@ class FileUploadValidator:
         'image/png',
         'image/jpeg',
         'image/jpg',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     }
 
-    ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.docx'}
+    ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg'}
 
     MAX_FILE_SIZE = 25 * 1024 * 1024  # 25MB
 

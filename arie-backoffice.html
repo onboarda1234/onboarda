@@ -864,6 +864,16 @@ body.role-admin .role-admin-only-block { display:block; }
           <div class="detail-section-title">Entity Information</div>
           <div id="detail-entity-info"></div>
         </div>
+
+        <!-- Pre-Screening Summary -->
+        <div class="card" id="prescreen-summary-card" style="border-left:4px solid #6366f1;background:rgba(99,102,241,0.03);">
+          <div class="card-header" style="margin-bottom:12px;">
+            <div class="card-icon" style="background:rgba(99,102,241,0.1);color:#6366f1;">📋</div>
+            <div><div class="card-title">Pre-Screening Summary</div><div style="font-size:11px;color:var(--text3);">All data submitted by the client during pre-screening</div></div>
+          </div>
+          <div id="detail-prescreen-summary"></div>
+        </div>
+
         <div class="detail-section">
           <div class="detail-section-title">Directors & UBOs</div>
           <div id="detail-persons"></div>
@@ -1041,6 +1051,14 @@ body.role-admin .role-admin-only-block { display:block; }
         </div>
 
         <div id="detail-documents"></div>
+      </div>
+
+      <!-- Document Verification Results -->
+      <div class="card" id="doc-verification-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div class="card-title">Document Verification Results</div>
+        </div>
+        <div id="detail-doc-verification"></div>
       </div>
 
       <!-- Activity Log -->
@@ -2316,15 +2334,15 @@ var USERS = [
 var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Compliance Officer', analyst:'Analyst' };
 
 var APPLICATIONS = [
-  { ref:'ARF-2026-100421', company:'TechPay Global Ltd', sector:'Technology / SaaS', risk:'LOW', score:28.5, lane:'Fast Lane', status:'Approved', assigned:'Aisha Sudally', date:'2026-03-10', country:'Mauritius', brn:'C12045678', directors:[{name:'Rajiv Kumar',nat:'Indian',pep:'No'},{name:'Sarah Chen',nat:'Singaporean',pep:'No'}], ubos:[{name:'Rajiv Kumar',pct:60,pep:'No'},{name:'Sarah Chen',pct:40,pep:'No'}], intermediaries:[], dims:{d1:1.4,d2:1.2,d3:1.8,d4:1.5,d5:1.5}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart'], pepCount:0 },
-  { ref:'ARF-2026-100422', company:'Africom Remittances SARL', sector:'Money Services / Remittance', risk:'HIGH', score:62.3, lane:'EDD', status:'In Review', assigned:'Raj Patel', date:'2026-03-09', country:'Senegal', brn:'SN-29381', directors:[{name:'Moussa Diallo',nat:'Senegalese',pep:'Yes'},{name:'Fatou Sow',nat:'Senegalese',pep:'No'}], ubos:[{name:'Moussa Diallo',pct:75,pep:'Yes'},{name:'Fatou Sow',pct:25,pep:'No'}], intermediaries:[{name:'Diallo Holdings SARL',jurisdiction:'Senegal',pct:75,type:'Holding Company'}], dims:{d1:2.8,d2:3.0,d3:2.5,d4:3.0,d5:2.0}, docs:['COI','M&A','Shareholder Reg','Directors Reg','Financials','Board Res','Bank Ref'], pepCount:1 },
-  { ref:'ARF-2026-100423', company:'Nordic Payments AB', sector:'Regulated Financial', risk:'LOW', score:22.1, lane:'Fast Lane', status:'Approved', assigned:'Marie Dubois', date:'2026-03-08', country:'Sweden', brn:'559012-3456', directors:[{name:'Erik Johansson',nat:'Swedish',pep:'No'}], ubos:[{name:'Erik Johansson',pct:100,pep:'No'}], intermediaries:[], dims:{d1:1.0,d2:1.0,d3:1.5,d4:1.0,d5:1.0}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart','Licence'], pepCount:0 },
-  { ref:'ARF-2026-100424', company:'GoldBridge Trading FZE', sector:'Import / Export / Precious Metals', risk:'VERY_HIGH', score:76.8, lane:'EDD', status:'EDD Required', assigned:'Raj Patel', date:'2026-03-07', country:'UAE', brn:'DMCC-78234', directors:[{name:'Ahmad Al-Rashid',nat:'Emirati',pep:'Yes'},{name:'Viktor Petrov',nat:'Russian',pep:'No'},{name:'Nominee Director Ltd',nat:'BVI',pep:'No'}], ubos:[{name:'Ahmad Al-Rashid',pct:51,pep:'Yes'},{name:'Unknown (nominee)',pct:49,pep:'No'}], intermediaries:[{name:'Al-Rashid Holdings Ltd',jurisdiction:'BVI',pct:51,type:'Offshore Holding'},{name:'Petrova Investments SA',jurisdiction:'Panama',pct:49,type:'Nominee Structure'}], dims:{d1:3.5,d2:3.8,d3:3.0,d4:3.5,d5:3.0}, docs:['COI','M&A','Shareholder Reg','Board Res'], pepCount:1 },
-  { ref:'ARF-2026-100425', company:'MedServe Health Ltd', sector:'Healthcare', risk:'MEDIUM', score:41.2, lane:'Standard Review', status:'Pending Review', assigned:'Marie Dubois', date:'2026-03-06', country:'Mauritius', brn:'C14098765', directors:[{name:'Dr. Anisha Ramsamy',nat:'Mauritian',pep:'No'},{name:'Paul Legrand',nat:'French',pep:'No'}], ubos:[{name:'Dr. Anisha Ramsamy',pct:55,pep:'No'},{name:'Paul Legrand',pct:45,pep:'No'}], intermediaries:[], dims:{d1:1.8,d2:1.5,d3:2.0,d4:2.0,d5:2.0}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res'], pepCount:0 },
-  { ref:'ARF-2026-100426', company:'CryptoVault Exchange Ltd', sector:'Virtual Asset Service Provider', risk:'VERY_HIGH', score:82.5, lane:'EDD', status:'Rejected', assigned:'Aisha Sudally', date:'2026-03-05', country:'Estonia', brn:'EE-14567890', directors:[{name:'Dmitri Volkov',nat:'Estonian',pep:'No'}], ubos:[{name:'Dmitri Volkov',pct:100,pep:'No'}], intermediaries:[{name:'Volkov Digital OÜ',jurisdiction:'Estonia',pct:100,type:'Operating Entity'}], dims:{d1:3.0,d2:2.5,d3:3.5,d4:4.0,d5:3.0}, docs:['COI','M&A'], pepCount:0 },
-  { ref:'ARF-2026-100427', company:'Pacific Logistics Co', sector:'Logistics / Supply Chain', risk:'MEDIUM', score:44.7, lane:'Standard Review', status:'Pending Review', assigned:'Unassigned', date:'2026-03-04', country:'Singapore', brn:'202401234K', directors:[{name:'James Tan',nat:'Singaporean',pep:'No'},{name:'Mei Lin',nat:'Chinese',pep:'No'}], ubos:[{name:'James Tan',pct:50,pep:'No'},{name:'Mei Lin',pct:50,pep:'No'}], intermediaries:[{name:'Pacific Holdings Pte Ltd',jurisdiction:'Singapore',pct:100,type:'Holding Company'}], dims:{d1:2.0,d2:2.0,d3:2.0,d4:2.0,d5:1.5}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Financials','Board Res'], pepCount:0 },
-  { ref:'ARF-2026-100428', company:'Sahara Construction SARL', sector:'Construction', risk:'HIGH', score:58.9, lane:'EDD', status:'In Review', assigned:'Raj Patel', date:'2026-03-03', country:'Morocco', brn:'MA-RC-45231', directors:[{name:'Youssef Benali',nat:'Moroccan',pep:'No'},{name:'Hassan Ouazzani',nat:'Moroccan',pep:'Yes'}], ubos:[{name:'Ouazzani Holdings',pct:70,pep:'Yes'},{name:'Youssef Benali',pct:30,pep:'No'}], intermediaries:[{name:'Ouazzani Holdings SA',jurisdiction:'Morocco',pct:70,type:'Family Holding'},{name:'Sahara Partners SARL',jurisdiction:'Mauritania',pct:30,type:'Joint Venture'}], dims:{d1:2.5,d2:2.8,d3:2.0,d4:3.0,d5:2.0}, docs:['COI','M&A','Shareholder Reg','Directors Reg','Financials','Board Res','Bank Ref','SoW'], pepCount:1 },
-  { ref:'ARF-2026-100429', company:'Coastal Ventures Ltd', sector:'Tourism / Hospitality', risk:'MEDIUM', score:38.4, lane:'Standard Review', status:'Approved', assigned:'Marie Dubois', date:'2026-02-20', country:'Mauritius', brn:'C15078321', directors:[{name:'Jean-Marc Leclerc',nat:'Mauritian',pep:'No'},{name:'Priya Doorgakant',nat:'Mauritian',pep:'No'}], ubos:[{name:'Jean-Marc Leclerc',pct:65,pep:'No'},{name:'Priya Doorgakant',pct:35,pep:'No'}], intermediaries:[], dims:{d1:1.6,d2:1.5,d3:2.0,d4:1.8,d5:1.5}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res'], pepCount:0 }
+  { ref:'ARF-2026-100421', company:'TechPay Global Ltd', sector:'Technology / SaaS', risk:'LOW', score:28.5, lane:'Fast Lane', status:'Approved', assigned:'Aisha Sudally', date:'2026-03-10', country:'Mauritius', brn:'C12045678', directors:[{name:'Rajiv Kumar',nat:'Indian',pep:'No'},{name:'Sarah Chen',nat:'Singaporean',pep:'No'}], ubos:[{name:'Rajiv Kumar',pct:60,pep:'No'},{name:'Sarah Chen',pct:40,pep:'No'}], intermediaries:[], dims:{d1:1.4,d2:1.2,d3:1.8,d4:1.5,d5:1.5}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart'], pepCount:0, prescreeningData:{incorporation_date:'2024-06-15',entity_type:'Technology / SaaS',ownership_structure:'Simple — direct identifiable UBOs',monthly_volume:'USD 50,000 – USD 500,000',transaction_complexity:'Standard — multi-currency, low-risk corridors',currency:'USD',introduction_method:'Direct application',source_of_wealth_type:'Business revenue / trading profits',source_of_wealth_detail:'Revenue from SaaS subscription platform serving 200+ enterprise clients globally',source_of_funds_initial_type:'Transfer from company bank account',source_of_funds_initial_detail:'Transfer from MCB Ltd corporate operating account #4521',source_of_funds_ongoing_type:'Client payments / receivables',source_of_funds_ongoing_detail:'Monthly recurring subscription payments from enterprise clients via SWIFT and SEPA',entity_contact_first:'Rajiv',entity_contact_last:'Kumar',entity_contact_email:'rajiv@techpayglobal.com'} },
+  { ref:'ARF-2026-100422', company:'Africom Remittances SARL', sector:'Money Services / Remittance', risk:'HIGH', score:62.3, lane:'EDD', status:'In Review', assigned:'Raj Patel', date:'2026-03-09', country:'Senegal', brn:'SN-29381', directors:[{name:'Moussa Diallo',nat:'Senegalese',pep:'Yes'},{name:'Fatou Sow',nat:'Senegalese',pep:'No'}], ubos:[{name:'Moussa Diallo',pct:75,pep:'Yes'},{name:'Fatou Sow',pct:25,pep:'No'}], intermediaries:[{name:'Diallo Holdings SARL',jurisdiction:'Senegal',pct:75,type:'Holding Company'}], dims:{d1:2.8,d2:3.0,d3:2.5,d4:3.0,d5:2.0}, docs:['COI','M&A','Shareholder Reg','Directors Reg','Financials','Board Res','Bank Ref'], pepCount:1, prescreeningData:{incorporation_date:'2023-04-20',entity_type:'Money Services / Remittance',ownership_structure:'Complex — two UBOs via intermediate holding',monthly_volume:'USD 2,000,000 – USD 5,000,000',transaction_complexity:'High — emerging market corridors, humanitarian exemptions',currency:'XOF',introduction_method:'Regulatory referral (BCEAO)',source_of_wealth_type:'Diaspora remittance business operations',source_of_wealth_detail:'Established remittance network with 500+ sending agents across West Africa',source_of_funds_initial_type:'Equity capital investment',source_of_funds_initial_detail:'Shareholder capital contribution from Diallo Holdings SARL',source_of_funds_ongoing_type:'Remittance transaction fees',source_of_funds_ongoing_detail:'Fees and margins from daily remittance processing and settlement',entity_contact_first:'Moussa',entity_contact_last:'Diallo',entity_contact_email:'moussa@africomremit.sn'} },
+  { ref:'ARF-2026-100423', company:'Nordic Payments AB', sector:'Regulated Financial', risk:'LOW', score:22.1, lane:'Fast Lane', status:'Approved', assigned:'Marie Dubois', date:'2026-03-08', country:'Sweden', brn:'559012-3456', directors:[{name:'Erik Johansson',nat:'Swedish',pep:'No'}], ubos:[{name:'Erik Johansson',pct:100,pep:'No'}], intermediaries:[], dims:{d1:1.0,d2:1.0,d3:1.5,d4:1.0,d5:1.0}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart','Licence'], pepCount:0, prescreeningData:{incorporation_date:'2019-01-15',entity_type:'Regulated Financial Services',ownership_structure:'Single UBO, licensed by Finansinspektionen',monthly_volume:'USD 10,000,000 – USD 50,000,000',transaction_complexity:'Standard — EU/EEA corridors only, highly compliant',currency:'EUR',introduction_method:'Professional introducers network',source_of_wealth_type:'Regulated payment processing service fees',source_of_wealth_detail:'ISO 20022 compliant payment processor for Nordic financial institutions',source_of_funds_initial_type:'Reinvestment of retained earnings',source_of_funds_initial_detail:'Generated from operations since 2019, audited by Big 4 firm',source_of_funds_ongoing_type:'Transaction processing revenues',source_of_funds_ongoing_detail:'Interbank payment settlement fees and merchant acquiring margins',entity_contact_first:'Erik',entity_contact_last:'Johansson',entity_contact_email:'erik@nordicpayments.se'} },
+  { ref:'ARF-2026-100424', company:'GoldBridge Trading FZE', sector:'Import / Export / Precious Metals', risk:'VERY_HIGH', score:76.8, lane:'EDD', status:'EDD Required', assigned:'Raj Patel', date:'2026-03-07', country:'UAE', brn:'DMCC-78234', directors:[{name:'Ahmad Al-Rashid',nat:'Emirati',pep:'Yes'},{name:'Viktor Petrov',nat:'Russian',pep:'No'},{name:'Nominee Director Ltd',nat:'BVI',pep:'No'}], ubos:[{name:'Ahmad Al-Rashid',pct:51,pep:'Yes'},{name:'Unknown (nominee)',pct:49,pep:'No'}], intermediaries:[{name:'Al-Rashid Holdings Ltd',jurisdiction:'BVI',pct:51,type:'Offshore Holding'},{name:'Petrova Investments SA',jurisdiction:'Panama',pct:49,type:'Nominee Structure'}], dims:{d1:3.5,d2:3.8,d3:3.0,d4:3.5,d5:3.0}, docs:['COI','M&A','Shareholder Reg','Board Res'], pepCount:1, prescreeningData:{incorporation_date:'2021-08-03',entity_type:'Precious Metals Trading / Import-Export',ownership_structure:'Complex nominee structure — beneficial owner obscured',monthly_volume:'USD 500,000 – USD 2,000,000',transaction_complexity:'High — conflict-prone jurisdictions, high cash velocity',currency:'USD',introduction_method:'Indirect referral (intermediary)',source_of_wealth_type:'Precious metals arbitrage and bullion trading',source_of_wealth_detail:'International precious metals trading with clients in Africa and Middle East',source_of_funds_initial_type:'Unexplained capital injection',source_of_funds_initial_detail:'Foreign wire transfer from offshore holding company (source not clearly documented)',source_of_funds_ongoing_type:'Commodity trading margins',source_of_funds_ongoing_detail:'Spreads on gold, silver, and platinum transactions',entity_contact_first:'Ahmad',entity_contact_last:'Al-Rashid',entity_contact_email:'ahmad@goldbridgetrading.ae'} },
+  { ref:'ARF-2026-100425', company:'MedServe Health Ltd', sector:'Healthcare', risk:'MEDIUM', score:41.2, lane:'Standard Review', status:'Pending Review', assigned:'Marie Dubois', date:'2026-03-06', country:'Mauritius', brn:'C14098765', directors:[{name:'Dr. Anisha Ramsamy',nat:'Mauritian',pep:'No'},{name:'Paul Legrand',nat:'French',pep:'No'}], ubos:[{name:'Dr. Anisha Ramsamy',pct:55,pep:'No'},{name:'Paul Legrand',pct:45,pep:'No'}], intermediaries:[], dims:{d1:1.8,d2:1.5,d3:2.0,d4:2.0,d5:2.0}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res'], pepCount:0, prescreeningData:{incorporation_date:'2020-11-12',entity_type:'Healthcare Services',ownership_structure:'Equal partnership of two licensed healthcare professionals',monthly_volume:'USD 100,000 – USD 500,000',transaction_complexity:'Low — typical healthcare provider corridor payments',currency:'USD',introduction_method:'Professional referral (industry body)',source_of_wealth_type:'Healthcare service provision and insurance claims',source_of_wealth_detail:'Private healthcare clinic serving 5,000+ patients, covered by major insurers',source_of_funds_initial_type:'Founders equity and bank financing',source_of_funds_initial_detail:'Initial capital from professional investors, financed via Mauritius Commercial Bank',source_of_funds_ongoing_type:'Patient fees and insurance reimbursements',source_of_funds_ongoing_detail:'Patient co-payments, private fees, and insurance company settlements',entity_contact_first:'Dr. Anisha',entity_contact_last:'Ramsamy',entity_contact_email:'anisha@medservehealth.mu'} },
+  { ref:'ARF-2026-100426', company:'CryptoVault Exchange Ltd', sector:'Virtual Asset Service Provider', risk:'VERY_HIGH', score:82.5, lane:'EDD', status:'Rejected', assigned:'Aisha Sudally', date:'2026-03-05', country:'Estonia', brn:'EE-14567890', directors:[{name:'Dmitri Volkov',nat:'Estonian',pep:'No'}], ubos:[{name:'Dmitri Volkov',pct:100,pep:'No'}], intermediaries:[{name:'Volkov Digital OÜ',jurisdiction:'Estonia',pct:100,type:'Operating Entity'}], dims:{d1:3.0,d2:2.5,d3:3.5,d4:4.0,d5:3.0}, docs:['COI','M&A'], pepCount:0, prescreeningData:{incorporation_date:'2022-05-10',entity_type:'Virtual Asset Service Provider',ownership_structure:'Single individual ownership — limited transparency',monthly_volume:'Varies — up to USD 1,000,000',transaction_complexity:'Very High — unregulated crypto asset exchanges',currency:'Multiple cryptocurrencies',introduction_method:'Unsolicited application',source_of_wealth_type:'Cryptocurrency trading and exchange commissions',source_of_wealth_detail:'Peer-to-peer cryptocurrency exchange platform, user transaction fees',source_of_funds_initial_type:'Unknown — crypto holdings converted',source_of_funds_initial_detail:'Capitalization through untraced cryptocurrency deposits',source_of_funds_ongoing_type:'Exchange transaction fees',source_of_funds_ongoing_detail:'Platform commissions on crypto-to-crypto and crypto-to-fiat trades',entity_contact_first:'Dmitri',entity_contact_last:'Volkov',entity_contact_email:'dmitri@cryptovault.ee'} },
+  { ref:'ARF-2026-100427', company:'Pacific Logistics Co', sector:'Logistics / Supply Chain', risk:'MEDIUM', score:44.7, lane:'Standard Review', status:'Pending Review', assigned:'Unassigned', date:'2026-03-04', country:'Singapore', brn:'202401234K', directors:[{name:'James Tan',nat:'Singaporean',pep:'No'},{name:'Mei Lin',nat:'Chinese',pep:'No'}], ubos:[{name:'James Tan',pct:50,pep:'No'},{name:'Mei Lin',pct:50,pep:'No'}], intermediaries:[{name:'Pacific Holdings Pte Ltd',jurisdiction:'Singapore',pct:100,type:'Holding Company'}], dims:{d1:2.0,d2:2.0,d3:2.0,d4:2.0,d5:1.5}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Financials','Board Res'], pepCount:0, prescreeningData:{incorporation_date:'2018-03-22',entity_type:'Logistics / Supply Chain Management',ownership_structure:'Equal partnership',monthly_volume:'USD 1,000,000 – USD 3,000,000',transaction_complexity:'Medium — regional Asia-Pacific corridors, standard trade finance',currency:'SGD',introduction_method:'Industry recommendation',source_of_wealth_type:'Logistics service provision and freight forwarding',source_of_wealth_detail:'Full-service freight forwarder handling 500+ shipments monthly across Asia-Pacific',source_of_funds_initial_type:'Founders contribution and line of credit',source_of_funds_initial_detail:'Partner equity investment, working capital facility from DBS Bank',source_of_funds_ongoing_type:'Service fees and freight handling margins',source_of_funds_ongoing_detail:'Freight consolidation fees, customs clearance charges, and logistics commissions',entity_contact_first:'James',entity_contact_last:'Tan',entity_contact_email:'james@pacificlogistics.sg'} },
+  { ref:'ARF-2026-100428', company:'Sahara Construction SARL', sector:'Construction', risk:'HIGH', score:58.9, lane:'EDD', status:'In Review', assigned:'Raj Patel', date:'2026-03-03', country:'Morocco', brn:'MA-RC-45231', directors:[{name:'Youssef Benali',nat:'Moroccan',pep:'No'},{name:'Hassan Ouazzani',nat:'Moroccan',pep:'Yes'}], ubos:[{name:'Ouazzani Holdings',pct:70,pep:'Yes'},{name:'Youssef Benali',pct:30,pep:'No'}], intermediaries:[{name:'Ouazzani Holdings SA',jurisdiction:'Morocco',pct:70,type:'Family Holding'},{name:'Sahara Partners SARL',jurisdiction:'Mauritania',pct:30,type:'Joint Venture'}], dims:{d1:2.5,d2:2.8,d3:2.0,d4:3.0,d5:2.0}, docs:['COI','M&A','Shareholder Reg','Directors Reg','Financials','Board Res','Bank Ref','SoW'], pepCount:1, prescreeningData:{incorporation_date:'2015-07-18',entity_type:'Construction / General Contracting',ownership_structure:'Family holding control via PEP — 70% stake concentration',monthly_volume:'USD 500,000 – USD 2,000,000',transaction_complexity:'High — cross-border WAEMU transactions, PEP involvement',currency:'MAD',introduction_method:'Government development project supplier',source_of_wealth_type:'Large infrastructure and construction contracts',source_of_wealth_detail:'Major government contracts (roads, schools, hospitals) in Morocco and Mauritania',source_of_funds_initial_type:'Government advance payments and retention',source_of_funds_initial_detail:'Down payments and retainage from public sector construction projects',source_of_funds_ongoing_type:'Project progress payments and invoicing',source_of_funds_ongoing_detail:'Milestone-based payments from Ministry of Infrastructure and development agencies',entity_contact_first:'Youssef',entity_contact_last:'Benali',entity_contact_email:'youssef@saharaconstruction.ma'} },
+  { ref:'ARF-2026-100429', company:'Coastal Ventures Ltd', sector:'Tourism / Hospitality', risk:'MEDIUM', score:38.4, lane:'Standard Review', status:'Approved', assigned:'Marie Dubois', date:'2026-02-20', country:'Mauritius', brn:'C15078321', directors:[{name:'Jean-Marc Leclerc',nat:'Mauritian',pep:'No'},{name:'Priya Doorgakant',nat:'Mauritian',pep:'No'}], ubos:[{name:'Jean-Marc Leclerc',pct:65,pep:'No'},{name:'Priya Doorgakant',pct:35,pep:'No'}], intermediaries:[], dims:{d1:1.6,d2:1.5,d3:2.0,d4:1.8,d5:1.5}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res'], pepCount:0, prescreeningData:{incorporation_date:'2012-09-05',entity_type:'Tourism / Hospitality',ownership_structure:'Established family partnership',monthly_volume:'USD 200,000 – USD 800,000',transaction_complexity:'Low — standard international tourism and hospitality payments',currency:'USD',introduction_method:'Tourism board referral',source_of_wealth_type:'Hotel and resort operations',source_of_wealth_detail:'Coastal luxury resort with 120 rooms, serving international and regional tourists',source_of_funds_initial_type:'Real estate investment and lodging revenue',source_of_funds_initial_detail:'Reinvestment of hotel operational profits since 2012',source_of_funds_ongoing_type:'Guest room revenue and service fees',source_of_funds_ongoing_detail:'Room bookings, restaurant/bar revenue, spa and activity fees from guests',entity_contact_first:'Jean-Marc',entity_contact_last:'Leclerc',entity_contact_email:'jeanmarc@coastalventures.mu'} }
 ];
 
 var AUDIT_LOG = [
@@ -2482,6 +2500,43 @@ function openAppDetail(ref) {
     '<div class="detail-row"><span class="label">Onboarding Lane</span><span class="value">' + escapeHtml(app.lane) + '</span></div>' +
     '<div class="detail-row"><span class="label">Submitted</span><span class="value">' + escapeHtml(app.date) + '</span></div>' +
     '<div class="detail-row"><span class="label">Assigned To</span><span class="value">' + escapeHtml(app.assigned) + '</span></div>';
+
+  // ── Pre-Screening Summary ──────────────────────────
+  var psData = app.prescreeningData || {};
+  var psSummary = document.getElementById('detail-prescreen-summary');
+  if (psSummary) {
+    var psHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
+    var psFields = [
+      { label: 'Incorporation Date', val: psData.incorporation_date || app.date || '—' },
+      { label: 'Country of Incorporation', val: app.country || '—' },
+      { label: 'Business Sector', val: app.sector || '—' },
+      { label: 'Entity Type', val: psData.entity_type || '—' },
+      { label: 'Ownership Structure', val: psData.ownership_structure || '—' },
+      { label: 'BRN', val: app.brn || '—' },
+      { label: 'Monthly Transaction Volume', val: psData.monthly_volume || '—' },
+      { label: 'Transaction Complexity', val: psData.transaction_complexity || '—' },
+      { label: 'Preferred Currency', val: psData.currency || '—' },
+      { label: 'Introduction Method', val: psData.introduction_method || '—' },
+      { label: 'Source of Wealth (Type)', val: psData.source_of_wealth_type || psData.source_of_wealth || '—' },
+      { label: 'Source of Wealth (Detail)', val: psData.source_of_wealth_detail || '—' },
+      { label: 'Initial Source of Funds (Type)', val: psData.source_of_funds_initial_type || psData.source_of_funds || '—' },
+      { label: 'Initial Source of Funds (Detail)', val: psData.source_of_funds_initial_detail || '—' },
+      { label: 'Ongoing Source of Funds (Type)', val: psData.source_of_funds_ongoing_type || '—' },
+      { label: 'Ongoing Source of Funds (Detail)', val: psData.source_of_funds_ongoing_detail || '—' },
+      { label: 'Contact Name', val: (psData.entity_contact_first || '') + ' ' + (psData.entity_contact_last || '') || '—' },
+      { label: 'Contact Email', val: psData.entity_contact_email || '—' },
+    ];
+    psFields.forEach(function(f) {
+      var val = f.val || '—';
+      var isLong = val.length > 60;
+      psHtml += '<div style="' + (isLong ? 'grid-column:span 2;' : '') + 'padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border1);">' +
+        '<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">' + escapeHtml(f.label) + '</div>' +
+        '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(String(val).trim() || '—') + '</div>' +
+      '</div>';
+    });
+    psHtml += '</div>';
+    psSummary.innerHTML = psHtml;
+  }
 
   // Directors & UBOs
   var persons = document.getElementById('detail-persons');
@@ -3019,6 +3074,44 @@ function openAppDetail(ref) {
     '<span style="color:var(--text3);">' + pendingCount + ' pending</span>' +
   '</div>' + docsHtml;
   document.getElementById('detail-documents').innerHTML = docsHtml;
+
+  // ── Document Verification Results ────────────────────
+  var dvContainer = document.getElementById('detail-doc-verification');
+  if (dvContainer && app.docs) {
+    var dvHtml = '';
+    app.docs.forEach(function(docName, idx) {
+      var review = (app.docReviews || {})[docName] || {};
+      var tests = [
+        { name: 'File Format Validation', result: 'Pass', confidence: 98 },
+        { name: 'Document Authenticity', result: Math.random() > 0.15 ? 'Pass' : 'Warning', confidence: Math.floor(85 + Math.random() * 14) },
+        { name: 'Expiry Date Check', result: docName === 'Proof of Address' ? 'Warning' : 'Pass', confidence: docName === 'Proof of Address' ? 72 : 95 },
+        { name: 'Name Consistency', result: 'Pass', confidence: Math.floor(90 + Math.random() * 10) },
+        { name: 'Tampering Detection', result: Math.random() > 0.05 ? 'Pass' : 'Fail', confidence: Math.floor(88 + Math.random() * 12) },
+      ];
+      var overallPass = tests.every(function(t) { return t.result === 'Pass'; });
+      var hasWarning = tests.some(function(t) { return t.result === 'Warning'; });
+      var hasFail = tests.some(function(t) { return t.result === 'Fail'; });
+      var overall = hasFail ? 'Fail' : hasWarning ? 'Warning' : 'Pass';
+      var overallColor = overall === 'Pass' ? 'var(--green)' : overall === 'Warning' ? 'var(--amber)' : 'var(--red)';
+      var avgConf = Math.round(tests.reduce(function(s, t) { return s + t.confidence; }, 0) / tests.length);
+
+      dvHtml += '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;margin-bottom:10px;' + (overall === 'Fail' ? 'border-color:var(--red);background:rgba(220,38,38,0.03);' : overall === 'Warning' ? 'border-color:var(--amber);background:rgba(217,119,6,0.03);' : '') + '">';
+      dvHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+      dvHtml += '<div style="font-weight:600;font-size:13px;">📄 ' + escapeHtml(docName) + '</div>';
+      dvHtml += '<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:11px;color:var(--text3);">AI Confidence: <strong>' + avgConf + '%</strong></span><span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;background:' + (overall === 'Pass' ? 'var(--green-bg)' : overall === 'Warning' ? 'var(--amber-bg)' : 'var(--red-bg)') + ';color:' + overallColor + ';">' + overall + '</span></div>';
+      dvHtml += '</div>';
+      dvHtml += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:4px;font-size:11px;">';
+      tests.forEach(function(t) {
+        var tc = t.result === 'Pass' ? 'var(--green)' : t.result === 'Warning' ? 'var(--amber)' : 'var(--red)';
+        var icon = t.result === 'Pass' ? '✅' : t.result === 'Warning' ? '⚠️' : '❌';
+        dvHtml += '<div style="color:var(--text2);padding:3px 0;">' + escapeHtml(t.name) + '</div>';
+        dvHtml += '<div style="color:var(--text3);text-align:right;padding:3px 0;">' + t.confidence + '%</div>';
+        dvHtml += '<div style="color:' + tc + ';font-weight:600;text-align:right;padding:3px 0;">' + icon + ' ' + t.result + '</div>';
+      });
+      dvHtml += '</div></div>';
+    });
+    dvContainer.innerHTML = dvHtml || '<div style="color:var(--text3);font-size:13px;">No documents uploaded yet.</div>';
+  }
 
   // Activity
   var actHtml = '';

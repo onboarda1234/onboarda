@@ -1550,7 +1550,7 @@
           <div class="form-group mb-2">
             <label>Password <span class="req">*</span></label>
             <div class="input-password-wrap">
-              <input type="password" id="r-password" placeholder="Min. 8 characters" required oninput="checkPasswordStrength(this.value)" autocomplete="new-password"/>
+              <input type="password" id="r-password" placeholder="Min. 12 characters" required oninput="checkPasswordStrength(this.value)" autocomplete="new-password"/>
               <button type="button" class="pwd-toggle" onclick="togglePwd('r-password', this)">👁</button>
             </div>
             <div class="pwd-strength" id="pwd-strength-wrap" style="display:none;">
@@ -2200,11 +2200,11 @@
           <div class="form-grid cols-3">
             <div class="form-group">
               <label>Incorporation Date <span class="req">*</span></label>
-              <input type="date" id="f-inc-date" required />
+              <input type="date" id="f-inc-date" required max="" />
             </div>
             <div class="form-group">
               <label>Country of Incorporation <span class="req">*</span></label>
-              <select id="f-inc-country" required>
+              <select id="f-inc-country" required onchange="checkSanctionedCountry(this)">
                 <option value="">Select country…</option>
                 <option>Afghanistan</option><option>Albania</option><option>Algeria</option>
                 <option>Andorra</option><option>Angola</option><option>Antigua and Barbuda</option>
@@ -2477,6 +2477,16 @@
               </select>
             </div>
             <div class="form-group">
+              <label>Preferred Account Currency <span class="req">*</span></label>
+              <select id="f-currency" required>
+                <option value="">Select currency…</option>
+                <option value="USD">USD — US Dollar</option>
+                <option value="EUR">EUR — Euro</option>
+                <option value="GBP">GBP — British Pound</option>
+                <option value="AED">AED — UAE Dirham</option>
+              </select>
+            </div>
+            <div class="form-group">
               <label>Countries of Operation <span class="req">*</span></label>
               <div class="ms-wrap" id="ms-op-countries" data-placeholder="Select countries of operation…">
                 <div class="ms-trigger" onclick="toggleMultiSelect('ms-op-countries')">
@@ -2593,7 +2603,7 @@
                 <option value="Loan / credit facility proceeds">Loan / credit facility proceeds</option>
                 <option value="Other">Other</option>
               </select>
-              <textarea id="f-source-wealth" placeholder="Provide additional detail if needed (e.g. name of business, investor, or fund source)" style="margin-top:8px;min-height:60px;"></textarea>
+              <textarea id="f-source-wealth" placeholder="Provide additional detail (minimum 20 characters)..." style="margin-top:8px;min-height:60px;" required minlength="20"></textarea>
             </div>
             <div class="form-group" style="display:flex;flex-direction:column;">
               <label>Initial Source of Funds <span class="req">*</span></label>
@@ -2609,7 +2619,7 @@
                 <option value="Client payments / receivables">Client payments / receivables</option>
                 <option value="Other">Other</option>
               </select>
-              <textarea id="f-source-init" placeholder="Provide additional detail (e.g. bank name, transferring entity)" style="margin-top:8px;min-height:60px;"></textarea>
+              <textarea id="f-source-init" placeholder="Provide additional detail (minimum 20 characters)..." style="margin-top:8px;min-height:60px;" required minlength="20"></textarea>
             </div>
             <div class="form-group span-2">
               <label>Ongoing Source of Funds <span class="req">*</span></label>
@@ -2625,7 +2635,7 @@
                 <option value="Subscription / SaaS revenue">Subscription / SaaS revenue</option>
                 <option value="Other">Other</option>
               </select>
-              <textarea id="f-source-ongoing" placeholder="Provide additional detail (e.g. type of clients, payment frequency, expected corridors)" style="margin-top:8px;min-height:60px;"></textarea>
+              <textarea id="f-source-ongoing" placeholder="Provide additional detail (minimum 20 characters)..." style="margin-top:8px;min-height:60px;" required minlength="20"></textarea>
             </div>
           </div>
 
@@ -5274,6 +5284,30 @@ async function submitPrescreening(e) {
   btn.disabled = true;
   btn.textContent = '⏳ Submitting…';
 
+  // Sanctions check
+  var incCountry = document.getElementById('f-inc-country');
+  if (incCountry && !checkSanctionedCountry(incCountry)) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Restricted Jurisdiction', 'ARIE Finance cannot onboard clients from sanctioned jurisdictions.');
+    return;
+  }
+  // Incorporation date validation
+  var incDate = document.getElementById('f-inc-date');
+  if (incDate && incDate.value && new Date(incDate.value) > new Date()) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Invalid Date', 'Incorporation date cannot be in the future.');
+    return;
+  }
+  // SoW/SoF minimum detail validation
+  var sowDetail = (document.getElementById('f-source-wealth') || {}).value || '';
+  var sofInitDetail = (document.getElementById('f-source-init') || {}).value || '';
+  var sofOngoingDetail = (document.getElementById('f-source-ongoing') || {}).value || '';
+  if (sowDetail.length < 20 || sofInitDetail.length < 20 || sofOngoingDetail.length < 20) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Insufficient Detail', 'Source of Wealth and Source of Funds detail fields require at least 20 characters each.');
+    return;
+  }
+
   // Collect form data for the API
   var form = document.getElementById('prescreening-form');
   var dirRows = document.querySelectorAll('#directors-body tr');
@@ -5312,10 +5346,20 @@ async function submitPrescreening(e) {
     ownership_structure: (document.getElementById('f-ownership-structure') || {}).value || '',
     prescreening_data: {
       monthly_volume: (document.getElementById('f-monthly-volume') || {}).value || '',
-      introduction_method: (document.getElementById('f-introduction') || {}).value || '',
+      introduction_method: (document.getElementById('f-intro-method') || document.getElementById('f-introduction') || {}).value || '',
       cross_border: (document.getElementById('f-cross-border') || {}).checked || false,
-      source_of_wealth: (document.getElementById('f-source-wealth-type') || {}).value || '',
-      source_of_funds: (document.getElementById('f-source-init-type') || {}).value || ''
+      source_of_wealth_type: (document.getElementById('f-source-wealth-type') || {}).value || '',
+      source_of_wealth_detail: (document.getElementById('f-source-wealth') || {}).value || '',
+      source_of_funds_initial_type: (document.getElementById('f-source-init-type') || {}).value || '',
+      source_of_funds_initial_detail: (document.getElementById('f-source-init') || {}).value || '',
+      source_of_funds_ongoing_type: (document.getElementById('f-source-ongoing-type') || {}).value || '',
+      source_of_funds_ongoing_detail: (document.getElementById('f-source-ongoing') || {}).value || '',
+      currency: (document.getElementById('f-currency') || {}).value || '',
+      incorporation_date: (document.getElementById('f-inc-date') || {}).value || '',
+      transaction_complexity: (document.getElementById('f-txn-complexity') || {}).value || '',
+      entity_contact_first: (document.getElementById('f-contact-first') || {}).value || '',
+      entity_contact_last: (document.getElementById('f-contact-last') || {}).value || '',
+      entity_contact_email: (document.getElementById('f-email') || {}).value || '',
     },
     directors: directors,
     ubos: ubos
@@ -7065,6 +7109,9 @@ document.addEventListener('DOMContentLoaded', () => {
   initMultiSelect('ms-target-markets', ALL_COUNTRIES);
   populateNationalitySelects();
   populateLookupCountry();
+  // Set incorporation date max to today
+  var incDateEl = document.getElementById('f-inc-date');
+  if (incDateEl) incDateEl.max = new Date().toISOString().split('T')[0];
   // Staff back office access via URL hash: file.html#backoffice
   if (window.location.hash === '#backoffice') {
     toggleBackOffice();
@@ -7143,6 +7190,26 @@ function switchBOTab(btn, tabId) {
 
 // ─── Update DOMContentLoaded to also populate nationality ─────
 
+// ─── Sanctioned Countries & Validation ───────────────────────
+const SANCTIONED_COUNTRIES_LIST = ['Iran','North Korea','Syria','Cuba','Crimea','Myanmar','Russia','Belarus','Venezuela','Afghanistan','Somalia','Yemen','Libya','Iraq','South Sudan','Central African Republic','Democratic Republic of Congo','Mali','Guinea-Bissau','Lebanon'];
+
+function checkSanctionedCountry(selectEl) {
+  var val = (selectEl.value || '').trim();
+  var errId = selectEl.id + '-sanction-err';
+  var existing = document.getElementById(errId);
+  if (existing) existing.remove();
+  if (val && SANCTIONED_COUNTRIES_LIST.some(function(c) { return val.toLowerCase() === c.toLowerCase(); })) {
+    var err = document.createElement('div');
+    err.id = errId;
+    err.style.cssText = 'color:#dc2626;font-size:12px;font-weight:600;margin-top:6px;padding:8px 12px;background:rgba(220,38,38,0.06);border:1px solid rgba(220,38,38,0.15);border-radius:8px;';
+    err.textContent = 'ARIE Finance cannot onboard clients involved in sanctioned or prohibited jurisdictions.';
+    selectEl.parentElement.appendChild(err);
+    selectEl.style.borderColor = '#dc2626';
+    return false;
+  }
+  selectEl.style.borderColor = '';
+  return true;
+}
 
 // ─── Simulated company data from "registry lookup" ───────────
 const MOCK_COMPANY_DATA = {
@@ -7168,6 +7235,36 @@ function submitRegister(e) {
   let ok = true;
   emailErr.classList.add('hidden');
   confErr.classList.add('hidden');
+  // Remove existing pwd error
+  var pwdErr = document.getElementById('r-pwd-err');
+  if (pwdErr) pwdErr.remove();
+  // Password policy check
+  var pwdChecks = [
+    { test: pwd.length >= 12, msg: 'at least 12 characters' },
+    { test: /[A-Z]/.test(pwd), msg: 'an uppercase letter' },
+    { test: /[a-z]/.test(pwd), msg: 'a lowercase letter' },
+    { test: /[0-9]/.test(pwd), msg: 'a number' },
+    { test: /[^A-Za-z0-9]/.test(pwd), msg: 'a special character' },
+  ];
+  var failures = pwdChecks.filter(function(c) { return !c.test; });
+  if (failures.length > 0) {
+    var errEl = document.createElement('span');
+    errEl.id = 'r-pwd-err';
+    errEl.className = 'field-error';
+    errEl.textContent = 'Password must contain: ' + failures.map(function(f) { return f.msg; }).join(', ');
+    document.getElementById('r-password').parentElement.after(errEl);
+    ok = false;
+  }
+  // Common passwords
+  var common = ['password','12345678','qwerty','letmein','welcome','monkey','dragon','master','abc123','password1','onboarda'];
+  if (common.some(function(c) { return pwd.toLowerCase().includes(c); })) {
+    var errEl2 = document.createElement('span');
+    errEl2.id = 'r-pwd-err';
+    errEl2.className = 'field-error';
+    errEl2.textContent = 'Password is too common or easily guessable';
+    document.getElementById('r-password').parentElement.after(errEl2);
+    ok = false;
+  }
   if (pwd !== conf) { confErr.classList.remove('hidden'); ok = false; }
   if (!ok) return;
   const btn = document.getElementById('register-btn');
@@ -7254,18 +7351,35 @@ function togglePwd(id, btn) {
   btn.textContent = inp.type === 'password' ? '👁' : '🙈';
 }
 function checkPasswordStrength(val) {
-  const wrap = document.getElementById('pwd-strength-wrap');
-  const label = document.getElementById('pwd-strength-label');
+  var wrap = document.getElementById('pwd-strength-wrap');
+  var label = document.getElementById('pwd-strength-label');
+  // Show/hide checklist
+  var checklist = document.getElementById('pwd-checklist');
+  if (!checklist) {
+    checklist = document.createElement('div');
+    checklist.id = 'pwd-checklist';
+    checklist.style.cssText = 'margin-top:8px;font-size:12px;line-height:2;';
+    wrap.parentElement.insertBefore(checklist, wrap.nextSibling);
+  }
   wrap.style.display = val.length ? 'block' : 'none';
-  let score = 0;
-  if (val.length >= 8) score++;
-  if (/[A-Z]/.test(val)) score++;
-  if (/[0-9]/.test(val)) score++;
-  if (/[^A-Za-z0-9]/.test(val)) score++;
-  const colors = ['','#ef4444','#f59e0b','#3b82f6','#22c55e'];
-  const labels = ['','Weak','Fair','Good','Strong'];
-  for (let i = 1; i <= 4; i++) {
-    document.getElementById('ps'+i).style.background = i <= score ? colors[score] : 'var(--bg3)';
+  checklist.style.display = val.length ? 'block' : 'none';
+
+  var checks = [
+    { test: val.length >= 12, label: '12+ characters' },
+    { test: /[A-Z]/.test(val), label: 'Uppercase letter' },
+    { test: /[a-z]/.test(val), label: 'Lowercase letter' },
+    { test: /[0-9]/.test(val), label: 'Number' },
+    { test: /[^A-Za-z0-9]/.test(val), label: 'Special character' },
+  ];
+  var score = checks.filter(function(c) { return c.test; }).length;
+  checklist.innerHTML = checks.map(function(c) {
+    return '<div style="color:' + (c.test ? '#16a34a' : 'var(--text3)') + ';">' + (c.test ? '✅' : '⬜') + ' ' + c.label + '</div>';
+  }).join('');
+
+  var colors = ['','#ef4444','#ef4444','#f59e0b','#3b82f6','#22c55e'];
+  var labels = ['','Very Weak','Weak','Fair','Good','Strong'];
+  for (var i = 1; i <= 4; i++) {
+    document.getElementById('ps'+i).style.background = i <= Math.min(score, 4) ? colors[score] : 'var(--bg3)';
   }
   label.textContent = labels[score] || '';
   label.style.color = colors[score] || 'var(--text3)';
@@ -7475,13 +7589,33 @@ function triggerUploadKYC(inputId) {
 
 function handleKYCUpload(personId, docType, input) {
   if (!input.files.length) return;
-  const lbl = document.getElementById('kyc-' + docType + '-lbl-' + personId);
-  const area = document.getElementById('kyc-' + docType + '-area-' + personId);
+  // docType uses underscores (e.g. cert_inc) but HTML IDs use hyphens (e.g. kyc-cert-inc-lbl-)
+  var docKey = docType.replace(/_/g, '-');
+  const lbl = document.getElementById('kyc-' + docKey + '-lbl-' + personId);
+  const area = document.getElementById('kyc-' + docKey + '-area-' + personId);
   var fileName = input.files.length === 1 ? input.files[0].name : input.files.length + ' files selected';
-  lbl.textContent = fileName;
-  area.style.borderColor = 'var(--green)';
-  area.style.color = 'var(--green)';
+  if (lbl) lbl.textContent = fileName;
+  if (area) { area.style.borderColor = 'var(--green)'; area.style.color = 'var(--green)'; }
   updateKYCBadge(personId);
+
+  // Upload to backend if authenticated
+  if (AUTH_TOKEN && currentApplicationId && input.files[0]) {
+    var formData = new FormData();
+    formData.append('file', input.files[0]);
+    fetch(API_BASE + '/applications/' + currentApplicationId + '/documents?doc_type=intermediary_' + docType + '_' + personId, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN },
+      body: formData
+    }).then(function(r) { return r.json(); }).then(function(resp) {
+      if (resp.id) {
+        // Trigger document verification
+        fetch(API_BASE + '/documents/' + resp.id + '/verify', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN, 'Content-Type': 'application/json' }
+        }).catch(function() {});
+      }
+    }).catch(function(err) { console.warn('Intermediary doc upload error:', err); });
+  }
 
   // Run real-time AI verification on person documents
   runAIPersonDocVerification(personId, docType, fileName);

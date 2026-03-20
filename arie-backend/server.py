@@ -403,6 +403,11 @@ FATF_GREY = {"syria","myanmar","iran","north korea","yemen","haiti","south sudan
              "democratic republic of congo","cameroon","burkina faso","mali","senegal"}
 FATF_BLACK = {"iran","north korea","myanmar"}
 SANCTIONED = {"iran","north korea","syria","cuba","crimea"}
+SANCTIONED_COUNTRIES_FULL = {"iran","north korea","syria","cuba","crimea","myanmar","russia","belarus",
+                              "venezuela","afghanistan","somalia","yemen","libya","iraq","south sudan",
+                              "central african republic","democratic republic of congo","mali",
+                              "guinea-bissau","lebanon"}
+ALLOWED_CURRENCIES = {"USD", "EUR", "GBP", "AED"}
 LOW_RISK = {"mauritius","united kingdom","uk","france","germany","sweden","norway",
             "denmark","finland","australia","new zealand","canada","usa","united states",
             "japan","singapore","hong kong","switzerland","netherlands","belgium","luxembourg",
@@ -1762,8 +1767,14 @@ class ClientRegisterHandler(BaseHandler):
             self.write({"error": "Too many registration attempts. Please try again later."})
             return
 
-        if len(password) < 8:
-            return self.error("Password must be at least 8 characters")
+        if len(password) < 12:
+            return self.error("Password must be at least 12 characters")
+
+        # Check for common passwords
+        common_passwords = {"password", "12345678", "qwerty", "letmein", "welcome", "monkey",
+                           "dragon", "master", "abc123", "password1", "onboarda", "123456789012"}
+        if password.lower() in common_passwords or any(cp in password.lower() for cp in common_passwords):
+            return self.error("Password is too common or easily guessable", 400)
 
         # Validate password policy (mandatory)
         is_valid, pw_error = PasswordPolicy.validate(password)
@@ -2160,6 +2171,45 @@ class SubmitApplicationHandler(BaseHandler):
             return
 
         real_id = app["id"]
+
+        # ── v2.2: Pre-screening validation ──────────────────────────
+        prescreening_raw = json.loads(app["prescreening_data"]) if app.get("prescreening_data") else {}
+
+        # Validate incorporation date (no future dates)
+        inc_date = prescreening_raw.get("incorporation_date", "")
+        if inc_date:
+            try:
+                from datetime import date
+                parsed_date = datetime.strptime(inc_date, "%Y-%m-%d").date()
+                if parsed_date > datetime.utcnow().date():
+                    db.close()
+                    return self.error("Incorporation date cannot be in the future.", 400)
+            except ValueError:
+                pass  # Non-standard date format, allow through
+
+        # Validate country is not sanctioned
+        country = (app.get("country") or "").lower().strip()
+        if country in SANCTIONED_COUNTRIES_FULL:
+            db.close()
+            return self.error(
+                "ARIE Finance cannot onboard clients involved in sanctioned or prohibited jurisdictions.",
+                403
+            )
+
+        # Validate Source of Wealth / Source of Funds detail (min 20 chars)
+        sow_detail = prescreening_raw.get("source_of_wealth_detail", "")
+        sof_init_detail = prescreening_raw.get("source_of_funds_initial_detail", "")
+        sof_ongoing_detail = prescreening_raw.get("source_of_funds_ongoing_detail", "")
+        for field_name, field_val in [("Source of Wealth", sow_detail), ("Initial Source of Funds", sof_init_detail), ("Ongoing Source of Funds", sof_ongoing_detail)]:
+            if len((field_val or "").strip()) < 20:
+                db.close()
+                return self.error(f"{field_name} detail must be at least 20 characters.", 400)
+
+        # Validate currency
+        currency = prescreening_raw.get("currency", "")
+        if currency and currency not in ALLOWED_CURRENCIES:
+            db.close()
+            return self.error(f"Currency '{currency}' not supported. Allowed: {', '.join(ALLOWED_CURRENCIES)}", 400)
 
         # Build scoring input
         directors = [dict(d) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
