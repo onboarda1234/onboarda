@@ -2994,23 +2994,25 @@ function openAppDetail(ref) {
       '<span style="color:var(--text3);">' + pendingCount + ' pending</span>' +
     '</div>';
 
+    // Open 2-column grid for document cards
+    combinedHtml += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
+
     app.docs.forEach(function(docName) {
       var review = (app.docReviews || {})[docName] || {};
       var isBoUpload = review.uploadedBy === 'officer';
       var uploadDate = review.reviewedAt || app.date;
       var statusHtml = '';
-      if (review.status === 'accepted') statusHtml = '<div style="font-size:11px;color:var(--green);font-weight:600;margin-top:2px;">✅ Accepted</div>';
-      else if (review.status === 'rejected') statusHtml = '<div style="font-size:11px;color:var(--red);font-weight:600;margin-top:2px;">❌ Rejected' + (review.comment ? ' — ' + escapeHtml(review.comment) : '') + '</div>';
-      else if (review.status === 'info_requested') statusHtml = '<div style="font-size:11px;color:var(--amber);font-weight:600;margin-top:2px;">📋 Info Requested' + (review.comment ? ' — ' + escapeHtml(review.comment) : '') + '</div>';
+      if (review.status === 'accepted') statusHtml = '<div style="font-size:10px;color:var(--green);font-weight:600;margin-top:2px;">✅ Accepted</div>';
+      else if (review.status === 'rejected') statusHtml = '<div style="font-size:10px;color:var(--red);font-weight:600;margin-top:2px;">❌ Rejected</div>';
+      else if (review.status === 'info_requested') statusHtml = '<div style="font-size:10px;color:var(--amber);font-weight:600;margin-top:2px;">📋 Info Req.</div>';
 
-      // Generate verification tests (deterministic per document name)
       var seed = seedRandom(docName);
       var tests = [
-        { name: 'File Format Validation', result: 'Pass', confidence: 98 },
-        { name: 'Document Authenticity', result: (seed % 7 === 0) ? 'Warning' : 'Pass', confidence: 85 + (seed % 14) },
-        { name: 'Expiry Date Check', result: docName === 'Proof of Address' ? 'Warning' : 'Pass', confidence: docName === 'Proof of Address' ? 72 : 90 + (seed % 10) },
-        { name: 'Name Consistency', result: 'Pass', confidence: 90 + (seed % 10) },
-        { name: 'Tampering Detection', result: (seed % 19 === 0) ? 'Fail' : 'Pass', confidence: 88 + (seed % 12) },
+        { name: 'Format', result: 'Pass', confidence: 98 },
+        { name: 'Authenticity', result: (seed % 7 === 0) ? 'Warning' : 'Pass', confidence: 85 + (seed % 14) },
+        { name: 'Expiry', result: docName === 'Proof of Address' ? 'Warning' : 'Pass', confidence: docName === 'Proof of Address' ? 72 : 90 + (seed % 10) },
+        { name: 'Name Match', result: 'Pass', confidence: 90 + (seed % 10) },
+        { name: 'Tampering', result: (seed % 19 === 0) ? 'Fail' : 'Pass', confidence: 88 + (seed % 12) },
       ];
       var hasFail = tests.some(function(t) { return t.result === 'Fail'; });
       var hasWarning = tests.some(function(t) { return t.result === 'Warning'; });
@@ -3018,49 +3020,47 @@ function openAppDetail(ref) {
       var overallColor = overall === 'Pass' ? 'var(--green)' : overall === 'Warning' ? 'var(--amber)' : 'var(--red)';
       var avgConf = Math.round(tests.reduce(function(s, t) { return s + t.confidence; }, 0) / tests.length);
 
-      combinedHtml += '<div style="border:1px solid var(--border1);border-radius:12px;margin-bottom:12px;overflow:hidden;' + (overall === 'Fail' ? 'border-color:var(--red);' : overall === 'Warning' ? 'border-color:var(--amber);' : '') + '">';
+      combinedHtml += '<div style="border:1px solid var(--border1);border-radius:10px;overflow:hidden;' + (overall === 'Fail' ? 'border-color:var(--red);' : overall === 'Warning' ? 'border-color:var(--amber);' : '') + '">';
 
-      // Document header + actions
-      combinedHtml += '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--surface2);border-bottom:1px solid var(--border1);">';
-      combinedHtml += '<div style="font-size:20px;">' + (isBoUpload ? '📤' : '📄') + '</div>';
-      combinedHtml += '<div style="flex:1;min-width:0;">';
-      combinedHtml += '<div style="font-weight:600;font-size:13px;">' + escapeHtml(docName) + (isBoUpload ? ' <span style="font-size:9px;padding:1px 5px;background:var(--brand);color:white;border-radius:3px;font-weight:600;">BO</span>' : '') + '</div>';
-      combinedHtml += '<div style="font-size:11px;color:var(--text3);">Uploaded ' + escapeHtml(uploadDate) + '</div>';
-      combinedHtml += statusHtml;
+      // Doc header
+      combinedHtml += '<div style="padding:10px 12px;background:var(--surface2);border-bottom:1px solid var(--border1);">';
+      combinedHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+      combinedHtml += '<span style="font-size:16px;">' + (isBoUpload ? '📤' : '📄') + '</span>';
+      combinedHtml += '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(docName) + '</div><div style="font-size:10px;color:var(--text3);">' + escapeHtml(uploadDate) + '</div>' + statusHtml + '</div>';
       combinedHtml += '</div>';
-      combinedHtml += '<div style="display:flex;gap:4px;flex-shrink:0;">';
-      combinedHtml += '<button class="doc-action-btn accept' + (review.status==='accepted'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + docName.replace(/'/g,"\\'") + '\',\'accepted\')" style="font-size:11px;padding:4px 10px;">Accept</button>';
-      combinedHtml += '<button class="doc-action-btn reject' + (review.status==='rejected'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + docName.replace(/'/g,"\\'") + '\',\'rejected\')" style="font-size:11px;padding:4px 10px;">Reject</button>';
-      combinedHtml += '<button class="doc-action-btn info' + (review.status==='info_requested'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + docName.replace(/'/g,"\\'") + '\',\'info_requested\')" style="font-size:11px;padding:4px 10px;">Request Info</button>';
+      combinedHtml += '<div style="display:flex;gap:3px;">';
+      combinedHtml += '<button class="doc-action-btn accept' + (review.status==='accepted'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + docName.replace(/'/g,"\\'") + '\',\'accepted\')" style="font-size:10px;padding:3px 8px;">Accept</button>';
+      combinedHtml += '<button class="doc-action-btn reject' + (review.status==='rejected'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + docName.replace(/'/g,"\\'") + '\',\'rejected\')" style="font-size:10px;padding:3px 8px;">Reject</button>';
+      combinedHtml += '<button class="doc-action-btn info' + (review.status==='info_requested'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + docName.replace(/'/g,"\\'") + '\',\'info_requested\')" style="font-size:10px;padding:3px 8px;">Info</button>';
       combinedHtml += '</div></div>';
 
-      // Inline verification results
-      combinedHtml += '<div style="padding:10px 14px;background:' + (overall === 'Fail' ? 'rgba(220,38,38,0.03)' : overall === 'Warning' ? 'rgba(217,119,6,0.03)' : 'rgba(22,163,74,0.02)') + ';">';
-      combinedHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
-      combinedHtml += '<span style="font-size:11px;font-weight:600;color:var(--text2);">AI Verification</span>';
-      combinedHtml += '<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:10px;color:var(--text3);">Confidence: <strong>' + avgConf + '%</strong></span><span style="font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;background:' + (overall === 'Pass' ? 'var(--green-bg)' : overall === 'Warning' ? 'var(--amber-bg)' : 'var(--red-bg)') + ';color:' + overallColor + ';">' + overall + '</span></div>';
+      // Compact verification
+      combinedHtml += '<div style="padding:8px 12px;background:' + (overall === 'Fail' ? 'rgba(220,38,38,0.03)' : overall === 'Warning' ? 'rgba(217,119,6,0.03)' : 'rgba(22,163,74,0.02)') + ';">';
+      combinedHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+      combinedHtml += '<span style="font-size:10px;font-weight:600;color:var(--text2);">AI Verification</span>';
+      combinedHtml += '<span style="font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;background:' + (overall === 'Pass' ? 'var(--green-bg)' : overall === 'Warning' ? 'var(--amber-bg)' : 'var(--red-bg)') + ';color:' + overallColor + ';">' + avgConf + '% ' + overall + '</span>';
       combinedHtml += '</div>';
-      combinedHtml += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:2px 8px;font-size:11px;">';
       tests.forEach(function(t) {
         var tc = t.result === 'Pass' ? 'var(--green)' : t.result === 'Warning' ? 'var(--amber)' : 'var(--red)';
         var icon = t.result === 'Pass' ? '✅' : t.result === 'Warning' ? '⚠️' : '❌';
-        combinedHtml += '<div style="color:var(--text2);padding:2px 0;">' + escapeHtml(t.name) + '</div>';
-        combinedHtml += '<div style="color:var(--text3);text-align:right;padding:2px 0;">' + t.confidence + '%</div>';
-        combinedHtml += '<div style="color:' + tc + ';font-weight:600;text-align:right;padding:2px 0;">' + icon + '</div>';
+        combinedHtml += '<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0;color:var(--text2);"><span>' + escapeHtml(t.name) + '</span><span style="color:' + tc + ';font-weight:600;">' + icon + ' ' + t.confidence + '%</span></div>';
       });
-      combinedHtml += '</div></div></div>';
+      combinedHtml += '</div></div>';
     });
 
     // Missing documents
     var allDocs = ['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart'];
     allDocs.forEach(function(d) {
       if (app.docs.indexOf(d) === -1) {
-        combinedHtml += '<div style="border:1px solid var(--border1);border-radius:12px;margin-bottom:12px;padding:12px 14px;display:flex;align-items:center;gap:10px;opacity:0.5;">';
-        combinedHtml += '<div style="font-size:20px;">❌</div>';
-        combinedHtml += '<div><div style="font-weight:600;font-size:13px;">' + escapeHtml(d) + '</div><div style="font-size:11px;color:var(--red);">Missing</div></div>';
+        combinedHtml += '<div style="border:1px solid var(--border1);border-radius:10px;padding:10px 12px;display:flex;align-items:center;gap:8px;opacity:0.5;">';
+        combinedHtml += '<span style="font-size:16px;">❌</span>';
+        combinedHtml += '<div><div style="font-weight:600;font-size:11px;">' + escapeHtml(d) + '</div><div style="font-size:10px;color:var(--red);">Missing</div></div>';
         combinedHtml += '</div>';
       }
     });
+
+    // Close grid
+    combinedHtml += '</div>';
 
     combinedContainer.innerHTML = combinedHtml;
   }
