@@ -885,11 +885,9 @@ body.role-admin .role-admin-only-block { display:block; }
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
   </div>
 
-  <!-- Tab: Overview (full width, no sidebar) -->
+  <!-- Tab: Overview (full width) -->
   <div id="detail-tab-overview">
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-    <div>
-      <!-- Client Info -->
+    <!-- Client Info (full width) -->
       <div class="card">
         <div class="card-header">
           <div class="card-title" id="detail-company-name">Company Name</div>
@@ -1009,8 +1007,7 @@ body.role-admin .role-admin-only-block { display:block; }
         </div>
         <div class="memo-body" id="detail-memo"></div>
       </div>
-    </div>
-  </div>
+
   </div><!-- /detail-tab-overview -->
 
   <!-- Tab: Activity Log (hidden by default) -->
