@@ -2476,16 +2476,7 @@
                 <option value="Very complex — includes high-risk corridors">International corridors including high-risk regions</option>
               </select>
             </div>
-            <div class="form-group">
-              <label>Preferred Account Currency <span class="req">*</span></label>
-              <select id="f-currency" required>
-                <option value="">Select currency…</option>
-                <option value="USD">USD — US Dollar</option>
-                <option value="EUR">EUR — Euro</option>
-                <option value="GBP">GBP — British Pound</option>
-                <option value="AED">AED — UAE Dirham</option>
-              </select>
-            </div>
+            <!-- Currency moved to Account Preferences section as multi-select -->
             <div class="form-group">
               <label>Countries of Operation <span class="req">*</span></label>
               <div class="ms-wrap" id="ms-op-countries" data-placeholder="Select countries of operation…">
@@ -2582,7 +2573,22 @@
           <div class="form-grid">
             <div class="form-group span-2">
               <label>Currencies Required <span class="req">*</span></label>
-              <input type="text" id="f-currencies" placeholder="e.g. USD, EUR, GBP" required />
+              <p style="font-size:11px;color:var(--text3);margin:-2px 0 8px 0;">Select all currencies your account will need to operate with.</p>
+              <div id="currency-checkboxes" style="display:flex;gap:12px;flex-wrap:wrap;">
+                <label style="display:flex;align-items:center;gap:6px;padding:10px 16px;border:1.5px solid var(--border2);border-radius:var(--radius-sm);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s;" class="currency-option">
+                  <input type="checkbox" value="USD" name="currencies" style="accent-color:var(--gold);width:16px;height:16px;" /> USD — US Dollar
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;padding:10px 16px;border:1.5px solid var(--border2);border-radius:var(--radius-sm);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s;" class="currency-option">
+                  <input type="checkbox" value="EUR" name="currencies" style="accent-color:var(--gold);width:16px;height:16px;" /> EUR — Euro
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;padding:10px 16px;border:1.5px solid var(--border2);border-radius:var(--radius-sm);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s;" class="currency-option">
+                  <input type="checkbox" value="GBP" name="currencies" style="accent-color:var(--gold);width:16px;height:16px;" /> GBP — British Pound
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;padding:10px 16px;border:1.5px solid var(--border2);border-radius:var(--radius-sm);cursor:pointer;font-size:14px;font-weight:500;transition:all .2s;" class="currency-option">
+                  <input type="checkbox" value="AED" name="currencies" style="accent-color:var(--gold);width:16px;height:16px;" /> AED — UAE Dirham
+                </label>
+              </div>
+              <span class="field-error hidden" id="currency-err" style="margin-top:4px;">Please select at least one currency.</span>
             </div>
           </div>
 
@@ -2603,7 +2609,7 @@
                 <option value="Loan / credit facility proceeds">Loan / credit facility proceeds</option>
                 <option value="Other">Other</option>
               </select>
-              <textarea id="f-source-wealth" placeholder="Provide additional detail (minimum 20 characters)..." style="margin-top:8px;min-height:60px;" required minlength="20"></textarea>
+              <textarea id="f-source-wealth" placeholder="Provide additional detail if needed..." style="margin-top:8px;min-height:60px;"></textarea>
             </div>
             <div class="form-group" style="display:flex;flex-direction:column;">
               <label>Initial Source of Funds <span class="req">*</span></label>
@@ -2619,7 +2625,7 @@
                 <option value="Client payments / receivables">Client payments / receivables</option>
                 <option value="Other">Other</option>
               </select>
-              <textarea id="f-source-init" placeholder="Provide additional detail (minimum 20 characters)..." style="margin-top:8px;min-height:60px;" required minlength="20"></textarea>
+              <textarea id="f-source-init" placeholder="Provide additional detail if needed..." style="margin-top:8px;min-height:60px;"></textarea>
             </div>
             <div class="form-group span-2">
               <label>Ongoing Source of Funds <span class="req">*</span></label>
@@ -2635,7 +2641,7 @@
                 <option value="Subscription / SaaS revenue">Subscription / SaaS revenue</option>
                 <option value="Other">Other</option>
               </select>
-              <textarea id="f-source-ongoing" placeholder="Provide additional detail (minimum 20 characters)..." style="margin-top:8px;min-height:60px;" required minlength="20"></textarea>
+              <textarea id="f-source-ongoing" placeholder="Provide additional detail if needed..." style="margin-top:8px;min-height:60px;"></textarea>
             </div>
           </div>
 
@@ -5298,13 +5304,40 @@ async function submitPrescreening(e) {
     showToast('error', 'Invalid Date', 'Incorporation date cannot be in the future.');
     return;
   }
-  // SoW/SoF minimum detail validation
-  var sowDetail = (document.getElementById('f-source-wealth') || {}).value || '';
-  var sofInitDetail = (document.getElementById('f-source-init') || {}).value || '';
-  var sofOngoingDetail = (document.getElementById('f-source-ongoing') || {}).value || '';
-  if (sowDetail.length < 20 || sofInitDetail.length < 20 || sofOngoingDetail.length < 20) {
+  // SoW/SoF detail fields are optional — no minimum enforced
+
+  // Currency selection validation
+  var selectedCurrencies = document.querySelectorAll('input[name="currencies"]:checked');
+  if (selectedCurrencies.length === 0) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
-    showToast('error', 'Insufficient Detail', 'Source of Wealth and Source of Funds detail fields require at least 20 characters each.');
+    var currErr = document.getElementById('currency-err');
+    if (currErr) currErr.classList.remove('hidden');
+    showToast('error', 'Currency Required', 'Please select at least one currency under Account Preferences.');
+    return;
+  }
+  var currErrEl = document.getElementById('currency-err');
+  if (currErrEl) currErrEl.classList.add('hidden');
+
+  // Director/UBO mandatory field validation
+  var dirRowsCheck = document.querySelectorAll('#directors-body tr');
+  var dirValid = true;
+  dirRowsCheck.forEach(function(row) {
+    var inputs = row.querySelectorAll('input[type="text"]');
+    inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
+  });
+  var uboRowsCheck = document.querySelectorAll('#ubos-body tr');
+  uboRowsCheck.forEach(function(row) {
+    var inputs = row.querySelectorAll('input[type="text"], input[type="number"]');
+    inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
+  });
+  var interRowsCheck = document.querySelectorAll('#intermediaries-body tr');
+  interRowsCheck.forEach(function(row) {
+    var inputs = row.querySelectorAll('input[type="text"], input[type="number"]');
+    inputs.forEach(function(inp) { if (!inp.value.trim()) { inp.style.borderColor = 'var(--red)'; dirValid = false; } else { inp.style.borderColor = ''; } });
+  });
+  if (!dirValid) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Incomplete Fields', 'All fields for Directors, UBOs, and Intermediary Shareholders are mandatory. Please complete all highlighted fields.');
     return;
   }
 
@@ -5354,7 +5387,7 @@ async function submitPrescreening(e) {
       source_of_funds_initial_detail: (document.getElementById('f-source-init') || {}).value || '',
       source_of_funds_ongoing_type: (document.getElementById('f-source-ongoing-type') || {}).value || '',
       source_of_funds_ongoing_detail: (document.getElementById('f-source-ongoing') || {}).value || '',
-      currency: (document.getElementById('f-currency') || {}).value || '',
+      currencies: Array.from(document.querySelectorAll('input[name="currencies"]:checked')).map(function(c) { return c.value; }),
       incorporation_date: (document.getElementById('f-inc-date') || {}).value || '',
       transaction_complexity: (document.getElementById('f-txn-complexity') || {}).value || '',
       entity_contact_first: (document.getElementById('f-contact-first') || {}).value || '',
@@ -5954,6 +5987,48 @@ var KYC_PERSON_DOC_RULES = {
       { id: 'account-standing', label: 'Account Standing', rule: 'Must confirm account in good standing for at least 12 months', type: 'content' },
       { id: 'signatory', label: 'Authorised Signatory', rule: 'Must be signed by an authorised bank officer with name and title', type: 'quality' }
     ]
+  },
+  // Intermediary shareholder corporate documents
+  'cert_inc': {
+    name: 'Certificate of Incorporation (Intermediary)',
+    checks: [
+      { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name must match the intermediary declared', type: 'name' },
+      { id: 'reg-number', label: 'Registration Number', rule: 'Registration number must be present and legible', type: 'content' },
+      { id: 'jurisdiction', label: 'Jurisdiction Match', rule: 'Jurisdiction must match declared intermediary jurisdiction', type: 'content' },
+      { id: 'clarity', label: 'Document Clarity', rule: 'Document must be legible, certified copy if applicable', type: 'quality' }
+    ]
+  },
+  'reg_dir': {
+    name: 'Register of Directors (Intermediary)',
+    checks: [
+      { id: 'completeness', label: 'Director List Complete', rule: 'All current directors must be listed with full names', type: 'content' },
+      { id: 'date-check', label: 'Document Currency', rule: 'Register must be current or recently certified', type: 'age', maxMonths: 12 },
+      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible with clear names and dates', type: 'quality' }
+    ]
+  },
+  'reg_sh': {
+    name: 'Register of Shareholders (Intermediary)',
+    checks: [
+      { id: 'completeness', label: 'Shareholder List Complete', rule: 'All shareholders with ownership % must be listed', type: 'content' },
+      { id: 'ownership-total', label: 'Ownership Totals', rule: 'Ownership percentages must sum to 100%', type: 'content' },
+      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible with clear names and percentages', type: 'quality' }
+    ]
+  },
+  'cert_gs': {
+    name: 'Certificate of Good Standing (Intermediary)',
+    checks: [
+      { id: 'date-check', label: 'Document Date', rule: 'Must be dated within the last 6 months', type: 'age', maxMonths: 6 },
+      { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name must match the intermediary declared', type: 'name' },
+      { id: 'issuer', label: 'Issuing Authority', rule: 'Must be issued by the relevant registry or authority', type: 'content' }
+    ]
+  },
+  'fin_stmt': {
+    name: 'Financial Statements (Intermediary)',
+    checks: [
+      { id: 'date-check', label: 'Financial Year', rule: 'Must cover the most recent financial year', type: 'age', maxMonths: 18 },
+      { id: 'completeness', label: 'Statement Completeness', rule: 'Must include balance sheet and P&L at minimum', type: 'content' },
+      { id: 'audit-status', label: 'Audit Status', rule: 'Audited statements preferred; unaudited acceptable with justification', type: 'content' }
+    ]
   }
 };
 
@@ -6035,7 +6110,9 @@ async function runAIPersonDocVerification(personId, docType, fileName) {
   var rules = KYC_PERSON_DOC_RULES[docType];
   if (!rules) return;
 
-  var areaId = 'kyc-' + docType + '-area-' + personId;
+  // docType uses underscores (cert_inc) but HTML IDs use hyphens (kyc-cert-inc-area-)
+  var docKey = docType.replace(/_/g, '-');
+  var areaId = 'kyc-' + docKey + '-area-' + personId;
   var area = document.getElementById(areaId);
   if (!area) return;
 
@@ -6392,7 +6469,28 @@ function buildReviewScreen() {
     if (hasPassport) uploadedCount++;
     if (hasPoa) uploadedCount++;
 
-    sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong></span><span class="review-status ' + (hasPassport && hasPoa ? 'uploaded' : 'missing') + '">' + (hasPassport && hasPoa ? '✅ ID + PoA Uploaded' : '❌ Documents Missing') + '</span></div>';
+    // Check if this is an intermediary (corporate docs) or individual (passport/PoA)
+    var isInter = personId.startsWith('int');
+    if (isInter) {
+      // Intermediary shareholder — check corporate docs
+      var interDocs = ['cert-inc', 'reg-dir', 'reg-sh', 'cert-gs', 'fin-stmt'];
+      var interDocNames = ['Certificate of Incorporation', 'Register of Directors', 'Register of Shareholders', 'Certificate of Good Standing', 'Financial Statements'];
+      var interUploaded = 0;
+      interDocs.forEach(function(dKey, di) {
+        var lbl = document.getElementById('kyc-' + dKey + '-lbl-' + personId);
+        var isUp = lbl && lbl.textContent !== 'Click to upload';
+        if (isUp) { interUploaded++; uploadedCount++; }
+        else missingCount++;
+        sectionB.innerHTML += '<div class="review-item" style="padding-left:28px;"><span class="review-item-name">↳ ' + escapeHtml(interDocNames[di]) + '</span><span class="review-status ' + (isUp ? 'uploaded' : 'missing') + '">' + (isUp ? '✅ Uploaded' : '❌ Missing') + '</span></div>';
+      });
+      sectionB.innerHTML = sectionB.innerHTML.replace(
+        '</strong></span><span class="review-status ' + (hasPassport && hasPoa ? 'uploaded' : 'missing'),
+        '</strong> <em style="font-size:11px;color:var(--text3);">(Intermediary)</em></span><span class="review-status ' + (interUploaded >= 3 ? 'uploaded' : 'missing')
+      );
+      if (interUploaded >= 3) personsVerified++;
+    } else {
+      sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong></span><span class="review-status ' + (hasPassport && hasPoa ? 'uploaded' : 'missing') + '">' + (hasPassport && hasPoa ? '✅ ID + PoA Uploaded' : '❌ Documents Missing') + '</span></div>';
+    }
 
     // Check PEP declaration
     var pepPanel = document.getElementById('pep-panel-' + personId);

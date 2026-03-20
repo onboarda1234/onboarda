@@ -2196,14 +2196,7 @@ class SubmitApplicationHandler(BaseHandler):
                 403
             )
 
-        # Validate Source of Wealth / Source of Funds detail (min 20 chars)
-        sow_detail = prescreening_raw.get("source_of_wealth_detail", "")
-        sof_init_detail = prescreening_raw.get("source_of_funds_initial_detail", "")
-        sof_ongoing_detail = prescreening_raw.get("source_of_funds_ongoing_detail", "")
-        for field_name, field_val in [("Source of Wealth", sow_detail), ("Initial Source of Funds", sof_init_detail), ("Ongoing Source of Funds", sof_ongoing_detail)]:
-            if len((field_val or "").strip()) < 20:
-                db.close()
-                return self.error(f"{field_name} detail must be at least 20 characters.", 400)
+        # Source of Wealth / Source of Funds detail fields are optional — no minimum enforced
 
         # Validate currency
         currency = prescreening_raw.get("currency", "")
