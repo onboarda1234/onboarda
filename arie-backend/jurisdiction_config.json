@@ -1,0 +1,82 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "ARIE Finance jurisdiction risk configuration",
+    "last_updated": "2026-03-22",
+    "source": "Extracted from rule_engine.py constants during Sprint 2"
+  },
+  "risk_classifications": {
+    "sanctioned": {
+      "description": "OFAC/UN/EU sanctioned — no onboarding permitted",
+      "risk_score": 4,
+      "countries": ["iran", "north korea", "syria", "cuba", "crimea"]
+    },
+    "fatf_black": {
+      "description": "FATF blacklist — highest AML/CFT deficiencies",
+      "risk_score": 4,
+      "countries": ["iran", "north korea", "myanmar"]
+    },
+    "fatf_grey": {
+      "description": "FATF greylist — increased monitoring required",
+      "risk_score": 3,
+      "countries": [
+        "syria", "myanmar", "iran", "north korea", "yemen", "haiti",
+        "south sudan", "nigeria", "south africa", "kenya", "philippines",
+        "tanzania", "mozambique", "democratic republic of congo",
+        "cameroon", "burkina faso", "mali", "senegal"
+      ]
+    },
+    "low_risk": {
+      "description": "Well-regulated jurisdictions with strong AML frameworks",
+      "risk_score": 1,
+      "countries": [
+        "mauritius", "united kingdom", "uk", "france", "germany", "sweden",
+        "norway", "denmark", "finland", "australia", "new zealand", "canada",
+        "usa", "united states", "japan", "singapore", "hong kong",
+        "switzerland", "netherlands", "belgium", "luxembourg", "ireland",
+        "austria", "portugal", "spain", "italy"
+      ]
+    },
+    "standard": {
+      "description": "Default for unlisted jurisdictions",
+      "risk_score": 2
+    }
+  },
+  "secrecy_jurisdictions": [
+    "bvi", "cayman islands", "panama", "seychelles", "bermuda",
+    "jersey", "guernsey", "isle of man", "liechtenstein",
+    "vanuatu", "samoa", "marshall islands"
+  ],
+  "sector_risk": {
+    "high_risk": ["Cryptocurrency", "Money Services", "Gaming", "Arms", "Precious Metals"],
+    "minimum_medium": ["Remittance", "Money Transfer", "Payment Services", "E-Money", "Virtual Assets", "MVTS"],
+    "medium_risk": ["Financial Services", "Real Estate", "Legal Services", "Trust Services", "Art Dealing"]
+  },
+  "risk_weights": {
+    "jurisdiction": 0.20,
+    "business": 0.15,
+    "transaction": 0.10,
+    "ownership": 0.25,
+    "fincrime": 0.10,
+    "documentation": 0.10,
+    "data_quality": 0.10
+  },
+  "confidence_thresholds": {
+    "normal": 0.70,
+    "conditional": 0.60,
+    "mandatory_sco_review": 0.60,
+    "high_risk_threshold": 0.75
+  },
+  "monitoring_intervals_days": {
+    "LOW": 730,
+    "MEDIUM": 365,
+    "HIGH": 180,
+    "VERY_HIGH": 90
+  },
+  "escalation_rules": {
+    "multi_gap_medium_threshold": 3,
+    "multi_gap_high_threshold": 4,
+    "mandatory_edd_risk_levels": ["HIGH", "VERY_HIGH"],
+    "dual_approval_required": ["HIGH", "VERY_HIGH"]
+  }
+}

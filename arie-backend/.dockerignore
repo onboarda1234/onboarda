@@ -1,0 +1,21 @@
+# ARIE Finance — Docker Ignore
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.coverage
+.coveragerc
+htmlcov/
+*.db
+*.sqlite3
+.env
+.env.*
+!.env.example
+.git
+.github
+tests/
+*.md
+node_modules/
+.mypy_cache/
+.vscode/
+.idea/

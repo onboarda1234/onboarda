@@ -316,6 +316,27 @@ def get_jwt_secret() -> str:
         return os.environ.get("JWT_SECRET_DEMO", os.environ.get("JWT_SECRET", "demo-dev-secret-not-for-production"))
 
 
+# ── API Credentials (Sprint 2.5: single access point) ──
+
+def get_sumsub_app_token() -> str:
+    return os.environ.get("SUMSUB_APP_TOKEN", "")
+
+def get_sumsub_secret_key() -> str:
+    return os.environ.get("SUMSUB_SECRET_KEY", "")
+
+def get_sumsub_level_name() -> str:
+    return os.environ.get("SUMSUB_LEVEL_NAME", "basic-kyc-level")
+
+def get_opencorporates_api_key() -> str:
+    return os.environ.get("OPENCORPORATES_API_KEY", "")
+
+def get_ip_geolocation_api_key() -> str:
+    return os.environ.get("IP_GEOLOCATION_API_KEY", "")
+
+def get_opensanctions_api_key() -> str:
+    return os.environ.get("OPENSANCTIONS_API_KEY", "")
+
+
 def get_cors_origin() -> str:
     """Get allowed CORS origin for current environment."""
     if is_production():

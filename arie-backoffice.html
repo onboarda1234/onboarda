@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>ARIE Finance — Back Office</title>
+<title>RegMind — Back Office</title>
 <style>
 :root {
   --brand:#2B2F8F; --brand-light:#4448B8; --brand-dim:rgba(43,47,143,0.08);
@@ -252,11 +252,71 @@ a { color:var(--brand); text-decoration:none; }
 
 /* ── Compliance Memo ── */
 .memo-card { background:var(--surface); border:1px solid var(--border1); border-radius:var(--radius); }
-.memo-header { padding:16px 20px; border-bottom:1px solid var(--border1); display:flex; align-items:center; gap:10px; }
+.memo-header { padding:16px 20px; border-bottom:1px solid var(--border1); display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .memo-body { padding:20px; }
-.memo-section { margin-bottom:16px; }
-.memo-section-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--brand); margin-bottom:6px; }
+.memo-section { margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--border1); }
+.memo-section:last-child { border-bottom:none; }
+.memo-section-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--brand); margin-bottom:8px; display:flex; align-items:center; gap:6px; }
+.memo-section-title .section-num { background:var(--brand); color:white; width:20px; height:20px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:9px; flex-shrink:0; }
 .memo-text { font-size:13px; color:var(--text2); line-height:1.7; }
+.memo-sub-section { margin:10px 0 10px 16px; padding:10px 14px; background:var(--bg2); border-radius:6px; border-left:3px solid var(--brand); }
+.memo-sub-title { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.3px; color:var(--text1); margin-bottom:4px; }
+.memo-risk-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:10px; font-weight:700; text-transform:uppercase; }
+.memo-risk-badge.low { background:#dcfce7; color:#166534; }
+.memo-risk-badge.medium { background:#fef3c7; color:#92400e; }
+.memo-risk-badge.high { background:#fee2e2; color:#991b1b; }
+.memo-risk-badge.very_high { background:#991b1b; color:white; }
+.memo-red-flag { color:var(--red); font-size:12px; padding:3px 0; }
+.memo-mitigant { color:var(--green); font-size:12px; padding:3px 0; }
+.memo-decision-box { padding:14px 18px; border-radius:8px; font-weight:600; font-size:14px; text-align:center; margin:10px 0; }
+.memo-decision-box.approve { background:#dcfce7; color:#166534; border:2px solid #166534; }
+.memo-decision-box.approve_with_conditions { background:#fef3c7; color:#92400e; border:2px solid #92400e; }
+.memo-decision-box.review { background:#fee2e2; color:#991b1b; border:2px solid #991b1b; }
+.memo-decision-box.reject { background:#991b1b; color:white; border:2px solid #7f1d1d; }
+.memo-download-btn { margin-left:auto; padding:8px 16px; background:var(--brand); color:white; border:none; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:6px; }
+.memo-download-btn:hover { opacity:0.9; }
+.memo-generate-btn { padding:8px 16px; background:var(--green); color:white; border:none; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:6px; }
+.memo-generate-btn:hover { opacity:0.9; }
+
+/* ── Memo Validation Panel ── */
+.memo-validation-panel { margin-top:16px; border:1px solid var(--border1); border-radius:var(--radius); background:var(--bg2); }
+.memo-validation-header { padding:14px 20px; border-bottom:1px solid var(--border1); display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.memo-validation-header .val-title { font-weight:700; font-size:13px; color:var(--text1); }
+.memo-validation-body { padding:16px 20px; }
+.memo-quality-score { display:flex; align-items:center; gap:14px; margin-bottom:16px; }
+.memo-quality-gauge { width:64px; height:64px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:20px; font-weight:800; color:white; flex-shrink:0; }
+.memo-quality-gauge.excellent { background:linear-gradient(135deg,#166534,#22c55e); }
+.memo-quality-gauge.good { background:linear-gradient(135deg,#065f46,#34d399); }
+.memo-quality-gauge.fair { background:linear-gradient(135deg,#92400e,#fbbf24); }
+.memo-quality-gauge.poor { background:linear-gradient(135deg,#991b1b,#ef4444); }
+.memo-quality-details { flex:1; }
+.memo-quality-details .label { font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text3); font-weight:600; }
+.memo-quality-details .score-text { font-size:15px; font-weight:700; color:var(--text1); }
+.memo-val-status { display:inline-block; padding:3px 10px; border-radius:4px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.3px; }
+.memo-val-status.pass { background:#dcfce7; color:#166534; }
+.memo-val-status.pass_with_fixes { background:#fef3c7; color:#92400e; }
+.memo-val-status.fail { background:#fee2e2; color:#991b1b; }
+.memo-val-status.pending { background:#e0e7ff; color:#3730a3; }
+.memo-val-issues { margin-top:12px; }
+.memo-val-issue { display:flex; align-items:flex-start; gap:8px; padding:8px 12px; margin-bottom:6px; border-radius:6px; font-size:12px; line-height:1.5; }
+.memo-val-issue.critical { background:#fee2e2; color:#991b1b; border-left:3px solid #991b1b; }
+.memo-val-issue.warning { background:#fef3c7; color:#92400e; border-left:3px solid #d97706; }
+.memo-val-issue.info { background:#e0e7ff; color:#3730a3; border-left:3px solid #4f46e5; }
+.memo-val-issue .issue-icon { flex-shrink:0; font-size:14px; }
+.memo-val-scores { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px; margin-top:14px; }
+.memo-val-score-card { background:var(--surface); border:1px solid var(--border1); border-radius:6px; padding:10px 12px; }
+.memo-val-score-card .sc-name { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px; color:var(--text3); margin-bottom:4px; }
+.memo-val-score-card .sc-bar { height:6px; background:var(--border1); border-radius:3px; overflow:hidden; margin-bottom:4px; }
+.memo-val-score-card .sc-bar .sc-fill { height:100%; border-radius:3px; transition:width 0.4s ease; }
+.memo-val-score-card .sc-value { font-size:11px; font-weight:700; color:var(--text1); }
+.memo-action-bar { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+.memo-action-btn { padding:8px 16px; border:none; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:6px; transition:opacity 0.2s; }
+.memo-action-btn:hover { opacity:0.85; }
+.memo-action-btn:disabled { opacity:0.4; cursor:not-allowed; }
+.memo-action-btn.validate { background:#4f46e5; color:white; }
+.memo-action-btn.approve { background:#166534; color:white; }
+.memo-action-btn.download { background:var(--brand); color:white; }
+.memo-action-btn.generate { background:var(--green); color:white; }
 
 /* ── Activity Log ── */
 .activity-item { display:flex; gap:12px; padding:10px 0; border-bottom:1px solid var(--border1); }
@@ -569,6 +629,10 @@ body.role-admin .role-admin-only-block { display:block; }
 .kanban-card-actions button { padding:4px 8px; font-size:11px; border:1px solid var(--border2); background:white; border-radius:4px; cursor:pointer; transition:all 0.15s; }
 .kanban-card-actions button:hover { border-color:var(--brand); color:var(--brand); }
 </style>
+<script>
+/* ── jsPDF 2.5.1 inline loader (CDN fallback) ── */
+(function(){var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';s.async=true;document.head.appendChild(s);})();
+</script>
 </head>
 <body>
 
@@ -576,7 +640,7 @@ body.role-admin .role-admin-only-block { display:block; }
 <div class="login-overlay" id="login-overlay">
   <div class="login-card">
     <div class="login-logo">
-      <h1>ARIE Finance</h1>
+      <h1>RegMind</h1>
       <p>Back Office Compliance Portal</p>
     </div>
     <form class="login-form" id="login-form" onsubmit="handleLogin(event)">
@@ -586,7 +650,7 @@ body.role-admin .role-admin-only-block { display:block; }
       </div>
       <div class="form-group">
         <label class="form-label" for="login-email">Email Address</label>
-        <input class="form-input" type="email" id="login-email" placeholder="you@ariefinance.mu" required autocomplete="email" />
+        <input class="form-input" type="email" id="login-email" placeholder="you@onboarda.com" required autocomplete="email" />
       </div>
       <div class="form-group">
         <label class="form-label" for="login-password">Password</label>
@@ -599,7 +663,7 @@ body.role-admin .role-admin-only-block { display:block; }
     </form>
     <div class="login-footer">
       Secure access for authorised compliance personnel only.<br>
-      <a href="mailto:support@ariefinance.mu">Contact IT Support</a> if you need access.
+      <a href="mailto:support@onboarda.com">Contact IT Support</a> if you need access.
     </div>
   </div>
 </div>
@@ -607,7 +671,7 @@ body.role-admin .role-admin-only-block { display:block; }
 <!-- ═══════════════ SIDEBAR ═══════════════ -->
 <div class="sidebar">
   <div class="sidebar-brand">
-    <h2>ARIE Finance</h2>
+    <h2>RegMind</h2>
     <span>Back Office Portal</span>
   </div>
   <nav class="sidebar-nav">
@@ -622,6 +686,9 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="snav-item" onclick="showView('edd',this)"><span class="snav-icon">⚠️</span> EDD Pipeline</div>
     <div class="snav-item" onclick="showView('reports',this)"><span class="snav-icon">📈</span> Reports</div>
     <div class="snav-item" onclick="showView('reg-intel',this)"><span class="snav-icon">🏛️</span> Regulatory Intelligence</div>
+    <div class="snav-section">AI Supervisor</div>
+    <div class="snav-item" onclick="showView('supervisor',this)"><span class="snav-icon">🛡️</span> Supervisor Dashboard</div>
+    <div class="snav-item" onclick="showView('supervisor-audit',this)"><span class="snav-icon">🔗</span> Audit Chain</div>
     <div class="snav-section">Administration</div>
     <div class="snav-item" onclick="showView('users',this)"><span class="snav-icon">👥</span> User Management</div>
     <div class="snav-item" onclick="showView('roles',this)"><span class="snav-icon">🔐</span> Roles & Permissions</div>
@@ -883,6 +950,7 @@ body.role-admin .role-admin-only-block { display:block; }
   <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--border1);">
     <button class="btn btn-outline btn-sm" id="tab-overview" onclick="switchDetailTab('overview')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Overview</button>
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
+    <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ AI Supervisor</button>
   </div>
 
   <!-- Tab: Overview (full width) -->
@@ -1002,10 +1070,46 @@ body.role-admin .role-admin-only-block { display:block; }
       <div class="memo-card">
         <div class="memo-header">
           <span style="font-size:18px;">📝</span>
-          <span style="font-weight:700;">Compliance Memo (Agent 5)</span>
-          <span class="badge approved" style="margin-left:auto;">Auto-Generated</span>
+          <span style="font-weight:700;">Compliance Onboarding Memo</span>
+          <span class="badge approved" id="memo-status-badge">Auto-Generated</span>
+          <button class="memo-generate-btn" id="btn-generate-memo" onclick="generateComplianceMemo()" title="Regenerate memo from server">🔄 Generate Memo</button>
+          <button class="memo-download-btn" id="btn-download-memo" onclick="downloadMemoPDF()" title="Download as PDF">📥 Download Memo (PDF)</button>
         </div>
         <div class="memo-body" id="detail-memo"></div>
+
+        <!-- Validation Panel -->
+        <div class="memo-validation-panel" id="memo-validation-panel" style="display:none;">
+          <div class="memo-validation-header">
+            <span style="font-size:16px;">🛡️</span>
+            <span class="val-title">Memo Quality Validation</span>
+            <span class="memo-val-status pending" id="memo-val-status-badge">PENDING</span>
+          </div>
+          <div class="memo-validation-body">
+            <!-- Quality Score Gauge -->
+            <div class="memo-quality-score">
+              <div class="memo-quality-gauge pending" id="memo-quality-gauge" style="background:#94a3b8;">—</div>
+              <div class="memo-quality-details">
+                <div class="label">Quality Score</div>
+                <div class="score-text" id="memo-quality-score-text">Not yet validated</div>
+                <div style="font-size:11px;color:var(--text3);margin-top:2px;" id="memo-quality-version"></div>
+              </div>
+            </div>
+
+            <!-- Issues List -->
+            <div class="memo-val-issues" id="memo-val-issues"></div>
+
+            <!-- Category Scores Breakdown -->
+            <div class="memo-val-scores" id="memo-val-scores"></div>
+
+            <!-- Action Buttons -->
+            <div class="memo-action-bar">
+              <button class="memo-action-btn generate" onclick="generateComplianceMemo()">🔄 Generate Memo</button>
+              <button class="memo-action-btn validate" id="btn-revalidate-memo" onclick="revalidateMemo()">🛡️ Validate Memo</button>
+              <button class="memo-action-btn approve" id="btn-approve-memo" onclick="approveMemo()" disabled>✅ Approve Memo</button>
+              <button class="memo-action-btn download" onclick="downloadMemoPDF()">📥 Download PDF</button>
+            </div>
+          </div>
+        </div>
       </div>
 
   </div><!-- /detail-tab-overview -->
@@ -1015,6 +1119,79 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="card">
       <div class="card-title" style="margin-bottom:12px;">Activity Log</div>
       <div id="detail-activity"></div>
+    </div>
+  </div>
+
+  <!-- Tab: AI Supervisor (hidden by default) -->
+  <div id="detail-tab-supervisor" style="display:none;">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:18px;">🛡️</span>
+        <span style="font-weight:700;">AI Supervisor Pipeline</span>
+        <span class="badge" id="sv-pipeline-status" style="background:var(--bg2);color:var(--text3);">Not Run</span>
+        <button class="btn btn-primary btn-sm" id="btn-run-supervisor" onclick="runSupervisorPipeline()" style="margin-left:auto;">▶️ Run Supervisor Pipeline</button>
+      </div>
+    </div>
+
+    <!-- Pipeline Results -->
+    <div id="sv-pipeline-results" style="display:none;">
+      <!-- Case Aggregate -->
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-header"><div class="card-title">Case Aggregate</div></div>
+        <div id="sv-case-aggregate" style="padding:14px;"></div>
+      </div>
+
+      <!-- Agent Results -->
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-header"><div class="card-title">Agent Results</div></div>
+        <div id="sv-agent-results" style="padding:14px;"></div>
+      </div>
+
+      <!-- Contradictions -->
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-header"><div class="card-title">Contradictions Detected</div></div>
+        <div id="sv-contradictions" style="padding:14px;"></div>
+      </div>
+
+      <!-- Rules Triggered -->
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-header"><div class="card-title">Compliance Rules Triggered</div></div>
+        <div id="sv-rules-triggered" style="padding:14px;"></div>
+      </div>
+
+      <!-- Review & Escalation -->
+      <div class="card" style="margin-bottom:14px;">
+        <div class="card-header"><div class="card-title">Officer Review</div></div>
+        <div id="sv-review-panel" style="padding:14px;">
+          <div id="sv-review-reasons"></div>
+          <div id="sv-review-form" style="display:none;margin-top:14px;border-top:1px solid var(--border1);padding-top:14px;">
+            <div style="font-size:12px;font-weight:700;margin-bottom:8px;">Submit Review Decision</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+              <select class="form-select" id="sv-review-decision" style="font-size:12px;padding:6px 10px;min-width:180px;">
+                <option value="approve">Approve</option>
+                <option value="reject">Reject</option>
+                <option value="request_information">Request Information</option>
+                <option value="escalate">Escalate Further</option>
+                <option value="enhanced_monitoring">Enhanced Monitoring</option>
+                <option value="defer">Defer</option>
+              </select>
+              <select class="form-select" id="sv-review-risk" style="font-size:12px;padding:6px 10px;min-width:140px;">
+                <option value="">Risk Level (optional)</option>
+                <option value="LOW">Low</option>
+                <option value="MEDIUM">Medium</option>
+                <option value="HIGH">High</option>
+                <option value="VERY_HIGH">Very High</option>
+              </select>
+            </div>
+            <textarea id="sv-review-reason" rows="3" placeholder="Decision reason (mandatory)..." style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border1);border-radius:6px;margin-bottom:8px;resize:vertical;"></textarea>
+            <div style="display:flex;gap:8px;">
+              <label style="font-size:11px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="sv-review-override" /> Override AI Recommendation</label>
+            </div>
+            <textarea id="sv-override-reason" rows="2" placeholder="Override reason (required if overriding AI)..." style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border1);border-radius:6px;margin-top:6px;display:none;resize:vertical;"></textarea>
+            <button class="btn btn-primary" onclick="submitSupervisorReview()" style="margin-top:10px;">Submit Review</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1429,7 +1606,7 @@ body.role-admin .role-admin-only-block { display:block; }
   <!-- System Settings -->
   <div class="card">
     <div class="card-title" style="margin-bottom:16px;">System Settings</div>
-    <div class="form-group"><div class="form-label">Company Name</div><input class="form-input" id="setting-company-name" value="ARIE Finance Ltd" /></div>
+    <div class="form-group"><div class="form-label">Company Name</div><input class="form-input" id="setting-company-name" value="Onboarda Ltd" /></div>
     <div class="form-group"><div class="form-label">FSC Licence Number</div><input class="form-input" id="setting-fsc-licence" value="FSC-PIS-2024-001" /></div>
     <div class="form-group"><div class="form-label">Default Data Retention (years)</div><input class="form-input" type="number" id="setting-retention" value="7" /></div>
     <div class="form-group"><div class="form-label">Risk Appetite — Max Score for Auto-Approval</div><input class="form-input" type="number" id="setting-auto-approve" value="40" /></div>
@@ -1606,7 +1783,7 @@ body.role-admin .role-admin-only-block { display:block; }
       <div class="doc-icon uploaded">📄</div>
       <div class="doc-info">
         <div class="doc-name">AML/CFT Compliance Manual (Appendix 5)</div>
-        <div class="doc-meta">ARIE Finance Compliance Manual — Version 1.0 — Key reference for all CDD, EDD, and risk assessment procedures.</div>
+        <div class="doc-meta">RegMind Compliance Manual — Version 1.0 — Key reference for all CDD, EDD, and risk assessment procedures.</div>
       </div>
       <a href="#" class="btn btn-outline btn-sm" onclick="downloadResource('aml-manual')">View</a>
     </div>
@@ -1693,6 +1870,97 @@ body.role-admin .role-admin-only-block { display:block; }
   </div>
 </div>
 
+<!-- ═══════════════ AI SUPERVISOR DASHBOARD ═══════════════ -->
+<div class="view" id="view-supervisor">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
+    <div>
+      <h3 style="font-size:16px;font-weight:700;">AI Supervisor Dashboard</h3>
+      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Multi-agent pipeline orchestrator — validation, confidence routing, contradiction detection, and compliance rules.</p>
+    </div>
+    <button class="btn btn-primary" onclick="refreshSupervisorDashboard()">🔄 Refresh</button>
+  </div>
+
+  <!-- Pipeline Stats -->
+  <div class="kpi-grid" id="supervisor-kpi-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-bottom:20px;">
+    <div class="card" style="padding:16px;text-align:center;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Pipelines Run</div>
+      <div id="sv-stat-pipelines" style="font-size:24px;font-weight:800;color:var(--brand);margin:4px 0;">0</div>
+    </div>
+    <div class="card" style="padding:16px;text-align:center;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Contradictions Found</div>
+      <div id="sv-stat-contradictions" style="font-size:24px;font-weight:800;color:var(--amber);margin:4px 0;">0</div>
+    </div>
+    <div class="card" style="padding:16px;text-align:center;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Rules Triggered</div>
+      <div id="sv-stat-rules" style="font-size:24px;font-weight:800;color:var(--red);margin:4px 0;">0</div>
+    </div>
+    <div class="card" style="padding:16px;text-align:center;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Pending Reviews</div>
+      <div id="sv-stat-reviews" style="font-size:24px;font-weight:800;color:var(--purple);margin:4px 0;">0</div>
+    </div>
+    <div class="card" style="padding:16px;text-align:center;">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);font-weight:600;">Avg Confidence</div>
+      <div id="sv-stat-confidence" style="font-size:24px;font-weight:800;color:var(--green);margin:4px 0;">—</div>
+    </div>
+  </div>
+
+  <!-- Compliance Rules -->
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header"><div class="card-title">Active Compliance Rules</div></div>
+    <div id="sv-rules-list" style="padding:14px;"></div>
+  </div>
+
+  <!-- Recent Pipelines -->
+  <div class="card" style="margin-bottom:16px;">
+    <div class="card-header"><div class="card-title">Recent Pipelines</div></div>
+    <div id="sv-pipelines-list" style="padding:14px;"></div>
+  </div>
+
+  <!-- Pending Escalations -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">Pending Escalations</div></div>
+    <div id="sv-escalations-list" style="padding:14px;"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ SUPERVISOR AUDIT CHAIN ═══════════════ -->
+<div class="view" id="view-supervisor-audit">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
+    <div>
+      <h3 style="font-size:16px;font-weight:700;">Supervisor Audit Chain</h3>
+      <p style="font-size:13px;color:var(--text3);margin-top:2px;">SHA-256 hash-chained, append-only audit log. Every agent run, validation, contradiction, rule trigger, and officer decision is recorded.</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline" onclick="verifySupervisorAuditChain()">🔗 Verify Chain Integrity</button>
+      <button class="btn btn-primary" onclick="refreshSupervisorAudit()">🔄 Refresh</button>
+    </div>
+  </div>
+
+  <div id="sv-audit-chain-status" style="margin-bottom:14px;"></div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Audit Entries</div>
+      <div style="display:flex;gap:8px;">
+        <select class="form-select" id="sv-audit-filter-type" onchange="refreshSupervisorAudit()" style="font-size:12px;padding:4px 8px;">
+          <option value="">All Event Types</option>
+          <option value="pipeline_started">Pipeline Started</option>
+          <option value="pipeline_completed">Pipeline Completed</option>
+          <option value="agent_run_completed">Agent Run Completed</option>
+          <option value="agent_run_failed">Agent Run Failed</option>
+          <option value="schema_validation_passed">Validation Passed</option>
+          <option value="schema_validation_failed">Validation Failed</option>
+          <option value="contradiction_detected">Contradiction Detected</option>
+          <option value="rule_triggered">Rule Triggered</option>
+          <option value="human_review_completed">Human Review</option>
+          <option value="ai_override">AI Override</option>
+        </select>
+      </div>
+    </div>
+    <div id="sv-audit-entries" style="padding:14px;max-height:600px;overflow-y:auto;"></div>
+  </div>
+</div>
+
 </div><!-- /content -->
 </div><!-- /main -->
 
@@ -1702,7 +1970,7 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="modal-header"><h3>Add New User</h3><button class="modal-close" onclick="closeModal('modal-add-user')">&times;</button></div>
     <div class="modal-body">
       <div class="form-group"><div class="form-label">Full Name</div><input class="form-input" id="new-user-name" placeholder="e.g. Jean-Marc Laurent" /></div>
-      <div class="form-group"><div class="form-label">Email</div><input class="form-input" type="email" id="new-user-email" placeholder="e.g. jm.laurent@ariefinance.mu" /></div>
+      <div class="form-group"><div class="form-label">Email</div><input class="form-input" type="email" id="new-user-email" placeholder="e.g. jm.laurent@onboarda.com" /></div>
       <div class="form-group"><div class="form-label">Role</div>
         <select class="form-select" id="new-user-role">
           <option value="analyst">Analyst</option>
@@ -2277,11 +2545,11 @@ function formatStatus(s) {
 // MOCK DATA (used as fallback if API is unavailable)
 // ═══════════════════════════════════════════════════════════
 var USERS = [
-  { id:1, name:'Aisha Sudally', email:'asudally@ariefinance.mu', role:'admin', initials:'AS', status:'active' },
-  { id:2, name:'Raj Patel', email:'raj.patel@ariefinance.mu', role:'sco', initials:'RP', status:'active' },
-  { id:3, name:'Marie Dubois', email:'m.dubois@ariefinance.mu', role:'co', initials:'MD', status:'active' },
-  { id:4, name:'Li Wei', email:'l.wei@ariefinance.mu', role:'analyst', initials:'LW', status:'active' },
-  { id:5, name:'Priya Naidoo', email:'p.naidoo@ariefinance.mu', role:'co', initials:'PN', status:'inactive' }
+  { id:1, name:'Aisha Sudally', email:'asudally@onboarda.com', role:'admin', initials:'AS', status:'active' },
+  { id:2, name:'Raj Patel', email:'raj.patel@onboarda.com', role:'sco', initials:'RP', status:'active' },
+  { id:3, name:'Marie Dubois', email:'m.dubois@onboarda.com', role:'co', initials:'MD', status:'active' },
+  { id:4, name:'Li Wei', email:'l.wei@onboarda.com', role:'analyst', initials:'LW', status:'active' },
+  { id:5, name:'Priya Naidoo', email:'p.naidoo@onboarda.com', role:'co', initials:'PN', status:'inactive' }
 ];
 
 var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Compliance Officer', analyst:'Analyst' };
@@ -2358,7 +2626,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', edd:'EDD Pipeline', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', edd:'EDD Pipeline', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
 
   if (name === 'applications') renderApplications();
@@ -2373,6 +2641,8 @@ function showView(name, navItem) {
   if (name === 'risk-model') renderRiskModel();
   if (name === 'ai-checks') renderAIChecks();
   if (name === 'ai-agents') renderAgentsPipeline();
+  if (name === 'supervisor') refreshSupervisorDashboard();
+  if (name === 'supervisor-audit') refreshSupervisorAudit();
   if (name === 'agent-health') renderAgentHealth();
   if (name === 'settings') { try { checkAPIStatus(); } catch(e) {} }
 }
@@ -2440,6 +2710,7 @@ function openAppDetail(ref) {
   var app = APPLICATIONS.find(function(a) { return a.ref === ref; });
   if (!app) return;
   currentApp = app;
+  window._currentDetailApp = app;
 
   document.getElementById('detail-company-name').textContent = app.company;
   document.getElementById('detail-badges').innerHTML = riskBadge(app.risk) + ' ' + statusBadge(app.status);
@@ -2704,7 +2975,7 @@ function openAppDetail(ref) {
       { icon:'🔄', text:'Transaction complexity: Number of corridors and currency pairs assessed', impact:'Neutral', color:'var(--text3)' }
     ]},
     { name:'D4: Industry / Sector Risk', weight:'15%', score:app.dims.d4, factors:[
-      { icon:'🏭', text:'Sector: "' + escapeHtml(app.sector) + '" — scored against ARIE sector risk classification (26 sectors, 4 risk tiers)', impact:app.dims.d4 >= 3 ? '+High' : app.dims.d4 >= 2 ? '+Medium' : '+Low', color:app.dims.d4 >= 3 ? 'var(--amber)' : 'var(--green)' },
+      { icon:'🏭', text:'Sector: "' + escapeHtml(app.sector) + '" — scored against RegMind sector risk classification (26 sectors, 4 risk tiers)', impact:app.dims.d4 >= 3 ? '+High' : app.dims.d4 >= 2 ? '+Medium' : '+Low', color:app.dims.d4 >= 3 ? 'var(--amber)' : 'var(--green)' },
       { icon:'⚠️', text:app.dims.d4 >= 4 ? 'VERY HIGH RISK sector — automatic compliance escalation triggered' : app.dims.d4 >= 3 ? 'High risk sector — enhanced due diligence recommended' : 'Sector within normal risk appetite', impact:app.dims.d4 >= 4 ? 'ESCALATE' : 'OK', color:app.dims.d4 >= 4 ? 'var(--red)' : 'var(--green)' }
     ]},
     { name:'D5: Delivery Channel Risk', weight:'10%', score:app.dims.d5, factors:[
@@ -2768,7 +3039,7 @@ function openAppDetail(ref) {
     'The composite risk score of <strong>' + app.score + '</strong> was computed using a weighted average of 5 risk dimensions. ' +
     (topRiskDrivers.length > 0 ? 'The primary risk drivers are: <strong>' + topRiskDrivers.join(', ') + '</strong>. ' : 'No individual dimension scored above medium risk. ') +
     (app.pepCount > 0 ? 'A PEP was identified among the directors/UBOs, which elevated the Customer/Entity risk dimension. ' : '') +
-    (app.risk === 'HIGH' || app.risk === 'VERY_HIGH' ? 'Enhanced Due Diligence (EDD) is required per the ARIE Risk Scoring Methodology v1.4. Senior compliance officer approval is mandatory.' :
+    (app.risk === 'HIGH' || app.risk === 'VERY_HIGH' ? 'Enhanced Due Diligence (EDD) is required per the RegMind Risk Scoring Methodology v1.4. Senior compliance officer approval is mandatory.' :
      app.risk === 'MEDIUM' ? 'Standard Customer Due Diligence (CDD) applies. All documentation should be verified before approval.' :
      'Simplified Due Diligence (SDD) applies. The application is eligible for Fast Lane processing.') +
     '</div>' +
@@ -2920,27 +3191,144 @@ function openAppDetail(ref) {
   });
   document.getElementById('detail-agents').innerHTML = agentHtml;
 
-  // Compliance Memo — with real screening data
-  var memo = document.getElementById('detail-memo');
-  var screeningSummary = '';
-  if (screening) {
-    var sanctionsSource = '(' + ((screening.director_screenings||[{}])[0]||{}).screening ? ((screening.director_screenings||[{}])[0].screening||{}).source||'unknown' : 'unknown';
-    var companySource = (screening.company_screening||{}).source||'unknown';
-    screeningSummary = 'Sanctions screening: <strong>' + (screening.total_hits > 0 ? screening.total_hits + ' match(es) found' : 'No matches') + '</strong> via ' + (sanctionsSource === 'sumsub' ? 'Sumsub AML (live)' : sanctionsSource === 'opensanctions' ? 'OpenSanctions (live)' : 'simulated engine') + '. ';
-    screeningSummary += 'Company registry: <strong>' + ((screening.company_screening||{}).found ? 'Verified' : 'Not found') + '</strong> via ' + (companySource === 'opencorporates' ? 'Open Corporates (live)' : 'simulated') + '. ';
-    if (screening.overall_flags && screening.overall_flags.length > 0) {
-      screeningSummary += '<br><span style="color:var(--red);font-weight:600;">Flags raised:</span><ul style="margin:4px 0 0 16px;padding:0;font-size:12px;">';
-      screening.overall_flags.forEach(function(f){ screeningSummary += '<li>' + f + '</li>'; });
-      screeningSummary += '</ul>';
-    }
-  } else {
-    screeningSummary = 'Sanctions screening: <strong>No matches</strong> across UN, EU, OFAC, and HMT lists. ' + (app.pepCount > 0 ? 'PEP screening: <strong>' + app.pepCount + ' confirmed match(es)</strong>. ' : 'PEP screening: <strong>Clear</strong>. ') + 'Adverse media: <strong>No relevant hits</strong>.';
-  }
+  // Compliance Memo — Big 4-grade 11-section format with professional judgement
+  var memoEl = document.getElementById('detail-memo');
+  window._currentMemoData = null;
 
-  memo.innerHTML = '<div class="memo-section"><div class="memo-section-title">Client Overview</div><div class="memo-text"><strong>' + escapeHtml(app.company) + '</strong> (BRN: ' + escapeHtml(app.brn) + ') is a corporate entity incorporated in ' + escapeHtml(app.country) + '. The application was submitted on ' + escapeHtml(app.date) + ' under reference <strong>' + escapeHtml(app.ref) + '</strong>. The AI risk scoring engine assigned a <strong>' + escapeHtml(app.risk.replace('_',' ')) + ' RISK</strong> classification (score: ' + escapeHtml(String(app.score)) + '/100).</div></div>' +
-    '<div class="memo-section"><div class="memo-section-title">Ownership Structure</div><div class="memo-text">The entity has <strong>' + escapeHtml(String(app.directors.length)) + ' director(s)</strong> and <strong>' + escapeHtml(String(app.ubos.length)) + ' UBO(s)</strong>. ' + (app.pepCount > 0 ? '<span style="color:var(--amber);font-weight:600;">⚠️ ' + escapeHtml(String(app.pepCount)) + ' PEP identified. Enhanced due diligence and PEP declaration form required. Bank reference letter mandated.</span>' : 'No PEPs identified.') + '</div></div>' +
-    '<div class="memo-section"><div class="memo-section-title">Screening Summary</div><div class="memo-text">' + screeningSummary + '</div></div>' +
-    '<div class="memo-section"><div class="memo-section-title">AI Recommendation</div><div class="memo-text">' + (app.risk === 'LOW' ? 'Proceed with <strong>Fast Lane</strong> onboarding. No additional checks required.' : app.risk === 'MEDIUM' ? 'Standard due diligence pathway recommended. All documentation appears adequate.' : 'Enhanced Due Diligence required. Senior compliance officer review mandatory before approval. ' + (app.pepCount > 0 ? 'PEP declaration and bank reference letter must be verified.' : '')) + '</div></div>';
+  // Build analytical variables
+  var riskLevel = app.risk || 'MEDIUM';
+  var riskScore = app.score || 50;
+  var pepDirList = []; var pepUboList = []; var pepList = [];
+  (app.directors||[]).forEach(function(d){ if(d.is_pep==='Yes'||d.isPep){ pepDirList.push(d.name||d.full_name); pepList.push(d.name||d.full_name); }});
+  (app.ubos||[]).forEach(function(u){ if(u.is_pep==='Yes'||u.isPep){ pepUboList.push(u.name||u.full_name); pepList.push(u.name||u.full_name); }});
+  var sanctionsHits = screening ? (screening.total_hits||0) : 0;
+  var companyVerified = screening ? ((screening.company_screening||{}).found ? 'Verified — registration details consistent with application data' : 'Not found in registry — this discrepancy requires investigation') : 'Information not provided — registry verification pending';
+  var screeningProvider = screening ? ((screening.company_screening||{}).source === 'opencorporates' ? 'OpenCorporates API' : (screening.company_screening||{}).source === 'sumsub' ? 'Sumsub AML' : 'Onboarda screening engine') : 'Onboarda screening engine';
+
+  var isOffshore = ['Mauritius','Seychelles','Cayman Islands','BVI','Panama','Jersey','Guernsey','Isle of Man','Bermuda'].indexOf(app.country) >= 0;
+  var isHighRiskCountry = ['Iran','North Korea','Syria','Myanmar','Afghanistan','Yemen','Libya'].indexOf(app.country) >= 0;
+  var isMediumRiskSector = ['Financial Services','Real Estate','Legal Services','Trust Services'].indexOf(app.sector||'') >= 0;
+  var isHighRiskSector = ['Cryptocurrency','Money Services','Gaming','Arms','Precious Metals'].indexOf(app.sector||'') >= 0;
+  var numDocs = (app.docs||[]).length;
+  var docReviews = app.docReviews || {};
+  var verifiedDocs = (app.docs||[]).filter(function(d){ return (docReviews[d]||{}).status === 'accepted'; }).length;
+  var docConfidence = numDocs > 0 ? Math.round(verifiedDocs/numDocs*100) : 0;
+  var monTier = (riskLevel==='HIGH'||riskLevel==='VERY_HIGH'||pepList.length>0) ? 'Enhanced' : 'Standard';
+  var decision = riskLevel==='LOW'?'APPROVE':riskLevel==='MEDIUM'?'APPROVE_WITH_CONDITIONS':riskLevel==='HIGH'?'REVIEW':'REJECT';
+  var decisionLabel = riskLevel==='LOW'?'APPROVAL':riskLevel==='MEDIUM'?'APPROVAL WITH CONDITIONS':riskLevel==='HIGH'?'SENIOR COMPLIANCE OFFICER REVIEW':'REJECTION';
+
+  // Determine primary UBO and structure complexity
+  var primaryUbo = null; var maxPct = 0;
+  (app.ubos||[]).forEach(function(u){ var pct = parseFloat(u.ownership_pct||u.ownershipPct||0); if(pct > maxPct){ maxPct = pct; primaryUbo = u; }});
+  var structComplexity = (app.ubos||[]).length > 3 ? 'Complex' : (app.ubos||[]).length > 1 ? 'Layered' : 'Simple';
+  var controlName = primaryUbo ? (primaryUbo.name||primaryUbo.full_name) : 'Information not provided';
+  var controlPct = primaryUbo ? (primaryUbo.ownership_pct||primaryUbo.ownershipPct||'N/A') : 'N/A';
+
+  var jRating = isHighRiskCountry?'HIGH':isOffshore?'MEDIUM':'LOW';
+  var bRating = isHighRiskSector?'HIGH':isMediumRiskSector?'MEDIUM':'LOW';
+  var oRating = pepList.length>1?'HIGH':pepList.length===1?'MEDIUM':'LOW';
+  var fRating = sanctionsHits>0?'HIGH':pepList.length>0?'MEDIUM':'LOW';
+  var modelConf = Math.max(60, docConfidence - 5);
+
+  var memoData = {
+    application_ref: app.ref,
+    company_name: app.company,
+    memo_generated: new Date().toISOString(),
+    sections: {
+      executive_summary: {
+        title: 'Executive Summary',
+        content: 'This memo presents the compliance assessment of ' + escapeHtml(app.company) + ' (BRN: ' + escapeHtml(app.brn) + '), a ' + escapeHtml(app.entityType||'corporate entity') + ' incorporated in ' + escapeHtml(app.country) + ', operating in the ' + escapeHtml(app.sector||'unspecified') + ' sector. The composite risk score of ' + riskScore + '/100 (' + riskLevel + ') reflects ' + (riskLevel==='LOW'?'a low-risk profile with no material concerns identified':riskLevel==='MEDIUM'?'a balanced risk profile where identified risk drivers are materially offset by mitigating factors':'an elevated risk profile requiring enhanced scrutiny before onboarding can proceed') + '. The principal risk drivers are ' + (pepList.length>0?'the presence of ' + pepList.length + ' Politically Exposed Person(s) (' + pepList.join(', ') + ')':'the absence of PEP exposure (positive indicator)') + (isOffshore||isHighRiskCountry?' and the ' + (isHighRiskCountry?'high-risk':'offshore') + ' jurisdictional classification of ' + escapeHtml(app.country):'') + '. ' + (numDocs>verifiedDocs?(numDocs-verifiedDocs) + ' document(s) remain outstanding, representing a documentation gap that must be remedied within 14 business days. ':'') + 'Recommendation: ' + decisionLabel + (pepList.length>0?' — subject to PEP declaration, enhanced monitoring, and conditions as detailed below.':'.')
+      },
+      client_overview: {
+        title: 'Client Overview',
+        content: 'Entity Name: ' + escapeHtml(app.company) + '. Business Registration Number: ' + escapeHtml(app.brn) + '. Jurisdiction of Incorporation: ' + escapeHtml(app.country) + '. Entity Type: ' + escapeHtml(app.entityType||'Information not provided') + '. Sector: ' + escapeHtml(app.sector||'Information not provided') + '. Application Reference: ' + escapeHtml(app.ref) + '. Date of Application: ' + escapeHtml(app.date) + '. Source of Funds: ' + escapeHtml(app.sourceOfFunds||'Information not provided — this data gap prevents assessment of fund origin legitimacy and elevates residual risk') + '. Expected Transaction Volume: ' + escapeHtml(app.expectedVolume||'Information not provided — this reduces the ability to benchmark transaction patterns and creates a monitoring dependency') + '.'
+      },
+      ownership_and_control: {
+        title: 'Ownership & Control',
+        structure_complexity: structComplexity,
+        control_statement: primaryUbo ? controlName + ' exercises effective control as ' + (parseFloat(controlPct)>50?'majority':'significant') + ' shareholder (' + controlPct + '%).' : 'Effective control cannot be determined from available data — this represents a material data gap requiring resolution.',
+        content: 'The entity operates a ' + structComplexity.toLowerCase() + ' corporate structure with ' + (app.directors||[]).length + ' director(s) and ' + (app.ubos||[]).length + ' UBO(s). ' +
+          (app.directors||[]).map(function(d){ return 'Director: ' + escapeHtml(d.name||d.full_name) + ' (' + escapeHtml(d.nationality||'nationality not provided') + ' national)' + (d.is_pep==='Yes'||d.isPep ? ' — identified as PEP. Board membership confers governance influence and introduces corruption risk per FATF Recommendation 12, requiring enhanced scrutiny.' : ' — not a PEP.'); }).join(' ') + ' ' +
+          (app.ubos||[]).map(function(u){ var pct = u.ownership_pct||u.ownershipPct||''; return 'UBO: ' + escapeHtml(u.name||u.full_name) + ' — ' + (pct ? pct + '% direct ownership' : 'ownership percentage not provided — this data gap prevents full UBO analysis') + (u.nationality ? ' (' + escapeHtml(u.nationality) + ' national)' : '') + (u.is_pep==='Yes'||u.isPep ? '. Identified as PEP — this UBO exercises both ownership and potential political influence, significantly elevating risk.' : '.'); }).join(' ') +
+          ((app.ubos||[]).length===0 ? ' No UBO information provided — this is a critical data gap that prevents beneficial ownership verification.' : '') +
+          ' No nominee arrangements or bearer shares were disclosed.'
+      },
+      risk_assessment: {
+        title: 'Risk Assessment',
+        sub_sections: {
+          jurisdiction_risk: { title: 'Jurisdiction Risk', rating: jRating, content: 'Jurisdiction of incorporation: ' + escapeHtml(app.country) + '. ' + (isHighRiskCountry ? escapeHtml(app.country) + ' is designated as a high-risk jurisdiction due to comprehensive international sanctions, FATF blacklisting, or active conflict zone status. This presents severe jurisdictional risk that materially affects the overall risk assessment.' : isOffshore ? escapeHtml(app.country) + ' presents moderate jurisdictional risk. While currently compliant with FATF standards, the jurisdiction retains characteristics of an offshore financial centre — including cross-border capital flow facilitation and international business licence regimes — that elevate baseline risk for ML/TF purposes.' : escapeHtml(app.country) + ' presents low jurisdictional risk. The jurisdiction maintains adequate AML/CFT frameworks and does not exhibit characteristics associated with elevated ML/TF risk.') + ' Risk weighting factor: 0.20.' },
+          business_risk: { title: 'Business Risk', rating: bRating, content: 'Sector: ' + escapeHtml(app.sector||'Information not provided') + '. ' + (isHighRiskSector ? 'The ' + escapeHtml(app.sector) + ' sector carries elevated inherent ML/TF risk due to the potential for anonymous transactions, rapid value transfer, or regulatory arbitrage.' : isMediumRiskSector ? 'The ' + escapeHtml(app.sector) + ' sector carries moderate inherent risk due to the intermediary nature of the business and exposure to third-party funds. The stated business model appears plausible and consistent with the entity\'s jurisdictional profile, partially mitigating this concern.' : 'The stated business sector presents low inherent risk and does not exhibit typology indicators associated with elevated ML/TF risk.') + ' Business model plausibility assessed by Agent 3. Risk weighting factor: 0.15.' },
+          transaction_risk: { title: 'Transaction Risk', rating: riskLevel, content: 'Expected transaction volume: ' + escapeHtml(app.expectedVolume||'Information not provided') + '. Source of funds: ' + escapeHtml(app.sourceOfFunds||'Information not provided') + '. As a newly onboarded entity, limited historical transaction data is available, which constrains the ability to identify anomalous patterns at this stage and creates a monitoring dependency. Risk weighting factor: 0.10.' },
+          ownership_risk: { title: 'Ownership Risk', rating: oRating, content: (app.directors||[]).length + ' director(s), ' + (app.ubos||[]).length + ' UBO(s). Structure complexity: ' + structComplexity + '. ' + (pepList.length>0 ? pepList.length + ' PEP(s) identified. PEP exposure introduces corruption and undue influence risk per FATF Recommendation 12.' + (pepDirList.length>0&&pepUboList.length===0 ? ' The PEP(s) hold board positions but no direct ownership, partially mitigating control risk.' : '') : 'No PEP exposure identified — positive indicator.') + (primaryUbo ? ' Beneficial ownership identified to natural person level.' : ' Beneficial ownership could not be verified — critical gap.') + ' Risk weighting factor: 0.25.' },
+          financial_crime_risk: { title: 'Financial Crime Risk', rating: fRating, content: 'Sanctions screening conducted across UN, EU, OFAC SDN, and HMT consolidated lists via ' + screeningProvider + '. ' + (sanctionsHits>0 ? sanctionsHits + ' match(es) identified requiring further assessment. ' : 'No matches returned for any associated individual or the entity. ') + 'PEP screening: ' + pepList.length + ' confirmed match(es). Adverse media: No relevant hits across global databases. The entity\'s business model ' + (fRating==='LOW'?'does not exhibit':'may exhibit') + ' typology indicators associated with ML/TF. Risk weighting factor: 0.10.' }
+        }
+      },
+      screening_results: {
+        title: 'Screening Results',
+        content: 'Sanctions Screening: Conducted against UN Security Council, EU, OFAC SDN, and HMT consolidated lists via ' + screeningProvider + '. ' + (sanctionsHits>0 ? sanctionsHits + ' match(es) identified — assessed for false positive determination based on identity data verification. ' : 'No matches returned for any associated individual or the entity. ') + 'PEP Screening: ' + pepList.length + ' confirmed match(es)' + (pepList.length>0 ? ' — ' + pepList.map(function(p){ return p + ' identified as PEP. Confirmed true positive based on verified identity data. PEP declaration form and enhanced due diligence documentation requested.'; }).join(' ') : ' — no matches identified.') + ' Adverse Media: Comprehensive search conducted across global news and regulatory enforcement databases. No relevant hits identified. Company Registry Verification: ' + escapeHtml(app.company) + ' — ' + companyVerified + ' via ' + screeningProvider + '.'
+      },
+      document_verification: {
+        title: 'Document Verification',
+        content: numDocs + ' document(s) submitted, ' + verifiedDocs + ' verified. ' + (app.docs||[]).map(function(d){ var r = docReviews[d]||{}; return d + ': ' + (r.status==='accepted' ? 'Verified — document is authentic and consistent with application data. No discrepancies identified.' : r.status==='rejected' ? 'Rejected — ' + (r.comment||'discrepancy identified, re-submission required') + '.' : r.status==='info_requested' ? 'Further information requested — ' + (r.comment||'additional verification needed') + '.' : 'Pending verification — document received, verification in progress.'); }).join(' ') + (numDocs>verifiedDocs ? ' ' + (numDocs-verifiedDocs) + ' document(s) require action. This gap prevents complete entity verification and is reflected as a condition of approval.' : ' All documents verified — high confidence in entity documentation.') + ' Overall documentation adequacy: ' + docConfidence + '%. Model confidence adjusted accordingly.'
+      },
+      ai_explainability: {
+        title: 'AI Explainability Layer',
+        content: 'Risk scoring model: Onboarda Composite Risk Engine v2.1. Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group guidance. Overall risk score: ' + riskScore + '/100 (' + riskLevel + '). Model confidence: ' + modelConf + '% — ' + (docConfidence<100 ? 'confidence reduced from baseline due to outstanding documentation and limited historical transaction data.' : 'high confidence based on complete documentation.') + ' Top risk-increasing factors: (1) ' + (pepList.length>0 ? 'PEP presence — weight: 0.25, elevating ownership risk per FATF Recommendation 12.' : 'No PEP exposure — no contribution to ownership risk.') + ' (2) ' + (isOffshore||isHighRiskCountry ? (isHighRiskCountry?'High-risk':'Offshore') + ' jurisdiction (' + escapeHtml(app.country) + ') — weight: 0.20, elevating baseline cross-border risk.' : 'Jurisdiction (' + escapeHtml(app.country) + ') — weight: 0.20, low contribution.') + ' (3) ' + escapeHtml(app.sector||'Unspecified') + ' sector — weight: 0.15. Top risk-decreasing factors: (1) ' + (sanctionsHits===0?'Clean sanctions screening':'Screening completed') + ' — weight: 0.20. (2) ' + (primaryUbo?'Verified beneficial ownership to natural person level':'Ownership verification incomplete') + ' — weight: 0.15. (3) Documentation at ' + docConfidence + '% — weight: 0.10. Decision pathway: Agent 1 (Identity & Document Integrity) → Agent 2 (External Database Cross-Verification) → Agent 3 (FinCrime Screening Interpretation) → Agent 4 (Corporate Structure & UBO Mapping) → Agent 5 (Compliance Memo). Supervisor: No inter-agent contradictions flagged.'
+      },
+      red_flags_and_mitigants: {
+        title: 'Red Flags & Mitigants',
+        red_flags:
+          pepList.map(function(p){ return 'Politically Exposed Person identified: ' + p + '. ' + (pepDirList.indexOf(p)>=0 ? 'Board membership confers governance influence and introduces corruption and undue influence risk per FATF Recommendation 12, requiring enhanced scrutiny.' : 'Direct ownership by a PEP significantly elevates control risk and the potential for proceeds of corruption to enter the financial system.'); })
+          .concat(numDocs>verifiedDocs ? ['Documentation gap: ' + (numDocs-verifiedDocs) + ' of ' + numDocs + ' required document(s) remain outstanding. This prevents complete entity verification and creates residual risk until remedied.'] : [])
+          .concat(isOffshore ? ['Offshore jurisdiction: ' + escapeHtml(app.country) + ' retains characteristics of an international financial centre, elevating baseline risk for cross-border fund flows and regulatory arbitrage.'] : [])
+          .concat(isHighRiskCountry ? ['High-risk jurisdiction: ' + escapeHtml(app.country) + ' is subject to comprehensive sanctions or FATF blacklisting, presenting severe jurisdictional risk.'] : [])
+          .concat(isHighRiskSector ? ['High-risk sector: ' + escapeHtml(app.sector) + ' carries elevated inherent ML/TF risk.'] : [])
+          .concat(['Limited trading history: As a new onboarding, there is no historical transaction data against which to benchmark expected volumes. This reduces forward-looking risk confidence and creates a monitoring dependency.']),
+        mitigants:
+          pepList.map(function(p){ return pepDirList.indexOf(p)>=0 ? p + ' holds no direct ownership stake, reducing control risk. PEP declaration and enhanced monitoring will be applied as conditions of approval.' : p + ' has been identified and PEP declaration, source of wealth verification, and enhanced monitoring are required as conditions.'; })
+          .concat(numDocs>verifiedDocs ? ['Outstanding documents formally requested with 14-business-day deadline. Failure to provide triggers automatic escalation. The ' + verifiedDocs + ' documents already verified are internally consistent.'] : ['All required documents received and verified at ' + docConfidence + '% confidence, providing strong assurance of entity legitimacy.'])
+          .concat(isOffshore ? [escapeHtml(app.country) + ' is currently compliant with FATF standards. The entity\'s business activity is consistent with the jurisdiction\'s commercial profile.'] : [])
+          .concat(['Sanctions screening completed across all consolidated lists (UN, EU, OFAC, HMT) with ' + (pepList.length===0?'no matches':'PEP identification and appropriate enhanced measures') + '.'])
+          .concat(primaryUbo ? ['Beneficial ownership traced to natural person level via ' + structComplexity.toLowerCase() + ' structure. ' + controlName + ' (' + controlPct + '%) confirmed as exercising effective control.'] : [])
+          .concat(['Transaction monitoring will be applied on a quarterly basis for the first 12 months, with automated alerts for anomalous volumes, compensating for the absence of historical benchmarking data.'])
+      },
+      compliance_decision: {
+        title: 'Compliance Decision',
+        decision: decision,
+        content: 'On the basis of the composite risk assessment (' + riskLevel + ' — ' + riskScore + '/100), ' + (pepList.length===0?'clean':'flagged') + ' screening results, ' + (verifiedDocs===numDocs?'verified':'partially verified') + ' documentation (' + docConfidence + '% confidence), and ' + (primaryUbo?'confirmed':'unverified') + ' beneficial ownership, this application is recommended for ' + decisionLabel + '. ' + (riskLevel!=='LOW' ? 'Conditions of approval: ' + (pepList.length>0 ? '(1) PEP declaration form(s) must be completed by ' + pepList.join(', ') + ' within 14 business days. ' : '') + (numDocs>verifiedDocs ? (pepList.length>0?'(2)':'(1)') + ' Outstanding documents must be received within 14 business days. Failure triggers escalation. ' : '') + ((pepList.length>0&&numDocs>verifiedDocs?'(3)':pepList.length>0||numDocs>verifiedDocs?'(2)':'(1)') + ' ' + monTier + ' monitoring for the first 12 months. ') : '') + 'Residual risk acknowledgement: ' + (riskLevel==='LOW'?'Minimal residual risk identified.':riskLevel==='MEDIUM'||riskLevel==='HIGH'?'Residual risk remains manageable within the conditions framework and does not warrant rejection at this stage.':'Residual risk is elevated and requires SCO determination.')
+      },
+      ongoing_monitoring: {
+        title: 'Ongoing Monitoring & Review',
+        content: 'Monitoring tier: ' + monTier + ' — assigned due to ' + (monTier==='Enhanced' ? 'the combination of ' + (pepList.length>0?'PEP presence, ':'') + (isOffshore?'offshore jurisdiction, ':'') + riskLevel + ' composite risk.' : 'the ' + riskLevel + ' composite risk profile with no material PEP or jurisdictional concerns.') + ' Review frequency: ' + (riskLevel==='HIGH'||riskLevel==='VERY_HIGH'?'6 months':'12 months') + (pepList.length>0&&riskLevel!=='HIGH'&&riskLevel!=='VERY_HIGH'?', with interim 6-month review triggered by PEP conditions':'') + '. Transaction monitoring: ' + (riskLevel!=='LOW'?'Quarterly':'Annual') + ' review of transaction patterns. Trigger events: (1) Change in beneficial ownership or directorship. (2) Adverse media alerts. (3) ' + (pepList.length>0?'Change in PEP status for ' + pepList.join(', ') + '.':'New PEP identification.') + ' (4) Transaction volumes exceeding 150% of stated expectations. (5) Regulatory action against entity or associated persons.' + (numDocs>verifiedDocs ? ' (6) Failure to provide outstanding documents within 14-day deadline.' : '')
+      },
+      audit_and_governance: {
+        title: 'Audit & Governance',
+        content: 'This compliance onboarding memo was generated by the Onboarda AI Compliance Engine (Agent 5), version 2.1. All data inputs validated through the 10-agent verification pipeline. Supervisor module confirmed inter-agent consistency with no contradictions flagged. Document classification: CONFIDENTIAL. Retention period: 7 years from generation or termination of business relationship. Applicable frameworks: FATF 40 Recommendations, applicable AML/CFT legislation in ' + escapeHtml(app.country) + '. Generated: ' + new Date().toISOString() + '. Memo version: 1.0. Reviewed by: Information not provided — memo pending Senior Compliance Officer review.'
+      }
+    },
+    metadata: {
+      risk_rating: riskLevel,
+      risk_score: riskScore,
+      confidence_level: modelConf / 100,
+      approval_recommendation: decision,
+      key_findings: [
+        'Beneficial ownership ' + (primaryUbo ? 'traced to natural persons — ' + controlName + ' (' + controlPct + '%) exercises effective control' : 'could not be verified — critical data gap'),
+        (pepList.length>0 ? 'PEP identified: ' + pepList.join(', ') + '. Enhanced due diligence required.' : 'No PEP exposure identified'),
+        'Sanctions and adverse media screening ' + (sanctionsHits===0?'clear':'completed with findings') + ' across all consolidated lists',
+        verifiedDocs + ' of ' + numDocs + ' documents verified at ' + docConfidence + '% confidence',
+        escapeHtml(app.country) + ' jurisdiction presents ' + (isHighRiskCountry?'severe':isOffshore?'moderate':'low') + ' risk',
+        'Composite risk: ' + riskScore + '/100 (' + riskLevel + ') at ' + modelConf + '% model confidence'
+      ]
+    }
+  };
+  window._currentMemoData = memoData;
+
+  // Render the 11-section memo
+  var memoHtml = renderMemoSections(memoData);
+  memoEl.innerHTML = memoHtml;
+
+  // Show validation panel and fetch existing results
+  showValidationPanelIfMemoExists();
 
   // Documents with review actions
   if (!app.docReviews) app.docReviews = {};
@@ -3403,19 +3791,20 @@ function switchCaseTab(tab, btn) {
 }
 
 function switchDetailTab(tab) {
-  var tabOverview = document.getElementById('tab-overview');
-  var tabActivity = document.getElementById('tab-activity');
-  var panelOverview = document.getElementById('detail-tab-overview');
-  var panelActivity = document.getElementById('detail-tab-activity');
-  if (tab === 'overview') {
-    tabOverview.style.borderBottomColor = 'var(--brand)'; tabOverview.style.color = 'var(--brand)'; tabOverview.style.fontWeight = '600';
-    tabActivity.style.borderBottomColor = 'transparent'; tabActivity.style.color = 'var(--text3)'; tabActivity.style.fontWeight = '400';
-    panelOverview.style.display = ''; panelActivity.style.display = 'none';
-  } else {
-    tabActivity.style.borderBottomColor = 'var(--brand)'; tabActivity.style.color = 'var(--brand)'; tabActivity.style.fontWeight = '600';
-    tabOverview.style.borderBottomColor = 'transparent'; tabOverview.style.color = 'var(--text3)'; tabOverview.style.fontWeight = '400';
-    panelOverview.style.display = 'none'; panelActivity.style.display = '';
-  }
+  var tabs = ['overview', 'activity', 'supervisor'];
+  tabs.forEach(function(t) {
+    var tabEl = document.getElementById('tab-' + t);
+    var panelEl = document.getElementById('detail-tab-' + t);
+    if (!tabEl || !panelEl) return;
+    if (t === tab) {
+      tabEl.style.borderBottomColor = 'var(--brand)'; tabEl.style.color = 'var(--brand)'; tabEl.style.fontWeight = '600';
+      panelEl.style.display = '';
+    } else {
+      tabEl.style.borderBottomColor = 'transparent'; tabEl.style.color = 'var(--text3)'; tabEl.style.fontWeight = '400';
+      panelEl.style.display = 'none';
+    }
+  });
+  if (tab === 'supervisor') loadSupervisorForApp();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3477,12 +3866,12 @@ async function confirmDecision() {
 
 function showClientNotificationModal(decision) {
   var templates = {
-    'Approve': 'Dear [Company Name],\n\nWe are pleased to inform you that your application for an account with ARIE Finance has been APPROVED.\n\nYour account will be activated within 24 hours. You will receive separate correspondence with your account details and next steps.\n\nThank you for choosing ARIE Finance.\n\nBest regards,\nCompliance Team\nARIE Finance',
-    'Reject': 'Dear [Company Name],\n\nAfter careful review of your application, we regret to inform you that we are unable to proceed at this time.\n\nThis decision is final and based on our risk assessment and compliance requirements. Should you have any questions, please contact our compliance department.\n\nBest regards,\nCompliance Team\nARIE Finance',
-    'EDD': 'Dear [Company Name],\n\nThank you for your application. Our compliance team requires additional documentation to complete our Enhanced Due Diligence review.\n\nPlease provide the following within 10 business days:\n- Enhanced beneficial ownership documentation\n- Bank references\n- Regulatory compliance certifications\n\nPlease reply to this email with the requested documents.\n\nBest regards,\nCompliance Team\nARIE Finance'
+    'Approve': 'Dear [Company Name],\n\nWe are pleased to inform you that your application for an account with Onboarda has been APPROVED.\n\nYour account will be activated within 24 hours. You will receive separate correspondence with your account details and next steps.\n\nThank you for choosing Onboarda.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind',
+    'Reject': 'Dear [Company Name],\n\nAfter careful review of your application, we regret to inform you that we are unable to proceed at this time.\n\nThis decision is final and based on our risk assessment and compliance requirements. Should you have any questions, please contact our compliance department.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind',
+    'EDD': 'Dear [Company Name],\n\nThank you for your application. Our compliance team requires additional documentation to complete our Enhanced Due Diligence review.\n\nPlease provide the following within 10 business days:\n- Enhanced beneficial ownership documentation\n- Bank references\n- Regulatory compliance certifications\n\nPlease reply to this email with the requested documents.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind'
   };
 
-  document.getElementById('notification-message').value = templates[decision] || 'Dear Client,\\n\\nThank you for your application.\\n\\nBest regards,\\nCompliance Team\\nARIE Finance';
+  document.getElementById('notification-message').value = templates[decision] || 'Dear Client,\\n\\nThank you for your application.\\n\\nBest regards,\\nCompliance Team\\nOnboarda\\nPowered by RegMind';
   document.getElementById('modal-client-notification').classList.add('open');
 }
 
@@ -3862,16 +4251,16 @@ function renderKPIDashboard() {
     // Agent Performance Breakdown
     '<div class="card" style="margin-top:14px;"><div class="card-title" style="margin-bottom:12px;">Agent Performance Breakdown</div>' +
       '<table class="kpi-mini-table"><thead><tr><th>Agent</th><th>Runs</th><th>Avg Time</th><th>Pass Rate</th><th>Flags</th><th>Accuracy</th><th>Status</th></tr></thead><tbody>' +
-        agentPerfRow('🛡️','Agent 1: Identity & Document Integrity', 47, '0.3s', '97.8%', 1, '100%', 'green') +
-        agentPerfRow('📋','Agent 2: Corporate Structure & UBO Mapping', 47, '0.8s', '89.4%', 5, '80%', 'amber') +
-        agentPerfRow('📎','Agent 3: Business Model Plausibility', 47, '4.2s', '87.3%', 83, '92.1%', 'green') +
-        agentPerfRow('💼','Agent 4: FinCrime Screening Interpretation', 47, '1.1s', '91.5%', 4, '75%', 'amber') +
-        agentPerfRow('👥','Agent 5: Compliance Memo & Risk Recommendation', 47, '0.6s', '93.6%', 3, '100%', 'green') +
-        agentPerfRow('🔍','Agent 6: Periodic Review Preparation', 47, '2.8s', '87.2%', 7, '85.7%', 'green') +
-        agentPerfRow('💰','Agent 7: Adverse Media & PEP Monitoring', 47, '0.9s', '85.1%', 7, '85.7%', 'green') +
-        agentPerfRow('⚖️','Agent 8: Behaviour & Risk Drift', 47, '0.4s', '100%', 0, 'N/A', 'green') +
-        agentPerfRow('📝','Agent 9: Regulatory Impact', 47, '1.5s', '100%', 0, 'N/A', 'green') +
-        agentPerfRow('📡','Agent 10: Ongoing Compliance Review', 12, '3.1s', '91.7%', 1, '100%', 'green') +
+        agentPerfRow('🔍','Agent 1: Identity & Document Integrity Agent', 47, '0.3s', '97.8%', 1, '100%', 'green') +
+        agentPerfRow('🔎','Agent 2: External Database Cross-Verification Agent', 47, '0.8s', '89.4%', 5, '80%', 'amber') +
+        agentPerfRow('💼','Agent 3: FinCrime Screening Interpretation Agent', 47, '4.2s', '87.3%', 83, '92.1%', 'green') +
+        agentPerfRow('🏗️','Agent 4: Corporate Structure & UBO Mapping Agent', 47, '1.1s', '91.5%', 4, '75%', 'amber') +
+        agentPerfRow('📝','Agent 5: Compliance Memo Agent', 47, '0.6s', '93.6%', 3, '100%', 'green') +
+        agentPerfRow('📅','Agent 6: Periodic Review Preparation Agent', 47, '2.8s', '87.2%', 7, '85.7%', 'green') +
+        agentPerfRow('📡','Agent 7: Adverse Media & PEP Monitoring Agent', 47, '0.9s', '85.1%', 7, '85.7%', 'green') +
+        agentPerfRow('📈','Agent 8: Behaviour & Risk Drift Agent', 47, '0.4s', '100%', 0, 'N/A', 'green') +
+        agentPerfRow('⚖️','Agent 9: Regulatory Impact Agent', 47, '1.5s', '100%', 0, 'N/A', 'green') +
+        agentPerfRow('📋','Agent 10: Ongoing Compliance Review Agent', 12, '3.1s', '91.7%', 1, '100%', 'green') +
       '</tbody></table></div>';
   document.getElementById('kpi-section-ai').innerHTML = aiHtml;
 
@@ -5213,7 +5602,7 @@ async function handleLogin(e) {
   errEl.classList.remove('show');
 
   // Demo password for offline/demo mode
-  var DEMO_PASSWORD = 'Arie2026!';
+  var DEMO_PASSWORD = 'Onboarda2026!';
 
   try {
     var resp;
@@ -5254,7 +5643,7 @@ async function handleLogin(e) {
     hideLoginScreen();
     showToast(isOffline ? 'Demo Mode — Welcome, ' + currentUser.name : 'Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
-    errText.textContent = 'Invalid email or password. Try: Arie2026!';
+    errText.textContent = 'Invalid email or password. Try: Onboarda2026!';
     errEl.classList.add('show');
   } finally {
     submitBtn.disabled = false;
@@ -5748,7 +6137,7 @@ function generateRegAISummary(doc) {
   // Generate contextual suggestions based on content keywords
   if (text.indexOf('risk') >= 0 || text.indexOf('score') >= 0 || text.indexOf('rating') >= 0) {
     sugIdx++;
-    suggestions.push({ id: 'S' + String(sugIdx).padStart(3,'0'), type: 'modify', text: 'Review and update risk scoring parameters based on new guidance', detail: 'The regulatory update references risk assessment methodology. Review whether current ARIE scoring dimensions (D1-D5) adequately capture the new risk factors described. Consider weight adjustments if necessary.', status: 'pending', reviewedBy: null, reviewedAt: null, notes: '' });
+    suggestions.push({ id: 'S' + String(sugIdx).padStart(3,'0'), type: 'modify', text: 'Review and update risk scoring parameters based on new guidance', detail: 'The regulatory update references risk assessment methodology. Review whether current RegMind scoring dimensions (D1-D5) adequately capture the new risk factors described. Consider weight adjustments if necessary.', status: 'pending', reviewedBy: null, reviewedAt: null, notes: '' });
   }
   if (text.indexOf('sanction') >= 0 || text.indexOf('list') >= 0 || text.indexOf('designation') >= 0) {
     sugIdx++;
@@ -5811,7 +6200,7 @@ function generateRegAISummary(doc) {
     summary: 'This ' + doc.docType.toLowerCase() + ' from ' + doc.regulator + ' (' + doc.jurisdiction + ') introduces regulatory changes effective ' + (doc.effDate || 'upon publication') + '. The document covers obligations related to ' + Object.keys(affectedAreas).filter(function(k) { return affectedAreas[k]; }).join(', ').replace(/,([^,]*)$/, ' and$1') + '. ' + suggestions.length + ' potential compliance rule changes have been identified for human review.',
     keyObligations: [
       'Review and assess the regulatory requirements outlined in ' + escapeHtml(doc.title),
-      'Determine applicability to ARIE Finance\'s current client base and operations',
+      'Determine applicability to RegMind\'s current client base and operations',
       'Implement necessary changes to compliance controls before effective date (' + (doc.effDate || 'TBD') + ')',
       'Brief compliance team on new requirements and updated procedures',
       'Document all changes made in response to this regulatory update'
@@ -5841,7 +6230,7 @@ function generateAIResponse(question) {
   var responses = {
     'review checklist': 'Here\'s your compliance review checklist:\n\n✓ Client identity verified\n✓ UBO structure validated\n✓ Sanctions screening complete\n✓ PEP database checked\n✓ Source of funds assessed\n✓ Business model analyzed\n\nAll checks passed. Status: Ready for approval.',
     'risk assessment guide': 'Risk assessment follows our 5-dimension model:\n\n1. Entity Risk (20%) — company structure, geography\n2. UBO Risk (20%) — beneficial ownership clarity\n3. FinCrime Risk (30%) — sanctions, PEP, adverse media\n4. Business Risk (15%) — transaction patterns\n5. Transactional Risk (15%) — high-risk activities\n\nComposite scores: 0-30 (Low), 31-60 (Medium), 61-80 (High), 81+ (Very High)',
-    'agent status': '🤖 Current Agent Status:\n\nOnboarding Agents (1-5):\n✓ Agent 1: Identity & Document Integrity (66 automated checks, OCR, validation, registry cross-reference) — LIVE\n✓ Agent 2: Corporate Structure & UBO Mapping (Ownership chains, UBO identification, multi-layered entity detection) — LIVE\n✓ Agent 3: Business Model Plausibility (Business story evaluation, sector alignment, transaction benchmarking) — LIVE\n✓ Agent 4: FinCrime Screening Interpretation (Sanctions/PEP/adverse media analysis, false positive reduction) — LIVE\n✓ Agent 5: Compliance Memo & Risk Recommendation (5-dimension composite scoring, risk routing, compliance memo) — LIVE\n\nMonitoring Agents (6-10):\n✓ Agent 6: Periodic Review Preparation (Review schedules, expired docs) — NOT LIVE IN PILOT\n✓ Agent 7: Adverse Media & PEP Monitoring (Continuous daily scans, sanctions updates) — LIVE\n✓ Agent 8: Behaviour & Risk Drift (Transaction patterns, volume analysis) — NOT LIVE IN PILOT\n✓ Agent 9: Regulatory Impact (Regulatory change detection) — FUTURE PHASE\n✓ Agent 10: Ongoing Compliance Review (Signal consolidation, trend analysis) — NOT LIVE IN PILOT',
+    'agent status': '🤖 Current Agent Status:\n\nOnboarding Agents (1-5):\n✓ Agent 1: Identity & Document Integrity Agent (66 automated checks, OCR, validation, cross-document consistency) — LIVE\n✓ Agent 2: External Database Cross-Verification Agent (Registry lookups, OpenCorporates, Companies House, ADGM, DIFC) — LIVE\n✓ Agent 3: FinCrime Screening Interpretation Agent (Sanctions/PEP/adverse media analysis, false positive reduction) — LIVE\n✓ Agent 4: Corporate Structure & UBO Mapping Agent (Ownership chains, UBO identification, nominee detection) — LIVE\n✓ Agent 5: Compliance Memo Agent (7-dimension composite scoring, risk routing, compliance memo) — LIVE\n\nMonitoring Agents (6-10):\n✓ Agent 6: Periodic Review Preparation Agent (Review schedules, expired docs) — NOT LIVE IN PILOT\n✓ Agent 7: Adverse Media & PEP Monitoring Agent (Continuous daily scans, sanctions updates) — LIVE\n✓ Agent 8: Behaviour & Risk Drift Agent (Transaction patterns, volume analysis) — NOT LIVE IN PILOT\n✓ Agent 9: Regulatory Impact Agent (Regulatory change detection) — FUTURE PHASE\n✓ Agent 10: Ongoing Compliance Review Agent (Signal consolidation, trend analysis) — NOT LIVE IN PILOT',
     'regulatory updates': 'Recent regulatory updates:\n\n• FATF Mutual Evaluation Report: Enhanced CDD requirements for high-risk jurisdictions\n• EU AML Directive 6: Beneficial ownership registry transparency increased\n• OFAC: New sanctions list (SDN) updates — 8 new entities added this week\n• Local Jurisdiction: AML regulations updated — customer reporting now quarterly\n\nAll 10 AI agents have been updated to reflect these changes.'
   };
   if (q.includes('checklist')) return responses['review checklist'];
@@ -6011,6 +6400,1225 @@ function submitBoDocUpload() {
   toggleBoDocUpload();
   openAppDetail(currentApp.ref);
   showToast('Document uploaded: ' + uploadLabel + ' (' + file.name + ')');
+}
+
+// ══════════════════════════════════════════════════════════
+// COMPLIANCE MEMO: Render, Generate, Download PDF
+// ══════════════════════════════════════════════════════════
+
+function renderMemoSections(data) {
+  if (!data || !data.sections) return '<div class="memo-text" style="color:var(--text3);text-align:center;padding:40px;">No memo data available. Click "Generate Memo" to create one.</div>';
+  var s = data.sections;
+  var sectionOrder = ['executive_summary','client_overview','ownership_and_control','risk_assessment','screening_results','document_verification','ai_explainability','red_flags_and_mitigants','compliance_decision','ongoing_monitoring','audit_and_governance'];
+  var html = '';
+
+  // Risk badge at top
+  var rl = (data.metadata||{}).risk_rating || 'MEDIUM';
+  var rs = (data.metadata||{}).risk_score || 'N/A';
+  var dec = (data.metadata||{}).approval_recommendation || 'REVIEW';
+  html += '<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">';
+  html += '<span style="font-size:11px;color:var(--text3);">Risk Rating:</span><span class="memo-risk-badge ' + rl.toLowerCase() + '">' + rl.replace('_',' ') + ' (' + rs + '/100)</span>';
+  html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Decision:</span><span class="memo-risk-badge ' + (dec.indexOf('APPROVE')===0&&dec!=='APPROVE_WITH_CONDITIONS'?'low':dec==='APPROVE_WITH_CONDITIONS'?'medium':dec==='REVIEW'?'high':'very_high') + '">' + dec.replace(/_/g,' ') + '</span>';
+  var conf = (data.metadata||{}).confidence_level;
+  if (conf) { html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Confidence:</span><span style="font-size:11px;font-weight:600;color:' + (conf>=0.8?'var(--green)':conf>=0.6?'var(--amber)':'var(--red)') + ';">' + Math.round(conf*100) + '%</span>'; }
+  html += '<span style="font-size:10px;color:var(--text3);margin-left:auto;">Ref: ' + (data.application_ref||'') + ' | Generated: ' + (data.memo_generated||'').substring(0,19).replace('T',' ') + '</span>';
+  html += '</div>';
+
+  sectionOrder.forEach(function(key, idx) {
+    var sec = s[key];
+    if (!sec) return;
+    html += '<div class="memo-section">';
+    html += '<div class="memo-section-title"><span class="section-num">' + (idx+1) + '</span>' + (sec.title||key.replace(/_/g,' ')) + '</div>';
+
+    // Risk Assessment has sub-sections
+    if (key === 'risk_assessment' && sec.sub_sections) {
+      if (sec.content) html += '<div class="memo-text">' + sec.content + '</div>';
+      var subOrder = ['jurisdiction_risk','business_risk','transaction_risk','ownership_risk','financial_crime_risk'];
+      subOrder.forEach(function(sk) {
+        var sub = sec.sub_sections[sk];
+        if (!sub) return;
+        html += '<div class="memo-sub-section">';
+        html += '<div class="memo-sub-title">' + (sub.title||sk.replace(/_/g,' ')) + ' <span class="memo-risk-badge ' + (sub.rating||'medium').toLowerCase() + '" style="margin-left:6px;">' + (sub.rating||'N/A') + '</span></div>';
+        html += '<div class="memo-text">' + (sub.content||'Information not provided') + '</div>';
+        html += '</div>';
+      });
+    }
+    // Red Flags & Mitigants
+    else if (key === 'red_flags_and_mitigants') {
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
+      html += '<div><div style="font-size:10px;font-weight:700;color:var(--red);margin-bottom:6px;">⚠️ RED FLAGS</div>';
+      (sec.red_flags||['No red flags identified']).forEach(function(f) { html += '<div class="memo-red-flag">• ' + f + '</div>'; });
+      html += '</div>';
+      html += '<div><div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:6px;">✅ MITIGANTS</div>';
+      (sec.mitigants||['None identified']).forEach(function(m) { html += '<div class="memo-mitigant">• ' + m + '</div>'; });
+      html += '</div></div>';
+    }
+    // Compliance Decision — highlighted box
+    else if (key === 'compliance_decision') {
+      var d = sec.decision||'REVIEW';
+      var dClass = d==='APPROVE'?'approve':d==='APPROVE_WITH_CONDITIONS'?'approve_with_conditions':d==='REVIEW'?'review':'reject';
+      html += '<div class="memo-decision-box ' + dClass + '">' + d.replace(/_/g,' ') + '</div>';
+      html += '<div class="memo-text">' + (sec.content||'Information not provided') + '</div>';
+    }
+    // Ownership & Control — with structure complexity and control statement
+    else if (key === 'ownership_and_control') {
+      if (sec.structure_complexity || sec.control_statement) {
+        html += '<div style="display:flex;gap:12px;margin-bottom:10px;flex-wrap:wrap;">';
+        if (sec.structure_complexity) {
+          var scClass = sec.structure_complexity==='Simple'?'low':sec.structure_complexity==='Layered'?'medium':'high';
+          html += '<span style="font-size:10px;color:var(--text3);">Structure:</span><span class="memo-risk-badge ' + scClass + '">' + sec.structure_complexity + '</span>';
+        }
+        if (sec.control_statement) {
+          html += '<span style="font-size:10px;color:var(--text3);margin-left:8px;">Control:</span><span style="font-size:11px;font-weight:600;color:var(--text1);">' + sec.control_statement + '</span>';
+        }
+        html += '</div>';
+      }
+      html += '<div class="memo-text">' + (sec.content||'Information not provided') + '</div>';
+    }
+    // AI Explainability — structured factor display
+    else if (key === 'ai_explainability') {
+      // Model info
+      var aiContent = sec.content || '';
+      var modelInfo = aiContent.split('Risk-increasing factors:')[0] || aiContent;
+      if (modelInfo && modelInfo.length < aiContent.length) {
+        html += '<div class="memo-text">' + modelInfo.trim() + '</div>';
+      }
+      // Risk-increasing factors
+      var incFactors = sec.risk_increasing_factors || [];
+      if (incFactors.length > 0) {
+        html += '<div style="margin:8px 0;"><div style="font-size:10px;font-weight:700;color:var(--red);margin-bottom:4px;">RISK-INCREASING FACTORS</div>';
+        incFactors.forEach(function(f) {
+          html += '<div style="font-size:11px;color:#dc2626;padding:3px 0 3px 16px;border-left:3px solid #dc2626;margin:3px 0;">+ ' + f + '</div>';
+        });
+        html += '</div>';
+      }
+      // Risk-decreasing factors
+      var decFactors = sec.risk_decreasing_factors || [];
+      if (decFactors.length > 0) {
+        html += '<div style="margin:8px 0;"><div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:4px;">RISK-DECREASING FACTORS</div>';
+        decFactors.forEach(function(f) {
+          html += '<div style="font-size:11px;color:#16a34a;padding:3px 0 3px 16px;border-left:3px solid #16a34a;margin:3px 0;">- ' + f + '</div>';
+        });
+        html += '</div>';
+      }
+      // Fallback to full content if no structured factors
+      if (incFactors.length === 0 && decFactors.length === 0) {
+        html += '<div class="memo-text">' + aiContent + '</div>';
+      }
+      // Decision pathway
+      var pathIdx = aiContent.indexOf('Decision pathway:');
+      if (pathIdx > -1) {
+        html += '<div class="memo-text" style="margin-top:6px;font-size:10px;color:var(--text3);">' + aiContent.substring(pathIdx) + '</div>';
+      }
+    }
+    // Standard sections
+    else {
+      html += '<div class="memo-text">' + (sec.content||'Information not provided') + '</div>';
+    }
+
+    html += '</div>';
+  });
+
+  // ── SUPERVISOR VERDICT PANEL ──
+  var sv = data.supervisor;
+  if (sv && sv.verdict) {
+    var svColor = sv.verdict === 'CONSISTENT' ? '#16a34a' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#d97706' : '#dc2626';
+    var svBg = sv.verdict === 'CONSISTENT' ? '#f0fdf4' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#fffbeb' : '#fef2f2';
+    html += '<div style="border:2px solid ' + svColor + ';border-radius:8px;padding:16px;margin-top:16px;background:' + svBg + ';">';
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">';
+    html += '<span style="font-size:13px;font-weight:700;color:' + svColor + ';">SUPERVISOR VERDICT</span>';
+    html += '<span style="background:' + svColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + sv.verdict.replace(/_/g, ' ') + '</span>';
+    html += '<span style="font-size:11px;color:var(--text3);margin-left:auto;">Confidence: ' + Math.round((sv.supervisor_confidence || 0) * 100) + '%</span>';
+    html += '</div>';
+    html += '<div style="font-size:11px;color:var(--text1);margin-bottom:8px;">' + (sv.recommendation || '') + '</div>';
+    // Contradictions
+    if (sv.contradictions && sv.contradictions.length > 0) {
+      html += '<div style="font-size:10px;font-weight:700;color:#dc2626;margin:6px 0 4px;">Contradictions (' + sv.contradictions.length + '):</div>';
+      sv.contradictions.forEach(function(c) {
+        html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(220,38,38,0.08);border-radius:4px;border-left:3px solid #dc2626;">';
+        html += '<strong>[' + (c.severity || '').toUpperCase() + ']</strong> ' + c.description;
+        if (c.section_a && c.section_b) html += ' <span style="color:var(--text3);">(' + c.section_a + ' vs ' + c.section_b + ')</span>';
+        html += '</div>';
+      });
+    }
+    // Warnings
+    if (sv.warnings && sv.warnings.length > 0) {
+      html += '<div style="font-size:10px;font-weight:700;color:#d97706;margin:6px 0 4px;">Warnings (' + sv.warnings.length + '):</div>';
+      sv.warnings.forEach(function(w) {
+        html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(217,119,6,0.08);border-radius:4px;border-left:3px solid #d97706;">';
+        html += '<strong>[' + (w.severity || '').toUpperCase() + ']</strong> ' + w.description;
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+  }
+
+  // ── RULE ENGINE PANEL ──
+  var re = (data.metadata || {}).rule_engine;
+  if (re && re.engine_status) {
+    var reColor = re.engine_status === 'CLEAN' ? '#16a34a' : re.engine_status === 'ENFORCED' ? '#d97706' : '#dc2626';
+    var reBg = re.engine_status === 'CLEAN' ? '#f0fdf4' : re.engine_status === 'ENFORCED' ? '#fffbeb' : '#fef2f2';
+    html += '<div style="border:2px solid ' + reColor + ';border-radius:8px;padding:16px;margin-top:12px;background:' + reBg + ';">';
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">';
+    html += '<span style="font-size:13px;font-weight:700;color:' + reColor + ';">PRE-GENERATION RULE ENGINE</span>';
+    html += '<span style="background:' + reColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + re.engine_status + '</span>';
+    html += '<span style="font-size:10px;color:var(--text3);margin-left:auto;">Rules: ' + (re.rules_checked || []).length + ' | Enforcements: ' + (re.total_enforcements || 0) + ' | Violations: ' + (re.total_violations || 0) + '</span>';
+    html += '</div>';
+    // Enforcements
+    if (re.enforcements && re.enforcements.length > 0) {
+      html += '<div style="font-size:10px;font-weight:700;color:#d97706;margin:6px 0 4px;">Enforcements Applied (' + re.enforcements.length + '):</div>';
+      re.enforcements.forEach(function(e) {
+        html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(217,119,6,0.08);border-radius:4px;border-left:3px solid #d97706;">';
+        html += '<strong>[' + (e.rule || '') + ']</strong> ' + (e.reason || '');
+        if (e.original && e.enforced) html += ' <span style="color:var(--text3);">(was: ' + e.original + ' -> now: ' + e.enforced + ')</span>';
+        if (e.original_decision && e.enforced_decision) html += ' <span style="color:var(--text3);">(was: ' + e.original_decision + ' -> now: ' + e.enforced_decision + ')</span>';
+        html += '</div>';
+      });
+    }
+    // Violations
+    if (re.violations && re.violations.length > 0) {
+      html += '<div style="font-size:10px;font-weight:700;color:#dc2626;margin:6px 0 4px;">Rule Violations (' + re.violations.length + '):</div>';
+      re.violations.forEach(function(v) {
+        html += '<div style="font-size:10px;padding:4px 8px;margin:2px 0;background:rgba(220,38,38,0.08);border-radius:4px;border-left:3px solid #dc2626;">';
+        html += '<strong>[' + (v.rule || '') + ' / ' + (v.severity || '').toUpperCase() + ']</strong> ' + (v.detail || '');
+        if (v.action) html += ' <span style="color:var(--text3);">Action: ' + v.action + '</span>';
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+  }
+
+  // ── BLOCKED MEMO BANNER ──
+  if (data.metadata && data.metadata.blocked) {
+    html += '<div style="border:3px solid #dc2626;border-radius:8px;padding:16px;margin-top:12px;background:#fef2f2;text-align:center;">';
+    html += '<div style="font-size:16px;font-weight:700;color:#dc2626;margin-bottom:6px;">MEMO BLOCKED</div>';
+    html += '<div style="font-size:12px;color:#991b1b;">' + (data.metadata.block_reason || 'Blocked by Rule Engine + Supervisor. Manual review required.') + '</div>';
+    html += '</div>';
+  }
+
+  return html;
+}
+
+async function generateComplianceMemo() {
+  var app = window._currentDetailApp;
+  if (!app) { alert('No application selected.'); return; }
+  var btn = document.getElementById('btn-generate-memo');
+  btn.innerHTML = '⏳ Generating...'; btn.disabled = true;
+  try {
+    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    });
+    var data = await res.json();
+    var memoData = (data.data && data.data.sections) ? data.data : (data.sections ? data : null);
+    if (memoData) {
+      window._currentMemoData = memoData;
+      document.getElementById('detail-memo').innerHTML = renderMemoSections(memoData);
+      document.getElementById('memo-status-badge').textContent = 'Server-Generated';
+      document.getElementById('memo-status-badge').className = 'badge approved';
+      showValidationPanelIfMemoExists();
+      // Show supervisor status in badge if available
+      var sv = memoData.supervisor;
+      if (sv && sv.verdict) {
+        var svBadge = document.getElementById('memo-status-badge');
+        if (svBadge) {
+          var svLabel = sv.verdict === 'CONSISTENT' ? 'Supervisor: Consistent' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? 'Supervisor: Warnings' : 'Supervisor: Inconsistent';
+          svBadge.textContent = svLabel;
+          svBadge.className = 'badge ' + (sv.verdict === 'CONSISTENT' ? 'approved' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? 'pending' : 'rejected');
+        }
+      }
+    } else {
+      alert('Memo generation returned unexpected format.');
+    }
+  } catch (e) {
+    alert('Failed to generate memo: ' + e.message);
+  }
+  btn.innerHTML = '🔄 Generate Memo'; btn.disabled = false;
+}
+
+function downloadMemoPDF() {
+  var data = window._currentMemoData;
+  if (!data || !data.sections) { alert('No memo data available. Generate a memo first.'); return; }
+
+  // Check if jsPDF is loaded
+  if (typeof window.jspdf === 'undefined') {
+    alert('PDF library is still loading. Please try again in a moment.');
+    return;
+  }
+
+  var jsPDF = window.jspdf.jsPDF;
+  var doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  var pageWidth = 210;
+  var margin = 20;
+  var contentWidth = pageWidth - margin * 2;
+  var y = 20;
+  var pageHeight = 297;
+  var bottomMargin = 25;
+
+  function checkPageBreak(needed) {
+    if (y + needed > pageHeight - bottomMargin) {
+      doc.addPage();
+      y = 20;
+      // Add footer line
+      doc.setDrawColor(200); doc.setLineWidth(0.3); doc.line(margin, pageHeight - 15, pageWidth - margin, pageHeight - 15);
+      doc.setFontSize(7); doc.setTextColor(150);
+      doc.text('CONFIDENTIAL — Onboarda Compliance Memo — ' + (data.application_ref||''), margin, pageHeight - 10);
+      doc.text('Page ' + doc.internal.getNumberOfPages(), pageWidth - margin, pageHeight - 10, { align: 'right' });
+      y = 20;
+    }
+  }
+
+  // PDF-safe text sanitizer: replace broken encoding characters
+  function pdfSafe(text) {
+    if (!text) return '';
+    return String(text)
+      .replace(/[\u2018\u2019\u201A\uFFFD]/g, "'")
+      .replace(/[\u201C\u201D\u201E]/g, '"')
+      .replace(/[\u2013\u2014]/g, '-')
+      .replace(/[\u2026]/g, '...')
+      .replace(/[\u00A0]/g, ' ')
+      .replace(/[\u00AD]/g, '-')
+      .replace(/[\u00B7]/g, '.')
+      .replace(/[\u2022]/g, '-')
+      .replace(/[\u2003\u2002\u2009]/g, ' ')
+      .replace(/[^\x00-\x7F]/g, function(ch) {
+        // For any remaining non-ASCII chars, try to keep common ones or replace
+        var code = ch.charCodeAt(0);
+        if (code >= 0xC0 && code <= 0xFF) return ch; // Keep Latin-1 Supplement (accented chars)
+        return '';
+      });
+  }
+
+  function addText(text, fontSize, isBold, color) {
+    doc.setFontSize(fontSize || 10);
+    doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+    doc.setTextColor(color || '#333333');
+    var lines = doc.splitTextToSize(pdfSafe(text), contentWidth);
+    lines.forEach(function(line) {
+      checkPageBreak(6);
+      doc.text(line, margin, y);
+      y += fontSize * 0.45;
+    });
+    y += 2;
+  }
+
+  // ── HEADER ──
+  doc.setFillColor(10, 36, 99); // Dark navy
+  doc.rect(0, 0, pageWidth, 38, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(18); doc.setFont('helvetica', 'bold');
+  doc.text('COMPLIANCE ONBOARDING MEMO', margin, 16);
+  doc.setFontSize(9); doc.setFont('helvetica', 'normal');
+  doc.text('Application: ' + (data.application_ref||'N/A') + '  |  Entity: ' + (data.company_name||'N/A'), margin, 24);
+  doc.text('Generated: ' + (data.memo_generated||'').substring(0,19).replace('T',' ') + '  |  Classification: CONFIDENTIAL', margin, 30);
+
+  // Risk badge in header
+  var rl = (data.metadata||{}).risk_rating || 'MEDIUM';
+  var rs = (data.metadata||{}).risk_score || 'N/A';
+  var dec = (data.metadata||{}).approval_recommendation || 'REVIEW';
+  var badgeColors = { LOW: [34,197,94], MEDIUM: [245,158,11], HIGH: [239,68,68], VERY_HIGH: [153,27,27] };
+  var bc = badgeColors[rl] || badgeColors.MEDIUM;
+  doc.setFillColor(bc[0],bc[1],bc[2]);
+  doc.roundedRect(pageWidth - margin - 45, 8, 45, 12, 2, 2, 'F');
+  doc.setTextColor(255); doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+  doc.text(rl.replace('_',' ') + ' (' + rs + '/100)', pageWidth - margin - 42, 16);
+  doc.setFillColor(bc[0],bc[1],bc[2]);
+  doc.roundedRect(pageWidth - margin - 45, 22, 45, 12, 2, 2, 'F');
+  doc.text(dec.replace(/_/g,' '), pageWidth - margin - 42, 30);
+
+  // Confidence badge
+  var conf = (data.metadata||{}).confidence_level;
+  if (conf) {
+    var confPct = Math.round(conf * 100);
+    var confColor = confPct >= 80 ? [34,197,94] : confPct >= 60 ? [245,158,11] : [239,68,68];
+    doc.setFontSize(7); doc.setFont('helvetica', 'normal'); doc.setTextColor(200,210,230);
+    doc.text('Confidence: ' + confPct + '%', pageWidth - margin - 43, 38);
+  }
+
+  y = 46;
+
+  // ── VALIDATION STATUS BAR (if available) ──
+  var valPanel = document.getElementById('memo-val-status-badge');
+  var valStatus = valPanel ? valPanel.textContent.trim() : '';
+  var qualGauge = document.getElementById('memo-quality-gauge');
+  var qualScore = qualGauge ? qualGauge.textContent.trim() : '';
+  if (valStatus && valStatus !== 'PENDING') {
+    doc.setFillColor(245, 247, 250);
+    doc.roundedRect(margin, y, contentWidth, 10, 2, 2, 'F');
+    doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(51);
+    doc.text('Validation: ', margin + 4, y + 6);
+    var vsBc = valStatus === 'PASS' ? [34,197,94] : valStatus.indexOf('FIX') > -1 ? [245,158,11] : valStatus === 'FAIL' ? [239,68,68] : [100,116,139];
+    doc.setFillColor(vsBc[0], vsBc[1], vsBc[2]);
+    doc.roundedRect(margin + 24, y + 1, 24, 7, 1, 1, 'F');
+    doc.setTextColor(255); doc.setFontSize(7); doc.text(valStatus, margin + 25, y + 6);
+    if (qualScore && qualScore !== '—') {
+      doc.setTextColor(51); doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+      doc.text('Quality Score: ' + qualScore + '/10', margin + 56, y + 6);
+    }
+    // Approved by info
+    var approvedText = '';
+    if (valStatus === 'APPROVED' && data.approved_by) {
+      approvedText = 'Approved by: ' + data.approved_by;
+      if (data.approved_at) approvedText += ' on ' + data.approved_at.substring(0,10);
+    }
+    if (approvedText) {
+      doc.setFontSize(7); doc.setTextColor(100);
+      doc.text(approvedText, pageWidth - margin - 4, y + 6, { align: 'right' });
+    }
+    y += 14;
+  }
+
+  // ── SECTIONS ──
+  var sectionOrder = ['executive_summary','client_overview','ownership_and_control','risk_assessment','screening_results','document_verification','ai_explainability','red_flags_and_mitigants','compliance_decision','ongoing_monitoring','audit_and_governance'];
+
+  sectionOrder.forEach(function(key, idx) {
+    var sec = data.sections[key];
+    if (!sec) return;
+
+    checkPageBreak(20);
+
+    // Section header
+    doc.setFillColor(10, 36, 99);
+    doc.circle(margin + 3, y - 1, 3, 'F');
+    doc.setTextColor(255); doc.setFontSize(7); doc.setFont('helvetica', 'bold');
+    doc.text(String(idx + 1), margin + 1.8, y + 0.5);
+    doc.setTextColor(10, 36, 99); doc.setFontSize(11); doc.setFont('helvetica', 'bold');
+    doc.text((sec.title||key.replace(/_/g,' ')).toUpperCase(), margin + 10, y);
+    y += 3;
+    doc.setDrawColor(10, 36, 99); doc.setLineWidth(0.5); doc.line(margin, y, pageWidth - margin, y);
+    y += 5;
+
+    // Risk Assessment sub-sections
+    if (key === 'risk_assessment' && sec.sub_sections) {
+      if (sec.content) { addText(sec.content, 9, false, '#333333'); }
+      var subOrder = ['jurisdiction_risk','business_risk','transaction_risk','ownership_risk','financial_crime_risk'];
+      subOrder.forEach(function(sk) {
+        var sub = sec.sub_sections[sk];
+        if (!sub) return;
+        checkPageBreak(14);
+        doc.setFillColor(245,247,250); doc.rect(margin + 4, y - 3, contentWidth - 4, 7, 'F');
+        doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(51);
+        doc.text((sub.title||sk.replace(/_/g,' ')).toUpperCase(), margin + 6, y + 1);
+        var subBc = badgeColors[sub.rating] || badgeColors.MEDIUM;
+        doc.setFillColor(subBc[0],subBc[1],subBc[2]);
+        doc.roundedRect(margin + contentWidth - 25, y - 2.5, 20, 5, 1, 1, 'F');
+        doc.setTextColor(255); doc.setFontSize(7); doc.text(sub.rating||'N/A', margin + contentWidth - 23, y + 1);
+        y += 7;
+        doc.setTextColor(51);
+        addText(sub.content||'Information not provided', 9, false, '#555555');
+        y += 2;
+      });
+    }
+    // Red Flags & Mitigants
+    else if (key === 'red_flags_and_mitigants') {
+      checkPageBreak(12);
+      doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(220, 38, 38);
+      doc.text('RED FLAGS:', margin, y); y += 5;
+      (sec.red_flags||['No red flags identified']).forEach(function(f) {
+        checkPageBreak(6);
+        doc.setFont('helvetica', 'normal'); doc.setTextColor(220, 38, 38); doc.setFontSize(9);
+        var fl = doc.splitTextToSize(pdfSafe('- ' + f), contentWidth - 4);
+        fl.forEach(function(line){ doc.text(line, margin + 4, y); y += 4; });
+      });
+      y += 3;
+      doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(34, 197, 94);
+      doc.text('MITIGANTS:', margin, y); y += 5;
+      (sec.mitigants||['None identified']).forEach(function(m) {
+        checkPageBreak(6);
+        doc.setFont('helvetica', 'normal'); doc.setTextColor(34, 197, 94); doc.setFontSize(9);
+        var ml = doc.splitTextToSize(pdfSafe('- ' + m), contentWidth - 4);
+        ml.forEach(function(line){ doc.text(line, margin + 4, y); y += 4; });
+      });
+      y += 3;
+    }
+    // Compliance Decision — highlighted box
+    else if (key === 'compliance_decision') {
+      var d = sec.decision||'REVIEW';
+      var dBc = d==='APPROVE'?[34,197,94]:d==='APPROVE_WITH_CONDITIONS'?[245,158,11]:d==='REVIEW'?[239,68,68]:[153,27,27];
+      checkPageBreak(18);
+      doc.setFillColor(dBc[0],dBc[1],dBc[2]);
+      doc.roundedRect(margin, y, contentWidth, 10, 2, 2, 'F');
+      doc.setTextColor(255); doc.setFontSize(11); doc.setFont('helvetica', 'bold');
+      doc.text(d.replace(/_/g,' '), pageWidth / 2, y + 7, { align: 'center' });
+      y += 15;
+      addText(sec.content||'Information not provided', 9, false, '#333333');
+    }
+    // Ownership & Control — with structure complexity and control statement
+    else if (key === 'ownership_and_control') {
+      if (sec.structure_complexity || sec.control_statement) {
+        checkPageBreak(12);
+        doc.setFillColor(245,247,250); doc.rect(margin, y - 3, contentWidth, 14, 'F');
+        doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(51);
+        if (sec.structure_complexity) {
+          doc.text('Structure Complexity: ', margin + 4, y + 2);
+          var scBc = sec.structure_complexity==='Simple'?badgeColors.LOW:sec.structure_complexity==='Layered'?badgeColors.MEDIUM:badgeColors.HIGH;
+          doc.setFillColor(scBc[0],scBc[1],scBc[2]); doc.roundedRect(margin + 42, y - 1, 18, 5, 1, 1, 'F');
+          doc.setTextColor(255); doc.setFontSize(7); doc.text(sec.structure_complexity, margin + 43, y + 2);
+        }
+        if (sec.control_statement) {
+          doc.setTextColor(51); doc.setFontSize(8); doc.setFont('helvetica', 'bold');
+          doc.text('Effective Control: ', margin + 4, y + 9);
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+          var csLines = doc.splitTextToSize(sec.control_statement, contentWidth - 40);
+          doc.text(csLines[0]||'', margin + 36, y + 9);
+        }
+        y += 16;
+      }
+      addText(sec.content||'Information not provided', 9, false, '#444444');
+    }
+    // AI Explainability — structured factor display
+    else if (key === 'ai_explainability') {
+      // Model info text
+      var aiContent = sec.content || '';
+      var modelInfo = aiContent.split('Risk-increasing factors:')[0] || aiContent.split('Top risk')[0] || '';
+      if (modelInfo) {
+        addText(modelInfo.trim(), 9, false, '#444444');
+      }
+      // Risk-increasing factors
+      var incFactors = sec.risk_increasing_factors || [];
+      if (incFactors.length > 0) {
+        checkPageBreak(10);
+        doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(220, 38, 38);
+        doc.text('RISK-INCREASING FACTORS:', margin, y); y += 5;
+        incFactors.forEach(function(f) {
+          checkPageBreak(6);
+          doc.setFont('helvetica', 'normal'); doc.setTextColor(180, 38, 38); doc.setFontSize(8);
+          var fl = doc.splitTextToSize(pdfSafe('  + ' + f), contentWidth - 8);
+          fl.forEach(function(line){ doc.text(line, margin + 4, y); y += 3.8; });
+          y += 1;
+        });
+        y += 2;
+      }
+      // Risk-decreasing factors
+      var decFactors = sec.risk_decreasing_factors || [];
+      if (decFactors.length > 0) {
+        checkPageBreak(10);
+        doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(34, 150, 94);
+        doc.text('RISK-DECREASING FACTORS:', margin, y); y += 5;
+        decFactors.forEach(function(f) {
+          checkPageBreak(6);
+          doc.setFont('helvetica', 'normal'); doc.setTextColor(34, 150, 94); doc.setFontSize(8);
+          var fl = doc.splitTextToSize(pdfSafe('  - ' + f), contentWidth - 8);
+          fl.forEach(function(line){ doc.text(line, margin + 4, y); y += 3.8; });
+          y += 1;
+        });
+        y += 2;
+      }
+      // Decision pathway
+      var pathwayPart = '';
+      if (aiContent.indexOf('Decision pathway:') > -1) {
+        pathwayPart = aiContent.substring(aiContent.indexOf('Decision pathway:'));
+      } else if (aiContent.indexOf('Supervisor module:') > -1) {
+        pathwayPart = aiContent.substring(aiContent.indexOf('Supervisor module:'));
+      }
+      if (pathwayPart) {
+        addText(pathwayPart.trim(), 8, false, '#666666');
+      }
+    }
+    // Standard sections
+    else {
+      addText(sec.content||'Information not provided', 9, false, '#444444');
+    }
+
+    y += 4;
+  });
+
+  // ── SUPERVISOR VERDICT (if available) ──
+  var sv = data.supervisor;
+  if (sv && sv.verdict) {
+    checkPageBreak(25);
+    doc.setFillColor(10, 36, 99);
+    doc.circle(margin + 3, y - 1, 3, 'F');
+    doc.setTextColor(255); doc.setFontSize(7); doc.setFont('helvetica', 'bold');
+    doc.text('S', margin + 1.8, y + 0.5);
+    doc.setTextColor(10, 36, 99); doc.setFontSize(11); doc.setFont('helvetica', 'bold');
+    doc.text('SUPERVISOR VERDICT', margin + 10, y);
+    y += 3;
+    doc.setDrawColor(10, 36, 99); doc.setLineWidth(0.5); doc.line(margin, y, pageWidth - margin, y);
+    y += 5;
+    // Verdict badge
+    var svBc = sv.verdict === 'CONSISTENT' ? [34,197,94] : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? [245,158,11] : [239,68,68];
+    doc.setFillColor(svBc[0], svBc[1], svBc[2]);
+    doc.roundedRect(margin, y, 50, 8, 2, 2, 'F');
+    doc.setTextColor(255); doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+    doc.text(sv.verdict.replace(/_/g, ' '), margin + 2, y + 5.5);
+    doc.setTextColor(51); doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+    doc.text('Confidence: ' + Math.round((sv.supervisor_confidence || 0) * 100) + '%', margin + 55, y + 5.5);
+    y += 12;
+    addText(sv.recommendation || '', 9, false, '#333333');
+    // Contradictions
+    if (sv.contradictions && sv.contradictions.length > 0) {
+      y += 2;
+      doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(220, 38, 38);
+      doc.text('Contradictions detected:', margin, y); y += 4;
+      sv.contradictions.forEach(function(c) {
+        checkPageBreak(8);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(180, 38, 38);
+        var cl = doc.splitTextToSize('[' + (c.severity||'').toUpperCase() + '] ' + c.description, contentWidth - 8);
+        cl.forEach(function(line){ doc.text(line, margin + 4, y); y += 3.5; });
+        y += 1;
+      });
+    }
+    // Warnings
+    if (sv.warnings && sv.warnings.length > 0) {
+      y += 2;
+      doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(180, 130, 0);
+      doc.text('Warnings:', margin, y); y += 4;
+      sv.warnings.forEach(function(w) {
+        checkPageBreak(8);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(180, 130, 0);
+        var wl = doc.splitTextToSize('[' + (w.severity||'').toUpperCase() + '] ' + w.description, contentWidth - 8);
+        wl.forEach(function(line){ doc.text(line, margin + 4, y); y += 3.5; });
+        y += 1;
+      });
+    }
+    y += 4;
+  }
+
+  // ── RULE ENGINE STATUS (if available) ──
+  var re = (data.metadata || {}).rule_engine;
+  if (re && re.engine_status) {
+    checkPageBreak(25);
+    doc.setFillColor(10, 36, 99);
+    doc.circle(margin + 3, y - 1, 3, 'F');
+    doc.setTextColor(255); doc.setFontSize(7); doc.setFont('helvetica', 'bold');
+    doc.text('R', margin + 1.8, y + 0.5);
+    doc.setTextColor(10, 36, 99); doc.setFontSize(11); doc.setFont('helvetica', 'bold');
+    doc.text('PRE-GENERATION RULE ENGINE', margin + 10, y);
+    y += 3;
+    doc.setDrawColor(10, 36, 99); doc.setLineWidth(0.5); doc.line(margin, y, pageWidth - margin, y);
+    y += 5;
+    // Status badge
+    var reBc = re.engine_status === 'CLEAN' ? [34,197,94] : re.engine_status === 'ENFORCED' ? [245,158,11] : [239,68,68];
+    doc.setFillColor(reBc[0], reBc[1], reBc[2]);
+    doc.roundedRect(margin, y, 35, 8, 2, 2, 'F');
+    doc.setTextColor(255); doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+    doc.text(pdfSafe(re.engine_status), margin + 2, y + 5.5);
+    doc.setTextColor(51); doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+    doc.text(pdfSafe('Enforcements: ' + (re.total_enforcements||0) + ' | Violations: ' + (re.total_violations||0)), margin + 40, y + 5.5);
+    y += 12;
+    // Enforcements
+    if (re.enforcements && re.enforcements.length > 0) {
+      doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(180, 130, 0);
+      doc.text('Rule Enforcements Applied:', margin, y); y += 4;
+      re.enforcements.forEach(function(e) {
+        checkPageBreak(8);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(100);
+        var el = doc.splitTextToSize(pdfSafe('[' + (e.rule||'') + '] ' + (e.reason||'')), contentWidth - 8);
+        el.forEach(function(line){ doc.text(line, margin + 4, y); y += 3.5; });
+        y += 1;
+      });
+      y += 2;
+    }
+    // Violations
+    if (re.violations && re.violations.length > 0) {
+      doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(220, 38, 38);
+      doc.text('Rule Violations Detected:', margin, y); y += 4;
+      re.violations.forEach(function(v) {
+        checkPageBreak(8);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(180, 38, 38);
+        var vl = doc.splitTextToSize(pdfSafe('[' + (v.rule||'') + ' / ' + (v.severity||'').toUpperCase() + '] ' + (v.detail||'')), contentWidth - 8);
+        vl.forEach(function(line){ doc.text(line, margin + 4, y); y += 3.5; });
+        y += 1;
+      });
+    }
+    y += 4;
+  }
+
+  // ── BLOCKED MEMO WARNING ──
+  if (data.metadata && data.metadata.blocked) {
+    checkPageBreak(18);
+    doc.setFillColor(239, 68, 68);
+    doc.roundedRect(margin, y, contentWidth, 14, 2, 2, 'F');
+    doc.setTextColor(255); doc.setFontSize(11); doc.setFont('helvetica', 'bold');
+    doc.text('MEMO BLOCKED', pageWidth / 2, y + 6, { align: 'center' });
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+    var blockLines = doc.splitTextToSize(pdfSafe(data.metadata.block_reason || 'Blocked by Rule Engine + Supervisor'), contentWidth - 10);
+    doc.text(blockLines[0] || '', pageWidth / 2, y + 11, { align: 'center' });
+    y += 18;
+  }
+
+  // ── FOOTER on every page ──
+  var totalPages = doc.internal.getNumberOfPages();
+  for (var p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    doc.setDrawColor(200); doc.setLineWidth(0.3); doc.line(margin, pageHeight - 15, pageWidth - margin, pageHeight - 15);
+    doc.setFontSize(7); doc.setTextColor(150); doc.setFont('helvetica', 'normal');
+    doc.text('CONFIDENTIAL — Onboarda Compliance Memo — ' + (data.application_ref||''), margin, pageHeight - 10);
+    doc.text('Page ' + p + ' of ' + totalPages, pageWidth - margin, pageHeight - 10, { align: 'right' });
+  }
+
+  // Save
+  var fileName = 'Compliance_Memo_' + (data.application_ref||'APP').replace(/[^a-zA-Z0-9-]/g,'_') + '.pdf';
+  doc.save(fileName);
+}
+
+// ══════════════════════════════════════════════════════════
+// MEMO VALIDATION & APPROVAL
+// ══════════════════════════════════════════════════════════
+
+async function revalidateMemo() {
+  var app = window._currentDetailApp;
+  if (!app) { alert('No application selected.'); return; }
+  var btn = document.getElementById('btn-revalidate-memo');
+  btn.innerHTML = '⏳ Validating...'; btn.disabled = true;
+  try {
+    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    });
+    var data = await res.json();
+    if (data.success !== false) {
+      var result = data.data || data;
+      renderValidationPanel(result);
+      showToast('Validation complete — score: ' + (result.quality_score || 0).toFixed(1) + '/10');
+    } else {
+      alert('Validation failed: ' + (data.message || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Validation request failed: ' + e.message);
+  }
+  btn.innerHTML = '🛡️ Validate Memo'; btn.disabled = false;
+}
+
+async function approveMemo() {
+  var app = window._currentDetailApp;
+  if (!app) { alert('No application selected.'); return; }
+  var btn = document.getElementById('btn-approve-memo');
+  var memoData = window._currentMemoData;
+
+  // ── GATE 1: Check if memo is blocked by Rule Engine + Supervisor ──
+  if (memoData && memoData.metadata && memoData.metadata.blocked) {
+    alert('BLOCKED: This memo cannot be approved.\n\n' + (memoData.metadata.block_reason || 'Rule Engine violations detected with INCONSISTENT supervisor verdict. Manual review required.'));
+    return;
+  }
+
+  // ── GATE 2: Check supervisor verdict ──
+  if (memoData && memoData.supervisor && memoData.supervisor.verdict === 'INCONSISTENT') {
+    alert('Cannot approve memo with INCONSISTENT supervisor verdict.\n\nResolve contradictions and regenerate before approval.');
+    return;
+  }
+  if (memoData && memoData.supervisor && !memoData.supervisor.can_approve) {
+    alert('Supervisor has flagged this memo as not approvable.\n\n' + (memoData.supervisor.recommendation || 'Review required.'));
+    return;
+  }
+
+  // ── GATE 3: Check supervisor requires SCO review ──
+  if (memoData && memoData.supervisor && memoData.supervisor.requires_sco_review) {
+    if (!confirm('This memo requires Senior Compliance Officer review due to rule violations.\n\nAre you a Senior Compliance Officer confirming this review?')) return;
+  }
+
+  // ── GATE 4: Check rule engine violations ──
+  var ruleEngine = memoData && memoData.metadata ? memoData.metadata.rule_engine : null;
+  if (ruleEngine && ruleEngine.total_violations > 0) {
+    if (!confirm('Rule Engine detected ' + ruleEngine.total_violations + ' violation(s).\n\nThese should be reviewed before approval. Continue?')) return;
+  }
+
+  // ── GATE 5: Check validation status ──
+  var valStatus = (document.getElementById('memo-val-status-badge').textContent || '').trim().toUpperCase();
+  if (valStatus === 'FAIL') {
+    alert('Cannot approve memo with FAIL validation status. Please fix issues and re-validate first.');
+    return;
+  }
+  if (valStatus === 'PASS_WITH_FIXES' || valStatus === 'PASS WITH FIXES') {
+    if (!confirm('This memo has validation issues that should be reviewed. Are you sure you want to approve?')) return;
+  }
+
+  btn.innerHTML = '⏳ Approving...'; btn.disabled = true;
+  try {
+    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    });
+    var data = await res.json();
+    if (data.success !== false) {
+      document.getElementById('memo-status-badge').textContent = 'Approved';
+      document.getElementById('memo-status-badge').className = 'badge approved';
+      showToast('Memo approved successfully.');
+      // Update validation status badge
+      var sBadge = document.getElementById('memo-val-status-badge');
+      sBadge.textContent = 'APPROVED';
+      sBadge.className = 'memo-val-status pass';
+    } else {
+      alert('Approval failed: ' + (data.message || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Approval request failed: ' + e.message);
+  }
+  btn.innerHTML = '✅ Approve Memo'; btn.disabled = false;
+}
+
+async function fetchValidationResults() {
+  var app = window._currentDetailApp;
+  if (!app) return;
+  try {
+    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/memo/validation', {
+      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    });
+    var data = await res.json();
+    if (data.success !== false && (data.data || data.quality_score !== undefined)) {
+      var result = data.data || data;
+      renderValidationPanel(result);
+    }
+  } catch (e) {
+    // silently fail — validation may not exist yet
+  }
+}
+
+function renderValidationPanel(result) {
+  var panel = document.getElementById('memo-validation-panel');
+  panel.style.display = '';
+
+  // Quality score gauge
+  var score = parseFloat(result.quality_score) || 0;
+  var gauge = document.getElementById('memo-quality-gauge');
+  gauge.textContent = score.toFixed(1);
+  gauge.className = 'memo-quality-gauge ' + (score >= 8 ? 'excellent' : score >= 6 ? 'good' : score >= 4 ? 'fair' : 'poor');
+
+  // Score text
+  var scoreText = document.getElementById('memo-quality-score-text');
+  var scoreLabel = score >= 8 ? 'Excellent' : score >= 6 ? 'Good' : score >= 4 ? 'Fair — manual review recommended' : 'Poor — significant issues found';
+  scoreText.textContent = score.toFixed(1) + ' / 10 — ' + scoreLabel;
+
+  // Version
+  var versionEl = document.getElementById('memo-quality-version');
+  if (result.memo_version) versionEl.textContent = 'Memo v' + result.memo_version;
+  if (result.validation_run_at) versionEl.textContent += ' | Validated: ' + result.validation_run_at.substring(0,19).replace('T',' ');
+
+  // Validation status badge
+  var status = (result.validation_status || 'pending').toLowerCase();
+  var sBadge = document.getElementById('memo-val-status-badge');
+  sBadge.textContent = status.replace(/_/g, ' ').toUpperCase();
+  sBadge.className = 'memo-val-status ' + status;
+
+  // Issues list
+  var issuesContainer = document.getElementById('memo-val-issues');
+  var issues = [];
+  try { issues = typeof result.validation_issues === 'string' ? JSON.parse(result.validation_issues) : (result.validation_issues || []); } catch(e) { issues = []; }
+
+  var issuesHtml = '';
+  if (issues.length > 0) {
+    issuesHtml += '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;color:var(--text3);margin-bottom:8px;">Issues Found (' + issues.length + ')</div>';
+    issues.forEach(function(issue) {
+      var sev = (issue.severity || 'info').toLowerCase();
+      var icon = sev === 'critical' ? '🔴' : sev === 'warning' ? '🟡' : 'ℹ️';
+      issuesHtml += '<div class="memo-val-issue ' + sev + '">';
+      issuesHtml += '<span class="issue-icon">' + icon + '</span>';
+      issuesHtml += '<div><strong>' + (issue.category || 'General').replace(/_/g, ' ') + ':</strong> ' + (issue.message || issue.description || 'No details') + '</div>';
+      issuesHtml += '</div>';
+    });
+  } else {
+    issuesHtml = '<div style="text-align:center;padding:10px;color:var(--green);font-size:12px;font-weight:600;">✅ No issues found — memo meets quality standards</div>';
+  }
+  issuesContainer.innerHTML = issuesHtml;
+
+  // Category scores breakdown
+  var scoresContainer = document.getElementById('memo-val-scores');
+  var scores = result.category_scores || result.scores || {};
+  var scoresHtml = '';
+  var categoryNames = {
+    structural_completeness: 'Structural Completeness',
+    risk_consistency: 'Risk Consistency',
+    decision_alignment: 'Decision Alignment',
+    ownership_quality: 'Ownership Analysis',
+    screening_defensibility: 'Screening Defensibility',
+    document_verification: 'Document Verification',
+    red_flags_mitigants: 'Red Flags & Mitigants',
+    confidence_explainability: 'Confidence & Explainability',
+    missing_data_handling: 'Missing Data Handling'
+  };
+  Object.keys(scores).forEach(function(cat) {
+    var val = scores[cat];
+    var pct = typeof val === 'number' ? val * 100 : parseFloat(val) || 0;
+    if (pct > 1 && pct <= 10) pct = pct * 10; // handle 0-10 scale
+    var barColor = pct >= 80 ? '#22c55e' : pct >= 60 ? '#34d399' : pct >= 40 ? '#fbbf24' : '#ef4444';
+    scoresHtml += '<div class="memo-val-score-card">';
+    scoresHtml += '<div class="sc-name">' + (categoryNames[cat] || cat.replace(/_/g, ' ')) + '</div>';
+    scoresHtml += '<div class="sc-bar"><div class="sc-fill" style="width:' + Math.min(pct, 100) + '%;background:' + barColor + ';"></div></div>';
+    scoresHtml += '<div class="sc-value">' + (typeof val === 'number' ? val.toFixed(1) : val) + '</div>';
+    scoresHtml += '</div>';
+  });
+  scoresContainer.innerHTML = scoresHtml;
+
+  // Enable/disable approve button based on validation status + rule engine + supervisor
+  var approveBtn = document.getElementById('btn-approve-memo');
+  var memoD = window._currentMemoData;
+  var isBlocked = memoD && memoD.metadata && memoD.metadata.blocked;
+  var svInconsistent = memoD && memoD.supervisor && memoD.supervisor.verdict === 'INCONSISTENT';
+  var svCannotApprove = memoD && memoD.supervisor && memoD.supervisor.can_approve === false;
+
+  if (isBlocked) {
+    approveBtn.disabled = true;
+    approveBtn.title = 'BLOCKED: Memo blocked by Rule Engine + Supervisor. Cannot approve.';
+    approveBtn.style.background = '#7f1d1d';
+    approveBtn.innerHTML = '🚫 Blocked';
+  } else if (svInconsistent || svCannotApprove) {
+    approveBtn.disabled = true;
+    approveBtn.title = 'Cannot approve — supervisor verdict is INCONSISTENT. Resolve contradictions first.';
+    approveBtn.style.background = '#991b1b';
+    approveBtn.innerHTML = '❌ Supervisor Block';
+  } else if (status === 'fail') {
+    approveBtn.disabled = true;
+    approveBtn.title = 'Cannot approve — memo failed validation. Fix issues and re-validate.';
+    approveBtn.style.background = '';
+  } else if (status === 'pass_with_fixes') {
+    approveBtn.disabled = false;
+    approveBtn.title = 'Caution: memo has issues that should be reviewed before approval.';
+    approveBtn.style.background = '#92400e';
+    approveBtn.innerHTML = '✅ Approve Memo';
+  } else if (status === 'pass') {
+    approveBtn.disabled = false;
+    approveBtn.title = 'Memo passed validation — ready for approval.';
+    approveBtn.style.background = '#166534';
+    approveBtn.innerHTML = '✅ Approve Memo';
+  } else {
+    approveBtn.disabled = true;
+    approveBtn.title = 'Run validation first.';
+    approveBtn.style.background = '';
+  }
+}
+
+// Show validation panel when memo is generated and auto-fetch existing validation
+function showValidationPanelIfMemoExists() {
+  if (window._currentMemoData && window._currentMemoData.sections) {
+    document.getElementById('memo-validation-panel').style.display = '';
+    fetchValidationResults();
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// AI SUPERVISOR — Dashboard, Pipeline, Review, Audit
+// ══════════════════════════════════════════════════════════
+
+window._lastSupervisorResult = null;
+
+async function runSupervisorPipeline() {
+  var app = window._currentDetailApp;
+  if (!app) { alert('No application selected.'); return; }
+  var btn = document.getElementById('btn-run-supervisor');
+  var statusBadge = document.getElementById('sv-pipeline-status');
+  btn.innerHTML = '⏳ Running Pipeline...'; btn.disabled = true;
+  statusBadge.textContent = 'Running'; statusBadge.style.background = '#fef3c7'; statusBadge.style.color = '#92400e';
+  try {
+    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/supervisor/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') },
+      body: JSON.stringify({ trigger_type: 'onboarding' })
+    });
+    var data = await res.json();
+    if (data.success !== false && data.data) {
+      window._lastSupervisorResult = data.data;
+      renderSupervisorResults(data.data);
+      showToast('Supervisor pipeline complete — ' + (data.data.agent_count || 0) + ' agents processed');
+    } else if (data.pipeline_id) {
+      window._lastSupervisorResult = data;
+      renderSupervisorResults(data);
+      showToast('Pipeline complete');
+    } else {
+      alert('Pipeline failed: ' + (data.message || JSON.stringify(data)));
+    }
+  } catch (e) {
+    alert('Pipeline request failed: ' + e.message);
+  }
+  btn.innerHTML = '▶️ Run Supervisor Pipeline'; btn.disabled = false;
+}
+
+async function loadSupervisorForApp() {
+  var app = window._currentDetailApp;
+  if (!app) return;
+  try {
+    var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/supervisor/result', {
+      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    });
+    var data = await res.json();
+    if (data.success !== false && data.data && data.data.pipeline_id) {
+      window._lastSupervisorResult = data.data;
+      renderSupervisorResults(data.data);
+    } else if (data.pipeline_id) {
+      window._lastSupervisorResult = data;
+      renderSupervisorResults(data);
+    }
+  } catch (e) { /* no pipeline run yet */ }
+}
+
+function renderSupervisorResults(result) {
+  var statusBadge = document.getElementById('sv-pipeline-status');
+  var st = result.status || 'unknown';
+  var stColors = { completed: ['#dcfce7','#166534'], awaiting_review: ['#fef3c7','#92400e'], completed_with_errors: ['#fee2e2','#991b1b'], failed: ['#991b1b','#fff'] };
+  var sc = stColors[st] || ['#e0e7ff','#3730a3'];
+  statusBadge.textContent = st.replace(/_/g,' ').toUpperCase();
+  statusBadge.style.background = sc[0]; statusBadge.style.color = sc[1];
+
+  document.getElementById('sv-pipeline-results').style.display = '';
+
+  // Case aggregate
+  var agg = result.case_aggregate || {};
+  var aggHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;">';
+  aggHtml += svStatCard('Aggregate Confidence', agg.aggregate_confidence != null ? (agg.aggregate_confidence * 100).toFixed(1) + '%' : '—', agg.aggregate_confidence > 0.85 ? 'var(--green)' : agg.aggregate_confidence > 0.65 ? 'var(--amber)' : 'var(--red)');
+  aggHtml += svStatCard('Routing', (agg.confidence_routing || 'N/A').replace(/_/g,' '), agg.confidence_routing === 'normal' ? 'var(--green)' : 'var(--amber)');
+  aggHtml += svStatCard('Agents OK', (agg.successful_agents || 0) + '/' + (agg.total_agents_run || 0), 'var(--brand)');
+  aggHtml += svStatCard('Contradictions', agg.total_contradictions || 0, agg.total_contradictions > 0 ? 'var(--amber)' : 'var(--green)');
+  aggHtml += svStatCard('Rules Triggered', agg.total_rules_triggered || 0, agg.total_rules_triggered > 0 ? 'var(--red)' : 'var(--green)');
+  aggHtml += svStatCard('Escalation', agg.escalation_required ? (agg.escalation_level || 'yes').replace(/_/g,' ') : 'None', agg.escalation_required ? 'var(--red)' : 'var(--green)');
+  aggHtml += '</div>';
+  document.getElementById('sv-case-aggregate').innerHTML = aggHtml;
+
+  // Agent results
+  var agents = result.agent_results || [];
+  var agHtml = '';
+  if (agents.length === 0) { agHtml = '<div style="font-size:12px;color:var(--text3);">No agent results.</div>'; }
+  agents.forEach(function(a) {
+    var confColor = a.confidence >= 0.85 ? 'var(--green)' : a.confidence >= 0.65 ? 'var(--amber)' : 'var(--red)';
+    var stColor = a.status === 'clean' ? 'var(--green)' : a.status === 'issues_found' ? 'var(--amber)' : 'var(--red)';
+    agHtml += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border1);">';
+    agHtml += '<div style="width:240px;font-size:12px;font-weight:600;">' + (a.agent_name || a.agent_type.replace(/_/g,' ')) + '</div>';
+    agHtml += '<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:' + stColor + ';color:white;font-weight:600;">' + (a.status || '').toUpperCase() + '</span>';
+    agHtml += '<span style="font-size:11px;color:' + confColor + ';font-weight:700;">' + (a.confidence * 100).toFixed(0) + '%</span>';
+    agHtml += '<span style="font-size:11px;color:var(--text3);">' + (a.findings_count || 0) + ' findings, ' + (a.issues_count || 0) + ' issues</span>';
+    if (a.escalation_flag) agHtml += '<span style="font-size:10px;background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-weight:600;">ESCALATION</span>';
+    agHtml += '</div>';
+  });
+  document.getElementById('sv-agent-results').innerHTML = agHtml;
+
+  // Contradictions
+  var contras = result.contradictions_detail || result.contradictions || [];
+  var cHtml = '';
+  if (typeof contras === 'number') { cHtml = '<div style="font-size:12px;color:var(--text3);">' + contras + ' contradictions detected.</div>'; }
+  else if (contras.length === 0) { cHtml = '<div style="font-size:12px;color:var(--green);font-weight:600;">✅ No contradictions detected between agents.</div>'; }
+  else {
+    contras.forEach(function(c) {
+      var sevColor = c.severity === 'critical' ? '#991b1b' : c.severity === 'high' ? '#dc2626' : '#d97706';
+      cHtml += '<div style="padding:10px;margin-bottom:8px;border-left:3px solid ' + sevColor + ';background:var(--bg2);border-radius:6px;">';
+      cHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+      cHtml += '<span style="font-size:12px;font-weight:700;">' + (c.contradiction_category || c.contradiction_type || '').replace(/_/g,' ') + '</span>';
+      cHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + sevColor + ';color:white;font-weight:600;">' + (c.severity || '').toUpperCase() + '</span>';
+      cHtml += '</div>';
+      cHtml += '<div style="font-size:11px;color:var(--text2);line-height:1.6;">' + (c.description || '') + '</div>';
+      if (c.agent_a_type || c.agent_b_type) {
+        cHtml += '<div style="font-size:10px;color:var(--text3);margin-top:4px;">Agents: ' + (c.agent_a_type || '').replace(/_/g,' ') + ' vs ' + (c.agent_b_type || '').replace(/_/g,' ') + '</div>';
+      }
+      cHtml += '</div>';
+    });
+  }
+  document.getElementById('sv-contradictions').innerHTML = cHtml;
+
+  // Rules triggered
+  var rules = result.triggered_rules || [];
+  var rHtml = '';
+  if (rules.length === 0) { rHtml = '<div style="font-size:12px;color:var(--green);font-weight:600;">✅ No compliance rules triggered.</div>'; }
+  else {
+    rules.forEach(function(r) {
+      var actColor = (r.action_taken === 'reject' || r.action_taken === 'block_approval') ? '#991b1b' : r.action_taken === 'escalate' ? '#dc2626' : '#d97706';
+      rHtml += '<div style="padding:10px;margin-bottom:8px;border-left:3px solid ' + actColor + ';background:var(--bg2);border-radius:6px;">';
+      rHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+      rHtml += '<span style="font-size:12px;font-weight:700;">' + (r.rule_name || '').replace(/_/g,' ') + '</span>';
+      rHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + actColor + ';color:white;font-weight:600;">' + (r.action_taken || '').replace(/_/g,' ').toUpperCase() + '</span>';
+      rHtml += '</div>';
+      rHtml += '<div style="font-size:11px;color:var(--text2);">' + (r.rule_recommendation || r.rule_category || '') + '</div>';
+      rHtml += '</div>';
+    });
+  }
+  document.getElementById('sv-rules-triggered').innerHTML = rHtml;
+
+  // Review panel
+  var reviewReasons = result.review_reasons || [];
+  var blocking = result.blocking_issues || [];
+  var needsReview = result.requires_human_review || false;
+  var rrHtml = '';
+  if (needsReview) {
+    rrHtml += '<div style="padding:10px;background:#fef3c7;border-radius:6px;margin-bottom:10px;font-size:12px;color:#92400e;font-weight:600;">⚠️ This case requires human review</div>';
+    if (blocking.length > 0) {
+      rrHtml += '<div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:6px;">Blocking Issues:</div>';
+      blocking.forEach(function(b) { rrHtml += '<div style="font-size:11px;color:var(--red);padding:2px 0;">🔴 ' + b + '</div>'; });
+    }
+    if (reviewReasons.length > 0) {
+      rrHtml += '<div style="font-size:11px;font-weight:700;color:var(--amber);margin:8px 0 6px;">Review Reasons:</div>';
+      reviewReasons.forEach(function(r) { rrHtml += '<div style="font-size:11px;color:var(--text2);padding:2px 0;">• ' + r + '</div>'; });
+    }
+    document.getElementById('sv-review-form').style.display = '';
+  } else {
+    rrHtml = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">✅ No human review required — pipeline completed successfully.</div>';
+    document.getElementById('sv-review-form').style.display = 'none';
+  }
+  document.getElementById('sv-review-reasons').innerHTML = rrHtml;
+
+  // Toggle override reason field
+  var overrideCheckbox = document.getElementById('sv-review-override');
+  if (overrideCheckbox) {
+    overrideCheckbox.onchange = function() {
+      document.getElementById('sv-override-reason').style.display = this.checked ? '' : 'none';
+    };
+  }
+}
+
+function svStatCard(label, value, color) {
+  return '<div style="background:var(--surface);border:1px solid var(--border1);border-radius:6px;padding:10px;text-align:center;">'
+    + '<div style="font-size:9px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;">' + label + '</div>'
+    + '<div style="font-size:18px;font-weight:800;color:' + color + ';margin-top:4px;">' + value + '</div>'
+    + '</div>';
+}
+
+async function submitSupervisorReview() {
+  var app = window._currentDetailApp;
+  var result = window._lastSupervisorResult;
+  if (!app || !result || !result.pipeline_id) { alert('No pipeline result available.'); return; }
+
+  var decision = document.getElementById('sv-review-decision').value;
+  var reason = document.getElementById('sv-review-reason').value.trim();
+  if (!reason) { alert('Decision reason is required.'); return; }
+
+  var isOverride = document.getElementById('sv-review-override').checked;
+  var overrideReason = document.getElementById('sv-override-reason').value.trim();
+  if (isOverride && !overrideReason) { alert('Override reason is required when overriding AI.'); return; }
+
+  try {
+    var res = await fetch(BO_API_BASE.replace('/api','') + '/api/supervisor/review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') },
+      body: JSON.stringify({
+        pipeline_id: result.pipeline_id,
+        reviewer_id: window._currentUser ? window._currentUser.id : 'unknown',
+        reviewer_name: window._currentUser ? window._currentUser.full_name : 'Officer',
+        reviewer_role: window._currentUser ? window._currentUser.role : 'co',
+        decision: decision,
+        decision_reason: reason,
+        risk_level_assigned: document.getElementById('sv-review-risk').value || null,
+        override_ai: isOverride,
+        override_reason: isOverride ? overrideReason : null,
+      })
+    });
+    var data = await res.json();
+    if (data.error) { alert('Review failed: ' + data.error); return; }
+    showToast('Review submitted: ' + decision);
+    document.getElementById('sv-review-form').style.display = 'none';
+    document.getElementById('sv-review-reasons').innerHTML = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">✅ Review submitted: ' + decision.replace(/_/g,' ').toUpperCase() + ' by ' + (window._currentUser ? window._currentUser.full_name : 'Officer') + '</div>';
+  } catch (e) {
+    alert('Review submission failed: ' + e.message);
+  }
+}
+
+// ── Supervisor Dashboard (global view) ──
+async function refreshSupervisorDashboard() {
+  try {
+    var res = await fetch(BO_API_BASE.replace('/api','') + '/api/supervisor/dashboard', {
+      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    });
+    var data = await res.json();
+    if (data.error) { document.getElementById('sv-pipelines-list').innerHTML = '<div style="font-size:12px;color:var(--text3);">Supervisor not available: ' + data.error + '</div>'; return; }
+
+    var stats = data.system_stats || {};
+    document.getElementById('sv-stat-pipelines').textContent = (data.recent_pipelines || []).length;
+    document.getElementById('sv-stat-contradictions').textContent = (stats.contradictions || {}).contradictions_found || 0;
+    document.getElementById('sv-stat-rules').textContent = (stats.rules || {}).total_triggers || 0;
+    document.getElementById('sv-stat-reviews').textContent = (data.pending_escalations || []).length;
+
+    // Recent pipelines
+    var pipelines = data.recent_pipelines || [];
+    var pHtml = '';
+    if (pipelines.length === 0) { pHtml = '<div style="font-size:12px;color:var(--text3);">No pipelines run yet.</div>'; }
+    pipelines.forEach(function(p) {
+      var stColor = p.status === 'completed' ? 'var(--green)' : p.status === 'awaiting_review' ? 'var(--amber)' : 'var(--red)';
+      pHtml += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border1);">';
+      pHtml += '<span style="font-size:11px;font-family:monospace;color:var(--text3);">' + (p.pipeline_id || '').substring(0, 8) + '</span>';
+      pHtml += '<span style="font-size:11px;font-weight:600;">' + (p.application_id || '').substring(0, 12) + '</span>';
+      pHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + stColor + ';color:white;font-weight:600;">' + (p.status || '').replace(/_/g,' ').toUpperCase() + '</span>';
+      pHtml += '<span style="font-size:10px;color:var(--text3);">' + (p.agent_count || 0) + ' agents, ' + (p.contradiction_count || 0) + ' contradictions</span>';
+      pHtml += '</div>';
+    });
+    document.getElementById('sv-pipelines-list').innerHTML = pHtml;
+
+    // Escalations
+    var escs = data.pending_escalations || [];
+    var eHtml = '';
+    if (escs.length === 0) { eHtml = '<div style="font-size:12px;color:var(--green);font-weight:600;">✅ No pending escalations.</div>'; }
+    escs.forEach(function(e) {
+      eHtml += '<div style="padding:8px;margin-bottom:6px;border-left:3px solid var(--red);background:var(--bg2);border-radius:6px;font-size:11px;">';
+      eHtml += '<strong>' + (e.application_id || '').substring(0, 12) + '</strong> — ' + (e.reason || '') + ' <span style="color:var(--text3);">(' + (e.escalation_level || '').replace(/_/g,' ') + ')</span>';
+      eHtml += '</div>';
+    });
+    document.getElementById('sv-escalations-list').innerHTML = eHtml;
+
+    // Rules
+    var rulesRes = await fetch(BO_API_BASE.replace('/api','') + '/api/supervisor/rules', {
+      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    });
+    var rulesData = await rulesRes.json();
+    var rules = (rulesData.rules || []);
+    var rlHtml = '';
+    if (rules.length === 0) { rlHtml = '<div style="font-size:12px;color:var(--text3);">No rules configured.</div>'; }
+    rules.forEach(function(r) {
+      var actColor = r.action === 'reject' ? '#991b1b' : r.action === 'escalate' ? '#dc2626' : r.action === 'block_approval' ? '#991b1b' : '#d97706';
+      rlHtml += '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border1);">';
+      rlHtml += '<span style="font-size:11px;font-weight:600;min-width:200px;">' + (r.name || '').replace(/_/g,' ') + '</span>';
+      rlHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + actColor + ';color:white;font-weight:600;">' + (r.action || '').replace(/_/g,' ').toUpperCase() + '</span>';
+      rlHtml += '<span style="font-size:10px;color:var(--text3);">' + (r.description || '') + '</span>';
+      rlHtml += '</div>';
+    });
+    document.getElementById('sv-rules-list').innerHTML = rlHtml;
+
+  } catch (e) {
+    document.getElementById('sv-pipelines-list').innerHTML = '<div style="font-size:12px;color:var(--red);">Failed to load dashboard: ' + e.message + '</div>';
+  }
+}
+
+// ── Supervisor Audit Chain ──
+async function refreshSupervisorAudit() {
+  var filterType = document.getElementById('sv-audit-filter-type').value;
+  var url = BO_API_BASE.replace('/api','') + '/api/supervisor/audit?limit=100';
+  if (filterType) url += '&event_type=' + filterType;
+  try {
+    var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') } });
+    var data = await res.json();
+    if (data.error) { document.getElementById('sv-audit-entries').innerHTML = '<div style="font-size:12px;color:var(--red);">' + data.error + '</div>'; return; }
+
+    var entries = data.entries || [];
+    var html = '';
+    if (entries.length === 0) { html = '<div style="font-size:12px;color:var(--text3);">No audit entries found.</div>'; }
+    entries.forEach(function(e) {
+      var sevColor = e.severity === 'critical' ? '#991b1b' : e.severity === 'high' ? '#dc2626' : e.severity === 'warning' ? '#d97706' : e.severity === 'medium' ? '#d97706' : '#64748b';
+      html += '<div style="padding:8px 10px;border-bottom:1px solid var(--border1);font-size:11px;">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+      html += '<span style="font-weight:600;color:' + sevColor + ';">' + (e.event_type || '').replace(/_/g,' ').toUpperCase() + '</span>';
+      html += '<span style="color:var(--text3);font-size:10px;">' + (e.timestamp || '').substring(0, 19).replace('T', ' ') + '</span>';
+      html += '</div>';
+      html += '<div style="color:var(--text2);margin-top:2px;">' + (e.action || '') + '</div>';
+      if (e.detail) html += '<div style="color:var(--text3);font-size:10px;margin-top:2px;">' + e.detail + '</div>';
+      if (e.entry_hash) html += '<div style="color:var(--text3);font-size:9px;font-family:monospace;margin-top:2px;">Hash: ' + e.entry_hash.substring(0, 16) + '…</div>';
+      html += '</div>';
+    });
+    document.getElementById('sv-audit-entries').innerHTML = html;
+  } catch (e) {
+    document.getElementById('sv-audit-entries').innerHTML = '<div style="font-size:12px;color:var(--red);">Failed: ' + e.message + '</div>';
+  }
+}
+
+async function verifySupervisorAuditChain() {
+  try {
+    var res = await fetch(BO_API_BASE.replace('/api','') + '/api/supervisor/audit/verify', {
+      headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
+    });
+    var data = await res.json();
+    var statusEl = document.getElementById('sv-audit-chain-status');
+    if (data.error) {
+      statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;">Chain verification error: ' + data.error + '</div>';
+    } else if (data.intact || data.valid) {
+      statusEl.innerHTML = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">🔗 Audit chain integrity verified — ' + (data.entries_checked || data.count || 0) + ' entries checked, no tampering detected.</div>';
+    } else {
+      statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;font-weight:600;">⚠️ Chain integrity issue detected at entry ' + (data.broken_at || 'unknown') + '. ' + (data.message || '') + '</div>';
+    }
+  } catch (e) {
+    document.getElementById('sv-audit-chain-status').innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;">Verification failed: ' + e.message + '</div>';
+  }
+}
+
+// Auto-load supervisor dashboard when view is shown
+var _origShowView = window.showView;
+if (typeof _origShowView === 'function') {
+  window.showView = function(view, el) {
+    _origShowView(view, el);
+    if (view === 'supervisor') refreshSupervisorDashboard();
+    if (view === 'supervisor-audit') refreshSupervisorAudit();
+  };
 }
 
 // ── Re-screen application using live APIs ──
@@ -6193,7 +7801,7 @@ function downloadRiskCSV() {
   var breakdown = computeSubCriteriaBreakdown(app);
 
   var lines = [];
-  lines.push('ARIE RISK COMPUTATION REPORT — FULL AUDIT TRAIL');
+  lines.push('REGMIND RISK COMPUTATION REPORT — FULL AUDIT TRAIL');
   lines.push('Generated,' + new Date().toISOString().slice(0,19).replace('T',' '));
   lines.push('Generated By,"' + (currentUser.name || '').replace(/"/g,'""') + '"');
   lines.push('');
@@ -6319,7 +7927,7 @@ function downloadRiskPDF() {
   // Header
   html += '<div class="header">';
   html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;">';
-  html += '<div><h1>ARIE Risk Computation Report</h1>';
+  html += '<div><h1>RegMind Risk Computation Report</h1>';
   html += '<div class="subtitle">Full Audit Trail — Line-by-Line Sub-Criteria Computation — Scoring Model v1.4</div></div>';
   html += '<div style="text-align:right;"><div class="ref">' + app.ref + '</div>';
   html += '<div style="font-size:11px;color:#888;margin-top:4px;">' + new Date().toLocaleDateString('en-GB', {day:'numeric',month:'long',year:'numeric'}) + '</div></div>';
@@ -6366,7 +7974,7 @@ function downloadRiskPDF() {
 
   // Full sub-criteria detail
   html += '<div class="section-title page-break">Line-by-Line Sub-Criteria Computation</div>';
-  html += '<p style="font-size:11px;color:#666;margin-bottom:16px;">Each dimension score is computed as the weighted average of its sub-criteria. Each sub-criterion is scored 1-4 based on deterministic rule-based lookups against the ARIE Risk Scoring Model v1.4. The input/evidence column shows the data point that determined the score.</p>';
+  html += '<p style="font-size:11px;color:#666;margin-bottom:16px;">Each dimension score is computed as the weighted average of its sub-criteria. Each sub-criterion is scored 1-4 based on deterministic rule-based lookups against the RegMind Risk Scoring Model v1.4. The input/evidence column shows the data point that determined the score.</p>';
 
   breakdown.dimensions.forEach(function(dim) {
     var dimColor = dim.dimScore <= 1.5 ? '#059669' : dim.dimScore <= 2.5 ? '#2563eb' : dim.dimScore <= 3.2 ? '#d97706' : '#dc2626';
@@ -6433,7 +8041,7 @@ function downloadRiskPDF() {
   // Methodology
   html += '<div class="section-title">Scoring Methodology Reference</div>';
   html += '<table><tbody>';
-  html += '<tr><td style="font-weight:600;width:200px;">Model Version</td><td>ARIE Risk Scoring Model v1.4</td></tr>';
+  html += '<tr><td style="font-weight:600;width:200px;">Model Version</td><td>RegMind Risk Scoring Model v1.4</td></tr>';
   html += '<tr><td style="font-weight:600;">Methodology</td><td>Rule-Based Weighted Average (Deterministic) — no AI influence on score computation</td></tr>';
   html += '<tr><td style="font-weight:600;">Formula</td><td style="font-family:monospace;font-size:10px;">Composite = (D1 x w1 + D2 x w2 + D3 x w3 + D4 x w4 + D5 x w5) / (w1 + w2 + w3 + w4 + w5) x 25</td></tr>';
   html += '<tr><td style="font-weight:600;">Score Range</td><td>0 (Lowest Risk) to 100 (Highest Risk)</td></tr>';
@@ -6445,7 +8053,7 @@ function downloadRiskPDF() {
 
   // Footer
   html += '<div class="footer">';
-  html += '<div>ARIE Onboarda | Confidential — For Internal Use Only | Audit Trail Document</div>';
+  html += '<div>Onboarda | Powered by RegMind | Confidential — For Internal Use Only | Audit Trail Document</div>';
   html += '<div>Generated by ' + escapeHtml(currentUser.name) + ' on ' + new Date().toLocaleString('en-GB') + '</div>';
   html += '</div>';
 

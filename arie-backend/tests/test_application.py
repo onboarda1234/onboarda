@@ -27,11 +27,11 @@ class TestApplicationWorkflow:
         """, ("app_trans_1", "ARF-2026-TR1", "testclient001", "Trans Corp", "draft"))
         db.commit()
 
-        # Draft -> Submitted
-        db.execute("UPDATE applications SET status='submitted' WHERE id='app_trans_1'")
+        # Draft -> prescreening_submitted (valid status per CHECK constraint)
+        db.execute("UPDATE applications SET status='prescreening_submitted' WHERE id='app_trans_1'")
         db.commit()
         row = db.execute("SELECT status FROM applications WHERE id='app_trans_1'").fetchone()
-        assert row["status"] == "submitted"
+        assert row["status"] == "prescreening_submitted"
 
     def test_directors_linked_to_application(self, db, sample_application):
         """Directors are properly linked to applications."""

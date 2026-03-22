@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Onboarda — Compliance. Automated. Explained.</title>
+<meta name="description" content="AI-powered compliance onboarding, risk scoring, and monitoring platform for regulated institutions.">
+<meta property="og:title" content="Onboarda — Compliance. Automated. Explained.">
+<meta property="og:description" content="AI-powered compliance onboarding and monitoring for regulated institutions.">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-font-smoothing:antialiased}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;color:#0f1117;background:#fff;overflow-x:hidden;line-height:1.5}
+::selection{background:rgba(99,102,241,.2)}
+a{text-decoration:none;color:inherit}
+
+/* ═══ PARTICLES CANVAS ═══ */
+#particles-canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0}
+
+/* ═══ UTILITY ═══ */
+.section{padding:100px 24px;max-width:1200px;margin:0 auto;position:relative;z-index:1}
+.section-dark{background:#0c0e14;color:#fff}
+.section-subtle{background:#f8f9fb}
+.text-center{text-align:center}
+
+/* ═══ TYPOGRAPHY ═══ */
+.label{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
+.label-indigo{color:#4f46e5}.label-violet{color:#818cf8}
+.heading-xl{font-size:56px;font-weight:800;line-height:1.08;letter-spacing:-2px}
+.heading-lg{font-size:40px;font-weight:800;letter-spacing:-1.5px;line-height:1.15}
+.heading-md{font-size:18px;font-weight:700}
+.text-sub{font-size:18px;line-height:1.7;color:rgba(15,17,23,.55)}
+.text-muted{font-size:14px;color:rgba(15,17,23,.55);line-height:1.65}
+.gradient-text{background:linear-gradient(135deg,#4f46e5,#8b5cf6,#6366f1);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+
+/* ═══ BUTTONS ═══ */
+.btn-primary{display:inline-flex;align-items:center;gap:8px;padding:14px 32px;border-radius:12px;font-weight:600;font-size:15px;background:linear-gradient(135deg,#4f46e5,#6366f1);color:#fff;border:none;cursor:pointer;transition:all .25s cubic-bezier(.16,1,.3,1);box-shadow:0 4px 14px rgba(79,70,229,.35);font-family:inherit;position:relative;overflow:hidden}
+.btn-primary::after{content:'';position:absolute;top:50%;left:50%;width:0;height:0;background:rgba(255,255,255,.15);border-radius:50%;transform:translate(-50%,-50%);transition:width .5s,height .5s}
+.btn-primary:hover::after{width:300px;height:300px}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 25px rgba(79,70,229,.45),0 0 0 3px rgba(99,102,241,.15)}
+.btn-secondary{display:inline-flex;align-items:center;gap:8px;padding:14px 32px;border-radius:12px;font-weight:600;font-size:15px;background:transparent;color:#0f1117;border:1.5px solid rgba(15,17,23,.15);cursor:pointer;transition:all .25s;font-family:inherit}
+.btn-secondary:hover{border-color:#4f46e5;color:#4f46e5;transform:translateY(-2px)}
+.btn-secondary-dark{color:rgba(255,255,255,.7);border-color:rgba(255,255,255,.15)}
+.btn-secondary-dark:hover{color:#fff;border-color:rgba(255,255,255,.4)}
+.btn-lg{font-size:16px;padding:16px 36px}
+.arrow-icon{transition:transform .3s}.btn-primary:hover .arrow-icon{transform:translateX(4px)}
+
+/* ═══ GRIDS ═══ */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+
+/* ═══ CARDS ═══ */
+.feature-card{padding:32px;border-radius:16px;border:1px solid rgba(15,17,23,.07);background:#fff;transition:all .3s cubic-bezier(.16,1,.3,1);position:relative;overflow:hidden}
+.feature-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#4f46e5,#8b5cf6);transform:scaleX(0);transform-origin:left;transition:transform .4s cubic-bezier(.16,1,.3,1)}
+.feature-card:hover::before{transform:scaleX(1)}
+.feature-card:hover{transform:translateY(-6px);border-color:rgba(79,70,229,.2);box-shadow:0 25px 50px rgba(0,0,0,.08)}
+.icon-box{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:16px;transition:transform .3s,background .3s}
+.feature-card:hover .icon-box{transform:scale(1.1)}
+.icon-box-indigo{background:rgba(79,70,229,.08);color:#4f46e5}
+.icon-box-red{background:rgba(220,38,38,.06);color:#dc2626}
+.icon-box-lg{width:56px;height:56px;border-radius:16px;margin:0 auto 20px}
+
+/* ═══ HEADER ═══ */
+.site-header{position:fixed;top:0;left:0;right:0;z-index:100;padding:18px 24px;transition:all .35s cubic-bezier(.16,1,.3,1);border-bottom:1px solid transparent}
+.site-header.scrolled{padding:12px 24px;background:rgba(255,255,255,.85);backdrop-filter:blur(20px) saturate(180%);border-bottom-color:rgba(15,17,23,.06)}
+.header-inner{max-width:1200px;margin:0 auto;display:flex;align-items:center;justify-content:space-between}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-mark{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#4f46e5,#6366f1);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px;transition:transform .3s}
+.logo:hover .logo-mark{transform:rotate(-8deg) scale(1.1)}
+.logo-text{font-size:18px;font-weight:700;letter-spacing:-.5px}
+.nav{display:flex;gap:32px}
+.nav a{color:rgba(15,17,23,.6);font-size:14px;font-weight:500;transition:color .2s;position:relative}
+.nav a::after{content:'';position:absolute;bottom:-4px;left:0;width:0;height:2px;background:#4f46e5;border-radius:1px;transition:width .3s}
+.nav a:hover{color:#4f46e5}
+.nav a:hover::after{width:100%}
+
+/* ═══ HERO ═══ */
+.hero{padding:160px 24px 100px;min-height:100vh;position:relative;overflow:hidden;display:flex;align-items:center}
+.hero-bg{position:absolute;top:0;left:0;right:0;bottom:0;background:radial-gradient(ellipse 80% 60% at 50% -10%,rgba(99,102,241,.12),transparent 70%),radial-gradient(ellipse 60% 40% at 80% 20%,rgba(139,92,246,.08),transparent),#fff;z-index:0}
+.hero-inner{max-width:1200px;margin:0 auto;width:100%;display:flex;gap:64px;align-items:center;position:relative;z-index:1}
+.hero-content{flex:1 1 480px}
+.hero-visual{flex:1 1 500px}
+.hero-tag{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:20px;background:rgba(79,70,229,.08);margin-bottom:24px}
+.hero-tag-dot{width:6px;height:6px;border-radius:50%;background:#4f46e5;animation:pulse-dot 2s infinite}
+@keyframes pulse-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.5)}}
+.hero-tag-text{font-size:13px;font-weight:600;color:#4f46e5}
+.hero-stats{display:flex;gap:32px;margin-top:48px}
+
+/* ═══ TYPING CURSOR ═══ */
+.typing-cursor{display:inline-block;width:3px;height:.9em;background:#4f46e5;margin-left:4px;animation:blink .7s infinite;vertical-align:text-bottom;border-radius:2px}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* ═══ COUNTER ═══ */
+.counter{display:inline-block}
+
+/* ═══ PROOF BAR ═══ */
+.proof-bar{border-top:1px solid rgba(15,17,23,.06);border-bottom:1px solid rgba(15,17,23,.06);padding:24px;overflow:hidden}
+.proof-track{display:flex;gap:48px;animation:proof-scroll 20s linear infinite;width:max-content}
+.proof-track:hover{animation-play-state:paused}
+@keyframes proof-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+.proof-item{display:flex;align-items:center;gap:8px;color:rgba(15,17,23,.35);font-size:13px;font-weight:500;white-space:nowrap}
+.proof-item svg{color:#4f46e5;flex-shrink:0}
+
+/* ═══ DASHBOARD MOCKUP ═══ */
+.mockup{background:#0c0e14;border-radius:16px;border:1px solid rgba(255,255,255,.08);overflow:hidden;box-shadow:0 40px 80px rgba(0,0,0,.5);max-width:720px;width:100%;transition:transform .6s cubic-bezier(.16,1,.3,1)}
+.mockup:hover{transform:translateY(-8px) scale(1.01)}
+.mockup-titlebar{display:flex;align-items:center;gap:8px;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02)}
+.mockup-dot{width:12px;height:12px;border-radius:50%}
+.mockup-title{margin-left:12px;font-size:12px;color:rgba(255,255,255,.35);font-weight:500}
+.mockup-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;padding:16px 20px 12px;border-bottom:1px solid rgba(255,255,255,.06)}
+.mockup-stat-label{font-size:10px;color:rgba(255,255,255,.4);font-weight:500;text-transform:uppercase;letter-spacing:.5px}
+.mockup-stat-value{font-size:22px;font-weight:700;color:#fff;margin-top:2px}
+.mockup-thead{display:grid;grid-template-columns:130px 1fr 90px 60px 110px;padding:10px 20px;font-size:10px;font-weight:600;color:rgba(255,255,255,.3);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid rgba(255,255,255,.06)}
+.mockup-row{display:grid;grid-template-columns:130px 1fr 90px 60px 110px;padding:11px 20px;font-size:13px;color:rgba(255,255,255,.75);border-bottom:1px solid rgba(255,255,255,.04);transition:background .15s;cursor:pointer;opacity:0;animation:row-slide .5s forwards}
+.mockup-row:hover{background:rgba(255,255,255,.03)}
+@keyframes row-slide{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
+.mockup-row:nth-child(1){animation-delay:.3s}.mockup-row:nth-child(2){animation-delay:.45s}.mockup-row:nth-child(3){animation-delay:.6s}.mockup-row:nth-child(4){animation-delay:.75s}.mockup-row:nth-child(5){animation-delay:.9s}
+.mockup-ref{font-family:monospace;font-size:11px;color:rgba(255,255,255,.5)}.mockup-company{font-weight:500;color:#fff}.mockup-score{font-weight:700}
+.risk-badge{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;display:inline-block}
+.status-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:6px}
+.status-dot.pulse{animation:pulse-dot 2s infinite}
+
+/* ═══ PIPELINE ═══ */
+.pipeline{background:#0c0e14;border-radius:16px;padding:32px;border:1px solid rgba(255,255,255,.08);box-shadow:0 30px 60px rgba(0,0,0,.15)}
+.pipeline-title{font-size:12px;font-weight:600;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:1px;margin-bottom:20px}
+.pipeline-item{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-radius:10px;margin-bottom:8px;border:1px solid rgba(255,255,255,.04);background:rgba(255,255,255,.03);transition:all .3s}
+.pipeline-item.active{background:rgba(99,102,241,.1);border-color:rgba(99,102,241,.2)}
+.pipeline-item.active .pipeline-status-dot{animation:pulse-dot 1.5s infinite}
+.pipeline-agent{font-size:10px;font-weight:600;color:rgba(255,255,255,.35);margin-bottom:2px}
+.pipeline-task{font-size:13px;color:#fff;font-weight:500}
+.pipeline-status{font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px}
+.pipeline-time{font-size:10px;color:rgba(255,255,255,.3);margin-top:4px;font-family:monospace}
+.pipeline-status-dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px}
+.pipeline-progress{height:2px;background:rgba(255,255,255,.06);border-radius:1px;margin-top:6px;overflow:hidden}
+.pipeline-progress-fill{height:100%;border-radius:1px;transition:width 2s ease-out}
+
+/* ═══ WORKFLOW ═══ */
+.workflow-card{padding:28px;border-radius:14px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);transition:all .35s cubic-bezier(.16,1,.3,1);position:relative;overflow:hidden}
+.workflow-card::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at var(--mx,50%) var(--my,50%),rgba(99,102,241,.15),transparent 60%);opacity:0;transition:opacity .3s}
+.workflow-card:hover::before{opacity:1}
+.workflow-card:hover{border-color:rgba(99,102,241,.25);transform:translateY(-4px)}
+.workflow-num{font-size:32px;font-weight:800;color:rgba(99,102,241,.3);margin-bottom:12px;font-family:monospace;position:relative;z-index:1}
+.workflow-title{font-size:16px;font-weight:700;color:#fff;margin-bottom:6px;position:relative;z-index:1}
+.workflow-sub{font-size:13px;color:rgba(255,255,255,.45);line-height:1.6;position:relative;z-index:1}
+.workflow-connector{display:flex;align-items:center;justify-content:center;color:rgba(99,102,241,.4);font-size:20px}
+.hitl-badge{text-align:center;margin-top:48px;padding:20px 28px;border-radius:12px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.15);display:inline-flex;align-items:center;gap:10px;width:fit-content}
+
+/* ═══ PORTFOLIO ═══ */
+.portfolio{background:linear-gradient(135deg,#f8f9fb,#f1f3f9);border-radius:16px;padding:32px;border:1px solid rgba(15,17,23,.06)}
+.portfolio-title{font-size:12px;font-weight:600;color:rgba(15,17,23,.4);text-transform:uppercase;letter-spacing:1px;margin-bottom:20px}
+.portfolio-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
+.portfolio-stat{padding:16px;border-radius:10px;background:#fff;border:1px solid rgba(15,17,23,.06);transition:transform .3s}
+.portfolio-stat:hover{transform:scale(1.03)}
+.portfolio-stat-label{font-size:10px;font-weight:500;color:rgba(15,17,23,.4);text-transform:uppercase;letter-spacing:.5px}
+.portfolio-stat-value{font-size:28px;font-weight:800;margin-top:4px}
+.risk-bar{display:flex;gap:4px;height:10px;border-radius:5px;overflow:hidden}
+.risk-bar-segment{transition:flex .8s cubic-bezier(.16,1,.3,1);border-radius:0}
+.risk-bar-labels{display:flex;justify-content:space-between;margin-top:8px}
+.risk-bar-labels span{font-size:10px;color:rgba(15,17,23,.4)}
+
+/* ═══ CHECK LIST ═══ */
+.check-item{display:flex;gap:12px;align-items:flex-start}
+.check-icon{width:22px;height:22px;border-radius:6px;background:rgba(79,70,229,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+.check-icon svg{width:12px;height:12px;stroke:#4f46e5;stroke-width:3;fill:none}
+.detail-item{display:flex;gap:14px;align-items:flex-start}
+.detail-icon{width:24px;height:24px;border-radius:8px;background:rgba(79,70,229,.1);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
+.detail-icon svg{width:12px;height:12px;stroke:#4f46e5;stroke-width:3;fill:none}
+
+/* ═══ DEMO CARDS ═══ */
+.demo-card{background:#fff;border-radius:16px;border:1px solid rgba(15,17,23,.06);overflow:hidden;transition:all .35s cubic-bezier(.16,1,.3,1)}
+.demo-card:hover{transform:translateY(-6px);box-shadow:0 25px 50px rgba(0,0,0,.08)}
+.demo-card-visual{height:180px;background:linear-gradient(135deg,#0c0e14,#1a1d2e);display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+.demo-card-visual::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 30% 40%,rgba(99,102,241,.1),transparent 50%),radial-gradient(circle at 70% 60%,rgba(139,92,246,.08),transparent 50%)}
+.demo-card-tag{padding:8px 16px;border-radius:8px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);color:rgba(255,255,255,.5);font-size:12px;font-weight:600;letter-spacing:.5px;position:relative;z-index:1}
+.demo-card-body{padding:24px}
+
+/* ═══ TRUST ═══ */
+.trust-card{padding:36px;border-radius:16px;background:linear-gradient(135deg,rgba(79,70,229,.04),rgba(139,92,246,.04));border:1px solid rgba(79,70,229,.1);text-align:center;transition:all .35s}
+.trust-card:hover{transform:translateY(-4px);box-shadow:0 20px 40px rgba(79,70,229,.08);border-color:rgba(79,70,229,.2)}
+
+/* ═══ CTA ═══ */
+.cta-section{background:linear-gradient(135deg,#0c0e14,#1a1d2e);padding:100px 24px;position:relative;overflow:hidden}
+.cta-section::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle at 30% 50%,rgba(79,70,229,.08),transparent 40%),radial-gradient(circle at 70% 50%,rgba(139,92,246,.06),transparent 40%);animation:cta-glow 8s ease-in-out infinite alternate}
+@keyframes cta-glow{0%{transform:translate(0,0)}100%{transform:translate(2%,-2%)}}
+
+/* ═══ FOOTER ═══ */
+.site-footer{background:#0c0e14;border-top:1px solid rgba(255,255,255,.06);padding:64px 24px 40px}
+.footer-col-title{font-size:12px;font-weight:600;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:1px;margin-bottom:16px}
+.footer-link{font-size:14px;color:rgba(255,255,255,.35);margin-bottom:10px;cursor:pointer;transition:color .2s,transform .2s;display:block}
+.footer-link:hover{color:rgba(255,255,255,.7);transform:translateX(4px)}
+.footer-bottom{border-top:1px solid rgba(255,255,255,.06);padding-top:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+.footer-legal{font-size:12px;color:rgba(255,255,255,.25)}
+.footer-legal a{transition:color .2s}.footer-legal a:hover{color:rgba(255,255,255,.5)}
+
+/* ═══ FADE-IN ═══ */
+.fade-in{opacity:0;transform:translateY(28px);transition:opacity .7s cubic-bezier(.16,1,.3,1),transform .7s cubic-bezier(.16,1,.3,1)}
+.fade-in.visible{opacity:1;transform:translateY(0)}
+.fade-in.d1{transition-delay:.1s}.fade-in.d2{transition-delay:.2s}.fade-in.d3{transition-delay:.3s}.fade-in.d4{transition-delay:.4s}
+
+/* ═══ PARALLAX ═══ */
+.parallax-layer{will-change:transform;transition:transform .1s linear}
+
+/* ═══ MOBILE ═══ */
+.mobile-toggle{display:none;background:none;border:none;cursor:pointer;padding:8px}
+.mobile-toggle span{display:block;width:22px;height:2px;background:#0f1117;margin:5px 0;border-radius:2px;transition:all .3s}
+.mobile-menu{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,.98);backdrop-filter:blur(20px);z-index:200;flex-direction:column;align-items:center;justify-content:center;gap:32px}
+.mobile-menu.open{display:flex}
+.mobile-menu a{font-size:20px;font-weight:600;color:#0f1117}
+.mobile-close{position:absolute;top:20px;right:24px;background:none;border:none;font-size:28px;cursor:pointer;color:#0f1117}
+
+@media(max-width:900px){
+  .grid-2,.grid-3,.grid-4{grid-template-columns:1fr}
+  .hero-inner{flex-direction:column}.hero-visual,.portfolio{display:none}
+  .section{padding:64px 20px}.nav{display:none}.mobile-toggle{display:block}
+  .hero{padding:130px 20px 60px;min-height:auto}
+  .hitl-badge{margin-left:auto;margin-right:auto}
+  #pipeline-desktop{display:none!important}
+}
+@media(max-width:600px){
+  .heading-xl{font-size:36px!important;letter-spacing:-1px}
+  .heading-lg{font-size:28px}.hero-stats{flex-wrap:wrap;gap:24px}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<header class="site-header" id="site-header">
+  <div class="header-inner">
+    <a href="#" class="logo"><div class="logo-mark">O</div><span class="logo-text">Onboarda</span></a>
+    <nav class="nav">
+      <a href="#features">Features</a><a href="#workflow">Workflow</a><a href="#management">Management Cos</a><a href="#platform">Platform</a>
+    </nav>
+    <div style="display:flex;gap:12px;align-items:center">
+      <a class="btn-primary" href="#demo" style="padding:10px 24px;font-size:13px">Request Demo</a>
+      <button class="mobile-toggle" onclick="document.getElementById('mobile-menu').classList.add('open')" aria-label="Menu"><span></span><span></span><span></span></button>
+    </div>
+  </div>
+</header>
+<div class="mobile-menu" id="mobile-menu">
+  <button class="mobile-close" onclick="document.getElementById('mobile-menu').classList.remove('open')">&times;</button>
+  <a href="#features" onclick="this.parentElement.classList.remove('open')">Features</a>
+  <a href="#workflow" onclick="this.parentElement.classList.remove('open')">Workflow</a>
+  <a href="#management" onclick="this.parentElement.classList.remove('open')">Management Cos</a>
+  <a href="#platform" onclick="this.parentElement.classList.remove('open')">Platform</a>
+  <a class="btn-primary" href="#demo" onclick="this.parentElement.classList.remove('open')">Request Demo</a>
+</div>
+
+<!-- ═══ HERO ═══ -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <canvas id="particles-canvas"></canvas>
+  <div class="hero-inner">
+    <div class="hero-content">
+      <div class="fade-in">
+        <div class="hero-tag"><div class="hero-tag-dot"></div><span class="hero-tag-text">RegTech Infrastructure</span></div>
+      </div>
+      <h1 class="heading-xl fade-in d1" style="margin-bottom:24px">
+        <span id="typed-line1"></span><br>
+        <span class="gradient-text" id="typed-line2"></span><br>
+        <span id="typed-line3"></span><span class="typing-cursor" id="cursor"></span>
+      </h1>
+      <p class="text-sub fade-in d2" style="max-width:480px;margin-bottom:36px">Onboard clients faster while maintaining full regulatory control. AI-powered onboarding, risk scoring, and compliance workflows — in one platform.</p>
+      <div class="fade-in d3" style="display:flex;gap:16px;flex-wrap:wrap">
+        <a class="btn-primary" href="#demo">Request Demo <svg class="arrow-icon" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg></a>
+        <a class="btn-secondary" href="#platform">View Platform</a>
+      </div>
+      <div class="hero-stats fade-in d4">
+        <div><div class="stat-value counter" data-target="5" style="font-size:24px;font-weight:800">0</div><div style="font-size:12px;color:rgba(15,17,23,.45);font-weight:500;margin-top:2px">AI Agents</div></div>
+        <div><div style="font-size:24px;font-weight:800">&lt; <span class="counter" data-target="24">0</span>h</div><div style="font-size:12px;color:rgba(15,17,23,.45);font-weight:500;margin-top:2px">Avg. Onboarding</div></div>
+        <div><div class="stat-value counter" data-target="100" data-suffix="%" style="font-size:24px;font-weight:800">0</div><div style="font-size:12px;color:rgba(15,17,23,.45);font-weight:500;margin-top:2px">Audit Coverage</div></div>
+      </div>
+    </div>
+    <div class="hero-visual parallax-layer" data-speed="0.03">
+      <div class="mockup">
+        <div class="mockup-titlebar"><div class="mockup-dot" style="background:#ff5f57"></div><div class="mockup-dot" style="background:#febc2e"></div><div class="mockup-dot" style="background:#28c840"></div><span class="mockup-title">Onboarda — Back Office</span></div>
+        <div class="mockup-stats" id="mockup-stats">
+          <div><div class="mockup-stat-label">Active Clients</div><div class="mockup-stat-value"><span class="counter" data-target="247">0</span></div></div>
+          <div style="text-align:center"><div class="mockup-stat-label">Pending Review</div><div class="mockup-stat-value"><span class="counter" data-target="14">0</span></div></div>
+          <div style="text-align:center"><div class="mockup-stat-label">Pre-Approval Queue</div><div class="mockup-stat-value"><span class="counter" data-target="3">0</span></div></div>
+          <div style="text-align:center"><div class="mockup-stat-label">Avg. Risk Score</div><div class="mockup-stat-value"><span class="counter" data-target="34" data-suffix=".2">0</span></div></div>
+        </div>
+        <div class="mockup-thead"><span>Reference</span><span>Company</span><span>Risk</span><span>Score</span><span>Status</span></div>
+        <div id="mockup-rows"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PROOF BAR (auto-scrolling) ═══ -->
+<div class="proof-bar">
+  <div class="proof-track" id="proof-track"></div>
+</div>
+
+<!-- ═══ PROBLEM ═══ -->
+<section><div class="section">
+  <div class="text-center fade-in" style="margin-bottom:64px">
+    <p class="label label-indigo">The Problem</p>
+    <h2 class="heading-lg">Compliance shouldn't be a bottleneck</h2>
+    <p class="text-sub" style="max-width:560px;margin:16px auto 0">Traditional onboarding is slow, manual, and doesn't scale. Every new client creates more risk — not less.</p>
+  </div>
+  <div class="grid-4" id="problems-grid"></div>
+</div></section>
+
+<!-- ═══ SOLUTION ═══ -->
+<section class="section-subtle"><div class="section">
+  <div class="grid-2">
+    <div class="fade-in">
+      <p class="label label-indigo">The Solution</p>
+      <h2 class="heading-lg" style="margin-bottom:20px">A Compliance<br><span class="gradient-text">Operating System</span></h2>
+      <p style="font-size:17px;color:rgba(15,17,23,.55);line-height:1.75;margin-bottom:32px">Onboarda replaces spreadsheets, email chains, and disconnected tools with a single platform that automates the entire compliance lifecycle — from first application to ongoing monitoring.</p>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="check-item"><div class="check-icon"><svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg></div><span style="font-size:15px;color:rgba(15,17,23,.7);font-weight:500">Reduce onboarding from weeks to hours</span></div>
+        <div class="check-item"><div class="check-icon"><svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg></div><span style="font-size:15px;color:rgba(15,17,23,.7);font-weight:500">Five AI agents working in parallel</span></div>
+        <div class="check-item"><div class="check-icon"><svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg></div><span style="font-size:15px;color:rgba(15,17,23,.7);font-weight:500">Every decision explainable and auditable</span></div>
+        <div class="check-item"><div class="check-icon"><svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg></div><span style="font-size:15px;color:rgba(15,17,23,.7);font-weight:500">Human-in-the-loop approvals at every stage</span></div>
+      </div>
+    </div>
+    <div class="fade-in d2" id="pipeline-desktop">
+      <div class="pipeline" id="pipeline-container"></div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ═══ FEATURES ═══ -->
+<section id="features"><div class="section">
+  <div class="text-center fade-in" style="margin-bottom:64px">
+    <p class="label label-indigo">Features</p>
+    <h2 class="heading-lg">Everything you need. Nothing you don't.</h2>
+  </div>
+  <div class="grid-3" id="features-grid"></div>
+</div></section>
+
+<!-- ═══ WORKFLOW ═══ -->
+<section class="section-dark" id="workflow"><div class="section">
+  <div class="text-center fade-in" style="margin-bottom:64px">
+    <p class="label label-violet">Workflow</p>
+    <h2 class="heading-lg" style="color:#fff">From application to monitoring</h2>
+    <p style="font-size:17px;line-height:1.7;color:rgba(255,255,255,.45);max-width:500px;margin:16px auto 0">A structured, auditable workflow with human oversight at every critical decision point.</p>
+  </div>
+  <div class="grid-3" style="gap:16px" id="workflow-grid"></div>
+  <div class="text-center"><div class="hitl-badge fade-in d4">
+    <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="#818cf8" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
+    <span style="font-size:15px;font-weight:600;color:#c7d2fe">Human-in-the-loop. Always.</span>
+  </div></div>
+</div></section>
+
+<!-- ═══ MANAGEMENT COS ═══ -->
+<section id="management"><div class="section">
+  <div class="grid-2">
+    <div class="fade-in portfolio">
+      <div class="portfolio-title">Portfolio Risk Overview</div>
+      <div class="portfolio-grid">
+        <div class="portfolio-stat"><div class="portfolio-stat-label">Total Clients</div><div class="portfolio-stat-value" style="color:#0f1117"><span class="counter" data-target="312">0</span></div></div>
+        <div class="portfolio-stat"><div class="portfolio-stat-label">High Risk</div><div class="portfolio-stat-value" style="color:#d97706"><span class="counter" data-target="28">0</span></div></div>
+        <div class="portfolio-stat"><div class="portfolio-stat-label">Pending Review</div><div class="portfolio-stat-value" style="color:#6366f1"><span class="counter" data-target="14">0</span></div></div>
+        <div class="portfolio-stat"><div class="portfolio-stat-label">Overdue Reviews</div><div class="portfolio-stat-value" style="color:#dc2626"><span class="counter" data-target="3">0</span></div></div>
+      </div>
+      <div class="risk-bar"><div class="risk-bar-segment" style="flex:45;background:#16a34a"></div><div class="risk-bar-segment" style="flex:30;background:#2563eb"></div><div class="risk-bar-segment" style="flex:18;background:#d97706"></div><div class="risk-bar-segment" style="flex:7;background:#dc2626"></div></div>
+      <div class="risk-bar-labels"><span>Low 45%</span><span>Medium 30%</span><span>High 18%</span><span>Very High 7%</span></div>
+    </div>
+    <div class="fade-in d1">
+      <p class="label label-indigo">For Management Companies</p>
+      <h2 class="heading-lg" style="margin-bottom:20px">Built for portfolio-scale compliance</h2>
+      <p style="font-size:17px;color:rgba(15,17,23,.55);line-height:1.75;margin-bottom:32px">Manage hundreds of clients across multiple risk profiles. Real-time portfolio risk views, automated periodic reviews, and white-label capability for your brand.</p>
+      <div style="display:flex;flex-direction:column;gap:16px" id="mgmt-features"></div>
+    </div>
+  </div>
+</div></section>
+
+<!-- ═══ PLATFORM ═══ -->
+<section class="section-subtle" id="platform"><div class="section">
+  <div class="text-center fade-in" style="margin-bottom:64px">
+    <p class="label label-indigo">Platform</p>
+    <h2 class="heading-lg">See it in action</h2>
+  </div>
+  <div class="grid-3" id="demo-grid"></div>
+</div></section>
+
+<!-- ═══ TRUST ═══ -->
+<section><div class="section">
+  <div class="text-center fade-in" style="margin-bottom:64px">
+    <p class="label label-indigo">Trust & Compliance</p>
+    <h2 class="heading-lg">Built for regulated institutions</h2>
+  </div>
+  <div class="grid-3" id="trust-grid"></div>
+</div></section>
+
+<!-- ═══ CTA ═══ -->
+<section class="cta-section" id="demo"><div style="max-width:700px;margin:0 auto;text-align:center;position:relative;z-index:1">
+  <div class="fade-in">
+    <h2 style="font-size:44px;font-weight:800;letter-spacing:-1.5px;color:#fff;margin-bottom:20px">Transform your onboarding process</h2>
+    <p style="font-size:18px;color:rgba(255,255,255,.5);line-height:1.7;margin-bottom:40px">Join the regulated institutions replacing manual compliance with intelligent automation. See Onboarda in action.</p>
+    <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap">
+      <a class="btn-primary btn-lg" href="mailto:hello@onboarda.com">Request Demo <svg class="arrow-icon" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/></svg></a>
+      <a class="btn-secondary btn-secondary-dark btn-lg" href="mailto:hello@onboarda.com">Book a Call</a>
+    </div>
+  </div>
+</div></section>
+
+<!-- ═══ FOOTER ═══ -->
+<footer class="site-footer"><div style="max-width:1200px;margin:0 auto">
+  <div class="grid-4" style="margin-bottom:48px">
+    <div><div class="logo" style="margin-bottom:16px"><div class="logo-mark" style="width:30px;height:30px;border-radius:8px;font-size:14px">O</div><span style="font-size:16px;font-weight:700;color:#fff">Onboarda</span></div><p style="font-size:13px;color:rgba(255,255,255,.35);line-height:1.7;max-width:250px">AI-powered compliance onboarding and monitoring for regulated institutions.</p></div>
+    <div><div class="footer-col-title">Product</div><a class="footer-link" href="#features">Features</a><a class="footer-link" href="#workflow">Workflow</a><a class="footer-link" href="#platform">Platform</a><a class="footer-link" href="#">Security</a><a class="footer-link" href="#">Pricing</a></div>
+    <div><div class="footer-col-title">Use Cases</div><a class="footer-link" href="#">Payment Providers</a><a class="footer-link" href="#">Management Companies</a><a class="footer-link" href="#">Corporate Services</a><a class="footer-link" href="#">Fund Administrators</a></div>
+    <div><div class="footer-col-title">Company</div><a class="footer-link" href="#">About</a><a class="footer-link" href="mailto:hello@onboarda.com">Contact</a><a class="footer-link" href="#">Blog</a><a class="footer-link" href="#">Careers</a><a class="footer-link" href="#">Legal</a></div>
+  </div>
+  <div class="footer-bottom"><span class="footer-legal">&copy; 2026 Onboarda. All rights reserved.</span><div style="display:flex;gap:24px" class="footer-legal"><a href="#">Privacy Policy</a><a href="#">Terms of Service</a><a href="#">Cookie Policy</a></div></div>
+</div></footer>
+
+<script>
+// ═══════════════════════════════════════════════
+// 1. PARTICLES
+// ═══════════════════════════════════════════════
+(function(){
+  var c=document.getElementById('particles-canvas'),ctx=c.getContext('2d'),particles=[];
+  function resize(){c.width=c.parentElement.offsetWidth;c.height=c.parentElement.offsetHeight}
+  resize();window.addEventListener('resize',resize);
+  for(var i=0;i<60;i++)particles.push({x:Math.random()*c.width,y:Math.random()*c.height,vx:(Math.random()-.5)*.3,vy:(Math.random()-.5)*.3,r:Math.random()*2+.5,o:Math.random()*.3+.05});
+  function draw(){
+    ctx.clearRect(0,0,c.width,c.height);
+    particles.forEach(function(p){
+      p.x+=p.vx;p.y+=p.vy;
+      if(p.x<0)p.x=c.width;if(p.x>c.width)p.x=0;if(p.y<0)p.y=c.height;if(p.y>c.height)p.y=0;
+      ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fillStyle='rgba(99,102,241,'+p.o+')';ctx.fill();
+    });
+    // Connect nearby particles
+    for(var i=0;i<particles.length;i++){
+      for(var j=i+1;j<particles.length;j++){
+        var dx=particles[i].x-particles[j].x,dy=particles[i].y-particles[j].y,d=Math.sqrt(dx*dx+dy*dy);
+        if(d<120){ctx.beginPath();ctx.moveTo(particles[i].x,particles[i].y);ctx.lineTo(particles[j].x,particles[j].y);ctx.strokeStyle='rgba(99,102,241,'+(1-d/120)*.08+')';ctx.stroke();}
+      }
+    }
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+// ═══════════════════════════════════════════════
+// 2. TYPING ANIMATION
+// ═══════════════════════════════════════════════
+(function(){
+  var lines=[{el:'typed-line1',text:'Compliance.'},{el:'typed-line2',text:'Automated.'},{el:'typed-line3',text:'Explained.'}];
+  var li=0,ci=0,cursor=document.getElementById('cursor');
+  function type(){
+    if(li>=lines.length){cursor.style.display='none';return;}
+    var el=document.getElementById(lines[li].el),txt=lines[li].text;
+    if(ci<=txt.length){el.textContent=txt.slice(0,ci);ci++;setTimeout(type,60+Math.random()*40);}
+    else{ci=0;li++;setTimeout(type,300);}
+  }
+  setTimeout(type,800);
+})();
+
+// ═══════════════════════════════════════════════
+// 3. SCROLL: header, fade-in, parallax, counters
+// ═══════════════════════════════════════════════
+var observer=new IntersectionObserver(function(entries){
+  entries.forEach(function(e){if(e.isIntersecting){e.target.classList.add('visible');observer.unobserve(e.target);}});
+},{threshold:.12});
+document.querySelectorAll('.fade-in').forEach(function(el){observer.observe(el);});
+
+// Counter animation
+var counterObs=new IntersectionObserver(function(entries){
+  entries.forEach(function(e){
+    if(!e.isIntersecting)return;
+    var el=e.target,target=parseInt(el.dataset.target),suffix=el.dataset.suffix||'',start=0,dur=1500,startTime=null;
+    function step(ts){
+      if(!startTime)startTime=ts;
+      var p=Math.min((ts-startTime)/dur,1);
+      var ease=1-Math.pow(1-p,3); // easeOutCubic
+      el.textContent=Math.round(start+(target-start)*ease)+suffix;
+      if(p<1)requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+    counterObs.unobserve(el);
+  });
+},{threshold:.5});
+document.querySelectorAll('.counter').forEach(function(el){counterObs.observe(el);});
+
+// Sticky header
+window.addEventListener('scroll',function(){
+  document.getElementById('site-header').classList.toggle('scrolled',window.scrollY>20);
+});
+
+// Parallax
+window.addEventListener('scroll',function(){
+  document.querySelectorAll('.parallax-layer').forEach(function(el){
+    var speed=parseFloat(el.dataset.speed)||.05;
+    el.style.transform='translateY('+(-window.scrollY*speed)+'px)';
+  });
+});
+
+// ═══════════════════════════════════════════════
+// 4. DASHBOARD ROWS (animated + cycling statuses)
+// ═══════════════════════════════════════════════
+(function(){
+  var rows=[
+    {ref:'ARF-2026-100421',co:'Meridian Holdings',risk:'LOW',rc:'#16a34a',score:22,statuses:['Approved','Monitoring','Approved']},
+    {ref:'ARF-2026-100422',co:'NovaPay Ltd',risk:'HIGH',rc:'#d97706',score:68,statuses:['Pre-Approval','Under Review','Pre-Approval']},
+    {ref:'ARF-2026-100423',co:'Atlas Ventures',risk:'MEDIUM',rc:'#2563eb',score:41,statuses:['KYC Review','Compliance Review','KYC Review']},
+    {ref:'ARF-2026-100424',co:'Zenith Capital',risk:'VERY HIGH',rc:'#dc2626',score:82,statuses:['Escalated','EDD Required','Escalated']},
+    {ref:'ARF-2026-100425',co:'Pacific Trade Co',risk:'LOW',rc:'#16a34a',score:18,statuses:['Approved','Monitoring','Approved']},
+  ];
+  var container=document.getElementById('mockup-rows');
+  rows.forEach(function(r){
+    var div=document.createElement('div');div.className='mockup-row';
+    div.innerHTML='<span class="mockup-ref">'+r.ref+'</span><span class="mockup-company">'+r.co+'</span><span><span class="risk-badge" style="background:'+r.rc+'18;color:'+r.rc+'">'+r.risk+'</span></span><span class="mockup-score">'+r.score+'</span><span class="row-status" style="color:'+r.rc+';font-weight:500;font-size:12px"><span class="status-dot pulse" style="background:'+r.rc+'"></span>'+r.statuses[0]+'</span>';
+    container.appendChild(div);
+  });
+  // Cycle statuses
+  var idx=0;
+  setInterval(function(){
+    idx=(idx+1)%3;
+    var statusEls=container.querySelectorAll('.row-status');
+    statusEls.forEach(function(el,i){
+      el.style.opacity='0';el.style.transition='opacity .3s';
+      setTimeout(function(){el.innerHTML='<span class="status-dot pulse" style="background:'+rows[i].rc+'"></span>'+rows[i].statuses[idx];el.style.opacity='1';},300);
+    });
+  },4000);
+})();
+
+// ═══════════════════════════════════════════════
+// 5. PROOF BAR (infinite scroll, duplicated)
+// ═══════════════════════════════════════════════
+(function(){
+  var items=['AML/CFT Compliant','FATF Aligned','Risk-Based Approach','Regulator-Ready','SOC 2 Architecture','MFSA Aligned','Audit Trail by Design','PEP Screening','Sanctions Monitoring'];
+  var track=document.getElementById('proof-track');
+  var html='';
+  for(var r=0;r<2;r++){items.forEach(function(t){html+='<div class="proof-item"><svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg> '+t+'</div>';});}
+  track.innerHTML=html;
+})();
+
+// ═══════════════════════════════════════════════
+// 6. PROBLEM CARDS
+// ═══════════════════════════════════════════════
+(function(){
+  var data=[
+    {icon:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',title:'Onboarding takes weeks',desc:'Manual forms, email chains, and spreadsheet tracking slow everything down.'},
+    {icon:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>',title:'Compliance is manual',desc:'Officers spend hours on tasks that should take minutes. Review quality varies.'},
+    {icon:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>',title:'Scaling is painful',desc:'Adding clients means adding headcount. The process doesn\'t scale.'},
+    {icon:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',title:'Audit trails are fragile',desc:'Scattered records across emails, drives, and legacy systems. Regulators aren\'t impressed.'},
+  ];
+  var g=document.getElementById('problems-grid');
+  data.forEach(function(p,i){var d=document.createElement('div');d.className='fade-in d'+i+' feature-card';d.innerHTML='<div class="icon-box icon-box-red">'+p.icon+'</div><h3 class="heading-md" style="margin-bottom:8px">'+p.title+'</h3><p class="text-muted">'+p.desc+'</p>';g.appendChild(d);observer.observe(d);});
+})();
+
+// ═══════════════════════════════════════════════
+// 7. AI PIPELINE (animated progress)
+// ═══════════════════════════════════════════════
+(function(){
+  var agents=[
+    {agent:'Agent 1',task:'Entity & Ownership Analysis',status:'Complete',color:'#16a34a',bg:'rgba(22,163,74,.15)',time:'1.2s',pct:100},
+    {agent:'Agent 2',task:'Sanctions & PEP Screening',status:'Complete',color:'#16a34a',bg:'rgba(22,163,74,.15)',time:'2.4s',pct:100},
+    {agent:'Agent 3',task:'Adverse Media Scan',status:'Complete',color:'#16a34a',bg:'rgba(22,163,74,.15)',time:'3.1s',pct:100},
+    {agent:'Agent 4',task:'Document Verification',status:'Running',color:'#818cf8',bg:'rgba(99,102,241,.15)',time:'...',pct:65,active:true},
+    {agent:'Agent 5',task:'Compliance Memo Synthesis',status:'Queued',color:'rgba(255,255,255,.3)',bg:'rgba(255,255,255,.05)',time:'—',pct:0},
+  ];
+  var c=document.getElementById('pipeline-container');
+  c.innerHTML='<div class="pipeline-title">AI Agent Pipeline</div>';
+  agents.forEach(function(a,i){
+    var div=document.createElement('div');div.className='pipeline-item'+(a.active?' active':'');
+    div.innerHTML='<div><div class="pipeline-agent">'+a.agent+'</div><div class="pipeline-task">'+a.task+'</div><div class="pipeline-progress"><div class="pipeline-progress-fill" style="width:0;background:'+a.color+'"></div></div></div><div style="text-align:right"><div class="pipeline-status" style="background:'+a.bg+';color:'+a.color+'">'+(a.active?'<span class="pipeline-status-dot" style="background:'+a.color+'"></span>':'')+a.status+'</div><div class="pipeline-time">'+a.time+'</div></div>';
+    c.appendChild(div);
+    // Animate progress bars on view
+    var pObs=new IntersectionObserver(function(entries){entries.forEach(function(e){if(e.isIntersecting){setTimeout(function(){div.querySelector('.pipeline-progress-fill').style.width=a.pct+'%';},200+i*300);pObs.unobserve(div);}});},{threshold:.3});
+    pObs.observe(div);
+  });
+  // Pulse Agent 4 progress
+  var a4=c.querySelectorAll('.pipeline-item')[3];
+  var fill=a4?a4.querySelector('.pipeline-progress-fill'):null;
+  if(fill){var dir=1,pct=65;setInterval(function(){pct+=dir*2;if(pct>=90)dir=-1;if(pct<=55)dir=1;fill.style.width=pct+'%';},200);}
+  if(window.innerWidth<=900)document.getElementById('pipeline-desktop').style.display='none';
+})();
+
+// ═══════════════════════════════════════════════
+// 8. FEATURE CARDS
+// ═══════════════════════════════════════════════
+(function(){
+  var icons={brain:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>',doc:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>',users:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg>',search:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/></svg>',clock:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',eye:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>'};
+  var features=[
+    {i:icons.brain,t:'AI Risk Scoring',d:'Five-dimension weighted risk engine with explainable outputs. Every score has a clear rationale.'},
+    {i:icons.doc,t:'KYC & Document Automation',d:'Structured document collection with AI verification. Passport, PoA, certificates — validated automatically.'},
+    {i:icons.users,t:'UBO & Structure Mapping',d:'Multi-layer beneficial ownership analysis. Intermediary shareholders, PEP checks, ownership chains.'},
+    {i:icons.search,t:'Screening & Adverse Media',d:'Real-time sanctions, PEP, and adverse media screening against global watchlists. OpenSanctions integrated.'},
+    {i:icons.doc,t:'Compliance Memo Generation',d:'AI-generated compliance memos synthesising all agent findings into a regulator-ready narrative.'},
+    {i:icons.clock,t:'Ongoing Monitoring',d:'Continuous client monitoring with periodic reviews, risk drift detection, and automated alerting.'},
+    {i:icons.eye,t:'Audit Trail & Explainability',d:'Every decision logged. Every AI output explained. Full agent decision trail for regulatory inspection.'},
+  ];
+  var g=document.getElementById('features-grid');
+  features.forEach(function(f,i){var d=document.createElement('div');d.className='fade-in d'+(i%3)+' feature-card';d.innerHTML='<div class="icon-box icon-box-indigo">'+f.i+'</div><h3 style="font-size:16px;font-weight:700;margin-bottom:8px">'+f.t+'</h3><p class="text-muted">'+f.d+'</p>';g.appendChild(d);observer.observe(d);});
+})();
+
+// ═══════════════════════════════════════════════
+// 9. WORKFLOW CARDS (mouse glow)
+// ═══════════════════════════════════════════════
+(function(){
+  var steps=[{n:'01',t:'Client Applies',s:'Pre-screening data collected'},{n:'02',t:'AI Agents Run',s:'5 agents score risk in parallel'},{n:'03',t:'Risk Routing',s:'Low risk fast-tracked, high risk gated'},{n:'04',t:'Compliance Review',s:'Officer reviews with full AI context'},{n:'05',t:'Decision',s:'Approve, reject, or escalate'},{n:'06',t:'Monitoring',s:'Ongoing surveillance activated'}];
+  var g=document.getElementById('workflow-grid');
+  steps.forEach(function(s,i){
+    var d=document.createElement('div');d.className='fade-in d'+(i%3)+' workflow-card';
+    d.innerHTML='<div class="workflow-num">'+s.n+'</div><h3 class="workflow-title">'+s.t+'</h3><p class="workflow-sub">'+s.s+'</p>';
+    d.addEventListener('mousemove',function(e){var r=d.getBoundingClientRect();d.style.setProperty('--mx',((e.clientX-r.left)/r.width*100)+'%');d.style.setProperty('--my',((e.clientY-r.top)/r.height*100)+'%');});
+    g.appendChild(d);observer.observe(d);
+  });
+})();
+
+// ═══════════════════════════════════════════════
+// 10. MGMT FEATURES
+// ═══════════════════════════════════════════════
+(function(){
+  var items=[{t:'Multi-client portfolio management',s:'Centralised view across all entities with risk aggregation'},{t:'Automated periodic reviews',s:'Risk-based review cycles — quarterly, semi-annual, or annual'},{t:'White-label ready',s:'Deploy under your brand with configurable workflows'},{t:'Regulatory reporting',s:'Pre-built reports for MFSA, FSC, and other regulators'}];
+  var c=document.getElementById('mgmt-features');
+  items.forEach(function(it){c.innerHTML+='<div class="detail-item"><div class="detail-icon"><svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/></svg></div><div><div style="font-size:15px;font-weight:600">'+it.t+'</div><div style="font-size:13px;color:rgba(15,17,23,.45);margin-top:2px">'+it.s+'</div></div></div>';});
+})();
+
+// ═══════════════════════════════════════════════
+// 11. DEMO + TRUST CARDS
+// ═══════════════════════════════════════════════
+(function(){
+  var demos=[{tag:'CLIENT-FACING',t:'Client Portal',d:'Clean, guided onboarding experience. Pre-screening, document upload, and real-time status tracking.'},{tag:'OFFICER-FACING',t:'Back Office Dashboard',d:'Full compliance workbench. Application queue, risk scoring, AI agent outputs, and decision tools.'},{tag:'COMPLIANCE',t:'AI Explainability Layer',d:'Every AI decision broken down. Agent-by-agent reasoning with confidence scores and evidence links.'}];
+  var dg=document.getElementById('demo-grid');
+  demos.forEach(function(d,i){var el=document.createElement('div');el.className='fade-in d'+i+' demo-card';el.innerHTML='<div class="demo-card-visual"><div class="demo-card-tag">'+d.tag+'</div></div><div class="demo-card-body"><h3 style="font-size:18px;font-weight:700;margin-bottom:8px">'+d.t+'</h3><p class="text-muted">'+d.d+'</p></div>';dg.appendChild(el);observer.observe(el);});
+
+  var trust=[{icon:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>',t:'Regulator-ready workflows',d:'Every workflow designed with regulatory defensibility in mind. MFSA, FSC, FCA-aligned processes out of the box.'},{icon:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',t:'Audit trail by design',d:'Every action, every decision, every AI output — timestamped, attributed, and immutable. Always inspection-ready.'},{icon:'<svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z"/></svg>',t:'No black-box decisions',d:'Full explainability layer. See exactly why each risk score was assigned, which agents contributed, and what evidence was used.'}];
+  var tg=document.getElementById('trust-grid');
+  trust.forEach(function(t,i){var el=document.createElement('div');el.className='fade-in d'+i+' trust-card';el.innerHTML='<div class="icon-box icon-box-indigo icon-box-lg">'+t.icon+'</div><h3 style="font-size:18px;font-weight:700;margin-bottom:10px">'+t.t+'</h3><p class="text-muted">'+t.d+'</p>';tg.appendChild(el);observer.observe(el);});
+})();
+</script>
+</body>
+</html>

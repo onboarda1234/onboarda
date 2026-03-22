@@ -64,11 +64,13 @@ class TestRiskScoring:
 
 class TestScreening:
     def test_simulated_sanctions_screen(self, temp_db):
-        from server import _simulate_sanctions_screen
-        result = _simulate_sanctions_screen("John Smith")
+        from server import screen_sumsub_aml
+        result = screen_sumsub_aml("John Smith")
+        # Returns dict with standard keys regardless of API availability
+        assert isinstance(result, dict)
         assert "matched" in result
         assert "results" in result
-        assert result["source"] == "simulated"
+        assert isinstance(result["results"], list)
 
     def test_simulated_company_lookup(self, temp_db):
         from server import _simulate_company_lookup

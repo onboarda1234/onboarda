@@ -1,0 +1,28 @@
+[run]
+data_file = /tmp/.coverage
+source = .
+omit =
+    tests/*
+    supervisor/*
+    venv/*
+    .venv/*
+    */site-packages/*
+    production_controls.py
+    resilience/*
+    migrations/*
+    s3_client.py
+    setup_s3.py
+    security_hardening.py
+
+[report]
+fail_under = 30
+show_missing = true
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    if __name__ == .__main__
+    raise NotImplementedError
+    pass
+
+[html]
+directory = htmlcov

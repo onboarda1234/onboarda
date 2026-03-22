@@ -65,9 +65,40 @@ from environment import (
     get_database_url, get_jwt_secret, get_cors_origin, get_s3_bucket
 )
 
+# ── Sprint 2: Extracted modules ──────────────────────────
+from auth import (
+    create_token, decode_token,
+    sanitize_input, sanitize_dict,
+    RateLimiter,
+)
+from rule_engine import (
+    FATF_GREY, FATF_BLACK, SANCTIONED, SANCTIONED_COUNTRIES_FULL,
+    ALLOWED_CURRENCIES, LOW_RISK, SECTOR_SCORES,
+    HIGH_RISK_SECTORS, MINIMUM_MEDIUM_SECTORS, MEDIUM_RISK_SECTORS,
+    HIGH_RISK_COUNTRIES, ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
+    RISK_WEIGHTS, RISK_RANK,
+    classify_country, score_sector, compute_risk_score,
+)
+from validation_engine import (
+    validate_compliance_memo,
+    pre_validate_application,
+    generate_fallback_memo,
+)
+from supervisor_engine import run_memo_supervisor
+from memo_handler import build_compliance_memo
+
+# Sprint 3: Server-side PDF generation
+try:
+    from pdf_generator import generate_memo_pdf
+    HAS_PDF_GENERATOR = True
+except ImportError:
+    HAS_PDF_GENERATOR = False
+    logging.getLogger("arie").warning("PDF generator not available — install weasyprint")
+
 # Supervisor framework
 try:
-    from supervisor.api import setup_supervisor, get_supervisor_routes
+    from supervisor.api import setup_supervisor, get_supervisor_routes, get_supervisor
+    from supervisor.agent_executors import register_all_executors
     SUPERVISOR_AVAILABLE = True
 except ImportError:
     SUPERVISOR_AVAILABLE = False
@@ -325,44 +356,8 @@ def init_db():
         db.close()
 
 
-# ══════════════════════════════════════════════════════════
-# AUTH HELPERS
-# ══════════════════════════════════════════════════════════
-def create_token(user_id, role, name, token_type="officer"):
-    """Create a JWT with session binding (jti) and issuer claim for security."""
-    jti = uuid.uuid4().hex  # Unique token ID for session tracking / revocation
-    payload = {
-        "sub": user_id,
-        "role": role,
-        "name": name,
-        "type": token_type,
-        "jti": jti,
-        "iss": "arie-finance",
-        "exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS),
-        "iat": datetime.utcnow(),
-        "nbf": datetime.utcnow(),  # Not valid before issuance
-    }
-    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-
-
-def decode_token(token):
-    """Decode and validate JWT with issuer verification."""
-    try:
-        decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"],
-                          issuer="arie-finance",
-                          options={"require": ["exp", "iat", "sub"]})
-        # Check token revocation
-        if token_revocation_list.is_revoked(decoded.get("jti", "")):
-            logger.debug("Token revoked")
-            return None
-        return decoded
-    except jwt.ExpiredSignatureError:
-        logger.debug("Token expired")
-        return None
-    except jwt.InvalidTokenError as e:
-        logger.debug("Invalid token: %s", e)
-        return None
-
+# ── Extracted modules: auth.py, rule_engine.py, screening.py, memo_handler.py,
+# ── validation_engine.py, supervisor_engine.py (see Sprint 2 architecture)
 
 def generate_ref():
     """Generate application reference like ARF-2026-100429"""
@@ -372,1256 +367,30 @@ def generate_ref():
     year = datetime.now().year
     return f"ARF-{year}-{100421 + count}"
 
-
-def sanitize_input(value):
-    """Sanitize user input to prevent XSS and HTML injection."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return html.escape(value.strip(), quote=True)
-    return value
-
-def sanitize_dict(data, keys=None):
-    """Sanitize specified keys in a dict (or all string values if keys=None)."""
-    if not isinstance(data, dict):
-        return data
-    result = {}
-    for k, v in data.items():
-        if keys is None or k in keys:
-            result[k] = sanitize_input(v) if isinstance(v, str) else v
-        else:
-            result[k] = v
-    return result
-
-
-# ══════════════════════════════════════════════════════════
-# RISK SCORING ENGINE
-# ══════════════════════════════════════════════════════════
-# Country risk classification
-FATF_GREY = {"syria","myanmar","iran","north korea","yemen","haiti","south sudan",
-             "nigeria","south africa","kenya","philippines","tanzania","mozambique",
-             "democratic republic of congo","cameroon","burkina faso","mali","senegal"}
-FATF_BLACK = {"iran","north korea","myanmar"}
-SANCTIONED = {"iran","north korea","syria","cuba","crimea"}
-SANCTIONED_COUNTRIES_FULL = {"iran","north korea","syria","cuba","crimea","myanmar","russia","belarus",
-                              "venezuela","afghanistan","somalia","yemen","libya","iraq","south sudan",
-                              "central african republic","democratic republic of congo","mali",
-                              "guinea-bissau","lebanon"}
-ALLOWED_CURRENCIES = {"USD", "EUR", "GBP", "AED"}
-LOW_RISK = {"mauritius","united kingdom","uk","france","germany","sweden","norway",
-            "denmark","finland","australia","new zealand","canada","usa","united states",
-            "japan","singapore","hong kong","switzerland","netherlands","belgium","luxembourg",
-            "ireland","austria","portugal","spain","italy"}
-
-SECTOR_SCORES = {
-    "regulated financial":1, "government":1, "bank":1, "listed company":1,
-    "healthcare":2, "technology":2, "software":2, "saas":2, "manufacturing":2,
-    "retail":2, "e-commerce":2, "education":2, "media":2, "logistics":2,
-    "import":3, "export":3, "real estate":3, "construction":3, "mining":3,
-    "oil":3, "gas":3, "money services":3, "forex":3, "precious":3,
-    "non-profit":3, "ngo":3, "charity":3, "advisory":3,
-    "management consulting":3, "consulting":3, "financial / tax advisory":3,
-    "crypto":4, "virtual asset":4, "gambling":4, "gaming":4, "betting":4,
-    "arms":4, "defence":4, "military":4, "shell company":4, "nominee":4
-}
-
-
-def classify_country(country_name):
-    """Return risk score 1-4 for a country."""
-    if not country_name:
-        return 2
-    c = country_name.lower().strip()
-    if c in SANCTIONED:
-        return 4
-    if c in FATF_BLACK:
-        return 4
-    if c in FATF_GREY:
-        return 3
-    if c in LOW_RISK:
-        return 1
-    return 2  # standard
-
-
-def score_sector(sector_name):
-    """Return risk score 1-4 for a sector."""
-    if not sector_name:
-        return 2
-    s = sector_name.lower()
-    for key, score in SECTOR_SCORES.items():
-        if key in s:
-            return score
-    return 2
-
-
-def compute_risk_score(app_data):
-    """
-    Compute composite risk score from application data.
-    Returns: { score, level, dimensions: {d1..d5}, lane }
-    """
-    data = app_data if isinstance(app_data, dict) else json.loads(app_data)
-
-    # D1: Customer / Entity Risk (30%)
-    entity_map = {"listed":1,"regulated fund":2,"regulated":1,"government":1,
-                  "large private":2,"sme":2,
-                  "newly incorporated":3,"trust":3,"foundation":3,"non-profit":3,
-                  "unregulated fund":4,"shell":4}
-    owner_map = {"simple":1,"1-2":2,"3+":3,"complex":4}
-
-    d1_entity = 2
-    et = (data.get("entity_type") or "").lower()
-    for k, v in entity_map.items():
-        if k in et:
-            d1_entity = v; break
-
-    d1_owner = 2
-    os_val = (data.get("ownership_structure") or "").lower()
-    for k, v in owner_map.items():
-        if k in os_val:
-            d1_owner = v; break
-
-    has_pep = any(d.get("is_pep") == "Yes" for d in data.get("directors", []))
-    has_pep = has_pep or any(u.get("is_pep") == "Yes" for u in data.get("ubos", []))
-    d1_pep = 3 if has_pep else 1
-
-    d1 = d1_entity * 0.20 + d1_owner * 0.20 + d1_pep * 0.25 + 1 * 0.15 + 2 * 0.10 + 2 * 0.10
-
-    # D2: Geographic Risk (25%)
-    d2_inc = classify_country(data.get("country"))
-
-    # Intermediary shareholder jurisdictions
-    intermediaries = data.get("intermediary_shareholders", [])
-    secrecy_jurisdictions = {"bvi", "cayman islands", "panama", "seychelles", "bermuda",
-                             "jersey", "guernsey", "isle of man", "liechtenstein",
-                             "vanuatu", "samoa", "marshall islands"}
-    if intermediaries:
-        inter_scores = []
-        for inter in intermediaries:
-            j = (inter.get("jurisdiction") or "").strip()
-            j_score = classify_country(j)
-            # Boost secrecy/opacity jurisdictions to at least 3
-            if j.lower() in secrecy_jurisdictions:
-                j_score = max(j_score, 3)
-            inter_scores.append(j_score)
-        d2_inter = max(inter_scores) if inter_scores else 1
-    else:
-        d2_inter = 1  # No intermediaries = low risk
-
-    # UBO/Director nationalities
-    nat_demonym_map = {
-        "indian": "india", "singaporean": "singapore", "swedish": "sweden",
-        "emirati": "uae", "russian": "russia", "estonian": "estonia",
-        "senegalese": "senegal", "french": "france", "mauritian": "mauritius",
-        "chinese": "china", "moroccan": "morocco", "nigerian": "nigeria",
-        "british": "united kingdom", "american": "united states",
-        "german": "germany", "japanese": "japan", "australian": "australia",
-        "canadian": "canada", "lebanese": "lebanon", "iranian": "iran",
-        "syrian": "syria", "afghan": "afghanistan", "belarusian": "belarus",
-        "venezuelan": "venezuela", "cuban": "cuba", "north korean": "north korea (dprk)",
-        "pakistani": "pakistan", "south african": "south africa",
-        "vietnamese": "vietnam", "filipino": "philippines",
-    }
-    all_persons = data.get("directors", []) + data.get("ubos", [])
-    nat_scores = []
-    for person in all_persons:
-        nat = (person.get("nationality") or person.get("nat") or "").strip().lower()
-        if nat:
-            mapped = nat_demonym_map.get(nat, nat)
-            nat_scores.append(classify_country(mapped))
-    d2_ubo_nat = max(nat_scores) if nat_scores else 1
-
-    op_countries = data.get("operating_countries", [])
-    d2_op = max([classify_country(c) for c in op_countries]) if op_countries else d2_inc
-    target_markets = data.get("target_markets", [])
-    d2_tgt = max([classify_country(c) for c in target_markets]) if target_markets else d2_inc
-    d2 = d2_inc * 0.25 + d2_ubo_nat * 0.20 + d2_inter * 0.20 + d2_op * 0.20 + d2_tgt * 0.15
-
-    # D3: Product / Service Risk (20%)
-    vol_map = {"under":1,"50,000":2,"500,000":3,"over":4}
-    d3_svc = 2  # default
-    if data.get("cross_border"):
-        d3_svc = 3
-    d3_vol = 2
-    vol = (data.get("monthly_volume") or "").lower()
-    for k, v in vol_map.items():
-        if k in vol:
-            d3_vol = v; break
-    d3 = d3_svc * 0.40 + d3_vol * 0.30 + 2 * 0.30
-
-    # D4: Industry / Sector Risk (15%)
-    d4 = score_sector(data.get("sector"))
-
-    # D5: Delivery Channel Risk (10%)
-    intro_map = {"direct":1,"regulated":1,"non-regulated":3,"unsolicited":4}
-    d5_intro = 2
-    intro = (data.get("introduction_method") or "").lower()
-    for k, v in intro_map.items():
-        if k in intro:
-            d5_intro = v; break
-    d5 = d5_intro * 0.50 + 2 * 0.50  # non-face-to-face by default
-
-    # Composite
-    composite = (d1 * 0.30 + d2 * 0.25 + d3 * 0.20 + d4 * 0.15 + d5 * 0.10) / 4 * 100
-    composite = round(composite, 1)
-
-    if composite >= 70:
-        level = "VERY_HIGH"
-    elif composite >= 55:
-        level = "HIGH"
-    elif composite >= 40:
-        level = "MEDIUM"
-    else:
-        level = "LOW"
-
-    lane_map = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}
-
-    return {
-        "score": composite,
-        "level": level,
-        "dimensions": {"d1": round(d1, 2), "d2": round(d2, 2), "d3": round(d3, 2), "d4": round(d4, 2), "d5": round(d5, 2)},
-        "lane": lane_map[level]
-    }
-
-
-# ══════════════════════════════════════════════════════════
-# REAL API INTEGRATIONS
-# ══════════════════════════════════════════════════════════
-
-def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Person"):
-    """
-    Screen a person or entity against Sumsub AML (sanctions, PEP, watchlists).
-    Returns: { matched: bool, results: [...], source: "sumsub"|"simulated" }
-    """
-    try:
-        # First create/retrieve a Sumsub applicant
-        import hashlib
-        ext_id = f"{entity_type}_{hashlib.md5(name.encode()).hexdigest()[:12]}"
-        parts = name.strip().split(" ", 1)
-        first = parts[0] if parts else ""
-        last = parts[1] if len(parts) > 1 else ""
-
-        applicant_result = sumsub_create_applicant(
-            external_user_id=ext_id,
-            first_name=first,
-            last_name=last,
-            dob=birth_date,
-            country=nationality
-        )
-
-        if not applicant_result.get("applicant_id"):
-            logger.warning(f"Sumsub AML: Failed to create/retrieve applicant for '{name}'")
-            return _simulate_aml_screen(name)
-
-        applicant_id = applicant_result["applicant_id"]
-
-        # Get AML screening results
-        from sumsub_client import get_sumsub_client
-        client = get_sumsub_client()
-        aml_result = client.get_aml_screening(applicant_id)
-
-        if aml_result.get("source") == "simulated":
-            # API not configured, return simulated
-            return _simulate_aml_screen(name)
-
-        # Parse AML check results into our standard format
-        aml_checks = aml_result.get("aml_checks", [])
-        hits = []
-
-        for check in aml_checks:
-            check_data = check.get("data", {})
-            if check_data.get("matches"):
-                for match in check_data.get("matches", []):
-                    hits.append({
-                        "match_score": round(float(match.get("matchScore", 0)) * 100, 1),
-                        "matched_name": match.get("name", name),
-                        "datasets": [check.get("checkType", "AML")],
-                        "schema": entity_type,
-                        "topics": match.get("topics", []),
-                        "countries": match.get("countries", []),
-                        "sanctions_list": match.get("list", ""),
-                        "is_pep": "pep" in match.get("topics", []) or match.get("isPep", False),
-                        "is_sanctioned": "sanction" in match.get("topics", []) or match.get("isSanctioned", False),
-                    })
-
-        return {
-            "matched": len(hits) > 0,
-            "results": hits,
-            "source": "sumsub",
-            "api_status": "live",
-            "screened_at": datetime.utcnow().isoformat()
-        }
-
-    except Exception as e:
-        logger.error(f"Sumsub AML screening error: {e}")
-        return _simulate_aml_screen(name)
-
-
-def _simulate_aml_screen(name, note="No Sumsub credentials configured — simulated result"):
-    """Fallback: realistic simulation when Sumsub not configured."""
-    if is_production():
-        logger.error("BLOCKED: Mock screening attempted in production")
-        return {"matched": False, "results": [], "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production", "screened_at": datetime.utcnow().isoformat()}
-    import random
-    is_hit = random.random() < 0.08  # 8% simulated hit rate
-    results = []
-    if is_hit:
-        results.append({
-            "match_score": round(random.uniform(68, 95), 1),
-            "matched_name": name,
-            "datasets": ["aml-simulated"],
-            "schema": "Person",
-            "topics": ["pep"] if random.random() < 0.5 else ["sanction"],
-            "countries": [],
-            "sanctions_list": "Simulated AML List",
-            "is_pep": random.random() < 0.5,
-            "is_sanctioned": random.random() < 0.3,
-        })
-    return {
-        "matched": is_hit,
-        "results": results,
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "screened_at": datetime.utcnow().isoformat()
-    }
-
-
-def lookup_opencorporates(company_name, jurisdiction=None):
-    """
-    Look up a company via Open Corporates registry.
-    Returns: { found: bool, companies: [...], source: "opencorporates"|"simulated" }
-    """
-    if not OPENCORPORATES_API_KEY:
-        logger.info(f"OpenCorporates: No API key — simulating lookup for '{company_name}'")
-        return _simulate_company_lookup(company_name)
-
-    try:
-        params = {"q": company_name, "api_token": OPENCORPORATES_API_KEY}
-        if jurisdiction:
-            params["jurisdiction_code"] = jurisdiction.lower()
-
-        resp = requests.get(
-            f"{OPENCORPORATES_API_URL}/companies/search",
-            params=params,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            companies_raw = data.get("results", {}).get("companies", [])
-            companies = []
-            for c_wrap in companies_raw[:5]:  # Top 5 matches
-                c = c_wrap.get("company", {})
-                companies.append({
-                    "name": c.get("name", ""),
-                    "company_number": c.get("company_number", ""),
-                    "jurisdiction": c.get("jurisdiction_code", ""),
-                    "incorporation_date": c.get("incorporation_date", ""),
-                    "dissolution_date": c.get("dissolution_date"),
-                    "company_type": c.get("company_type", ""),
-                    "registry_url": c.get("registry_url", ""),
-                    "status": c.get("current_status", ""),
-                    "registered_address": c.get("registered_address_in_full", ""),
-                    "opencorporates_url": c.get("opencorporates_url", ""),
-                })
-
-            return {
-                "found": len(companies) > 0,
-                "companies": companies,
-                "total_results": data.get("results", {}).get("total_count", 0),
-                "source": "opencorporates",
-                "api_status": "live",
-                "searched_at": datetime.utcnow().isoformat()
-            }
-        elif resp.status_code == 401:
-            logger.warning("OpenCorporates: Invalid API key — falling back to simulation")
-            return _simulate_company_lookup(company_name, note="API key invalid — simulated result")
-        else:
-            logger.warning(f"OpenCorporates: HTTP {resp.status_code}")
-            return _simulate_company_lookup(company_name, note=f"API returned {resp.status_code} — simulated")
-
-    except Exception as e:
-        logger.error(f"OpenCorporates error: {e}")
-        return _simulate_company_lookup(company_name, note=f"API error — simulated result")
-
-
-def _simulate_company_lookup(company_name, note="No API key configured — simulated result"):
-    """Fallback: simulated company registry lookup. C-04: BLOCKED in production."""
-    if is_production():
-        logger.error("BLOCKED: Mock company lookup attempted in production")
-        return {"found": False, "companies": [], "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
-    import random
-    found = random.random() < 0.85  # 85% chance found
-    companies = []
-    if found:
-        companies.append({
-            "name": company_name,
-            "company_number": f"C{random.randint(10000,99999)}",
-            "jurisdiction": "mu",
-            "incorporation_date": f"20{random.randint(10,24)}-{random.randint(1,12):02d}-{random.randint(1,28):02d}",
-            "dissolution_date": None,
-            "company_type": random.choice(["Private Company Limited by Shares", "Global Business Company"]),
-            "registry_url": "",
-            "status": random.choice(["Active", "Active"]),
-            "registered_address": "Port Louis, Mauritius",
-            "opencorporates_url": "",
-        })
-    return {
-        "found": found,
-        "companies": companies,
-        "total_results": 1 if found else 0,
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "searched_at": datetime.utcnow().isoformat()
-    }
-
-
-def geolocate_ip(ip_address):
-    """
-    Look up geolocation and risk data for an IP address.
-    Returns: { country, city, is_vpn, is_proxy, risk_level, source }
-    """
-    if not ip_address or ip_address in ("127.0.0.1", "::1", "0.0.0.0"):
-        return {
-            "country": "Local",
-            "country_code": "XX",
-            "city": "Localhost",
-            "region": "",
-            "is_vpn": False,
-            "is_proxy": False,
-            "is_tor": False,
-            "risk_level": "LOW",
-            "source": "local",
-            "api_status": "skipped",
-            "checked_at": datetime.utcnow().isoformat()
-        }
-
-    try:
-        # Use ipapi.co (free tier: 1000 req/day, no key needed for basic)
-        url = f"{IP_GEOLOCATION_API_URL}/{ip_address}/json/"
-        if IP_GEOLOCATION_API_KEY:
-            url += f"?key={IP_GEOLOCATION_API_KEY}"
-
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("error"):
-                return _simulate_ip_geolocation(ip_address, note=data.get("reason", "API error"))
-
-            country_code = (data.get("country_code") or "").upper()
-            # Determine IP risk level
-            ip_risk = "LOW"
-            if country_code in [c.upper() for c in SANCTIONED]:
-                ip_risk = "VERY_HIGH"
-            elif country_code in [c.upper() for c in FATF_BLACK]:
-                ip_risk = "HIGH"
-            elif country_code in [c.upper() for c in FATF_GREY]:
-                ip_risk = "MEDIUM"
-
-            return {
-                "country": data.get("country_name", "Unknown"),
-                "country_code": country_code,
-                "city": data.get("city", ""),
-                "region": data.get("region", ""),
-                "latitude": data.get("latitude"),
-                "longitude": data.get("longitude"),
-                "org": data.get("org", ""),
-                "asn": data.get("asn", ""),
-                "is_vpn": False,  # Basic API doesn't detect VPN
-                "is_proxy": False,
-                "is_tor": False,
-                "risk_level": ip_risk,
-                "source": "ipapi",
-                "api_status": "live",
-                "checked_at": datetime.utcnow().isoformat()
-            }
-        else:
-            return _simulate_ip_geolocation(ip_address, note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"IP Geolocation error: {e}")
-        return _simulate_ip_geolocation(ip_address, note=f"API error — simulated")
-
-
-def _simulate_ip_geolocation(ip_address, note="Simulated result"):
-    """Fallback: simulated IP geolocation. C-04: BLOCKED in production."""
-    if is_production():
-        logger.error("BLOCKED: Mock IP geolocation attempted in production")
-        return {"country": "Unknown", "country_code": "XX", "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
-    import random
-    countries = [
-        ("Mauritius", "MU"), ("United Kingdom", "GB"), ("France", "FR"),
-        ("India", "IN"), ("South Africa", "ZA"), ("Singapore", "SG")
-    ]
-    country, code = random.choice(countries)
-    return {
-        "country": country,
-        "country_code": code,
-        "city": "Simulated City",
-        "region": "",
-        "is_vpn": random.random() < 0.05,
-        "is_proxy": random.random() < 0.03,
-        "is_tor": False,
-        "risk_level": "LOW",
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "checked_at": datetime.utcnow().isoformat()
-    }
-
-
-# ══════════════════════════════════════════════════════════
-# SUMSUB KYC / IDENTITY VERIFICATION
-# ══════════════════════════════════════════════════════════
-
-def _sumsub_sign(method, url_path, body=b""):
-    """
-    Create HMAC-SHA256 signature for Sumsub API requests.
-    Returns headers dict with X-App-Token, X-App-Access-Ts, X-App-Access-Sig.
-    """
-    ts = str(int(time.time()))
-    # Build signature payload: ts + method + path + body
-    sig_payload = ts.encode("utf-8") + method.upper().encode("utf-8") + url_path.encode("utf-8")
-    if body:
-        sig_payload += body if isinstance(body, bytes) else body.encode("utf-8")
-    sig = hmac.new(
-        SUMSUB_SECRET_KEY.encode("utf-8"),
-        sig_payload,
-        hashlib.sha256
-    ).hexdigest()
-    return {
-        "X-App-Token": SUMSUB_APP_TOKEN,
-        "X-App-Access-Ts": ts,
-        "X-App-Access-Sig": sig,
-    }
-
-
-def sumsub_create_applicant(external_user_id, first_name=None, last_name=None,
-                            email=None, phone=None, dob=None, country=None,
-                            level_name=None):
-    """
-    Create a Sumsub applicant for KYC verification.
-    Returns: { applicant_id, external_user_id, status, source }
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        logger.info(f"Sumsub: No credentials — simulating applicant creation for '{external_user_id}'")
-        return _simulate_sumsub_applicant(external_user_id, first_name, last_name)
-
-    try:
-        level = level_name or SUMSUB_LEVEL_NAME
-        url_path = f"/resources/applicants?levelName={level}"
-        body_data = {
-            "externalUserId": external_user_id,
-        }
-        if first_name or last_name:
-            fixed_info = {}
-            if first_name:
-                fixed_info["firstName"] = first_name
-            if last_name:
-                fixed_info["lastName"] = last_name
-            if dob:
-                fixed_info["dob"] = dob
-            if country:
-                fixed_info["country"] = country
-            body_data["fixedInfo"] = fixed_info
-        if email:
-            body_data["email"] = email
-        if phone:
-            body_data["phone"] = phone
-
-        body_bytes = json.dumps(body_data).encode("utf-8")
-        headers = _sumsub_sign("POST", url_path, body_bytes)
-        headers["Content-Type"] = "application/json"
-
-        resp = requests.post(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            data=body_bytes,
-            timeout=15
-        )
-
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            applicant_id = data.get("id", "")
-            logger.info(f"Sumsub: Created applicant {applicant_id} for user {external_user_id}")
-            return {
-                "applicant_id": applicant_id,
-                "external_user_id": external_user_id,
-                "status": data.get("review", {}).get("reviewStatus", "init"),
-                "inspection_id": data.get("inspectionId", ""),
-                "level_name": level,
-                "created_at": data.get("createdAt", ""),
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            logger.warning(f"Sumsub create applicant failed: {resp.status_code} — {resp.text[:300]}")
-            # If applicant already exists, try to get existing
-            if resp.status_code == 409:
-                return sumsub_get_applicant_by_external_id(external_user_id)
-            return _simulate_sumsub_applicant(external_user_id, first_name, last_name,
-                                             note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub create applicant error: {e}")
-        return _simulate_sumsub_applicant(external_user_id, first_name, last_name,
-                                         note=f"Exception: {str(e)[:100]}")
-
-
-def sumsub_get_applicant_by_external_id(external_user_id):
-    """Retrieve an existing Sumsub applicant by external user ID."""
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        return _simulate_sumsub_applicant(external_user_id)
-
-    try:
-        url_path = f"/resources/applicants/-;externalUserId={external_user_id}/one"
-        headers = _sumsub_sign("GET", url_path)
-
-        resp = requests.get(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            return {
-                "applicant_id": data.get("id", ""),
-                "external_user_id": external_user_id,
-                "status": data.get("review", {}).get("reviewStatus", "init"),
-                "review_answer": data.get("review", {}).get("reviewResult", {}).get("reviewAnswer", ""),
-                "inspection_id": data.get("inspectionId", ""),
-                "level_name": data.get("requiredIdDocs", {}).get("docSets", [{}])[0].get("idDocSetType", "") if data.get("requiredIdDocs") else "",
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            return _simulate_sumsub_applicant(external_user_id,
-                                             note=f"Lookup returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub get applicant error: {e}")
-        return _simulate_sumsub_applicant(external_user_id, note=str(e)[:100])
-
-
-def sumsub_generate_access_token(external_user_id, level_name=None):
-    """
-    Generate an access token for the Sumsub WebSDK.
-    The client portal uses this token to launch the KYC widget.
-    Returns: { token, userId, source }
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        logger.info(f"Sumsub: No credentials — simulating access token for '{external_user_id}'")
-        return _simulate_sumsub_token(external_user_id)
-
-    try:
-        level = level_name or SUMSUB_LEVEL_NAME
-        url_path = f"/resources/accessTokens?userId={external_user_id}&levelName={level}"
-        headers = _sumsub_sign("POST", url_path)
-
-        resp = requests.post(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            logger.info(f"Sumsub: Generated access token for user {external_user_id}")
-            return {
-                "token": data.get("token", ""),
-                "user_id": external_user_id,
-                "level_name": level,
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            logger.warning(f"Sumsub token gen failed: {resp.status_code} — {resp.text[:300]}")
-            return _simulate_sumsub_token(external_user_id,
-                                         note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub token error: {e}")
-        return _simulate_sumsub_token(external_user_id, note=str(e)[:100])
-
-
-def sumsub_get_applicant_status(applicant_id):
-    """
-    Get the verification status of a Sumsub applicant.
-    Returns: { applicant_id, status, review_answer, verification_steps, source }
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        return _simulate_sumsub_status(applicant_id)
-
-    try:
-        # Get applicant data
-        url_path = f"/resources/applicants/{applicant_id}/one"
-        headers = _sumsub_sign("GET", url_path)
-
-        resp = requests.get(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            review = data.get("review", {})
-            review_result = review.get("reviewResult", {})
-
-            result = {
-                "applicant_id": applicant_id,
-                "external_user_id": data.get("externalUserId", ""),
-                "status": review.get("reviewStatus", "init"),
-                "review_answer": review_result.get("reviewAnswer", ""),
-                "rejection_labels": review_result.get("rejectLabels", []),
-                "moderation_comment": review_result.get("moderationComment", ""),
-                "created_at": data.get("createdAt", ""),
-                "source": "sumsub",
-                "api_status": "live",
-            }
-
-            # Also get verification steps
-            steps_url = f"/resources/applicants/{applicant_id}/requiredIdDocsStatus"
-            steps_headers = _sumsub_sign("GET", steps_url)
-            steps_resp = requests.get(
-                f"{SUMSUB_BASE_URL}{steps_url}",
-                headers=steps_headers,
-                timeout=10
-            )
-            if steps_resp.status_code == 200:
-                result["verification_steps"] = steps_resp.json()
-
-            return result
-        else:
-            logger.warning(f"Sumsub status check failed: {resp.status_code}")
-            return _simulate_sumsub_status(applicant_id,
-                                          note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub status error: {e}")
-        return _simulate_sumsub_status(applicant_id, note=str(e)[:100])
-
-
-def sumsub_add_document(applicant_id, doc_type, country, file_path=None, file_data=None, file_name="document.pdf"):
-    """
-    Add an identity document to a Sumsub applicant.
-    doc_type: PASSPORT, ID_CARD, DRIVERS, SELFIE, etc.
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        return {"status": "simulated", "message": "Sumsub not configured", "source": "simulated"}
-
-    try:
-        url_path = f"/resources/applicants/{applicant_id}/info/idDoc"
-        metadata = json.dumps({
-            "idDocType": doc_type,
-            "country": country,
-        })
-
-        # Read file content
-        content = None
-        if file_path and os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                content = f.read()
-        elif file_data:
-            content = base64.b64decode(file_data) if isinstance(file_data, str) else file_data
-
-        if not content:
-            return {"status": "error", "message": "No document content provided", "source": "sumsub"}
-
-        # Multipart form data — we need to sign without the body for multipart
-        headers = _sumsub_sign("POST", url_path)
-
-        files = {
-            "metadata": (None, metadata, "application/json"),
-            "content": (file_name, content, "application/octet-stream"),
-        }
-
-        resp = requests.post(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            files=files,
-            timeout=30
-        )
-
-        if resp.status_code in (200, 201):
-            logger.info(f"Sumsub: Added {doc_type} document for applicant {applicant_id}")
-            return {
-                "status": "uploaded",
-                "doc_type": doc_type,
-                "applicant_id": applicant_id,
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            logger.warning(f"Sumsub doc upload failed: {resp.status_code} — {resp.text[:200]}")
-            return {
-                "status": "error",
-                "message": f"Upload failed: {resp.status_code}",
-                "source": "sumsub",
-            }
-
-    except Exception as e:
-        logger.error(f"Sumsub doc upload error: {e}")
-        return {"status": "error", "message": str(e)[:100], "source": "sumsub"}
-
-
-def sumsub_verify_webhook(body_bytes, signature_header):
-    """Verify a Sumsub webhook signature (HMAC-SHA256)."""
-    if not SUMSUB_WEBHOOK_SECRET:
-        if ENVIRONMENT == "production":
-            logger.error("Sumsub webhook secret not configured in production — REJECTING webhook")
-            return False
-        logger.warning("Sumsub webhook secret not configured — accepting in dev mode only")
-        return True
-
-    expected = hmac.new(
-        SUMSUB_WEBHOOK_SECRET.encode("utf-8"),
-        body_bytes,
-        hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature_header or "")
-
-
-# ── Sumsub simulation fallbacks ──────────────────────────
-
-def _simulate_sumsub_applicant(external_user_id, first_name=None, last_name=None, note="No Sumsub credentials configured"):
-    """Fallback: simulated applicant creation. C-04: BLOCKED in production."""
-    if is_production():
-        logger.error("BLOCKED: Mock Sumsub applicant creation attempted in production")
-        return {"applicant_id": None, "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
-    sim_id = f"sim_{hashlib.md5(external_user_id.encode()).hexdigest()[:16]}"
-    return {
-        "applicant_id": sim_id,
-        "external_user_id": external_user_id,
-        "status": "init",
-        "inspection_id": f"insp_{sim_id[:12]}",
-        "level_name": SUMSUB_LEVEL_NAME,
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "created_at": datetime.utcnow().isoformat(),
-    }
-
-
-def _simulate_sumsub_token(external_user_id, note="No Sumsub credentials configured"):
-    """Fallback: simulated access token. C-04: BLOCKED in production."""
-    if is_production():
-        logger.error("BLOCKED: Mock Sumsub token generation attempted in production")
-        return {"token": None, "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
-    token = base64.b64encode(f"sim_token_{external_user_id}_{int(time.time())}".encode()).decode()
-    return {
-        "token": token,
-        "user_id": external_user_id,
-        "level_name": SUMSUB_LEVEL_NAME,
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-    }
-
-
-def _simulate_sumsub_status(applicant_id, note="No Sumsub credentials configured"):
-    """Fallback: simulated verification status. C-04: BLOCKED in production."""
-    if is_production():
-        logger.error("BLOCKED: Mock Sumsub status check attempted in production")
-        return {"applicant_id": applicant_id, "status": "blocked", "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
-    import random
-    statuses = ["init", "pending", "completed"]
-    answers = ["", "", "GREEN"]
-    idx = random.randint(0, 2)
-    return {
-        "applicant_id": applicant_id,
-        "external_user_id": "",
-        "status": statuses[idx],
-        "review_answer": answers[idx],
-        "rejection_labels": [],
-        "moderation_comment": "",
-        "verification_steps": {
-            "IDENTITY": {"reviewResult": {"reviewAnswer": answers[idx]} if idx == 2 else {}},
-            "SELFIE": {"reviewResult": {"reviewAnswer": answers[idx]} if idx == 2 else {}},
-        },
-        "source": "simulated",
-        "api_status": "simulated",
-        "note": note,
-        "created_at": datetime.utcnow().isoformat(),
-    }
-
-
-def run_full_screening(application_data, directors, ubos, client_ip=None):
-    """
-    Run all screening agents in parallel against an application.
-    Uses ThreadPoolExecutor for concurrent HTTP API calls.
-    """
-    company_name = application_data.get("company_name", "")
-    country = application_data.get("country", "")
-
-    report = {
-        "screened_at": datetime.utcnow().isoformat(),
-        "company_screening": {},
-        "director_screenings": [],
-        "ubo_screenings": [],
-        "ip_geolocation": {},
-        "overall_flags": [],
-        "total_hits": 0,
-    }
-
-    # Map jurisdiction
-    jurisdiction = None
-    if country:
-        jur_map = {"mauritius": "mu", "united kingdom": "gb", "uk": "gb", "france": "fr",
-                   "singapore": "sg", "india": "in", "hong kong": "hk", "usa": "us",
-                   "united states": "us", "south africa": "za", "germany": "de"}
-        jurisdiction = jur_map.get(country.lower())
-
-    # ── Parallel API calls ──
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        # Submit all screening tasks concurrently
-        company_future = executor.submit(lookup_opencorporates, company_name, jurisdiction)
-        company_sanctions_future = executor.submit(screen_sumsub_aml, company_name, entity_type="Company")
-
-        director_futures = []
-        for d in directors:
-            d_name = d.get("full_name", "")
-            if d_name:
-                f = executor.submit(screen_sumsub_aml, d_name, nationality=d.get("nationality"), entity_type="Person")
-                director_futures.append((d, f))
-
-        ubo_futures = []
-        for u in ubos:
-            u_name = u.get("full_name", "")
-            if u_name:
-                f = executor.submit(screen_sumsub_aml, u_name, nationality=u.get("nationality"), entity_type="Person")
-                ubo_futures.append((u, f))
-
-        ip_future = executor.submit(geolocate_ip, client_ip) if client_ip else None
-
-        kyc_futures = []
-        all_persons = [(d, "director") for d in directors] + [(u, "ubo") for u in ubos]
-        for person, ptype in all_persons:
-            p_name = person.get("full_name", "")
-            if not p_name:
-                continue
-            ext_id = person.get("email", "") or f"{ptype}_{hashlib.md5(p_name.encode()).hexdigest()[:12]}"
-            parts = p_name.strip().split(" ", 1)
-            first = parts[0] if parts else ""
-            last = parts[1] if len(parts) > 1 else ""
-            f = executor.submit(sumsub_create_applicant,
-                external_user_id=ext_id, first_name=first, last_name=last,
-                country=person.get("nationality", ""))
-            kyc_futures.append((person, ptype, p_name, f))
-
-        # ── Collect results ──
-        report["company_screening"] = company_future.result(timeout=30)
-        if not report["company_screening"]["found"]:
-            report["overall_flags"].append(f"Company '{company_name}' not found in corporate registry")
-
-        company_sanctions = company_sanctions_future.result(timeout=30)
-        report["company_screening"]["sanctions"] = company_sanctions
-        if company_sanctions["matched"]:
-            report["overall_flags"].append(f"Company '{company_name}' has sanctions/watchlist matches")
-            report["total_hits"] += len(company_sanctions["results"])
-
-        for d, f in director_futures:
-            d_name = d.get("full_name", "")
-            screening = f.result(timeout=30)
-            result = {
-                "person_name": d_name, "person_type": "director",
-                "nationality": d.get("nationality", ""), "declared_pep": d.get("is_pep", "No"),
-                "screening": screening,
-            }
-            if screening["matched"]:
-                report["overall_flags"].append(f"Director '{d_name}' has sanctions/PEP matches")
-                report["total_hits"] += len(screening["results"])
-                for hit in screening["results"]:
-                    if hit.get("is_pep") and d.get("is_pep", "No") != "Yes":
-                        result["undeclared_pep"] = True
-                        report["overall_flags"].append(f"Director '{d_name}' may be undeclared PEP")
-            report["director_screenings"].append(result)
-
-        for u, f in ubo_futures:
-            u_name = u.get("full_name", "")
-            screening = f.result(timeout=30)
-            result = {
-                "person_name": u_name, "person_type": "ubo",
-                "nationality": u.get("nationality", ""), "ownership_pct": u.get("ownership_pct", 0),
-                "declared_pep": u.get("is_pep", "No"), "screening": screening,
-            }
-            if screening["matched"]:
-                report["overall_flags"].append(f"UBO '{u_name}' has sanctions/PEP matches")
-                report["total_hits"] += len(screening["results"])
-                for hit in screening["results"]:
-                    if hit.get("is_pep") and u.get("is_pep", "No") != "Yes":
-                        result["undeclared_pep"] = True
-                        report["overall_flags"].append(f"UBO '{u_name}' may be undeclared PEP")
-            report["ubo_screenings"].append(result)
-
-        if ip_future:
-            report["ip_geolocation"] = ip_future.result(timeout=30)
-            ip_geo = report["ip_geolocation"]
-            if ip_geo.get("risk_level") in ("HIGH", "VERY_HIGH"):
-                report["overall_flags"].append(f"Client IP geolocated to high-risk jurisdiction: {ip_geo.get('country')}")
-            if ip_geo.get("is_vpn"):
-                report["overall_flags"].append("Client IP detected as VPN")
-            if ip_geo.get("is_proxy"):
-                report["overall_flags"].append("Client IP detected as proxy")
-            if ip_geo.get("is_tor"):
-                report["overall_flags"].append("Client IP detected as Tor exit node")
-
-        report["kyc_applicants"] = []
-        for person, ptype, p_name, f in kyc_futures:
-            applicant = f.result(timeout=30)
-            applicant["person_name"] = p_name
-            applicant["person_type"] = ptype
-            report["kyc_applicants"].append(applicant)
-            if applicant.get("review_answer") == "RED":
-                report["overall_flags"].append(f"Sumsub KYC FAILED for {ptype} '{p_name}'")
-                report["total_hits"] += 1
-
-    return report
-
-
-# ══════════════════════════════════════════════════════════
-# RATE LIMITING
-# ══════════════════════════════════════════════════════════
-
-class RateLimiter:
-    """In-memory sliding window rate limiter. Keyed by IP + endpoint."""
-    def __init__(self):
-        self._attempts = {}  # key → list of timestamps
-
-    def is_limited(self, key, max_attempts=10, window_seconds=900):
-        """Returns True if the key has exceeded max_attempts in the window."""
-        now = time.time()
-        cutoff = now - window_seconds
-        if key not in self._attempts:
-            self._attempts[key] = []
-        # Prune old entries
-        self._attempts[key] = [t for t in self._attempts[key] if t > cutoff]
-        if len(self._attempts[key]) >= max_attempts:
-            return True
-        self._attempts[key].append(now)
-        return False
-
-    def remaining(self, key, max_attempts=10, window_seconds=900):
-        """Returns how many attempts remain for the key."""
-        now = time.time()
-        cutoff = now - window_seconds
-        attempts = [t for t in self._attempts.get(key, []) if t > cutoff]
-        return max(0, max_attempts - len(attempts))
-
-    def reset(self, key):
-        """Reset rate limit for a key (e.g., after successful login)."""
-        self._attempts.pop(key, None)
-
-# Global rate limiter instance
-rate_limiter = RateLimiter()
-
-
-# ══════════════════════════════════════════════════════════
-# TORNADO REQUEST HANDLERS
-# ══════════════════════════════════════════════════════════
-
-class BaseHandler(tornado.web.RequestHandler):
-    def prepare(self):
-        """Enforce HTTPS in production via X-Forwarded-Proto from reverse proxy."""
-        if ENVIRONMENT == "production":
-            forwarded_proto = self.request.headers.get("X-Forwarded-Proto", "")
-            if forwarded_proto == "http":
-                # Redirect HTTP to HTTPS
-                url = self.request.full_url().replace("http://", "https://", 1)
-                self.redirect(url, permanent=True)
-                return
-
-    def check_rate_limit(self, endpoint_key, max_attempts=30, window_seconds=60):
-        """
-        C-06 FIX: Check rate limit for the current request.
-        Returns True if the request should proceed, False if rate-limited.
-        """
-        ip = self.get_client_ip()
-        user = self.get_current_user_token()
-        user_id = user.get("sub", "") if user else ""
-
-        # Per-IP rate limit
-        ip_key = f"{endpoint_key}:ip:{ip}"
-        if rate_limiter.is_limited(ip_key, max_attempts=max_attempts, window_seconds=window_seconds):
-            self.set_status(429)
-            self.write({"error": f"Rate limit exceeded for {endpoint_key}. Try again later.", "retry_after": window_seconds})
-            return False
-
-        # Per-user rate limit (if authenticated)
-        if user_id:
-            user_key = f"{endpoint_key}:user:{user_id}"
-            if rate_limiter.is_limited(user_key, max_attempts=max_attempts, window_seconds=window_seconds):
-                self.set_status(429)
-                self.write({"error": f"Rate limit exceeded. Try again later.", "retry_after": window_seconds})
-                return False
-
-        return True
-
-    def set_default_headers(self):
-        # CORS — in production, MUST set ALLOWED_ORIGIN env var to your domain
-        allowed_origin = os.environ.get("ALLOWED_ORIGIN", "")
-        if not allowed_origin:
-            if ENVIRONMENT == "production":
-                # In production, no CORS header = same-origin only (most secure)
-                logger.warning("ALLOWED_ORIGIN not set in production — defaulting to same-origin only")
-            else:
-                allowed_origin = "*"  # Permissive in dev only
-        if allowed_origin:
-            self.set_header("Access-Control-Allow-Origin", allowed_origin)
-        self.set_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-        self.set_header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-CSRF-Token,X-Idempotency-Key")
-        self.set_header("Access-Control-Max-Age", "3600")
-        self.set_header("Content-Type", "application/json")
-        # Security headers — always on
-        self.set_header("X-Content-Type-Options", "nosniff")
-        self.set_header("X-Frame-Options", "DENY")
-        self.set_header("X-XSS-Protection", "1; mode=block")
-        self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
-        # HSTS — always in production (tells browsers to only use HTTPS)
-        if ENVIRONMENT == "production":
-            self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
-        # Content Security Policy
-        csp = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; "
-            "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
-            "img-src 'self' data: blob:; "
-            "connect-src 'self'; "
-            "frame-ancestors 'none'"
-        )
-        self.set_header("Content-Security-Policy", csp)
-        self.set_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
-
-    def issue_csrf_token(self):
-        """Issue a CSRF token as a secure cookie. Call on successful login."""
-        csrf_token = secrets.token_hex(32)
-        self.set_cookie(
-            "csrf_token", csrf_token,
-            httponly=False,  # Must be readable by JS to send in header
-            secure=(ENVIRONMENT == "production"),
-            samesite="Strict",
-            path="/",
-        )
-        return csrf_token
-
-    def options(self, *args):
-        self.set_status(204)
-        self.finish()
-
-    def check_xsrf_cookie(self):
-        """
-        CSRF protection: double-submit cookie pattern.
-        - Bearer token requests: CSRF-exempt (token proves authentication)
-        - Webhook endpoints: CSRF-exempt (use HMAC signature validation)
-        - Auth endpoints (login/register): CSRF-exempt (no session exists yet)
-        - Cookie-based requests: REQUIRE X-CSRF-Token header matching csrf_token cookie
-        """
-        # Bearer token auth is inherently CSRF-safe
-        if self.request.headers.get("Authorization", "").startswith("Bearer "):
-            return
-        # Webhook endpoints use HMAC signatures, not cookies
-        if "/webhook" in self.request.uri:
-            return
-        # Auth endpoints (login, register) are pre-session — no CSRF token exists yet
-        # These are protected by rate limiting instead
-        _csrf_exempt_paths = (
-            "/api/auth/officer/login",
-            "/api/auth/client/login",
-            "/api/auth/client/register",
-            "/api/health",
-        )
-        if self.request.uri in _csrf_exempt_paths:
-            return
-        # OPTIONS preflight requests don't need CSRF
-        if self.request.method == "OPTIONS":
-            return
-        # For state-changing methods with cookie auth, enforce CSRF
-        if self.request.method in ("POST", "PUT", "PATCH", "DELETE"):
-            csrf_cookie = self.get_cookie("csrf_token", None)
-            csrf_header = self.request.headers.get("X-CSRF-Token", "")
-            if not csrf_cookie or not csrf_header:
-                raise tornado.web.HTTPError(403, reason="CSRF token missing")
-            if not hmac.compare_digest(csrf_cookie, csrf_header):
-                raise tornado.web.HTTPError(403, reason="CSRF token mismatch")
-            return
-        # GET/HEAD are safe methods — no CSRF check needed
-
-    def get_json(self):
-        try:
-            return json.loads(self.request.body)
-        except Exception:
-            return {}
-
-    def get_current_user_token(self):
-        auth = self.request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            return decode_token(auth[7:])
-        return None
-
-    def require_auth(self, roles=None):
-        user = self.get_current_user_token()
-        if not user:
-            self.set_status(401)
-            self.write({"error": "Authentication required"})
-            return None
-        if roles and user.get("role") not in roles:
-            self.set_status(403)
-            self.write({"error": "Insufficient permissions"})
-            return None
-        return user
-
-    def get_client_ip(self):
-        return self.request.headers.get("X-Real-IP", self.request.remote_ip)
-
-    def success(self, data, status=200):
-        self.set_status(status)
-        self.write(json.dumps(data, default=str))
-
-    def error(self, message, status=400):
-        self.set_status(status)
-        self.write({"error": message})
-
-    def log_audit(self, user, action, target, detail, db=None):
-        own_db = db is None
-        if own_db:
-            db = get_db()
-        db.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-            (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip())
-        )
-        db.commit()
-        if own_db:
-            db.close()
-
-    def check_app_ownership(self, user, app):
-        """Returns True if user is allowed to access this application."""
-        if user.get("type") == "client" and app["client_id"] != user["sub"]:
-            self.error("Unauthorized", 403)
-            return False
-        return True
-
-    def write_error(self, status_code, **kwargs):
-        """Cross-cutting: Safe error responses — no stack traces in production."""
-        if ENVIRONMENT == "production":
-            self.write({"error": self._reason or "Internal server error", "status": status_code})
-        else:
-            # In dev, include more detail for debugging
-            import traceback
-            error_detail = ""
-            if "exc_info" in kwargs:
-                error_detail = traceback.format_exception(*kwargs["exc_info"])[-1].strip()
-            self.write({"error": self._reason or "Internal server error", "status": status_code, "detail": error_detail})
+from screening import (
+    screen_sumsub_aml, _simulate_aml_screen,
+    lookup_opencorporates, _simulate_company_lookup,
+    geolocate_ip, _simulate_ip_geolocation,
+    _sumsub_sign, sumsub_create_applicant, sumsub_get_applicant_by_external_id,
+    sumsub_generate_access_token, sumsub_get_applicant_status,
+    sumsub_add_document, sumsub_verify_webhook,
+    _simulate_sumsub_applicant, _simulate_sumsub_token, _simulate_sumsub_status,
+    run_full_screening,
+)
+
+# Sprint 3.5: BaseHandler extracted to base_handler.py to reduce server.py concentration risk
+from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db  # noqa: F401
 
 
 # ── Health Check ──
 class HealthHandler(BaseHandler):
     def get(self):
         """Enhanced health check with database connectivity and dependency status."""
+        from branding import BRAND
         health = {
             "status": "ok",
-            "service": "ARIE Finance API",
+            "service": f"{BRAND['backoffice_name']} API",
+            "platform": BRAND["portal_name"],
             "version": "1.0.0",
             "environment": ENV,
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -1704,6 +473,7 @@ class OfficerLoginHandler(BaseHandler):
         rate_limiter.reset(rl_key)  # Reset on successful login
         token = create_token(user["id"], user["role"], user["full_name"], "officer")
         csrf_token = self.issue_csrf_token()
+        self.issue_session_cookie(token)  # Sprint 3.5: httpOnly cookie auth
         self.log_audit({"sub": user["id"], "name": user["full_name"], "role": user["role"]},
                        "Login", "System", f"Officer login from {ip}")
         self.success({
@@ -1742,6 +512,7 @@ class ClientLoginHandler(BaseHandler):
 
         token = create_token(client["id"], "client", client["company_name"] or email, "client")
         csrf_token = self.issue_csrf_token()
+        self.issue_session_cookie(token)  # Sprint 3.5: httpOnly cookie auth
         self.success({
             "token": token,
             "csrf_token": csrf_token,
@@ -1805,6 +576,21 @@ class MeHandler(BaseHandler):
         if not user:
             return
         self.success({"id": user["sub"], "name": user["name"], "role": user["role"], "type": user["type"]})
+
+
+class LogoutHandler(BaseHandler):
+    """POST /api/auth/logout — Revoke token and clear session cookie."""
+    def post(self):
+        user = self.get_current_user_token()
+        if user:
+            # Revoke the JWT so it can't be reused even before expiry
+            jti = user.get("jti")
+            exp = user.get("exp")
+            if jti and exp:
+                token_revocation_list.revoke(jti, exp)
+            self.log_audit(user, "Logout", "System", f"User {user.get('name', '')} logged out")
+        self.clear_session_cookie()
+        self.success({"status": "logged_out"})
 
 
 # ══════════════════════════════════════════════════════════
@@ -3728,53 +2514,471 @@ class ComplianceMemoHandler(BaseHandler):
         ubos = [dict(u) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
         documents = [dict(d) for d in db.execute("SELECT * FROM documents WHERE application_id=?", (real_id,)).fetchall()]
 
-        # Generate memo structure
-        memo = {
-            "application_ref": app["ref"],
-            "company_name": app["company_name"],
-            "memo_generated": datetime.now().isoformat(),
-            "client_overview": {
-                "company_name": app["company_name"],
-                "entity_type": app["entity_type"],
-                "country": app["country"],
-                "sector": app["sector"],
-                "brn": app["brn"]
-            },
-            "ownership_structure": {
-                "structure_description": app["ownership_structure"],
-                "directors_count": len(directors),
-                "ubos_count": len(ubos),
-                "directors": [{"name": d["full_name"], "nationality": d["nationality"], "is_pep": d["is_pep"]} for d in directors],
-                "ubos": [{"name": u["full_name"], "ownership_pct": u["ownership_pct"], "is_pep": u["is_pep"]} for u in ubos]
-            },
-            "screening_results": {
-                "sanctions_status": "No matches" if not any(d["is_pep"]=="Yes" for d in directors + ubos) else "Potential matches - Review required",
-                "pep_matches": [d["full_name"] for d in directors if d["is_pep"]=="Yes"] + [u["full_name"] for u in ubos if u["is_pep"]=="Yes"],
-                "documents_verified": len([d for d in documents if d["verification_status"]=="verified"]),
-                "documents_total": len(documents)
-            },
-            "risk_indicators": {
-                "risk_score": app["risk_score"],
-                "risk_level": app["risk_level"],
-                "onboarding_lane": app["onboarding_lane"]
-            },
-            "ai_recommendation": "Approve" if app["risk_level"]=="LOW" else "Review required" if app["risk_level"] in ("MEDIUM","HIGH") else "Escalate",
-            "review_checklist": [
-                "✓ Company identity verified",
-                "✓ UBO chain mapped",
-                "✓ PEP screening completed",
-                "✓ Adverse media review conducted",
-                "✓ Source of funds verified",
-                "✓ Business model plausibility confirmed"
-            ]
-        }
+        # Build compliance memo (pure computation — extracted to memo_handler.py)
+        memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(app, directors, ubos, documents)
+        rule_violations = rule_engine_result.get("violations", [])
+
+        # Store memo in compliance_memos table
+        rule_violations_json = json.dumps(rule_violations) if rule_violations else None
+        memo_json = json.dumps(memo)
+        try:
+            db.execute(
+                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
+                 validation_result["quality_score"], validation_result["validation_status"],
+                 supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json)
+            )
+        except Exception:
+            # Fallback if rule_violations column doesn't exist yet
+            try:
+                db.execute(
+                    "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
+                     validation_result["quality_score"], validation_result["validation_status"],
+                     supervisor_result["verdict"], supervisor_result["recommendation"])
+                )
+            except Exception:
+                try:
+                    db.execute(
+                        "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status) VALUES (?,?,?,?,?)",
+                        (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft")
+                    )
+                except Exception:
+                    pass
 
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"], f"Compliance memo generated for {app['company_name']}", self.get_client_ip()))
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"],
+                    "Compliance memo generated for " + app["company_name"]
+                    + " | Supervisor: " + supervisor_result["verdict"]
+                    + " | Quality: " + str(validation_result["quality_score"]) + "/10"
+                    + " | Rule Engine: " + rule_engine_result["engine_status"]
+                    + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
+                    self.get_client_ip()))
         db.commit()
         db.close()
 
         self.success(memo)
+
+
+class SupervisorRunHandler(BaseHandler):
+    """POST /api/applications/:id/supervisor/run — Trigger full supervisor pipeline for an application"""
+    async def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not SUPERVISOR_AVAILABLE:
+            return self.error("Supervisor framework not available", 503)
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        db.close()
+
+        data = self.get_json()
+        trigger_type = data.get("trigger_type", "onboarding") if data else "onboarding"
+
+        try:
+            supervisor = get_supervisor()
+            result = await supervisor.run_pipeline(
+                application_id=app["id"],
+                trigger_type=__import__("supervisor.schemas", fromlist=["TriggerType"]).TriggerType(trigger_type),
+                context_data={"app_ref": app["ref"], "company_name": app["company_name"]},
+                trigger_source=f"backoffice:{user['id']}",
+            )
+            self.success({
+                "pipeline_id": result.pipeline_id,
+                "status": result.status,
+                "agent_count": len(result.agent_outputs),
+                "failed_agents": len(result.failed_agents),
+                "contradictions": len(result.contradictions),
+                "rules_triggered": sum(1 for r in result.rule_evaluations if r.triggered),
+                "requires_human_review": result.requires_human_review,
+                "review_reasons": result.review_reasons,
+                "blocking_issues": result.blocking_issues,
+                "case_aggregate": result.case_aggregate.model_dump() if result.case_aggregate else None,
+                "contradictions_detail": [c.model_dump() for c in result.contradictions],
+                "triggered_rules": [r.model_dump() for r in result.rule_evaluations if r.triggered],
+                "escalations": [e.model_dump() for e in result.escalations],
+                "agent_results": [
+                    {
+                        "agent_type": at.value,
+                        "agent_name": out.agent_name,
+                        "status": out.status.value,
+                        "confidence": out.confidence_score,
+                        "findings_count": len(out.findings),
+                        "issues_count": len(out.detected_issues),
+                        "escalation_flag": out.escalation_flag,
+                        "recommendation": out.recommendation,
+                    }
+                    for at, out in result.agent_outputs.items()
+                ],
+                "failed_agent_details": result.failed_agents,
+            })
+        except Exception as e:
+            logger.error("Supervisor pipeline failed: %s", e, exc_info=True)
+            return self.error(f"Pipeline execution failed: {str(e)}", 500)
+
+
+class SupervisorResultHandler(BaseHandler):
+    """GET /api/applications/:id/supervisor/result — Get latest pipeline result"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        if not SUPERVISOR_AVAILABLE:
+            return self.error("Supervisor framework not available", 503)
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        db.close()
+
+        # Return from the pipeline cache
+        try:
+            from supervisor.api import _pipeline_cache
+            # Find the most recent pipeline for this application
+            latest = None
+            for pid, result in _pipeline_cache.items():
+                if result.application_id == app["id"]:
+                    if latest is None or (result.completed_at or "") > (latest.completed_at or ""):
+                        latest = result
+            if latest:
+                self.success(latest.to_dict())
+            else:
+                self.success({"status": "no_pipeline_run", "message": "No supervisor pipeline has been run for this application."})
+        except Exception as e:
+            return self.error(f"Failed to fetch result: {str(e)}", 500)
+
+
+class MemoValidateHandler(BaseHandler):
+    """POST /api/applications/:id/memo/validate — Run validation engine on stored memo"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        # Fetch latest memo for this application
+        memo_row = db.execute(
+            "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+
+        if not memo_row:
+            db.close()
+            return self.error("No compliance memo found for this application. Generate a memo first.", 404)
+
+        try:
+            memo_data = json.loads(memo_row["memo_data"])
+        except (json.JSONDecodeError, TypeError):
+            db.close()
+            return self.error("Memo data is corrupt or unreadable.", 500)
+
+        # Run validation engine
+        validation = validate_compliance_memo(memo_data)
+
+        # Store results
+        try:
+            db.execute(
+                "UPDATE compliance_memos SET quality_score = ?, validation_status = ?, validation_issues = ?, validation_run_at = ? WHERE id = ?",
+                (validation["quality_score"], validation["validation_status"], json.dumps(validation["issues"]), validation["validated_at"], memo_row["id"])
+            )
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Validate Memo", app_id, f"Memo validation: {validation['validation_status']} (score: {validation['quality_score']}/10)", self.get_client_ip()))
+            db.commit()
+        except Exception:
+            pass
+        db.close()
+
+        self.success(validation)
+
+
+class MemoApproveHandler(BaseHandler):
+    """POST /api/applications/:id/memo/approve — Approve memo (requires validation pass)"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        db = get_db()
+        memo_row = db.execute(
+            "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+
+        if not memo_row:
+            db.close()
+            return self.error("No compliance memo found.", 404)
+
+        # ── SERVER-SIDE 5-GATE APPROVAL ENFORCEMENT ──
+        # Gate 1: Check if memo is blocked by rule engine
+        is_blocked = memo_row.get("blocked") or False
+        block_reason = memo_row.get("block_reason") or ""
+        if is_blocked:
+            db.close()
+            return self.error(f"Cannot approve blocked memo. Block reason: {block_reason}", 400)
+
+        # Gate 2: Check validation status
+        val_status = memo_row.get("validation_status") or "pending"
+        if val_status == "fail":
+            db.close()
+            return self.error("Cannot approve memo with FAIL validation status. Fix issues and re-validate first.", 400)
+
+        # Gate 3: Check supervisor verdict from memo content
+        memo_content = memo_row.get("memo_content") or "{}"
+        try:
+            memo_data = json.loads(memo_content) if isinstance(memo_content, str) else memo_content
+        except (json.JSONDecodeError, TypeError):
+            memo_data = {}
+        metadata = memo_data.get("metadata", {})
+        supervisor_result = metadata.get("supervisor", {})
+        supervisor_verdict = supervisor_result.get("verdict", "")
+        can_approve = supervisor_result.get("can_approve", True)
+        requires_sco = supervisor_result.get("requires_sco_review", False)
+
+        if supervisor_verdict == "INCONSISTENT" and not can_approve:
+            db.close()
+            return self.error("Cannot approve memo: Supervisor verdict is INCONSISTENT with unresolved contradictions.", 400)
+
+        # Gate 4: SCO review enforcement — if requires_sco_review, only SCO or admin can approve
+        if requires_sco and user.get("role") not in ["sco", "admin"]:
+            db.close()
+            return self.error("This memo requires Senior Compliance Officer review before approval.", 403)
+
+        # Gate 5: Check rule engine violations
+        rule_engine = metadata.get("rule_engine", {})
+        rule_violations_data = rule_engine.get("violations", [])
+        if len(rule_violations_data) > 0 and supervisor_verdict == "INCONSISTENT":
+            db.close()
+            return self.error(f"Cannot approve memo with {len(rule_violations_data)} rule violation(s) and INCONSISTENT supervisor verdict.", 400)
+
+        now_ts = datetime.now().isoformat()
+        try:
+            db.execute(
+                "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ? WHERE id = ?",
+                (user.get("sub", ""), now_ts, user.get("sub", ""), memo_row["id"])
+            )
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Approve Memo", app_id, f"Compliance memo approved by {user.get('name', 'Unknown')}", self.get_client_ip()))
+            db.commit()
+        except Exception:
+            pass
+        db.close()
+
+        self.success({"status": "approved", "approved_by": user.get("name", ""), "approved_at": now_ts})
+
+
+class MemoValidationResultsHandler(BaseHandler):
+    """GET /api/applications/:id/memo/validation — Fetch latest validation results"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        memo_row = db.execute(
+            "SELECT quality_score, validation_status, validation_issues, validation_run_at, review_status, approved_by, approved_at, memo_version FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+        db.close()
+
+        if not memo_row:
+            return self.error("No memo found.", 404)
+
+        try:
+            issues = json.loads(memo_row["validation_issues"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            issues = []
+
+        self.success({
+            "quality_score": memo_row["quality_score"],
+            "validation_status": memo_row["validation_status"] or "pending",
+            "issues": issues,
+            "validated_at": memo_row["validation_run_at"],
+            "review_status": memo_row["review_status"],
+            "approved_by": memo_row["approved_by"],
+            "approved_at": memo_row["approved_at"],
+            "memo_version": memo_row["memo_version"]
+        })
+
+
+class MemoPDFDownloadHandler(BaseHandler):
+    """GET /api/applications/:id/memo/pdf — Generate and download compliance memo as PDF"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        if not HAS_PDF_GENERATOR:
+            return self.error("PDF generation not available. Install weasyprint.", 503)
+
+        db = get_db()
+        # Fetch application
+        app = db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)
+        ).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        real_id = app["id"]
+
+        # Fetch latest memo
+        memo_row = db.execute(
+            "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC LIMIT 1",
+            (real_id,)
+        ).fetchone()
+        if not memo_row:
+            db.close()
+            return self.error("No compliance memo found. Generate a memo first.", 404)
+
+        # Parse memo data
+        try:
+            memo_data = json.loads(memo_row["memo_data"]) if isinstance(memo_row["memo_data"], str) else memo_row["memo_data"]
+        except (json.JSONDecodeError, TypeError):
+            db.close()
+            return self.error("Memo data is corrupt or unparseable.", 500)
+
+        # Build validation/supervisor context from memo metadata
+        metadata = memo_data.get("metadata", {})
+        validation_result = {
+            "validation_status": memo_row.get("validation_status") or metadata.get("validation_status", "pending"),
+            "quality_score": memo_row.get("quality_score") or metadata.get("quality_score", 0),
+        }
+        supervisor_result = {
+            "verdict": memo_row.get("supervisor_status") or metadata.get("supervisor", {}).get("verdict", "N/A"),
+        }
+
+        approved_by = memo_row.get("approved_by")
+        approved_at = memo_row.get("approved_at")
+
+        # If approved_by is user ID, try to resolve to name
+        if approved_by:
+            approver = db.execute("SELECT email FROM users WHERE id = ?", (approved_by,)).fetchone()
+            if approver:
+                approved_by = approver["email"]
+
+        # Generate PDF
+        try:
+            pdf_bytes = generate_memo_pdf(
+                memo_data=memo_data,
+                application=dict(app),
+                validation_result=validation_result,
+                supervisor_result=supervisor_result,
+                approved_by=approved_by,
+                approved_at=approved_at,
+            )
+        except Exception as e:
+            logger.error("PDF generation failed for %s: %s", app_id, str(e))
+            db.close()
+            return self.error(f"PDF generation failed: {str(e)}", 500)
+
+        # Update pdf_generated_at timestamp
+        try:
+            db.execute(
+                "UPDATE compliance_memos SET pdf_generated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), memo_row["id"])
+            )
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                (user.get("sub",""), user.get("name",""), user.get("role",""), "Download Memo PDF", app["ref"],
+                 f"PDF generated for {app['company_name']} memo", self.get_client_ip())
+            )
+            db.commit()
+        except Exception:
+            pass
+        db.close()
+
+        # Return PDF as binary download
+        safe_ref = re.sub(r'[^a-zA-Z0-9_-]', '_', app.get("ref", "memo"))
+        filename = f"compliance_memo_{safe_ref}.pdf"
+        self.set_header("Content-Type", "application/pdf")
+        self.set_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.set_header("Content-Length", str(len(pdf_bytes)))
+        self.set_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.write(pdf_bytes)
+
+
+class MemoSupervisorHandler(BaseHandler):
+    """POST /api/applications/:id/memo/supervisor — Run supervisor on stored memo"""
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        memo_row = db.execute(
+            "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+
+        if not memo_row:
+            db.close()
+            return self.error("No compliance memo found for this application.", 404)
+
+        try:
+            memo_data = json.loads(memo_row["memo_data"])
+        except (json.JSONDecodeError, TypeError):
+            db.close()
+            return self.error("Memo data is corrupt or unreadable.", 500)
+
+        # Run memo supervisor
+        supervisor_result = run_memo_supervisor(memo_data)
+
+        # Update memo with supervisor results
+        try:
+            memo_data["supervisor"] = supervisor_result
+            memo_data["metadata"]["supervisor_status"] = supervisor_result["verdict"]
+            memo_data["metadata"]["supervisor_confidence"] = supervisor_result["supervisor_confidence"]
+            db.execute(
+                "UPDATE compliance_memos SET memo_data = ?, supervisor_status = ?, supervisor_summary = ? WHERE id = ?",
+                (json.dumps(memo_data), supervisor_result["verdict"], supervisor_result["recommendation"], memo_row["id"])
+            )
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Run Memo Supervisor", app_id,
+                        "Supervisor verdict: " + supervisor_result["verdict"] + " | Contradictions: " + str(supervisor_result["contradiction_count"]),
+                        self.get_client_ip()))
+            db.commit()
+        except Exception:
+            pass
+        db.close()
+
+        self.success(supervisor_result)
+
+
+class MemoSupervisorResultHandler(BaseHandler):
+    """GET /api/applications/:id/memo/supervisor — Get supervisor results for stored memo"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        memo_row = db.execute(
+            "SELECT memo_data FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            (app_id, app_id)
+        ).fetchone()
+        db.close()
+
+        if not memo_row:
+            return self.error("No memo found.", 404)
+
+        try:
+            memo_data = json.loads(memo_row["memo_data"])
+        except (json.JSONDecodeError, TypeError):
+            return self.error("Memo data is corrupt.", 500)
+
+        supervisor = memo_data.get("supervisor")
+        if not supervisor:
+            return self.error("Supervisor has not been run on this memo yet.", 404)
+
+        self.success(supervisor)
 
 
 # ══════════════════════════════════════════════════════════
@@ -4639,6 +3843,7 @@ def make_app():
         (r"/api/auth/officer/login", OfficerLoginHandler),
         (r"/api/auth/client/login", ClientLoginHandler),
         (r"/api/auth/client/register", ClientRegisterHandler),
+        (r"/api/auth/logout", LogoutHandler),
         (r"/api/auth/me", MeHandler),
 
         # Applications (more specific routes first)
@@ -4646,6 +3851,14 @@ def make_app():
         (r"/api/applications/([^/]+)/accept-pricing", PricingAcceptHandler),
         (r"/api/applications/([^/]+)/pre-approval-decision", PreApprovalDecisionHandler),
         (r"/api/applications/([^/]+)/submit-kyc", KYCSubmitHandler),
+        (r"/api/applications/([^/]+)/supervisor/run", SupervisorRunHandler),
+        (r"/api/applications/([^/]+)/supervisor/result", SupervisorResultHandler),
+        (r"/api/applications/([^/]+)/memo/validate", MemoValidateHandler),
+        (r"/api/applications/([^/]+)/memo/approve", MemoApproveHandler),
+        (r"/api/applications/([^/]+)/memo/validation", MemoValidationResultsHandler),
+        (r"/api/applications/([^/]+)/memo/pdf", MemoPDFDownloadHandler),
+        (r"/api/applications/([^/]+)/memo/supervisor/run", MemoSupervisorHandler),
+        (r"/api/applications/([^/]+)/memo/supervisor", MemoSupervisorResultHandler),
         (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
         (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
@@ -4762,8 +3975,9 @@ if __name__ == "__main__":
     # Initialize supervisor framework
     if SUPERVISOR_AVAILABLE:
         try:
-            setup_supervisor(DB_PATH)
-            logger.info("✅ Supervisor framework initialized")
+            supervisor_instance = setup_supervisor(DB_PATH)
+            register_all_executors(supervisor_instance, DB_PATH)
+            logger.info("✅ Supervisor framework initialized with %d agent executors", 10)
         except Exception as e:
             logger.error("Failed to initialize supervisor: %s", e)
             SUPERVISOR_AVAILABLE = False

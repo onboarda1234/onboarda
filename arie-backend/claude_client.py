@@ -5,11 +5,11 @@ Claude AI Integration Module for ARIE Finance Compliance Platform
 
 Powers 5 Onboarding AI agents in the compliance workflow:
 
-1. Identity & Document Integrity Agent — 66 automated checks, OCR, validation, registry cross-reference
-2. Corporate Structure & UBO Mapping Agent — Ownership chains, UBO identification, multi-layered entity detection, nominee/trust identification
-3. Business Model Plausibility Agent — Business story evaluation, sector alignment, transaction benchmarking, source of funds consistency
-4. FinCrime Screening Interpretation Agent — Sanctions/PEP/adverse media analysis, false positive reduction, hit severity ranking
-5. Compliance Memo & Risk Recommendation Agent — 5-dimension composite scoring, risk routing, compliance memo
+1. Identity & Document Integrity Agent — 66 automated checks, OCR, validation, cross-document consistency
+2. External Database Cross-Verification Agent — Registry lookups, OpenCorporates, Companies House, ADGM, DIFC verification
+3. FinCrime Screening Interpretation Agent — Sanctions/PEP/adverse media analysis, false positive reduction, hit severity ranking
+4. Corporate Structure & UBO Mapping Agent — Ownership chains, UBO identification, nominee detection, complex chain flagging
+5. Compliance Memo Agent — 7-dimension composite scoring, risk routing, compliance memo generation
 
 Usage:
     from claude_client import ClaudeClient
@@ -37,6 +37,8 @@ import json
 import logging
 import re
 import hashlib
+import time
+import random
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
@@ -97,12 +99,9 @@ if PYDANTIC_AVAILABLE:
         recommendation: str = Field(default="")
 
     class ComplianceMemoSchema(BaseModel):
-        """Agent 5 (Part 2): Compliance memo output validation."""
-        summary: str = Field(min_length=10)
-        risk_assessment: str = Field(default="")
-        key_findings: List[str] = Field(default_factory=list)
-        recommendation: str = Field(pattern=r'^(APPROVE|REVIEW|EDD|REJECT)$')
-        conditions: List[str] = Field(default_factory=list)
+        """Agent 5 (Part 2): Compliance memo output validation — regulator-grade 11-section structure."""
+        sections: Dict[str, Any] = Field(description="11 mandatory memo sections")
+        metadata: Dict[str, Any] = Field(description="Risk rating, score, confidence, recommendation, findings, conditions, checklist")
 
     # Map agent method names to their validation schemas
     _AGENT_SCHEMAS = {
@@ -240,7 +239,7 @@ class UsageTracker:
 
 
 def _mock_risk_score() -> Dict[str, Any]:
-    """Generate realistic mock risk score response (Agent 5: Compliance Memo & Risk Recommendation)."""
+    """Generate realistic mock risk score response (Agent 5: Compliance Memo)."""
     return {
         "overall_score": 58,
         "risk_level": "MEDIUM",
@@ -365,52 +364,125 @@ def _mock_interpret_fincrime_screening() -> Dict[str, Any]:
 
 
 def _mock_generate_compliance_memo() -> Dict[str, Any]:
-    """Generate realistic mock compliance memo (Agent 5: Compliance Memo & Risk Recommendation)."""
+    """Generate realistic mock compliance memo (Agent 5: Compliance Memo).
+    Follows the mandatory 11-section regulator-grade memo structure."""
     return {
-        "memo_html": """
-<h2>Compliance Assessment Memo</h2>
-<p><strong>Application Reference:</strong> APP-2025-00123</p>
-<p><strong>Company:</strong> Example Corp Ltd</p>
-<p><strong>Assessment Date:</strong> 2025-03-16</p>
-
-<h3>Executive Summary</h3>
-<p>The applicant represents a medium-risk entity with standard corporate governance
-and identifiable beneficial ownership. Key considerations include multi-layered ownership
-structures and minor document discrepancies resolved through additional verification.</p>
-
-<h3>Beneficial Ownership Assessment</h3>
-<p>Ultimate beneficial ownership has been identified through a three-layer structure,
-terminating with natural persons resident in FATF-compliant jurisdictions. Trust documentation
-and nominee arrangements require standard enhanced due diligence.</p>
-
-<h3>Compliance Recommendation</h3>
-<p>Approve with standard conditions including: (1) certified trust documentation,
-(2) beneficial ownership declaration, (3) standard ongoing monitoring.</p>
-        """,
-        "summary": "Medium-risk entity with identifiable UBO and standard governance. Recommend approval with conditions.",
-        "risk_rating": "MEDIUM",
-        "key_findings": [
-            "UBO chain successfully mapped to natural persons",
-            "Corporate structure complies with standard expectations",
-            "No adverse media or sanctions findings",
-            "All required documentation substantially complete",
-        ],
-        "recommendations": [
-            "Obtain certified copy of trust deed",
-            "Annual beneficial ownership update",
-            "Quarterly transaction monitoring",
-        ],
-        "review_checklist": [
-            "Company identity verified against registry",
-            "UBO chain mapped to natural persons",
-            "PEP screening completed - no matches",
-            "Adverse media review conducted",
-            "Source of funds verified through bank statements",
-            "Business model plausibility confirmed",
-            "Trust documentation reviewed",
-            "Sanctions screening completed",
-        ],
-        "approval_recommendation": "APPROVE_WITH_CONDITIONS",
+        "sections": {
+            "executive_summary": {
+                "title": "Executive Summary",
+                "content": "This memo presents the compliance assessment of Example Corp Ltd (BRN: C-12345), a private company limited by shares incorporated in Mauritius, operating in the fund administration and corporate services sector. The composite risk score of 52/100 (MEDIUM) reflects a balanced risk profile: the principal risk drivers are the presence of a Politically Exposed Person among the board of directors and the offshore jurisdictional classification of Mauritius, which together contribute approximately 23 points to the risk score. These are materially offset by clean sanctions screening across all major consolidated lists, a fully traceable beneficial ownership chain terminating in natural persons resident in FATF-compliant jurisdictions, and a plausible business model consistent with the entity's regulatory licences. Two of nine required documents remain outstanding (Regulatory Certificate and Structure Chart), representing a documentation gap that must be remedied within 14 business days. Recommendation: APPROVE WITH CONDITIONS — subject to PEP declaration, bank reference letter for the identified PEP, receipt of outstanding documents, and enhanced monitoring for the first 12 months."
+            },
+            "client_overview": {
+                "title": "Client Overview",
+                "content": "Entity Name: Example Corp Ltd. Business Registration Number: C-12345. Jurisdiction of Incorporation: Mauritius. Entity Type: Private Company Limited by Shares. Sector: Financial Services (Fund Administration and Corporate Services). Date of Application: 2025-03-16. Application Reference: APP-2025-00123. Stated Business Activity: The entity provides fund administration and corporate secretarial services to investment funds domiciled in Mauritius and the broader Indian Ocean region. This activity is consistent with the entity's FSC licence and the commercial profile of Mauritius as an international financial centre. Source of Funds: Operating revenue derived from management and administration fees charged to fund clients. The fee structure is commensurate with market norms for the sector and jurisdiction. Expected Transaction Volume: USD 500,000–2,000,000 per annum, which falls within the expected range for a fund administrator of this size. No unusual volume patterns identified at this stage, although limited trading history reduces the ability to benchmark against historical norms."
+            },
+            "ownership_and_control": {
+                "title": "Ownership & Control",
+                "structure_complexity": "Simple",
+                "control_statement": "John Smith exercises effective control as majority shareholder (75%) and is the sole UBO. The remaining 25% is held by Jane Doe, who also serves as a director. No shareholder agreements or special voting arrangements were disclosed that would alter effective control.",
+                "content": "The entity operates a simple, single-tier corporate structure with no intermediate holding entities, nominee arrangements, or bearer shares in issue. UBO: John Smith — 75% direct shareholding, British national, resident in the United Kingdom, not a PEP. Director 1: Jane Doe — Mauritian national, resident in Mauritius, not a PEP, also holds 25% shareholding. Director 2: Robert Lee — Singapore national, resident in Singapore, identified as a Politically Exposed Person (Foreign Government Official — Senior Trade Advisor, Singapore Ministry of Trade and Industry). Robert Lee holds no shareholding and exercises no ownership control, but his board position confers governance influence that warrants enhanced due diligence. The beneficial ownership chain was verified against the Mauritius Companies Division register via OpenCorporates. The register of directors and register of shareholders are mutually consistent. No discrepancies identified between declared and registered ownership."
+            },
+            "risk_assessment": {
+                "title": "Risk Assessment",
+                "sub_sections": {
+                    "jurisdiction_risk": {
+                        "title": "Jurisdiction Risk",
+                        "rating": "MEDIUM",
+                        "content": "Mauritius presents moderate jurisdictional risk. The jurisdiction was placed on the FATF grey list in February 2020 due to strategic deficiencies in its AML/CFT framework, but was removed in October 2021 following completion of its action plan. While Mauritius is currently compliant with FATF standards and is a member of the Eastern and Southern Africa Anti-Money Laundering Group (ESAAMLG), it retains characteristics of an offshore international financial centre — including a Global Business Licence regime, extensive double taxation treaty network, and significant cross-border capital flows — that elevate baseline risk. The entity's stated business of fund administration is consistent with the jurisdiction's commercial profile, which partially mitigates this concern. Risk weighting factor: 0.20. Contribution to composite score: +10 points."
+                    },
+                    "business_risk": {
+                        "title": "Business Risk",
+                        "rating": "MEDIUM",
+                        "content": "The financial services sector (fund administration) carries inherent regulatory and ML/TF risk due to the intermediary nature of the business and the volume of third-party funds under management. However, the entity holds a valid FSC licence, the stated business model — charging management and administration fees to investment fund clients — is plausible and consistent with the entity's incorporation documents, regulatory authorisations, and sector norms. Agent 4 (Corporate Structure & UBO Mapping) assessed the revenue model as consistent with market benchmarks. No indicators of shell company characteristics or front-company typologies were identified. Risk weighting factor: 0.15. Contribution to composite score: +8 points."
+                    },
+                    "transaction_risk": {
+                        "title": "Transaction Risk",
+                        "rating": "LOW",
+                        "content": "The expected annual transaction volume of USD 500,000–2,000,000 falls within normal parameters for a fund administrator of this size and jurisdiction. Source of funds is identified as management fee income, which is verifiable against client contracts and audited financial statements. No unusual transaction patterns, high-value single transactions, or rapid movement of funds were flagged. However, as the entity is newly onboarded, there is limited historical transaction data against which to benchmark, which modestly reduces confidence in forward-looking transaction risk assessment. Risk weighting factor: 0.10. Contribution to composite score: +3 points."
+                    },
+                    "ownership_risk": {
+                        "title": "Ownership Risk",
+                        "rating": "MEDIUM",
+                        "content": "Beneficial ownership has been identified to natural person level through a single-tier structure, which is a positive indicator. However, one director (Robert Lee) has been identified as a PEP (Foreign Government Official — Senior Trade Advisor, Singapore Ministry of Trade and Industry). Although Robert Lee holds no direct ownership and his PEP status relates to a government advisory role rather than a position with direct control over public funds, his board position confers governance influence and introduces the potential for corruption or undue influence risk that FATF Recommendation 12 requires enhanced scrutiny for. The PEP does not exercise effective control (which rests with John Smith at 75%), partially mitigating this concern. Risk weighting factor: 0.25. Contribution to composite score: +13 points."
+                    },
+                    "financial_crime_risk": {
+                        "title": "Financial Crime Risk",
+                        "rating": "LOW",
+                        "content": "Sanctions screening was conducted across UN Security Council Consolidated List, EU Consolidated Financial Sanctions List, OFAC SDN List, and HMT Consolidated List via OpenSanctions API. No matches were returned for any director, UBO, or the entity itself. Adverse media screening returned no relevant hits across global media databases. No connections to high-risk individuals, designated entities, or known criminal networks were identified. The entity's business model does not exhibit typology indicators associated with money laundering (layering through fund structures), terrorist financing, or proliferation financing. Risk weighting factor: 0.10. Contribution to composite score: +2 points."
+                    }
+                }
+            },
+            "screening_results": {
+                "title": "Screening Results",
+                "content": "Sanctions Screening: Conducted via OpenSanctions API against UN, EU, OFAC, and HMT consolidated lists. No matches returned for John Smith, Jane Doe, Robert Lee, or Example Corp Ltd. Screening timestamp: 2025-03-16T10:15:00Z. PEP Screening: One match confirmed — Robert Lee identified as a Foreign Government Official (Senior Trade Advisor, Singapore Ministry of Trade and Industry). This is a confirmed true positive based on verified identity data (full name, date of birth, nationality). PEP classification: Foreign PEP, Tier 2. PEP declaration form and bank reference letter have been requested. Adverse Media Screening: Comprehensive adverse media search conducted across global news databases and regulatory enforcement databases. No relevant hits identified for any associated individual or the entity itself. No historical regulatory actions, enforcement proceedings, or negative press coverage identified. Company Registry Verification: Example Corp Ltd verified as active on the Mauritius Companies Division register via OpenCorporates API. Registration number, registered office, director names, and incorporation date are all consistent with application data. Last annual return filed: 2024-12-15 — entity is current with filing obligations."
+            },
+            "document_verification": {
+                "title": "Document Verification",
+                "content": "Seven of nine required documents have been submitted and verified. Certificate of Incorporation: Verified — document is authentic, dated 2019-04-12, consistent with registry data. No discrepancies. Memorandum & Articles: Verified — standard form for Mauritius private company, consistent with declared share structure and objects. Register of Directors: Verified — lists all three directors consistent with application data. Register of Shareholders: Verified — shareholding percentages (John Smith 75%, Jane Doe 25%) match UBO declaration and M&A. Financial Statements: Verified — audited by Baker Tilly Mauritius for FY2024, unqualified opinion, revenue profile consistent with stated business activity, no going concern issues. Proof of Address: Verified — utility bill (CEB Mauritius) dated 2025-01-22, within 3-month window, address matches registered office. Board Resolution: Verified — resolution dated 2025-03-10 authorises application for account opening, signed by two directors. MISSING: Regulatory Certificate (FSC licence copy) — requested 2025-03-16, expected within 7 business days. This is a material gap as it prevents independent verification of the entity's regulatory status. MISSING: Structure Chart — requested 2025-03-16. While the ownership structure appears simple, a formal structure chart is required per policy. Overall documentation adequacy: 78% of required documents received and verified. Confidence in verified documents: 94%. The two missing documents do not prevent onboarding but must be received within 14 business days as a condition of approval."
+            },
+            "ai_explainability": {
+                "title": "AI Explainability Layer",
+                "content": "Risk scoring model: Onboarda Composite Risk Engine v2.1. Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group risk factor guidance. Overall risk score: 52/100 (MEDIUM). Model confidence: 87% — confidence is reduced from baseline 95% due to limited historical transaction data and two missing documents. Top 3 risk-increasing factors: (1) PEP presence among directors — weight: 0.25, contribution: +13 points. Robert Lee's PEP status triggers FATF Recommendation 12 enhanced scrutiny requirements. (2) Offshore jurisdiction classification — weight: 0.20, contribution: +10 points. Mauritius's IFC characteristics elevate cross-border risk baseline. (3) Financial services sector — weight: 0.15, contribution: +8 points. Fund administration carries inherent intermediary risk. Top 3 risk-decreasing factors: (1) Clean sanctions screening — weight: 0.20, contribution: -10 points. No matches across any consolidated list. (2) Verified beneficial ownership — weight: 0.15, contribution: -8 points. Single-tier structure with UBO identified to natural person. (3) Adequate documentation — weight: 0.10, contribution: -5 points. 7 of 9 documents verified with high confidence. Decision pathway: Data ingestion → Agent 1 (Identity & Document Integrity: 94% confidence) → Agent 2 (External Database Cross-Verification: registry confirmed) → Agent 3 (FinCrime Screening Interpretation: clear) → Agent 4 (Corporate Structure & UBO Mapping: simple structure, no concerns) → Agent 5 (Compliance Memo). Supervisor module: No inter-agent contradictions flagged. All agent outputs are mutually consistent. Limitations: Limited historical transaction data reduces forward-looking risk confidence. Two missing documents prevent complete verification."
+            },
+            "red_flags_and_mitigants": {
+                "title": "Red Flags & Mitigants",
+                "red_flags": [
+                    "Politically Exposed Person identified: Robert Lee (Director) holds a senior advisory position with the Singapore Ministry of Trade and Industry. While his role is advisory rather than executive, board membership confers governance influence and introduces corruption and undue influence risk per FATF Recommendation 12.",
+                    "Documentation gap: 2 of 9 required documents remain outstanding (Regulatory Certificate, Structure Chart). The absence of the FSC licence copy is a material gap that prevents independent verification of the entity's regulatory authorisation. Until received, there is residual risk that the entity's stated regulatory status cannot be confirmed.",
+                    "Limited trading history: As a new onboarding, there is no historical transaction data against which to benchmark stated expected volumes of USD 500K–2M per annum. This reduces confidence in forward-looking transaction risk assessment and creates a monitoring dependency."
+                ],
+                "mitigants": [
+                    "Robert Lee holds no ownership stake (0%) and does not exercise effective control, which rests with John Smith (75%). His PEP role is advisory rather than executive, reducing the likelihood of direct corruption exposure. PEP declaration and bank reference letter have been requested as conditions of approval.",
+                    "Outstanding documents have been formally requested with a 14-business-day deadline. Failure to provide will trigger automatic escalation. The 7 documents already verified are internally consistent and corroborated by external registry data, providing reasonable assurance of entity legitimacy.",
+                    "Transaction monitoring will be applied on a quarterly basis for the first 12 months, with automated alerts for volumes exceeding 150% of stated expectations. This compensates for the absence of historical benchmarking data and will enable early detection of anomalous patterns."
+                ]
+            },
+            "compliance_decision": {
+                "title": "Compliance Decision",
+                "decision": "APPROVE_WITH_CONDITIONS",
+                "content": "On the basis of the composite risk assessment (MEDIUM — 52/100), clean sanctions and adverse media screening, verified beneficial ownership to natural person level, and a plausible business model consistent with regulatory authorisations, this application is recommended for APPROVAL WITH CONDITIONS. The conditions reflect the residual risks identified — principally the PEP exposure, outstanding documentation, and limited transaction history. Conditions of approval: (1) Regulatory Certificate (FSC licence copy) and Structure Chart must be received within 14 business days of this memo date. Failure to comply will trigger automatic escalation to the Senior Compliance Officer. (2) Robert Lee must complete and sign a PEP declaration form within 14 business days. (3) A bank reference letter for Robert Lee must be obtained from his primary banking institution. (4) Enhanced monitoring (quarterly transaction review, annual full re-assessment) will apply for the first 12 months. Residual risk acknowledgement: The MLRO acknowledges that residual risk remains in relation to the PEP exposure and documentation gap. These risks are assessed as manageable within the conditions framework and do not warrant rejection at this stage. The case will be re-assessed immediately upon receipt of outstanding documents."
+            },
+            "ongoing_monitoring": {
+                "title": "Ongoing Monitoring & Review",
+                "content": "Monitoring tier: Enhanced — assigned due to the combination of PEP presence, offshore jurisdiction, and financial services sector classification. This tier is warranted even at MEDIUM composite risk given the specific risk drivers identified. Review frequency: Every 12 months (standard for MEDIUM risk entities), with an interim 6-month review triggered by the PEP condition. Next scheduled review: 2026-03-16. Transaction monitoring: Quarterly review of transaction patterns against stated business activity (USD 500K–2M per annum). Automated alerts configured for: (a) single transactions exceeding USD 100,000, (b) monthly aggregate volume exceeding USD 250,000, (c) transactions involving jurisdictions on the FATF grey/black list. Trigger events requiring immediate review: (1) Any change in beneficial ownership structure or directorship composition. (2) Adverse media alerts from continuous screening. (3) Change in Robert Lee's PEP status (e.g., change of government role, cessation of PEP status). (4) Transaction volumes exceeding 150% of stated expectations in any quarter. (5) Regulatory action, investigation, or enforcement proceedings against the entity or any associated person. (6) Failure to provide outstanding documents within the 14-business-day deadline."
+            },
+            "audit_and_governance": {
+                "title": "Audit & Governance",
+                "content": "This compliance onboarding memo was generated by the Onboarda AI Compliance Engine (Agent 5: Compliance Memo), version 2.1. All data inputs were validated through the 10-agent verification pipeline comprising document verification, corporate structure analysis, business plausibility assessment, FinCrime screening interpretation, and composite risk scoring. The supervisor module confirmed inter-agent consistency with no contradictions flagged. Document classification: CONFIDENTIAL — this document contains personal data subject to GDPR (as applicable) and Mauritius Data Protection Act 2017 requirements. Retention period: 7 years from date of generation or termination of business relationship, whichever is later, in accordance with FIAMLA 2002 (Mauritius) record-keeping requirements. Applicable compliance frameworks: Financial Intelligence and Anti-Money Laundering Act 2002 (Mauritius), AML/CFT Codes and Guidance Notes (FSC Mauritius), EU Sixth Anti-Money Laundering Directive (6AMLD), FATF 40 Recommendations (2012, as updated). Generated: 2025-03-16T14:30:00Z. Memo version: 1.0. Reviewed by: Information not provided — memo pending Senior Compliance Officer review."
+            }
+        },
+        "metadata": {
+            "risk_rating": "MEDIUM",
+            "risk_score": 52,
+            "confidence_level": 0.87,
+            "approval_recommendation": "APPROVE_WITH_CONDITIONS",
+            "key_findings": [
+                "Beneficial ownership traced to natural persons via single-tier structure — John Smith (75%, UK national) exercises effective control",
+                "PEP identified: Robert Lee (Director, 0% ownership) — Foreign Government Official, Singapore. Advisory role, no direct control.",
+                "Clean sanctions and adverse media screening across all consolidated lists via OpenSanctions API",
+                "7 of 9 required documents verified at 94% confidence; 2 outstanding documents formally requested",
+                "Business model assessed as plausible and consistent with FSC regulatory licence",
+                "Mauritius jurisdiction presents moderate risk due to IFC classification despite current FATF compliance"
+            ],
+            "conditions": [
+                "Outstanding documents (Regulatory Certificate, Structure Chart) to be received within 14 business days — escalation on non-compliance",
+                "PEP declaration form to be completed and signed by Robert Lee within 14 business days",
+                "Bank reference letter for Robert Lee to be obtained from primary banking institution",
+                "Enhanced monitoring (quarterly transaction review, annual re-assessment) for first 12 months"
+            ],
+            "review_checklist": [
+                "Company identity verified against Mauritius Companies Division register via OpenCorporates — confirmed active",
+                "UBO chain mapped to natural person: John Smith (75%, UK national) — effective control confirmed",
+                "PEP screening completed — 1 confirmed true positive: Robert Lee (Director, Foreign Government Official)",
+                "Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists",
+                "Adverse media review conducted — no relevant hits identified",
+                "Source of funds verified through audited financial statements (Baker Tilly, FY2024)",
+                "Business model plausibility confirmed by Agent 3 — consistent with FSC licence and sector norms",
+                "Document verification completed (7/9) — 2 documents outstanding with formal request issued",
+                "Composite risk score reviewed: 52/100 (MEDIUM) at 87% confidence",
+                "Compliance decision (APPROVE WITH CONDITIONS) aligned with risk assessment findings and conditions framework"
+            ]
+        }
     }
 
 
@@ -578,11 +650,52 @@ class ClaudeClient:
         # Pass 6: Length limit
         return result[:max_length]
 
+    # ── Sprint 3.5: Risk-Based Model Routing ─────────────────────
+
+    # Routing tiers (environment-overridable)
+    ROUTING_MODELS = {
+        "fast": os.environ.get("ARIE_MODEL_FAST", "claude-sonnet-4-6"),
+        "thorough": os.environ.get("ARIE_MODEL_THOROUGH", "claude-opus-4-6"),
+    }
+
+    def select_memo_model(self, risk_score: float, risk_level: str) -> tuple:
+        """
+        Sprint 3.5: Choose model for memo generation based on risk profile.
+
+        Routing logic:
+        - LOW risk (score < 40)            → Sonnet  (fast, cost-effective)
+        - MEDIUM risk (40 ≤ score < 55)    → Sonnet  (with validation gate)
+        - HIGH / VERY_HIGH (score ≥ 55)    → Opus    (thorough analysis)
+
+        Returns: (model_name, routing_reason)
+        """
+        level = (risk_level or "MEDIUM").upper()
+        score = risk_score or 50
+
+        if level in ("HIGH", "VERY_HIGH") or score >= 55:
+            model = self.ROUTING_MODELS["thorough"]
+            reason = f"HIGH/VERY_HIGH risk (score={score}, level={level}) → Opus for thorough analysis"
+        else:
+            model = self.ROUTING_MODELS["fast"]
+            reason = f"{level} risk (score={score}) → Sonnet for cost efficiency"
+
+        logger.info(
+            f"Model routing: {reason} | selected={model}",
+            extra={"structured_data": {
+                "event": "model_routing",
+                "risk_score": score,
+                "risk_level": level,
+                "selected_model": model,
+                "routing_reason": reason,
+            }}
+        )
+        return model, reason
+
     # ── Risk Scoring (Sonnet - fast, cheap) ─────────────────────
 
     def score_risk(self, application_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Agent 5 (Part 1): Compliance Memo & Risk Recommendation Agent — Compute 5-dimension composite risk scoring.
+        Agent 5 (Part 1): Compliance Memo Agent — Compute 5-dimension composite risk scoring.
 
         Scores application risk across 5 compliance dimensions:
         1. Jurisdiction Risk
@@ -679,7 +792,7 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
         self, business_data: Dict[str, Any], registry_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Agent 3: Business Model Plausibility Agent — Evaluate business model alignment and transaction consistency.
+        Agent 4: Corporate Structure & UBO Mapping Agent — Evaluate business model alignment and transaction consistency.
 
         Assesses business story against sector benchmarks, transaction volume, geography, and source of funds.
         Uses claude-sonnet-4-6 for speed and cost efficiency.
@@ -950,7 +1063,7 @@ Identify false positives, consolidate confirmed hits, rank severity, and provide
         agent_results: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Agent 5 (Part 2): Compliance Memo & Risk Recommendation Agent — Generate comprehensive compliance narrative.
+        Agent 5 (Part 2): Compliance Memo Agent — Generate comprehensive compliance narrative.
 
         Synthesizes risk scoring, beneficial ownership analysis, FinCrime interpretation, and business plausibility
         assessment into a professional compliance memo suitable for board and regulatory review.
@@ -963,13 +1076,16 @@ Identify false positives, consolidate confirmed hits, rank severity, and provide
 
         Returns:
             {
-                "memo_html": "<h2>Compliance Assessment Memo</h2>...",
-                "summary": "...",
-                "risk_rating": "<LOW|MEDIUM|HIGH|VERY_HIGH>",
-                "key_findings": ["finding1", "finding2"],
-                "recommendations": ["rec1", "rec2"],
-                "review_checklist": ["item1", "item2"],
-                "approval_recommendation": "<APPROVE|APPROVE_WITH_CONDITIONS|REVIEW|REJECT>"
+                "sections": { ... 11 mandatory sections ... },
+                "metadata": {
+                    "risk_rating": "LOW|MEDIUM|HIGH|VERY_HIGH",
+                    "risk_score": int,
+                    "confidence_level": float,
+                    "approval_recommendation": "APPROVE|APPROVE_WITH_CONDITIONS|REVIEW|REJECT",
+                    "key_findings": [...],
+                    "conditions": [...],
+                    "review_checklist": [...]
+                }
             }
         """
         if self.mock_mode:
@@ -978,25 +1094,90 @@ Identify false positives, consolidate confirmed hits, rank severity, and provide
             result["ai_source"] = "mock"
             return result
 
-        system_prompt = """You are a senior compliance officer producing a formal compliance assessment memo.
+        system_prompt = """You are a Senior MLRO, Big 4 Compliance Reviewer, and RegTech Analyst producing a gold-standard, regulator-grade compliance onboarding memo.
 
-Generate a comprehensive, professional memo that synthesizes:
-- Risk assessment results
-- Cross-verification findings
-- Corporate structure analysis
-- Regulatory expectations
+QUALITY STANDARD: This memo must pass a Big 4 compliance review. It must read as if written by a senior compliance officer exercising professional judgement — not as structured data output.
 
-The memo should be suitable for board-level review and regulatory audit.
+MANDATORY WRITING RULES:
+1. PROFESSIONAL JUDGEMENT: Every section must include (a) what was assessed, (b) what was found, (c) why it matters for risk. Do NOT merely list facts — ANALYSE them.
+2. RISK REASONING: Every risk rating must be JUSTIFIED with contextual explanation. BAD: "Jurisdiction assessed against FATF." GOOD: "Mauritius presents moderate jurisdictional risk. Although currently removed from the FATF grey list following its 2021 action plan completion, the jurisdiction retains characteristics of an offshore financial centre, elevating baseline risk for cross-border fund flows."
+3. MISSING DATA: If ANY data is missing, state "Information not provided" AND assess the impact: "This data gap prevents full verification and elevates residual risk."
+4. SCREENING: Never use the word "simulated". Reference screening sources where available. Include false positive analysis for any name matches.
+5. DOCUMENTS: For each document, state verification status, consistency with other data, and any anomalies — not just "uploaded" or "verified".
+6. OWNERSHIP: Include % ownership for ALL UBOs. If missing, flag as data gap. Include a structure complexity rating (Simple / Layered / Complex) and a control statement identifying who exercises effective control.
+7. RED FLAGS: Always include 2-3+ meaningful, specific red flags (even for low-risk cases — e.g., "Limited trading history reduces ability to benchmark expected transaction patterns"). Each must have a corresponding specific mitigant.
+8. DECISION: Must include rationale, link to risk assessment findings, and conditions. "Approved subject to enhanced monitoring due to PEP exposure and offshore jurisdiction classification."
+9. NO GENERIC AI PHRASING. No repetition. No vague wording. Formal, precise, defensible.
+10. Use ONLY the data provided. Do NOT hallucinate or invent facts.
 
-Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
+Return ONLY valid JSON (no markdown, no code blocks) with this EXACT structure:
+
 {
-    "memo_html": "<h2>Compliance Assessment Memo</h2>...",
-    "summary": "executive summary",
-    "risk_rating": "<LOW|MEDIUM|HIGH|VERY_HIGH>",
-    "key_findings": ["finding1", "finding2"],
-    "recommendations": ["rec1", "rec2"],
-    "review_checklist": ["item1", "item2"],
-    "approval_recommendation": "<APPROVE|APPROVE_WITH_CONDITIONS|REVIEW|REJECT>"
+    "sections": {
+        "executive_summary": {
+            "title": "Executive Summary",
+            "content": "Synthesis paragraph: entity identity, jurisdiction, composite risk rating with score, principal risk drivers, key mitigating factors, and recommendation with conditions. This must read as a standalone briefing for a board member."
+        },
+        "client_overview": {
+            "title": "Client Overview",
+            "content": "Entity name, BRN, jurisdiction, entity type, sector, application date and reference, stated business activity with assessment of plausibility, source of funds with adequacy assessment, expected transaction volume with benchmarking commentary."
+        },
+        "ownership_and_control": {
+            "title": "Ownership & Control",
+            "structure_complexity": "Simple|Layered|Complex",
+            "control_statement": "Name of person(s) exercising effective control and basis for determination.",
+            "content": "Full UBO chain with % ownership for each. Director details with nationality and PEP status. Nominee/bearer share assessment. Structure verification against registry. Professional judgement on opacity or governance concerns."
+        },
+        "risk_assessment": {
+            "title": "Risk Assessment",
+            "sub_sections": {
+                "jurisdiction_risk": {"title": "Jurisdiction Risk", "rating": "LOW|MEDIUM|HIGH|VERY_HIGH", "content": "FATF status with context (grey list history, action plan progress), offshore classification rationale, cross-border risk implications, risk weighting factor with justification."},
+                "business_risk": {"title": "Business Risk", "rating": "...", "content": "Sector inherent risk with reasoning, business model plausibility assessment, regulatory licence status and adequacy, revenue model consistency, risk weighting factor."},
+                "transaction_risk": {"title": "Transaction Risk", "rating": "...", "content": "Expected volume assessment against sector norms, source of funds adequacy, unusual pattern indicators, ability to benchmark, risk weighting factor."},
+                "ownership_risk": {"title": "Ownership Risk", "rating": "...", "content": "UBO identification completeness, PEP exposure and its implications, structure complexity assessment, nominee/layered structure concerns, risk weighting factor."},
+                "financial_crime_risk": {"title": "Financial Crime Risk", "rating": "...", "content": "Sanctions screening findings with source and false positive analysis, adverse media assessment, AML typology relevance, predicate offence exposure, risk weighting factor."}
+            }
+        },
+        "screening_results": {
+            "title": "Screening Results",
+            "content": "Sanctions: provider, lists checked, results with false positive analysis for any hits. PEP: matches with classification and risk implications. Adverse media: methodology and findings. Company registry: source, verification status, any discrepancies. Each finding must include professional assessment, not just data."
+        },
+        "document_verification": {
+            "title": "Document Verification",
+            "content": "For EACH document: type, verification status (valid/expired/inconsistent/missing), consistency with other submitted data, any anomalies or discrepancies identified. Overall documentation adequacy assessment with confidence %."
+        },
+        "ai_explainability": {
+            "title": "AI Explainability Layer",
+            "content": "Model version, methodology description, overall score with confidence %. Top 3 risk-increasing factors with weights and point contributions. Top 3 risk-decreasing factors with weights. Decision pathway through agent pipeline. Supervisor contradiction flags if any. Limitations or caveats."
+        },
+        "red_flags_and_mitigants": {
+            "title": "Red Flags & Mitigants",
+            "red_flags": ["Specific, contextual risk indicator with explanation of WHY it is a concern — minimum 2 entries even for low-risk cases"],
+            "mitigants": ["Specific mitigating factor corresponding to each red flag with explanation of WHY it reduces the risk"]
+        },
+        "compliance_decision": {
+            "title": "Compliance Decision",
+            "decision": "APPROVE|APPROVE_WITH_CONDITIONS|REVIEW|REJECT",
+            "content": "Decision with full rationale linking to risk assessment, screening, and ownership findings. Specific conditions with deadlines. Escalation triggers. Residual risk acknowledgement."
+        },
+        "ongoing_monitoring": {
+            "title": "Ongoing Monitoring & Review",
+            "content": "Monitoring tier with justification, review frequency tied to risk level, next review date, transaction monitoring parameters, specific trigger events with rationale for each."
+        },
+        "audit_and_governance": {
+            "title": "Audit & Governance",
+            "content": "Generation method and validation pipeline, document classification, retention period with regulatory basis, applicable compliance frameworks (specific legislation), generation timestamp, reviewer identity or 'Information not provided', version control."
+        }
+    },
+    "metadata": {
+        "risk_rating": "LOW|MEDIUM|HIGH|VERY_HIGH",
+        "risk_score": 0,
+        "confidence_level": 0.0,
+        "approval_recommendation": "APPROVE|APPROVE_WITH_CONDITIONS|REVIEW|REJECT",
+        "key_findings": ["finding1", "finding2"],
+        "conditions": ["condition1 or empty array"],
+        "review_checklist": ["item1", "item2"]
+    }
 }"""
 
         # Sanitize application data
@@ -1023,7 +1204,9 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
             else:
                 sanitized_agent_results[key] = value
 
-        user_prompt = f"""Generate a compliance memo for this application:
+        user_prompt = f"""Generate a Big 4-grade compliance onboarding memo for this application.
+
+Use ONLY the data provided below. If any data point is missing, explicitly state "Information not provided" and assess the impact on risk.
 
 APPLICATION DATA:
 {json.dumps(sanitized_app_data, indent=2)}
@@ -1031,17 +1214,33 @@ APPLICATION DATA:
 AGENT ANALYSIS RESULTS:
 {json.dumps(sanitized_agent_results, indent=2)}
 
-Produce a comprehensive memo covering executive summary, findings, recommendations, and approval decision."""
+CRITICAL REQUIREMENTS:
+1. Follow ALL 11 mandatory sections in exact order.
+2. Every section must demonstrate PROFESSIONAL JUDGEMENT — explain what was found AND why it matters.
+3. Every risk rating must include CONTEXTUAL REASONING — not just a label.
+4. Ownership section must include % ownership for every UBO, a structure complexity rating, and a control statement.
+5. Screening section must NEVER use "simulated". Include false positive analysis for any matches.
+6. Document verification must assess each document's consistency with other data, not just list status.
+7. Red Flags must contain minimum 2 specific, contextual entries with corresponding mitigants.
+8. Decision must include rationale, conditions with deadlines, and residual risk acknowledgement.
+9. AI Explainability must include factor-level weights, confidence %, and top 3 risk drivers.
+10. The memo must read as written by a senior compliance officer — not as AI-generated structured data."""
 
         try:
+            # Sprint 3.5: Risk-based model routing
+            risk_score = application_data.get("risk_score", 50)
+            risk_level = application_data.get("risk_level", "MEDIUM")
+            selected_model, routing_reason = self.select_memo_model(risk_score, risk_level)
+
             response = self._call_claude(
                 system_prompt,
                 user_prompt,
-                model="claude-opus-4-6",
+                model=selected_model,
                 timeout=self.timeout_seconds,
             )
             result = self._parse_json_response(response, agent_method="generate_compliance_memo")
-            result["ai_source"] = "claude-opus-4-6"
+            result["ai_source"] = selected_model
+            result["ai_routing_reason"] = routing_reason
             return result
         except Exception as e:
             logger.error(f"Memo generation failed: {e} — returning mock response")
@@ -1208,6 +1407,10 @@ validity dates, name matching, document quality, and any red flags."""
                 )
                 if attempt == self.max_retries - 1:
                     raise RuntimeError(f"Claude API timeout after {self.max_retries} retries") from e
+                # Exponential backoff with jitter: 2^attempt * (1 + random 0-0.5s)
+                backoff = (2 ** attempt) * (1 + random.uniform(0, 0.5))
+                logger.info(f"Retrying in {backoff:.1f}s after timeout...")
+                time.sleep(backoff)
 
             except APIConnectionError as e:
                 logger.warning(
@@ -1217,11 +1420,19 @@ validity dates, name matching, document quality, and any red flags."""
                     raise RuntimeError(
                         f"Claude API connection failed after {self.max_retries} retries"
                     ) from e
+                backoff = (2 ** attempt) * (1 + random.uniform(0, 0.5))
+                logger.info(f"Retrying in {backoff:.1f}s after connection error...")
+                time.sleep(backoff)
 
             except APIError as e:
                 logger.error(f"Claude API error: {e}")
                 if attempt == self.max_retries - 1:
                     raise RuntimeError(f"Claude API error: {e}") from e
+                # For rate-limit (429) errors, use longer backoff
+                backoff_base = 4 if getattr(e, 'status_code', 0) == 429 else 2
+                backoff = (backoff_base ** attempt) * (1 + random.uniform(0, 0.5))
+                logger.info(f"Retrying in {backoff:.1f}s after API error (status: {getattr(e, 'status_code', 'unknown')})...")
+                time.sleep(backoff)
 
     def _parse_json_response(self, response_text: str, agent_method: str = None) -> Dict[str, Any]:
         """

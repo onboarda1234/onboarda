@@ -1,0 +1,837 @@
+"""
+ARIE Finance — Screening & API Integrations
+Extracted from server.py during Sprint 2 monolith decomposition.
+
+Provides:
+    - Sumsub AML screening (screen_sumsub_aml)
+    - OpenCorporates company lookup (lookup_opencorporates)
+    - IP geolocation (geolocate_ip)
+    - Sumsub KYC integration (create applicant, tokens, status, documents, webhooks)
+    - Full screening pipeline (run_full_screening)
+"""
+import os
+import json
+import time
+import hmac
+import hashlib
+import base64
+import random
+import logging
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+
+import requests
+
+from rule_engine import SANCTIONED, FATF_BLACK, FATF_GREY
+from environment import (
+    ENV, is_production, is_staging, is_demo,
+    get_sumsub_base_url, get_sumsub_app_token, get_sumsub_secret_key,
+    get_sumsub_level_name, get_opencorporates_api_key, get_ip_geolocation_api_key,
+)
+
+logger = logging.getLogger("arie")
+
+ENVIRONMENT = ENV
+
+# Sprint 2.5: Centralized config — delegated to environment.py getters.
+# Module-level aliases for backward compatibility with existing function bodies.
+OPENCORPORATES_API_KEY = get_opencorporates_api_key()
+IP_GEOLOCATION_API_KEY = get_ip_geolocation_api_key()
+SUMSUB_APP_TOKEN = get_sumsub_app_token()
+SUMSUB_SECRET_KEY = get_sumsub_secret_key()
+SUMSUB_BASE_URL = get_sumsub_base_url()
+SUMSUB_LEVEL_NAME = get_sumsub_level_name()
+
+def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Person"):
+    """
+    Screen a person or entity against Sumsub AML (sanctions, PEP, watchlists).
+    Returns: { matched: bool, results: [...], source: "sumsub"|"simulated" }
+    """
+    try:
+        # First create/retrieve a Sumsub applicant
+        import hashlib
+        ext_id = f"{entity_type}_{hashlib.md5(name.encode()).hexdigest()[:12]}"
+        parts = name.strip().split(" ", 1)
+        first = parts[0] if parts else ""
+        last = parts[1] if len(parts) > 1 else ""
+
+        applicant_result = sumsub_create_applicant(
+            external_user_id=ext_id,
+            first_name=first,
+            last_name=last,
+            dob=birth_date,
+            country=nationality
+        )
+
+        if not applicant_result.get("applicant_id"):
+            logger.warning(f"Sumsub AML: Failed to create/retrieve applicant for '{name}'")
+            return _simulate_aml_screen(name)
+
+        applicant_id = applicant_result["applicant_id"]
+
+        # Get AML screening results
+        from sumsub_client import get_sumsub_client
+        client = get_sumsub_client()
+        aml_result = client.get_aml_screening(applicant_id)
+
+        if aml_result.get("source") == "simulated":
+            # API not configured, return simulated
+            return _simulate_aml_screen(name)
+
+        # Parse AML check results into our standard format
+        aml_checks = aml_result.get("aml_checks", [])
+        hits = []
+
+        for check in aml_checks:
+            check_data = check.get("data", {})
+            if check_data.get("matches"):
+                for match in check_data.get("matches", []):
+                    hits.append({
+                        "match_score": round(float(match.get("matchScore", 0)) * 100, 1),
+                        "matched_name": match.get("name", name),
+                        "datasets": [check.get("checkType", "AML")],
+                        "schema": entity_type,
+                        "topics": match.get("topics", []),
+                        "countries": match.get("countries", []),
+                        "sanctions_list": match.get("list", ""),
+                        "is_pep": "pep" in match.get("topics", []) or match.get("isPep", False),
+                        "is_sanctioned": "sanction" in match.get("topics", []) or match.get("isSanctioned", False),
+                    })
+
+        return {
+            "matched": len(hits) > 0,
+            "results": hits,
+            "source": "sumsub",
+            "api_status": "live",
+            "screened_at": datetime.utcnow().isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Sumsub AML screening error: {e}")
+        return _simulate_aml_screen(name)
+
+
+def _simulate_aml_screen(name, note="No Sumsub credentials configured — simulated result"):
+    """Fallback: realistic simulation when Sumsub not configured."""
+    if is_production():
+        logger.error("BLOCKED: Mock screening attempted in production")
+        return {"matched": False, "results": [], "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production", "screened_at": datetime.utcnow().isoformat()}
+    import random
+    is_hit = random.random() < 0.08  # 8% simulated hit rate
+    results = []
+    if is_hit:
+        results.append({
+            "match_score": round(random.uniform(68, 95), 1),
+            "matched_name": name,
+            "datasets": ["aml-simulated"],
+            "schema": "Person",
+            "topics": ["pep"] if random.random() < 0.5 else ["sanction"],
+            "countries": [],
+            "sanctions_list": "Simulated AML List",
+            "is_pep": random.random() < 0.5,
+            "is_sanctioned": random.random() < 0.3,
+        })
+    return {
+        "matched": is_hit,
+        "results": results,
+        "source": "simulated",
+        "api_status": "simulated",
+        "note": note,
+        "screened_at": datetime.utcnow().isoformat()
+    }
+
+
+def lookup_opencorporates(company_name, jurisdiction=None):
+    """
+    Look up a company via Open Corporates registry.
+    Returns: { found: bool, companies: [...], source: "opencorporates"|"simulated" }
+    """
+    if not OPENCORPORATES_API_KEY:
+        logger.info(f"OpenCorporates: No API key — simulating lookup for '{company_name}'")
+        return _simulate_company_lookup(company_name)
+
+    try:
+        params = {"q": company_name, "api_token": OPENCORPORATES_API_KEY}
+        if jurisdiction:
+            params["jurisdiction_code"] = jurisdiction.lower()
+
+        resp = requests.get(
+            f"{OPENCORPORATES_API_URL}/companies/search",
+            params=params,
+            timeout=15
+        )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            companies_raw = data.get("results", {}).get("companies", [])
+            companies = []
+            for c_wrap in companies_raw[:5]:  # Top 5 matches
+                c = c_wrap.get("company", {})
+                companies.append({
+                    "name": c.get("name", ""),
+                    "company_number": c.get("company_number", ""),
+                    "jurisdiction": c.get("jurisdiction_code", ""),
+                    "incorporation_date": c.get("incorporation_date", ""),
+                    "dissolution_date": c.get("dissolution_date"),
+                    "company_type": c.get("company_type", ""),
+                    "registry_url": c.get("registry_url", ""),
+                    "status": c.get("current_status", ""),
+                    "registered_address": c.get("registered_address_in_full", ""),
+                    "opencorporates_url": c.get("opencorporates_url", ""),
+                })
+
+            return {
+                "found": len(companies) > 0,
+                "companies": companies,
+                "total_results": data.get("results", {}).get("total_count", 0),
+                "source": "opencorporates",
+                "api_status": "live",
+                "searched_at": datetime.utcnow().isoformat()
+            }
+        elif resp.status_code == 401:
+            logger.warning("OpenCorporates: Invalid API key — falling back to simulation")
+            return _simulate_company_lookup(company_name, note="API key invalid — simulated result")
+        else:
+            logger.warning(f"OpenCorporates: HTTP {resp.status_code}")
+            return _simulate_company_lookup(company_name, note=f"API returned {resp.status_code} — simulated")
+
+    except Exception as e:
+        logger.error(f"OpenCorporates error: {e}")
+        return _simulate_company_lookup(company_name, note=f"API error — simulated result")
+
+
+def _simulate_company_lookup(company_name, note="No API key configured — simulated result"):
+    """Fallback: simulated company registry lookup. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock company lookup attempted in production")
+        return {"found": False, "companies": [], "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
+    import random
+    found = random.random() < 0.85  # 85% chance found
+    companies = []
+    if found:
+        companies.append({
+            "name": company_name,
+            "company_number": f"C{random.randint(10000,99999)}",
+            "jurisdiction": "mu",
+            "incorporation_date": f"20{random.randint(10,24)}-{random.randint(1,12):02d}-{random.randint(1,28):02d}",
+            "dissolution_date": None,
+            "company_type": random.choice(["Private Company Limited by Shares", "Global Business Company"]),
+            "registry_url": "",
+            "status": random.choice(["Active", "Active"]),
+            "registered_address": "Port Louis, Mauritius",
+            "opencorporates_url": "",
+        })
+    return {
+        "found": found,
+        "companies": companies,
+        "total_results": 1 if found else 0,
+        "source": "simulated",
+        "api_status": "simulated",
+        "note": note,
+        "searched_at": datetime.utcnow().isoformat()
+    }
+
+
+def geolocate_ip(ip_address):
+    """
+    Look up geolocation and risk data for an IP address.
+    Returns: { country, city, is_vpn, is_proxy, risk_level, source }
+    """
+    if not ip_address or ip_address in ("127.0.0.1", "::1", "0.0.0.0"):
+        return {
+            "country": "Local",
+            "country_code": "XX",
+            "city": "Localhost",
+            "region": "",
+            "is_vpn": False,
+            "is_proxy": False,
+            "is_tor": False,
+            "risk_level": "LOW",
+            "source": "local",
+            "api_status": "skipped",
+            "checked_at": datetime.utcnow().isoformat()
+        }
+
+    try:
+        # Use ipapi.co (free tier: 1000 req/day, no key needed for basic)
+        url = f"{IP_GEOLOCATION_API_URL}/{ip_address}/json/"
+        if IP_GEOLOCATION_API_KEY:
+            url += f"?key={IP_GEOLOCATION_API_KEY}"
+
+        resp = requests.get(url, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("error"):
+                return _simulate_ip_geolocation(ip_address, note=data.get("reason", "API error"))
+
+            country_code = (data.get("country_code") or "").upper()
+            # Determine IP risk level
+            ip_risk = "LOW"
+            if country_code in [c.upper() for c in SANCTIONED]:
+                ip_risk = "VERY_HIGH"
+            elif country_code in [c.upper() for c in FATF_BLACK]:
+                ip_risk = "HIGH"
+            elif country_code in [c.upper() for c in FATF_GREY]:
+                ip_risk = "MEDIUM"
+
+            return {
+                "country": data.get("country_name", "Unknown"),
+                "country_code": country_code,
+                "city": data.get("city", ""),
+                "region": data.get("region", ""),
+                "latitude": data.get("latitude"),
+                "longitude": data.get("longitude"),
+                "org": data.get("org", ""),
+                "asn": data.get("asn", ""),
+                "is_vpn": False,  # Basic API doesn't detect VPN
+                "is_proxy": False,
+                "is_tor": False,
+                "risk_level": ip_risk,
+                "source": "ipapi",
+                "api_status": "live",
+                "checked_at": datetime.utcnow().isoformat()
+            }
+        else:
+            return _simulate_ip_geolocation(ip_address, note=f"API returned {resp.status_code}")
+
+    except Exception as e:
+        logger.error(f"IP Geolocation error: {e}")
+        return _simulate_ip_geolocation(ip_address, note=f"API error — simulated")
+
+
+def _simulate_ip_geolocation(ip_address, note="Simulated result"):
+    """Fallback: simulated IP geolocation. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock IP geolocation attempted in production")
+        return {"country": "Unknown", "country_code": "XX", "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
+    import random
+    countries = [
+        ("Mauritius", "MU"), ("United Kingdom", "GB"), ("France", "FR"),
+        ("India", "IN"), ("South Africa", "ZA"), ("Singapore", "SG")
+    ]
+    country, code = random.choice(countries)
+    return {
+        "country": country,
+        "country_code": code,
+        "city": "Simulated City",
+        "region": "",
+        "is_vpn": random.random() < 0.05,
+        "is_proxy": random.random() < 0.03,
+        "is_tor": False,
+        "risk_level": "LOW",
+        "source": "simulated",
+        "api_status": "simulated",
+        "note": note,
+        "checked_at": datetime.utcnow().isoformat()
+    }
+
+
+# ══════════════════════════════════════════════════════════
+# SUMSUB KYC / IDENTITY VERIFICATION
+# ══════════════════════════════════════════════════════════
+
+def _sumsub_sign(method, url_path, body=b""):
+    """
+    Create HMAC-SHA256 signature for Sumsub API requests.
+    Returns headers dict with X-App-Token, X-App-Access-Ts, X-App-Access-Sig.
+    """
+    ts = str(int(time.time()))
+    # Build signature payload: ts + method + path + body
+    sig_payload = ts.encode("utf-8") + method.upper().encode("utf-8") + url_path.encode("utf-8")
+    if body:
+        sig_payload += body if isinstance(body, bytes) else body.encode("utf-8")
+    sig = hmac.new(
+        SUMSUB_SECRET_KEY.encode("utf-8"),
+        sig_payload,
+        hashlib.sha256
+    ).hexdigest()
+    return {
+        "X-App-Token": SUMSUB_APP_TOKEN,
+        "X-App-Access-Ts": ts,
+        "X-App-Access-Sig": sig,
+    }
+
+
+def sumsub_create_applicant(external_user_id, first_name=None, last_name=None,
+                            email=None, phone=None, dob=None, country=None,
+                            level_name=None):
+    """
+    Create a Sumsub applicant for KYC verification.
+    Returns: { applicant_id, external_user_id, status, source }
+    """
+    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
+        logger.info(f"Sumsub: No credentials — simulating applicant creation for '{external_user_id}'")
+        return _simulate_sumsub_applicant(external_user_id, first_name, last_name)
+
+    try:
+        level = level_name or SUMSUB_LEVEL_NAME
+        url_path = f"/resources/applicants?levelName={level}"
+        body_data = {
+            "externalUserId": external_user_id,
+        }
+        if first_name or last_name:
+            fixed_info = {}
+            if first_name:
+                fixed_info["firstName"] = first_name
+            if last_name:
+                fixed_info["lastName"] = last_name
+            if dob:
+                fixed_info["dob"] = dob
+            if country:
+                fixed_info["country"] = country
+            body_data["fixedInfo"] = fixed_info
+        if email:
+            body_data["email"] = email
+        if phone:
+            body_data["phone"] = phone
+
+        body_bytes = json.dumps(body_data).encode("utf-8")
+        headers = _sumsub_sign("POST", url_path, body_bytes)
+        headers["Content-Type"] = "application/json"
+
+        resp = requests.post(
+            f"{SUMSUB_BASE_URL}{url_path}",
+            headers=headers,
+            data=body_bytes,
+            timeout=15
+        )
+
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            applicant_id = data.get("id", "")
+            logger.info(f"Sumsub: Created applicant {applicant_id} for user {external_user_id}")
+            return {
+                "applicant_id": applicant_id,
+                "external_user_id": external_user_id,
+                "status": data.get("review", {}).get("reviewStatus", "init"),
+                "inspection_id": data.get("inspectionId", ""),
+                "level_name": level,
+                "created_at": data.get("createdAt", ""),
+                "source": "sumsub",
+                "api_status": "live",
+            }
+        else:
+            logger.warning(f"Sumsub create applicant failed: {resp.status_code} — {resp.text[:300]}")
+            # If applicant already exists, try to get existing
+            if resp.status_code == 409:
+                return sumsub_get_applicant_by_external_id(external_user_id)
+            return _simulate_sumsub_applicant(external_user_id, first_name, last_name,
+                                             note=f"API returned {resp.status_code}")
+
+    except Exception as e:
+        logger.error(f"Sumsub create applicant error: {e}")
+        return _simulate_sumsub_applicant(external_user_id, first_name, last_name,
+                                         note=f"Exception: {str(e)[:100]}")
+
+
+def sumsub_get_applicant_by_external_id(external_user_id):
+    """Retrieve an existing Sumsub applicant by external user ID."""
+    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
+        return _simulate_sumsub_applicant(external_user_id)
+
+    try:
+        url_path = f"/resources/applicants/-;externalUserId={external_user_id}/one"
+        headers = _sumsub_sign("GET", url_path)
+
+        resp = requests.get(
+            f"{SUMSUB_BASE_URL}{url_path}",
+            headers=headers,
+            timeout=15
+        )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            return {
+                "applicant_id": data.get("id", ""),
+                "external_user_id": external_user_id,
+                "status": data.get("review", {}).get("reviewStatus", "init"),
+                "review_answer": data.get("review", {}).get("reviewResult", {}).get("reviewAnswer", ""),
+                "inspection_id": data.get("inspectionId", ""),
+                "level_name": data.get("requiredIdDocs", {}).get("docSets", [{}])[0].get("idDocSetType", "") if data.get("requiredIdDocs") else "",
+                "source": "sumsub",
+                "api_status": "live",
+            }
+        else:
+            return _simulate_sumsub_applicant(external_user_id,
+                                             note=f"Lookup returned {resp.status_code}")
+
+    except Exception as e:
+        logger.error(f"Sumsub get applicant error: {e}")
+        return _simulate_sumsub_applicant(external_user_id, note=str(e)[:100])
+
+
+def sumsub_generate_access_token(external_user_id, level_name=None):
+    """
+    Generate an access token for the Sumsub WebSDK.
+    The client portal uses this token to launch the KYC widget.
+    Returns: { token, userId, source }
+    """
+    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
+        logger.info(f"Sumsub: No credentials — simulating access token for '{external_user_id}'")
+        return _simulate_sumsub_token(external_user_id)
+
+    try:
+        level = level_name or SUMSUB_LEVEL_NAME
+        url_path = f"/resources/accessTokens?userId={external_user_id}&levelName={level}"
+        headers = _sumsub_sign("POST", url_path)
+
+        resp = requests.post(
+            f"{SUMSUB_BASE_URL}{url_path}",
+            headers=headers,
+            timeout=15
+        )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            logger.info(f"Sumsub: Generated access token for user {external_user_id}")
+            return {
+                "token": data.get("token", ""),
+                "user_id": external_user_id,
+                "level_name": level,
+                "source": "sumsub",
+                "api_status": "live",
+            }
+        else:
+            logger.warning(f"Sumsub token gen failed: {resp.status_code} — {resp.text[:300]}")
+            return _simulate_sumsub_token(external_user_id,
+                                         note=f"API returned {resp.status_code}")
+
+    except Exception as e:
+        logger.error(f"Sumsub token error: {e}")
+        return _simulate_sumsub_token(external_user_id, note=str(e)[:100])
+
+
+def sumsub_get_applicant_status(applicant_id):
+    """
+    Get the verification status of a Sumsub applicant.
+    Returns: { applicant_id, status, review_answer, verification_steps, source }
+    """
+    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
+        return _simulate_sumsub_status(applicant_id)
+
+    try:
+        # Get applicant data
+        url_path = f"/resources/applicants/{applicant_id}/one"
+        headers = _sumsub_sign("GET", url_path)
+
+        resp = requests.get(
+            f"{SUMSUB_BASE_URL}{url_path}",
+            headers=headers,
+            timeout=15
+        )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            review = data.get("review", {})
+            review_result = review.get("reviewResult", {})
+
+            result = {
+                "applicant_id": applicant_id,
+                "external_user_id": data.get("externalUserId", ""),
+                "status": review.get("reviewStatus", "init"),
+                "review_answer": review_result.get("reviewAnswer", ""),
+                "rejection_labels": review_result.get("rejectLabels", []),
+                "moderation_comment": review_result.get("moderationComment", ""),
+                "created_at": data.get("createdAt", ""),
+                "source": "sumsub",
+                "api_status": "live",
+            }
+
+            # Also get verification steps
+            steps_url = f"/resources/applicants/{applicant_id}/requiredIdDocsStatus"
+            steps_headers = _sumsub_sign("GET", steps_url)
+            steps_resp = requests.get(
+                f"{SUMSUB_BASE_URL}{steps_url}",
+                headers=steps_headers,
+                timeout=10
+            )
+            if steps_resp.status_code == 200:
+                result["verification_steps"] = steps_resp.json()
+
+            return result
+        else:
+            logger.warning(f"Sumsub status check failed: {resp.status_code}")
+            return _simulate_sumsub_status(applicant_id,
+                                          note=f"API returned {resp.status_code}")
+
+    except Exception as e:
+        logger.error(f"Sumsub status error: {e}")
+        return _simulate_sumsub_status(applicant_id, note=str(e)[:100])
+
+
+def sumsub_add_document(applicant_id, doc_type, country, file_path=None, file_data=None, file_name="document.pdf"):
+    """
+    Add an identity document to a Sumsub applicant.
+    doc_type: PASSPORT, ID_CARD, DRIVERS, SELFIE, etc.
+    """
+    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
+        return {"status": "simulated", "message": "Sumsub not configured", "source": "simulated"}
+
+    try:
+        url_path = f"/resources/applicants/{applicant_id}/info/idDoc"
+        metadata = json.dumps({
+            "idDocType": doc_type,
+            "country": country,
+        })
+
+        # Read file content
+        content = None
+        if file_path and os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                content = f.read()
+        elif file_data:
+            content = base64.b64decode(file_data) if isinstance(file_data, str) else file_data
+
+        if not content:
+            return {"status": "error", "message": "No document content provided", "source": "sumsub"}
+
+        # Multipart form data — we need to sign without the body for multipart
+        headers = _sumsub_sign("POST", url_path)
+
+        files = {
+            "metadata": (None, metadata, "application/json"),
+            "content": (file_name, content, "application/octet-stream"),
+        }
+
+        resp = requests.post(
+            f"{SUMSUB_BASE_URL}{url_path}",
+            headers=headers,
+            files=files,
+            timeout=30
+        )
+
+        if resp.status_code in (200, 201):
+            logger.info(f"Sumsub: Added {doc_type} document for applicant {applicant_id}")
+            return {
+                "status": "uploaded",
+                "doc_type": doc_type,
+                "applicant_id": applicant_id,
+                "source": "sumsub",
+                "api_status": "live",
+            }
+        else:
+            logger.warning(f"Sumsub doc upload failed: {resp.status_code} — {resp.text[:200]}")
+            return {
+                "status": "error",
+                "message": f"Upload failed: {resp.status_code}",
+                "source": "sumsub",
+            }
+
+    except Exception as e:
+        logger.error(f"Sumsub doc upload error: {e}")
+        return {"status": "error", "message": str(e)[:100], "source": "sumsub"}
+
+
+def sumsub_verify_webhook(body_bytes, signature_header):
+    """Verify a Sumsub webhook signature (HMAC-SHA256)."""
+    if not SUMSUB_WEBHOOK_SECRET:
+        if ENVIRONMENT == "production":
+            logger.error("Sumsub webhook secret not configured in production — REJECTING webhook")
+            return False
+        logger.warning("Sumsub webhook secret not configured — accepting in dev mode only")
+        return True
+
+    expected = hmac.new(
+        SUMSUB_WEBHOOK_SECRET.encode("utf-8"),
+        body_bytes,
+        hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature_header or "")
+
+
+# ── Sumsub simulation fallbacks ──────────────────────────
+
+def _simulate_sumsub_applicant(external_user_id, first_name=None, last_name=None, note="No Sumsub credentials configured"):
+    """Fallback: simulated applicant creation. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock Sumsub applicant creation attempted in production")
+        return {"applicant_id": None, "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
+    sim_id = f"sim_{hashlib.md5(external_user_id.encode()).hexdigest()[:16]}"
+    return {
+        "applicant_id": sim_id,
+        "external_user_id": external_user_id,
+        "status": "init",
+        "inspection_id": f"insp_{sim_id[:12]}",
+        "level_name": SUMSUB_LEVEL_NAME,
+        "source": "simulated",
+        "api_status": "simulated",
+        "note": note,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _simulate_sumsub_token(external_user_id, note="No Sumsub credentials configured"):
+    """Fallback: simulated access token. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock Sumsub token generation attempted in production")
+        return {"token": None, "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
+    token = base64.b64encode(f"sim_token_{external_user_id}_{int(time.time())}".encode()).decode()
+    return {
+        "token": token,
+        "user_id": external_user_id,
+        "level_name": SUMSUB_LEVEL_NAME,
+        "source": "simulated",
+        "api_status": "simulated",
+        "note": note,
+    }
+
+
+def _simulate_sumsub_status(applicant_id, note="No Sumsub credentials configured"):
+    """Fallback: simulated verification status. C-04: BLOCKED in production."""
+    if is_production():
+        logger.error("BLOCKED: Mock Sumsub status check attempted in production")
+        return {"applicant_id": applicant_id, "status": "blocked", "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production"}
+    import random
+    statuses = ["init", "pending", "completed"]
+    answers = ["", "", "GREEN"]
+    idx = random.randint(0, 2)
+    return {
+        "applicant_id": applicant_id,
+        "external_user_id": "",
+        "status": statuses[idx],
+        "review_answer": answers[idx],
+        "rejection_labels": [],
+        "moderation_comment": "",
+        "verification_steps": {
+            "IDENTITY": {"reviewResult": {"reviewAnswer": answers[idx]} if idx == 2 else {}},
+            "SELFIE": {"reviewResult": {"reviewAnswer": answers[idx]} if idx == 2 else {}},
+        },
+        "source": "simulated",
+        "api_status": "simulated",
+        "note": note,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+
+
+def run_full_screening(application_data, directors, ubos, client_ip=None):
+    """
+    Run all screening agents in parallel against an application.
+    Uses ThreadPoolExecutor for concurrent HTTP API calls.
+    """
+    company_name = application_data.get("company_name", "")
+    country = application_data.get("country", "")
+
+    report = {
+        "screened_at": datetime.utcnow().isoformat(),
+        "company_screening": {},
+        "director_screenings": [],
+        "ubo_screenings": [],
+        "ip_geolocation": {},
+        "overall_flags": [],
+        "total_hits": 0,
+    }
+
+    # Map jurisdiction
+    jurisdiction = None
+    if country:
+        jur_map = {"mauritius": "mu", "united kingdom": "gb", "uk": "gb", "france": "fr",
+                   "singapore": "sg", "india": "in", "hong kong": "hk", "usa": "us",
+                   "united states": "us", "south africa": "za", "germany": "de"}
+        jurisdiction = jur_map.get(country.lower())
+
+    # ── Parallel API calls ──
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        # Submit all screening tasks concurrently
+        company_future = executor.submit(lookup_opencorporates, company_name, jurisdiction)
+        company_sanctions_future = executor.submit(screen_sumsub_aml, company_name, entity_type="Company")
+
+        director_futures = []
+        for d in directors:
+            d_name = d.get("full_name", "")
+            if d_name:
+                f = executor.submit(screen_sumsub_aml, d_name, nationality=d.get("nationality"), entity_type="Person")
+                director_futures.append((d, f))
+
+        ubo_futures = []
+        for u in ubos:
+            u_name = u.get("full_name", "")
+            if u_name:
+                f = executor.submit(screen_sumsub_aml, u_name, nationality=u.get("nationality"), entity_type="Person")
+                ubo_futures.append((u, f))
+
+        ip_future = executor.submit(geolocate_ip, client_ip) if client_ip else None
+
+        kyc_futures = []
+        all_persons = [(d, "director") for d in directors] + [(u, "ubo") for u in ubos]
+        for person, ptype in all_persons:
+            p_name = person.get("full_name", "")
+            if not p_name:
+                continue
+            ext_id = person.get("email", "") or f"{ptype}_{hashlib.md5(p_name.encode()).hexdigest()[:12]}"
+            parts = p_name.strip().split(" ", 1)
+            first = parts[0] if parts else ""
+            last = parts[1] if len(parts) > 1 else ""
+            f = executor.submit(sumsub_create_applicant,
+                external_user_id=ext_id, first_name=first, last_name=last,
+                country=person.get("nationality", ""))
+            kyc_futures.append((person, ptype, p_name, f))
+
+        # ── Collect results ──
+        report["company_screening"] = company_future.result(timeout=30)
+        if not report["company_screening"]["found"]:
+            report["overall_flags"].append(f"Company '{company_name}' not found in corporate registry")
+
+        company_sanctions = company_sanctions_future.result(timeout=30)
+        report["company_screening"]["sanctions"] = company_sanctions
+        if company_sanctions["matched"]:
+            report["overall_flags"].append(f"Company '{company_name}' has sanctions/watchlist matches")
+            report["total_hits"] += len(company_sanctions["results"])
+
+        for d, f in director_futures:
+            d_name = d.get("full_name", "")
+            screening = f.result(timeout=30)
+            result = {
+                "person_name": d_name, "person_type": "director",
+                "nationality": d.get("nationality", ""), "declared_pep": d.get("is_pep", "No"),
+                "screening": screening,
+            }
+            if screening["matched"]:
+                report["overall_flags"].append(f"Director '{d_name}' has sanctions/PEP matches")
+                report["total_hits"] += len(screening["results"])
+                for hit in screening["results"]:
+                    if hit.get("is_pep") and d.get("is_pep", "No") != "Yes":
+                        result["undeclared_pep"] = True
+                        report["overall_flags"].append(f"Director '{d_name}' may be undeclared PEP")
+            report["director_screenings"].append(result)
+
+        for u, f in ubo_futures:
+            u_name = u.get("full_name", "")
+            screening = f.result(timeout=30)
+            result = {
+                "person_name": u_name, "person_type": "ubo",
+                "nationality": u.get("nationality", ""), "ownership_pct": u.get("ownership_pct", 0),
+                "declared_pep": u.get("is_pep", "No"), "screening": screening,
+            }
+            if screening["matched"]:
+                report["overall_flags"].append(f"UBO '{u_name}' has sanctions/PEP matches")
+                report["total_hits"] += len(screening["results"])
+                for hit in screening["results"]:
+                    if hit.get("is_pep") and u.get("is_pep", "No") != "Yes":
+                        result["undeclared_pep"] = True
+                        report["overall_flags"].append(f"UBO '{u_name}' may be undeclared PEP")
+            report["ubo_screenings"].append(result)
+
+        if ip_future:
+            report["ip_geolocation"] = ip_future.result(timeout=30)
+            ip_geo = report["ip_geolocation"]
+            if ip_geo.get("risk_level") in ("HIGH", "VERY_HIGH"):
+                report["overall_flags"].append(f"Client IP geolocated to high-risk jurisdiction: {ip_geo.get('country')}")
+            if ip_geo.get("is_vpn"):
+                report["overall_flags"].append("Client IP detected as VPN")
+            if ip_geo.get("is_proxy"):
+                report["overall_flags"].append("Client IP detected as proxy")
+            if ip_geo.get("is_tor"):
+                report["overall_flags"].append("Client IP detected as Tor exit node")
+
+        report["kyc_applicants"] = []
+        for person, ptype, p_name, f in kyc_futures:
+            applicant = f.result(timeout=30)
+            applicant["person_name"] = p_name
+            applicant["person_type"] = ptype
+            report["kyc_applicants"].append(applicant)
+            if applicant.get("review_answer") == "RED":
+                report["overall_flags"].append(f"Sumsub KYC FAILED for {ptype} '{p_name}'")
+                report["total_hits"] += 1
+
+    return report
+

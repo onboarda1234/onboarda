@@ -309,6 +309,7 @@ def _get_postgres_schema() -> str:
         description TEXT,
         enabled BOOLEAN DEFAULT true,
         checks JSONB DEFAULT '[]',
+        supervisor_agent_type TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -458,6 +459,22 @@ def _get_postgres_schema() -> str:
         review_status TEXT DEFAULT 'draft' CHECK(review_status IN ('draft','reviewed','approved','rejected')),
         reviewed_by TEXT REFERENCES users(id),
         review_notes TEXT,
+        quality_score REAL DEFAULT 0,
+        validation_status TEXT DEFAULT 'pending' CHECK(validation_status IN ('pending','pass','pass_with_fixes','fail')),
+        validation_issues TEXT DEFAULT '[]',
+        validation_run_at TIMESTAMP,
+        memo_version TEXT DEFAULT '1.0',
+        raw_output_hash TEXT,
+        approved_by TEXT REFERENCES users(id),
+        approved_at TIMESTAMP,
+        supervisor_status TEXT DEFAULT 'pending',
+        supervisor_summary TEXT,
+        supervisor_contradictions TEXT DEFAULT '[]',
+        rule_violations TEXT DEFAULT '[]',
+        rule_engine_status TEXT DEFAULT 'pending',
+        blocked BOOLEAN DEFAULT FALSE,
+        block_reason TEXT,
+        pdf_generated_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -472,6 +489,61 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_application_id ON periodic_reviews(application_id);
     CREATE INDEX IF NOT EXISTS idx_sar_reports_application_id ON sar_reports(application_id);
     CREATE INDEX IF NOT EXISTS idx_compliance_memos_application_id ON compliance_memos(application_id);
+    CREATE INDEX IF NOT EXISTS idx_compliance_memos_review_status ON compliance_memos(review_status);
+    CREATE INDEX IF NOT EXISTS idx_compliance_memos_validation_status ON compliance_memos(validation_status);
+    CREATE INDEX IF NOT EXISTS idx_compliance_memos_blocked ON compliance_memos(blocked);
+    CREATE INDEX IF NOT EXISTS idx_compliance_memos_created_at ON compliance_memos(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_target ON audit_log(target);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
+
+    -- Sprint 3: GDPR Data Retention Policy
+    CREATE TABLE IF NOT EXISTS data_retention_policies (
+        id SERIAL PRIMARY KEY,
+        data_category TEXT NOT NULL UNIQUE,
+        retention_days INTEGER NOT NULL,
+        legal_basis TEXT NOT NULL,
+        description TEXT,
+        auto_purge BOOLEAN DEFAULT false,
+        requires_review BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Sprint 3: GDPR Data Subject Access Requests
+    CREATE TABLE IF NOT EXISTS data_subject_requests (
+        id SERIAL PRIMARY KEY,
+        request_type TEXT NOT NULL CHECK(request_type IN ('access','rectification','erasure','portability','restriction','objection')),
+        requester_email TEXT NOT NULL,
+        requester_name TEXT,
+        client_id TEXT REFERENCES clients(id),
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed','rejected','expired')),
+        description TEXT,
+        response_notes TEXT,
+        handled_by TEXT REFERENCES users(id),
+        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        due_at TIMESTAMP,
+        completed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Sprint 3: GDPR Purge Log (immutable audit of what was deleted)
+    CREATE TABLE IF NOT EXISTS data_purge_log (
+        id SERIAL PRIMARY KEY,
+        data_category TEXT NOT NULL,
+        record_count INTEGER NOT NULL,
+        oldest_record_date TIMESTAMP,
+        newest_record_date TIMESTAMP,
+        retention_policy_id INTEGER REFERENCES data_retention_policies(id),
+        purge_reason TEXT NOT NULL,
+        purged_by TEXT REFERENCES users(id),
+        purged_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dsr_status ON data_subject_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_dsr_client ON data_subject_requests(client_id);
+    CREATE INDEX IF NOT EXISTS idx_purge_log_category ON data_purge_log(data_category);
     """
 
 
@@ -593,6 +665,7 @@ def _get_sqlite_schema() -> str:
         description TEXT,
         enabled INTEGER DEFAULT 1,
         checks TEXT DEFAULT '[]',
+        supervisor_agent_type TEXT,
         updated_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -742,8 +815,87 @@ def _get_sqlite_schema() -> str:
         review_status TEXT DEFAULT 'draft' CHECK(review_status IN ('draft','reviewed','approved','rejected')),
         reviewed_by TEXT REFERENCES users(id),
         review_notes TEXT,
+        quality_score REAL DEFAULT 0,
+        validation_status TEXT DEFAULT 'pending' CHECK(validation_status IN ('pending','pass','pass_with_fixes','fail')),
+        validation_issues TEXT DEFAULT '[]',
+        validation_run_at TEXT,
+        memo_version TEXT DEFAULT '1.0',
+        raw_output_hash TEXT,
+        approved_by TEXT REFERENCES users(id),
+        approved_at TEXT,
+        supervisor_status TEXT DEFAULT 'pending',
+        supervisor_summary TEXT,
+        supervisor_contradictions TEXT DEFAULT '[]',
+        rule_violations TEXT DEFAULT '[]',
+        rule_engine_status TEXT DEFAULT 'pending',
+        blocked INTEGER DEFAULT 0,
+        block_reason TEXT,
+        pdf_generated_at TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE INDEX IF NOT EXISTS idx_compliance_memos_application_id ON compliance_memos(application_id);
+    CREATE INDEX IF NOT EXISTS idx_compliance_memos_review_status ON compliance_memos(review_status);
+    CREATE INDEX IF NOT EXISTS idx_compliance_memos_validation_status ON compliance_memos(validation_status);
+    CREATE INDEX IF NOT EXISTS idx_compliance_memos_blocked ON compliance_memos(blocked);
+    CREATE INDEX IF NOT EXISTS idx_compliance_memos_created_at ON compliance_memos(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_target ON audit_log(target);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_applications_client_id ON applications(client_id);
+    CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
+    CREATE INDEX IF NOT EXISTS idx_applications_assigned_to ON applications(assigned_to);
+    CREATE INDEX IF NOT EXISTS idx_directors_application_id ON directors(application_id);
+    CREATE INDEX IF NOT EXISTS idx_ubos_application_id ON ubos(application_id);
+    CREATE INDEX IF NOT EXISTS idx_documents_application_id ON documents(application_id);
+
+    -- Sprint 3: GDPR Data Retention Policy
+    CREATE TABLE IF NOT EXISTS data_retention_policies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data_category TEXT NOT NULL UNIQUE,
+        retention_days INTEGER NOT NULL,
+        legal_basis TEXT NOT NULL,
+        description TEXT,
+        auto_purge INTEGER DEFAULT 0,
+        requires_review INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Sprint 3: GDPR Data Subject Access Requests
+    CREATE TABLE IF NOT EXISTS data_subject_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_type TEXT NOT NULL CHECK(request_type IN ('access','rectification','erasure','portability','restriction','objection')),
+        requester_email TEXT NOT NULL,
+        requester_name TEXT,
+        client_id TEXT REFERENCES clients(id),
+        status TEXT DEFAULT 'pending' CHECK(status IN ('pending','in_progress','completed','rejected','expired')),
+        description TEXT,
+        response_notes TEXT,
+        handled_by TEXT REFERENCES users(id),
+        received_at TEXT DEFAULT (datetime('now')),
+        due_at TEXT,
+        completed_at TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Sprint 3: GDPR Purge Log (immutable audit of what was deleted)
+    CREATE TABLE IF NOT EXISTS data_purge_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data_category TEXT NOT NULL,
+        record_count INTEGER NOT NULL,
+        oldest_record_date TEXT,
+        newest_record_date TEXT,
+        retention_policy_id INTEGER REFERENCES data_retention_policies(id),
+        purge_reason TEXT NOT NULL,
+        purged_by TEXT REFERENCES users(id),
+        purged_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dsr_status ON data_subject_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_dsr_client ON data_subject_requests(client_id);
+    CREATE INDEX IF NOT EXISTS idx_purge_log_category ON data_purge_log(data_category);
     """
 
 
@@ -1018,10 +1170,26 @@ def seed_initial_data(db: DBConnection):
         )
     ]
 
+    # Supervisor agent type mapping: agent_number → supervisor schema AgentType
+    supervisor_type_map = {
+        1: "identity_document_integrity",
+        2: "corporate_structure_ubo",
+        3: "business_model_plausibility",
+        4: "fincrime_screening",
+        5: "compliance_memo_risk",
+        6: "periodic_review_preparation",
+        7: "adverse_media_pep_monitoring",
+        8: "behaviour_risk_drift",
+        9: None,  # Regulatory Impact Agent has no supervisor equivalent yet
+        10: "ongoing_compliance_review",
+    }
+
     for agent_data in agents_seed:
+        agent_num = agent_data[0]
+        sv_type = supervisor_type_map.get(agent_num)
         db.execute(
-            "INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks) VALUES (?,?,?,?,?,?,?)",
-            agent_data
+            "INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks, supervisor_agent_type) VALUES (?,?,?,?,?,?,?,?)",
+            agent_data + (sv_type,)
         )
 
     db.commit()
@@ -1048,6 +1216,36 @@ def seed_initial_data(db: DBConnection):
 
     db.commit()
 
+    # Sprint 3: Seed default GDPR data retention policies
+    # Based on Mauritius Data Protection Act 2017 + GDPR Article 5(1)(e)
+    retention_policies = [
+        ("client_pii", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "Client personal data: names, addresses, DOB, nationality. 7 years post-relationship.", 0, 1),
+        ("kyc_documents", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "KYC/CDD documents: passports, proof of address, corporate registry. 7 years post-relationship.", 0, 1),
+        ("screening_results", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "Sanctions, PEP, adverse media screening results. 7 years retention.", 0, 1),
+        ("compliance_memos", 2555, "Regulatory obligation (AML/CFT Act 2020 s.17)", "Compliance memos and risk assessments. 7 years retention.", 0, 1),
+        ("audit_logs", 3650, "Legitimate interest + regulatory", "Audit trail records. 10 years retention for full accountability.", 0, 0),
+        ("application_data", 2555, "Regulatory obligation", "Onboarding application forms and submitted data. 7 years post-decision.", 0, 1),
+        ("sar_reports", 3650, "Regulatory obligation (FIU reporting)", "Suspicious Activity Reports. 10 years — never auto-purge.", 0, 0),
+        ("session_tokens", 1, "Legitimate interest", "Expired authentication tokens and session data. 24-hour retention.", 1, 0),
+        ("monitoring_alerts", 2555, "Regulatory obligation", "Ongoing monitoring alerts and risk drift records. 7 years.", 0, 1),
+    ]
+
+    for policy in retention_policies:
+        try:
+            db.execute(
+                "INSERT OR IGNORE INTO data_retention_policies (data_category, retention_days, legal_basis, description, auto_purge, requires_review) VALUES (?,?,?,?,?,?)",
+                policy
+            )
+        except Exception:
+            try:
+                db.execute(
+                    "INSERT INTO data_retention_policies (data_category, retention_days, legal_basis, description, auto_purge, requires_review) VALUES (?,?,?,?,?,?) ON CONFLICT (data_category) DO NOTHING",
+                    policy
+                )
+            except Exception:
+                pass  # Already seeded
+
+    db.commit()
     logger.info("Database seeded with initial data")
 
 
