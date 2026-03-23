@@ -2566,6 +2566,64 @@ var APPLICATIONS = [
   { ref:'ARF-2026-100429', company:'Coastal Ventures Ltd', sector:'Tourism / Hospitality', risk:'MEDIUM', score:38.4, lane:'Standard Review', status:'Approved', assigned:'Marie Dubois', date:'2026-02-20', country:'Mauritius', brn:'C15078321', directors:[{name:'Jean-Marc Leclerc',nat:'Mauritian',pep:'No'},{name:'Priya Doorgakant',nat:'Mauritian',pep:'No'}], ubos:[{name:'Jean-Marc Leclerc',pct:65,pep:'No'},{name:'Priya Doorgakant',pct:35,pep:'No'}], intermediaries:[], dims:{d1:1.6,d2:1.5,d3:2.0,d4:1.8,d5:1.5}, docs:['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res'], pepCount:0, prescreeningData:{incorporation_date:'2012-09-05',entity_type:'Tourism / Hospitality',ownership_structure:'Established family partnership',monthly_volume:'USD 200,000 – USD 800,000',transaction_complexity:'Low — standard international tourism and hospitality payments',currency:'USD',introduction_method:'Tourism board referral',source_of_wealth_type:'Hotel and resort operations',source_of_wealth_detail:'Coastal luxury resort with 120 rooms, serving international and regional tourists',source_of_funds_initial_type:'Real estate investment and lodging revenue',source_of_funds_initial_detail:'Reinvestment of hotel operational profits since 2012',source_of_funds_ongoing_type:'Guest room revenue and service fees',source_of_funds_ongoing_detail:'Room bookings, restaurant/bar revenue, spa and activity fees from guests',entity_contact_first:'Jean-Marc',entity_contact_last:'Leclerc',entity_contact_email:'jeanmarc@coastalventures.mu'} }
 ];
 
+// ── Generate per-person KYC docs, business docs, and other docs for each application ──
+APPLICATIONS.forEach(function(app) {
+  // Section B: Per-person KYC documents (directors, UBOs, intermediary shareholders)
+  var personDocs = [];
+  (app.directors || []).forEach(function(d) {
+    var pDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
+    if (d.pep === 'Yes') {
+      pDocs.push({type:'Bank Reference Letter', status:'uploaded'});
+      pDocs.push({type:'Source of Wealth Declaration', status:'uploaded'});
+    }
+    // Randomly omit CV for some
+    var seed = 0; for (var i=0;i<d.name.length;i++) seed = ((seed<<5)-seed)+d.name.charCodeAt(i);
+    if (Math.abs(seed) % 3 !== 0) pDocs.push({type:'CV / Resume', status:'uploaded'});
+    personDocs.push({ name: d.name, role: 'Director', pep: d.pep, docs: pDocs });
+  });
+  (app.ubos || []).forEach(function(u) {
+    // Skip if already added as director
+    if (personDocs.some(function(p){ return p.name === u.name; })) return;
+    var uDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
+    if (u.pep === 'Yes') {
+      uDocs.push({type:'Bank Reference Letter', status:'uploaded'});
+      uDocs.push({type:'Source of Wealth Declaration', status:'uploaded'});
+    }
+    var seed = 0; for (var i=0;i<u.name.length;i++) seed = ((seed<<5)-seed)+u.name.charCodeAt(i);
+    if (Math.abs(seed) % 3 !== 0) uDocs.push({type:'CV / Resume', status:'uploaded'});
+    personDocs.push({ name: u.name, role: 'UBO (' + u.pct + '%)', pep: u.pep, docs: uDocs });
+  });
+  (app.intermediaries || []).forEach(function(inter) {
+    var iDocs = [{type:'Certificate of Incorporation', status:'uploaded'}, {type:'Register of Directors', status:'uploaded'}, {type:'Register of Shareholders', status:'uploaded'}];
+    var seed = 0; for (var i=0;i<inter.name.length;i++) seed = ((seed<<5)-seed)+inter.name.charCodeAt(i);
+    if (Math.abs(seed) % 2 === 0) iDocs.push({type:'Certificate of Good Standing', status:'uploaded'});
+    if (Math.abs(seed) % 3 === 0) iDocs.push({type:'Financial Statements', status:'uploaded'});
+    personDocs.push({ name: inter.name, role: 'Intermediary (' + inter.jurisdiction + ')', pep: 'N/A', docs: iDocs });
+  });
+  app.personDocs = personDocs;
+
+  // Section C: Business documents (optional, varies by application)
+  var bizDocs = [];
+  var seed2 = 0; for (var i=0;i<app.company.length;i++) seed2 = ((seed2<<5)-seed2)+app.company.charCodeAt(i);
+  seed2 = Math.abs(seed2);
+  if (seed2 % 2 === 0) bizDocs.push('Business Plan');
+  if (seed2 % 3 !== 2) bizDocs.push('Tax Clearance Certificate');
+  if (app.docs.indexOf('Licence') !== -1 || seed2 % 4 === 0) bizDocs.push('Regulatory Licence');
+  if (seed2 % 5 === 0) bizDocs.push('Insurance Certificate');
+  if (app.risk === 'HIGH' || app.risk === 'VERY_HIGH') bizDocs.push('AML Policy Document');
+  app.businessDocs = bizDocs;
+
+  // Section D: Other documents (ad-hoc, some apps have them)
+  var otherDocs = [];
+  if (app.risk === 'HIGH' || app.risk === 'VERY_HIGH') {
+    otherDocs.push('Legal Opinion Letter');
+    if (seed2 % 2 === 0) otherDocs.push('Compliance Certification');
+  }
+  if (seed2 % 7 === 0) otherDocs.push('Client Reference Letter');
+  if (app.intermediaries.length > 0 && seed2 % 3 === 0) otherDocs.push('Organisational Chart');
+  app.otherDocs = otherDocs;
+});
+
 var AUDIT_LOG = [
   { ts:'2026-03-12 09:14', user:'Aisha Sudally', role:'Admin', action:'Login', target:'System', detail:'Logged in from 196.192.xx.xx', ip:'196.192.44.12' },
   { ts:'2026-03-12 08:45', user:'Raj Patel', role:'Senior CO', action:'Approve', target:'ARF-2026-100421', detail:'Application approved — Low risk, Fast Lane', ip:'196.192.44.18' },
@@ -2932,7 +2990,7 @@ function openAppDetail(ref) {
 
   // Decision trail data (5 agents — matching AI Agents config page)
   var trailSteps = [
-    { name:'Agent 1: Identity & Document Integrity', time:fmtTime(0), detail:'Validated authenticity and consistency of ' + (app.docs||[]).length + ' identity documents. Performed ~35 checks including MRZ extraction, expiry validation, tampering detection, and cross-document consistency. Does NOT do sanctions screening or registry lookups.', confidence:95, result:(app.docs||[]).length + ' documents checked — ' + (app.docs||[]).length + ' passed' },
+    { name:'Agent 1: Identity & Document Integrity', time:fmtTime(0), detail:'Validated authenticity and consistency of ' + (function(){ var t=(app.docs||[]).length; (app.personDocs||[]).forEach(function(p){t+=p.docs.length;}); t+=(app.businessDocs||[]).length+(app.otherDocs||[]).length; return t; })() + ' documents across 4 sections (corporate, KYC/identity, business, other). Performed ~' + (35 + ((app.personDocs||[]).reduce(function(s,p){return s+p.docs.length;},0))*5) + ' checks including MRZ extraction, expiry validation, tampering detection, cross-document consistency, and per-person identity verification for ' + ((app.directors||[]).length + (app.ubos||[]).length) + ' individuals.', confidence:95, result:(function(){ var t=(app.docs||[]).length; (app.personDocs||[]).forEach(function(p){t+=p.docs.length;}); t+=(app.businessDocs||[]).length+(app.otherDocs||[]).length; return t; })() + ' documents checked across all sections' },
     { name:'Agent 2: External Database Cross-Verification', time:fmtTime(3000), detail:'Secondary verification layer. Checked passport/company document data against external registries (OpenCorporates, Companies House, ADGM, DIFC). Confirmed persons exist in official records as declared directors/shareholders. ' + (screening ? 'Registry data retrieved.' : 'Awaiting screening.'), confidence:92, result:'12 checks — ' + ((app.directors||[]).length + (app.ubos||[]).length) + ' persons cross-referenced' },
     { name:'Agent 3: FinCrime Screening Interpretation', time:fmtTime(6000), detail:'Screened individuals and entities against sanctions lists, PEP databases, watchlists, and adverse media. Distinguished false positives, assessed match confidence, classified political exposure. ' + (app.pepCount>0?app.pepCount+' PEP match(es) identified.':'No matches.'), confidence:app.pepCount>0?78:97, result:app.pepCount>0?'PEP DETECTED — enhanced review':'All clear — no matches' },
     { name:'Agent 4: Corporate Structure & UBO Mapping', time:fmtTime(9000), detail:'Mapped ownership layers for ' + (app.ubos||[]).length + ' UBO(s) and ' + (app.directors||[]).length + ' director(s). ' + ((app.intermediaries||[]).length > 0 ? 'Detected ' + (app.intermediaries||[]).length + ' intermediary layer(s) — nominee structures flagged.' : 'Simple direct ownership confirmed.') + ' Cross-referenced UBOs with sanctions/PEP results from Agent 3.', confidence:91, result:(app.ubos||[]).length + ' UBOs mapped, ' + (app.directors||[]).length + ' directors verified' },
@@ -3065,22 +3123,68 @@ function openAppDetail(ref) {
   // ALL 10 AI AGENTS — Dynamic rendering from application data
   // ═══════════════════════════════════════════════════════
 
-  // ── Agent 1: Identity & Document Integrity Agent (35 checks) ──
+  // ── Agent 1: Identity & Document Integrity Agent ──
   var a1checks = [];
-  var docCount = (app.docs || []).length;
-  a1checks.push({l:'Documents uploaded', r:docCount + ' document(s)', c:docCount > 0 ? 'pass' : 'warn'});
+  var corpDocCount = (app.docs || []).length;
+  var personDocCount = (app.personDocs||[]).reduce(function(s,p){return s+p.docs.length;},0);
+  var bizDocCount = (app.businessDocs||[]).length;
+  var otherDocCount = (app.otherDocs||[]).length;
+  var totalDocCount = corpDocCount + personDocCount + bizDocCount + otherDocCount;
+
+  a1checks.push({l:'Total documents uploaded', r:totalDocCount + ' document(s) across 4 sections', c:totalDocCount > 0 ? 'pass' : 'warn'});
+
+  // Section A: Corporate documents
+  a1checks.push({l:'§A Corporate Documents', r:corpDocCount + ' uploaded', c:'pass'});
   (app.docs || []).forEach(function(docName) {
     var review = (app.docReviews || {})[docName] || {};
     var status = review.status === 'accepted' ? 'pass' : review.status === 'rejected' ? 'fail' : 'warn';
     var statusText = review.status === 'accepted' ? 'Accepted' : review.status === 'rejected' ? 'Rejected' : 'Pending review';
-    a1checks.push({l:docName, r:statusText, c:status});
+    a1checks.push({l:'  ' + docName, r:statusText, c:status});
   });
   var allDocsExpected = ['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart'];
-  allDocsExpected.forEach(function(d) { if ((app.docs || []).indexOf(d) === -1) a1checks.push({l:d, r:'Missing', c:'fail'}); });
-  a1checks.push({l:'MRZ extraction', r:docCount > 0 ? 'Extracted from identity documents' : 'No identity docs', c:docCount > 0 ? 'pass' : 'warn'});
-  a1checks.push({l:'Expiry validation', r:docCount > 0 ? 'All within validity' : 'No documents to check', c:docCount > 0 ? 'pass' : 'warn'});
-  a1checks.push({l:'Tampering detection', r:docCount > 0 ? 'No anomalies detected' : 'Awaiting documents', c:docCount > 0 ? 'pass' : 'warn'});
-  a1checks.push({l:'Cross-document consistency', r:docCount > 2 ? 'Names and dates consistent' : 'Insufficient docs', c:docCount > 2 ? 'pass' : 'warn'});
+  allDocsExpected.forEach(function(d) { if ((app.docs || []).indexOf(d) === -1) a1checks.push({l:'  ' + d, r:'Missing', c:'fail'}); });
+
+  // Section B: Per-person KYC documents
+  if (app.personDocs && app.personDocs.length > 0) {
+    a1checks.push({l:'§B KYC / Identity Documents', r:personDocCount + ' across ' + app.personDocs.length + ' person(s)', c:'pass'});
+    app.personDocs.forEach(function(person) {
+      a1checks.push({l:'  ' + person.name + ' (' + person.role + ')', r:person.docs.length + ' doc(s)', c:'pass'});
+      person.docs.forEach(function(doc) {
+        var review = (app.docReviews || {})[person.name + ' — ' + doc.type] || {};
+        var status = review.status === 'accepted' ? 'pass' : review.status === 'rejected' ? 'fail' : 'warn';
+        var statusText = review.status === 'accepted' ? 'Accepted' : review.status === 'rejected' ? 'Rejected' : 'Pending review';
+        a1checks.push({l:'    ' + doc.type, r:statusText, c:status});
+      });
+      // Missing KYC docs
+      var expectedKyc = ['Passport / ID', 'Proof of Address'];
+      if (person.pep === 'Yes') { expectedKyc.push('Bank Reference Letter'); expectedKyc.push('Source of Wealth Declaration'); }
+      var personDocTypes = person.docs.map(function(d){ return d.type; });
+      expectedKyc.forEach(function(d) {
+        if (personDocTypes.indexOf(d) === -1) a1checks.push({l:'    ' + d, r:'Missing — ' + person.name, c:'fail'});
+      });
+    });
+  }
+
+  // Section C: Business documents
+  if (app.businessDocs && app.businessDocs.length > 0) {
+    a1checks.push({l:'§C Business Documents', r:bizDocCount + ' uploaded (optional)', c:'pass'});
+    app.businessDocs.forEach(function(docName) {
+      a1checks.push({l:'  ' + docName, r:'Pending review', c:'warn'});
+    });
+  }
+
+  // Section D: Other documents
+  if (app.otherDocs && app.otherDocs.length > 0) {
+    a1checks.push({l:'§D Other Documents', r:otherDocCount + ' uploaded', c:'pass'});
+    app.otherDocs.forEach(function(docName) {
+      a1checks.push({l:'  ' + docName, r:'Pending review', c:'warn'});
+    });
+  }
+
+  a1checks.push({l:'MRZ extraction', r:personDocCount > 0 ? 'Extracted from ' + personDocCount + ' identity documents' : 'No identity docs', c:personDocCount > 0 ? 'pass' : 'warn'});
+  a1checks.push({l:'Expiry validation', r:totalDocCount > 0 ? 'All within validity' : 'No documents to check', c:totalDocCount > 0 ? 'pass' : 'warn'});
+  a1checks.push({l:'Tampering detection', r:totalDocCount > 0 ? 'No anomalies detected' : 'Awaiting documents', c:totalDocCount > 0 ? 'pass' : 'warn'});
+  a1checks.push({l:'Cross-document consistency', r:totalDocCount > 2 ? 'Names and dates consistent across sections' : 'Insufficient docs', c:totalDocCount > 2 ? 'pass' : 'warn'});
   agents.push({ name:'Agent 1: Identity & Document Integrity', icon:'🔍', checks:a1checks });
 
   // ── Agent 2: External Database Cross-Verification Agent (12 checks) ──
@@ -3209,7 +3313,11 @@ function openAppDetail(ref) {
   var isHighRiskCountry = ['Iran','North Korea','Syria','Myanmar','Afghanistan','Yemen','Libya'].indexOf(app.country) >= 0;
   var isMediumRiskSector = ['Financial Services','Real Estate','Legal Services','Trust Services'].indexOf(app.sector||'') >= 0;
   var isHighRiskSector = ['Cryptocurrency','Money Services','Gaming','Arms','Precious Metals'].indexOf(app.sector||'') >= 0;
-  var numDocs = (app.docs||[]).length;
+  var numCorpDocs = (app.docs||[]).length;
+  var numPersonDocs = (app.personDocs||[]).reduce(function(s,p){return s+p.docs.length;},0);
+  var numBizDocs = (app.businessDocs||[]).length;
+  var numOtherDocs = (app.otherDocs||[]).length;
+  var numDocs = numCorpDocs + numPersonDocs + numBizDocs + numOtherDocs;
   var docReviews = app.docReviews || {};
   var verifiedDocs = (app.docs||[]).filter(function(d){ return (docReviews[d]||{}).status === 'accepted'; }).length;
   var docConfidence = numDocs > 0 ? Math.round(verifiedDocs/numDocs*100) : 0;
@@ -3269,7 +3377,13 @@ function openAppDetail(ref) {
       },
       document_verification: {
         title: 'Document Verification',
-        content: numDocs + ' document(s) submitted, ' + verifiedDocs + ' verified. ' + (app.docs||[]).map(function(d){ var r = docReviews[d]||{}; return d + ': ' + (r.status==='accepted' ? 'Verified — document is authentic and consistent with application data. No discrepancies identified.' : r.status==='rejected' ? 'Rejected — ' + (r.comment||'discrepancy identified, re-submission required') + '.' : r.status==='info_requested' ? 'Further information requested — ' + (r.comment||'additional verification needed') + '.' : 'Pending verification — document received, verification in progress.'); }).join(' ') + (numDocs>verifiedDocs ? ' ' + (numDocs-verifiedDocs) + ' document(s) require action. This gap prevents complete entity verification and is reflected as a condition of approval.' : ' All documents verified — high confidence in entity documentation.') + ' Overall documentation adequacy: ' + docConfidence + '%. Model confidence adjusted accordingly.'
+        content: numDocs + ' document(s) submitted across 4 sections, ' + verifiedDocs + ' verified. ' +
+          'SECTION A — Corporate Entity Documents (' + numCorpDocs + '): ' + (app.docs||[]).map(function(d){ var r = docReviews[d]||{}; return d + ': ' + (r.status==='accepted' ? 'Verified — authentic and consistent.' : r.status==='rejected' ? 'Rejected — ' + (r.comment||'discrepancy identified') + '.' : r.status==='info_requested' ? 'Info requested — ' + (r.comment||'additional verification needed') + '.' : 'Pending verification.'); }).join(' ') +
+          ' SECTION B — Directors, UBOs & Intermediary KYC Documents (' + numPersonDocs + '): ' + (app.personDocs||[]).map(function(p){ return p.name + ' (' + p.role + '): ' + p.docs.map(function(d){ return d.type; }).join(', ') + ' — all submitted' + (p.pep==='Yes'?' (PEP — enhanced documents included)':'') + '.'; }).join(' ') +
+          (numBizDocs > 0 ? ' SECTION C — Business Operating Documents (' + numBizDocs + '): ' + (app.businessDocs||[]).join(', ') + ' — submitted (optional supporting documentation).' : '') +
+          (numOtherDocs > 0 ? ' SECTION D — Other Documents (' + numOtherDocs + '): ' + (app.otherDocs||[]).join(', ') + ' — submitted as additional supporting evidence.' : '') +
+          (numDocs>verifiedDocs ? ' ' + (numDocs-verifiedDocs) + ' document(s) require action across sections. This gap prevents complete entity verification and is reflected as a condition of approval.' : ' All documents verified — high confidence in entity documentation.') +
+          ' Overall documentation adequacy: ' + docConfidence + '%. Model confidence adjusted accordingly.'
       },
       ai_explainability: {
         title: 'AI Explainability Layer',
@@ -3315,7 +3429,7 @@ function openAppDetail(ref) {
         'Beneficial ownership ' + (primaryUbo ? 'traced to natural persons — ' + controlName + ' (' + controlPct + '%) exercises effective control' : 'could not be verified — critical data gap'),
         (pepList.length>0 ? 'PEP identified: ' + pepList.join(', ') + '. Enhanced due diligence required.' : 'No PEP exposure identified'),
         'Sanctions and adverse media screening ' + (sanctionsHits===0?'clear':'completed with findings') + ' across all consolidated lists',
-        verifiedDocs + ' of ' + numDocs + ' documents verified at ' + docConfidence + '% confidence',
+        verifiedDocs + ' of ' + numDocs + ' documents verified across 4 sections (' + numCorpDocs + ' corporate, ' + numPersonDocs + ' KYC/identity, ' + numBizDocs + ' business, ' + numOtherDocs + ' other) at ' + docConfidence + '% confidence',
         escapeHtml(app.country) + ' jurisdiction presents ' + (isHighRiskCountry?'severe':isOffshore?'moderate':'low') + ' risk',
         'Composite risk: ' + riskScore + '/100 (' + riskLevel + ') at ' + modelConf + '% model confidence'
       ]
@@ -3379,21 +3493,23 @@ function openAppDetail(ref) {
   // ── Combined Documents + Inline Verification (new layout) ──
   var combinedContainer = document.getElementById('detail-docs-with-verification');
   if (combinedContainer && app.docs) {
-    // Use a seeded approach so verification results are stable per doc name
     function seedRandom(str) { var h = 0; for (var i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; } return Math.abs(h); }
+
+    // Count all documents across all sections
+    var allPersonDocCount = 0;
+    (app.personDocs || []).forEach(function(p) { allPersonDocCount += p.docs.length; });
+    var totalAllDocs = app.docs.length + allPersonDocCount + (app.businessDocs || []).length + (app.otherDocs || []).length;
 
     var combinedHtml = '<div style="display:flex;gap:10px;margin-bottom:14px;font-size:11px;">' +
       '<span style="color:var(--green);font-weight:600;">' + acceptedCount + ' accepted</span>' +
       '<span style="color:var(--red);font-weight:600;">' + rejectedCount + ' rejected</span>' +
       '<span style="color:var(--amber);font-weight:600;">' + infoCount + ' info req.</span>' +
-      '<span style="color:var(--text3);">' + pendingCount + ' pending</span>' +
+      '<span style="color:var(--text3);">' + totalAllDocs + ' total documents</span>' +
     '</div>';
 
-    // Open 3-column grid for document cards
-    combinedHtml += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">';
-
-    app.docs.forEach(function(docName) {
-      var review = (app.docReviews || {})[docName] || {};
+    // Helper: render a single document card with AI verification
+    function renderDocCard(docName, seedStr, reviewKey) {
+      var review = (app.docReviews || {})[reviewKey || docName] || {};
       var isBoUpload = review.uploadedBy === 'officer';
       var uploadDate = review.reviewedAt || app.date;
       var statusHtml = '';
@@ -3401,7 +3517,7 @@ function openAppDetail(ref) {
       else if (review.status === 'rejected') statusHtml = '<div style="font-size:10px;color:var(--red);font-weight:600;margin-top:2px;">❌ Rejected</div>';
       else if (review.status === 'info_requested') statusHtml = '<div style="font-size:10px;color:var(--amber);font-weight:600;margin-top:2px;">📋 Info Req.</div>';
 
-      var seed = seedRandom(docName);
+      var seed = seedRandom(seedStr || docName);
       var tests = [
         { name: 'Format', result: 'Pass', confidence: 98 },
         { name: 'Authenticity', result: (seed % 7 === 0) ? 'Warning' : 'Pass', confidence: 85 + (seed % 14) },
@@ -3415,44 +3531,109 @@ function openAppDetail(ref) {
       var overallColor = overall === 'Pass' ? 'var(--green)' : overall === 'Warning' ? 'var(--amber)' : 'var(--red)';
       var avgConf = Math.round(tests.reduce(function(s, t) { return s + t.confidence; }, 0) / tests.length);
 
-      combinedHtml += '<div style="border:1px solid var(--border1);border-radius:10px;overflow:hidden;' + (overall === 'Fail' ? 'border-color:var(--red);' : overall === 'Warning' ? 'border-color:var(--amber);' : '') + '">';
+      var html = '<div style="border:1px solid var(--border1);border-radius:10px;overflow:hidden;' + (overall === 'Fail' ? 'border-color:var(--red);' : overall === 'Warning' ? 'border-color:var(--amber);' : '') + '">';
+      html += '<div style="padding:10px 12px;background:var(--surface2);border-bottom:1px solid var(--border1);">';
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+      html += '<span style="font-size:16px;">' + (isBoUpload ? '📤' : '📄') + '</span>';
+      html += '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(docName) + '</div><div style="font-size:10px;color:var(--text3);">' + escapeHtml(uploadDate) + '</div>' + statusHtml + '</div>';
+      html += '</div>';
+      var safeKey = (reviewKey || docName).replace(/'/g,"\\'");
+      html += '<div style="display:flex;gap:3px;">';
+      html += '<button class="doc-action-btn accept' + (review.status==='accepted'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + safeKey + '\',\'accepted\')" style="font-size:10px;padding:3px 8px;">Accept</button>';
+      html += '<button class="doc-action-btn reject' + (review.status==='rejected'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + safeKey + '\',\'rejected\')" style="font-size:10px;padding:3px 8px;">Reject</button>';
+      html += '<button class="doc-action-btn info' + (review.status==='info_requested'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + safeKey + '\',\'info_requested\')" style="font-size:10px;padding:3px 8px;">Info</button>';
+      html += '</div></div>';
 
-      // Doc header
-      combinedHtml += '<div style="padding:10px 12px;background:var(--surface2);border-bottom:1px solid var(--border1);">';
-      combinedHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
-      combinedHtml += '<span style="font-size:16px;">' + (isBoUpload ? '📤' : '📄') + '</span>';
-      combinedHtml += '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(docName) + '</div><div style="font-size:10px;color:var(--text3);">' + escapeHtml(uploadDate) + '</div>' + statusHtml + '</div>';
-      combinedHtml += '</div>';
-      combinedHtml += '<div style="display:flex;gap:3px;">';
-      combinedHtml += '<button class="doc-action-btn accept' + (review.status==='accepted'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + docName.replace(/'/g,"\\'") + '\',\'accepted\')" style="font-size:10px;padding:3px 8px;">Accept</button>';
-      combinedHtml += '<button class="doc-action-btn reject' + (review.status==='rejected'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + docName.replace(/'/g,"\\'") + '\',\'rejected\')" style="font-size:10px;padding:3px 8px;">Reject</button>';
-      combinedHtml += '<button class="doc-action-btn info' + (review.status==='info_requested'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + docName.replace(/'/g,"\\'") + '\',\'info_requested\')" style="font-size:10px;padding:3px 8px;">Info</button>';
-      combinedHtml += '</div></div>';
-
-      // Compact verification
-      combinedHtml += '<div style="padding:8px 12px;background:' + (overall === 'Fail' ? 'rgba(220,38,38,0.03)' : overall === 'Warning' ? 'rgba(217,119,6,0.03)' : 'rgba(22,163,74,0.02)') + ';">';
-      combinedHtml += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
-      combinedHtml += '<span style="font-size:10px;font-weight:600;color:var(--text2);">AI Verification</span>';
-      combinedHtml += '<span style="font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;background:' + (overall === 'Pass' ? 'var(--green-bg)' : overall === 'Warning' ? 'var(--amber-bg)' : 'var(--red-bg)') + ';color:' + overallColor + ';">' + avgConf + '% ' + overall + '</span>';
-      combinedHtml += '</div>';
+      html += '<div style="padding:8px 12px;background:' + (overall === 'Fail' ? 'rgba(220,38,38,0.03)' : overall === 'Warning' ? 'rgba(217,119,6,0.03)' : 'rgba(22,163,74,0.02)') + ';">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+      html += '<span style="font-size:10px;font-weight:600;color:var(--text2);">AI Verification</span>';
+      html += '<span style="font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;background:' + (overall === 'Pass' ? 'var(--green-bg)' : overall === 'Warning' ? 'var(--amber-bg)' : 'var(--red-bg)') + ';color:' + overallColor + ';">' + avgConf + '% ' + overall + '</span>';
+      html += '</div>';
       tests.forEach(function(t) {
         var tc = t.result === 'Pass' ? 'var(--green)' : t.result === 'Warning' ? 'var(--amber)' : 'var(--red)';
         var icon = t.result === 'Pass' ? '✅' : t.result === 'Warning' ? '⚠️' : '❌';
-        combinedHtml += '<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0;color:var(--text2);"><span>' + escapeHtml(t.name) + '</span><span style="color:' + tc + ';font-weight:600;">' + icon + ' ' + t.confidence + '%</span></div>';
+        html += '<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0;color:var(--text2);"><span>' + escapeHtml(t.name) + '</span><span style="color:' + tc + ';font-weight:600;">' + icon + ' ' + t.confidence + '%</span></div>';
       });
-      combinedHtml += '</div></div>';
-    });
+      html += '</div></div>';
+      return html;
+    }
 
-    // Missing documents
-    var allDocs = ['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart'];
-    allDocs.forEach(function(d) {
+    // Helper: section header
+    function sectionHeader(icon, title, count, subtitle) {
+      return '<div style="grid-column:1/-1;margin-top:16px;margin-bottom:4px;padding:10px 14px;background:linear-gradient(135deg,rgba(43,47,143,0.06),rgba(43,47,143,0.02));border-radius:8px;border-left:3px solid var(--brand);">' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+        '<span style="font-size:16px;">' + icon + '</span>' +
+        '<div><div style="font-weight:700;font-size:13px;color:var(--text1);">' + title + '</div>' +
+        (subtitle ? '<div style="font-size:10px;color:var(--text3);margin-top:1px;">' + subtitle + '</div>' : '') +
+        '</div>' +
+        '<span style="margin-left:auto;font-size:10px;font-weight:600;color:var(--brand);background:rgba(43,47,143,0.08);padding:2px 8px;border-radius:10px;">' + count + ' docs</span>' +
+        '</div></div>';
+    }
+
+    // Open 3-column grid
+    combinedHtml += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">';
+
+    // ── SECTION A: Corporate Entity Documents ──
+    combinedHtml += sectionHeader('📋', 'Section A — Corporate Entity Documents', app.docs.length, 'Company registration, financial statements, and governance documents');
+    app.docs.forEach(function(docName) {
+      combinedHtml += renderDocCard(docName);
+    });
+    // Missing corporate docs
+    var allCorpDocs = ['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart'];
+    allCorpDocs.forEach(function(d) {
       if (app.docs.indexOf(d) === -1) {
-        combinedHtml += '<div style="border:1px solid var(--border1);border-radius:10px;padding:10px 12px;display:flex;align-items:center;gap:8px;opacity:0.5;">';
-        combinedHtml += '<span style="font-size:16px;">❌</span>';
-        combinedHtml += '<div><div style="font-weight:600;font-size:11px;">' + escapeHtml(d) + '</div><div style="font-size:10px;color:var(--red);">Missing</div></div>';
-        combinedHtml += '</div>';
+        combinedHtml += '<div style="border:1px solid var(--border1);border-radius:10px;padding:10px 12px;display:flex;align-items:center;gap:8px;opacity:0.5;">' +
+          '<span style="font-size:16px;">❌</span>' +
+          '<div><div style="font-weight:600;font-size:11px;">' + escapeHtml(d) + '</div><div style="font-size:10px;color:var(--red);">Missing</div></div></div>';
       }
     });
+
+    // ── SECTION B: Directors, UBOs & Intermediary Shareholder Documents ──
+    if (app.personDocs && app.personDocs.length > 0) {
+      combinedHtml += sectionHeader('👤', 'Section B — Directors, UBOs & Intermediary Documents', allPersonDocCount, 'Identity verification, proof of address, and KYC documents per individual');
+
+      app.personDocs.forEach(function(person) {
+        // Person sub-header
+        var pepBadge = person.pep === 'Yes' ? ' <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;margin-left:4px;">⚠ PEP</span>' : '';
+        combinedHtml += '<div style="grid-column:1/-1;margin-top:8px;padding:6px 12px;background:var(--surface2);border-radius:6px;border-left:2px solid var(--accent);">' +
+          '<span style="font-weight:600;font-size:11px;color:var(--text1);">' + escapeHtml(person.name) + '</span>' +
+          '<span style="font-size:10px;color:var(--text3);margin-left:8px;">' + escapeHtml(person.role) + '</span>' +
+          pepBadge + '</div>';
+
+        person.docs.forEach(function(doc) {
+          var uniqueKey = person.name + ' — ' + doc.type;
+          combinedHtml += renderDocCard(doc.type, uniqueKey, uniqueKey);
+        });
+
+        // Missing KYC docs for this person
+        var expectedPersonDocs = ['Passport / ID', 'Proof of Address'];
+        if (person.pep === 'Yes') { expectedPersonDocs.push('Bank Reference Letter'); expectedPersonDocs.push('Source of Wealth Declaration'); }
+        var personDocTypes = person.docs.map(function(d){ return d.type; });
+        expectedPersonDocs.forEach(function(d) {
+          if (personDocTypes.indexOf(d) === -1) {
+            combinedHtml += '<div style="border:1px solid var(--border1);border-radius:10px;padding:10px 12px;display:flex;align-items:center;gap:8px;opacity:0.5;">' +
+              '<span style="font-size:16px;">❌</span>' +
+              '<div><div style="font-weight:600;font-size:11px;">' + escapeHtml(d) + '</div><div style="font-size:10px;color:var(--red);">Missing — ' + escapeHtml(person.name) + '</div></div></div>';
+          }
+        });
+      });
+    }
+
+    // ── SECTION C: Business Operating Documents ──
+    if (app.businessDocs && app.businessDocs.length > 0) {
+      combinedHtml += sectionHeader('🏢', 'Section C — Business Operating Documents', app.businessDocs.length, 'Optional supporting business documentation');
+      app.businessDocs.forEach(function(docName) {
+        combinedHtml += renderDocCard(docName, app.company + docName);
+      });
+    }
+
+    // ── SECTION D: Other Documents ──
+    if (app.otherDocs && app.otherDocs.length > 0) {
+      combinedHtml += sectionHeader('📂', 'Section D — Other Documents', app.otherDocs.length, 'Additional supporting documentation');
+      app.otherDocs.forEach(function(docName) {
+        combinedHtml += renderDocCard(docName, app.ref + docName);
+      });
+    }
 
     // Close grid
     combinedHtml += '</div>';

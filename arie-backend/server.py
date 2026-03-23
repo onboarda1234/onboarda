@@ -4031,7 +4031,7 @@ if __name__ == "__main__":
 ║    IP Geolocation:   {ip_status:<27s}║
 ║    Sumsub KYC:       {sumsub_status:<27s}║
 ║                                                  ║
-║  Admin email: asudally@ariefinance.mu              ║
+║  Admin email: asudally@onboarda.com                ║
 ║  Password: see initial boot output above          ║
 ╚══════════════════════════════════════════════════╝
     """)
