@@ -6065,7 +6065,7 @@ var KYC_PERSON_DOC_RULES = {
 };
 
 // Simulate AI verification with realistic delays
-function runAIDocVerification(docId, fileName) {
+async function runAIDocVerification(docId, fileName) {
   var rules = DOC_RULES[docId];
   if (!rules) return;
 
@@ -6080,29 +6080,33 @@ function runAIDocVerification(docId, fileName) {
   resultsDiv.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><span class="spinner-sm"></span><span style="font-weight:600;color:var(--text2);">AI Verifying: ' + escapeHtml(rules.name) + '...</span></div>';
   item.appendChild(resultsDiv);
 
-  // Simulate checks one by one
-  var checks = rules.checks;
-  var delay = 800;
-  checks.forEach(function(check, idx) {
-    setTimeout(function() {
-      // Simulate: most checks pass, but occasionally flag issues for demo
-      var passed = true;
-      var message = '';
-      var severity = 'pass'; // pass, warn, fail
+  try {
+    // Call real AI verification API
+    var response = await apiCall('POST', '/api/documents/ai-verify', {
+      doc_type: docId,
+      file_name: fileName,
+      person_name: '',
+      doc_category: 'company'
+    });
 
-      // Simulate realistic issues based on rule type
-      if (check.type === 'expiry' && Math.random() < 0.15) {
-        passed = false; severity = 'fail';
-        message = 'Document appears to be expired. Please upload a valid, unexpired document.';
-      } else if (check.type === 'age' && Math.random() < 0.12) {
-        passed = false; severity = 'warn';
-        message = 'Document may be older than ' + (check.maxMonths || 3) + ' months. Please verify the date or upload a more recent version.';
-      } else if (check.type === 'quality' && Math.random() < 0.10) {
-        passed = false; severity = 'warn';
-        message = 'Document appears blurry or partially illegible. Please upload a clearer copy.';
-      } else if (check.type === 'name' && Math.random() < 0.08) {
-        passed = false; severity = 'warn';
-        message = 'Entity/person name on document could not be confidently matched to application. Please verify.';
+    var apiChecks = response.checks || [];
+    var fails = 0;
+    var warns = 0;
+
+    // Remove spinner
+    var spinner = resultsDiv.querySelector('.spinner-sm');
+    if (spinner) spinner.parentElement.remove();
+
+    // Match API response checks against local rule definitions for display
+    rules.checks.forEach(function(ruleCheck) {
+      var apiCheck = apiChecks.find(function(c) { return c.type === ruleCheck.type; }) || {};
+      var passed = apiCheck.result === 'pass' || apiCheck.result === undefined;
+      var severity = apiCheck.result || 'pass';
+      var message = apiCheck.message || '';
+
+      if (!passed) {
+        if (severity === 'fail') fails++;
+        else warns++;
       }
 
       var icon = passed ? '✅' : (severity === 'fail' ? '❌' : '⚠️');
@@ -6110,32 +6114,59 @@ function runAIDocVerification(docId, fileName) {
       var resultHTML = '<div class="doc-verify-row" style="display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-top:1px solid var(--border1);">' +
         '<span>' + icon + '</span>' +
         '<div style="flex:1;">' +
-          '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(check.label) + '</div>' +
-          '<div style="color:var(--text3);font-size:11px;">' + escapeHtml(check.rule) + '</div>' +
+          '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(ruleCheck.label) + '</div>' +
+          '<div style="color:var(--text3);font-size:11px;">' + escapeHtml(ruleCheck.rule) + '</div>' +
           (message ? '<div style="color:' + color + ';font-size:11px;margin-top:2px;font-weight:500;">' + escapeHtml(message) + '</div>' : '') +
         '</div>' +
       '</div>';
-
-      // Remove spinner on last check
-      if (idx === checks.length - 1) {
-        var spinner = resultsDiv.querySelector('.spinner-sm');
-        if (spinner) spinner.parentElement.remove();
-        // Add summary
-        var allPassed = resultsDiv.querySelectorAll('.doc-verify-row').length === 0 || true; // simplified
-        var warns = resultsDiv.querySelectorAll('[style*="d97706"]').length;
-        var fails = resultsDiv.querySelectorAll('[style*="var(--red)"]').length;
-        var summaryColor = fails > 0 ? 'var(--red)' : (warns > 0 ? '#d97706' : 'var(--green)');
-        var summaryText = fails > 0 ? '❌ Issues found — action required' : (warns > 0 ? '⚠️ Warnings — please review' : '✅ All checks passed');
-        resultsDiv.insertAdjacentHTML('afterbegin', '<div style="font-weight:600;color:' + summaryColor + ';margin-bottom:6px;">' + summaryText + '</div>');
-
-        if (fails > 0 || warns > 0) {
-          showToast('warn', 'Document Review', 'AI flagged issues with ' + rules.name + '. Please review the comments below the document.');
-        }
-      }
-
       resultsDiv.insertAdjacentHTML('beforeend', resultHTML);
-    }, delay * (idx + 1));
-  });
+    });
+
+    // Also render any extra checks returned by the API that aren't in local rules
+    apiChecks.forEach(function(apiCheck) {
+      var hasLocal = rules.checks.some(function(r) { return r.type === apiCheck.type; });
+      if (!hasLocal) {
+        var passed = apiCheck.result === 'pass';
+        if (!passed) {
+          if (apiCheck.result === 'fail') fails++;
+          else warns++;
+        }
+        var icon = passed ? '✅' : (apiCheck.result === 'fail' ? '❌' : '⚠️');
+        var color = passed ? 'var(--green)' : (apiCheck.result === 'fail' ? 'var(--red)' : '#d97706');
+        var resultHTML = '<div class="doc-verify-row" style="display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-top:1px solid var(--border1);">' +
+          '<span>' + icon + '</span>' +
+          '<div style="flex:1;">' +
+            '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(apiCheck.label) + '</div>' +
+            (apiCheck.message ? '<div style="color:' + color + ';font-size:11px;margin-top:2px;">' + escapeHtml(apiCheck.message) + '</div>' : '') +
+          '</div>' +
+        '</div>';
+        resultsDiv.insertAdjacentHTML('beforeend', resultHTML);
+      }
+    });
+
+    // Add summary at top
+    var summaryColor = fails > 0 ? 'var(--red)' : (warns > 0 ? '#d97706' : 'var(--green)');
+    var summaryText = fails > 0 ? '❌ Issues found — action required' : (warns > 0 ? '⚠️ Warnings — please review' : '✅ All checks passed');
+    resultsDiv.insertAdjacentHTML('afterbegin', '<div style="font-weight:600;color:' + summaryColor + ';margin-bottom:6px;">' + summaryText + '</div>');
+
+    // Show red flags if any
+    if (response.red_flags && response.red_flags.length > 0) {
+      var flagsHTML = '<div style="margin-top:6px;padding:6px 8px;background:var(--red-dim,#fff5f5);border:1px solid var(--red);border-radius:4px;font-size:11px;color:var(--red);">' +
+        '<strong>Red Flags:</strong> ' + response.red_flags.map(function(f) { return escapeHtml(f); }).join('; ') + '</div>';
+      resultsDiv.insertAdjacentHTML('beforeend', flagsHTML);
+    }
+
+    if (fails > 0 || warns > 0) {
+      showToast('warn', 'Document Review', 'AI flagged issues with ' + rules.name + '. Please review the comments below the document.');
+    }
+
+  } catch (err) {
+    // Fallback: remove spinner and show error
+    var spinner = resultsDiv.querySelector('.spinner-sm');
+    if (spinner) spinner.parentElement.remove();
+    resultsDiv.innerHTML = '<div style="font-weight:600;color:#d97706;margin-bottom:6px;">⚠️ Verification unavailable</div>' +
+      '<div style="color:var(--text3);font-size:11px;">Could not complete AI verification. Please try again or contact support.</div>';
+  }
 }
 
 async function runAIPersonDocVerification(personId, docType, fileName) {

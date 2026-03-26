@@ -790,16 +790,16 @@ body.role-admin .role-admin-only-block { display:block; }
       <div class="card-header"><div class="card-title">Onboarding Lanes</div></div>
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Fast Lane (Low Risk)</span><span style="font-weight:700;color:var(--green);">18</span></div>
-          <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div style="width:38%;height:100%;background:var(--green);border-radius:5px;"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Fast Lane (Low Risk)</span><span id="lane-fast-count" style="font-weight:700;color:var(--green);">0</span></div>
+          <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div id="lane-fast-bar" style="width:0%;height:100%;background:var(--green);border-radius:5px;transition:width 0.5s;"></div></div>
         </div>
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Standard Review (Medium)</span><span style="font-weight:700;color:var(--blue);">12</span></div>
-          <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div style="width:26%;height:100%;background:var(--blue);border-radius:5px;"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Standard Review (Medium)</span><span id="lane-standard-count" style="font-weight:700;color:var(--blue);">0</span></div>
+          <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div id="lane-standard-bar" style="width:0%;height:100%;background:var(--blue);border-radius:5px;transition:width 0.5s;"></div></div>
         </div>
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Enhanced Due Diligence (High/Very High)</span><span style="font-weight:700;color:var(--amber);">17</span></div>
-          <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div style="width:36%;height:100%;background:var(--amber);border-radius:5px;"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Enhanced Due Diligence (High/Very High)</span><span id="lane-edd-count" style="font-weight:700;color:var(--amber);">0</span></div>
+          <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div id="lane-edd-bar" style="width:0%;height:100%;background:var(--amber);border-radius:5px;transition:width 0.5s;"></div></div>
         </div>
       </div>
     </div>
@@ -1348,31 +1348,18 @@ body.role-admin .role-admin-only-block { display:block; }
 <!-- ═══════════════ REPORTS VIEW ═══════════════ -->
 <div class="view" id="view-reports">
   <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);">
-    <div class="stat-card"><div class="stat-card-label">Applications (YTD)</div><div class="stat-card-value">47</div></div>
-    <div class="stat-card"><div class="stat-card-label">Approval Rate</div><div class="stat-card-value" style="color:var(--green);">78%</div></div>
-    <div class="stat-card"><div class="stat-card-label">Avg. Risk Score</div><div class="stat-card-value">38.2</div></div>
+    <div class="stat-card"><div class="stat-card-label">Applications (YTD)</div><div class="stat-card-value" id="report-ytd-count">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Approval Rate</div><div class="stat-card-value" id="report-approval-rate" style="color:var(--green);">—</div></div>
+    <div class="stat-card"><div class="stat-card-label">Avg. Risk Score</div><div class="stat-card-value" id="report-avg-score">—</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
     <div class="card">
       <div class="card-title" style="margin-bottom:16px;">Monthly Application Trend</div>
-      <div style="display:flex;align-items:flex-end;gap:8px;height:140px;">
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;" title="Oct"><div style="width:100%;background:var(--brand);border-radius:4px 4px 0 0;height:60px;"></div><span style="font-size:10px;color:var(--text3);">Oct</span></div>
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;" title="Nov"><div style="width:100%;background:var(--brand);border-radius:4px 4px 0 0;height:80px;"></div><span style="font-size:10px;color:var(--text3);">Nov</span></div>
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;" title="Dec"><div style="width:100%;background:var(--brand);border-radius:4px 4px 0 0;height:50px;"></div><span style="font-size:10px;color:var(--text3);">Dec</span></div>
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;" title="Jan"><div style="width:100%;background:var(--brand);border-radius:4px 4px 0 0;height:90px;"></div><span style="font-size:10px;color:var(--text3);">Jan</span></div>
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;" title="Feb"><div style="width:100%;background:var(--brand);border-radius:4px 4px 0 0;height:100px;"></div><span style="font-size:10px;color:var(--text3);">Feb</span></div>
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;" title="Mar"><div style="width:100%;background:var(--brand-light);border-radius:4px 4px 0 0;height:130px;"></div><span style="font-size:10px;color:var(--text3);">Mar</span></div>
-      </div>
+      <div id="report-monthly-chart" style="display:flex;align-items:flex-end;gap:8px;height:140px;"></div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:16px;">Top Rejection Reasons</div>
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>Incomplete documentation</span><span style="font-weight:600;">35%</span></div><div style="height:6px;background:var(--surface3);border-radius:3px;"><div style="width:35%;height:100%;background:var(--red);border-radius:3px;"></div></div></div>
-        <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>Prohibited sector</span><span style="font-weight:600;">25%</span></div><div style="height:6px;background:var(--surface3);border-radius:3px;"><div style="width:25%;height:100%;background:var(--amber);border-radius:3px;"></div></div></div>
-        <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>Sanctions match</span><span style="font-weight:600;">20%</span></div><div style="height:6px;background:var(--surface3);border-radius:3px;"><div style="width:20%;height:100%;background:var(--amber);border-radius:3px;"></div></div></div>
-        <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>Outside risk appetite</span><span style="font-weight:600;">15%</span></div><div style="height:6px;background:var(--surface3);border-radius:3px;"><div style="width:15%;height:100%;background:var(--blue);border-radius:3px;"></div></div></div>
-        <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>Adverse media</span><span style="font-weight:600;">5%</span></div><div style="height:6px;background:var(--surface3);border-radius:3px;"><div style="width:5%;height:100%;background:var(--text3);border-radius:3px;"></div></div></div>
-      </div>
+      <div class="card-title" style="margin-bottom:16px;">Risk Distribution</div>
+      <div id="report-risk-chart" style="display:flex;flex-direction:column;gap:10px;"></div>
     </div>
   </div>
 </div>
@@ -2702,6 +2689,7 @@ function showView(name, navItem) {
   if (name === 'supervisor') refreshSupervisorDashboard();
   if (name === 'supervisor-audit') refreshSupervisorAudit();
   if (name === 'agent-health') renderAgentHealth();
+  if (name === 'reports') renderReportsFromData();
   if (name === 'settings') { try { checkAPIStatus(); } catch(e) {} }
 }
 
@@ -2744,6 +2732,87 @@ function renderDashboardRecent() {
     tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
+  updateOnboardingLanes();
+}
+
+function renderReportsFromData() {
+  var total = APPLICATIONS.length;
+  var approved = APPLICATIONS.filter(function(a) { return a.status === 'approved'; }).length;
+  var scores = APPLICATIONS.map(function(a) { return parseFloat(a.score) || 0; });
+  var avgScore = scores.length ? (scores.reduce(function(s,v){ return s+v; }, 0) / scores.length).toFixed(1) : '—';
+  var approvalRate = total > 0 ? Math.round(approved / total * 100) + '%' : '—';
+
+  var el;
+  el = document.getElementById('report-ytd-count'); if (el) el.textContent = total;
+  el = document.getElementById('report-approval-rate'); if (el) el.textContent = approvalRate;
+  el = document.getElementById('report-avg-score'); if (el) el.textContent = avgScore;
+
+  // Monthly trend chart — group applications by month
+  var monthCounts = {};
+  var monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  APPLICATIONS.forEach(function(a) {
+    if (!a.date) return;
+    var parts = a.date.split(/[-\/]/);
+    var m = parseInt(parts[1] || parts[0], 10);
+    var key = monthNames[(m - 1) % 12] || 'Unknown';
+    monthCounts[key] = (monthCounts[key] || 0) + 1;
+  });
+  var chartEl = document.getElementById('report-monthly-chart');
+  if (chartEl) {
+    var months = Object.keys(monthCounts);
+    if (months.length === 0) months = ['No data'];
+    var maxCount = Math.max.apply(null, Object.values(monthCounts).concat([1]));
+    var html = '';
+    months.forEach(function(m) {
+      var count = monthCounts[m] || 0;
+      var h = Math.max(Math.round(count / maxCount * 130), 4);
+      html += '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;" title="' + m + ': ' + count + '">' +
+        '<div style="font-size:9px;color:var(--text3);">' + count + '</div>' +
+        '<div style="width:100%;background:var(--brand);border-radius:4px 4px 0 0;height:' + h + 'px;"></div>' +
+        '<span style="font-size:10px;color:var(--text3);">' + m + '</span></div>';
+    });
+    chartEl.innerHTML = html;
+  }
+
+  // Risk distribution chart
+  var riskCounts = { LOW: 0, MEDIUM: 0, HIGH: 0, VERY_HIGH: 0 };
+  APPLICATIONS.forEach(function(a) {
+    var r = (a.risk || '').toUpperCase().replace(' ', '_');
+    if (riskCounts[r] !== undefined) riskCounts[r]++;
+    else riskCounts['MEDIUM']++;
+  });
+  var riskEl = document.getElementById('report-risk-chart');
+  if (riskEl) {
+    var riskColors = { LOW: 'var(--green)', MEDIUM: 'var(--blue)', HIGH: 'var(--amber)', VERY_HIGH: 'var(--red)' };
+    var riskLabels = { LOW: 'Low Risk', MEDIUM: 'Medium Risk', HIGH: 'High Risk', VERY_HIGH: 'Very High Risk' };
+    var html = '';
+    ['LOW','MEDIUM','HIGH','VERY_HIGH'].forEach(function(r) {
+      var count = riskCounts[r];
+      var pct = total > 0 ? Math.round(count / total * 100) : 0;
+      html += '<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>' + riskLabels[r] + '</span><span style="font-weight:600;">' + count + ' (' + pct + '%)</span></div>' +
+        '<div style="height:6px;background:var(--surface3);border-radius:3px;"><div style="width:' + pct + '%;height:100%;background:' + riskColors[r] + ';border-radius:3px;"></div></div></div>';
+    });
+    riskEl.innerHTML = html;
+  }
+}
+
+function updateOnboardingLanes() {
+  var fast = 0, standard = 0, edd = 0;
+  APPLICATIONS.forEach(function(app) {
+    var risk = (app.risk || '').toUpperCase();
+    if (risk === 'LOW') fast++;
+    else if (risk === 'MEDIUM') standard++;
+    else if (risk === 'HIGH' || risk === 'VERY_HIGH' || risk === 'VERY HIGH') edd++;
+    else standard++; // default to standard if unknown
+  });
+  var total = Math.max(fast + standard + edd, 1);
+  var el;
+  el = document.getElementById('lane-fast-count'); if (el) el.textContent = fast;
+  el = document.getElementById('lane-fast-bar'); if (el) el.style.width = Math.round(fast / total * 100) + '%';
+  el = document.getElementById('lane-standard-count'); if (el) el.textContent = standard;
+  el = document.getElementById('lane-standard-bar'); if (el) el.style.width = Math.round(standard / total * 100) + '%';
+  el = document.getElementById('lane-edd-count'); if (el) el.textContent = edd;
+  el = document.getElementById('lane-edd-bar'); if (el) el.style.width = Math.round(edd / total * 100) + '%';
 }
 
 function renderApplications() {
