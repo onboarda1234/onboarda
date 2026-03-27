@@ -943,6 +943,17 @@ def _run_migrations(db: DBConnection):
                 logger.debug(f"Migration column may already exist: {e}")
         logger.info("Migration v2.1: Pre-approval columns added")
 
+    # Check if s3_key column exists on documents table
+    try:
+        db.execute("SELECT s3_key FROM documents LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.2: Adding s3_key column to documents table")
+        try:
+            db.execute("ALTER TABLE documents ADD COLUMN s3_key TEXT")
+        except Exception as e:
+            logger.debug(f"Migration s3_key column may already exist: {e}")
+        logger.info("Migration v2.2: s3_key column added")
+
 
 # ============================================================================
 # Seed Data
