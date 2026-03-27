@@ -399,12 +399,7 @@ class HealthHandler(BaseHandler):
         # Database connectivity check
         try:
             db = get_db()
-            if USE_POSTGRES:
-                cur = db.cursor()
-                cur.execute("SELECT 1")
-                cur.close()
-            else:
-                db.execute("SELECT 1")
+            db.execute("SELECT 1")
             db.close()
             health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
         except Exception as e:
