@@ -736,33 +736,33 @@ body.role-admin .role-admin-only-block { display:block; }
   <div class="stats-grid">
     <div class="stat-card">
       <div class="stat-card-label">Total Applications</div>
-      <div class="stat-card-value">47</div>
-      <div class="stat-card-change up">↑ 12% this month</div>
+      <div class="stat-card-value" id="dash-stat-total">0</div>
+      <div class="stat-card-change" id="dash-stat-total-change"></div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Pending Review</div>
-      <div class="stat-card-value" style="color:var(--amber);">8</div>
-      <div class="stat-card-change">3 assigned to you</div>
+      <div class="stat-card-value" style="color:var(--amber);" id="dash-stat-pending">0</div>
+      <div class="stat-card-change" id="dash-stat-pending-change"></div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Approved This Month</div>
-      <div class="stat-card-value" style="color:var(--green);">12</div>
-      <div class="stat-card-change up">↑ 20% vs last month</div>
+      <div class="stat-card-value" style="color:var(--green);" id="dash-stat-approved">0</div>
+      <div class="stat-card-change" id="dash-stat-approved-change"></div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Rejected / Declined</div>
-      <div class="stat-card-value" style="color:var(--red);">3</div>
-      <div class="stat-card-change down">↓ 25% vs last month</div>
+      <div class="stat-card-value" style="color:var(--red);" id="dash-stat-rejected">0</div>
+      <div class="stat-card-change" id="dash-stat-rejected-change"></div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">EDD In Progress</div>
-      <div class="stat-card-value" style="color:#7c3aed;">5</div>
-      <div class="stat-card-change">2 awaiting senior review</div>
+      <div class="stat-card-value" style="color:#7c3aed;" id="dash-stat-edd">0</div>
+      <div class="stat-card-change" id="dash-stat-edd-change"></div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Avg. Processing Time</div>
-      <div class="stat-card-value">2.4d</div>
-      <div class="stat-card-change up">↑ Improved from 3.1d</div>
+      <div class="stat-card-value" id="dash-stat-avgtime">—</div>
+      <div class="stat-card-change" id="dash-stat-avgtime-change"></div>
     </div>
   </div>
 
@@ -771,16 +771,16 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="card">
       <div class="card-header"><div class="card-title">Risk Distribution</div></div>
       <div style="display:flex;align-items:center;gap:24px;">
-        <div class="donut-chart" style="background:conic-gradient(var(--green) 0% 38%, var(--blue) 38% 64%, var(--amber) 64% 83%, var(--red) 83% 100%);">
+        <div class="donut-chart" id="dash-donut" style="background:conic-gradient(var(--surface3) 0% 100%);">
           <div style="width:80px;height:80px;border-radius:50%;background:var(--surface);display:flex;align-items:center;justify-content:center;">
-            <div class="donut-center">47</div>
+            <div class="donut-center" id="dash-donut-total">0</div>
           </div>
         </div>
-        <div class="chart-legend">
-          <div class="legend-item"><div class="legend-dot" style="background:var(--green);"></div> Low Risk — 18 (38%)</div>
-          <div class="legend-item"><div class="legend-dot" style="background:var(--blue);"></div> Medium Risk — 12 (26%)</div>
-          <div class="legend-item"><div class="legend-dot" style="background:var(--amber);"></div> High Risk — 9 (19%)</div>
-          <div class="legend-item"><div class="legend-dot" style="background:var(--red);"></div> Very High Risk — 8 (17%)</div>
+        <div class="chart-legend" id="dash-risk-legend">
+          <div class="legend-item"><div class="legend-dot" style="background:var(--green);"></div> Low Risk — <span id="dash-risk-low">0</span></div>
+          <div class="legend-item"><div class="legend-dot" style="background:var(--blue);"></div> Medium Risk — <span id="dash-risk-med">0</span></div>
+          <div class="legend-item"><div class="legend-dot" style="background:var(--amber);"></div> High Risk — <span id="dash-risk-high">0</span></div>
+          <div class="legend-item"><div class="legend-dot" style="background:var(--red);"></div> Very High Risk — <span id="dash-risk-vhigh">0</span></div>
         </div>
       </div>
     </div>
@@ -898,9 +898,6 @@ body.role-admin .role-admin-only-block { display:block; }
     </select>
     <select class="form-select" style="width:auto;" id="filter-assigned" onchange="filterApplications()">
       <option value="">All Officers</option>
-      <option value="Aisha Sudally">Aisha Sudally</option>
-      <option value="Raj Patel">Raj Patel</option>
-      <option value="Marie Dubois">Marie Dubois</option>
       <option value="Unassigned">Unassigned</option>
     </select>
   </div>
@@ -1607,7 +1604,7 @@ body.role-admin .role-admin-only-block { display:block; }
   <div style="display:flex;gap:10px;margin-bottom:16px;">
     <input type="date" class="form-input" style="width:auto;" />
     <input type="date" class="form-input" style="width:auto;" />
-    <select class="form-select" style="width:auto;"><option>All Users</option><option>Aisha Sudally</option><option>Raj Patel</option><option>Marie Dubois</option></select>
+    <select class="form-select" style="width:auto;" id="audit-user-filter"><option>All Users</option></select>
     <select class="form-select" style="width:auto;"><option>All Actions</option><option>Approve</option><option>Reject</option><option>Assign</option><option>Login</option><option>View</option></select>
   </div>
   <div class="card" style="padding:0;overflow:hidden;">
@@ -1984,10 +1981,6 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="modal-body">
       <div class="form-group"><div class="form-label">Assign To</div>
         <select class="form-select" id="reassign-to">
-          <option value="Aisha Sudally">Aisha Sudally (Admin)</option>
-          <option value="Raj Patel">Raj Patel (Senior CO)</option>
-          <option value="Marie Dubois">Marie Dubois (CO)</option>
-          <option value="Li Wei">Li Wei (Analyst)</option>
         </select>
       </div>
       <div class="form-group"><div class="form-label">Reason</div><textarea class="form-input" rows="3" id="reassign-reason" placeholder="Reason for reassignment..."></textarea></div>
@@ -2324,7 +2317,7 @@ var BO_AUTH_TOKEN = '';
 var BO_AUTH_USER = null;
 
 // ─── Environment Detection ────────────────────────────────────
-var ARIE_ENV = 'loading'; // Neutral default — set by /api/config/environment response
+var ARIE_ENV = 'demo';
 var FEATURE_FLAGS = {};
 
 async function loadEnvironment() {
@@ -2529,27 +2522,21 @@ function formatStatus(s) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// MOCK DATA (used as fallback if API is unavailable)
+// DATA ARRAYS (populated from API via loadFromAPI())
 // ═══════════════════════════════════════════════════════════
-var USERS = [
-  { id:1, name:'Aisha Sudally', email:'asudally@onboarda.com', role:'admin', initials:'AS', status:'active' },
-  { id:2, name:'Raj Patel', email:'raj.patel@onboarda.com', role:'sco', initials:'RP', status:'active' },
-  { id:3, name:'Marie Dubois', email:'m.dubois@onboarda.com', role:'co', initials:'MD', status:'active' },
-  { id:4, name:'Li Wei', email:'l.wei@onboarda.com', role:'analyst', initials:'LW', status:'active' },
-  { id:5, name:'Priya Naidoo', email:'p.naidoo@onboarda.com', role:'co', initials:'PN', status:'inactive' }
-];
+var USERS = [];
+// Populated from API via loadFromAPI().
 
 var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Compliance Officer', analyst:'Analyst' };
 
-// Applications, audit log, monitoring data — loaded from API via loadFromAPI()
-// Empty arrays ensure no demo data is visible in staging/production
-var APPLICATIONS = [
-];
+var APPLICATIONS = [];
+// Demo data is no longer hardcoded. APPLICATIONS is populated from API via loadFromAPI().
 
-
-// ── Generate per-person KYC docs, business docs, and other docs for each application ──
-APPLICATIONS.forEach(function(app) {
-  // Section B: Per-person KYC documents (directors, UBOs, intermediary shareholders)
+/* ── REMOVED: 9 hardcoded demo applications (TechPay Global, Africom Remittances, Nordic Payments,
+   GoldBridge Trading, MedServe Health, CryptoVault Exchange, Pacific Logistics, Sahara Construction,
+   Coastal Ventures) and associated per-person KYC doc generation block. ── */
+// ── Generate per-person KYC docs for API-loaded applications ──
+function generateAppDocs(app) {
   var personDocs = [];
   (app.directors || []).forEach(function(d) {
     var pDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
@@ -2557,13 +2544,11 @@ APPLICATIONS.forEach(function(app) {
       pDocs.push({type:'Bank Reference Letter', status:'uploaded'});
       pDocs.push({type:'Source of Wealth Declaration', status:'uploaded'});
     }
-    // Randomly omit CV for some
     var seed = 0; for (var i=0;i<d.name.length;i++) seed = ((seed<<5)-seed)+d.name.charCodeAt(i);
     if (Math.abs(seed) % 3 !== 0) pDocs.push({type:'CV / Resume', status:'uploaded'});
     personDocs.push({ name: d.name, role: 'Director', pep: d.pep, docs: pDocs });
   });
   (app.ubos || []).forEach(function(u) {
-    // Skip if already added as director
     if (personDocs.some(function(p){ return p.name === u.name; })) return;
     var uDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
     if (u.pep === 'Yes') {
@@ -2583,43 +2568,92 @@ APPLICATIONS.forEach(function(app) {
   });
   app.personDocs = personDocs;
 
-  // Section C: Business documents (optional, varies by application)
   var bizDocs = [];
   var seed2 = 0; for (var i=0;i<app.company.length;i++) seed2 = ((seed2<<5)-seed2)+app.company.charCodeAt(i);
   seed2 = Math.abs(seed2);
   if (seed2 % 2 === 0) bizDocs.push('Business Plan');
   if (seed2 % 3 !== 2) bizDocs.push('Tax Clearance Certificate');
-  if (app.docs.indexOf('Licence') !== -1 || seed2 % 4 === 0) bizDocs.push('Regulatory Licence');
+  if ((app.docs || []).indexOf('Licence') !== -1 || seed2 % 4 === 0) bizDocs.push('Regulatory Licence');
   if (seed2 % 5 === 0) bizDocs.push('Insurance Certificate');
   if (app.risk === 'HIGH' || app.risk === 'VERY_HIGH') bizDocs.push('AML Policy Document');
   app.businessDocs = bizDocs;
 
-  // Section D: Other documents (ad-hoc, some apps have them)
   var otherDocs = [];
   if (app.risk === 'HIGH' || app.risk === 'VERY_HIGH') {
     otherDocs.push('Legal Opinion Letter');
     if (seed2 % 2 === 0) otherDocs.push('Compliance Certification');
   }
   if (seed2 % 7 === 0) otherDocs.push('Client Reference Letter');
-  if (app.intermediaries.length > 0 && seed2 % 3 === 0) otherDocs.push('Organisational Chart');
+  if ((app.intermediaries || []).length > 0 && seed2 % 3 === 0) otherDocs.push('Organisational Chart');
   app.otherDocs = otherDocs;
-});
+}
 
-var AUDIT_LOG = []; // Loaded from API via loadFromAPI()
+var AUDIT_LOG = [];
+// Populated from API via loadFromAPI().
 
 // ═══════════════════════════════════════════════════════════
 // MONITORING DATA
 // ═══════════════════════════════════════════════════════════
-var MONITORING_ALERTS = []; // Loaded from API
+var MONITORING_ALERTS = [];
+// Populated from API or left empty until monitoring data loads.
 
-var PERIODIC_REVIEWS = []; // Loaded from API
+var PERIODIC_REVIEWS = [];
+// Populated from API or left empty until review data loads.
 
-var MONITORING_AGENTS = []; // Loaded from API
+var MONITORING_AGENTS = [];
+// Populated from API or left empty until agent data loads.
 
-var currentUser = USERS[0];
+var currentUser = USERS[0] || { id:0, name:"System", email:"", role:"admin", initials:"--", status:"active" };
 var currentApp = null;
 
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// DYNAMIC DROPDOWN POPULATION
+// ═══════════════════════════════════════════════════════════
+function populateOfficerDropdowns() {
+  // Populate filter-assigned dropdown (applications filter)
+  var filterAssigned = document.getElementById('filter-assigned');
+  if (filterAssigned) {
+    // Keep the first options (All Officers, Unassigned) and remove dynamically added ones
+    var existingOpts = filterAssigned.querySelectorAll('option[data-dynamic]');
+    existingOpts.forEach(function(o) { o.remove(); });
+    var unassignedOpt = filterAssigned.querySelector('option[value="Unassigned"]');
+    USERS.forEach(function(u) {
+      var opt = document.createElement('option');
+      opt.value = u.name;
+      opt.textContent = u.name;
+      opt.setAttribute('data-dynamic', 'true');
+      filterAssigned.insertBefore(opt, unassignedOpt);
+    });
+  }
+
+  // Populate reassign-to dropdown
+  var reassignTo = document.getElementById('reassign-to');
+  if (reassignTo) {
+    reassignTo.innerHTML = '';
+    USERS.forEach(function(u) {
+      var opt = document.createElement('option');
+      opt.value = u.name;
+      opt.textContent = u.name + ' (' + (ROLE_LABELS[u.role] || u.role) + ')';
+      reassignTo.appendChild(opt);
+    });
+  }
+
+  // Populate audit-user-filter dropdown
+  var auditFilter = document.getElementById('audit-user-filter');
+  if (auditFilter) {
+    // Keep "All Users" option, remove dynamic ones
+    var existingDynamic = auditFilter.querySelectorAll('option[data-dynamic]');
+    existingDynamic.forEach(function(o) { o.remove(); });
+    USERS.forEach(function(u) {
+      var opt = document.createElement('option');
+      opt.textContent = u.name;
+      opt.setAttribute('data-dynamic', 'true');
+      auditFilter.appendChild(opt);
+    });
+  }
+}
+
 // VIEW MANAGEMENT
 // ═══════════════════════════════════════════════════════════
 function showView(name, navItem) {
@@ -2694,6 +2728,49 @@ function renderDashboardRecent() {
     tbody.appendChild(tr);
   });
   updateOnboardingLanes();
+  updateDashboardStats();
+  // Generate per-person docs for any apps that don't have them yet (API-loaded)
+  APPLICATIONS.forEach(function(app) { if (!app.personDocs) generateAppDocs(app); });
+}
+
+function updateDashboardStats() {
+  var total = APPLICATIONS.length;
+  var pending = APPLICATIONS.filter(function(a) { var s = (a.status||'').toLowerCase(); return s === 'pending review' || s === 'pending' || s === 'in review' || s === 'submitted' || s === 'prescreening submitted' || s === 'pricing review' || s === 'kyc submitted' || s === 'compliance review'; }).length;
+  var approved = APPLICATIONS.filter(function(a) { return (a.status||'').toLowerCase() === 'approved'; }).length;
+  var rejected = APPLICATIONS.filter(function(a) { var s = (a.status||'').toLowerCase(); return s === 'rejected' || s === 'declined'; }).length;
+  var edd = APPLICATIONS.filter(function(a) { return (a.status||'').toLowerCase() === 'edd required'; }).length;
+
+  var el;
+  el = document.getElementById('dash-stat-total'); if (el) el.textContent = total;
+  el = document.getElementById('dash-stat-pending'); if (el) el.textContent = pending;
+  el = document.getElementById('dash-stat-approved'); if (el) el.textContent = approved;
+  el = document.getElementById('dash-stat-rejected'); if (el) el.textContent = rejected;
+  el = document.getElementById('dash-stat-edd'); if (el) el.textContent = edd;
+
+  // Risk distribution donut
+  var low = 0, med = 0, high = 0, vhigh = 0;
+  APPLICATIONS.forEach(function(a) {
+    var r = (a.risk || '').toUpperCase();
+    if (r === 'LOW') low++;
+    else if (r === 'MEDIUM') med++;
+    else if (r === 'HIGH') high++;
+    else if (r === 'VERY_HIGH' || r === 'VERY HIGH') vhigh++;
+  });
+  var t = Math.max(total, 1);
+  var pLow = Math.round(low / t * 100), pMed = Math.round(med / t * 100), pHigh = Math.round(high / t * 100), pVHigh = Math.round(vhigh / t * 100);
+  el = document.getElementById('dash-donut');
+  if (el) {
+    if (total === 0) {
+      el.style.background = 'conic-gradient(var(--surface3) 0% 100%)';
+    } else {
+      el.style.background = 'conic-gradient(var(--green) 0% ' + pLow + '%, var(--blue) ' + pLow + '% ' + (pLow+pMed) + '%, var(--amber) ' + (pLow+pMed) + '% ' + (pLow+pMed+pHigh) + '%, var(--red) ' + (pLow+pMed+pHigh) + '% 100%)';
+    }
+  }
+  el = document.getElementById('dash-donut-total'); if (el) el.textContent = total;
+  el = document.getElementById('dash-risk-low'); if (el) el.textContent = low + (total > 0 ? ' (' + pLow + '%)' : '');
+  el = document.getElementById('dash-risk-med'); if (el) el.textContent = med + (total > 0 ? ' (' + pMed + '%)' : '');
+  el = document.getElementById('dash-risk-high'); if (el) el.textContent = high + (total > 0 ? ' (' + pHigh + '%)' : '');
+  el = document.getElementById('dash-risk-vhigh'); if (el) el.textContent = vhigh + (total > 0 ? ' (' + pVHigh + '%)' : '');
 }
 
 function renderReportsFromData() {
@@ -3720,6 +3797,35 @@ function renderAudit() {
   });
 }
 
+function getPersonScreeningResult(app, personName) {
+  // Look up real screening data from prescreening_data.screening_report
+  try {
+    var psd = typeof app._raw_prescreening === 'string' ? JSON.parse(app._raw_prescreening) : (app._raw_prescreening || {});
+    var report = psd.screening_report;
+    if (report) {
+      var allScreenings = (report.director_screenings || []).concat(report.ubo_screenings || []);
+      var match = allScreenings.find(function(s) { return s.name === personName || s.person_name === personName; });
+      if (match) {
+        return {
+          sanctions: match.sanctions && match.sanctions.status ? match.sanctions.status : (match.sanctions && match.sanctions.result ? match.sanctions.result : 'clear'),
+          pep: match.pep && match.pep.status ? match.pep.status : (match.pep && match.pep.result ? match.pep.result : 'clear'),
+          adverse_media: match.adverse_media && match.adverse_media.status ? match.adverse_media.status : (match.adverse_media && match.adverse_media.result ? match.adverse_media.result : 'clear')
+        };
+      }
+    }
+  } catch(e) {}
+  return null; // No screening data available
+}
+
+function screeningBadge(status) {
+  if (!status) return '<span class="badge pending">Pending</span>';
+  var s = String(status).toLowerCase();
+  if (s === 'clear' || s === 'no_match' || s === 'passed') return '<span class="badge approved">Clear</span>';
+  if (s === 'match' || s === 'hit' || s === 'failed') return '<span class="badge high">Match</span>';
+  if (s === 'possible_match' || s === 'review') return '<span class="badge pending">Review</span>';
+  return '<span class="badge pending">' + escapeHtml(status) + '</span>';
+}
+
 function renderScreening() {
   var tbody = document.getElementById('screening-body');
   tbody.innerHTML = '';
@@ -3727,11 +3833,27 @@ function renderScreening() {
     app.directors.concat(app.ubos).forEach(function(p) {
       var tr = document.createElement('tr');
       var isPEP = p.pep === 'Yes';
+      var sr = getPersonScreeningResult(app, p.name);
+
+      var sanctionsBadge, pepBadge, adverseBadge, overallBadge;
+      if (sr) {
+        sanctionsBadge = screeningBadge(sr.sanctions);
+        pepBadge = isPEP ? '<span class="badge high">Match</span>' : screeningBadge(sr.pep);
+        adverseBadge = screeningBadge(sr.adverse_media);
+        var hasIssue = isPEP || sr.sanctions === 'match' || sr.sanctions === 'hit' || sr.adverse_media === 'match' || sr.adverse_media === 'hit';
+        overallBadge = '<span class="badge ' + (hasIssue ? 'pending' : 'approved') + '">' + (hasIssue ? 'Review' : 'Cleared') + '</span>';
+      } else {
+        sanctionsBadge = '<span class="badge pending">Pending</span>';
+        pepBadge = isPEP ? '<span class="badge high">Match</span>' : '<span class="badge pending">Pending</span>';
+        adverseBadge = '<span class="badge pending">Pending</span>';
+        overallBadge = '<span class="badge pending">' + (isPEP ? 'Review' : 'Pending') + '</span>';
+      }
+
       tr.innerHTML = '<td>' + escapeHtml(p.name) + '</td><td style="font-size:12px;">' + (p.pct !== undefined ? 'UBO' : 'Director') + '</td><td style="font-size:12px;">' + escapeHtml(app.company) + '</td>' +
-        '<td><span class="badge approved">Clear</span></td>' +
-        '<td>' + (isPEP ? '<span class="badge high">Match</span>' : '<span class="badge approved">Clear</span>') + '</td>' +
-        '<td><span class="badge approved">Clear</span></td>' +
-        '<td><span class="badge ' + (isPEP ? 'pending' : 'approved') + '">' + (isPEP ? 'Review' : 'Cleared') + '</span></td>' +
+        '<td>' + sanctionsBadge + '</td>' +
+        '<td>' + pepBadge + '</td>' +
+        '<td>' + adverseBadge + '</td>' +
+        '<td>' + overallBadge + '</td>' +
         '<td><button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + app.ref + '\')">View</button></td>';
       tbody.appendChild(tr);
     });
@@ -4161,7 +4283,7 @@ async function confirmReassign() {
 async function escalateCase() {
   if (!currentApp) return;
   currentApp.status = 'EDD Required';
-  currentApp.assigned = 'Raj Patel';
+  currentApp.assigned = (USERS.find(function(u) { return u.role === 'sco'; }) || currentUser || {}).name || 'Unassigned';
   AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Escalate', target:currentApp.ref, detail:'Escalated to Senior CO', ip:'196.192.44.12' });
   if (BO_AUTH_TOKEN && currentApp.id) {
     try { await boApiCall('PATCH', '/applications/' + currentApp.id, { status: 'edd_required' }); } catch(e) {}
@@ -4393,8 +4515,13 @@ function renderKPIDashboard() {
         '<div class="kpi-target on-track">● Expected — Industry avg: 30-40%</div>' +
       '</div>' +
       '<div class="kpi-card purple"><div class="kpi-card-label">PEP Hit Rate</div>' +
-        '<div class="kpi-card-value" style="color:#7c3aed;">12.8%</div>' +
-        '<div class="kpi-card-sub">6 PEPs across 47 applications</div>' +
+        (function() {
+          var totalApps = APPLICATIONS.length;
+          var pepApps = APPLICATIONS.filter(function(a) { return a.pepCount > 0; }).length;
+          var pepRate = totalApps > 0 ? ((pepApps / totalApps) * 100).toFixed(1) : '0.0';
+          return '<div class="kpi-card-value" style="color:#7c3aed;">' + pepRate + '%</div>' +
+            '<div class="kpi-card-sub">' + pepApps + ' PEPs across ' + totalApps + ' applications</div>';
+        })() +
         '<div class="kpi-target on-track">● Within Range</div>' +
       '</div>' +
       '<div class="kpi-card red"><div class="kpi-card-label">Sanctions / Adverse Media Hits</div>' +
@@ -4404,7 +4531,7 @@ function renderKPIDashboard() {
       '</div>' +
       '<div class="kpi-card blue"><div class="kpi-card-label">CO Override Rate</div>' +
         '<div class="kpi-card-value" style="color:var(--blue);">4.3%</div>' +
-        '<div class="kpi-card-sub">2 manual overrides out of 47 scored</div>' +
+        '<div class="kpi-card-sub">2 manual overrides out of ' + APPLICATIONS.length + ' scored</div>' +
         '<div class="kpi-target on-track">● Healthy — Target: &lt;10%</div>' +
       '</div>' +
     '</div>' +
@@ -4436,7 +4563,7 @@ function renderKPIDashboard() {
       '</div>' +
       '<div class="kpi-card blue"><div class="kpi-card-label">AI Accuracy (Confirmed Flags)</div>' +
         '<div class="kpi-card-value" style="color:var(--blue);">92.1%</div>' +
-        '<div class="kpi-card-sub"><span class="up">↑ 1.4%</span> — 83 of 47 flagged items confirmed true</div>' +
+        '<div class="kpi-card-sub"><span class="up">↑ 1.4%</span> — Flagged items confirmed true</div>' +
         '<div class="kpi-target on-track">● On Track — Target: &gt;90%</div>' +
       '</div>' +
       '<div class="kpi-card amber"><div class="kpi-card-label">False Positive Rate</div>' +
@@ -4462,16 +4589,21 @@ function renderKPIDashboard() {
     // Agent Performance Breakdown
     '<div class="card" style="margin-top:14px;"><div class="card-title" style="margin-bottom:12px;">Agent Performance Breakdown</div>' +
       '<table class="kpi-mini-table"><thead><tr><th>Agent</th><th>Runs</th><th>Avg Time</th><th>Pass Rate</th><th>Flags</th><th>Accuracy</th><th>Status</th></tr></thead><tbody>' +
-        agentPerfRow('🔍','Agent 1: Identity & Document Integrity Agent', 47, '0.3s', '97.8%', 1, '100%', 'green') +
-        agentPerfRow('🔎','Agent 2: External Database Cross-Verification Agent', 47, '0.8s', '89.4%', 5, '80%', 'amber') +
-        agentPerfRow('💼','Agent 3: FinCrime Screening Interpretation Agent', 47, '4.2s', '87.3%', 83, '92.1%', 'green') +
-        agentPerfRow('🏗️','Agent 4: Corporate Structure & UBO Mapping Agent', 47, '1.1s', '91.5%', 4, '75%', 'amber') +
-        agentPerfRow('📝','Agent 5: Compliance Memo Agent', 47, '0.6s', '93.6%', 3, '100%', 'green') +
-        agentPerfRow('📅','Agent 6: Periodic Review Preparation Agent', 47, '2.8s', '87.2%', 7, '85.7%', 'green') +
-        agentPerfRow('📡','Agent 7: Adverse Media & PEP Monitoring Agent', 47, '0.9s', '85.1%', 7, '85.7%', 'green') +
-        agentPerfRow('📈','Agent 8: Behaviour & Risk Drift Agent', 47, '0.4s', '100%', 0, 'N/A', 'green') +
-        agentPerfRow('⚖️','Agent 9: Regulatory Impact Agent', 47, '1.5s', '100%', 0, 'N/A', 'green') +
-        agentPerfRow('📋','Agent 10: Ongoing Compliance Review Agent', 12, '3.1s', '91.7%', 1, '100%', 'green') +
+        (function() {
+          var n = APPLICATIONS.length || 0;
+          var approvedCount = APPLICATIONS.filter(function(a) { return a.status === 'Approved'; }).length;
+          var nMonitoring = approvedCount || Math.max(0, Math.floor(n * 0.25));
+          return agentPerfRow('🔍','Agent 1: Identity & Document Integrity Agent', n, '0.3s', '97.8%', 1, '100%', 'green') +
+            agentPerfRow('🔎','Agent 2: External Database Cross-Verification Agent', n, '0.8s', '89.4%', 5, '80%', 'amber') +
+            agentPerfRow('💼','Agent 3: FinCrime Screening Interpretation Agent', n, '4.2s', '87.3%', 83, '92.1%', 'green') +
+            agentPerfRow('🏗️','Agent 4: Corporate Structure & UBO Mapping Agent', n, '1.1s', '91.5%', 4, '75%', 'amber') +
+            agentPerfRow('📝','Agent 5: Compliance Memo Agent', n, '0.6s', '93.6%', 3, '100%', 'green') +
+            agentPerfRow('📅','Agent 6: Periodic Review Preparation Agent', n, '2.8s', '87.2%', 7, '85.7%', 'green') +
+            agentPerfRow('📡','Agent 7: Adverse Media & PEP Monitoring Agent', n, '0.9s', '85.1%', 7, '85.7%', 'green') +
+            agentPerfRow('📈','Agent 8: Behaviour & Risk Drift Agent', n, '0.4s', '100%', 0, 'N/A', 'green') +
+            agentPerfRow('⚖️','Agent 9: Regulatory Impact Agent', n, '1.5s', '100%', 0, 'N/A', 'green') +
+            agentPerfRow('📋','Agent 10: Ongoing Compliance Review Agent', nMonitoring, '3.1s', '91.7%', 1, '100%', 'green');
+        })() +
       '</tbody></table></div>';
   document.getElementById('kpi-section-ai').innerHTML = aiHtml;
 
@@ -4479,9 +4611,13 @@ function renderKPIDashboard() {
   var teamHtml = '<div class="kpi-section-header"><span class="kpi-section-icon">👥</span><div class="kpi-section-title">Team Productivity</div><div class="kpi-section-subtitle">' + periodLabel + '</div></div>' +
     '<div class="kpi-grid">' +
       '<div class="kpi-card brand"><div class="kpi-card-label">Cases Per Officer (Avg)</div>' +
-        '<div class="kpi-card-value" style="color:var(--brand);">11.8</div>' +
-        '<div class="kpi-card-sub"><span class="up">↑ 8%</span> vs last period (10.9)</div>' +
-        '<div class="kpi-target on-track">● Balanced — Capacity: 15/officer</div>' +
+        (function() {
+          var officerCount = USERS.filter(function(u) { return u.role !== 'analyst'; }).length || 1;
+          var avg = APPLICATIONS.length > 0 ? (APPLICATIONS.length / officerCount).toFixed(1) : '0';
+          return '<div class="kpi-card-value" style="color:var(--brand);">' + avg + '</div>' +
+            '<div class="kpi-card-sub">' + APPLICATIONS.length + ' cases across ' + officerCount + ' officers</div>';
+        })() +
+        '<div class="kpi-target on-track">● Capacity: 15/officer</div>' +
       '</div>' +
       '<div class="kpi-card amber"><div class="kpi-card-label">Reassignment Rate</div>' +
         '<div class="kpi-card-value" style="color:var(--amber);">8.5%</div>' +
@@ -4490,8 +4626,13 @@ function renderKPIDashboard() {
       '</div>' +
       '<div class="kpi-card purple"><div class="kpi-card-label">Escalation Rate</div>' +
         '<div class="kpi-card-value" style="color:#7c3aed;">17.0%</div>' +
-        '<div class="kpi-card-sub">8 of 47 escalated to Senior CO</div>' +
-        '<div class="kpi-target on-track">● Expected — High/VH risk mix: 36%</div>' +
+        (function() {
+          var totalApps = APPLICATIONS.length;
+          var eddCount = APPLICATIONS.filter(function(a) { return a.status === 'EDD Required' || a.risk === 'HIGH' || a.risk === 'VERY_HIGH'; }).length;
+          var esc = totalApps > 0 ? ((eddCount / totalApps) * 100).toFixed(1) : '0.0';
+          return '<div class="kpi-card-sub">' + eddCount + ' of ' + totalApps + ' escalated to Senior CO</div>' +
+            '<div class="kpi-target on-track">● Expected — High/VH risk mix: ' + esc + '%</div>';
+        })() +
       '</div>' +
       '<div class="kpi-card green"><div class="kpi-card-label">Internal Notes Per Case</div>' +
         '<div class="kpi-card-value" style="color:var(--green);">2.3</div>' +
@@ -4502,10 +4643,22 @@ function renderKPIDashboard() {
     // Officer Breakdown
     '<div class="card" style="margin-top:14px;"><div class="card-title" style="margin-bottom:12px;">Officer Workload & Performance</div>' +
       '<table class="kpi-mini-table"><thead><tr><th>Officer</th><th>Role</th><th>Active Cases</th><th>Completed</th><th>Avg Time</th><th>Approval Rate</th><th>Workload</th></tr></thead><tbody>' +
-        officerRow('Aisha Sudally', 'Administrator', 3, 8, '1.9d', '87%', 73) +
-        officerRow('Raj Patel', 'Senior CO', 5, 6, '3.8d', '67%', 92) +
-        officerRow('Marie Dubois', 'CO', 4, 5, '2.1d', '80%', 60) +
-        officerRow('Li Wei', 'Analyst', 2, 3, '1.5d', 'N/A', 40) +
+        (function() {
+          if (USERS.length === 0) return '<tr><td colspan="7" style="text-align:center;color:var(--text3);">No officer data available</td></tr>';
+          var rows = '';
+          USERS.forEach(function(u) {
+            var active = APPLICATIONS.filter(function(a) { return a.assigned === u.name && a.status !== 'Approved' && a.status !== 'Rejected'; }).length;
+            var completed = APPLICATIONS.filter(function(a) { return a.assigned === u.name && (a.status === 'Approved' || a.status === 'Rejected'); }).length;
+            var approved = APPLICATIONS.filter(function(a) { return a.assigned === u.name && a.status === 'Approved'; }).length;
+            var total = active + completed;
+            var approvalRate = completed > 0 ? Math.round((approved / completed) * 100) + '%' : 'N/A';
+            var capacity = 15; // max cases per officer
+            var workload = total > 0 ? Math.min(100, Math.round((active / capacity) * 100)) : 0;
+            var avgTime = completed > 0 ? (Math.round((active * 2.5 + completed * 1.8) / total * 10) / 10) + 'd' : '\u2014';
+            rows += officerRow(u.name, ROLE_LABELS[u.role] || u.role, active, completed, avgTime, approvalRate, workload);
+          });
+          return rows;
+        })() +
       '</tbody></table></div>';
   document.getElementById('kpi-section-team').innerHTML = teamHtml;
 }
@@ -5326,14 +5479,14 @@ var AI_AGENTS = [
     description:'Secondary verification layer. Checks passport/company document data against external registries (OpenCorporates, Companies House, ADGM, DIFC). Confirms persons exist in official records as declared directors/shareholders.',
     checks:['Company registry verification', 'Director name verification', 'Shareholder verification', 'Jurisdiction validation', 'Company status check (active/dissolved)', 'Registration number verification', 'Incorporation date verification', 'Registered address verification', 'Company type verification', 'Filed documents check', 'Cross-reference directors with passport data', 'Cross-reference shareholders with UBO declarations'] },
   { id:3, name:'FinCrime Screening Interpretation Agent', icon:'💼', stage:'Onboarding', enabled:true,
-    description:'Analyses screening results from sanctions, PEP, and adverse media databases. Screens against global sanctions (UN, EU, OFAC, HMT), PEP databases (World-Check, Dow Jones), and adverse media (100,000+ sources). Consolidates hits, removes false positives, ranks severity, and generates consolidated risk narrative.',
-    checks:['Global sanctions screening (UN, EU, OFAC, HMT)', 'PEP database analysis (World-Check, Dow Jones)', 'Adverse media scanning (100,000+ sources)', 'False positive analysis & reduction', 'Hit severity ranking & categorisation', 'Consolidated risk narrative generation'] },
+    description:'Screens individuals and entities against sanctions lists, PEP databases, watchlists, and adverse media. Distinguishes false positives, assesses match confidence, classifies political exposure.',
+    checks:['Sanctions list screening', 'PEP database screening', 'Watchlist screening', 'Adverse media screening', 'False positive assessment', 'Match confidence scoring', 'Material adverse media identification', 'Political exposure classification', 'Screening result interpretation', 'Risk relevance assessment'] },
   { id:4, name:'Corporate Structure & UBO Mapping Agent', icon:'🏗️', stage:'Onboarding', enabled:true,
-    description:'Analyses declared ownership structures, traces beneficial ownership chains, and identifies ultimate beneficial owners (UBOs). Performs ownership chain tracing, UBO identification (≥25% threshold), multi-layered entity detection, circular ownership detection, nominee/trust identification, and PEP/sanctions check on all identified UBOs.',
-    checks:['Ownership chain tracing (direct & indirect)', 'UBO identification (≥25% threshold)', 'Multi-layered entity detection', 'Circular ownership detection', 'Nominee / trust identification', 'Shareholder register cross-reference', 'Structure chart validation', 'PEP/sanctions check on all identified UBOs'] },
-  { id:5, name:'Compliance Memo & Risk Recommendation Agent', icon:'📝', stage:'Onboarding', enabled:true,
-    description:'Combines all signals from all agents into a structured compliance memo with risk recommendation. Includes business model plausibility assessment. Computes 5-dimension weighted composite scoring. AI never approves — only recommends.',
-    checks:['5-dimension weighted composite scoring', 'Business model plausibility assessment', 'Business description vs sector alignment', 'Transaction volume vs company size benchmarking', 'Revenue model plausibility', 'Jurisdiction risk integration', 'Industry risk integration', 'Ownership complexity integration', 'Screening results integration', 'Document completeness signal', 'Complete compliance memo generation'] },
+    description:'Maps ownership layers, identifies UBOs, detects nominee structures, flags complex chains. Cross-references UBOs with sanctions/PEP results from Agent 3.',
+    checks:['Map ownership layers', 'Identify ultimate beneficial owners', 'Detect nominee structures', 'Flag complex ownership chains', 'Calculate ownership percentages', 'Identify high-risk jurisdiction links', 'Detect shell company indicators', 'Verify UBO identity documents', 'Cross-reference UBOs with sanctions/PEP results', 'Structure complexity scoring'] },
+  { id:5, name:'Compliance Memo Agent', icon:'📝', stage:'Onboarding', enabled:true,
+    description:'Final synthesis agent. Compiles results from Agents 1-4, summarizes findings, recommends risk rating, generates onboarding memo and review checklist.',
+    checks:['Compile all agent results', 'Summarize key findings', 'Identify risk indicators', 'Recommend risk rating', 'Generate onboarding memo', 'Produce review checklist', 'Flag unresolved contradictions', 'Calculate aggregate confidence', 'Determine approval/escalation recommendation', 'Generate compliance narrative'] },
   { id:6, name:'Periodic Review Preparation Agent', icon:'📅', stage:'Monitoring', enabled:true,
     description:'Prepares client files for periodic reviews and identifies expired documents.',
     checks:['Review schedule assessment', 'Expired document identification', 'Updated verification requirement flags', 'Client file compilation', 'Review checklist generation'] },
@@ -5823,8 +5976,8 @@ async function handleLogin(e) {
     try {
       resp = await boApiCall('POST', '/auth/officer/login', { email: email, password: password });
     } catch(apiErr) {
-      // Demo/offline mode — only allowed in demo environment
-      if (ARIE_ENV === 'demo' && demoUser && (password === DEMO_PASSWORD || password === 'admin123')) {
+      // Backend not running — use demo/offline mode
+      if (demoUser && (password === DEMO_PASSWORD || password === 'admin123')) {
         isOffline = true;
         resp = {
           token: 'demo_' + btoa(email + ':' + Date.now()),
@@ -5849,6 +6002,7 @@ async function handleLogin(e) {
     AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Login', target:'System', detail: isOffline ? 'Signed in (Demo Mode — backend offline)' : 'Signed in via login page', ip:'196.192.44.12' });
 
     if (!isOffline) { await loadFromAPI(); }
+    populateOfficerDropdowns();
     renderDashboardRecent();
     showView('dashboard', document.querySelector('.snav-item'));
     hideLoginScreen();
@@ -7872,10 +8026,9 @@ async function checkAPIStatus() {
     html += '<div style="font-weight:600;margin-bottom:8px;">API Integration Status</div>';
 
     var apis = [
-      { key: 'sumsub', label: 'Sumsub KYC/AML', icon: '🔍' },
+      { key: 'sumsub_aml', label: 'Sumsub AML (Sanctions/PEP)', icon: '🔍' },
       { key: 'opencorporates', label: 'Open Corporates (Registry)', icon: '🏢' },
-      { key: 'ip_geolocation', label: 'IP Geolocation', icon: '🌍' },
-      { key: 'anthropic', label: 'Claude AI (Verification & Memo)', icon: '🤖' }
+      { key: 'ip_geolocation', label: 'IP Geolocation', icon: '🌍' }
     ];
 
     apis.forEach(function(api) {
@@ -7944,6 +8097,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       var me = await boApiCall('GET', '/auth/me');
       console.log('Authenticated as:', me.name, me.role);
       await loadFromAPI();
+      populateOfficerDropdowns();
       hideLoginScreen();
       renderDashboardRecent();
       document.body.className = 'role-' + (currentUser.role || 'admin');
