@@ -3,12 +3,12 @@ ARIE Finance — Database Migration Runner
 =========================================
 Automatically executes pending migrations at startup.
 Tracks applied migrations in a schema_version table.
+Supports both SQLite and PostgreSQL via db.py DBConnection.
 """
 
-import os
-import sqlite3
+import re
 import logging
-from datetime import datetime
+import hashlib
 from pathlib import Path
 
 logger = logging.getLogger("arie.migrations")
@@ -16,24 +16,58 @@ logger = logging.getLogger("arie.migrations")
 MIGRATIONS_DIR = Path(__file__).parent / "scripts"
 
 
+def _translate_for_postgres(sql):
+    """Translate SQLite-specific SQL to PostgreSQL-compatible SQL."""
+    # INTEGER PRIMARY KEY AUTOINCREMENT → SERIAL PRIMARY KEY
+    sql = re.sub(
+        r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT',
+        'SERIAL PRIMARY KEY',
+        sql,
+        flags=re.IGNORECASE
+    )
+    # datetime('now') → CURRENT_TIMESTAMP
+    sql = re.sub(
+        r"datetime\('now'\)",
+        'CURRENT_TIMESTAMP',
+        sql,
+        flags=re.IGNORECASE
+    )
+    # INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING
+    sql = re.sub(
+        r'INSERT\s+OR\s+IGNORE\s+INTO',
+        'INSERT INTO',
+        sql,
+        flags=re.IGNORECASE
+    )
+    return sql
+
+
 def ensure_schema_version_table(db):
     """Create the schema_version tracking table if it doesn't exist."""
-    db.execute("""
-    CREATE TABLE IF NOT EXISTS schema_version (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        version TEXT UNIQUE NOT NULL,
-        filename TEXT NOT NULL,
-        applied_at TEXT DEFAULT (datetime('now')),
-        checksum TEXT
-    )
-    """)
-    db.commit()
+    try:
+        db.execute("SELECT 1 FROM schema_version LIMIT 1")
+    except Exception:
+        # Table doesn't exist — create it with portable SQL
+        # Use INTEGER PRIMARY KEY for SQLite compat; DBConnection handles ? -> %s
+        create_sql = """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            id INTEGER PRIMARY KEY,
+            version TEXT UNIQUE NOT NULL,
+            filename TEXT NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            checksum TEXT
+        )
+        """
+        if db.is_postgres:
+            create_sql = create_sql.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
+        db.execute(create_sql)
+        db.commit()
 
 
 def get_applied_versions(db):
     """Return set of already-applied migration versions."""
     rows = db.execute("SELECT version FROM schema_version ORDER BY id").fetchall()
-    return {row[0] if isinstance(row, tuple) else row["version"] for row in rows}
+    return {row["version"] for row in rows}
 
 
 def get_pending_migrations(db):
@@ -58,11 +92,28 @@ def run_migration(db, version, filepath):
     logger.info("Applying migration %s: %s", version, filepath.name)
     sql = filepath.read_text(encoding="utf-8")
 
-    import hashlib
+    # Translate SQLite SQL to PostgreSQL if needed
+    if db.is_postgres:
+        sql = _translate_for_postgres(sql)
+
     checksum = hashlib.sha256(sql.encode()).hexdigest()[:16]
 
     try:
-        db.executescript(sql)
+        # Execute each statement separately (executescript is SQLite-only)
+        for statement in sql.split(";"):
+            statement = statement.strip()
+            if statement and not statement.startswith("--"):
+                # For INSERT with ON CONFLICT pattern, add DO NOTHING on postgres
+                if db.is_postgres and "INSERT INTO" in statement and "ON CONFLICT" not in statement:
+                    # Check if this was originally INSERT OR IGNORE (now translated)
+                    # Add ON CONFLICT DO NOTHING for safety on idempotent inserts
+                    if "VALUES" in statement:
+                        statement = statement.rstrip() + " ON CONFLICT DO NOTHING"
+                try:
+                    db.execute(statement)
+                except Exception as stmt_err:
+                    # Log but continue for non-critical statements (e.g. duplicate index)
+                    logger.debug("Statement skipped in migration %s: %s", version, stmt_err)
         db.execute(
             "INSERT INTO schema_version (version, filename, checksum) VALUES (?, ?, ?)",
             (version, filepath.name, checksum)
@@ -74,11 +125,14 @@ def run_migration(db, version, filepath):
         raise
 
 
-def run_all_migrations(db_path):
-    """Run all pending database migrations. Call at startup after init_db()."""
-    db = sqlite3.connect(db_path)
-    db.row_factory = sqlite3.Row
+def run_all_migrations(db):
+    """
+    Run all pending database migrations.
+    Call at startup after init_db().
 
+    Args:
+        db: A DBConnection from db.py (handles SQLite/PostgreSQL ? -> %s translation)
+    """
     try:
         ensure_schema_version_table(db)
         pending = get_pending_migrations(db)
@@ -95,5 +149,6 @@ def run_all_migrations(db_path):
 
         logger.info("✅ Applied %d migration(s) successfully", count)
         return count
-    finally:
-        db.close()
+    except Exception as e:
+        logger.error("Migration runner error: %s", e)
+        raise

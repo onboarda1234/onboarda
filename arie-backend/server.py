@@ -4083,7 +4083,9 @@ if __name__ == "__main__":
     # Run database migrations
     try:
         from migrations.runner import run_all_migrations
-        run_all_migrations(DB_PATH)
+        migration_db = get_db()
+        run_all_migrations(migration_db)
+        migration_db.close()
     except Exception as e:
         logger.warning("Migration runner unavailable: %s", e)
 
