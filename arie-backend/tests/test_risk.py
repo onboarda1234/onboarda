@@ -36,7 +36,7 @@ class TestRiskScoring:
 
     def test_country_classification(self, temp_db):
         from server import classify_country
-        assert classify_country("Mauritius") == 1
+        assert classify_country("Mauritius") == 2  # Excel: Mauritius = standard risk (2)
         assert classify_country("Iran") == 4
         assert classify_country("Nigeria") == 3
         assert classify_country("Unknown Country") == 2

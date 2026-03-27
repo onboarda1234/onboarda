@@ -44,6 +44,15 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
+from config import (
+    ANTHROPIC_API_KEY as _CFG_ANTHROPIC_API_KEY,
+    CLAUDE_MOCK_MODE as _CFG_CLAUDE_MOCK_MODE,
+    IS_PRODUCTION as _CFG_IS_PRODUCTION,
+    ARIE_MODEL_FAST as _CFG_ARIE_MODEL_FAST,
+    ARIE_MODEL_THOROUGH as _CFG_ARIE_MODEL_THOROUGH,
+    AI_CONFIDENCE_THRESHOLD as _CFG_AI_CONFIDENCE_THRESHOLD,
+)
+
 # C-03: Pydantic validation for AI outputs
 try:
     from pydantic import BaseModel, Field, field_validator, ValidationError
@@ -70,11 +79,10 @@ if PYDANTIC_AVAILABLE:
 
     class DocumentVerificationSchema(BaseModel):
         """Agent 1: Document verification output validation."""
-        document_type: str = Field(min_length=1)
-        is_valid: bool
-        confidence: float = Field(ge=0.0, le=1.0)
-        checks: Dict[str, Any] = Field(default_factory=dict)
-        issues: List[str] = Field(default_factory=list)
+        checks: List[Dict[str, Any]] = Field(default_factory=list)
+        overall: str = Field(default="flagged")
+        confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+        red_flags: List[str] = Field(default_factory=list)
 
     class CorporateStructureSchema(BaseModel):
         """Agent 2: Corporate structure analysis output validation."""
@@ -149,6 +157,157 @@ class ApprovalRecommendation(Enum):
     APPROVE_WITH_CONDITIONS = "APPROVE_WITH_CONDITIONS"
     REVIEW = "REVIEW"
     REJECT = "REJECT"
+
+
+# ── Agent-to-Risk-Dimension Mapping (Improvement 5) ────────────
+# D1=Customer/Entity, D2=Geographic, D3=Product/Service, D4=Channel, D5=Transaction
+AGENT_RISK_DIMENSIONS = {
+    1: ["D1"],              # Identity & Document Integrity → Customer/Entity Risk
+    2: ["D1", "D2"],        # External DB Cross-Verification → Entity + Geographic
+    3: ["D1"],              # FinCrime Screening → Customer Risk (screening)
+    4: ["D1"],              # Corporate Structure & UBO → Customer Risk (UBO)
+    5: ["D1", "D2", "D3", "D4", "D5"],  # Compliance Memo → All dimensions
+}
+
+# ── Escalation Trigger Rules (Improvement 6) ────────────────────
+# Check IDs that always escalate when they FAIL
+ALWAYS_ESCALATE_CHECK_IDS = {
+    "SCR-01",   # Sanctions match
+    "SCR-02",   # PEP confirmed match
+    "DOC-14",   # Ownership consistency failure
+    "DOC-17",   # Director consistency failure
+    "UBO-01",   # UBO identification failure
+}
+
+# High-risk dimensions that escalate on WARN (score >= 3)
+HIGH_RISK_ESCALATION_DIMENSIONS = {"D1", "D2"}
+
+
+def compute_escalation(checks: list, agent_number: int = None, risk_dimensions: dict = None) -> bool:
+    """
+    Determine if agent output requires manual review (escalation).
+
+    Rules:
+    - Any FAIL → requires_review = True
+    - Any check in ALWAYS_ESCALATE_CHECK_IDS with FAIL → requires_review = True
+    - WARN on high-risk dimension (D1, D2 with score >= 3) → requires_review = True
+    """
+    if not checks:
+        return False
+
+    for check in checks:
+        result = (check.get("result") or "").lower()
+        check_id = check.get("id", "")
+
+        # Any FAIL → escalate
+        if result == "fail":
+            return True
+
+        # Specific check IDs always escalate on fail
+        if check_id in ALWAYS_ESCALATE_CHECK_IDS and result == "fail":
+            return True
+
+    # Check dimension-based escalation for WARNs
+    if risk_dimensions and agent_number:
+        agent_dims = AGENT_RISK_DIMENSIONS.get(agent_number, [])
+        has_warn = any((c.get("result") or "").lower() == "warn" for c in checks)
+        if has_warn:
+            for dim in agent_dims:
+                if dim in HIGH_RISK_ESCALATION_DIMENSIONS:
+                    dim_score = risk_dimensions.get(dim, {}).get("score", 0)
+                    if dim_score >= 3:
+                        return True
+
+    return False
+
+
+def compute_overall_status(checks: list) -> str:
+    """
+    Compute the overall status from a list of check results.
+
+    FAIL if any check is FAIL, WARN if any check is WARN, else PASS.
+    NOT_RUN if no checks present.
+    """
+    if not checks:
+        return "NOT_RUN"
+
+    has_fail = False
+    has_warn = False
+    for check in checks:
+        result = (check.get("result") or "").lower()
+        if result == "fail":
+            has_fail = True
+        elif result == "warn":
+            has_warn = True
+
+    if has_fail:
+        return "FAIL"
+    if has_warn:
+        return "WARN"
+    return "PASS"
+
+
+def standardise_agent_output(
+    checks: list,
+    summary: str = "",
+    agent_number: int = None,
+    document_id: str = None,
+    document_type: str = None,
+    risk_dimensions: dict = None,
+    error_message: str = None,
+) -> dict:
+    """
+    Wrap any agent output into the standardised structure.
+
+    Returns:
+        {
+            "status": "PASS" | "WARN" | "FAIL" | "ERROR" | "NOT_RUN",
+            "checks": [...],
+            "summary": "...",
+            "flags": [],
+            "requires_review": true/false,
+            "validated": true/false,
+            "rejected": false
+        }
+    """
+    if error_message:
+        return {
+            "status": "ERROR",
+            "checks": checks or [],
+            "summary": error_message,
+            "flags": [error_message],
+            "requires_review": True,
+            "validated": False,
+            "rejected": False,
+        }
+
+    # Enrich checks with document_id/document_type if provided
+    if document_id or document_type:
+        for check in (checks or []):
+            if document_id and "document_id" not in check:
+                check["document_id"] = document_id
+            if document_type and "document_type" not in check:
+                check["document_type"] = document_type
+
+    status = compute_overall_status(checks)
+    requires_review = compute_escalation(checks, agent_number, risk_dimensions)
+
+    # Extract flags from failed/warned checks
+    flags = []
+    for check in (checks or []):
+        result = (check.get("result") or "").lower()
+        if result in ("fail", "warn"):
+            flags.append(check.get("message") or check.get("reason") or check.get("label", "Unknown check"))
+
+    return {
+        "status": status,
+        "checks": checks or [],
+        "summary": summary,
+        "flags": flags,
+        "requires_review": requires_review or status in ("FAIL", "ERROR"),
+        "validated": status in ("PASS", "WARN"),
+        "rejected": False,
+    }
 
 
 # ── Data Classes ────────────────────────────────────────────────
@@ -491,24 +650,28 @@ def _mock_verify_document() -> Dict[str, Any]:
     return {
         "checks": [
             {
+                "id": "DOC-01",
                 "label": "Document Validity",
                 "type": "validity",
                 "result": "pass",
                 "message": "Document format and structure verified"
             },
             {
+                "id": "DOC-02",
                 "label": "Expiry Risk",
                 "type": "expiry",
                 "result": "pass",
                 "message": "Document validity extends beyond 6 months"
             },
             {
+                "id": "DOC-03",
                 "label": "Name Consistency",
                 "type": "name",
                 "result": "pass",
                 "message": "Name on document matches application data"
             },
             {
+                "id": "DOC-04",
                 "label": "Quality Indicators",
                 "type": "quality",
                 "result": "pass",
@@ -554,13 +717,11 @@ class ClaudeClient:
             monthly_budget_usd: Maximum monthly spend in USD (default: $50)
             mock_mode: Force mock mode (defaults to CLAUDE_MOCK_MODE env var)
         """
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        self.mock_mode = mock_mode if mock_mode is not None else os.environ.get(
-            "CLAUDE_MOCK_MODE", "false"
-        ).lower() == "true"
+        self.api_key = api_key or _CFG_ANTHROPIC_API_KEY
+        self.mock_mode = mock_mode if mock_mode is not None else _CFG_CLAUDE_MOCK_MODE
 
         # P0-04: Block mock mode in production
-        if self.mock_mode and os.environ.get("ENVIRONMENT") == "production":
+        if self.mock_mode and _CFG_IS_PRODUCTION:
             raise RuntimeError(
                 "CRITICAL: CLAUDE_MOCK_MODE=true is not allowed in production. "
                 "Set CLAUDE_MOCK_MODE=false or unset it, and provide a valid ANTHROPIC_API_KEY."
@@ -654,8 +815,8 @@ class ClaudeClient:
 
     # Routing tiers (environment-overridable)
     ROUTING_MODELS = {
-        "fast": os.environ.get("ARIE_MODEL_FAST", "claude-sonnet-4-6"),
-        "thorough": os.environ.get("ARIE_MODEL_THOROUGH", "claude-opus-4-6"),
+        "fast": _CFG_ARIE_MODEL_FAST,
+        "thorough": _CFG_ARIE_MODEL_THOROUGH,
     }
 
     def select_memo_model(self, risk_score: float, risk_level: str) -> tuple:
@@ -1251,24 +1412,152 @@ CRITICAL REQUIREMENTS:
 
     # ── Document Verification (Sonnet - fast, cheap) ──────────────
 
+    # ── Deterministic check definitions per document type ──
+    # Single source of truth — MUST align exactly with ENTITY_DOC_CHECKS and PERSON_DOC_CHECKS in back office.
+    # BOOTSTRAP DEFAULTS ONLY — runtime loads from ai_checks DB table via check_overrides parameter.
+    # These definitions are used ONLY when DB lookup fails or returns empty.
+    # The canonical source of truth is the ai_checks database table, editable via back office.
+    #
+    # Claude evaluates each check — it does NOT decide what checks to run.
+    # Keys: type (used for matching in UI), label (display name), rule (what Claude must verify)
+    _DOC_CHECK_DEFINITIONS = {
+        # ── Corporate Entity Documents (aligned with ENTITY_DOC_CHECKS in backoffice) ──
+        "poa": [
+            {"id": "DOC-01", "type": "age", "label": "Document Date", "rule": "Must be dated within the last 3 months. PASS if dated within 3 months. WARN if dated 3-6 months ago. FAIL if older than 6 months or undated."},
+            {"id": "DOC-02", "type": "name", "label": "Entity Name Match", "rule": "Entity name on document must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-03", "type": "quality", "label": "Document Clarity", "rule": "Document must be legible and unredacted. PASS if fully legible. WARN if partially legible. FAIL if illegible or blank."},
+            {"id": "DOC-04", "type": "content", "label": "Address Match", "rule": "Address must match registered office address on application. PASS if address matches. WARN if partial match. FAIL if mismatch or missing."},
+        ],
+        "cert_inc": [
+            {"id": "DOC-05", "type": "name", "label": "Entity Name Match", "rule": "Company name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-06", "type": "content", "label": "Registration Number", "rule": "Registration number must be present and legible. PASS if present and legible. WARN if partially legible. FAIL if missing or illegible."},
+            {"id": "DOC-07", "type": "quality", "label": "Document Clarity", "rule": "Document must be legible, certified copy if applicable. PASS if legible. WARN if partially legible. FAIL if illegible or blank."},
+        ],
+        "memarts": [
+            {"id": "DOC-08", "type": "name", "label": "Entity Name Match", "rule": "Company name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-09", "type": "quality", "label": "Completeness", "rule": "All pages must be present and legible. PASS if complete and legible. WARN if minor pages missing. FAIL if key pages missing or illegible."},
+            {"id": "DOC-10", "type": "quality2", "label": "Certification", "rule": "Must be certified or signed copy. PASS if certified/signed. WARN if unsigned but appears authentic. FAIL if no certification and authenticity questionable."},
+        ],
+        "cert_reg": [
+            {"id": "DOC-11", "type": "name", "label": "Entity Name Match", "rule": "Company name must match. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-12", "type": "expiry", "label": "Current Validity", "rule": "Must be current / not expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired."},
+            {"id": "DOC-13", "type": "quality", "label": "Document Clarity", "rule": "Must be legible and complete. PASS if legible. WARN if partially legible. FAIL if illegible or blank."},
+        ],
+        "reg_sh": [
+            {"id": "DOC-14", "type": "content", "label": "Ownership Consistency", "rule": "Shareholdings must match UBOs declared in pre-screening. PASS if all percentages match. WARN if minor discrepancies (< 5%). FAIL if major discrepancies or missing."},
+            {"id": "DOC-15", "type": "content2", "label": "Completeness", "rule": "Total ownership must add up to 100%. PASS if totals 100%. WARN if totals 95-100% (rounding). FAIL if < 95% or > 100%."},
+            {"id": "DOC-16", "type": "age", "label": "Currency", "rule": "Register must reflect current shareholding structure. PASS if current. WARN if potentially outdated. FAIL if clearly outdated."},
+        ],
+        "reg_dir": [
+            {"id": "DOC-17", "type": "content", "label": "Director Consistency", "rule": "Directors must match those declared in pre-screening. PASS if all directors match. WARN if minor name variations. FAIL if directors missing or extra undeclared directors."},
+            {"id": "DOC-18", "type": "content2", "label": "Completeness", "rule": "All current directors must be listed. PASS if all listed. WARN if count uncertain. FAIL if directors clearly missing."},
+            {"id": "DOC-19", "type": "quality", "label": "Document Clarity", "rule": "Must be legible. PASS if legible. WARN if partially legible. FAIL if illegible."},
+        ],
+        "fin_stmt": [
+            {"id": "DOC-20", "type": "age", "label": "Financial Period", "rule": "Must be for most recent financial year (or forecast if < 1 year old). PASS if within last 18 months. WARN if 18-24 months old. FAIL if older than 24 months."},
+            {"id": "DOC-21", "type": "name", "label": "Entity Name Match", "rule": "Company name on statements must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-22", "type": "content", "label": "Audit Status", "rule": "Preferably audited; management accounts acceptable for new entities. PASS if audited. WARN if management accounts only. FAIL if no financial data present."},
+            {"id": "DOC-23", "type": "quality", "label": "Completeness", "rule": "Balance sheet, P&L, and notes must be present. PASS if all present. WARN if notes missing. FAIL if balance sheet or P&L missing."},
+        ],
+        "board_res": [
+            {"id": "DOC-24", "type": "name", "label": "Signatory Match", "rule": "Authorised signatory must be a declared director. PASS if signatory is a declared director. WARN if name variation. FAIL if signatory not a director."},
+            {"id": "DOC-25", "type": "age", "label": "Resolution Date", "rule": "Must be dated and reasonably current. PASS if dated within 12 months. WARN if 12-24 months old. FAIL if undated or older than 24 months."},
+            {"id": "DOC-26", "type": "content", "label": "Scope of Authority", "rule": "Must authorise the signatory to open the account. PASS if explicit authorisation present. WARN if implicit only. FAIL if no authorisation found."},
+        ],
+        "structure_chart": [
+            {"id": "DOC-27", "type": "content", "label": "UBO Chain", "rule": "Must trace ownership to ultimate beneficial owners. PASS if UBO chain complete. WARN if chain incomplete but UBOs identifiable. FAIL if UBOs not identifiable."},
+            {"id": "DOC-28", "type": "content2", "label": "Ownership Match", "rule": "Shareholdings must match shareholder register. PASS if percentages match. WARN if minor discrepancies. FAIL if major discrepancies."},
+            {"id": "DOC-29", "type": "quality", "label": "Legibility", "rule": "Diagram must be clear and readable. PASS if legible. WARN if partially legible. FAIL if illegible."},
+        ],
+        "bankref": [
+            {"id": "DOC-30", "type": "quality", "label": "Bank Letterhead", "rule": "Must be on official bank letterhead. PASS if on letterhead. WARN if letterhead unclear. FAIL if no letterhead."},
+            {"id": "DOC-31", "type": "age", "label": "Date", "rule": "Must be dated within the last 3 months. PASS if within 3 months. WARN if 3-6 months. FAIL if older than 6 months or undated."},
+            {"id": "DOC-32", "type": "name", "label": "Entity Name Match", "rule": "Entity name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+        ],
+        "licence": [
+            {"id": "DOC-33", "type": "name", "label": "Entity Name Match", "rule": "Entity name must match. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-34", "type": "expiry", "label": "Validity", "rule": "Licence must be current and not expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired."},
+            {"id": "DOC-35", "type": "content", "label": "Issuing Authority", "rule": "Issuing regulator must be identifiable. PASS if authority clearly identified. WARN if partially identifiable. FAIL if not identifiable."},
+        ],
+        # ── Additional entity docs (portal-only, no backoffice config yet) ──
+        "contracts": [
+            {"id": "DOC-36", "type": "name", "label": "Name Match", "rule": "Entity name must appear in the contract. PASS if name present and matches. WARN if partial match. FAIL if not present."},
+            {"id": "DOC-37", "type": "content", "label": "Relevance", "rule": "Contract must be relevant to the declared business activity. PASS if relevant. WARN if tangentially related. FAIL if unrelated."},
+            {"id": "DOC-38", "type": "quality", "label": "Clarity", "rule": "Document must be legible. PASS if legible. WARN if partially legible. FAIL if illegible."},
+        ],
+        "aml_policy": [
+            {"id": "DOC-39", "type": "content", "label": "Completeness", "rule": "Must cover key AML areas (CDD, sanctions screening, reporting). PASS if all key areas covered. WARN if minor gaps. FAIL if major areas missing."},
+            {"id": "DOC-40", "type": "age", "label": "Date", "rule": "Policy must be dated and reviewed within last 12 months. PASS if within 12 months. WARN if 12-24 months. FAIL if older or undated."},
+            {"id": "DOC-41", "type": "content2", "label": "Relevance", "rule": "Must be relevant to the entity's business activities. PASS if relevant. WARN if generic. FAIL if irrelevant."},
+        ],
+        "source_wealth": [
+            {"id": "DOC-42", "type": "content", "label": "Consistency", "rule": "Must be consistent with declared source of wealth in application. PASS if consistent. WARN if minor gaps. FAIL if contradicts declaration."},
+            {"id": "DOC-43", "type": "quality", "label": "Clarity", "rule": "Document must be legible and credible. PASS if legible and credible. WARN if partially legible. FAIL if illegible or not credible."},
+        ],
+        "source_funds": [
+            {"id": "DOC-44", "type": "content", "label": "Consistency", "rule": "Must be consistent with declared source of funds in application. PASS if consistent. WARN if minor gaps. FAIL if contradicts declaration."},
+            {"id": "DOC-45", "type": "quality", "label": "Clarity", "rule": "Document must be legible and credible. PASS if legible and credible. WARN if partially legible. FAIL if illegible or not credible."},
+        ],
+        "bank_statements": [
+            {"id": "DOC-46", "type": "age", "label": "Period", "rule": "Must cover a recent period (within last 6 months). PASS if within 6 months. WARN if 6-12 months. FAIL if older than 12 months."},
+            {"id": "DOC-47", "type": "name", "label": "Name Match", "rule": "Account holder name must match the declared entity or person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-48", "type": "quality", "label": "Completeness", "rule": "All pages must be present. PASS if complete. WARN if minor pages missing. FAIL if key pages missing."},
+        ],
+        # ── KYC Person Documents (aligned with PERSON_DOC_CHECKS in backoffice) ──
+        "passport": [
+            {"id": "DOC-49", "type": "expiry", "label": "Document Expiry", "rule": "Must not be expired; at least 6 months validity remaining recommended. PASS if > 6 months validity. WARN if 1-6 months validity. FAIL if expired."},
+            {"id": "DOC-50", "type": "quality", "label": "Photo Quality", "rule": "Photo must be clear and identifiable. PASS if clear. WARN if partially obscured. FAIL if unidentifiable."},
+            {"id": "DOC-51", "type": "name", "label": "Name Match", "rule": "Name must match the person declared in the application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-52", "type": "content", "label": "Nationality Match", "rule": "Nationality must match the nationality declared in pre-screening. PASS if matches. WARN if not clearly visible. FAIL if mismatch."},
+        ],
+        "national_id": [
+            {"id": "DOC-53", "type": "expiry", "label": "Document Expiry", "rule": "Must not be expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired."},
+            {"id": "DOC-54", "type": "quality", "label": "Photo Quality", "rule": "Photo must be clear and identifiable. PASS if clear. WARN if partially obscured. FAIL if unidentifiable."},
+            {"id": "DOC-55", "type": "name", "label": "Name Match", "rule": "Name must match the person declared in the application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-56", "type": "content", "label": "Nationality Match", "rule": "Nationality must match declared nationality. PASS if matches. WARN if not clearly visible. FAIL if mismatch."},
+        ],
+        "cv": [
+            {"id": "DOC-57", "type": "name", "label": "Name Match", "rule": "Name on CV/profile must match declared identity. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-58", "type": "content", "label": "Employment History", "rule": "Should include relevant professional background. PASS if relevant history present. WARN if limited history. FAIL if no history."},
+        ],
+        "sow": [
+            {"id": "DOC-59", "type": "name", "label": "Name Match", "rule": "Name must match the declared person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-60", "type": "content", "label": "Supporting Evidence", "rule": "Must contain credible evidence of wealth origin. PASS if credible evidence present. WARN if evidence weak. FAIL if no evidence."},
+        ],
+    }
+
+    # Legacy text rules (kept for backward compatibility)
+    _DOC_VERIFICATION_RULES = {k: " ".join(f"({i+1}) {c['rule']}" for i, c in enumerate(v)) for k, v in _DOC_CHECK_DEFINITIONS.items()}
+
     def verify_document(
         self,
         doc_type: str,
         file_name: str,
         person_name: str = "",
         doc_category: str = "identity",
+        file_path: str = None,
+        check_overrides: list = None,
+        entity_name: str = "",
+        directors: list = None,
+        ubos: list = None,
     ) -> Dict[str, Any]:
         """
         Agent 1: Identity & Document Integrity Agent — Verify document authenticity and compliance using Claude AI.
 
-        Performs 66 automated checks including OCR, validation, and registry cross-reference.
-        Uses claude-sonnet-4-6 for speed and cost efficiency.
+        When file_path is provided, sends the actual document to Claude's vision API for
+        real content analysis. Without file_path, falls back to metadata-only verification.
 
         Args:
             doc_type: Type of document (passport, national_id, poa, cv, bankref, etc)
             file_name: Name of the uploaded file
             person_name: Name of the person the document belongs to (optional)
             doc_category: Category of document (identity, company, kyc, address, etc)
+            file_path: Path to the actual file on disk (optional, enables vision analysis)
+            check_overrides: Optional list of check dicts from ai_checks DB table.
+                           If provided, used instead of _DOC_CHECK_DEFINITIONS.
+            entity_name: Registered entity/company name from pre-screening (optional)
+            directors: List of declared director full names (optional)
+            ubos: List of declared UBO full names (optional)
 
         Returns:
             {
@@ -1295,59 +1584,181 @@ CRITICAL REQUIREMENTS:
         # Sanitize person name to prevent prompt injection
         sanitized_person_name = self._sanitize_for_prompt(person_name)
 
-        system_prompt = """You are an expert document analyst specializing in identity verification and compliance.
+        # Read file for vision if available
+        file_content_blocks = []
+        if file_path:
+            file_content_blocks = self._read_file_for_vision(file_path)
+            if file_content_blocks:
+                logger.info(f"Document vision enabled for {doc_type}: {file_name}")
+            else:
+                logger.warning(f"Could not read file for vision, falling back to metadata: {file_path}")
 
-Analyze the provided document information and verify its authenticity, validity, and compliance.
-Evaluate the following aspects:
-1. Document Validity: Is the document format valid and recognized?
-2. Expiry Risk: Does the document have sufficient remaining validity period?
-3. Name Consistency: Does the name on the document match the declared person (if provided)?
-4. Quality Indicators: Are there signs of document tampering, poor quality, or forgery?
-5. Red Flags: Are there any suspicious characteristics that warrant additional review?
+        # Get deterministic check definitions for this doc type
+        # check_overrides (from ai_checks DB table) take priority over hardcoded _DOC_CHECK_DEFINITIONS
+        if check_overrides:
+            check_defs = check_overrides
+        else:
+            check_defs = self._DOC_CHECK_DEFINITIONS.get(doc_type, [
+                {"type": "doc_type_match", "label": "Document Type Match", "rule": "Verify document matches claimed type"},
+                {"type": "quality", "label": "Document Quality", "rule": "Document must be legible and complete"},
+                {"type": "name", "label": "Name Match", "rule": "Name must match declared person or entity"},
+            ])
+
+        has_vision = len(file_content_blocks) > 0
+
+        from datetime import date as _date
+        today_str = _date.today().strftime("%d %B %Y")
+
+        # Build deterministic check list for the prompt
+        checks_prompt = "\n".join(
+            f'{i+1}. [ID: {c.get("id", "DOC-XX")}] "{c["label"]}" (type: "{c["type"]}") — {c["rule"]}'
+            for i, c in enumerate(check_defs)
+        )
+
+        system_prompt = f"""You are Agent 1: Identity & Document Integrity Agent for a regulated financial compliance platform.
+
+TODAY'S DATE IS: {today_str}. Use this as the reference date for all expiry and date checks.
+
+You MUST verify uploaded documents with strict compliance standards. {"An image/document of the actual file is attached — you MUST analyze its visual content." if has_vision else "No file image is attached — analyze based on metadata only and flag that visual verification was not possible."}
+
+CRITICAL INSTRUCTION: You must evaluate EXACTLY the checks listed below — no more, no less.
+Do NOT add extra checks. Do NOT skip any checks. Do NOT rename them.
+Each check must appear in your response with the exact "type" value specified.
+
+CHECKS TO EVALUATE FOR "{doc_type}" (evaluate ALL {len(check_defs)} checks):
+{checks_prompt}
 
 Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
-{
+{{
     "checks": [
-        {
+        {{
+            "id": "DOC-XX",
             "label": "Check Name",
             "type": "check_type",
             "result": "pass"|"warn"|"fail",
             "message": "Explanation of the check result"
-        }
+        }}
     ],
     "overall": "verified"|"flagged",
     "confidence": <0.0-1.0>,
     "red_flags": ["flag1", "flag2"]
-}"""
+}}
+
+RULES:
+- You MUST return exactly {len(check_defs)} checks, one for each listed above
+- Each check MUST include the exact "id" value specified (e.g., "DOC-01", "DOC-02", etc.)
+- Use the exact "type" values specified (e.g., "doc_type_match", "entity_name", etc.)
+- Each result MUST be exactly "pass", "warn", or "fail" — no other values
+- If ANY check has result "fail", the overall MUST be "flagged"
+- If ANY check has result "warn", the overall MUST be "flagged" unless overridden by pass evidence
+- If you cannot evaluate a check (e.g., no file attached), use result "warn" with explanation
+- Be strict — compliance errors have real regulatory consequences"""
+
+        # Build application context for cross-referencing
+        sanitized_entity = self._sanitize_for_prompt(entity_name) if entity_name else ""
+        sanitized_directors = [self._sanitize_for_prompt(d) for d in (directors or []) if d]
+        sanitized_ubos = [self._sanitize_for_prompt(u) for u in (ubos or []) if u]
+
+        app_context_lines = []
+        if sanitized_entity:
+            app_context_lines.append(f"Entity Name: {sanitized_entity}")
+        if sanitized_directors:
+            app_context_lines.append(f"Declared Directors: {', '.join(sanitized_directors)}")
+        if sanitized_ubos:
+            app_context_lines.append(f"Declared UBOs: {', '.join(sanitized_ubos)}")
+        if sanitized_person_name:
+            app_context_lines.append(f"Associated Person for this document: {sanitized_person_name}")
+
+        app_context_block = ""
+        if app_context_lines:
+            app_context_block = "\n\nApplication Context (use for cross-referencing names in the document):\n- " + "\n- ".join(app_context_lines)
 
         user_prompt = f"""Verify this document:
 
-Document Type: {doc_type}
+Claimed Document Type: {doc_type}
 File Name: {file_name}
 Document Category: {doc_category}
-Associated Person: {sanitized_person_name if sanitized_person_name else "Not provided"}
+Associated Person/Entity: {sanitized_person_name if sanitized_person_name else "Not provided"}{app_context_block}
 
-Analyze the document details and provide verification assessment. Focus on authenticity,
-validity dates, name matching, document quality, and any red flags."""
+{"Analyze the attached document image/file carefully." if has_vision else "No file attached — verify based on metadata and flag that manual review is recommended."}
+Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Return results for each one."""
 
         try:
+            # Build multimodal content blocks if file is available
+            content_blocks = None
+            if file_content_blocks:
+                content_blocks = file_content_blocks + [{"type": "text", "text": user_prompt}]
+
             response = self._call_claude(
                 system_prompt,
                 user_prompt,
                 model="claude-sonnet-4-6",
-                timeout=self.timeout_seconds,
+                timeout=45,  # Increased for vision processing
+                content_blocks=content_blocks,
             )
             result = self._parse_json_response(response, agent_method="verify_document")
             result["ai_source"] = "claude-sonnet-4-6"
+            result["vision_enabled"] = has_vision
             return result
         except Exception as e:
-            logger.error(f"Document verification failed: {e} — returning mock response")
-            result = _mock_verify_document()
-            result["ai_source"] = "mock"
-            result["ai_error"] = str(e)[:200]
-            return result
+            logger.error(f"Document verification failed: {e} — returning flagged response")
+            # In non-mock mode, return flagged (not fake passes) when AI fails
+            return {
+                "checks": [
+                    {"label": "AI Verification", "type": "validity", "result": "warn", "message": f"AI verification unavailable: {str(e)[:100]}. Manual review required."},
+                    {"label": "Document Type Match", "type": "doc_type_match", "result": "warn", "message": "Could not verify — manual check required"},
+                ],
+                "overall": "flagged",
+                "confidence": 0.0,
+                "red_flags": ["AI verification failed — manual review required"],
+                "ai_source": "error",
+                "ai_error": str(e)[:200],
+                "vision_enabled": has_vision,
+            }
 
     # ── Internal Helper Methods ─────────────────────────────────
+
+    def _read_file_for_vision(self, file_path: str) -> list:
+        """
+        Read a document file and prepare it for Claude vision API.
+
+        Supports JPG, PNG (as images) and PDF (as documents).
+        Returns content blocks for the Messages API, or empty list on failure.
+        """
+        import base64 as b64mod
+        import mimetypes
+
+        if not file_path or not os.path.isfile(file_path):
+            logger.warning(f"File not found for vision: {file_path}")
+            return []
+
+        file_size = os.path.getsize(file_path)
+        if file_size > 10 * 1024 * 1024:  # 10MB limit
+            logger.warning(f"File too large for vision ({file_size} bytes): {file_path}")
+            return []
+
+        ext = os.path.splitext(file_path)[1].lower()
+        mime_map = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".pdf": "application/pdf",
+        }
+        mime_type = mime_map.get(ext)
+        if not mime_type:
+            logger.warning(f"Unsupported file type for vision: {ext}")
+            return []
+
+        try:
+            with open(file_path, "rb") as f:
+                file_data = b64mod.standard_b64encode(f.read()).decode("utf-8")
+
+            if ext == ".pdf":
+                return [{"type": "document", "source": {"type": "base64", "media_type": mime_type, "data": file_data}}]
+            else:
+                return [{"type": "image", "source": {"type": "base64", "media_type": mime_type, "data": file_data}}]
+        except Exception as e:
+            logger.error(f"Failed to read file for vision: {e}")
+            return []
 
     def _call_claude(
         self,
@@ -1355,6 +1766,7 @@ validity dates, name matching, document quality, and any red flags."""
         user_prompt: str,
         model: str = "claude-sonnet-4-6",
         timeout: int = 30,
+        content_blocks: list = None,
     ) -> str:
         """
         Make a call to Claude API with retry logic and timeout handling.
@@ -1364,6 +1776,8 @@ validity dates, name matching, document quality, and any red flags."""
             user_prompt: User input/query
             model: Model to use (claude-sonnet-4-6 or claude-opus-4-6)
             timeout: Timeout in seconds
+            content_blocks: Optional multimodal content blocks (images/documents + text).
+                            When provided, replaces user_prompt in the message.
 
         Returns:
             Raw response text from Claude
@@ -1376,6 +1790,9 @@ validity dates, name matching, document quality, and any red flags."""
                 "Claude client not available. Initialize with valid API key or enable mock mode."
             )
 
+        # Build message content — multimodal if content_blocks provided, else plain text
+        message_content = content_blocks if content_blocks else user_prompt
+
         for attempt in range(self.max_retries):
             try:
                 logger.debug(
@@ -1386,7 +1803,7 @@ validity dates, name matching, document quality, and any red flags."""
                     model=model,
                     max_tokens=4096,
                     system=system_prompt,
-                    messages=[{"role": "user", "content": user_prompt}],
+                    messages=[{"role": "user", "content": message_content}],
                     timeout=timeout,
                 )
 
@@ -1476,7 +1893,7 @@ validity dates, name matching, document quality, and any red flags."""
                 result = validated.model_dump()
 
                 # H-03 FIX: Enforce minimum confidence threshold
-                CONFIDENCE_THRESHOLD = float(os.environ.get("AI_CONFIDENCE_THRESHOLD", "0.70"))
+                CONFIDENCE_THRESHOLD = _CFG_AI_CONFIDENCE_THRESHOLD
                 confidence = result.get("confidence") or result.get("overall_confidence") or result.get("risk_confidence")
                 if confidence is not None and float(confidence) < CONFIDENCE_THRESHOLD:
                     logger.warning(

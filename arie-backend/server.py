@@ -11,7 +11,40 @@ Env:  PORT=8080 SECRET_KEY=your-secret DB_PATH=./arie.db
 """
 
 import os, sys, json, uuid, time, hashlib, hmac, re, sqlite3, base64, logging, secrets, io
+from dotenv import load_dotenv
+load_dotenv()  # Load .env before any config reads
 from datetime import datetime, timedelta
+
+# Unified configuration — single source of truth for all env vars
+from config import (
+    ENVIRONMENT as _CFG_ENVIRONMENT,
+    IS_PRODUCTION as _CFG_IS_PRODUCTION,
+    JWT_SECRET as _CFG_JWT_SECRET,
+    SECRET_KEY as _CFG_SECRET_KEY,
+    DATABASE_URL as _CFG_DATABASE_URL,
+    DB_PATH as _CFG_DB_PATH,
+    PORT as _CFG_PORT,
+    ANTHROPIC_API_KEY as _CFG_ANTHROPIC_API_KEY,
+    CLAUDE_BUDGET_USD as _CFG_CLAUDE_BUDGET_USD,
+    CLAUDE_MOCK_MODE as _CFG_CLAUDE_MOCK_MODE,
+    SUMSUB_APP_TOKEN as _CFG_SUMSUB_APP_TOKEN,
+    SUMSUB_SECRET_KEY as _CFG_SUMSUB_SECRET_KEY,
+    SUMSUB_BASE_URL as _CFG_SUMSUB_BASE_URL,
+    SUMSUB_LEVEL_NAME as _CFG_SUMSUB_LEVEL_NAME,
+    SUMSUB_WEBHOOK_SECRET as _CFG_SUMSUB_WEBHOOK_SECRET,
+    OPENSANCTIONS_API_KEY as _CFG_OPENSANCTIONS_API_KEY,
+    OPENSANCTIONS_API_URL as _CFG_OPENSANCTIONS_API_URL,
+    OPENCORPORATES_API_KEY as _CFG_OPENCORPORATES_API_KEY,
+    OPENCORPORATES_API_URL as _CFG_OPENCORPORATES_API_URL,
+    IP_GEOLOCATION_API_KEY as _CFG_IP_GEOLOCATION_API_KEY,
+    IP_GEOLOCATION_API_URL as _CFG_IP_GEOLOCATION_API_URL,
+    S3_BUCKET as _CFG_S3_BUCKET,
+    UPLOAD_DIR as _CFG_UPLOAD_DIR,
+    DEBUG as _CFG_DEBUG,
+    LOG_FORMAT as _CFG_LOG_FORMAT,
+    ALLOWED_ORIGIN as _CFG_ALLOWED_ORIGIN,
+    validate_config,
+)
 from functools import wraps
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -28,7 +61,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 # Import database module
-from db import get_db as db_get_db, init_db as db_init_db, USE_POSTGRESQL
+from db import get_db as db_get_db, init_db as db_init_db, USE_POSTGRESQL, log_agent_execution
 
 # S3 support (optional)
 try:
@@ -52,11 +85,14 @@ HAS_SECURITY_HARDENING = True  # Always True — module is now mandatory
 
 # Claude AI integration (optional)
 try:
-    from claude_client import ClaudeClient
+    from claude_client import ClaudeClient, standardise_agent_output, compute_overall_status, AGENT_RISK_DIMENSIONS
     HAS_CLAUDE_CLIENT = True
 except ImportError:
     HAS_CLAUDE_CLIENT = False
     ClaudeClient = None
+    standardise_agent_output = None
+    compute_overall_status = None
+    AGENT_RISK_DIMENSIONS = {}
 
 # Environment configuration module
 from environment import (
@@ -106,7 +142,7 @@ except ImportError:
 
 # ── Logging ───────────────────────────────────────────────
 # JSON structured logging for production, human-readable for development
-_log_format = os.environ.get("LOG_FORMAT", "text")  # "json" or "text"
+_log_format = _CFG_LOG_FORMAT  # "json" or "text"
 
 class JSONFormatter(logging.Formatter):
     """JSON structured log formatter for production log aggregation."""
@@ -124,7 +160,7 @@ class JSONFormatter(logging.Formatter):
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry)
 
-if _log_format == "json" or os.environ.get("ENVIRONMENT", "development") == "production":
+if _log_format == "json" or _CFG_IS_PRODUCTION:
     _handler = logging.StreamHandler()
     _handler.setFormatter(JSONFormatter())
     logging.root.handlers = []
@@ -135,21 +171,13 @@ else:
 
 logger = logging.getLogger("arie")
 
-# ── Configuration ──────────────────────────────────────────
-PORT = int(os.environ.get("PORT", 8080))
-ENVIRONMENT = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development"))
+# ── Configuration (from unified config module) ────────────
+PORT = _CFG_PORT
+ENVIRONMENT = _CFG_ENVIRONMENT
+SECRET_KEY = _CFG_SECRET_KEY
 
-# SECRET_KEY: In production, MUST be set via env var. In dev, auto-generate a random key per session.
-_env_secret = os.environ.get("SECRET_KEY", "")
-if not _env_secret and ENVIRONMENT == "production":
-    print("FATAL: SECRET_KEY environment variable is required in production mode.")
-    print("       Generate one with: python3 -c \"import secrets; print(secrets.token_hex(64))\"")
-    sys.exit(1)
-SECRET_KEY = _env_secret or secrets.token_hex(64)  # Random per-session in dev
-
-# Database: PostgreSQL (via DATABASE_URL) in production, SQLite for development
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "arie.db"))
+DATABASE_URL = _CFG_DATABASE_URL
+DB_PATH = _CFG_DB_PATH
 USE_POSTGRES = bool(DATABASE_URL)
 
 # PostgreSQL adapter (optional import)
@@ -162,25 +190,52 @@ if USE_POSTGRES:
         logger.error("DATABASE_URL set but psycopg2 not installed. Run: pip install psycopg2-binary")
         sys.exit(1)
 
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(os.path.dirname(__file__), "uploads", "documents"))
+UPLOAD_DIR = _CFG_UPLOAD_DIR
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..")  # Serves from arie-backend parent
 MAX_UPLOAD_MB = 10
 TOKEN_EXPIRY_HOURS = 24
 
-# ── External API Keys (set via environment variables) ──────
-OPENSANCTIONS_API_KEY = os.environ.get("OPENSANCTIONS_API_KEY", "")
-OPENSANCTIONS_API_URL = os.environ.get("OPENSANCTIONS_API_URL", "https://api.opensanctions.org")
-OPENCORPORATES_API_KEY = os.environ.get("OPENCORPORATES_API_KEY", "")
-OPENCORPORATES_API_URL = os.environ.get("OPENCORPORATES_API_URL", "https://api.opencorporates.com/v0.4")
-IP_GEOLOCATION_API_KEY = os.environ.get("IP_GEOLOCATION_API_KEY", "")
-IP_GEOLOCATION_API_URL = os.environ.get("IP_GEOLOCATION_API_URL", "https://ipapi.co")
+# ── External API Keys (from unified config module) ────────
+OPENSANCTIONS_API_KEY = _CFG_OPENSANCTIONS_API_KEY
+OPENSANCTIONS_API_URL = _CFG_OPENSANCTIONS_API_URL
+OPENCORPORATES_API_KEY = _CFG_OPENCORPORATES_API_KEY
+OPENCORPORATES_API_URL = _CFG_OPENCORPORATES_API_URL
+IP_GEOLOCATION_API_KEY = _CFG_IP_GEOLOCATION_API_KEY
+IP_GEOLOCATION_API_URL = _CFG_IP_GEOLOCATION_API_URL
 
 # Sumsub KYC/Identity Verification
-SUMSUB_APP_TOKEN = os.environ.get("SUMSUB_APP_TOKEN", "")
-SUMSUB_SECRET_KEY = os.environ.get("SUMSUB_SECRET_KEY", "")
-SUMSUB_BASE_URL = os.environ.get("SUMSUB_BASE_URL", "https://api.sumsub.com")
-SUMSUB_LEVEL_NAME = os.environ.get("SUMSUB_LEVEL_NAME", "basic-kyc-level")
-SUMSUB_WEBHOOK_SECRET = os.environ.get("SUMSUB_WEBHOOK_SECRET", "")
+SUMSUB_APP_TOKEN = _CFG_SUMSUB_APP_TOKEN
+SUMSUB_SECRET_KEY = _CFG_SUMSUB_SECRET_KEY
+SUMSUB_BASE_URL = _CFG_SUMSUB_BASE_URL
+SUMSUB_LEVEL_NAME = _CFG_SUMSUB_LEVEL_NAME
+SUMSUB_WEBHOOK_SECRET = _CFG_SUMSUB_WEBHOOK_SECRET
+
+
+def mask_email(email: str) -> str:
+    """Mask email addresses for safe logging (PII redaction)."""
+    if not email or '@' not in str(email):
+        return '***'
+    local, domain = str(email).rsplit('@', 1)
+    return f"{local[0]}***@{domain}"
+
+
+def _safe_verification_status(checks: list, raw_status: str = None) -> str:
+    """
+    Improvement 9: No Result = No Pass.
+    Returns NOT_RUN if no checks exist. Never returns 'verified'/'pass' without evidence.
+    """
+    if not checks:
+        return "not_run"
+    if raw_status in ("verified", "pass"):
+        # Verify that checks actually support a pass
+        has_fail = any((c.get("result") or "").lower() == "fail" for c in checks)
+        has_warn = any((c.get("result") or "").lower() == "warn" for c in checks)
+        if has_fail:
+            return "flagged"
+        if has_warn:
+            return "flagged"
+        return raw_status
+    return raw_status or "not_run"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -209,6 +264,20 @@ except (RuntimeError, ValueError) as e:
             logger.error(f"PIIEncryptor initialization failed even with auto key: {e2}")
 
 
+def safe_json_loads(val):
+    """Safely parse JSON — handles PostgreSQL JSONB (already dict) and SQLite TEXT (string)."""
+    if val is None:
+        return {}
+    if isinstance(val, (dict, list)):
+        return val  # PostgreSQL JSONB returns Python objects directly
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
 def encrypt_pii_fields(record: dict, field_names: list) -> dict:
     """Encrypt specified PII fields in a record before database write."""
     if not _pii_encryptor:
@@ -233,14 +302,15 @@ def decrypt_pii_fields(record: dict, field_names: list) -> dict:
             if val.startswith("gAAAAA"):  # Fernet ciphertext prefix
                 try:
                     decrypted[field] = _pii_encryptor.decrypt(val)
-                except Exception:
-                    pass  # Return encrypted value if decryption fails
+                except Exception as e:
+                    logger.warning(f"PII decryption failed for field '{field}': {e}")
+                    decrypted[field] = None  # Clear encrypted blob — show as missing, not gibberish
     return decrypted
 
 
 # PII field definitions for each entity type
 PII_FIELDS_DIRECTORS = ["passport_number", "nationality", "id_number"]
-PII_FIELDS_UBOS = ["passport_number", "nationality", "ownership_pct"]
+PII_FIELDS_UBOS = ["passport_number", "nationality"]
 PII_FIELDS_APPLICATIONS = ["pep_flags"]
 
 # ── Prometheus Metrics (optional) ──────────────────────────
@@ -267,7 +337,7 @@ def validate_environment():
     if ENVIRONMENT == "production":
         if not SECRET_KEY or SECRET_KEY == "arie-dev-secret-change-in-production":
             errors.append("SECRET_KEY must be set to a secure random value in production")
-        if not os.environ.get("ALLOWED_ORIGIN"):
+        if not _CFG_ALLOWED_ORIGIN or _CFG_ALLOWED_ORIGIN == "http://localhost:8080":
             warnings.append("ALLOWED_ORIGIN not set — CORS defaults to same-origin only")
         if not DATABASE_URL:
             warnings.append("DATABASE_URL not set — using SQLite (not recommended for production)")
@@ -351,7 +421,7 @@ def init_db():
         seed_initial_data(db)
         db.commit()
     except Exception as e:
-        logging.error(f"Seed error: {e}")
+        logging.error(f"Seed error: {e}", exc_info=True)
     finally:
         db.close()
 
@@ -382,6 +452,85 @@ from screening import (
 from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db  # noqa: F401
 
 
+# ── Database Reset (temporary — remove after staging wipe) ──
+class AdminResetDBHandler(BaseHandler):
+    def post(self):
+        """One-time staging database reset. Drops all data and re-seeds."""
+        from config import IS_PRODUCTION
+        if IS_PRODUCTION:
+            self.error("Cannot reset production database", 403)
+            return
+        secret = self.get_json().get("confirm")
+        if secret != "WIPE_STAGING_2026":
+            self.error("Invalid confirmation", 403)
+            return
+        try:
+            db = get_db()
+            if db.is_postgres:
+                # Disable FK constraints, truncate all tables, re-enable
+                db.execute("SET session_replication_role = 'replica'")
+                tables = db.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'").fetchall()
+                for t in tables:
+                    tname = t.get("tablename") if hasattr(t, 'get') else t[0]
+                    if tname and tname not in ("schema_version", "schema_migrations"):
+                        db.execute(f'TRUNCATE TABLE "{tname}" CASCADE')
+                db.execute("SET session_replication_role = 'origin'")
+            else:
+                tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+                for t in tables:
+                    tname = t.get("name") if hasattr(t, 'get') else t[0]
+                    if tname and tname not in ("schema_version", "schema_migrations"):
+                        db.execute(f"DELETE FROM {tname}")
+            # Add missing columns if needed
+            if db.is_postgres:
+                try:
+                    db.execute("ALTER TABLE applications ADD COLUMN IF NOT EXISTS screening_mode TEXT DEFAULT 'live'")
+                except Exception:
+                    pass
+            db.commit()
+            # Re-seed directly (don't use init_db which may skip if schema exists)
+            from db import seed_initial_data
+            try:
+                seed_initial_data(db)
+                logger.info("Database re-seeded successfully after reset")
+            except Exception as seed_err:
+                logger.error(f"Re-seed failed: {seed_err}", exc_info=True)
+                db.close()
+                self.error(f"Wipe succeeded but re-seed failed: {str(seed_err)}", 500)
+                return
+            db.close()
+            self.success({"status": "reset_complete", "message": "Database wiped and re-seeded"})
+        except Exception as e:
+            logger.error(f"DB reset failed: {e}", exc_info=True)
+            self.error(f"Reset failed: {str(e)}", 500)
+
+
+class AdminResetPasswordHandler(BaseHandler):
+    """POST /api/admin/reset-password — reset a client's password (staging only)."""
+    def post(self):
+        from config import IS_PRODUCTION
+        if IS_PRODUCTION:
+            self.error("Not available in production", 403)
+            return
+        data = self.get_json()
+        email = data.get("email", "").strip().lower()
+        new_password = data.get("new_password", "")
+        if not email or not new_password:
+            self.error("email and new_password required", 400)
+            return
+        import bcrypt
+        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db = get_db()
+        db.execute("UPDATE clients SET password_hash=? WHERE LOWER(email)=?", (pw_hash, email))
+        db.commit()
+        check = db.execute("SELECT id FROM clients WHERE LOWER(email)=?", (email,)).fetchone()
+        if not check:
+            db.close()
+            self.error("Email not found", 404)
+            return
+        db.close()
+        self.success({"status": "password_reset", "email": email})
+
 # ── Health Check ──
 class HealthHandler(BaseHandler):
     def get(self):
@@ -399,12 +548,7 @@ class HealthHandler(BaseHandler):
         # Database connectivity check
         try:
             db = get_db()
-            if USE_POSTGRES:
-                cur = db.cursor()
-                cur.execute("SELECT 1")
-                cur.close()
-            else:
-                db.execute("SELECT 1")
+            db.execute("SELECT 1")
             db.close()
             health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
         except Exception as e:
@@ -460,7 +604,7 @@ class OfficerLoginHandler(BaseHandler):
         if rate_limiter.is_limited(rl_key, max_attempts=10, window_seconds=900):
             self.set_status(429)
             self.write({"error": "Too many login attempts. Please try again in 15 minutes."})
-            logger.warning(f"Rate limited officer login from {ip} for {email}")
+            logger.warning(f"Rate limited officer login from {ip} for {mask_email(email)}")
             return
 
         db = get_db()
@@ -498,7 +642,7 @@ class ClientLoginHandler(BaseHandler):
         if rate_limiter.is_limited(rl_key, max_attempts=10, window_seconds=900):
             self.set_status(429)
             self.write({"error": "Too many login attempts. Please try again in 15 minutes."})
-            logger.warning(f"Rate limited client login from {ip} for {email}")
+            logger.warning(f"Rate limited client login from {ip} for {mask_email(email)}")
             return
 
         db = get_db()
@@ -566,7 +710,124 @@ class ClientRegisterHandler(BaseHandler):
         db.close()
 
         token = create_token(client_id, "client", company or email, "client")
-        self.success({"token": token, "client": {"id": client_id, "email": email, "company": company}}, 201)
+        csrf_token = self.issue_csrf_token()
+        self.issue_session_cookie(token)
+        self.success({"token": token, "csrf_token": csrf_token, "client": {"id": client_id, "email": email, "company": company}}, 201)
+
+
+class ForgotPasswordHandler(BaseHandler):
+    """POST /api/auth/client/forgot-password — generate a password reset token."""
+    def post(self):
+        data = self.get_json()
+        email = data.get("email", "").strip().lower()
+        if not email:
+            return self.error("Email is required", 400)
+
+        # Rate limit: 5 attempts per 30 minutes per IP
+        ip = self.get_client_ip()
+        rl_key = f"forgot_pw:{ip}"
+        if rate_limiter.is_limited(rl_key, max_attempts=5, window_seconds=1800):
+            self.set_status(429)
+            self.write({"error": "Too many reset attempts. Please try again later."})
+            return
+
+        db = get_db()
+        client = db.execute("SELECT id, email FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
+        if not client:
+            db.close()
+            # Don't reveal whether email exists
+            return self.success({"message": "If that email is registered, a reset link has been sent."})
+
+        # Generate reset token and expiry (1 hour)
+        reset_token = secrets.token_urlsafe(32)
+        expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+        db.execute("UPDATE clients SET password_reset_token=?, password_reset_expires=? WHERE id=?",
+                   (reset_token, expires, client["id"]))
+        db.commit()
+        db.close()
+
+        logger.info(f"Password reset token generated for {mask_email(email)}: {reset_token}")
+
+        from config import IS_PRODUCTION
+        result = {"message": "If that email is registered, a reset link has been sent."}
+        if not IS_PRODUCTION:
+            result["reset_token"] = reset_token  # Only expose token in non-production
+        self.success(result)
+
+
+class ResetPasswordHandler(BaseHandler):
+    """POST /api/auth/client/reset-password — reset password using token."""
+    def post(self):
+        data = self.get_json()
+        token = data.get("token", "").strip()
+        new_password = data.get("new_password", "")
+        if not token or not new_password:
+            return self.error("Token and new_password are required", 400)
+
+        if len(new_password) < 12:
+            return self.error("Password must be at least 12 characters", 400)
+
+        # Validate password policy
+        is_valid, pw_error = PasswordPolicy.validate(new_password)
+        if not is_valid:
+            return self.error(f"Password policy violation: {pw_error}", 400)
+
+        db = get_db()
+        client = db.execute(
+            "SELECT id, email, password_reset_token, password_reset_expires FROM clients WHERE password_reset_token = ?",
+            (token,)
+        ).fetchone()
+
+        if not client:
+            db.close()
+            return self.error("Invalid or expired reset token", 400)
+
+        # Check expiry
+        try:
+            expires = datetime.fromisoformat(client["password_reset_expires"])
+            if datetime.utcnow() > expires:
+                db.close()
+                return self.error("Reset token has expired", 400)
+        except (ValueError, TypeError):
+            db.close()
+            return self.error("Invalid or expired reset token", 400)
+
+        # Reset password and clear token
+        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE clients SET password_hash=?, password_reset_token=NULL, password_reset_expires=NULL WHERE id=?",
+                   (pw_hash, client["id"]))
+        db.commit()
+        db.close()
+
+        logger.info(f"Password reset completed for {mask_email(client['email'])}")
+        self.success({"message": "Password has been reset successfully."})
+
+
+class ClientChangePasswordHandler(BaseHandler):
+    """POST /api/auth/client/change-password — change password for authenticated client."""
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+        data = self.get_json()
+        current = data.get("current_password", "")
+        new_pw = data.get("new_password", "")
+        if not current or not new_pw:
+            return self.error("current_password and new_password required", 400)
+        if len(new_pw) < 12:
+            return self.error("Password must be at least 12 characters", 400)
+
+        db = get_db()
+        client = db.execute("SELECT password_hash FROM clients WHERE id=?", (user.get("sub"),)).fetchone()
+        if not client or not bcrypt.checkpw(current.encode(), client["password_hash"].encode()):
+            db.close()
+            return self.error("Current password is incorrect", 401)
+        new_hash = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE clients SET password_hash=? WHERE id=?", (new_hash, user.get("sub")))
+        db.commit()
+        db.close()
+        logger.info(f"Password changed for client {user.get('sub')}")
+        self.success({"status": "password_changed"})
 
 
 class MeHandler(BaseHandler):
@@ -632,13 +893,19 @@ class ApplicationsHandler(BaseHandler):
         db.close()
 
         apps = [dict(r) for r in rows]
-        # Attach directors and UBOs for each — C-02: decrypt PII on read
+        # Attach directors, UBOs, and documents for each — C-02: decrypt PII on read
         db = get_db()
         for app in apps:
             app["directors"] = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
                 "SELECT * FROM directors WHERE application_id = ?", (app["id"],)).fetchall()]
             app["ubos"] = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
                 "SELECT * FROM ubos WHERE application_id = ?", (app["id"],)).fetchall()]
+            app["documents"] = [dict(d) for d in db.execute(
+                "SELECT id, doc_type, doc_name, file_size, verification_status, verification_results, verified_at, person_id FROM documents WHERE application_id = ?",
+                (app["id"],)).fetchall()]
+            # Bug #4: Parse risk_dimensions from JSON string for API consumers
+            if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
+                app["risk_dimensions"] = safe_json_loads(app["risk_dimensions"])
         db.close()
 
         self.success({"applications": apps, "total": len(apps)})
@@ -714,6 +981,9 @@ class ApplicationDetailHandler(BaseHandler):
             "SELECT * FROM ubos WHERE application_id = ?", (result["id"],)).fetchall()]
         result["documents"] = [dict(d) for d in db.execute(
             "SELECT * FROM documents WHERE application_id = ?", (result["id"],)).fetchall()]
+        # Bug #4: Parse risk_dimensions from JSON string for API consumers
+        if result.get("risk_dimensions") and isinstance(result["risk_dimensions"], str):
+            result["risk_dimensions"] = safe_json_loads(result["risk_dimensions"])
         db.close()
 
         self.success(result)
@@ -770,7 +1040,7 @@ class ApplicationDetailHandler(BaseHandler):
                 data.get("sector", app["sector"]),
                 data.get("entity_type", app["entity_type"]),
                 data.get("ownership_structure", app["ownership_structure"]),
-                json.dumps(data.get("prescreening_data", json.loads(app["prescreening_data"]))),
+                json.dumps(data.get("prescreening_data", safe_json_loads(app["prescreening_data"]))),
                 real_id
             ))
         else:
@@ -894,7 +1164,7 @@ class ApplicationDetailHandler(BaseHandler):
             # For approval: enforce that screening is complete, memo exists, and approval gate passes
             if new_status == "approved":
                 # Require screening to have been run (not in draft)
-                prescreening = json.loads(app["prescreening_data"]) if app.get("prescreening_data") else {}
+                prescreening = safe_json_loads(app["prescreening_data"])
                 if not prescreening.get("screening_report"):
                     db.close()
                     return self.error("Cannot approve: screening has not been run. Submit the application first.", 400)
@@ -959,7 +1229,7 @@ class SubmitApplicationHandler(BaseHandler):
         real_id = app["id"]
 
         # ── v2.2: Pre-screening validation ──────────────────────────
-        prescreening_raw = json.loads(app["prescreening_data"]) if app.get("prescreening_data") else {}
+        prescreening_raw = safe_json_loads(app["prescreening_data"])
 
         # Validate incorporation date (no future dates)
         inc_date = prescreening_raw.get("incorporation_date", "")
@@ -990,11 +1260,11 @@ class SubmitApplicationHandler(BaseHandler):
             db.close()
             return self.error(f"Currency '{currency}' not supported. Allowed: {', '.join(ALLOWED_CURRENCIES)}", 400)
 
-        # Build scoring input
-        directors = [dict(d) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
-        ubos = [dict(u) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+        # Build scoring input — C-02: decrypt PII fields on read
+        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
+        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
 
-        prescreening = json.loads(app["prescreening_data"]) if app["prescreening_data"] else {}
+        prescreening = safe_json_loads(app["prescreening_data"])
         scoring_input = {
             **prescreening,
             "entity_type": app["entity_type"],
@@ -1173,9 +1443,11 @@ class KYCSubmitHandler(BaseHandler):
             db.close()
             return
 
-        if app["status"] != "kyc_documents":
+        # Allow KYC submission from multiple valid states (handles edge cases where pricing was accepted client-side)
+        valid_kyc_submit_statuses = ("kyc_documents", "pricing_accepted", "pricing_review", "submitted", "draft", "pre_approved")
+        if app["status"] not in valid_kyc_submit_statuses:
             db.close()
-            return self.error("Application is not in KYC & Documents stage", 400)
+            return self.error(f"Application cannot be submitted from status '{app['status']}'", 400)
 
         real_id = app["id"]
 
@@ -1184,6 +1456,36 @@ class KYCSubmitHandler(BaseHandler):
         if doc_count == 0:
             db.close()
             return self.error("Please upload at least one document before submitting", 400)
+
+        # Re-compute risk score at KYC submission if not already scored
+        risk_score = app["risk_score"] or 0
+        risk_level = app["risk_level"] or "LOW"
+        if risk_score == 0:
+            try:
+                prescreening = safe_json_loads(app["prescreening_data"])
+                directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
+                ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+                scoring_input = {
+                    **prescreening,
+                    "entity_type": app["entity_type"],
+                    "ownership_structure": app["ownership_structure"],
+                    "country": app["country"],
+                    "sector": app["sector"],
+                    "company_name": app["company_name"],
+                    "directors": directors,
+                    "ubos": ubos
+                }
+                score_result = compute_risk_score(scoring_input)
+                risk_score = score_result["score"]
+                risk_level = score_result["level"]
+                db.execute("""UPDATE applications SET
+                    risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                    updated_at=datetime('now') WHERE id=?""",
+                    (score_result["score"], score_result["level"],
+                     json.dumps(score_result.get("dimensions", {})),
+                     score_result.get("lane", "Standard Review"), real_id))
+            except Exception as e:
+                logger.warning(f"Risk scoring at KYC submit failed for {app['ref']}: {e}")
 
         # ALL applications after KYC go to compliance review — no auto-approval
         db.execute("""
@@ -1198,7 +1500,7 @@ class KYCSubmitHandler(BaseHandler):
         for cu in compliance_users:
             db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
                       (cu["id"], f"KYC Submitted — Ready for Review: {app['ref']}",
-                       f"{app['company_name']} has completed KYC & document upload. Risk: {app['risk_level']} (Score: {app['risk_score']}). Awaiting compliance approval."))
+                       f"{app['company_name']} has completed KYC & document upload. Risk: {risk_level} (Score: {risk_score}). Awaiting compliance approval."))
 
         db.commit()
         db.close()
@@ -1377,7 +1679,39 @@ class PreApprovalDecisionHandler(BaseHandler):
 # ══════════════════════════════════════════════════════════
 
 class DocumentUploadHandler(BaseHandler):
-    """POST /api/applications/:id/documents"""
+    """GET/POST /api/applications/:id/documents"""
+
+    def get(self, app_id):
+        """Return all documents for an application."""
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT id, ref, client_id FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        docs = [dict(d) for d in db.execute(
+            "SELECT id, application_id, person_id, doc_type, doc_name, file_size, mime_type, verification_status, verification_results, verified_at FROM documents WHERE application_id = ?",
+            (app["id"],)).fetchall()]
+        db.close()
+
+        # Parse verification_results JSON strings
+        for doc in docs:
+            if doc.get("verification_results"):
+                try:
+                    doc["verification_results"] = safe_json_loads(doc["verification_results"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        self.success(docs)
+
     def post(self, app_id):
         user = self.require_auth()
         if not user:
@@ -1397,8 +1731,9 @@ class DocumentUploadHandler(BaseHandler):
             return
 
         # v2.1: KYC access control — HIGH/VERY_HIGH risk requires pre-approval before document upload
+        # In production, this gate is enforced; in staging, allow uploads for testing
         risk_level = (app.get("risk_level") or "").upper()
-        if risk_level in ("HIGH", "VERY_HIGH"):
+        if risk_level in ("HIGH", "VERY_HIGH") and ENVIRONMENT == "production":
             if app.get("pre_approval_decision") != "PRE_APPROVE":
                 db.close()
                 return self.error(
@@ -1446,7 +1781,7 @@ class DocumentUploadHandler(BaseHandler):
                     s3_key = f"documents/{app['id']}/{safe_name}"
                     s3_client.upload_fileobj(
                         io.BytesIO(body),
-                        Bucket=os.environ.get("S3_BUCKET", "arie-documents"),
+                        Bucket=_CFG_S3_BUCKET,
                         Key=s3_key,
                         ExtraArgs={"ContentType": file_info["content_type"]}
                     )
@@ -1477,6 +1812,20 @@ class DocumentVerifyHandler(BaseHandler):
             return
 
         db = get_db()
+
+        # P0-3: Check if Agent 1 (document verification) is enabled before executing
+        agent1 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=1").fetchone()
+        if agent1 and not agent1["enabled"]:
+            db.close()
+            self.log_audit(user, "Agent Skipped", "Agent 1", "Document verification skipped — agent disabled")
+            self.success({
+                "status": "skipped",
+                "message": "Document verification agent is currently disabled",
+                "checks": [],
+                "requires_review": True
+            })
+            return
+
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         if not doc:
             db.close()
@@ -1485,36 +1834,139 @@ class DocumentVerifyHandler(BaseHandler):
         # Get the related application and person for screening
         app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
 
-        import random
+        # ── AI Document Verification (real vision analysis) ──
         checks = []
-        check_types = [
-            ("Name Match", "name", "Entity/person name verified against application"),
-            ("Document Date", "age", "Document is within acceptable date range"),
-            ("Document Clarity", "quality", "Document is legible and complete"),
-            ("Content Verification", "content", "Required content elements present"),
-        ]
         all_passed = True
-        for label, ctype, rule in check_types:
-            passed = random.random() > 0.12  # 88% pass rate
-            severity = "pass" if passed else ("warn" if random.random() > 0.4 else "fail")
-            if not passed:
+
+        # Resolve file path
+        file_path = doc.get("file_path", "")
+        if file_path and not os.path.isabs(file_path):
+            file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
+
+        # Get person name and entity name for verification cross-checks
+        person_name = ""
+        entity_name = app.get("company_name", "") if app else ""
+        if doc.get("person_id"):
+            person = db.execute("SELECT full_name FROM directors WHERE id=?", (doc["person_id"],)).fetchone()
+            if not person:
+                person = db.execute("SELECT full_name FROM ubos WHERE id=?", (doc["person_id"],)).fetchone()
+            if person:
+                person_name = person.get("full_name", "")
+
+        # If no person_id, try to resolve person from doc_type suffix (e.g., intermediary_passport_dir1 → 1st director)
+        if not person_name and app:
+            import re as _re2
+            doc_type_raw = doc.get("doc_type", "")
+            dir_match = _re2.search(r'_dir(\d+)$', doc_type_raw)
+            ubo_match = _re2.search(r'_ubo(\d+)$', doc_type_raw)
+            if dir_match:
+                idx = int(dir_match.group(1)) - 1  # dir1 = index 0
+                directors = db.execute("SELECT full_name FROM directors WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
+                if 0 <= idx < len(directors):
+                    person_name = directors[idx].get("full_name", "")
+            elif ubo_match:
+                idx = int(ubo_match.group(1)) - 1
+                ubos = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
+                if 0 <= idx < len(ubos):
+                    person_name = ubos[idx].get("full_name", "")
+
+        # Determine doc_category based on doc_type
+        company_doc_types = ["cert_inc", "memarts", "cert_reg", "reg_sh", "reg_dir", "fin_stmt",
+                             "board_res", "structure_chart", "poa", "bankref", "licence",
+                             "contracts", "source_wealth", "source_funds", "bank_statements", "aml_policy"]
+        raw_doc_type = doc.get("doc_type", "general")
+        doc_category = "company" if raw_doc_type in company_doc_types else "kyc"
+
+        # Extract base doc_type (strip intermediary_ prefix and person suffix)
+        base_doc_type = raw_doc_type
+        if base_doc_type.startswith("intermediary_"):
+            base_doc_type = base_doc_type[len("intermediary_"):]
+        # Remove trailing _dir1, _ubo1, etc.
+        import re as _re
+        base_doc_type = _re.sub(r'_(dir|ubo|inter)\d+$', '', base_doc_type)
+
+        # Look up declared directors and UBOs for cross-referencing
+        directors_list = []
+        ubos_list = []
+        if app:
+            dir_rows = db.execute("SELECT full_name FROM directors WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
+            directors_list = [r["full_name"] for r in dir_rows if r.get("full_name")]
+            ubo_rows = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
+            ubos_list = [r["full_name"] for r in ubo_rows if r.get("full_name")]
+
+        # For company docs, pass entity name; for KYC docs, pass person name
+        verify_name = entity_name if doc_category == "company" else person_name
+
+        # Load check overrides from ai_checks table
+        check_overrides = None
+        try:
+            check_category = "entity" if doc_category == "company" else "person"
+            ai_check_row = db.execute(
+                "SELECT checks FROM ai_checks WHERE doc_type=? AND category=?",
+                (base_doc_type, check_category)
+            ).fetchone()
+            if ai_check_row and ai_check_row["checks"]:
+                loaded_checks = safe_json_loads(ai_check_row["checks"])
+                if loaded_checks:
+                    check_overrides = loaded_checks
+            if not check_overrides:
+                logger.warning(f"No DB checks found for doc_type={base_doc_type}, category={check_category}. Using hardcoded fallback.")
+        except Exception as e:
+            logger.warning(f"Could not load ai_checks for {base_doc_type}: {e}. Using hardcoded fallback.")
+
+        try:
+            if HAS_CLAUDE_CLIENT:
+                claude_client = ClaudeClient(
+                    api_key=_CFG_ANTHROPIC_API_KEY,
+                    monthly_budget_usd=_CFG_CLAUDE_BUDGET_USD,
+                    mock_mode=_CFG_CLAUDE_MOCK_MODE
+                )
+                ai_result = claude_client.verify_document(
+                    doc_type=base_doc_type,
+                    file_name=doc.get("doc_name", ""),
+                    person_name=verify_name,
+                    doc_category=doc_category,
+                    file_path=file_path,
+                    check_overrides=check_overrides,
+                    entity_name=entity_name,
+                    directors=directors_list,
+                    ubos=ubos_list,
+                )
+
+                # P0-2: Guard against rejected/invalid AI responses
+                if ai_result.get("_rejected") or ai_result.get("_validated") is False:
+                    logger.warning(f"AI verification rejected for doc {doc_id}: {ai_result.get('error', 'schema validation failed')}")
+                    checks = [{"label": "AI Verification", "type": "validity", "result": "fail",
+                               "message": "AI output failed validation — manual review required"}]
+                    all_passed = False
+                else:
+                    checks = ai_result.get("checks", [])
+                    # P0-5: No pass without evidence — empty checks cannot be "verified"
+                    if not checks:
+                        all_passed = False
+                    else:
+                        all_passed = ai_result.get("overall") == "verified"
+            else:
+                logger.warning("Claude client not available — flagging document for manual review")
+                checks = [{"label": "AI Verification", "type": "validity", "result": "warn", "message": "AI unavailable — manual review required"}]
                 all_passed = False
-            checks.append({
-                "label": label,
-                "type": ctype,
-                "rule": rule,
-                "result": severity,
-                "message": "" if passed else f"Check flagged — manual review recommended"
-            })
+        except Exception as e:
+            logger.error(f"AI document verification failed: {e}")
+            checks = [{"label": "AI Verification", "type": "validity", "result": "warn", "message": f"AI error: {str(e)[:100]}. Manual review required."}]
+            all_passed = False
 
         # If it's an identity document, run sanctions/PEP screening
         sanctions_result = None
         id_doc_types = ["passport", "national_id", "id_card", "drivers_license", "director_id", "ubo_id"]
         if doc["doc_type"] in id_doc_types and doc["person_id"]:
-            # Try to find the person's name
+            # Try to find the person's name — C-02: decrypt PII fields on read
             person = db.execute("SELECT full_name, nationality FROM directors WHERE id=?", (doc["person_id"],)).fetchone()
-            if not person:
+            if person:
+                person = decrypt_pii_fields(dict(person), PII_FIELDS_DIRECTORS)
+            else:
                 person = db.execute("SELECT full_name, nationality FROM ubos WHERE id=?", (doc["person_id"],)).fetchone()
+                if person:
+                    person = decrypt_pii_fields(dict(person), PII_FIELDS_UBOS)
             if person:
                 sanctions_result = screen_sumsub_aml(
                     person["full_name"],
@@ -1555,6 +2007,22 @@ class DocumentVerifyHandler(BaseHandler):
         db.commit()
         db.close()
 
+        # Improvement 8: Log agent execution for traceability
+        try:
+            app_id = doc.get("application_id", "")
+            log_agent_execution(
+                application_id=app_id,
+                agent_name="verify_document",
+                agent_number=1,
+                status=status,
+                checks=checks,
+                flags=[c.get("message", "") for c in checks if (c.get("result") or "").lower() in ("fail", "warn")],
+                requires_review=not all_passed,
+                document_id=doc_id,
+            )
+        except Exception as e:
+            logger.debug(f"Agent execution logging failed: {e}")
+
         self.success({"doc_id": doc_id, "status": status, "checks": checks})
 
 
@@ -1570,50 +2038,144 @@ class DocumentAIVerifyHandler(BaseHandler):
 
         try:
             body = json.loads(self.request.body)
-        except:
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
+            logger.warning(f"Invalid JSON in AI verify request: {e}")
             return self.error("Invalid JSON", 400)
 
         doc_type = body.get("doc_type", "")
         file_name = body.get("file_name", "")
         person_name = body.get("person_name", "")
         doc_category = body.get("doc_category", "identity")
+        doc_id = body.get("doc_id", "")
+        entity_name = body.get("entity_name", "")
+        directors = body.get("directors", [])
+        ubos = body.get("ubos", [])
+        app_id = body.get("application_id", "")
 
         if not doc_type or not file_name:
             return self.error("doc_type and file_name are required", 400)
 
+        # If pre-screening context not provided in request, look it up from the application
+        if (not entity_name or not directors) and app_id:
+            try:
+                db = get_db()
+                app_row = db.execute("SELECT company_name, prescreening_data FROM applications WHERE id=?", (app_id,)).fetchone()
+                if app_row:
+                    if not entity_name:
+                        entity_name = app_row.get("company_name", "") or ""
+                    if not directors:
+                        dir_rows = db.execute("SELECT full_name FROM directors WHERE application_id=? ORDER BY id", (app_id,)).fetchall()
+                        directors = [r["full_name"] for r in dir_rows if r.get("full_name")]
+                    if not ubos:
+                        ubo_rows = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app_id,)).fetchall()
+                        ubos = [r["full_name"] for r in ubo_rows if r.get("full_name")]
+                db.close()
+            except Exception as e:
+                logger.warning(f"Could not look up pre-screening data for app {app_id}: {e}")
+
+        # Resolve file path if doc_id provided
+        file_path = None
+        if doc_id:
+            db = get_db()
+            doc_record = db.execute("SELECT file_path FROM documents WHERE id=?", (doc_id,)).fetchone()
+            db.close()
+            if doc_record:
+                fp = doc_record.get("file_path", "")
+                if fp and not os.path.isabs(fp):
+                    file_path = os.path.join(UPLOAD_DIR, os.path.basename(fp))
+                elif fp:
+                    file_path = fp
+
         # Initialize Claude client
         if not HAS_CLAUDE_CLIENT:
-            logger.warning("Claude client not available — returning mock response")
+            logger.warning("Claude client not available — returning flagged response for manual review")
             return self.success({
                 "checks": [
-                    {"label": "Document Validity", "type": "validity", "result": "pass", "message": "Document format verified"},
-                    {"label": "Expiry Risk", "type": "expiry", "result": "pass", "message": "Document validity verified"},
-                    {"label": "Name Consistency", "type": "name", "result": "pass", "message": "Name verified"},
-                    {"label": "Quality Indicators", "type": "quality", "result": "pass", "message": "Quality verified"}
+                    {"label": "Document Type Match", "type": "doc_type_match", "result": "warn", "message": "AI unavailable — manual review required"},
+                    {"label": "Document Validity", "type": "validity", "result": "warn", "message": "AI unavailable — manual review required"},
                 ],
-                "overall": "verified",
-                "confidence": 0.90,
-                "ai_source": "mock"
+                "overall": "flagged",
+                "confidence": 0.0,
+                "ai_source": "unavailable"
             })
 
         try:
             claude_client = ClaudeClient(
-                api_key=os.environ.get("ANTHROPIC_API_KEY"),
-                monthly_budget_usd=float(os.environ.get("CLAUDE_BUDGET_USD", 50.0)),
-                mock_mode=os.environ.get("CLAUDE_MOCK_MODE", "false").lower() == "true"
+                api_key=_CFG_ANTHROPIC_API_KEY,
+                monthly_budget_usd=_CFG_CLAUDE_BUDGET_USD,
+                mock_mode=_CFG_CLAUDE_MOCK_MODE
             )
 
             result = claude_client.verify_document(
                 doc_type=doc_type,
                 file_name=file_name,
                 person_name=person_name,
-                doc_category=doc_category
+                doc_category=doc_category,
+                file_path=file_path,
+                entity_name=entity_name,
+                directors=directors,
+                ubos=ubos,
             )
+
+            # P0-2: Guard against rejected/invalid AI responses
+            if result.get("_rejected") or result.get("_validated") is False:
+                logger.warning(f"AI verify rejected for {doc_type}/{file_name}: {result.get('error', 'schema validation failed')}")
+                result["checks"] = [{"label": "AI Verification", "type": "validity", "result": "fail",
+                                     "message": "AI output failed validation — manual review required"}]
+                result["overall"] = "flagged"
+
+            # P0-5: No pass without evidence — empty checks cannot be "verified"
+            if not result.get("checks"):
+                result["checks"] = [{"label": "AI Verification", "type": "validity", "result": "warn",
+                                     "message": "No verification checks returned — manual review required"}]
+                result["overall"] = "flagged"
 
             self.success(result)
         except Exception as e:
             logger.error(f"Document AI verification failed: {e}")
             self.error(f"Verification failed: {str(e)[:200]}", 500)
+
+
+# ══════════════════════════════════════════════════════════
+# DOCUMENT DOWNLOAD ENDPOINT
+# ══════════════════════════════════════════════════════════
+
+class DocumentDownloadHandler(BaseHandler):
+    """GET /api/documents/:id/download — Serve uploaded document file"""
+    def get(self, doc_id):
+        user = self.require_auth()
+        if not user:
+            return
+        db = get_db()
+        doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+        if not doc:
+            db.close()
+            return self.error("Document not found", 404)
+
+        # Check access — officer can view any, client can only view their own
+        if user.get("type") == "client":
+            app = db.execute("SELECT client_id FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+            if not app or app["client_id"] != user["sub"]:
+                db.close()
+                return self.error("Access denied", 403)
+        db.close()
+
+        file_path = doc["file_path"]
+        if file_path and not os.path.isabs(file_path):
+            file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
+
+        if not file_path or not os.path.exists(file_path):
+            return self.error("File not found on disk", 404)
+
+        mime_type = doc.get("mime_type", "application/octet-stream") or "application/octet-stream"
+        doc_name = doc.get("doc_name", "document")
+
+        self.set_header("Content-Type", mime_type)
+        self.set_header("Content-Disposition", f'inline; filename="{doc_name}"')
+
+        with open(file_path, "rb") as f:
+            self.write(f.read())
+        self.finish()
 
 
 # ══════════════════════════════════════════════════════════
@@ -1709,11 +2271,22 @@ class RiskConfigHandler(BaseHandler):
         config = db.execute("SELECT * FROM risk_config WHERE id=1").fetchone()
         db.close()
         if config:
-            self.success({"dimensions": json.loads(config["dimensions"]),
-                         "thresholds": json.loads(config["thresholds"]),
-                         "updated_at": config["updated_at"]})
+            result = {
+                "dimensions": safe_json_loads(config["dimensions"]),
+                "thresholds": safe_json_loads(config["thresholds"]),
+                "updated_at": config["updated_at"],
+            }
+            # Include scoring config columns (may not exist in older schemas)
+            for col in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+                try:
+                    val = config[col]
+                    result[col] = safe_json_loads(val) if val else {}
+                except (KeyError, IndexError):
+                    result[col] = {}
+            self.success(result)
         else:
-            self.success({"dimensions": [], "thresholds": []})
+            self.success({"dimensions": [], "thresholds": [],
+                         "country_risk_scores": {}, "sector_risk_scores": {}, "entity_type_scores": {}})
 
     def put(self):
         user = self.require_auth(roles=["admin"])
@@ -1721,8 +2294,14 @@ class RiskConfigHandler(BaseHandler):
             return
         data = self.get_json()
         db = get_db()
-        db.execute("UPDATE risk_config SET dimensions=?, thresholds=?, updated_by=?, updated_at=datetime('now') WHERE id=1",
-                   (json.dumps(data.get("dimensions",[])), json.dumps(data.get("thresholds",[])), user["sub"]))
+        db.execute(
+            "UPDATE risk_config SET dimensions=?, thresholds=?, country_risk_scores=?, sector_risk_scores=?, entity_type_scores=?, updated_by=?, updated_at=datetime('now') WHERE id=1",
+            (json.dumps(data.get("dimensions", [])),
+             json.dumps(data.get("thresholds", [])),
+             json.dumps(data.get("country_risk_scores", {})),
+             json.dumps(data.get("sector_risk_scores", {})),
+             json.dumps(data.get("entity_type_scores", {})),
+             user["sub"]))
         db.commit()
         db.close()
         self.log_audit(user, "Config", "Risk Model", "Risk scoring model updated")
@@ -1751,7 +2330,7 @@ class AIAgentsHandler(BaseHandler):
         agents = []
         for r in rows:
             a = dict(r)
-            a["checks"] = json.loads(a["checks"]) if a["checks"] else []
+            a["checks"] = safe_json_loads(a["checks"]) if a["checks"] else []
             a["enabled"] = bool(a["enabled"])
             agents.append(a)
         self.success({"agents": agents})
@@ -1781,14 +2360,42 @@ class AIAgentDetailHandler(BaseHandler):
             return
         data = self.get_json()
         db = get_db()
+
+        # P2-1: Read old state for audit diff
+        old_agent = db.execute("SELECT * FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
+        if not old_agent:
+            db.close()
+            return self.error("Agent not found", 404)
+
+        # P2-3: Conflict detection — reject stale updates
+        if data.get("expected_updated_at"):
+            if old_agent["updated_at"] and old_agent["updated_at"] != data["expected_updated_at"]:
+                db.close()
+                return self.error("Configuration was modified by another user. Please refresh and try again.", 409)
+
         db.execute("""UPDATE ai_agents SET name=?, icon=?, stage=?, description=?,
                       enabled=?, checks=?, updated_at=datetime('now') WHERE id=?""",
                    (data.get("name",""), data.get("icon",""), data.get("stage",""),
                     data.get("description",""), 1 if data.get("enabled",True) else 0,
                     json.dumps(data.get("checks",[])), agent_id))
         db.commit()
+
+        # P2-1: Build audit detail with old/new values
+        changes = []
+        if "enabled" in data and (1 if data["enabled"] else 0) != old_agent["enabled"]:
+            changes.append(f"enabled: {bool(old_agent['enabled'])} -> {data['enabled']}")
+        if "name" in data and data["name"] != old_agent["name"]:
+            changes.append(f"name: '{old_agent['name']}' -> '{data['name']}'")
+        if "stage" in data and data["stage"] != old_agent["stage"]:
+            changes.append(f"stage: '{old_agent['stage']}' -> '{data['stage']}'")
+        detail = f"Agent {agent_id} updated: {data.get('name', old_agent['name'])}. Changes: "
+        detail += ", ".join(changes) if changes else "no field changes"
+
+        # Return updated_at for conflict detection
+        updated_row = db.execute("SELECT updated_at FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
         db.close()
-        self.success({"status": "updated"})
+        self.log_audit(user, "Config Update", "AI Agents", detail)
+        self.success({"status": "updated", "updated_at": updated_row["updated_at"] if updated_row else None})
 
     def delete(self, agent_id):
         user = self.require_auth(roles=["admin"])
@@ -1800,6 +2407,87 @@ class AIAgentDetailHandler(BaseHandler):
         db.close()
         self.log_audit(user, "Config", "AI Agents", f"Agent {agent_id} deleted")
         self.success({"status": "deleted"})
+
+
+# ══════════════════════════════════════════════════════════
+# AI VERIFICATION CHECKS CONFIG ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class VerificationChecksHandler(BaseHandler):
+    """GET/PUT /api/config/verification-checks"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        db = get_db()
+        rows = db.execute("SELECT * FROM ai_checks ORDER BY category, id").fetchall()
+        db.close()
+        entity = []
+        person = []
+        for r in rows:
+            item = {
+                "id": r["id"],
+                "doc_type": r["doc_type"],
+                "doc_name": r["doc_name"],
+                "checks": safe_json_loads(r["checks"]) if r["checks"] else [],
+                "updated_at": r["updated_at"],
+            }
+            if r["category"] == "entity":
+                entity.append(item)
+            else:
+                person.append(item)
+        self.success({"entity": entity, "person": person})
+
+    def put(self):
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
+        data = self.get_json()
+        doc_type = data.get("doc_type")
+        category = data.get("category")
+        checks = data.get("checks", [])
+        if not doc_type or not category:
+            return self.error("doc_type and category are required", 400)
+
+        db = get_db()
+
+        # P2-1: Read old state for audit diff
+        old_row = db.execute("SELECT checks FROM ai_checks WHERE doc_type=? AND category=?", (doc_type, category)).fetchone()
+        old_checks_count = len(safe_json_loads(old_row["checks"])) if old_row and old_row["checks"] else 0
+
+        # Update existing row or insert if new
+        existing = db.execute("SELECT id FROM ai_checks WHERE doc_type=? AND category=?", (doc_type, category)).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE ai_checks SET checks=?, updated_at=datetime('now') WHERE doc_type=? AND category=?",
+                (json.dumps(checks), doc_type, category)
+            )
+        else:
+            doc_name = data.get("doc_name", doc_type)
+            db.execute(
+                "INSERT INTO ai_checks (category, doc_type, doc_name, checks) VALUES (?,?,?,?)",
+                (category, doc_type, doc_name, json.dumps(checks))
+            )
+
+        # Auto-update Agent 1's checks list from all ai_checks
+        all_rows = db.execute("SELECT doc_name, checks FROM ai_checks ORDER BY category, id").fetchall()
+        all_labels = []
+        for row in all_rows:
+            row_checks = safe_json_loads(row["checks"]) if row["checks"] else []
+            for ch in row_checks:
+                all_labels.append(f"{row['doc_name']}: {ch.get('label', '')}")
+        db.execute(
+            "UPDATE ai_agents SET checks=?, updated_at=datetime('now') WHERE agent_number=1",
+            (json.dumps(all_labels),)
+        )
+
+        db.commit()
+        db.close()
+        # P2-1: Audit log with old/new check counts
+        new_checks_count = len(checks)
+        detail = f"Checks updated for {category}/{doc_type}: {old_checks_count} -> {new_checks_count} checks"
+        self.log_audit(user, "Config Update", "AI Checks", detail)
+        self.success({"status": "saved"})
 
 
 # ══════════════════════════════════════════════════════════
@@ -1859,12 +2547,13 @@ class ReportHandler(BaseHandler):
         results = []
         for row in rows:
             record = dict(row)
-            # Parse prescreening_data for risk info
-            prescreening = json.loads(record.get("prescreening_data") or "{}")
-            risk_info = prescreening.get("risk_assessment", {})
-            record["risk_score"] = risk_info.get("score", 0)
-            record["risk_level"] = risk_info.get("level", record.get("risk_level", ""))
-            record["risk_lane"] = risk_info.get("lane", "")
+            # Bug #4: Use actual DB columns for risk data (not prescreening_data which may lack these)
+            record["risk_score"] = record.get("risk_score") or 0
+            record["risk_level"] = record.get("risk_level") or ""
+            record["risk_lane"] = record.get("onboarding_lane") or ""
+            # Parse risk_dimensions from JSON string
+            if record.get("risk_dimensions") and isinstance(record["risk_dimensions"], str):
+                record["risk_dimensions"] = safe_json_loads(record["risk_dimensions"])
 
             # Filter to requested fields
             filtered = {}
@@ -1984,12 +2673,19 @@ class SaveResumeHandler(BaseHandler):
         if not user:
             return
         db = get_db()
-        session = db.execute(
-            "SELECT * FROM client_sessions WHERE client_id=? ORDER BY updated_at DESC LIMIT 1",
-            (user["sub"],)).fetchone()
+        # Support filtering by specific application_id
+        app_id = self.get_argument("application_id", None)
+        if app_id:
+            session = db.execute(
+                "SELECT * FROM client_sessions WHERE client_id=? AND application_id=? ORDER BY updated_at DESC LIMIT 1",
+                (user["sub"], app_id)).fetchone()
+        else:
+            session = db.execute(
+                "SELECT * FROM client_sessions WHERE client_id=? ORDER BY updated_at DESC LIMIT 1",
+                (user["sub"],)).fetchone()
         db.close()
         if session:
-            self.success({"form_data": json.loads(session["form_data"]),
+            self.success({"form_data": safe_json_loads(session["form_data"]),
                          "last_step": session["last_step"],
                          "application_id": session["application_id"]})
         else:
@@ -2013,12 +2709,34 @@ class SaveResumeHandler(BaseHandler):
         db.close()
         self.success({"status": "saved"})
 
+    def delete(self):
+        """DELETE /api/save-resume — delete saved session for an application."""
+        user = self.require_auth()
+        if not user:
+            return
+        app_id = self.get_argument("application_id", None)
+        if not app_id:
+            return self.error("application_id required", 400)
+        db = get_db()
+        db.execute("DELETE FROM client_sessions WHERE client_id=? AND application_id=?", (user.get("sub"), app_id))
+        db.commit()
+        db.close()
+        self.success({"status": "deleted"})
+
 
 # ══════════════════════════════════════════════════════════
 # PORTAL FILE SERVING
 # ══════════════════════════════════════════════════════════
 
-PORTAL_DIR = os.path.join(os.path.dirname(__file__), "..")  # outputs/ directory
+# Look for HTML files in parent dir (local dev) or same dir (Docker)
+_parent_dir = os.path.join(os.path.dirname(__file__), "..")
+_same_dir = os.path.dirname(__file__)
+if os.path.exists(os.path.join(_parent_dir, "arie-portal.html")):
+    PORTAL_DIR = _parent_dir
+elif os.path.exists(os.path.join(_same_dir, "arie-portal.html")):
+    PORTAL_DIR = _same_dir
+else:
+    PORTAL_DIR = _parent_dir  # fallback
 
 class PortalHandler(tornado.web.RequestHandler):
     """Serve the client portal HTML"""
@@ -2049,6 +2767,22 @@ class ScreeningHandler(BaseHandler):
         if not self.check_rate_limit("screening", max_attempts=20, window_seconds=60):
             return
 
+        # P0-3: Check if Agent 3 (screening) is enabled before executing
+        db = get_db()
+        agent3 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=3").fetchone()
+        if agent3 and not agent3["enabled"]:
+            db.close()
+            self.log_audit(user, "Agent Skipped", "Agent 3", "Screening skipped — agent disabled")
+            self.success({
+                "status": "skipped",
+                "message": "Screening agent is currently disabled",
+                "total_hits": 0,
+                "overall_flags": [],
+                "requires_review": True
+            })
+            return
+        db.close()
+
         data = self.get_json()
         app_id = data.get("application_id")
         if not app_id:
@@ -2061,8 +2795,8 @@ class ScreeningHandler(BaseHandler):
             return self.error("Application not found", 404)
 
         real_id = app["id"]
-        directors = [dict(d) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
-        ubos = [dict(u) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
+        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
 
         app_data = {
             "company_name": app["company_name"],
@@ -2074,7 +2808,7 @@ class ScreeningHandler(BaseHandler):
         report = run_full_screening(app_data, directors, ubos, client_ip=self.get_client_ip())
 
         # Store screening report
-        prescreening = json.loads(app["prescreening_data"]) if app["prescreening_data"] else {}
+        prescreening = safe_json_loads(app["prescreening_data"])
         prescreening["screening_report"] = report
         prescreening["last_screened_at"] = datetime.utcnow().isoformat()
         prescreening["screened_by"] = user["sub"]
@@ -2332,10 +3066,10 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
                     if applicant_id in pdata or external_user_id in pdata:
                         # Update the prescreening data with new KYC result
                         try:
-                            pdict = json.loads(pdata) if pdata else {}
+                            pdict = safe_json_loads(pdata)
                             if "screening_report" not in pdict:
                                 pdict["screening_report"] = {}
-                            pdict["screening_report"]["sumsub_webhook"] = json.loads(kyc_data)
+                            pdict["screening_report"]["sumsub_webhook"] = safe_json_loads(kyc_data)
 
                             # If verification failed, add a flag
                             if review_answer == "RED":
@@ -2501,7 +3235,19 @@ class ComplianceMemoHandler(BaseHandler):
         if not self.check_rate_limit("memo", max_attempts=10, window_seconds=60):
             return
 
+        # P0-3: Check if Agent 5 (compliance memo) is enabled before executing
         db = get_db()
+        agent5 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=5").fetchone()
+        if agent5 and not agent5["enabled"]:
+            db.close()
+            self.log_audit(user, "Agent Skipped", "Agent 5", "Compliance memo generation skipped — agent disabled")
+            self.success({
+                "status": "skipped",
+                "message": "Compliance memo agent is currently disabled",
+                "requires_review": True
+            })
+            return
+
         app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
         if not app:
             db.close()
@@ -2509,9 +3255,9 @@ class ComplianceMemoHandler(BaseHandler):
 
         real_id = app["id"]
 
-        # Fetch related data
-        directors = [dict(d) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
-        ubos = [dict(u) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+        # Fetch related data — C-02: decrypt PII fields on read
+        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
+        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
         documents = [dict(d) for d in db.execute("SELECT * FROM documents WHERE application_id=?", (real_id,)).fetchall()]
 
         # Build compliance memo (pure computation — extracted to memo_handler.py)
@@ -2528,8 +3274,9 @@ class ComplianceMemoHandler(BaseHandler):
                  validation_result["quality_score"], validation_result["validation_status"],
                  supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json)
             )
-        except Exception:
+        except Exception as e:
             # Fallback if rule_violations column doesn't exist yet
+            logger.warning(f"Memo insert with rule_violations failed (column may not exist): {e}")
             try:
                 db.execute(
                     "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -2537,14 +3284,15 @@ class ComplianceMemoHandler(BaseHandler):
                      validation_result["quality_score"], validation_result["validation_status"],
                      supervisor_result["verdict"], supervisor_result["recommendation"])
                 )
-            except Exception:
+            except Exception as e2:
+                logger.warning(f"Memo insert with supervisor columns failed: {e2}")
                 try:
                     db.execute(
                         "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status) VALUES (?,?,?,?,?)",
                         (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft")
                     )
-                except Exception:
-                    pass
+                except Exception as e3:
+                    logger.error(f"All memo insert attempts failed for application {real_id}: {e3}", exc_info=True)
 
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"],
@@ -2586,7 +3334,7 @@ class SupervisorRunHandler(BaseHandler):
                 application_id=app["id"],
                 trigger_type=__import__("supervisor.schemas", fromlist=["TriggerType"]).TriggerType(trigger_type),
                 context_data={"app_ref": app["ref"], "company_name": app["company_name"]},
-                trigger_source=f"backoffice:{user['id']}",
+                trigger_source=f"backoffice:{user.get('sub', user.get('id', 'unknown'))}",
             )
             self.success({
                 "pipeline_id": result.pipeline_id,
@@ -2675,7 +3423,7 @@ class MemoValidateHandler(BaseHandler):
             return self.error("No compliance memo found for this application. Generate a memo first.", 404)
 
         try:
-            memo_data = json.loads(memo_row["memo_data"])
+            memo_data = safe_json_loads(memo_row["memo_data"])
         except (json.JSONDecodeError, TypeError):
             db.close()
             return self.error("Memo data is corrupt or unreadable.", 500)
@@ -2692,8 +3440,8 @@ class MemoValidateHandler(BaseHandler):
             db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                        (user.get("sub",""), user.get("name",""), user.get("role",""), "Validate Memo", app_id, f"Memo validation: {validation['validation_status']} (score: {validation['quality_score']}/10)", self.get_client_ip()))
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to store memo validation results for {app_id}: {e}", exc_info=True)
         db.close()
 
         self.success(validation)
@@ -2733,7 +3481,7 @@ class MemoApproveHandler(BaseHandler):
         # Gate 3: Check supervisor verdict from memo content
         memo_content = memo_row.get("memo_content") or "{}"
         try:
-            memo_data = json.loads(memo_content) if isinstance(memo_content, str) else memo_content
+            memo_data = safe_json_loads(memo_content)
         except (json.JSONDecodeError, TypeError):
             memo_data = {}
         metadata = memo_data.get("metadata", {})
@@ -2767,8 +3515,8 @@ class MemoApproveHandler(BaseHandler):
             db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                        (user.get("sub",""), user.get("name",""), user.get("role",""), "Approve Memo", app_id, f"Compliance memo approved by {user.get('name', 'Unknown')}", self.get_client_ip()))
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to store memo approval for {app_id}: {e}", exc_info=True)
         db.close()
 
         self.success({"status": "approved", "approved_by": user.get("name", ""), "approved_at": now_ts})
@@ -2792,7 +3540,7 @@ class MemoValidationResultsHandler(BaseHandler):
             return self.error("No memo found.", 404)
 
         try:
-            issues = json.loads(memo_row["validation_issues"] or "[]")
+            issues = safe_json_loads(memo_row["validation_issues"])
         except (json.JSONDecodeError, TypeError):
             issues = []
 
@@ -2840,7 +3588,7 @@ class MemoPDFDownloadHandler(BaseHandler):
 
         # Parse memo data
         try:
-            memo_data = json.loads(memo_row["memo_data"]) if isinstance(memo_row["memo_data"], str) else memo_row["memo_data"]
+            memo_data = safe_json_loads(memo_row["memo_data"])
         except (json.JSONDecodeError, TypeError):
             db.close()
             return self.error("Memo data is corrupt or unparseable.", 500)
@@ -2891,8 +3639,8 @@ class MemoPDFDownloadHandler(BaseHandler):
                  f"PDF generated for {app['company_name']} memo", self.get_client_ip())
             )
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to store PDF generation audit for {app_id}: {e}", exc_info=True)
         db.close()
 
         # Return PDF as binary download
@@ -2923,7 +3671,7 @@ class MemoSupervisorHandler(BaseHandler):
             return self.error("No compliance memo found for this application.", 404)
 
         try:
-            memo_data = json.loads(memo_row["memo_data"])
+            memo_data = safe_json_loads(memo_row["memo_data"])
         except (json.JSONDecodeError, TypeError):
             db.close()
             return self.error("Memo data is corrupt or unreadable.", 500)
@@ -2945,8 +3693,8 @@ class MemoSupervisorHandler(BaseHandler):
                         "Supervisor verdict: " + supervisor_result["verdict"] + " | Contradictions: " + str(supervisor_result["contradiction_count"]),
                         self.get_client_ip()))
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to store memo supervisor results for {app_id}: {e}", exc_info=True)
         db.close()
 
         self.success(supervisor_result)
@@ -2970,7 +3718,7 @@ class MemoSupervisorResultHandler(BaseHandler):
             return self.error("No memo found.", 404)
 
         try:
-            memo_data = json.loads(memo_row["memo_data"])
+            memo_data = safe_json_loads(memo_row["memo_data"])
         except (json.JSONDecodeError, TypeError):
             return self.error("Memo data is corrupt.", 500)
 
@@ -3192,7 +3940,7 @@ class GetClientNotificationsHandler(BaseHandler):
         result = [dict(n) for n in notifications]
         for n in result:
             if n["documents_list"]:
-                n["documents_list"] = json.loads(n["documents_list"])
+                n["documents_list"] = safe_json_loads(n["documents_list"])
 
         db.close()
         self.success({"notifications": result})
@@ -3376,7 +4124,7 @@ class PeriodicReviewDetailHandler(BaseHandler):
 
         result = dict(review)
         if result["review_memo"]:
-            result["review_memo"] = json.loads(result["review_memo"])
+            result["review_memo"] = safe_json_loads(result["review_memo"])
 
         db.close()
         self.success(result)
@@ -3508,9 +4256,9 @@ class SARListHandler(BaseHandler):
         result = []
         for r in rows:
             row_dict = dict(r)
-            row_dict["indicators"] = json.loads(row_dict["indicators"]) if row_dict["indicators"] else []
-            row_dict["transaction_details"] = json.loads(row_dict["transaction_details"]) if row_dict["transaction_details"] else {}
-            row_dict["supporting_documents"] = json.loads(row_dict["supporting_documents"]) if row_dict["supporting_documents"] else []
+            row_dict["indicators"] = safe_json_loads(row_dict["indicators"]) if row_dict["indicators"] else []
+            row_dict["transaction_details"] = safe_json_loads(row_dict["transaction_details"]) if row_dict["transaction_details"] else {}
+            row_dict["supporting_documents"] = safe_json_loads(row_dict["supporting_documents"]) if row_dict["supporting_documents"] else []
             result.append(row_dict)
 
         db.close()
@@ -3584,9 +4332,9 @@ class SARDetailHandler(BaseHandler):
             return self.error("SAR report not found", 404)
 
         result = dict(sar)
-        result["indicators"] = json.loads(result["indicators"]) if result["indicators"] else []
-        result["transaction_details"] = json.loads(result["transaction_details"]) if result["transaction_details"] else {}
-        result["supporting_documents"] = json.loads(result["supporting_documents"]) if result["supporting_documents"] else []
+        result["indicators"] = safe_json_loads(result["indicators"]) if result["indicators"] else []
+        result["transaction_details"] = safe_json_loads(result["transaction_details"]) if result["transaction_details"] else {}
+        result["supporting_documents"] = safe_json_loads(result["supporting_documents"]) if result["supporting_documents"] else []
 
         db.close()
         self.success(result)
@@ -3617,9 +4365,9 @@ class SARDetailHandler(BaseHandler):
             WHERE id=?
         """, (
             data.get("narrative", sar["narrative"]),
-            json.dumps(data.get("indicators", json.loads(sar["indicators"] or "[]"))),
-            json.dumps(data.get("transaction_details", json.loads(sar["transaction_details"] or "{}"))),
-            json.dumps(data.get("supporting_documents", json.loads(sar["supporting_documents"] or "[]"))),
+            json.dumps(data.get("indicators", safe_json_loads(sar["indicators"]))),
+            json.dumps(data.get("transaction_details", safe_json_loads(sar["transaction_details"]))),
+            json.dumps(data.get("supporting_documents", safe_json_loads(sar["supporting_documents"]))),
             data.get("risk_level", sar["risk_level"]),
             real_id,
         ))
@@ -3838,11 +4586,16 @@ def make_app():
     routes = [
         # Health
         (r"/api/health", HealthHandler),
+        (r"/api/admin/reset-db", AdminResetDBHandler),
+        (r"/api/admin/reset-password", AdminResetPasswordHandler),
 
         # Auth
         (r"/api/auth/officer/login", OfficerLoginHandler),
         (r"/api/auth/client/login", ClientLoginHandler),
         (r"/api/auth/client/register", ClientRegisterHandler),
+        (r"/api/auth/client/forgot-password", ForgotPasswordHandler),
+        (r"/api/auth/client/reset-password", ResetPasswordHandler),
+        (r"/api/auth/client/change-password", ClientChangePasswordHandler),
         (r"/api/auth/logout", LogoutHandler),
         (r"/api/auth/me", MeHandler),
 
@@ -3867,6 +4620,7 @@ def make_app():
         (r"/api/applications", ApplicationsHandler),
 
         # Documents
+        (r"/api/documents/([^/]+)/download", DocumentDownloadHandler),
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
         (r"/api/documents/ai-verify", DocumentAIVerifyHandler),
 
@@ -3878,6 +4632,7 @@ def make_app():
         (r"/api/config/risk-model", RiskConfigHandler),
         (r"/api/config/ai-agents", AIAgentsHandler),
         (r"/api/config/ai-agents/([^/]+)", AIAgentDetailHandler),
+        (r"/api/config/verification-checks", VerificationChecksHandler),
         (r"/api/config/environment", EnvironmentInfoHandler),
 
         # Screening (Real API Integrations)
@@ -3952,7 +4707,7 @@ def make_app():
         logger.info("Supervisor API endpoints registered (%d routes)", len(get_supervisor_routes()))
 
     return tornado.web.Application(routes,
-        debug=os.environ.get("DEBUG", "0") == "1",
+        debug=_CFG_DEBUG,
         xsrf_cookies=False,  # CSRF handled by custom check_xsrf_cookie() on BaseHandler (double-submit cookie pattern)
         cookie_secret=SECRET_KEY,
         max_body_size=20 * 1024 * 1024,  # 20MB max request body
@@ -3960,6 +4715,9 @@ def make_app():
 
 
 if __name__ == "__main__":
+    # Validate unified configuration before starting
+    validate_config()
+
     # Validate environment before starting
     validate_environment()
 
