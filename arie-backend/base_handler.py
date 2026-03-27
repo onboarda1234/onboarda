@@ -17,11 +17,12 @@ import secrets
 import tornado.web
 
 from auth import decode_token, RateLimiter
+from config import ALLOWED_ORIGIN, IS_DEVELOPMENT, IS_DEMO, ENVIRONMENT as _CFG_ENVIRONMENT
 from db import get_db as db_get_db
 
 logger = logging.getLogger("arie")
 
-ENVIRONMENT = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development"))
+ENVIRONMENT = _CFG_ENVIRONMENT
 
 # Module-level rate limiter instance — shared across all handlers
 rate_limiter = RateLimiter()
@@ -70,16 +71,14 @@ class BaseHandler(tornado.web.RequestHandler):
         return True
 
     def set_default_headers(self):
-        # CORS — in production, MUST set ALLOWED_ORIGIN env var to your domain
-        allowed_origin = os.environ.get("ALLOWED_ORIGIN", "")
-        if not allowed_origin:
-            if ENVIRONMENT == "production":
-                # In production, no CORS header = same-origin only (most secure)
-                logger.warning("ALLOWED_ORIGIN not set in production — defaulting to same-origin only")
-            else:
-                allowed_origin = "*"  # Permissive in dev only
-        if allowed_origin:
-            self.set_header("Access-Control-Allow-Origin", allowed_origin)
+        # CORS — restricted in staging/production, permissive in dev/demo
+        if IS_DEVELOPMENT or IS_DEMO:
+            self.set_header("Access-Control-Allow-Origin", "*")
+        elif ALLOWED_ORIGIN and ALLOWED_ORIGIN != "http://localhost:8080":
+            self.set_header("Access-Control-Allow-Origin", ALLOWED_ORIGIN)
+        else:
+            # In staging/production with no explicit origin, same-origin only (most secure)
+            logger.warning("ALLOWED_ORIGIN not configured for %s — defaulting to same-origin only", ENVIRONMENT)
         self.set_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
         self.set_header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-CSRF-Token,X-Idempotency-Key")
         self.set_header("Access-Control-Max-Age", "3600")

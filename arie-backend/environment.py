@@ -18,7 +18,7 @@ VALID_ENVIRONMENTS = ("demo", "staging", "production")
 
 def get_environment() -> str:
     """Get current environment from ENV variable. Defaults to 'demo'."""
-    env = os.environ.get("ENV", "demo").lower().strip()
+    env = (os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or "demo").lower().strip()
     if env not in VALID_ENVIRONMENTS:
         logger.warning(f"Invalid ENV='{env}' — defaulting to 'demo'")
         env = "demo"

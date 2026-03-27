@@ -52,3 +52,4 @@ scripts/
 
 # ── Archive (old ARIE-branded files) ──
 archive/
+arie-backend/arie.db.bak_e2e
