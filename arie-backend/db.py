@@ -335,6 +335,7 @@ def _get_postgres_schema() -> str:
         doc_type TEXT NOT NULL,
         doc_name TEXT NOT NULL,
         file_path TEXT NOT NULL,
+        s3_key TEXT,
         file_size INTEGER,
         mime_type TEXT,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
@@ -715,6 +716,7 @@ def _get_sqlite_schema() -> str:
         doc_type TEXT NOT NULL,
         doc_name TEXT NOT NULL,
         file_path TEXT NOT NULL,
+        s3_key TEXT,
         file_size INTEGER,
         mime_type TEXT,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
@@ -1127,6 +1129,17 @@ def _run_migrations(db: DBConnection):
         except Exception as e:
             logger.debug(f"Could not populate default scoring config: {e}")
         logger.info("Migration v2.2: Scoring config columns added")
+
+    # Migration v2.3: Add s3_key column to documents table
+    try:
+        db.execute("SELECT s3_key FROM documents LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.3: Adding s3_key column to documents table")
+        try:
+            db.execute("ALTER TABLE documents ADD COLUMN s3_key TEXT")
+        except Exception as e:
+            logger.debug(f"Migration s3_key column may already exist: {e}")
+        logger.info("Migration v2.3: s3_key column added")
 
 
 def _populate_default_scoring_config(db: 'DBConnection'):

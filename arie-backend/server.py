@@ -1776,16 +1776,19 @@ class DocumentUploadHandler(BaseHandler):
         s3_key = None
         if HAS_S3:
             try:
-                s3_client = get_s3_client()
-                if s3_client:
-                    s3_key = f"documents/{app['id']}/{safe_name}"
-                    s3_client.upload_fileobj(
-                        io.BytesIO(body),
-                        Bucket=_CFG_S3_BUCKET,
-                        Key=s3_key,
-                        ExtraArgs={"ContentType": file_info["content_type"]}
-                    )
+                s3 = get_s3_client()
+                success, key_or_error = s3.upload_document(
+                    file_data=body,
+                    client_id=app["id"],
+                    doc_type=self.get_argument("doc_type", "general"),
+                    filename=safe_name,
+                    metadata={"content_type": file_info["content_type"], "original_name": filename}
+                )
+                if success:
+                    s3_key = key_or_error
                     logger.info(f"Document {doc_id} uploaded to S3: {s3_key}")
+                else:
+                    logger.warning(f"S3 upload failed for {doc_id}: {key_or_error}. Falling back to local storage.")
             except Exception as e:
                 logger.warning(f"S3 upload failed for {doc_id}: {e}. Falling back to local storage.")
                 s3_key = None
@@ -1794,9 +1797,9 @@ class DocumentUploadHandler(BaseHandler):
         person_id = self.get_argument("person_id", None)
 
         db.execute("""
-            INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, file_size, mime_type)
-            VALUES (?,?,?,?,?,?,?,?)
-        """, (doc_id, app["id"], person_id, doc_type, filename, file_path, len(body), file_info["content_type"]))
+            INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, s3_key, file_size, mime_type)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key, len(body), file_info["content_type"]))
         db.commit()
         db.close()
 
@@ -2141,11 +2144,12 @@ class DocumentAIVerifyHandler(BaseHandler):
 # ══════════════════════════════════════════════════════════
 
 class DocumentDownloadHandler(BaseHandler):
-    """GET /api/documents/:id/download — Serve uploaded document file"""
+    """GET /api/documents/:id/download — get presigned S3 URL or serve local file"""
     def get(self, doc_id):
         user = self.require_auth()
         if not user:
             return
+
         db = get_db()
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         if not doc:
@@ -2153,28 +2157,47 @@ class DocumentDownloadHandler(BaseHandler):
             return self.error("Document not found", 404)
 
         # Check access — officer can view any, client can only view their own
-        if user.get("type") == "client":
-            app = db.execute("SELECT client_id FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
-            if not app or app["client_id"] != user["sub"]:
-                db.close()
-                return self.error("Access denied", 403)
+        app = db.execute("SELECT id, client_id, ref FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        if user.get("type") == "client" and app["client_id"] != user["sub"]:
+            db.close()
+            return self.error("Access denied", 403)
         db.close()
 
+        s3_key = doc.get("s3_key") if doc else None
+
+        # Prefer S3 presigned URL if document is stored in S3
+        if s3_key and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, url_or_error = s3.get_presigned_url(
+                    key=s3_key,
+                    expiry=900,
+                    response_filename=doc["doc_name"]
+                )
+                if success:
+                    self.log_audit(user, "Download", app["ref"], f"Document downloaded via S3: {doc['doc_name']}")
+                    return self.success({"download_url": url_or_error, "source": "s3", "expires_in": 900})
+                else:
+                    logger.warning(f"S3 presigned URL failed for {doc_id}: {url_or_error}. Falling back to local.")
+            except Exception as e:
+                logger.warning(f"S3 download failed for {doc_id}: {e}. Falling back to local.")
+
+        # Fall back to local file
         file_path = doc["file_path"]
         if file_path and not os.path.isabs(file_path):
             file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
 
         if not file_path or not os.path.exists(file_path):
-            return self.error("File not found on disk", 404)
+            return self.error("Document file not found on server", 404)
 
-        mime_type = doc.get("mime_type", "application/octet-stream") or "application/octet-stream"
-        doc_name = doc.get("doc_name", "document")
-
-        self.set_header("Content-Type", mime_type)
-        self.set_header("Content-Disposition", f'inline; filename="{doc_name}"')
-
+        self.set_header("Content-Type", doc.get("mime_type") or "application/octet-stream")
+        self.set_header("Content-Disposition", f'attachment; filename="{doc["doc_name"]}"')
         with open(file_path, "rb") as f:
             self.write(f.read())
+        self.log_audit(user, "Download", app["ref"], f"Document downloaded locally: {doc['doc_name']}")
         self.finish()
 
 
@@ -3259,6 +3282,25 @@ class ComplianceMemoHandler(BaseHandler):
         directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
         ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
         documents = [dict(d) for d in db.execute("SELECT * FROM documents WHERE application_id=?", (real_id,)).fetchall()]
+
+        # Enrich app with prescreening fields for memo_handler
+        # prescreening_data is a JSON column; memo_handler expects source_of_funds and expected_volume as top-level keys
+        app = dict(app)
+        ps = json.loads(app.get("prescreening_data") or "{}")
+        sof = ps.get("source_of_funds", "")
+        if not sof:
+            sof_parts = []
+            if ps.get("source_of_funds_initial_type"):
+                sof_parts.append("Initial: " + ps["source_of_funds_initial_type"])
+            if ps.get("source_of_funds_initial_detail"):
+                sof_parts.append(ps["source_of_funds_initial_detail"])
+            if ps.get("source_of_funds_ongoing_type"):
+                sof_parts.append("Ongoing: " + ps["source_of_funds_ongoing_type"])
+            if ps.get("source_of_funds_ongoing_detail"):
+                sof_parts.append(ps["source_of_funds_ongoing_detail"])
+            sof = "; ".join(sof_parts)
+        app["source_of_funds"] = sof
+        app["expected_volume"] = ps.get("expected_volume") or ps.get("monthly_volume", "")
 
         # Build compliance memo (pure computation — extracted to memo_handler.py)
         memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(app, directors, ubos, documents)
@@ -4726,7 +4768,7 @@ if __name__ == "__main__":
     # Run database migrations
     try:
         from migrations.runner import run_all_migrations
-        run_all_migrations(DB_PATH)
+        run_all_migrations()
     except Exception as e:
         logger.warning("Migration runner unavailable: %s", e)
 
