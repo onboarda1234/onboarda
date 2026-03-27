@@ -1,0 +1,119 @@
+name: Deploy to Staging
+
+on:
+  workflow_dispatch:  # Manual trigger from GitHub UI
+  push:
+    branches: [main]
+
+# Prevent concurrent deployments
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: af-south-1
+  ECR_REPOSITORY: regmind-backend
+  ECS_CLUSTER: regmind-staging
+  ECS_SERVICE: regmind-backend
+  ECS_TASK_DEFINITION: regmind-staging:3
+
+jobs:
+  # Run CI first
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: ci
+    environment: staging
+    defaults:
+      run:
+        working-directory: arie-backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Copy HTML files into backend dir
+        run: |
+          cp ../arie-portal.html ./arie-portal.html
+          cp ../arie-backoffice.html ./arie-backoffice.html
+          echo "HTML files copied"
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build --platform linux/amd64 -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "Pushed $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "Pushed $ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+      - name: Deploy to ECS (rolling restart)
+        run: |
+          echo "Scaling down..."
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --desired-count 0 \
+            --region $AWS_REGION > /dev/null
+
+          echo "Waiting 30s for task to drain..."
+          sleep 30
+
+          echo "Deploying new image..."
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --task-definition $ECS_TASK_DEFINITION \
+            --desired-count 1 \
+            --force-new-deployment \
+            --region $AWS_REGION > /dev/null
+
+          echo "Waiting for task to start..."
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_SERVICE \
+            --region $AWS_REGION || true
+
+      - name: Verify deployment health
+        run: |
+          echo "Waiting for health check..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" https://staging.regmind.co/api/health 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check PASSED after ${i}0s"
+              HEALTH=$(curl -sf https://staging.regmind.co/api/health)
+              echo "Response: $HEALTH"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
+            sleep 10
+          done
+          echo "FAIL: Health check did not pass within 5 minutes"
+          exit 1
+
+      - name: Verify portal and backoffice
+        run: |
+          PORTAL=$(curl -sf -o /dev/null -w "%{http_code}" https://staging.regmind.co/portal)
+          BACKOFFICE=$(curl -sf -o /dev/null -w "%{http_code}" https://staging.regmind.co/backoffice)
+          echo "Portal: HTTP $PORTAL"
+          echo "Backoffice: HTTP $BACKOFFICE"
+          if [ "$PORTAL" != "200" ] || [ "$BACKOFFICE" != "200" ]; then
+            echo "FAIL: Portal or backoffice not returning 200"
+            exit 1
+          fi
+          echo "All endpoints verified"
