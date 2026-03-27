@@ -17,8 +17,8 @@ logger = logging.getLogger("arie.environment")
 VALID_ENVIRONMENTS = ("demo", "staging", "production")
 
 def get_environment() -> str:
-    """Get current environment from ENV variable. Defaults to 'demo'."""
-    env = os.environ.get("ENV", "demo").lower().strip()
+    """Get current environment from ENV or ENVIRONMENT variable. Defaults to 'demo'."""
+    env = os.environ.get("ENV", os.environ.get("ENVIRONMENT", "demo")).lower().strip()
     if env not in VALID_ENVIRONMENTS:
         logger.warning(f"Invalid ENV='{env}' — defaulting to 'demo'")
         env = "demo"

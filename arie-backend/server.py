@@ -124,7 +124,7 @@ class JSONFormatter(logging.Formatter):
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry)
 
-if _log_format == "json" or os.environ.get("ENVIRONMENT", "development") == "production":
+if _log_format == "json" or is_production():
     _handler = logging.StreamHandler()
     _handler.setFormatter(JSONFormatter())
     logging.root.handlers = []
@@ -137,15 +137,10 @@ logger = logging.getLogger("arie")
 
 # ── Configuration ──────────────────────────────────────────
 PORT = int(os.environ.get("PORT", 8080))
-ENVIRONMENT = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development"))
+ENVIRONMENT = ENV  # Centralized from environment.py
 
-# SECRET_KEY: In production, MUST be set via env var. In dev, auto-generate a random key per session.
-_env_secret = os.environ.get("SECRET_KEY", "")
-if not _env_secret and ENVIRONMENT == "production":
-    print("FATAL: SECRET_KEY environment variable is required in production mode.")
-    print("       Generate one with: python3 -c \"import secrets; print(secrets.token_hex(64))\"")
-    sys.exit(1)
-SECRET_KEY = _env_secret or secrets.token_hex(64)  # Random per-session in dev
+# SECRET_KEY: Unified via environment.py get_jwt_secret() — same secret used for JWT and cookies
+SECRET_KEY = get_jwt_secret()
 
 # Database: PostgreSQL (via DATABASE_URL) in production, SQLite for development
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -576,6 +571,59 @@ class MeHandler(BaseHandler):
         if not user:
             return
         self.success({"id": user["sub"], "name": user["name"], "role": user["role"], "type": user["type"]})
+
+
+class ChangePasswordHandler(BaseHandler):
+    """POST /api/auth/change-password — Change password for authenticated user (client or officer)."""
+    def post(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        if not self.check_rate_limit("change_password", max_attempts=5, window_seconds=300):
+            return
+
+        data = self.get_json()
+        current_password = data.get("current_password", "")
+        new_password = data.get("new_password", "")
+
+        if not current_password or not new_password:
+            return self.error("current_password and new_password are required", 400)
+
+        # Validate new password meets policy
+        is_valid, pw_error = PasswordPolicy.validate(new_password)
+        if not is_valid:
+            return self.error(f"New password does not meet policy: {pw_error}", 400)
+
+        db = get_db()
+        user_id = user.get("sub")
+        token_type = user.get("type", "officer")
+
+        # Look up user in the correct table
+        if token_type == "client":
+            row = db.execute("SELECT id, password_hash FROM clients WHERE id=?", (user_id,)).fetchone()
+        else:
+            row = db.execute("SELECT id, password_hash FROM users WHERE id=?", (user_id,)).fetchone()
+
+        if not row:
+            db.close()
+            return self.error("User not found", 404)
+
+        # Verify current password
+        if not bcrypt.checkpw(current_password.encode(), row["password_hash"].encode()):
+            db.close()
+            self.log_audit(user, "Change Password Failed", "System", "Incorrect current password")
+            return self.error("Current password is incorrect", 401)
+
+        # Hash and store new password
+        new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        table = "clients" if token_type == "client" else "users"
+        db.execute(f"UPDATE {table} SET password_hash=? WHERE id=?", (new_hash, user_id))
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "Change Password", "System", "Password changed successfully")
+        self.success({"status": "password_changed"})
 
 
 class LogoutHandler(BaseHandler):
@@ -1485,27 +1533,51 @@ class DocumentVerifyHandler(BaseHandler):
         # Get the related application and person for screening
         app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
 
-        import random
+        # Run AI-based document verification via Claude (or return pending_review if unavailable)
         checks = []
-        check_types = [
-            ("Name Match", "name", "Entity/person name verified against application"),
-            ("Document Date", "age", "Document is within acceptable date range"),
-            ("Document Clarity", "quality", "Document is legible and complete"),
-            ("Content Verification", "content", "Required content elements present"),
-        ]
         all_passed = True
-        for label, ctype, rule in check_types:
-            passed = random.random() > 0.12  # 88% pass rate
-            severity = "pass" if passed else ("warn" if random.random() > 0.4 else "fail")
-            if not passed:
+        ai_source = "pending"
+
+        if HAS_CLAUDE_CLIENT:
+            try:
+                claude_client = ClaudeClient(
+                    api_key=os.environ.get("ANTHROPIC_API_KEY"),
+                    monthly_budget_usd=float(os.environ.get("CLAUDE_BUDGET_USD", 50.0)),
+                    mock_mode=os.environ.get("CLAUDE_MOCK_MODE", "false").lower() == "true"
+                )
+                person_name = ""
+                if doc.get("person_id"):
+                    person = db.execute("SELECT full_name FROM directors WHERE id=?", (doc["person_id"],)).fetchone()
+                    if not person:
+                        person = db.execute("SELECT full_name FROM ubos WHERE id=?", (doc["person_id"],)).fetchone()
+                    if person:
+                        person_name = person["full_name"]
+
+                result = claude_client.verify_document(
+                    doc_type=doc["doc_type"],
+                    file_name=doc.get("filename", "unknown"),
+                    person_name=person_name,
+                    doc_category="identity" if doc["doc_type"] in ("passport", "national_id", "id_card", "drivers_license") else "company"
+                )
+                checks = result.get("checks", [])
+                ai_source = result.get("ai_source", "claude")
+                all_passed = result.get("overall") == "verified"
+            except Exception as e:
+                logger.error(f"AI document verification failed for doc {doc_id}: {e}")
+                checks = [
+                    {"label": "AI Verification", "type": "ai_review", "result": "warn",
+                     "message": "AI verification unavailable — document queued for manual review"}
+                ]
                 all_passed = False
-            checks.append({
-                "label": label,
-                "type": ctype,
-                "rule": rule,
-                "result": severity,
-                "message": "" if passed else f"Check flagged — manual review recommended"
-            })
+                ai_source = "unavailable"
+        else:
+            # No Claude client — flag for manual review instead of random pass/fail
+            checks = [
+                {"label": "AI Verification", "type": "ai_review", "result": "warn",
+                 "message": "AI verification not configured — document requires manual review"}
+            ]
+            all_passed = False
+            ai_source = "none"
 
         # If it's an identity document, run sanctions/PEP screening
         sanctions_result = None
@@ -1547,7 +1619,8 @@ class DocumentVerifyHandler(BaseHandler):
             "checks": checks,
             "overall": status,
             "verified_at": datetime.utcnow().isoformat(),
-            "sanctions_screening": sanctions_result
+            "sanctions_screening": sanctions_result,
+            "ai_source": ai_source
         }, default=str)
 
         db.execute("UPDATE documents SET verification_status=?, verification_results=?, verified_at=datetime('now') WHERE id=?",
@@ -2519,22 +2592,27 @@ class ComplianceMemoHandler(BaseHandler):
         rule_violations = rule_engine_result.get("violations", [])
 
         # Store memo in compliance_memos table
+        # Use final memo metadata for validation_status (may be overridden to "fail" by block gate)
         rule_violations_json = json.dumps(rule_violations) if rule_violations else None
         memo_json = json.dumps(memo)
+        final_validation_status = memo["metadata"].get("validation_status", validation_result["validation_status"])
+        is_blocked = memo["metadata"].get("blocked", False)
+        block_reason = memo["metadata"].get("block_reason", "")
         try:
             db.execute(
-                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, blocked, block_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
-                 validation_result["quality_score"], validation_result["validation_status"],
-                 supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json)
+                 validation_result["quality_score"], final_validation_status,
+                 supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json,
+                 is_blocked, block_reason if is_blocked else None)
             )
         except Exception:
-            # Fallback if rule_violations column doesn't exist yet
+            # Fallback if rule_violations/blocked columns don't exist yet
             try:
                 db.execute(
                     "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary) VALUES (?,?,?,?,?,?,?,?,?)",
                     (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
-                     validation_result["quality_score"], validation_result["validation_status"],
+                     validation_result["quality_score"], final_validation_status,
                      supervisor_result["verdict"], supervisor_result["recommendation"])
                 )
             except Exception:
@@ -2730,10 +2808,10 @@ class MemoApproveHandler(BaseHandler):
             db.close()
             return self.error("Cannot approve memo with FAIL validation status. Fix issues and re-validate first.", 400)
 
-        # Gate 3: Check supervisor verdict from memo content
-        memo_content = memo_row.get("memo_content") or "{}"
+        # Gate 3: Check supervisor verdict from memo data
+        memo_data_raw = memo_row.get("memo_data") or "{}"
         try:
-            memo_data = json.loads(memo_content) if isinstance(memo_content, str) else memo_content
+            memo_data = json.loads(memo_data_raw) if isinstance(memo_data_raw, str) else memo_data_raw
         except (json.JSONDecodeError, TypeError):
             memo_data = {}
         metadata = memo_data.get("metadata", {})
@@ -3843,6 +3921,7 @@ def make_app():
         (r"/api/auth/officer/login", OfficerLoginHandler),
         (r"/api/auth/client/login", ClientLoginHandler),
         (r"/api/auth/client/register", ClientRegisterHandler),
+        (r"/api/auth/change-password", ChangePasswordHandler),
         (r"/api/auth/logout", LogoutHandler),
         (r"/api/auth/me", MeHandler),
 

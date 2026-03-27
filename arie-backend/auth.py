@@ -16,10 +16,13 @@ from datetime import datetime, timedelta
 
 import jwt
 
+from environment import get_jwt_secret
+
 logger = logging.getLogger("arie")
 
 # ── Configuration ──
-SECRET_KEY = os.environ.get("SECRET_KEY", "CHANGE_ME_IN_PRODUCTION")
+# Unified secret: reads JWT_SECRET via centralized environment.py (not raw os.environ)
+SECRET_KEY = get_jwt_secret()
 TOKEN_EXPIRY_HOURS = 24
 
 # ── Token revocation (lazy import to avoid circular deps) ──

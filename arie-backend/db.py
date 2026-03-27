@@ -13,6 +13,8 @@ import secrets
 import subprocess
 from pathlib import Path
 
+from environment import is_production
+
 logger = logging.getLogger(__name__)
 
 # Try to import psycopg2 for PostgreSQL support
@@ -165,15 +167,13 @@ def get_db() -> DBConnection:
 
     C-07: SQLite is BLOCKED in production. Production MUST use PostgreSQL.
     """
-    env = os.environ.get("ENV", os.environ.get("ENVIRONMENT", "development")).lower()
-
     if USE_POSTGRESQL:
         init_pg_pool()
         conn = _pg_pool.getconn()
         return DBConnection(conn, is_postgres=True)
     else:
         # C-07: Block SQLite in production — this is a CRITICAL safety guard
-        if env in ("production", "prod"):
+        if is_production():
             raise RuntimeError(
                 "CRITICAL: SQLite is FORBIDDEN in production. "
                 "Set DATABASE_URL to a PostgreSQL connection string. "
@@ -1100,42 +1100,39 @@ def seed_initial_data(db: DBConnection):
             1, agent1_checks
         ),
         (
-            2, "Corporate Structure & UBO Mapping Agent", "🏗️", "corporate_ubo",
-            "Maps ownership chains, identifies ultimate beneficial owners (natural persons), detects nominee structures, "
-            "flags complex ownership chains, calculates ownership percentages through layered structures, "
-            "cross-references directors/shareholders against external registries (OpenCorporates, Companies House, ADGM, DIFC), "
-            "identifies high-risk jurisdiction links, detects shell company indicators. "
-            "Output: ownership map, UBO list, registry cross-verification results, structure complexity score, and nominee/shell risk flags.",
+            2, "External Database Cross-Verification Agent", "🔎", "external_verification",
+            "Secondary verification layer. Checks passport/company document data against external registries "
+            "(OpenCorporates, Companies House, ADGM, DIFC). Confirms persons exist in official records as declared "
+            "directors/shareholders. "
+            "Output: Registry Match (Confirmed / Partial Match with discrepancies / No Match — Escalate to compliance).",
             1, agent2_checks
         ),
         (
-            3, "Business Model Plausibility Agent", "📊", "business_plausibility",
-            "Evaluates business story, sector alignment, transaction benchmarking, and source of funds consistency. "
-            "Analyses declared business model against industry norms, assesses revenue model plausibility, "
-            "identifies geographic risk factors, flags unusual transaction patterns, "
-            "and checks regulatory licence requirements. "
-            "Output: plausibility score, sector risk assessment, transaction pattern concerns, and red flags.",
+            3, "FinCrime Screening Interpretation Agent", "💼", "screening",
+            "Analyses screening results from sanctions, PEP, and adverse media databases. "
+            "Screens against global sanctions (UN, EU, OFAC, HMT), PEP databases (World-Check, Dow Jones), "
+            "and adverse media (100,000+ sources). Consolidates hits, removes false positives, "
+            "ranks severity, and generates consolidated risk narrative. "
+            "Output: All Clear / Review Required (true positive with context) / Escalate (confirmed match with evidence).",
             1, agent3_checks
         ),
         (
-            4, "FinCrime Screening Interpretation Agent", "💼", "screening",
-            "Screens individuals and entities against sanctions lists, PEP databases, watchlists, and adverse media sources "
-            "via Sumsub AML. Interprets raw screening hits using Claude AI to distinguish false positives from genuine matches, "
-            "assesses match confidence, consolidates duplicate hits, ranks severity, highlights material adverse media, "
-            "and classifies political exposure levels. "
-            "Output: Screening Result with sanctions match status, PEP status (with confidence level), adverse media findings, "
-            "false positive assessment, and overall screening risk assessment.",
+            4, "Corporate Structure & UBO Mapping Agent", "🏗️", "corporate_ubo",
+            "Analyses declared ownership structures, traces beneficial ownership chains, and identifies ultimate beneficial "
+            "owners (UBOs). Performs ownership chain tracing (direct & indirect), UBO identification (≥25% threshold), "
+            "multi-layered entity detection, circular ownership detection, nominee/trust identification, "
+            "shareholder register cross-reference, structure chart validation, and PEP/sanctions check on all identified UBOs. "
+            "Output: Simple Structure (Proceed) / Complex Structure (Flag for enhanced review) / Opaque/Circular (Escalate).",
             1, agent4_checks
         ),
         (
             5, "Compliance Memo & Risk Recommendation Agent", "📝", "compliance_memo",
-            "Final synthesis agent. After Agents 1-4 complete their checks, this agent: "
-            "computes 5-dimension composite risk scoring (Entity 30%, Geographic 25%, Product/Service 20%, Sector 15%, Channel 10%), "
-            "compiles all results into a structured onboarding memo, summarizes key findings across all verification layers, "
-            "identifies and ranks risk indicators, recommends a risk rating (LOW/MEDIUM/HIGH/VERY_HIGH), "
-            "flags any unresolved contradictions between agents, calculates aggregate confidence score, "
-            "and produces a review checklist for compliance officers. "
-            "Output: structured onboarding report, 5-dimension risk score, risk recommendation, review checklist, and approval/escalation recommendation.",
+            "Final synthesis agent. Combines all signals from Agents 1-4 into a structured compliance memo with risk recommendation. "
+            "Includes business model plausibility assessment — evaluates whether the business story is plausible and internally consistent, "
+            "compares against industry benchmarks. Computes 5-dimension weighted composite scoring "
+            "(Entity 30%, Geographic 25%, Product/Service 20%, Sector 15%, Channel 10%). "
+            "AI never approves — only recommends. "
+            "Output: Risk Score (0-100) + Level (Low/Medium/High/Very High), decision routing, full compliance memo with all findings.",
             1, agent5_checks
         ),
         (
@@ -1173,9 +1170,9 @@ def seed_initial_data(db: DBConnection):
     # Supervisor agent type mapping: agent_number → supervisor schema AgentType
     supervisor_type_map = {
         1: "identity_document_integrity",
-        2: "corporate_structure_ubo",
-        3: "business_model_plausibility",
-        4: "fincrime_screening",
+        2: "external_database_verification",
+        3: "fincrime_screening",
+        4: "corporate_structure_ubo",
         5: "compliance_memo_risk",
         6: "periodic_review_preparation",
         7: "adverse_media_pep_monitoring",

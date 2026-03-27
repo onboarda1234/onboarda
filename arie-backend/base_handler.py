@@ -18,10 +18,11 @@ import tornado.web
 
 from auth import decode_token, RateLimiter
 from db import get_db as db_get_db
+from environment import ENV, is_production
 
 logger = logging.getLogger("arie")
 
-ENVIRONMENT = os.environ.get("ENVIRONMENT", os.environ.get("ENV", "development"))
+ENVIRONMENT = ENV
 
 # Module-level rate limiter instance — shared across all handlers
 rate_limiter = RateLimiter()

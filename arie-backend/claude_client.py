@@ -44,6 +44,8 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
+from environment import is_production, is_demo
+
 # C-03: Pydantic validation for AI outputs
 try:
     from pydantic import BaseModel, Field, field_validator, ValidationError
@@ -559,8 +561,8 @@ class ClaudeClient:
             "CLAUDE_MOCK_MODE", "false"
         ).lower() == "true"
 
-        # P0-04: Block mock mode in production
-        if self.mock_mode and os.environ.get("ENVIRONMENT") == "production":
+        # P0-04: Block mock mode in production (uses centralized environment detection)
+        if self.mock_mode and is_production():
             raise RuntimeError(
                 "CRITICAL: CLAUDE_MOCK_MODE=true is not allowed in production. "
                 "Set CLAUDE_MOCK_MODE=false or unset it, and provide a valid ANTHROPIC_API_KEY."
@@ -780,11 +782,13 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
             result["ai_source"] = "claude-sonnet-4-6"
             return result
         except Exception as e:
-            logger.error(f"Risk scoring failed: {e} — returning mock fallback")
-            result = _mock_risk_score()
-            result["ai_source"] = "mock"
-            result["ai_error"] = str(e)[:200]
-            return result
+            if is_demo():
+                logger.error(f"Risk scoring failed: {e} — returning mock fallback (demo mode)")
+                result = _mock_risk_score()
+                result["ai_source"] = "mock"
+                result["ai_error"] = str(e)[:200]
+                return result
+            raise RuntimeError(f"Risk scoring failed: {e}") from e
 
     # ── Business Plausibility Assessment (Sonnet - fast, cheap) ──
 
@@ -858,11 +862,13 @@ geographic logic, and source of funds alignment."""
             result["ai_source"] = "claude-sonnet-4-6"
             return result
         except Exception as e:
-            logger.error(f"Business plausibility assessment failed: {e} — returning mock response")
-            result = _mock_assess_business_plausibility()
-            result["ai_source"] = "mock"
-            result["ai_error"] = str(e)[:200]
-            return result
+            if is_demo():
+                logger.error(f"Business plausibility assessment failed: {e} — returning mock response (demo mode)")
+                result = _mock_assess_business_plausibility()
+                result["ai_source"] = "mock"
+                result["ai_error"] = str(e)[:200]
+                return result
+            raise RuntimeError(f"Business plausibility assessment failed: {e}") from e
 
     # ── Corporate Structure & UBO Mapping (Sonnet - fast, cheap) ──
 
@@ -955,11 +961,13 @@ Map the ownership chain, identify the ultimate beneficial owner, and flag any ri
             result["ai_source"] = "claude-sonnet-4-6"
             return result
         except Exception as e:
-            logger.error(f"Structure analysis failed: {e} — returning mock response")
-            result = _mock_analyze_corporate_structure()
-            result["ai_source"] = "mock"
-            result["ai_error"] = str(e)[:200]
-            return result
+            if is_demo():
+                logger.error(f"Structure analysis failed: {e} — returning mock response (demo mode)")
+                result = _mock_analyze_corporate_structure()
+                result["ai_source"] = "mock"
+                result["ai_error"] = str(e)[:200]
+                return result
+            raise RuntimeError(f"Structure analysis failed: {e}") from e
 
     # ── FinCrime Screening Interpretation (Sonnet - fast, cheap) ──
 
@@ -1049,11 +1057,13 @@ Identify false positives, consolidate confirmed hits, rank severity, and provide
             result["ai_source"] = "claude-sonnet-4-6"
             return result
         except Exception as e:
-            logger.error(f"FinCrime screening interpretation failed: {e} — returning mock response")
-            result = _mock_interpret_fincrime_screening()
-            result["ai_source"] = "mock"
-            result["ai_error"] = str(e)[:200]
-            return result
+            if is_demo():
+                logger.error(f"FinCrime screening interpretation failed: {e} — returning mock response (demo mode)")
+                result = _mock_interpret_fincrime_screening()
+                result["ai_source"] = "mock"
+                result["ai_error"] = str(e)[:200]
+                return result
+            raise RuntimeError(f"FinCrime screening interpretation failed: {e}") from e
 
     # ── Compliance Memo Generation (Opus - thorough, detailed) ───
 
@@ -1243,11 +1253,13 @@ CRITICAL REQUIREMENTS:
             result["ai_routing_reason"] = routing_reason
             return result
         except Exception as e:
-            logger.error(f"Memo generation failed: {e} — returning mock response")
-            result = _mock_generate_compliance_memo()
-            result["ai_source"] = "mock"
-            result["ai_error"] = str(e)[:200]
-            return result
+            if is_demo():
+                logger.error(f"Memo generation failed: {e} — returning mock response (demo mode)")
+                result = _mock_generate_compliance_memo()
+                result["ai_source"] = "mock"
+                result["ai_error"] = str(e)[:200]
+                return result
+            raise RuntimeError(f"Memo generation failed: {e}") from e
 
     # ── Document Verification (Sonnet - fast, cheap) ──────────────
 
@@ -1341,11 +1353,13 @@ validity dates, name matching, document quality, and any red flags."""
             result["ai_source"] = "claude-sonnet-4-6"
             return result
         except Exception as e:
-            logger.error(f"Document verification failed: {e} — returning mock response")
-            result = _mock_verify_document()
-            result["ai_source"] = "mock"
-            result["ai_error"] = str(e)[:200]
-            return result
+            if is_demo():
+                logger.error(f"Document verification failed: {e} — returning mock response (demo mode)")
+                result = _mock_verify_document()
+                result["ai_source"] = "mock"
+                result["ai_error"] = str(e)[:200]
+                return result
+            raise RuntimeError(f"Document verification failed: {e}") from e
 
     # ── Internal Helper Methods ─────────────────────────────────
 

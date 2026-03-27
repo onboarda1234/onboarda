@@ -17,6 +17,7 @@ from rule_engine import (
     ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
     RISK_WEIGHTS, RISK_RANK,
 )
+from environment import ENV, is_demo
 
 logger = logging.getLogger("arie")
 
@@ -562,6 +563,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "ownership_risk_rating": own_rating,
             "ownership_risk_justification": own_rating_justification,
             "supervisor_status": "pending",
+            "ai_source": "deterministic" if not is_demo() else "demo",
             "approval_recommendation": decision,
             "key_findings": [
                 f"Beneficial ownership {'traced to natural persons via ' + struct_complexity.lower() + ' structure — ' + control_name + ' (' + str(control_pct) + '%) exercises effective control' if primary_ubo else 'could not be verified — critical data gap'}",
