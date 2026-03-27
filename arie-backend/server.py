@@ -2105,20 +2105,32 @@ class SaveResumeHandler(BaseHandler):
 # PORTAL FILE SERVING
 # ══════════════════════════════════════════════════════════
 
-PORTAL_DIR = os.path.join(os.path.dirname(__file__), "..")  # outputs/ directory
+# HTML files: in Docker they're alongside server.py (/app/), in dev they're one level up
+_SCRIPT_DIR = os.path.dirname(__file__)
+_PARENT_DIR = os.path.join(_SCRIPT_DIR, "..")
+
+def _find_html(filename):
+    """Find HTML file in same dir (Docker) or parent dir (local dev)."""
+    local = os.path.join(_SCRIPT_DIR, filename)
+    if os.path.exists(local):
+        return local
+    parent = os.path.join(_PARENT_DIR, filename)
+    if os.path.exists(parent):
+        return parent
+    raise FileNotFoundError(f"{filename} not found in {_SCRIPT_DIR} or {_PARENT_DIR}")
 
 class PortalHandler(tornado.web.RequestHandler):
     """Serve the client portal HTML"""
     def get(self):
         self.set_header("Content-Type", "text/html")
-        with open(os.path.join(PORTAL_DIR, "arie-portal.html"), "r") as f:
+        with open(_find_html("arie-portal.html"), "r") as f:
             self.write(f.read())
 
 class BackOfficeHandler(tornado.web.RequestHandler):
     """Serve the back-office portal HTML"""
     def get(self):
         self.set_header("Content-Type", "text/html")
-        with open(os.path.join(PORTAL_DIR, "arie-backoffice.html"), "r") as f:
+        with open(_find_html("arie-backoffice.html"), "r") as f:
             self.write(f.read())
 
 
