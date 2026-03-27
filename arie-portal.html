@@ -1420,21 +1420,9 @@
 
   <div class="dash-nav-sep"></div>
   <div class="dash-sidebar-label">My Applications</div>
-  <button type="button" class="dash-nav-item" id="snav-techpay" onclick="resumeApplication('ARF-2026-100421','onboarding')">
-    <span class="dash-nav-icon">📄</span>
-    <span>TechPay Solutions</span>
-    <span class="app-status kyc" style="font-size:9px;padding:1px 6px;margin-left:auto;">KYC</span>
-  </button>
-  <button type="button" class="dash-nav-item" id="snav-globaltrade" onclick="resumeApplication('ARF-2026-100399','prescreening')">
-    <span class="dash-nav-icon">📄</span>
-    <span>GlobalTrade Imports</span>
-    <span class="app-status review" style="font-size:9px;padding:1px 6px;margin-left:auto;">Review</span>
-  </button>
-  <button type="button" class="dash-nav-item" id="snav-mediagroup" onclick="resumeApplication('ARF-2025-099812','approved')">
-    <span class="dash-nav-icon">✅</span>
-    <span>MediaGroup Africa</span>
-    <span class="app-status approved" style="font-size:9px;padding:1px 6px;margin-left:auto;">✓</span>
-  </button>
+  <div id="sidebar-my-apps">
+    <div style="padding:8px 16px;font-size:11px;color:var(--text3);">No applications yet</div>
+  </div>
 
   <div class="dash-nav-sep"></div>
   <div class="dash-sidebar-label">Account</div>
@@ -1443,6 +1431,9 @@
   </button>
   <button type="button" class="dash-nav-item" onclick="showView('status-lookup')">
     <span class="dash-nav-icon">🔍</span> Track by Reference
+  </button>
+  <button type="button" class="dash-nav-item" onclick="showChangePasswordModal()">
+    <span class="dash-nav-icon">🔑</span> Change Password
   </button>
 
   <div style="flex:1;"></div>
@@ -1458,6 +1449,30 @@
   <div>
     <div class="toast-title" id="toast-title">Success</div>
     <div class="toast-msg" id="toast-msg"></div>
+  </div>
+</div>
+
+<!-- Change Password Modal -->
+<div id="change-pwd-modal" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:28px;width:380px;max-width:90vw;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:16px;">Change Password</div>
+    <div id="change-pwd-error" style="display:none;background:var(--red-dim);color:var(--red);padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
+    <div class="form-group" style="margin-bottom:12px;">
+      <label class="form-label">Current Password</label>
+      <input type="password" id="cp-current" class="form-input" placeholder="Enter current password" />
+    </div>
+    <div class="form-group" style="margin-bottom:12px;">
+      <label class="form-label">New Password</label>
+      <input type="password" id="cp-new" class="form-input" placeholder="Enter new password" />
+    </div>
+    <div class="form-group" style="margin-bottom:16px;">
+      <label class="form-label">Confirm New Password</label>
+      <input type="password" id="cp-confirm" class="form-input" placeholder="Confirm new password" />
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <button class="btn" onclick="closeChangePasswordModal()" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border);padding:8px 16px;border-radius:6px;cursor:pointer;">Cancel</button>
+      <button class="btn" id="cp-submit-btn" onclick="submitChangePassword()" style="background:var(--brand);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;">Change Password</button>
+    </div>
   </div>
 </div>
 
@@ -1665,11 +1680,10 @@
 
         <!-- CTA Hero Cards -->
         <div class="dash-cta-row">
-          <div class="dash-cta-card primary" onclick="resumeApplication('ARF-2026-100421','onboarding')">
+          <div class="dash-cta-card primary" id="cta-resume-app" style="display:none;">
             <div class="dash-cta-icon">▶️</div>
             <div class="dash-cta-title">Resume Application</div>
-            <div class="dash-cta-desc">TechPay Solutions Ltd · KYC Documents awaiting upload</div>
-            <div style="margin-top:12px;font-size:11px;opacity:0.8;">Ref: ARF-2026-100421 &nbsp;·&nbsp; Last updated 10 Mar 2026</div>
+            <div class="dash-cta-desc" id="cta-resume-desc">No applications in progress</div>
             <div class="dash-cta-arrow">→</div>
           </div>
           <div class="dash-cta-card secondary" onclick="showView('prescreening')">
@@ -2795,7 +2809,7 @@
           </div>
 
           <button type="submit" class="btn-submit">
-            🔒 Submit Application
+            🚀 Submit Pre-Screening
           </button>
         </form>
       </div>
@@ -4203,82 +4217,30 @@
 
         <div class="kanban-board">
 
-          <!-- Col: Submitted -->
+          <!-- Kanban columns — populated dynamically from API -->
           <div class="kanban-col submitted">
-            <div class="kanban-col-header">📥 Submitted <span class="k-count">2</span></div>
-            <div class="kanban-cards">
-              <div class="k-card" onclick="openBOApp('FinEdge','ARF-2026-100425','review')">
-                <div class="k-card-name">FinEdge Capital Ltd</div>
-                <div class="k-card-ref">ARF-2026-100425</div>
-                <div class="k-card-flag">🇸🇬 Singapore · Trading</div>
-                <span class="k-sla ok">⏱ 3h ago</span>
-              </div>
-              <div class="k-card" onclick="openBOApp('BlueSky','ARF-2026-100424','review')">
-                <div class="k-card-name">BlueSky Logistics</div>
-                <div class="k-card-ref">ARF-2026-100424</div>
-                <div class="k-card-flag">🇦🇪 UAE · Logistics</div>
-                <span class="k-sla ok">⏱ 6h ago</span>
-              </div>
-            </div>
+            <div class="kanban-col-header">📥 Submitted <span class="k-count">0</span></div>
+            <div class="kanban-cards" id="kanban-submitted"></div>
           </div>
-
-          <!-- Col: AI Screening -->
           <div class="kanban-col ai-screen">
-            <div class="kanban-col-header">🤖 AI Screening <span class="k-count">1</span></div>
-            <div class="kanban-cards">
-              <div class="k-card" onclick="openBOApp('TechPay','ARF-2026-100421','onboarding')">
-                <div class="k-card-name">TechPay Solutions Ltd</div>
-                <div class="k-card-ref">ARF-2026-100421</div>
-                <div class="k-card-flag">🇬🇧 UK · Fintech</div>
-                <span class="k-sla warn">⏱ 22h — approaching SLA</span>
-              </div>
-            </div>
+            <div class="kanban-col-header">🤖 AI Screening <span class="k-count">0</span></div>
+            <div class="kanban-cards" id="kanban-ai-screen"></div>
           </div>
-
-          <!-- Col: Under Review -->
           <div class="kanban-col review">
-            <div class="kanban-col-header">🔍 Under Review <span class="k-count">2</span></div>
-            <div class="kanban-cards">
-              <div class="k-card" onclick="openBOApp('GlobalTrade','ARF-2026-100399','pending')">
-                <div class="k-card-name">GlobalTrade Import Exports</div>
-                <div class="k-card-ref">ARF-2026-100399</div>
-                <div class="k-card-flag">🇳🇬 Nigeria · Import/Export</div>
-                <span class="k-sla warn">⏱ 36h — approaching SLA</span>
-              </div>
-              
-
-          <!-- Col: EDD -->
+            <div class="kanban-col-header">🔍 Under Review <span class="k-count">0</span></div>
+            <div class="kanban-cards" id="kanban-review"></div>
+          </div>
           <div class="kanban-col edd">
-            <div class="kanban-col-header">⚠️ EDD Required <span class="k-count">1</span></div>
-            <div class="kanban-cards">
-              <div class="k-card" onclick="openBOApp('NovaPay','ARF-2026-100390','pending')">
-                <div class="k-card-name">NovaPay Africa Ltd</div>
-                <div class="k-card-ref">ARF-2026-100390</div>
-                <div class="k-card-flag">🇰🇪 Kenya · Payments · High Risk</div>
-                <span class="k-sla overdue">🔴 72h — SLA BREACHED</span>
-              </div>
-            </div>
+            <div class="kanban-col-header">⚠️ EDD Required <span class="k-count">0</span></div>
+            <div class="kanban-cards" id="kanban-edd"></div>
           </div>
-
-          <!-- Col: Approved -->
           <div class="kanban-col approved">
-            <div class="kanban-col-header">✅ Approved <span class="k-count">1</span></div>
-            <div class="kanban-cards">
-              <div class="k-card" onclick="openBOApp('MediaGroup','ARF-2025-099812','approved')">
-                <div class="k-card-name">MediaGroup Africa Ltd</div>
-                <div class="k-card-ref">ARF-2025-099812</div>
-                <div class="k-card-flag">🇿🇦 South Africa · Media</div>
-                <span class="k-sla ok">✅ Approved 20 Jan</span>
-              </div>
-            </div>
+            <div class="kanban-col-header">✅ Approved <span class="k-count">0</span></div>
+            <div class="kanban-cards" id="kanban-approved"></div>
           </div>
-
-          <!-- Col: Rejected -->
           <div class="kanban-col rejected">
             <div class="kanban-col-header">✗ Rejected <span class="k-count">0</span></div>
-            <div class="kanban-cards">
-              <div style="padding:12px;font-size:11px;color:var(--text3);text-align:center;">No rejected applications</div>
-            </div>
+            <div class="kanban-cards" id="kanban-rejected"></div>
           </div>
 
         </div><!-- /kanban-board -->
@@ -4289,150 +4251,37 @@
     <div id="bo-detail-view" style="display:none;padding-top:56px;">
     <div class="bo-layout">
 
-      <!-- Sidebar: Application list -->
+      <!-- Sidebar: Application list — populated dynamically from API -->
       <div class="bo-sidebar">
-        <div class="bo-sidebar-title">📁 Applications (3)</div>
-
-        <div class="bo-app-item active" onclick="selectBOApp(this,'TechPay')">
-          <div class="bo-app-name">TechPay Solutions Ltd</div>
-          <div class="bo-app-meta">ARF-2026-100421 · Submitted 10 Mar 2026</div>
-          <div class="bo-app-meta" style="margin-top:2px;">🇬🇧 UK · Fintech / Payments</div>
-          <span class="bo-app-status review">⏳ Pending Review</span>
-        </div>
-
-        <div class="bo-app-item" onclick="selectBOApp(this,'GlobalTrade')">
-          <div class="bo-app-name">GlobalTrade Import Exports</div>
-          <div class="bo-app-meta">ARF-2026-100418 · Submitted 9 Mar 2026</div>
-          <div class="bo-app-meta" style="margin-top:2px;">🇿🇦 South Africa · Import / Export</div>
-          <span class="bo-app-status approved">✓ Approved</span>
+        <div class="bo-sidebar-title" id="bo-sidebar-title">📁 Applications</div>
+        <div id="bo-sidebar-apps">
+          <div style="padding:12px;font-size:11px;color:var(--text3);text-align:center;">No applications loaded</div>
         </div>
 
         
 
-          <div class="ai-check-detail" style="border-left:3px solid var(--green);">
-            <div class="ai-check-detail-header">
-              <div class="ai-check-detail-name">⚠️ PEP Screening</div>
-              <span class="ai-status passed" style="font-size:12px;">✓ Clear</span>
-            </div>
-            <div class="ai-check-detail-body">
-              <div class="ai-detail-row"><span class="ai-detail-label">Database</span><span class="ai-detail-val">World-Check PEP & RCA Database (Tier 1–3) · 4.2M+ profiles</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Checked</span><span class="ai-detail-val">All 2 directors and 2 UBOs · Including Relative & Close Associate (RCA) scan</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Result</span><span class="ai-detail-val" style="color:var(--green);">No PEP classifications identified. No RCA links found.</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Confidence</span><span class="ai-detail-val">98.2% — All name/DOB/nationality combinations resolved uniquely</span></div>
-            </div>
-          </div>
-
-          <div class="ai-check-detail" style="border-left:3px solid var(--green);">
-            <div class="ai-check-detail-header">
-              <div class="ai-check-detail-name">📰 Adverse Media Search</div>
-              <span class="ai-status passed" style="font-size:12px;">✓ Clear</span>
-            </div>
-            <div class="ai-check-detail-body">
-              <div class="ai-detail-row"><span class="ai-detail-label">Sources</span><span class="ai-detail-val">ComplyAdvantage Adverse Media · 100,000+ global news, court & regulatory sources</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Categories</span><span class="ai-detail-val">Financial crime · Fraud · Money laundering · Terrorism financing · Corruption · Regulatory sanctions</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Articles Found</span><span class="ai-detail-val" style="color:var(--green);">0 adverse articles. 2 positive/neutral press mentions identified (not flagged).</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Look-back Period</span><span class="ai-detail-val">5 years · Entities: TechPay Solutions Ltd, James Henderson, Sarah Mitchell, Marcus Webb</span></div>
-            </div>
-          </div>
-
-          <div class="ai-check-detail" style="border-left:3px solid var(--green);">
-            <div class="ai-check-detail-header">
-              <div class="ai-check-detail-name">🏛️ Company Registry Verification</div>
-              <span class="ai-status passed" style="font-size:12px;">✓ Verified</span>
-            </div>
-            <div class="ai-check-detail-body">
-              <div class="ai-detail-row"><span class="ai-detail-label">Registry</span><span class="ai-detail-val">UK Companies House API (live lookup)</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Status</span><span class="ai-detail-val" style="color:var(--green);">Active — Incorporated 14 Apr 2019</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Registered Name</span><span class="ai-detail-val">TECHPAY SOLUTIONS LIMITED · Matches application ✓</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Reg. Number</span><span class="ai-detail-val">11924857 · Matches application ✓</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Reg. Address</span><span class="ai-detail-val">14 Finsbury Square, London, EC2A 1AB · Matches application ✓</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Directors on Record</span><span class="ai-detail-val">James Henderson ✓ · Sarah Mitchell ✓ · All match submitted director register</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Filing Status</span><span class="ai-detail-val">Accounts filed 30 Sep 2025 — No overdue filings</span></div>
-            </div>
-          </div>
-
-          <div class="ai-check-detail" style="border-left:3px solid var(--green);">
-            <div class="ai-check-detail-header">
-              <div class="ai-check-detail-name">🔬 Document Authenticity (AI Verification)</div>
-              <span class="ai-status passed" style="font-size:12px;">✓ Passed</span>
-            </div>
-            <div class="ai-check-detail-body">
-              <div class="ai-detail-row"><span class="ai-detail-label">COI</span><span class="ai-detail-val" style="color:var(--green);">Authentic — Metadata consistent, document template matches UK Companies House format, no signs of alteration</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Passport (Henderson)</span><span class="ai-detail-val" style="color:var(--green);">MRZ validated ✓ · Expiry: 12 Feb 2031 · Face detection: clear photo · Biometric chip marker detected · No tamper indicators</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Passport (Mitchell)</span><span class="ai-detail-val" style="color:var(--green);">MRZ validated ✓ · Expiry: 08 Jul 2029 · Face detection: clear photo · No tamper indicators</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Proof of Address</span><span class="ai-detail-val" style="color:var(--green);">Bank statement dated 15 Feb 2026 — within 90 days ✓ · Barclays Bank letterhead verified · Address matches COI</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Provider</span><span class="ai-detail-val">Onfido Document AI + AWS Textract OCR · Processing time: 4.2s</span></div>
-            </div>
-          </div>
-
-          <div class="ai-check-detail" style="border-left:3px solid var(--blue);">
-            <div class="ai-check-detail-header">
-              <div class="ai-check-detail-name">🌍 Country Risk Assessment</div>
-              <span class="ai-status running" style="font-size:12px;"><span class="ai-spinner"></span> In Progress</span>
-            </div>
-            <div class="ai-check-detail-body">
-              <div class="ai-detail-row"><span class="ai-detail-label">Jurisdiction</span><span class="ai-detail-val">United Kingdom — FATF Member, Not on Blacklist/Grey List</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">FATF Status</span><span class="ai-detail-val" style="color:var(--green);">Compliant jurisdiction ✓</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">CPI Score</span><span class="ai-detail-val">73/100 (Transparency International 2025) — Low corruption risk</span></div>
-              <div class="ai-detail-row"><span class="ai-detail-label">Target Markets</span><span class="ai-detail-val">UK, EU, South Africa, Kenya — all FATF-compliant jurisdictions ✓</span></div>
+          <!-- AI review checks — populated dynamically from API when viewing a real application -->
+          <div id="bo-ai-checks-container">
+            <div style="padding:20px;text-align:center;color:var(--text3);font-size:12px;">
+              Select an application to view AI review results
             </div>
           </div>
         </div>
 
-        <!-- ── TAB: Risk Score ── -->
+        <!-- ── TAB: Risk Score — populated dynamically from API ── -->
         <div class="bo-tab-content" id="tab-risk">
           <div class="risk-score-hero">
             <div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Composite Risk Score</div>
-            <div class="risk-dial" style="color:var(--amber);">34</div>
+            <div class="risk-dial" id="bo-risk-dial" style="color:var(--text3);">--</div>
             <div style="font-size:10px;color:var(--text3);margin-top:6px;">/ 100</div>
-            <div style="display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:6px 16px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:99px;">
-              <span style="font-size:13px;font-weight:700;color:var(--amber);">MEDIUM-LOW RISK</span>
+            <div id="bo-risk-label" style="display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:6px 16px;background:var(--bg3);border:1px solid var(--border);border-radius:99px;">
+              <span style="font-size:13px;font-weight:700;color:var(--text3);">Select an application</span>
             </div>
-            <p style="font-size:12px;color:var(--text2);max-width:500px;margin:12px auto 0;line-height:1.6;">Score below 40: Standard CDD pathway. No EDD required at this stage. Recommend approval subject to compliance officer sign-off.</p>
           </div>
 
           <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:12px;">Risk Factor Breakdown</div>
-
-          <div class="risk-factor">
-            <div style="font-size:18px;">🌍</div>
-            <div class="risk-factor-name">Jurisdiction Risk<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Country of Incorporation: UK (FATF Member)</div></div>
-            <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-low" style="width:20%"></div></div>
-            <div class="risk-factor-score" style="color:var(--green);">10 / 25 pts · Low</div>
-          </div>
-
-          <div class="risk-factor">
-            <div style="font-size:18px;">🏭</div>
-            <div class="risk-factor-name">Business Sector Risk<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Fintech / Payments — inherently higher risk sector</div></div>
-            <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-med" style="width:60%"></div></div>
-            <div class="risk-factor-score" style="color:var(--amber);">15 / 25 pts · Medium</div>
-          </div>
-
-          <div class="risk-factor">
-            <div style="font-size:18px;">🔍</div>
-            <div class="risk-factor-name">Screening Results<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Sanctions, PEP, Adverse Media — all clear</div></div>
-            <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-low" style="width:10%"></div></div>
-            <div class="risk-factor-score" style="color:var(--green);">0 / 20 pts · Clear</div>
-          </div>
-
-          <div class="risk-factor">
-            <div style="font-size:18px;">🏗️</div>
-            <div class="risk-factor-name">Ownership Structure Complexity<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">2 UBOs directly identified, no intermediate holding layers</div></div>
-            <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-low" style="width:15%"></div></div>
-            <div class="risk-factor-score" style="color:var(--green);">3 / 15 pts · Low</div>
-          </div>
-
-          <div class="risk-factor">
-            <div style="font-size:18px;">💰</div>
-            <div class="risk-factor-name">Transaction Volume Risk<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">Estimated monthly: USD 50K–500K inflows · 50 transactions</div></div>
-            <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-med" style="width:40%"></div></div>
-            <div class="risk-factor-score" style="color:var(--amber);">6 / 15 pts · Medium</div>
-          </div>
-
-          <div class="risk-factor">
-            <div style="font-size:18px;">📄</div>
-            <div class="risk-factor-name">Document Quality Score<div style="font-size:11px;color:var(--text3);font-weight:400;margin-top:2px;">AI verification: all documents passed, high confidence</div></div>
-            <div class="risk-factor-bar-wrap"><div class="risk-factor-bar risk-low" style="width:0%"></div></div>
-            <div class="risk-factor-score" style="color:var(--green);">0 / 10 pts · Excellent</div>
+          <div id="bo-risk-factors">
+            <div style="padding:20px;text-align:center;color:var(--text3);font-size:12px;">No risk data available</div>
           </div>
 
           <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px;margin-top:16px;">
@@ -4586,7 +4435,7 @@ let AUTH_USER = null;
 let currentApplicationId = '';
 
 // ─── Environment Detection ────────────────────────────────
-var ARIE_ENV = 'demo';
+var ARIE_ENV = 'loading'; // Neutral default — set by /api/config/environment response
 var FEATURE_FLAGS = {};
 
 async function loadEnvironment() {
@@ -4715,6 +4564,40 @@ function clientSignOut() {
   document.getElementById('global-client-sidebar').classList.remove('open');
   document.body.classList.remove('sidebar-active');
   showView('landing');
+}
+
+function showChangePasswordModal() {
+  document.getElementById('cp-current').value = '';
+  document.getElementById('cp-new').value = '';
+  document.getElementById('cp-confirm').value = '';
+  document.getElementById('change-pwd-error').style.display = 'none';
+  document.getElementById('cp-submit-btn').disabled = false;
+  document.getElementById('cp-submit-btn').textContent = 'Change Password';
+  document.getElementById('change-pwd-modal').style.display = 'flex';
+}
+function closeChangePasswordModal() {
+  document.getElementById('change-pwd-modal').style.display = 'none';
+}
+async function submitChangePassword() {
+  var errEl = document.getElementById('change-pwd-error');
+  var btn = document.getElementById('cp-submit-btn');
+  var current = document.getElementById('cp-current').value;
+  var newPwd = document.getElementById('cp-new').value;
+  var confirm = document.getElementById('cp-confirm').value;
+  errEl.style.display = 'none';
+  if (!current || !newPwd || !confirm) { errEl.textContent = 'All fields are required.'; errEl.style.display = 'block'; return; }
+  if (newPwd !== confirm) { errEl.textContent = 'New passwords do not match.'; errEl.style.display = 'block'; return; }
+  if (newPwd.length < 8) { errEl.textContent = 'Password must be at least 8 characters.'; errEl.style.display = 'block'; return; }
+  btn.disabled = true; btn.textContent = 'Changing...';
+  try {
+    await apiCall('POST', '/auth/change-password', { current_password: current, new_password: newPwd });
+    closeChangePasswordModal();
+    showToast('success', 'Password Changed', 'Your password has been updated successfully.');
+  } catch (err) {
+    errEl.textContent = err.message || 'Failed to change password. Please try again.';
+    errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = 'Change Password';
+  }
 }
 
 async function loadMyApplications() {
@@ -5046,7 +4929,8 @@ async function runRealtimeDocumentIntegrityCheck(docId, fileName) {
 
   } catch (err) {
     console.error('Document verification error:', err);
-    statusEl.innerHTML = '<div style="padding:8px;background:var(--amber-dim);border-radius:6px;color:var(--amber);"><strong>⚠️ Verification unavailable</strong><br/><span style="font-size:10px;">Could not complete verification. Please try again.</span></div>';
+    var errMsg = err.message || 'Could not complete verification. Please try again.';
+    statusEl.innerHTML = '<div style="padding:8px;background:var(--amber-dim);border-radius:6px;color:var(--amber);"><strong>⚠️ Verification unavailable</strong><br/><span style="font-size:10px;">' + escapeHtml(errMsg) + '</span></div>';
   }
 }
 
@@ -5438,7 +5322,7 @@ async function submitPrescreening(e) {
     // Security: application ID kept in memory only, not in localStorage
 
     btn.disabled = false;
-    btn.innerHTML = '🔒 Submit Application';
+    btn.innerHTML = '🚀 Submit Pre-Screening';
     showView('risk-scoring');
     showToast('success', 'Application Submitted', 'Reference: ' + appRef);
     startRiskScoring();
@@ -5447,7 +5331,7 @@ async function submitPrescreening(e) {
     console.warn('API create failed, using client-side fallback:', err);
     appRef = generateRef();
     btn.disabled = false;
-    btn.innerHTML = '🔒 Submit Application';
+    btn.innerHTML = '🚀 Submit Pre-Screening';
     showView('risk-scoring');
     showToast('success', 'Application Submitted', 'Reference: ' + appRef);
     startRiskScoring();
@@ -6161,11 +6045,12 @@ async function runAIDocVerification(docId, fileName) {
     }
 
   } catch (err) {
-    // Fallback: remove spinner and show error
+    // Fallback: remove spinner and show error with detail
     var spinner = resultsDiv.querySelector('.spinner-sm');
     if (spinner) spinner.parentElement.remove();
+    var errMsg = err.message || 'Could not complete AI verification. Please try again or contact support.';
     resultsDiv.innerHTML = '<div style="font-weight:600;color:#d97706;margin-bottom:6px;">⚠️ Verification unavailable</div>' +
-      '<div style="color:var(--text3);font-size:11px;">Could not complete AI verification. Please try again or contact support.</div>';
+      '<div style="color:var(--text3);font-size:11px;">' + escapeHtml(errMsg) + '</div>';
   }
 }
 
@@ -6254,7 +6139,8 @@ async function runAIPersonDocVerification(personId, docType, fileName) {
     console.error('Document verification error:', err);
     var spinner = resultsDiv.querySelector('.spinner-sm');
     if (spinner) spinner.parentElement.remove();
-    resultsDiv.insertAdjacentHTML('beforeend', '<div style="padding:8px;color:var(--amber);font-size:11px;"><strong>⚠️ Verification unavailable</strong><br/>Could not complete verification. Please try again.</div>');
+    var errMsg = err.message || 'Could not complete verification. Please try again.';
+    resultsDiv.insertAdjacentHTML('beforeend', '<div style="padding:8px;color:var(--amber);font-size:11px;"><strong>⚠️ Verification unavailable</strong><br/>' + escapeHtml(errMsg) + '</div>');
   }
 }
 
@@ -7355,20 +7241,12 @@ function toggleBackOffice() {
   }
 }
 
-// ─── Back Office: app selection ──────────────────────────────
+// ─── Back Office: app selection — populated from API data ─────
 function selectBOApp(el, name) {
   document.querySelectorAll('.bo-app-item').forEach(i => i.classList.remove('active'));
   el.classList.add('active');
-  const titles = {
-    TechPay: 'TechPay Solutions Ltd',
-    GlobalTrade: 'GlobalTrade Import Exports'
-  };
-  const refs = {
-    TechPay: 'ARF-2026-100421',
-    GlobalTrade: 'ARF-2026-100418'
-  };
-  document.getElementById('bo-app-title').textContent = titles[name] || name;
-  document.getElementById('bo-app-ref').textContent = refs[name] || '';
+  document.getElementById('bo-app-title').textContent = name || 'Select Application';
+  document.getElementById('bo-app-ref').textContent = '';
 }
 
 // ─── Back Office: tab switching ───────────────────────────────
@@ -7426,9 +7304,11 @@ function submitRegister(e) {
   let ok = true;
   emailErr.classList.add('hidden');
   confErr.classList.add('hidden');
-  // Remove existing pwd error
-  var pwdErr = document.getElementById('r-pwd-err');
-  if (pwdErr) pwdErr.remove();
+  // Remove existing pwd errors (policy + common — separate IDs to ensure both are cleared)
+  var pwdPolicyErr = document.getElementById('r-pwd-policy-err');
+  if (pwdPolicyErr) pwdPolicyErr.remove();
+  var pwdCommonErr = document.getElementById('r-pwd-common-err');
+  if (pwdCommonErr) pwdCommonErr.remove();
   // Password policy check
   var pwdChecks = [
     { test: pwd.length >= 12, msg: 'at least 12 characters' },
@@ -7440,7 +7320,7 @@ function submitRegister(e) {
   var failures = pwdChecks.filter(function(c) { return !c.test; });
   if (failures.length > 0) {
     var errEl = document.createElement('span');
-    errEl.id = 'r-pwd-err';
+    errEl.id = 'r-pwd-policy-err';
     errEl.className = 'field-error';
     errEl.textContent = 'Password must contain: ' + failures.map(function(f) { return f.msg; }).join(', ');
     document.getElementById('r-password').parentElement.after(errEl);
@@ -7450,7 +7330,7 @@ function submitRegister(e) {
   var common = ['password','12345678','qwerty','letmein','welcome','monkey','dragon','master','abc123','password1','onboarda'];
   if (common.some(function(c) { return pwd.toLowerCase().includes(c); })) {
     var errEl2 = document.createElement('span');
-    errEl2.id = 'r-pwd-err';
+    errEl2.id = 'r-pwd-common-err';
     errEl2.className = 'field-error';
     errEl2.textContent = 'Password is too common or easily guessable';
     document.getElementById('r-password').parentElement.after(errEl2);
@@ -7497,8 +7377,8 @@ async function submitLogin(e) {
     try {
       resp = await apiCall('POST', '/auth/client/login', { email, password });
     } catch(apiErr) {
-      // Backend not running — demo/offline mode
-      if (password === DEMO_PORTAL_PASSWORD || password === 'demo123') {
+      // Demo/offline mode — only allowed in demo environment
+      if (ARIE_ENV === 'demo' && (password === DEMO_PORTAL_PASSWORD || password === 'demo123')) {
         isOffline = true;
         const demoName = email.split('@')[0].replace(/[._]/g,' ').replace(/\b\w/g, c => c.toUpperCase());
         resp = {
@@ -8121,12 +8001,8 @@ function setKYCType(personId, type, btn) {
 }
 
 // ─── My Applications: resume ────────────────────────────────────────────
-// Map ref → sidebar nav ID
-const REF_TO_SNAV = {
-  'ARF-2026-100421': 'snav-techpay',
-  'ARF-2026-100399': 'snav-globaltrade',
-  'ARF-2025-099812': 'snav-mediagroup',
-};
+// Map ref → sidebar nav ID (populated dynamically)
+const REF_TO_SNAV = {};
 
 function resumeApplication(ref, stage) {
   const stageMap = {

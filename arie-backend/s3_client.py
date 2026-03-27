@@ -24,34 +24,34 @@ logger = logging.getLogger(__name__)
 class S3Client:
     """S3 client wrapper with document management functionality"""
 
-    def __init__(self, region: str = 'eu-west-1'):
+    def __init__(self, bucket_name: Optional[str] = None, region: Optional[str] = None):
         """
-        Initialize S3 client with AWS credentials from environment variables.
+        Initialize S3 client.
+
+        Uses explicit AWS credentials if set, otherwise falls back to boto3
+        default credential chain (IAM role, instance profile, etc.).
 
         Args:
-            region (str): AWS region (default: eu-west-1)
-
-        Raises:
-            ValueError: If AWS credentials are not set
+            bucket_name (str): S3 bucket name (default: S3_BUCKET env var)
+            region (str): AWS region (default: AWS_DEFAULT_REGION env var or af-south-1)
         """
+        self.bucket_name = bucket_name or os.getenv('S3_BUCKET', 'regmind-documents-staging')
+        self.region = region or os.getenv('AWS_DEFAULT_REGION', 'af-south-1')
+
+        # Use explicit credentials if available, otherwise boto3 default chain (IAM role)
         access_key = os.getenv('AWS_ACCESS_KEY_ID')
         secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
 
-        if not access_key or not secret_key:
-            raise ValueError(
-                "AWS credentials not found. Set AWS_ACCESS_KEY_ID and "
-                "AWS_SECRET_ACCESS_KEY environment variables."
+        if access_key and secret_key:
+            self.s3_client = boto3.client(
+                's3',
+                region_name=self.region,
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key
             )
-
-        self.bucket_name = 'arie-finance-documents'
-        self.region = region
-
-        self.s3_client = boto3.client(
-            's3',
-            region_name=region,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key
-        )
+        else:
+            # Fall back to IAM role / default credential chain (ECS Fargate, EC2, etc.)
+            self.s3_client = boto3.client('s3', region_name=self.region)
 
     def upload_document(
         self,
@@ -513,12 +513,13 @@ class S3Client:
 
 
 # Convenience function for quick initialization
-def get_s3_client(region: str = 'eu-west-1') -> S3Client:
+def get_s3_client(bucket_name: Optional[str] = None, region: Optional[str] = None) -> S3Client:
     """
     Create and return an S3 client instance.
 
     Args:
-        region (str): AWS region (default: eu-west-1)
+        bucket_name (str): S3 bucket name (default: S3_BUCKET env var)
+        region (str): AWS region (default: AWS_DEFAULT_REGION env var or af-south-1)
 
     Returns:
         S3Client: Configured S3 client instance
@@ -529,7 +530,7 @@ def get_s3_client(region: str = 'eu-west-1') -> S3Client:
         s3 = get_s3_client()
         success, key = s3.upload_document(...)
     """
-    return S3Client(region=region)
+    return S3Client(bucket_name=bucket_name, region=region)
 
 
 if __name__ == '__main__':

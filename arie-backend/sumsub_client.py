@@ -35,6 +35,8 @@ from calendar import monthrange
 import requests
 from requests.exceptions import RequestException, Timeout
 
+from environment import is_production
+
 
 logger = logging.getLogger("sumsub_client")
 
@@ -189,8 +191,7 @@ class SumsubClient:
         self.is_configured = bool(self.app_token and self.secret_key)
 
         # Block simulation mode in production — real KYC credentials are mandatory
-        env = os.environ.get("ENVIRONMENT", "").lower()
-        if not self.is_configured and env in ("production", "prod"):
+        if not self.is_configured and is_production():
             raise RuntimeError(
                 "CRITICAL: Sumsub credentials (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) "
                 "are required in production. Simulated KYC is not permitted. "

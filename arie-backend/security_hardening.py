@@ -32,6 +32,8 @@ from datetime import datetime, timedelta
 from typing import Tuple, Dict, List, Optional, Any
 from pathlib import Path
 
+from environment import ENV, is_production
+
 from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
@@ -52,66 +54,39 @@ class ApprovalGateValidator:
         """
         Validates that an application meets all approval prerequisites.
 
+        Reads from actual data sources (DB tables, prescreening_data JSON) — not phantom columns.
+
         Args:
-            app: Application dictionary with kyc_status, screening_id, documents, etc.
-            db: Database connection object
+            app: Application dictionary from SELECT * FROM applications
+            db: Database connection object (required)
 
         Returns:
             Tuple of (can_approve: bool, error_message: str)
 
         Checks:
-            - kyc_status must be 'completed' or 'approved'
-            - screening must exist and screening_mode must be 'live' (not 'simulated')
-            - compliance_memo must exist for this application
-            - all documents must have verification_status != 'flagged'
-            - ai_source must not be 'mock'
+            1. Application must have passed through KYC/compliance workflow stages
+            2. Screening must exist in prescreening_data and mode must be 'live'
+            3. Compliance memo must exist in compliance_memos table
+            4. All documents must not be 'flagged'
+            5. Screening report checks must not use simulated api_status
+            6. Compliance memo ai_source must not be 'mock'
         """
         try:
-            # Check KYC status
-            kyc_status = app.get('kyc_status', '').lower()
-            if kyc_status not in ['completed', 'approved']:
-                return (False, f"KYC status must be 'completed' or 'approved', got '{kyc_status}'")
-
-            # Check screening exists and mode is live
-            screening_id = app.get('screening_id')
-            if not screening_id:
-                return (False, "No screening report associated with this application")
-
-            screening_mode = app.get('screening_mode', '').lower()
-            if screening_mode != 'live':
-                return (
-                    False,
-                    f"Screening must be in 'live' mode, not '{screening_mode}'. "
-                    "Simulated screening is not permitted for approval."
-                )
-
-            # C-05 FIX: Check compliance memo exists via DB lookup (not in-memory field)
             app_id = app.get('id')
-            if app_id and db:
-                memo_row = db.execute(
-                    "SELECT id FROM compliance_memos WHERE application_id = ?", (app_id,)
-                ).fetchone()
-                if not memo_row:
-                    return (False, "Compliance memo must be generated before approval. "
-                            "Generate via POST /api/applications/{id}/memo first.")
-            else:
-                # Fallback: check in-memory field if no DB available
-                compliance_memo_id = app.get('compliance_memo_id')
-                if not compliance_memo_id:
-                    return (False, "Compliance memo must be generated before approval")
+            if not app_id or not db:
+                return (False, "Application ID and database connection are required for approval validation")
 
-            # Check all documents are not flagged
-            documents = app.get('documents', [])
-            for doc in documents:
-                verification_status = doc.get('verification_status', '').lower()
-                if verification_status == 'flagged':
-                    doc_name = doc.get('name', 'unknown')
-                    return (
-                        False,
-                        f"Document '{doc_name}' is flagged and must be resolved before approval"
-                    )
+            # 1. Check application has been through KYC/review workflow
+            # (The state machine in server.py enforces transitions, but verify the app
+            #  has reached a reviewable state — not still in draft/prescreening)
+            status = app.get('status', '').lower()
+            pre_kyc_states = ('draft', 'prescreening_submitted', 'pricing_review', 'pricing_accepted',
+                              'pre_approval_review', 'pre_approved', 'kyc_documents')
+            if status in pre_kyc_states:
+                return (False, f"Application is still in pre-review state '{status}'. "
+                        "Cannot approve until compliance review is complete.")
 
-            # C-04: Check screening report for any simulated api_status
+            # 2. Check screening exists in prescreening_data and mode is live
             prescreening_data = app.get('prescreening_data', '{}')
             if isinstance(prescreening_data, str):
                 import json as _json
@@ -119,7 +94,67 @@ class ApprovalGateValidator:
                     prescreening_data = _json.loads(prescreening_data)
                 except (ValueError, TypeError):
                     prescreening_data = {}
+
             screening_report = prescreening_data.get('screening_report', {})
+            if not screening_report:
+                return (False, "No screening report found in application data. "
+                        "Screening must be run before approval.")
+
+            screening_mode = screening_report.get('screening_mode', '').lower()
+            if is_production() and screening_mode != 'live':
+                return (
+                    False,
+                    f"Screening must be in 'live' mode, not '{screening_mode}'. "
+                    "Simulated screening is not permitted for approval in production."
+                )
+
+            # 3. Check compliance memo exists and meets quality gates
+            memo_row = db.execute(
+                "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason "
+                "FROM compliance_memos WHERE application_id = ? ORDER BY version DESC LIMIT 1",
+                (app_id,)
+            ).fetchone()
+            if not memo_row:
+                return (False, "Compliance memo must be generated before approval. "
+                        "Generate via POST /api/applications/{id}/memo first.")
+
+            # 3a. Memo must not be blocked
+            if memo_row.get('blocked'):
+                return (False, f"Compliance memo is blocked: {memo_row.get('block_reason', 'unspecified reason')}. "
+                        "Resolve blocking issues before approval.")
+
+            # 3b. Memo must be formally approved (review_status)
+            memo_review = (memo_row.get('review_status') or '').lower()
+            if memo_review != 'approved':
+                return (False, f"Compliance memo review_status is '{memo_review}', must be 'approved'. "
+                        "Memo must be reviewed and approved before application approval.")
+
+            # 3c. Memo validation must not have failed
+            memo_validation = (memo_row.get('validation_status') or '').lower()
+            if memo_validation == 'fail':
+                return (False, "Compliance memo has validation_status='fail'. "
+                        "Fix validation issues and re-generate before approval.")
+
+            # 3d. Supervisor must not be INCONSISTENT (unless explicitly overridden)
+            memo_supervisor = (memo_row.get('supervisor_status') or '').upper()
+            if memo_supervisor == 'INCONSISTENT':
+                return (False, "Compliance memo has supervisor_status='INCONSISTENT'. "
+                        "Resolve contradictions or obtain SCO override before approval.")
+
+            # 4. Check all documents are not flagged (from DB, not app dict)
+            flagged_docs = db.execute(
+                "SELECT id, doc_type, verification_status FROM documents "
+                "WHERE application_id = ? AND verification_status = 'flagged'",
+                (app_id,)
+            ).fetchall()
+            if flagged_docs:
+                doc_types = ', '.join(d['doc_type'] for d in flagged_docs)
+                return (
+                    False,
+                    f"Flagged documents must be resolved before approval: {doc_types}"
+                )
+
+            # 5. Check screening report for any simulated api_status
             for check_name in ('sanctions', 'company_registry', 'ip_geolocation', 'kyc'):
                 check_data = screening_report.get(check_name, {})
                 if isinstance(check_data, dict) and check_data.get('api_status') == 'simulated':
@@ -129,15 +164,25 @@ class ApprovalGateValidator:
                         "Live screening results are required for approval."
                     )
 
-            # Check AI source is not mock
-            ai_source = app.get('ai_source', '').lower()
+            # 6. Check AI source provenance from memo data
+            memo_data_str = memo_row.get('memo_data', '{}') if memo_row else '{}'
+            if isinstance(memo_data_str, str):
+                import json as _json2
+                try:
+                    memo_data = _json2.loads(memo_data_str)
+                except (ValueError, TypeError):
+                    memo_data = {}
+            else:
+                memo_data = memo_data_str
+            ai_source = memo_data.get('ai_source', '').lower()
             if ai_source == 'mock':
                 return (
                     False,
-                    "Application was processed with mock AI. Live AI verification required for approval."
+                    "Compliance memo was generated with mock AI. "
+                    "Live AI verification required for approval."
                 )
 
-            logger.info(f"Application {app.get('id')} passed approval gate validation")
+            logger.info(f"Application {app_id} passed approval gate validation")
             return (True, "")
 
         except Exception as e:
@@ -152,12 +197,12 @@ class ApprovalGateValidator:
     ) -> Tuple[bool, str]:
         """
         For HIGH/VERY_HIGH risk applications: validates that a different compliance officer
-        has already approved the application.
+        has already recorded a first approval in the audit log.
 
         Args:
-            app: Application dictionary with risk_level, approval_chain
+            app: Application dictionary with risk_level
             current_user: Current user (approval officer) making the approval
-            db: Database connection
+            db: Database connection (required — reads from audit_log table)
 
         Returns:
             Tuple of (can_approve: bool, error_message: str)
@@ -169,24 +214,34 @@ class ApprovalGateValidator:
             if risk_level not in ['HIGH', 'VERY_HIGH']:
                 return (True, "")
 
-            current_user_id = current_user.get('id')
-            approval_chain = app.get('approval_chain', [])
+            current_user_id = current_user.get('sub', current_user.get('id', ''))
+            app_ref = app.get('ref', '')
 
-            # Check if at least one other officer has already approved
-            other_approvals = [
-                a for a in approval_chain
-                if a.get('approver_id') != current_user_id and a.get('status') == 'approved'
-            ]
+            if not db or not app_ref:
+                return (False, "Database connection and application reference required for dual approval check")
+
+            # Check audit_log for a prior "First Approval" by a DIFFERENT officer
+            prior_approvals = db.execute(
+                "SELECT user_id, user_name FROM audit_log "
+                "WHERE target = ? AND action = 'First Approval (Pending Second)' "
+                "ORDER BY timestamp DESC",
+                (app_ref,)
+            ).fetchall()
+
+            # Find approvals by other officers
+            other_approvals = [a for a in prior_approvals if a['user_id'] != current_user_id]
 
             if not other_approvals:
                 return (
                     False,
-                    f"HIGH/VERY_HIGH risk application requires dual approval. "
-                    f"Another compliance officer must approve first."
+                    "HIGH/VERY_HIGH risk application requires dual approval. "
+                    "Another compliance officer must approve first."
                 )
 
+            first_approver = other_approvals[0]['user_name']
             logger.info(
-                f"Application {app.get('id')} ({risk_level}) passed dual approval check for user {current_user_id}"
+                f"Application {app_ref} ({risk_level}) passed dual approval check: "
+                f"first approver={first_approver}, second approver={current_user_id}"
             )
             return (True, "")
 
@@ -254,16 +309,14 @@ def store_screening_mode(db, app_id: str, mode: str) -> bool:
             logger.error(f"Invalid screening mode: {mode}")
             return False
 
-        # Update application record with screening_mode
-        sql = "UPDATE applications SET screening_mode = ? WHERE id = ?"
-        db.execute(sql, (mode, app_id))
-        db.commit()
-
-        logger.info(f"Stored screening_mode='{mode}' for application {app_id}")
+        # screening_mode is stored inside prescreening_data.screening_report JSON
+        # (set by the caller in server.py before saving prescreening_data).
+        # This function logs the mode for audit trail.
+        logger.info(f"Screening mode='{mode}' for application {app_id}")
         return True
 
     except Exception as e:
-        logger.error(f"Error storing screening mode: {e}", exc_info=True)
+        logger.error(f"Error in store_screening_mode: {e}", exc_info=True)
         return False
 
 
@@ -287,10 +340,8 @@ def validate_production_environment() -> None:
     Example:
         >>> validate_production_environment()  # Called in server.py startup
     """
-    environment = os.environ.get('ENVIRONMENT', 'development').lower()
-
-    if environment != 'production':
-        logger.debug(f"Environment is '{environment}', skipping production validation")
+    if not is_production():
+        logger.debug(f"Environment is '{ENV}', skipping production validation")
         return
 
     logger.info("Running production environment validation...")
@@ -483,7 +534,7 @@ class PIIEncryptor:
 
     # PII fields that must be encrypted in different data structures
     PII_FIELDS_DIRECTORS = ['passport_number', 'nationality', 'id_number']
-    PII_FIELDS_UBOS = ['passport_number', 'nationality', 'ownership_pct']
+    PII_FIELDS_UBOS = ['passport_number', 'nationality']
     PII_FIELDS_APPLICATIONS = ['pep_flags']
 
     def __init__(self, key: Optional[str] = None):
@@ -500,10 +551,8 @@ class PIIEncryptor:
         if key is None:
             key = os.environ.get('PII_ENCRYPTION_KEY')
 
-        env = os.environ.get('ENVIRONMENT', '').lower()
-
         if not key:
-            if env in ('production', 'prod'):
+            if is_production():
                 raise RuntimeError(
                     "CRITICAL: PII_ENCRYPTION_KEY must be set in production. "
                     "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
@@ -1241,7 +1290,7 @@ def get_detailed_health_response(include_config: bool = False) -> Dict:
     # Add optional configuration details (admin only)
     if include_config:
         response['configuration'] = {
-            'environment': os.environ.get('ENVIRONMENT', 'unknown'),
+            'environment': ENV,
             'log_level': os.environ.get('LOG_LEVEL', 'INFO'),
             'claude_mock_mode': os.environ.get('CLAUDE_MOCK_MODE', 'false'),
         }
@@ -1266,7 +1315,7 @@ def initialize_security_module() -> None:
         validate_production_environment()
     except RuntimeError as e:
         logger.error(f"Production environment validation failed: {e}")
-        if os.environ.get('ENVIRONMENT', 'development') == 'production':
+        if is_production():
             raise
 
 
