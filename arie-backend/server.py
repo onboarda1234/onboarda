@@ -588,6 +588,40 @@ class LogoutHandler(BaseHandler):
         self.success({"status": "logged_out"})
 
 
+class AdminPasswordResetHandler(BaseHandler):
+    """POST /api/admin/reset-password — staging-only admin password reset.
+    Requires confirmation token. NOT available in production."""
+    def post(self):
+        if ENVIRONMENT in ("production", "prod"):
+            return self.error("Not available in production", 403)
+
+        data = self.get_json()
+        confirm = data.get("confirm", "")
+        email = data.get("email", "").strip().lower()
+        new_password = data.get("new_password", "")
+
+        if confirm != "RESET_STAGING_ADMIN":
+            return self.error("Invalid confirmation token", 403)
+        if not email or not new_password:
+            return self.error("email and new_password required")
+        if len(new_password) < 8:
+            return self.error("Password must be at least 8 characters")
+
+        db = get_db()
+        user = db.execute("SELECT id, role FROM users WHERE email = ?", (email,)).fetchone()
+        if not user:
+            db.close()
+            return self.error("User not found", 404)
+
+        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE users SET password_hash = ? WHERE email = ?", (pw_hash, email))
+        db.commit()
+        db.close()
+
+        logger.warning(f"ADMIN PASSWORD RESET: {email} password was reset via staging endpoint")
+        self.success({"status": "password_reset", "email": email})
+
+
 # ══════════════════════════════════════════════════════════
 # APPLICATION ENDPOINTS
 # ══════════════════════════════════════════════════════════
@@ -3923,6 +3957,7 @@ def make_app():
         (r"/api/auth/client/login", ClientLoginHandler),
         (r"/api/auth/client/register", ClientRegisterHandler),
         (r"/api/auth/logout", LogoutHandler),
+        (r"/api/admin/reset-password", AdminPasswordResetHandler),
         (r"/api/auth/me", MeHandler),
 
         # Applications (more specific routes first)
