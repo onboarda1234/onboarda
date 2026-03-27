@@ -100,20 +100,21 @@ def run_migration(db, version, filepath):
 
     try:
         # Execute each statement separately (executescript is SQLite-only)
-        for statement in sql.split(";"):
-            statement = statement.strip()
-            if statement and not statement.startswith("--"):
-                # For INSERT with ON CONFLICT pattern, add DO NOTHING on postgres
-                if db.is_postgres and "INSERT INTO" in statement and "ON CONFLICT" not in statement:
-                    # Check if this was originally INSERT OR IGNORE (now translated)
-                    # Add ON CONFLICT DO NOTHING for safety on idempotent inserts
-                    if "VALUES" in statement:
-                        statement = statement.rstrip() + " ON CONFLICT DO NOTHING"
-                try:
-                    db.execute(statement)
-                except Exception as stmt_err:
-                    # Log but continue for non-critical statements (e.g. duplicate index)
-                    logger.debug("Statement skipped in migration %s: %s", version, stmt_err)
+        statements = [s.strip() for s in sql.split(";") if s.strip() and not s.strip().startswith("--")]
+        for i, statement in enumerate(statements):
+            # For INSERT with ON CONFLICT pattern, add DO NOTHING on postgres
+            if db.is_postgres and "INSERT INTO" in statement and "ON CONFLICT" not in statement:
+                if "VALUES" in statement:
+                    statement = statement.rstrip() + " ON CONFLICT DO NOTHING"
+            if db.is_postgres:
+                # Use savepoint so a failed statement doesn't abort the transaction
+                db.conn.cursor().execute(f"SAVEPOINT migration_stmt_{i}")
+            try:
+                db.execute(statement)
+            except Exception as stmt_err:
+                if db.is_postgres:
+                    db.conn.cursor().execute(f"ROLLBACK TO SAVEPOINT migration_stmt_{i}")
+                logger.debug("Statement skipped in migration %s: %s", version, stmt_err)
         db.execute(
             "INSERT INTO schema_version (version, filename, checksum) VALUES (?, ?, ?)",
             (version, filepath.name, checksum)
