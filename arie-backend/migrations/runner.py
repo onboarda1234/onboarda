@@ -47,8 +47,10 @@ def ensure_schema_version_table(db):
     try:
         db.execute("SELECT 1 FROM schema_version LIMIT 1")
     except Exception:
+        # PostgreSQL: failed SELECT aborts the transaction — must rollback first
+        if db.is_postgres:
+            db.conn.rollback()
         # Table doesn't exist — create it with portable SQL
-        # Use INTEGER PRIMARY KEY for SQLite compat; DBConnection handles ? -> %s
         create_sql = """
         CREATE TABLE IF NOT EXISTS schema_version (
             id INTEGER PRIMARY KEY,
