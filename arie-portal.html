@@ -7386,9 +7386,11 @@ function submitRegister(e) {
   let ok = true;
   emailErr.classList.add('hidden');
   confErr.classList.add('hidden');
-  // Remove existing pwd error
-  var pwdErr = document.getElementById('r-pwd-err');
-  if (pwdErr) pwdErr.remove();
+  // Remove existing pwd errors (policy + common — separate IDs to ensure both are cleared)
+  var pwdPolicyErr = document.getElementById('r-pwd-policy-err');
+  if (pwdPolicyErr) pwdPolicyErr.remove();
+  var pwdCommonErr = document.getElementById('r-pwd-common-err');
+  if (pwdCommonErr) pwdCommonErr.remove();
   // Password policy check
   var pwdChecks = [
     { test: pwd.length >= 12, msg: 'at least 12 characters' },
@@ -7400,7 +7402,7 @@ function submitRegister(e) {
   var failures = pwdChecks.filter(function(c) { return !c.test; });
   if (failures.length > 0) {
     var errEl = document.createElement('span');
-    errEl.id = 'r-pwd-err';
+    errEl.id = 'r-pwd-policy-err';
     errEl.className = 'field-error';
     errEl.textContent = 'Password must contain: ' + failures.map(function(f) { return f.msg; }).join(', ');
     document.getElementById('r-password').parentElement.after(errEl);
@@ -7410,7 +7412,7 @@ function submitRegister(e) {
   var common = ['password','12345678','qwerty','letmein','welcome','monkey','dragon','master','abc123','password1','onboarda'];
   if (common.some(function(c) { return pwd.toLowerCase().includes(c); })) {
     var errEl2 = document.createElement('span');
-    errEl2.id = 'r-pwd-err';
+    errEl2.id = 'r-pwd-common-err';
     errEl2.className = 'field-error';
     errEl2.textContent = 'Password is too common or easily guessable';
     document.getElementById('r-password').parentElement.after(errEl2);

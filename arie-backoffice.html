@@ -8026,9 +8026,10 @@ async function checkAPIStatus() {
     html += '<div style="font-weight:600;margin-bottom:8px;">API Integration Status</div>';
 
     var apis = [
-      { key: 'sumsub_aml', label: 'Sumsub AML (Sanctions/PEP)', icon: '🔍' },
+      { key: 'sumsub', label: 'Sumsub KYC/AML', icon: '🔍' },
       { key: 'opencorporates', label: 'Open Corporates (Registry)', icon: '🏢' },
-      { key: 'ip_geolocation', label: 'IP Geolocation', icon: '🌍' }
+      { key: 'ip_geolocation', label: 'IP Geolocation', icon: '🌍' },
+      { key: 'anthropic', label: 'Claude AI (Verification & Memo)', icon: '🤖' }
     ];
 
     apis.forEach(function(api) {
