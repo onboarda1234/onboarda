@@ -3329,7 +3329,8 @@ class ComplianceMemoHandler(BaseHandler):
         # Enrich app with prescreening fields for memo_handler
         # prescreening_data is a JSON column; memo_handler expects source_of_funds and expected_volume as top-level keys
         app = dict(app)
-        ps = json.loads(app.get("prescreening_data") or "{}")
+        ps_raw = app.get("prescreening_data") or "{}"
+        ps = ps_raw if isinstance(ps_raw, dict) else json.loads(ps_raw)
         sof = ps.get("source_of_funds", "")
         if not sof:
             sof_parts = []
