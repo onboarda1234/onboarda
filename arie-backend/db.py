@@ -282,6 +282,7 @@ def _get_postgres_schema() -> str:
         doc_type TEXT NOT NULL,
         doc_name TEXT NOT NULL,
         file_path TEXT NOT NULL,
+        s3_key TEXT,
         file_size INTEGER,
         mime_type TEXT,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
@@ -638,6 +639,7 @@ def _get_sqlite_schema() -> str:
         doc_type TEXT NOT NULL,
         doc_name TEXT NOT NULL,
         file_path TEXT NOT NULL,
+        s3_key TEXT,
         file_size INTEGER,
         mime_type TEXT,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
@@ -927,6 +929,9 @@ def _run_migrations(db: DBConnection):
     try:
         db.execute("SELECT pre_approval_decision FROM applications LIMIT 1")
     except Exception:
+        # PostgreSQL: failed SELECT aborts the transaction — must rollback first
+        if db.is_postgres:
+            db.conn.rollback()
         logger.info("Migration v2.1: Adding pre-approval columns to applications table")
         migration_cols = [
             "ALTER TABLE applications ADD COLUMN pre_approval_decision TEXT",
@@ -938,8 +943,25 @@ def _run_migrations(db: DBConnection):
             try:
                 db.execute(stmt)
             except Exception as e:
+                if db.is_postgres:
+                    db.conn.rollback()
                 logger.debug(f"Migration column may already exist: {e}")
         logger.info("Migration v2.1: Pre-approval columns added")
+
+    # Check if s3_key column exists on documents table
+    try:
+        db.execute("SELECT s3_key FROM documents LIMIT 1")
+    except Exception:
+        if db.is_postgres:
+            db.conn.rollback()
+        logger.info("Migration v2.2: Adding s3_key column to documents table")
+        try:
+            db.execute("ALTER TABLE documents ADD COLUMN s3_key TEXT")
+        except Exception as e:
+            if db.is_postgres:
+                db.conn.rollback()
+            logger.debug(f"Migration s3_key column may already exist: {e}")
+        logger.info("Migration v2.2: s3_key column added")
 
 
 # ============================================================================

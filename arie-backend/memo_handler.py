@@ -16,6 +16,7 @@ from rule_engine import (
     HIGH_RISK_SECTORS, MINIMUM_MEDIUM_SECTORS, MEDIUM_RISK_SECTORS,
     ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
     RISK_WEIGHTS, RISK_RANK,
+    SANCTIONED, FATF_BLACK,
 )
 from environment import ENV, is_demo
 
@@ -54,11 +55,12 @@ def build_compliance_memo(app, directors, ubos, documents):
 
     is_high_risk_country = country in HIGH_RISK_COUNTRIES
     is_offshore = country in OFFSHORE_COUNTRIES
+    is_sanctioned_country = country.lower().strip() in SANCTIONED or country.lower().strip() in FATF_BLACK
     is_high_risk_sector = sector in HIGH_RISK_SECTORS
     is_medium_risk_sector = sector in MEDIUM_RISK_SECTORS
     is_minimum_medium_sector = sector in MINIMUM_MEDIUM_SECTORS
 
-    jur_rating = "HIGH" if is_high_risk_country else "MEDIUM" if is_offshore else "LOW"
+    jur_rating = "VERY_HIGH" if is_sanctioned_country else "HIGH" if is_high_risk_country else "MEDIUM" if is_offshore else "LOW"
     # Rule 4C: Sectors with inherent minimum MEDIUM risk floor
     biz_rating = "HIGH" if is_high_risk_sector else "MEDIUM" if (is_medium_risk_sector or is_minimum_medium_sector) else "LOW"
     fc_rating = "MEDIUM" if len(all_peps) > 0 else "LOW"
@@ -73,6 +75,15 @@ def build_compliance_memo(app, directors, ubos, documents):
     # ══════════════════════════════════════════════════════════
     rule_violations = []
     rule_enforcements = []
+
+    # ── SANCTIONED COUNTRY FLOOR: Force VERY_HIGH jurisdiction risk ──
+    if is_sanctioned_country:
+        rule_enforcements.append({
+            "rule": "SANCTIONED_COUNTRY_FLOOR",
+            "original": jur_rating if jur_rating != "VERY_HIGH" else "VERY_HIGH",
+            "enforced": "VERY_HIGH",
+            "reason": country + " is a sanctioned or FATF blacklisted jurisdiction — jurisdiction risk floor is VERY_HIGH"
+        })
 
     # ── RULE 4C: Business risk floor enforcement ──
     if is_minimum_medium_sector and biz_rating == "LOW":

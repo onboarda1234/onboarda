@@ -235,7 +235,7 @@ def decrypt_pii_fields(record: dict, field_names: list) -> dict:
 
 # PII field definitions for each entity type
 PII_FIELDS_DIRECTORS = ["passport_number", "nationality", "id_number"]
-PII_FIELDS_UBOS = ["passport_number", "nationality", "ownership_pct"]
+PII_FIELDS_UBOS = ["passport_number", "nationality"]
 PII_FIELDS_APPLICATIONS = ["pep_flags"]
 
 # ── Prometheus Metrics (optional) ──────────────────────────
@@ -394,12 +394,7 @@ class HealthHandler(BaseHandler):
         # Database connectivity check
         try:
             db = get_db()
-            if USE_POSTGRES:
-                cur = db.cursor()
-                cur.execute("SELECT 1")
-                cur.close()
-            else:
-                db.execute("SELECT 1")
+            db.execute("SELECT 1")
             db.close()
             health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
         except Exception as e:
@@ -639,6 +634,40 @@ class LogoutHandler(BaseHandler):
             self.log_audit(user, "Logout", "System", f"User {user.get('name', '')} logged out")
         self.clear_session_cookie()
         self.success({"status": "logged_out"})
+
+
+class AdminPasswordResetHandler(BaseHandler):
+    """POST /api/admin/reset-password — staging-only admin password reset.
+    Requires confirmation token. NOT available in production."""
+    def post(self):
+        if ENVIRONMENT in ("production", "prod"):
+            return self.error("Not available in production", 403)
+
+        data = self.get_json()
+        confirm = data.get("confirm", "")
+        email = data.get("email", "").strip().lower()
+        new_password = data.get("new_password", "")
+
+        if confirm != "RESET_STAGING_ADMIN":
+            return self.error("Invalid confirmation token", 403)
+        if not email or not new_password:
+            return self.error("email and new_password required")
+        if len(new_password) < 8:
+            return self.error("Password must be at least 8 characters")
+
+        db = get_db()
+        user = db.execute("SELECT id, role FROM users WHERE email = ?", (email,)).fetchone()
+        if not user:
+            db.close()
+            return self.error("User not found", 404)
+
+        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE users SET password_hash = ? WHERE email = ?", (pw_hash, email))
+        db.commit()
+        db.close()
+
+        logger.warning(f"ADMIN PASSWORD RESET: {email} password was reset via staging endpoint")
+        self.success({"status": "password_reset", "email": email})
 
 
 # ══════════════════════════════════════════════════════════
@@ -1489,16 +1518,19 @@ class DocumentUploadHandler(BaseHandler):
         s3_key = None
         if HAS_S3:
             try:
-                s3_client = get_s3_client()
-                if s3_client:
-                    s3_key = f"documents/{app['id']}/{safe_name}"
-                    s3_client.upload_fileobj(
-                        io.BytesIO(body),
-                        Bucket=os.environ.get("S3_BUCKET", "arie-documents"),
-                        Key=s3_key,
-                        ExtraArgs={"ContentType": file_info["content_type"]}
-                    )
+                s3 = get_s3_client()
+                success, key_or_error = s3.upload_document(
+                    file_data=body,
+                    client_id=app["id"],
+                    doc_type=self.get_argument("doc_type", "general"),
+                    filename=safe_name,
+                    metadata={"content_type": file_info["content_type"], "original_name": filename}
+                )
+                if success:
+                    s3_key = key_or_error
                     logger.info(f"Document {doc_id} uploaded to S3: {s3_key}")
+                else:
+                    logger.warning(f"S3 upload failed for {doc_id}: {key_or_error}. Falling back to local storage.")
             except Exception as e:
                 logger.warning(f"S3 upload failed for {doc_id}: {e}. Falling back to local storage.")
                 s3_key = None
@@ -1507,14 +1539,69 @@ class DocumentUploadHandler(BaseHandler):
         person_id = self.get_argument("person_id", None)
 
         db.execute("""
-            INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, file_size, mime_type)
-            VALUES (?,?,?,?,?,?,?,?)
-        """, (doc_id, app["id"], person_id, doc_type, filename, file_path, len(body), file_info["content_type"]))
+            INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, s3_key, file_size, mime_type)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key, len(body), file_info["content_type"]))
         db.commit()
         db.close()
 
         self.log_audit(user, "Upload", app["ref"], f"Document uploaded: {filename} ({doc_type})")
         self.success({"id": doc_id, "doc_name": filename, "doc_type": doc_type, "file_size": len(body), "s3_key": s3_key}, 201)
+
+
+class DocumentDownloadHandler(BaseHandler):
+    """GET /api/documents/:id/download — get presigned S3 URL or serve local file"""
+    def get(self, doc_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+        if not doc:
+            db.close()
+            return self.error("Document not found", 404)
+
+        # Verify ownership: officers can access any doc, clients only their own
+        app = db.execute("SELECT id, client_id, ref FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+        db.close()
+
+        s3_key = doc.get("s3_key") if doc else None
+
+        # Prefer S3 presigned URL if document is stored in S3
+        if s3_key and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, url_or_error = s3.get_presigned_url(
+                    key=s3_key,
+                    expiry=900,
+                    response_filename=doc["doc_name"]
+                )
+                if success:
+                    self.log_audit(user, "Download", app["ref"], f"Document downloaded via S3: {doc['doc_name']}")
+                    return self.success({"download_url": url_or_error, "source": "s3", "expires_in": 900})
+                else:
+                    logger.warning(f"S3 presigned URL failed for {doc_id}: {url_or_error}. Falling back to local.")
+            except Exception as e:
+                logger.warning(f"S3 download failed for {doc_id}: {e}. Falling back to local.")
+
+        # Fall back to local file
+        file_path = doc["file_path"]
+        if os.path.exists(file_path):
+            self.set_header("Content-Type", doc.get("mime_type") or "application/octet-stream")
+            self.set_header("Content-Disposition", f'attachment; filename="{doc["doc_name"]}"')
+            with open(file_path, "rb") as f:
+                self.write(f.read())
+            self.log_audit(user, "Download", app["ref"], f"Document downloaded locally: {doc['doc_name']}")
+            self.finish()
+        else:
+            return self.error("Document file not found on server", 404)
 
 
 class DocumentVerifyHandler(BaseHandler):
@@ -2091,20 +2178,32 @@ class SaveResumeHandler(BaseHandler):
 # PORTAL FILE SERVING
 # ══════════════════════════════════════════════════════════
 
-PORTAL_DIR = os.path.join(os.path.dirname(__file__), "..")  # outputs/ directory
+# HTML files: in Docker they're alongside server.py (/app/), in dev they're one level up
+_SCRIPT_DIR = os.path.dirname(__file__)
+_PARENT_DIR = os.path.join(_SCRIPT_DIR, "..")
+
+def _find_html(filename):
+    """Find HTML file in same dir (Docker) or parent dir (local dev)."""
+    local = os.path.join(_SCRIPT_DIR, filename)
+    if os.path.exists(local):
+        return local
+    parent = os.path.join(_PARENT_DIR, filename)
+    if os.path.exists(parent):
+        return parent
+    raise FileNotFoundError(f"{filename} not found in {_SCRIPT_DIR} or {_PARENT_DIR}")
 
 class PortalHandler(tornado.web.RequestHandler):
     """Serve the client portal HTML"""
     def get(self):
         self.set_header("Content-Type", "text/html")
-        with open(os.path.join(PORTAL_DIR, "arie-portal.html"), "r") as f:
+        with open(_find_html("arie-portal.html"), "r") as f:
             self.write(f.read())
 
 class BackOfficeHandler(tornado.web.RequestHandler):
     """Serve the back-office portal HTML"""
     def get(self):
         self.set_header("Content-Type", "text/html")
-        with open(os.path.join(PORTAL_DIR, "arie-backoffice.html"), "r") as f:
+        with open(_find_html("arie-backoffice.html"), "r") as f:
             self.write(f.read())
 
 
@@ -2242,6 +2341,11 @@ class APIStatusHandler(BaseHandler):
                 "configured": bool(SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY),
                 "status": "live" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
                 "description": "KYC identity verification (document + selfie + liveness)"
+            },
+            "anthropic": {
+                "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "status": "live" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",
+                "description": "Claude AI — document verification, risk analysis, memo generation"
             },
             "environment": ENVIRONMENT,
         })
@@ -2586,6 +2690,27 @@ class ComplianceMemoHandler(BaseHandler):
         directors = [dict(d) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
         ubos = [dict(u) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
         documents = [dict(d) for d in db.execute("SELECT * FROM documents WHERE application_id=?", (real_id,)).fetchall()]
+
+        # Enrich app with prescreening fields for memo_handler
+        # prescreening_data is a JSON column; memo_handler expects source_of_funds and expected_volume as top-level keys
+        app = dict(app)
+        ps = json.loads(app.get("prescreening_data") or "{}")
+        # Source of funds: use single field (demo data) or concatenate granular fields (portal)
+        sof = ps.get("source_of_funds", "")
+        if not sof:
+            sof_parts = []
+            if ps.get("source_of_funds_initial_type"):
+                sof_parts.append("Initial: " + ps["source_of_funds_initial_type"])
+            if ps.get("source_of_funds_initial_detail"):
+                sof_parts.append(ps["source_of_funds_initial_detail"])
+            if ps.get("source_of_funds_ongoing_type"):
+                sof_parts.append("Ongoing: " + ps["source_of_funds_ongoing_type"])
+            if ps.get("source_of_funds_ongoing_detail"):
+                sof_parts.append(ps["source_of_funds_ongoing_detail"])
+            sof = "; ".join(sof_parts)
+        app["source_of_funds"] = sof
+        # Expected volume: use expected_volume (demo) or monthly_volume (portal)
+        app["expected_volume"] = ps.get("expected_volume") or ps.get("monthly_volume", "")
 
         # Build compliance memo (pure computation — extracted to memo_handler.py)
         memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(app, directors, ubos, documents)
@@ -3923,6 +4048,7 @@ def make_app():
         (r"/api/auth/client/register", ClientRegisterHandler),
         (r"/api/auth/change-password", ChangePasswordHandler),
         (r"/api/auth/logout", LogoutHandler),
+        (r"/api/admin/reset-password", AdminPasswordResetHandler),
         (r"/api/auth/me", MeHandler),
 
         # Applications (more specific routes first)
@@ -3946,6 +4072,7 @@ def make_app():
         (r"/api/applications", ApplicationsHandler),
 
         # Documents
+        (r"/api/documents/([^/]+)/download", DocumentDownloadHandler),
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
         (r"/api/documents/ai-verify", DocumentAIVerifyHandler),
 
@@ -4047,7 +4174,9 @@ if __name__ == "__main__":
     # Run database migrations
     try:
         from migrations.runner import run_all_migrations
-        run_all_migrations(DB_PATH)
+        migration_db = get_db()
+        run_all_migrations(migration_db)
+        migration_db.close()
     except Exception as e:
         logger.warning("Migration runner unavailable: %s", e)
 

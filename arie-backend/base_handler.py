@@ -164,6 +164,7 @@ class BaseHandler(tornado.web.RequestHandler):
             "/api/auth/client/register",
             "/api/auth/logout",
             "/api/health",
+            "/api/admin/reset-password",
         )
         if self.request.uri in _csrf_exempt_paths:
             return
