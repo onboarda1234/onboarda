@@ -216,7 +216,7 @@ def compute_risk_score(app_data):
         "german": "germany", "japanese": "japan", "australian": "australia",
         "canadian": "canada", "lebanese": "lebanon", "iranian": "iran",
         "syrian": "syria", "afghan": "afghanistan", "belarusian": "belarus",
-        "venezuelan": "venezuela", "cuban": "cuba", "north korean": "north korea (dprk)",
+        "venezuelan": "venezuela", "cuban": "cuba", "north korean": "north korea",
         "pakistani": "pakistan", "south african": "south africa",
         "vietnamese": "vietnam", "filipino": "philippines",
     }
@@ -273,6 +273,32 @@ def compute_risk_score(app_data):
         level = "MEDIUM"
     else:
         level = "LOW"
+
+    # ── FLOOR RULE 1: Sanctioned / FATF_BLACK incorporation country → force VERY_HIGH ──
+    # If the incorporation country is sanctioned or FATF blacklisted,
+    # the overall risk level MUST be VERY_HIGH regardless of composite score.
+    inc_country = (data.get("country") or "").lower().strip()
+    if inc_country and (inc_country in SANCTIONED or inc_country in FATF_BLACK):
+        if level != "VERY_HIGH":
+            logger.info(f"FLOOR RULE: Country '{inc_country}' is sanctioned/FATF_BLACK — forcing VERY_HIGH (was {level}, score {composite})")
+        level = "VERY_HIGH"
+        composite = max(composite, 70.0)
+
+    # ── FLOOR RULE 2: UBO/Director sanctioned nationality → force VERY_HIGH ──
+    # If any UBO or director holds nationality of a sanctioned/FATF_BLACK country,
+    # the overall risk level MUST be VERY_HIGH regardless of composite score.
+    sanctioned_set = SANCTIONED | FATF_BLACK
+    for person in data.get("directors", []) + data.get("ubos", []):
+        nat = (person.get("nationality") or person.get("nat") or "").strip().lower()
+        if nat:
+            mapped = nat_demonym_map.get(nat, nat)
+            if mapped in sanctioned_set:
+                person_name = person.get("full_name") or person.get("name") or "unknown"
+                if level != "VERY_HIGH":
+                    logger.info(f"FLOOR RULE: UBO/Director '{person_name}' nationality '{nat}' maps to sanctioned '{mapped}' — forcing VERY_HIGH (was {level}, score {composite})")
+                level = "VERY_HIGH"
+                composite = max(composite, 70.0)
+                break  # One match is sufficient
 
     lane_map = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}
 
