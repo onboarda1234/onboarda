@@ -531,6 +531,44 @@ class AdminResetPasswordHandler(BaseHandler):
         db.close()
         self.success({"status": "password_reset", "email": email})
 
+
+class AdminOfficerPasswordResetHandler(BaseHandler):
+    """POST /api/admin/officer-reset-password — reset an officer's password (staging only).
+    Targets the users table (officers/admins), NOT the clients table.
+    Requires confirmation token. NOT available in production."""
+    def post(self):
+        from config import IS_PRODUCTION
+        if IS_PRODUCTION:
+            return self.error("Not available in production", 403)
+
+        data = self.get_json()
+        confirm = data.get("confirm", "")
+        email = data.get("email", "").strip().lower()
+        new_password = data.get("new_password", "")
+
+        if confirm != "RESET_STAGING_ADMIN":
+            return self.error("Invalid confirmation token", 403)
+        if not email or not new_password:
+            return self.error("email and new_password required", 400)
+        if len(new_password) < 8:
+            return self.error("Password must be at least 8 characters", 400)
+
+        db = get_db()
+        user = db.execute("SELECT id, role, full_name FROM users WHERE LOWER(email) = ?", (email,)).fetchone()
+        if not user:
+            db.close()
+            return self.error("Officer not found", 404)
+
+        import bcrypt
+        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE users SET password_hash = ? WHERE LOWER(email) = ?", (pw_hash, email))
+        db.commit()
+        db.close()
+
+        logger.warning(f"OFFICER PASSWORD RESET: {email} (role={user['role']}) password was reset via staging endpoint")
+        self.success({"status": "password_reset", "email": email, "role": user["role"]})
+
+
 # ── Health Check ──
 class HealthHandler(BaseHandler):
     def get(self):
@@ -2927,6 +2965,11 @@ class APIStatusHandler(BaseHandler):
                 "status": "live" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
                 "description": "KYC identity verification (document + selfie + liveness)"
             },
+            "anthropic": {
+                "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "status": "live" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",
+                "description": "Claude AI — document verification, risk analysis, memo generation"
+            },
             "environment": ENVIRONMENT,
         })
 
@@ -4630,6 +4673,7 @@ def make_app():
         (r"/api/health", HealthHandler),
         (r"/api/admin/reset-db", AdminResetDBHandler),
         (r"/api/admin/reset-password", AdminResetPasswordHandler),
+        (r"/api/admin/officer-reset-password", AdminOfficerPasswordResetHandler),
 
         # Auth
         (r"/api/auth/officer/login", OfficerLoginHandler),
