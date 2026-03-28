@@ -53,3 +53,19 @@ scripts/
 # ── Archive (old ARIE-branded files) ──
 archive/
 arie-backend/arie.db.bak_e2e
+
+# ── Worktrees (managed by Claude Code) ──
+.claude/worktrees/
+
+# ── Lock files ──
+.~lock.*
+~$*
+
+# ── Zip archives ──
+*.zip
+
+# ── Credentials (never commit) ──
+Credentials.docx
+
+# ── Pytest cache ──
+.pytest_cache/
