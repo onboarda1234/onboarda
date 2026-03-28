@@ -820,21 +820,21 @@ body.role-admin .role-admin-only-block { display:block; }
   </div>
 
   <!-- Ongoing Monitoring Alerts -->
-  <div class="stats-grid" style="margin-top:24px;">
+  <div class="stats-grid" style="margin-top:24px;" id="dashboard-monitoring-stats">
     <div class="stat-card">
       <div class="stat-card-label">Files Due for Review</div>
-      <div class="stat-card-value" style="color:var(--amber);">12</div>
-      <div class="stat-card-change">Next review cycle in 8 days</div>
+      <div class="stat-card-value" style="color:var(--text3);">&mdash;</div>
+      <div class="stat-card-change">Monitoring not yet active</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Documents Expiring</div>
-      <div class="stat-card-value" style="color:var(--red);">5</div>
-      <div class="stat-card-change">Action required</div>
+      <div class="stat-card-value" style="color:var(--text3);">&mdash;</div>
+      <div class="stat-card-change">&mdash;</div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Active Monitoring Alerts</div>
-      <div class="stat-card-value" style="color:#7c3aed;">3</div>
-      <div class="stat-card-change">2 PEP status changes, 1 adverse media</div>
+      <div class="stat-card-value" style="color:var(--text3);">&mdash;</div>
+      <div class="stat-card-change">&mdash;</div>
     </div>
     <div class="stat-card">
       <button class="btn btn-primary" style="width:100%;margin-top:20px;" onclick="showView('monitoring',document.querySelectorAll('.snav-item')[5])">View Ongoing Monitoring →</button>
@@ -2360,6 +2360,26 @@ function applyEnvironmentUI() {
     if (monNav) monNav.style.display = 'none';
   }
 
+  // Non-demo: clear seeded regulatory documents (loaded at parse time before env detection)
+  if (ARIE_ENV !== 'demo') {
+    if (typeof REG_DOCUMENTS !== 'undefined') REG_DOCUMENTS = [];
+  }
+
+  // Demo mode: restore fabricated dashboard monitoring stats
+  if (ARIE_ENV === 'demo') {
+    var monStats = document.getElementById('dashboard-monitoring-stats');
+    if (monStats) {
+      var cards = monStats.querySelectorAll('.stat-card-value');
+      var changes = monStats.querySelectorAll('.stat-card-change');
+      if (cards[0]) { cards[0].textContent = '12'; cards[0].style.color = 'var(--amber)'; }
+      if (changes[0]) changes[0].textContent = 'Next review cycle in 8 days';
+      if (cards[1]) { cards[1].textContent = '5'; cards[1].style.color = 'var(--red)'; }
+      if (changes[1]) changes[1].textContent = 'Action required';
+      if (cards[2]) { cards[2].textContent = '3'; cards[2].style.color = '#7c3aed'; }
+      if (changes[2]) changes[2].textContent = '2 PEP status changes, 1 adverse media';
+    }
+  }
+
   // KPI: if demo data mode, show subtle label
   if (FEATURE_FLAGS.ENABLE_KPI_DEMO_DATA) {
     setTimeout(function() {
@@ -2961,7 +2981,7 @@ function openAppDetail(ref) {
   var dimKeys = ['d1','d2','d3','d4','d5'];
   var barsHtml = '';
   dimKeys.forEach(function(k, i) {
-    var val = app.dims[k];
+    var val = (app.dims && app.dims[k] != null) ? app.dims[k] : 0;
     var pct = (val / 4) * 100;
     var cls = val <= 1.5 ? 'low' : val <= 2.5 ? 'medium' : val <= 3.2 ? 'high' : 'vhigh';
     barsHtml += '<div class="risk-bar-row"><div class="risk-bar-label">' + dims[i] + '</div><div class="risk-bar-track"><div class="risk-bar-fill ' + cls + '" style="width:' + pct + '%;"></div></div><div class="risk-bar-value">' + val.toFixed(2) + '</div></div>';
@@ -2991,7 +3011,7 @@ function openAppDetail(ref) {
     '</tr></thead><tbody>';
 
   breakdown.dimensions.forEach(function(dim) {
-    var val = dim.dimScore;
+    var val = dim.dimScore != null ? dim.dimScore : 0;
     var weighted = val * dim.weight;
     var scoreColor = val <= 1.5 ? 'var(--green)' : val <= 2.5 ? 'var(--blue)' : val <= 3.2 ? 'var(--amber)' : 'var(--red)';
     sbHtml += '<tr>' +
@@ -3624,19 +3644,29 @@ function openAppDetail(ref) {
       else if (review.status === 'rejected') statusHtml = '<div style="font-size:10px;color:var(--red);font-weight:600;margin-top:2px;">❌ Rejected</div>';
       else if (review.status === 'info_requested') statusHtml = '<div style="font-size:10px;color:var(--amber);font-weight:600;margin-top:2px;">📋 Info Req.</div>';
 
-      var seed = seedRandom(seedStr || docName);
-      var tests = [
-        { name: 'Format', result: 'Pass', confidence: 98 },
-        { name: 'Authenticity', result: (seed % 7 === 0) ? 'Warning' : 'Pass', confidence: 85 + (seed % 14) },
-        { name: 'Expiry', result: docName === 'Proof of Address' ? 'Warning' : 'Pass', confidence: docName === 'Proof of Address' ? 72 : 90 + (seed % 10) },
-        { name: 'Name Match', result: 'Pass', confidence: 90 + (seed % 10) },
-        { name: 'Tampering', result: (seed % 19 === 0) ? 'Fail' : 'Pass', confidence: 88 + (seed % 12) },
-      ];
-      var hasFail = tests.some(function(t) { return t.result === 'Fail'; });
-      var hasWarning = tests.some(function(t) { return t.result === 'Warning'; });
-      var overall = hasFail ? 'Fail' : hasWarning ? 'Warning' : 'Pass';
-      var overallColor = overall === 'Pass' ? 'var(--green)' : overall === 'Warning' ? 'var(--amber)' : 'var(--red)';
-      var avgConf = Math.round(tests.reduce(function(s, t) { return s + t.confidence; }, 0) / tests.length);
+      var tests, overall, overallColor, avgConf;
+      if (ARIE_ENV === 'demo') {
+        // Demo mode: fabricated verification display
+        var seed = seedRandom(seedStr || docName);
+        tests = [
+          { name: 'Format', result: 'Pass', confidence: 98 },
+          { name: 'Authenticity', result: (seed % 7 === 0) ? 'Warning' : 'Pass', confidence: 85 + (seed % 14) },
+          { name: 'Expiry', result: docName === 'Proof of Address' ? 'Warning' : 'Pass', confidence: docName === 'Proof of Address' ? 72 : 90 + (seed % 10) },
+          { name: 'Name Match', result: 'Pass', confidence: 90 + (seed % 10) },
+          { name: 'Tampering', result: (seed % 19 === 0) ? 'Fail' : 'Pass', confidence: 88 + (seed % 12) },
+        ];
+        var hasFail = tests.some(function(t) { return t.result === 'Fail'; });
+        var hasWarning = tests.some(function(t) { return t.result === 'Warning'; });
+        overall = hasFail ? 'Fail' : hasWarning ? 'Warning' : 'Pass';
+        overallColor = overall === 'Pass' ? 'var(--green)' : overall === 'Warning' ? 'var(--amber)' : 'var(--red)';
+        avgConf = Math.round(tests.reduce(function(s, t) { return s + t.confidence; }, 0) / tests.length);
+      } else {
+        // Non-demo: no fabricated data — show neutral state
+        tests = null;
+        overall = 'Pending';
+        overallColor = 'var(--text3)';
+        avgConf = 0;
+      }
 
       var html = '<div style="border:1px solid var(--border1);border-radius:10px;overflow:hidden;' + (overall === 'Fail' ? 'border-color:var(--red);' : overall === 'Warning' ? 'border-color:var(--amber);' : '') + '">';
       html += '<div style="padding:10px 12px;background:var(--surface2);border-bottom:1px solid var(--border1);">';
@@ -3651,16 +3681,24 @@ function openAppDetail(ref) {
       html += '<button class="doc-action-btn info' + (review.status==='info_requested'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + safeKey + '\',\'info_requested\')" style="font-size:10px;padding:3px 8px;">Info</button>';
       html += '</div></div>';
 
-      html += '<div style="padding:8px 12px;background:' + (overall === 'Fail' ? 'rgba(220,38,38,0.03)' : overall === 'Warning' ? 'rgba(217,119,6,0.03)' : 'rgba(22,163,74,0.02)') + ';">';
+      html += '<div style="padding:8px 12px;background:' + (overall === 'Fail' ? 'rgba(220,38,38,0.03)' : overall === 'Warning' ? 'rgba(217,119,6,0.03)' : overall === 'Pending' ? 'rgba(107,114,128,0.03)' : 'rgba(22,163,74,0.02)') + ';">';
       html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
       html += '<span style="font-size:10px;font-weight:600;color:var(--text2);">AI Verification</span>';
-      html += '<span style="font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;background:' + (overall === 'Pass' ? 'var(--green-bg)' : overall === 'Warning' ? 'var(--amber-bg)' : 'var(--red-bg)') + ';color:' + overallColor + ';">' + avgConf + '% ' + overall + '</span>';
+      if (tests) {
+        html += '<span style="font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;background:' + (overall === 'Pass' ? 'var(--green-bg)' : overall === 'Warning' ? 'var(--amber-bg)' : 'var(--red-bg)') + ';color:' + overallColor + ';">' + avgConf + '% ' + overall + '</span>';
+      } else {
+        html += '<span style="font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;background:var(--surface3);color:var(--text3);">Not verified</span>';
+      }
       html += '</div>';
-      tests.forEach(function(t) {
-        var tc = t.result === 'Pass' ? 'var(--green)' : t.result === 'Warning' ? 'var(--amber)' : 'var(--red)';
-        var icon = t.result === 'Pass' ? '✅' : t.result === 'Warning' ? '⚠️' : '❌';
-        html += '<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0;color:var(--text2);"><span>' + escapeHtml(t.name) + '</span><span style="color:' + tc + ';font-weight:600;">' + icon + ' ' + t.confidence + '%</span></div>';
-      });
+      if (tests) {
+        tests.forEach(function(t) {
+          var tc = t.result === 'Pass' ? 'var(--green)' : t.result === 'Warning' ? 'var(--amber)' : 'var(--red)';
+          var icon = t.result === 'Pass' ? '✅' : t.result === 'Warning' ? '⚠️' : '❌';
+          html += '<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0;color:var(--text2);"><span>' + escapeHtml(t.name) + '</span><span style="color:' + tc + ';font-weight:600;">' + icon + ' ' + t.confidence + '%</span></div>';
+        });
+      } else {
+        html += '<div style="font-size:10px;color:var(--text3);padding:2px 0;">Verification results will appear after AI review.</div>';
+      }
       html += '</div></div>';
       return html;
     }
@@ -4535,26 +4573,34 @@ function renderKPIDashboard() {
         '<div class="kpi-target on-track">● Healthy — Target: &lt;10%</div>' +
       '</div>' +
     '</div>' +
-    // Risk Distribution Trend
-    '<div class="card" style="margin-top:14px;"><div class="card-title" style="margin-bottom:12px;">Risk Distribution Over Time</div>' +
-      '<div style="display:flex;gap:6px;align-items:flex-end;height:120px;">' +
-        buildMonthBars('Oct', [45,28,15,12]) +
-        buildMonthBars('Nov', [40,30,18,12]) +
-        buildMonthBars('Dec', [42,25,20,13]) +
-        buildMonthBars('Jan', [38,28,19,15]) +
-        buildMonthBars('Feb', [36,26,21,17]) +
-        buildMonthBars('Mar', [38,26,19,17]) +
-      '</div>' +
-      '<div style="display:flex;gap:16px;margin-top:10px;font-size:11px;color:var(--text3);">' +
-        '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:4px;"></span>Low</span>' +
-        '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue);margin-right:4px;"></span>Medium</span>' +
-        '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--amber);margin-right:4px;"></span>High</span>' +
-        '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--red);margin-right:4px;"></span>Very High</span>' +
-      '</div></div>';
+    // Risk Distribution Trend — demo only (no real historical data in staging)
+    (ARIE_ENV === 'demo' ?
+      '<div class="card" style="margin-top:14px;"><div class="card-title" style="margin-bottom:12px;">Risk Distribution Over Time</div>' +
+        '<div style="display:flex;gap:6px;align-items:flex-end;height:120px;">' +
+          buildMonthBars('Oct', [45,28,15,12]) +
+          buildMonthBars('Nov', [40,30,18,12]) +
+          buildMonthBars('Dec', [42,25,20,13]) +
+          buildMonthBars('Jan', [38,28,19,15]) +
+          buildMonthBars('Feb', [36,26,21,17]) +
+          buildMonthBars('Mar', [38,26,19,17]) +
+        '</div>' +
+        '<div style="display:flex;gap:16px;margin-top:10px;font-size:11px;color:var(--text3);">' +
+          '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:4px;"></span>Low</span>' +
+          '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--blue);margin-right:4px;"></span>Medium</span>' +
+          '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--amber);margin-right:4px;"></span>High</span>' +
+          '<span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--red);margin-right:4px;"></span>Very High</span>' +
+        '</div></div>'
+      : '<div class="card" style="margin-top:14px;"><div class="card-title">Risk Distribution Over Time</div><div style="padding:20px;text-align:center;color:var(--text3);font-size:13px;">Trend data will appear once sufficient application history is available.</div></div>');
   document.getElementById('kpi-section-risk').innerHTML = riskHtml;
 
   // ── Section 3: AI Performance ──
-  var aiHtml = '<div class="kpi-section-header"><span class="kpi-section-icon">🤖</span><div class="kpi-section-title">AI Engine Performance</div><div class="kpi-section-subtitle">' + periodLabel + '</div></div>' +
+  var aiHtml;
+  if (ARIE_ENV !== 'demo') {
+    aiHtml = '<div class="kpi-section-header"><span class="kpi-section-icon">🤖</span><div class="kpi-section-title">AI Engine Performance</div><div class="kpi-section-subtitle">' + periodLabel + '</div></div>' +
+      '<div style="text-align:center;padding:40px 20px;color:var(--text3);">' +
+      '<div style="font-size:14px;">AI performance metrics will appear here once sufficient agent execution data is collected.</div></div>';
+  } else {
+  aiHtml = '<div class="kpi-section-header"><span class="kpi-section-icon">🤖</span><div class="kpi-section-title">AI Engine Performance</div><div class="kpi-section-subtitle">' + periodLabel + '</div></div>' +
     '<div class="kpi-grid">' +
       '<div class="kpi-card green"><div class="kpi-card-label">Doc Verification Pass Rate</div>' +
         '<div class="kpi-card-value" style="color:var(--green);">87.3%</div>' +
@@ -4605,6 +4651,7 @@ function renderKPIDashboard() {
             agentPerfRow('📋','Agent 10: Ongoing Compliance Review Agent', nMonitoring, '3.1s', '91.7%', 1, '100%', 'green');
         })() +
       '</tbody></table></div>';
+  } // end demo-only AI performance block
   document.getElementById('kpi-section-ai').innerHTML = aiHtml;
 
   // ── Section 4: Team Productivity ──
@@ -5718,6 +5765,17 @@ function generateAgentHealthData() {
 }
 
 function renderAgentHealth() {
+  // Non-demo: show placeholder — no real agent health metrics available yet
+  if (ARIE_ENV !== 'demo') {
+    document.getElementById('ah-summary-stats').innerHTML =
+      '<div style="text-align:center;padding:60px 20px;color:var(--text3);">' +
+      '<div style="font-size:48px;margin-bottom:16px;">📊</div>' +
+      '<div style="font-size:16px;font-weight:600;margin-bottom:8px;">Agent Health Monitoring Not Yet Active</div>' +
+      '<div style="font-size:13px;">Agent execution metrics will appear here once the monitoring pipeline is operational.</div>' +
+      '</div>';
+    return;
+  }
+
   var data = generateAgentHealthData();
   var enabledData = data.filter(function(d) { return d.enabled; });
 
@@ -5976,8 +6034,8 @@ async function handleLogin(e) {
     try {
       resp = await boApiCall('POST', '/auth/officer/login', { email: email, password: password });
     } catch(apiErr) {
-      // Backend not running — use demo/offline mode
-      if (demoUser && (password === DEMO_PASSWORD || password === 'admin123')) {
+      // Backend not running — demo/offline mode (only allowed in demo environment)
+      if (ARIE_ENV === 'demo' && demoUser && (password === DEMO_PASSWORD || password === 'admin123')) {
         isOffline = true;
         resp = {
           token: 'demo_' + btoa(email + ':' + Date.now()),
@@ -6008,7 +6066,7 @@ async function handleLogin(e) {
     hideLoginScreen();
     showToast(isOffline ? 'Demo Mode — Welcome, ' + currentUser.name : 'Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
-    errText.textContent = 'Invalid email or password. Try: Onboarda2026!';
+    errText.textContent = ARIE_ENV === 'demo' ? 'Invalid email or password. Try: Onboarda2026!' : 'Invalid email or password.';
     errEl.classList.add('show');
   } finally {
     submitBtn.disabled = false;
@@ -6085,7 +6143,7 @@ function toggleDimExplain(idx) {
 var REG_DOCUMENTS = [];
 var REG_CURRENT_DOC_ID = null;
 
-// --- SAMPLE SEED DATA (2 pre-loaded regulatory documents) ---
+// --- SAMPLE SEED DATA (cleared in non-demo via applyEnvironmentUI) ---
 (function seedRegData() {
   REG_DOCUMENTS = [
     {

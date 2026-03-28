@@ -56,11 +56,11 @@ def init_pg_pool():
                 "Install it with: pip install psycopg2-binary --break-system-packages"
             )
         _pg_pool = psycopg2.pool.ThreadedConnectionPool(
-            2, 10,
+            1, 5,
             DATABASE_URL,
             sslmode='require'
         )
-        logger.info("PostgreSQL connection pool initialized")
+        logger.info("PostgreSQL connection pool initialized (minconn=1, maxconn=5)")
 
 
 def close_pg_pool():
