@@ -57,10 +57,10 @@ jobs:
           SECRET_KEY: ci-test-secret-key
           ADMIN_INITIAL_PASSWORD: CITestPassword123
         run: |
-          COUNT=$(pytest tests/ --ignore=tests/test_pdf_generator.py --co -q 2>/dev/null | tail -1 | grep -oP '^\d+')
+          COUNT=$(pytest tests/ --ignore=tests/test_pdf_generator.py --co -q 2>/dev/null | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+' | head -1)
           echo "Test count: $COUNT"
-          if [ "$COUNT" -lt 150 ]; then
-            echo "FAIL: Only $COUNT tests found. Minimum 150 required."
+          if [ -z "$COUNT" ] || [ "$COUNT" -lt 150 ]; then
+            echo "FAIL: Only ${COUNT:-0} tests found. Minimum 150 required."
             exit 1
           fi
           echo "PASS: $COUNT tests (>= 150 minimum)"
