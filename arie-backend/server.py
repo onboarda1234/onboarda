@@ -10,10 +10,12 @@ Run:  python server.py
 Env:  PORT=8080 SECRET_KEY=your-secret DB_PATH=./arie.db
 """
 
-import os, sys, json, uuid, time, hashlib, hmac, re, sqlite3, base64, logging, secrets, io
+import os, sys, json, uuid, time, hashlib, hmac, re, sqlite3, base64, logging, secrets, io, smtplib
 from dotenv import load_dotenv
 load_dotenv()  # Load .env before any config reads
 from datetime import datetime, timedelta
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # Unified configuration — single source of truth for all env vars
 from config import (
@@ -122,6 +124,7 @@ from validation_engine import (
 )
 from supervisor_engine import run_memo_supervisor
 from memo_handler import build_compliance_memo
+from branding import BRAND
 
 # Sprint 3: Server-side PDF generation
 try:
@@ -191,6 +194,8 @@ if USE_POSTGRES:
         sys.exit(1)
 
 UPLOAD_DIR = _CFG_UPLOAD_DIR
+RESOURCE_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "resources")
+REGULATORY_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "regulatory_intelligence")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..")  # Serves from arie-backend parent
 MAX_UPLOAD_MB = 10
 TOKEN_EXPIRY_HOURS = 24
@@ -219,6 +224,202 @@ def mask_email(email: str) -> str:
     return f"{local[0]}***@{domain}"
 
 
+def hash_reset_token(token: str) -> str:
+    """Hash password reset tokens before storing them."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def build_regulatory_analysis(doc: dict) -> dict:
+    """Deterministic backend analysis for regulatory intelligence documents."""
+    text = str(doc.get("source_text") or "").lower()
+    title = str(doc.get("title") or "regulatory document")
+    regulator = str(doc.get("regulator") or "Unknown regulator")
+    jurisdiction = str(doc.get("jurisdiction") or "Unknown jurisdiction")
+    doc_type = str(doc.get("doc_type") or "Document")
+    effective_date = str(doc.get("effective_date") or "") or "TBD"
+
+    keyword_groups = {
+        "onboarding": ["onboard", "application", "client", "customer"],
+        "kyc": ["kyc", "document", "verification", "identity"],
+        "sanctions": ["sanction", "pep", "list", "designation", "watchlist"],
+        "riskScoring": ["risk", "score", "rating", "classification"],
+        "edd": ["edd", "enhanced", "due diligence", "high risk"],
+        "monitoring": ["monitor", "periodic", "ongoing", "review cycle", "review"],
+        "reporting": ["report", "fiu", "disclosure", "suspicious", "filing"],
+    }
+    affected_areas = {area: any(term in text for term in terms) for area, terms in keyword_groups.items()}
+    if not any(affected_areas.values()):
+        affected_areas["onboarding"] = True
+
+    suggestions = []
+
+    def add_suggestion(suggestion_type: str, short_text: str, detail: str):
+        suggestion_id = f"S{len(suggestions) + 1:03d}"
+        suggestions.append({
+            "id": suggestion_id,
+            "type": suggestion_type,
+            "text": short_text,
+            "detail": detail,
+            "status": "pending",
+            "reviewedBy": None,
+            "reviewedAt": None,
+            "notes": "",
+        })
+
+    if affected_areas["riskScoring"]:
+        add_suggestion(
+            "modify",
+            "Review and update risk scoring parameters based on new guidance",
+            "The update references risk assessment methodology. Review whether current RegMind scoring dimensions and thresholds capture the new risk factors, and document any approved model changes before deployment.",
+        )
+    if affected_areas["sanctions"]:
+        add_suggestion(
+            "flag",
+            "Update screening lists and sanctions interpretation controls",
+            "The update references sanctions, PEP, or designation changes. Confirm source lists and screening interpretation controls are aligned before relying on automated screening outcomes.",
+        )
+    if affected_areas["kyc"]:
+        add_suggestion(
+            "add",
+            "Review onboarding document requirements and verification checks",
+            "The update introduces or affects documentary obligations. Review onboarding checklists and automated document verification controls so required evidence is collected and validated consistently.",
+        )
+    if affected_areas["reporting"]:
+        add_suggestion(
+            "add",
+            "Assess reporting thresholds and filing workflows",
+            "The update appears to introduce or change reporting obligations. Validate whether SAR/FIU or equivalent filing workflows, thresholds, and turnaround expectations require configuration changes.",
+        )
+    if "jurisdict" in text or "country" in text or "grey" in text or "black" in text:
+        add_suggestion(
+            "flag",
+            "Review country risk references and affected-client exposure",
+            "The update affects jurisdictional treatment. Review country risk references and identify existing clients or onboarding cases with exposure to the affected jurisdictions.",
+        )
+    if affected_areas["edd"]:
+        add_suggestion(
+            "escalate",
+            "Review EDD trigger criteria and escalation routing",
+            "The update affects enhanced due diligence expectations. Confirm EDD triggers, officer routing, and approval gating remain aligned with the new obligations.",
+        )
+    if affected_areas["monitoring"]:
+        add_suggestion(
+            "modify",
+            "Review monitoring cadence and ongoing review rules",
+            "The update affects monitoring or review obligations. Confirm periodic review frequency, alerting, and monitoring procedures are aligned before relying on current settings.",
+        )
+    if not suggestions:
+        add_suggestion(
+            "modify",
+            "Perform documented gap assessment against current compliance procedures",
+            "A manual gap assessment is recommended to confirm whether this update changes onboarding, screening, memo, or monitoring controls before the effective date.",
+        )
+        add_suggestion(
+            "add",
+            "Brief compliance staff and record implementation decisions",
+            "Document the implementation decision, obtain human approval for any policy changes, and brief the compliance team before the update takes effect.",
+        )
+
+    client_types = [f"All regulated entities under {regulator}"]
+    if affected_areas["sanctions"]:
+        client_types.append("Clients with exposure to designated jurisdictions or persons")
+    if affected_areas["edd"]:
+        client_types.append("High-risk and very high-risk clients")
+    if affected_areas["riskScoring"]:
+        client_types.append("Clients whose onboarding risk classification may change")
+    if affected_areas["monitoring"]:
+        client_types.append("Clients subject to enhanced or periodic review obligations")
+    if "payment" in text:
+        client_types.append("Payment institutions and money service businesses")
+    if "fund" in text or "invest" in text:
+        client_types.append("Investment funds and asset managers")
+
+    obligations = [
+        f"Review and assess the regulatory requirements outlined in {title}",
+        "Determine applicability to RegMind's current client base, controls, and operating procedures",
+        f"Implement any approved changes before the effective date ({effective_date})",
+        "Brief the compliance team and retain an implementation audit trail",
+        "Record the final implementation decision with human approval",
+    ]
+
+    impacted_labels = [label for label, hit in affected_areas.items() if hit]
+    if impacted_labels:
+        if len(impacted_labels) == 1:
+            impacted_text = impacted_labels[0]
+        else:
+            impacted_text = ", ".join(impacted_labels[:-1]) + " and " + impacted_labels[-1]
+    else:
+        impacted_text = "onboarding"
+
+    # Heuristic confidence: base 35, +4 per suggestion, +3 per area hit, capped at 82.
+    # Intentionally conservative — this is keyword matching, not semantic analysis.
+    confidence = min(82, 35 + (len(suggestions) * 4) + sum(3 for hit in affected_areas.values() if hit))
+
+    return {
+        "summary": (
+            f"This {doc_type.lower()} from {regulator} ({jurisdiction}) introduces changes affecting {impacted_text}. "
+            f"{len(suggestions)} implementation suggestion(s) require human review before any control changes are made."
+        ),
+        "keyObligations": obligations,
+        "affectedAreas": affected_areas,
+        "suggestions": suggestions,
+        "affectedClientTypes": client_types,
+        "confidence": confidence,
+        "analysedAt": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+        "analysisSource": "backend_rule_assisted",
+        "humanReviewRequired": True,
+    }
+
+
+def build_regulatory_workflow_state(doc: dict) -> str:
+    """Return a truthful UI workflow state for regulatory intelligence records."""
+    status = str(doc.get("status") or "")
+    analysis_source = str(doc.get("analysis_source") or "")
+    source_text = bool(doc.get("source_text"))
+    file_name = bool(doc.get("file_name"))
+
+    if analysis_source == "manual_review_required" or status == "review_required":
+        return "manual_text_required"
+    if analysis_source == "backend_rule_assisted" or status == "analysed":
+        return "heuristic_review"
+    if file_name or source_text or status == "uploaded":
+        return "stored_only"
+    # Conservative default: unknown records should not appear as "analysis available".
+    return "stored_only"
+
+
+def send_portal_email(to_addr: str, subject: str, text_body: str) -> bool:
+    """Send a transactional portal email via SMTP if configured."""
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = int(os.environ.get("SMTP_PORT", 587))
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_password = os.environ.get("SMTP_PASSWORD")
+    smtp_from = BRAND.get("email_from_address") or smtp_user
+    smtp_from_name = BRAND.get("email_from_name") or "Onboarda"
+
+    if not smtp_host or not smtp_user:
+        logger.warning("SMTP not configured. Transactional email not sent: %s", subject)
+        return False
+
+    msg = MIMEMultipart()
+    msg["From"] = f"{smtp_from_name} <{smtp_from}>"
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg.attach(MIMEText(text_body, "plain"))
+
+    try:
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.starttls()
+        if smtp_password:
+            server.login(smtp_user, smtp_password)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as exc:
+        logger.error("Transactional email failed for %s: %s", mask_email(to_addr), exc)
+        return False
+
+
 def _safe_verification_status(checks: list, raw_status: str = None) -> str:
     """
     Improvement 9: No Result = No Pass.
@@ -238,6 +439,8 @@ def _safe_verification_status(checks: list, raw_status: str = None) -> str:
     return raw_status or "not_run"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(RESOURCE_UPLOAD_DIR, exist_ok=True)
+os.makedirs(REGULATORY_UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
 # ── C-02: PII Encryption Initialization ──────────────────────
@@ -778,18 +981,30 @@ class ForgotPasswordHandler(BaseHandler):
 
         # Generate reset token and expiry (1 hour)
         reset_token = secrets.token_urlsafe(32)
+        reset_token_hash = hash_reset_token(reset_token)
         expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
         db.execute("UPDATE clients SET password_reset_token=?, password_reset_expires=? WHERE id=?",
-                   (reset_token, expires, client["id"]))
+                   (reset_token_hash, expires, client["id"]))
         db.commit()
         db.close()
 
-        logger.info(f"Password reset token generated for {mask_email(email)}: {reset_token}")
-
         from config import IS_PRODUCTION
         result = {"message": "If that email is registered, a reset link has been sent."}
+        portal_base = os.environ.get("PORTAL_BASE_URL") or BRAND.get("website") or ""
+        reset_link = f"{portal_base.rstrip('/')}/?reset_token={reset_token}" if portal_base else ""
+        email_body = (
+            "A password reset was requested for your Onboarda portal account.\n\n"
+            f"Use this reset token: {reset_token}\n\n"
+            + (f"Reset link: {reset_link}\n\n" if reset_link else "")
+            + "This token will expire in 1 hour. If you did not request this change, you can ignore this email."
+        )
+        email_sent = send_portal_email(email, "Onboarda password reset", email_body)
+
         if not IS_PRODUCTION:
             result["reset_token"] = reset_token  # Only expose token in non-production
+            if reset_link:
+                result["reset_link"] = reset_link
+        result["email_sent"] = bool(email_sent)
         self.success(result)
 
 
@@ -810,10 +1025,11 @@ class ResetPasswordHandler(BaseHandler):
         if not is_valid:
             return self.error(f"Password policy violation: {pw_error}", 400)
 
+        token_hash = hash_reset_token(token)
         db = get_db()
         client = db.execute(
             "SELECT id, email, password_reset_token, password_reset_expires FROM clients WHERE password_reset_token = ?",
-            (token,)
+            (token_hash,)
         ).fetchone()
 
         if not client:
@@ -860,6 +1076,10 @@ class ClientChangePasswordHandler(BaseHandler):
         if not client or not bcrypt.checkpw(current.encode(), client["password_hash"].encode()):
             db.close()
             return self.error("Current password is incorrect", 401)
+        is_valid, pw_error = PasswordPolicy.validate(new_pw)
+        if not is_valid:
+            db.close()
+            return self.error(f"Password policy violation: {pw_error}", 400)
         new_hash = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
         db.execute("UPDATE clients SET password_hash=? WHERE id=?", (new_hash, user.get("sub")))
         db.commit()
@@ -965,7 +1185,7 @@ class ApplicationsHandler(BaseHandler):
         """, (
             app_id, ref,
             user["sub"] if user["type"] == "client" else data.get("client_id"),
-            data.get("company_name", ""),
+            data.get("company_name") or data.get("entity_name", ""),
             data.get("brn", ""),
             data.get("country", ""),
             data.get("sector", ""),
@@ -1831,6 +2051,18 @@ class DocumentUploadHandler(BaseHandler):
                 logger.warning(f"S3 upload failed for {doc_id}: {e}. Falling back to local storage.")
                 s3_key = None
 
+        if ENVIRONMENT == "production" and not s3_key:
+            db.close()
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except OSError as cleanup_err:
+                logger.warning(f"Failed to clean up local file after storage error for {doc_id}: {cleanup_err}")
+            return self.error(
+                "Document storage is temporarily unavailable. Please retry once durable storage is restored.",
+                503
+            )
+
         doc_type = self.get_argument("doc_type", "general")
         person_id = self.get_argument("person_id", None)
 
@@ -2210,12 +2442,16 @@ class DocumentDownloadHandler(BaseHandler):
         if s3_key and HAS_S3:
             try:
                 s3 = get_s3_client()
-                success, url_or_error = s3.get_presigned_url(
+                success, url_or_error = s3.get_presigned_url_with_ownership(
                     key=s3_key,
+                    requesting_user_id=user.get("sub", ""),
+                    requesting_user_role=user.get("role") or user.get("type", ""),
+                    db_connection=db,
                     expiry=900,
                     response_filename=doc["doc_name"]
                 )
                 if success:
+                    db.close()
                     self.log_audit(user, "Download", app["ref"], f"Document downloaded via S3: {doc['doc_name']}")
                     return self.success({"download_url": url_or_error, "source": "s3", "expires_in": 900})
                 else:
@@ -2224,6 +2460,7 @@ class DocumentDownloadHandler(BaseHandler):
                 logger.warning(f"S3 download failed for {doc_id}: {e}. Falling back to local.")
 
         # Fall back to local file
+        db.close()
         file_path = doc["file_path"]
         if file_path and not os.path.isabs(file_path):
             file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
@@ -2236,6 +2473,566 @@ class DocumentDownloadHandler(BaseHandler):
         with open(file_path, "rb") as f:
             self.write(f.read())
         self.log_audit(user, "Download", app["ref"], f"Document downloaded locally: {doc['doc_name']}")
+        self.finish()
+
+
+# ══════════════════════════════════════════════════════════
+# COMPLIANCE RESOURCES ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class ComplianceResourcesHandler(BaseHandler):
+    """GET/POST /api/resources — list and upload compliance reference resources"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        rows = db.execute("""
+            SELECT r.id, r.slug, r.title, r.description, r.category, r.resource_type, r.file_name,
+                   r.mime_type, r.file_size, r.created_at, r.updated_at, r.uploaded_by,
+                   u.full_name AS uploaded_by_name
+            FROM compliance_resources r
+            LEFT JOIN users u ON r.uploaded_by = u.id
+            ORDER BY
+                CASE WHEN r.resource_type = 'system' THEN 0 ELSE 1 END,
+                r.created_at DESC,
+                r.title ASC
+        """).fetchall()
+        db.close()
+        self.success({"resources": [dict(r) for r in rows]})
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not self.check_rate_limit("resource_upload", max_attempts=20, window_seconds=60):
+            return
+
+        files = self.request.files.get("files") or self.request.files.get("file") or []
+        if not files:
+            return self.error("No file provided", 400)
+
+        uploaded = []
+        db = get_db()
+        try:
+            for file_info in files:
+                filename = os.path.basename(file_info["filename"] or "")
+                body = file_info["body"]
+                content_type = file_info.get("content_type", "application/octet-stream")
+
+                if not filename:
+                    continue
+                if len(body) > 25 * 1024 * 1024:
+                    return self.error(f"File exceeds 25MB limit: {filename}", 400)
+
+                is_valid, upload_error = FileUploadValidator.validate(filename, content_type, body)
+                if not is_valid:
+                    return self.error(f"File rejected: {upload_error}", 400)
+
+                resource_id = uuid.uuid4().hex[:16]
+                ext = os.path.splitext(filename)[1]
+                safe_name = f"{resource_id}{ext}"
+                file_path = os.path.join(RESOURCE_UPLOAD_DIR, safe_name)
+
+                with open(file_path, "wb") as f:
+                    f.write(body)
+
+                db.execute("""
+                    INSERT INTO compliance_resources
+                    (id, title, description, category, resource_type, file_name, file_path, mime_type, file_size, uploaded_by, updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                """, (
+                    resource_id,
+                    filename,
+                    "Uploaded via back-office resources library.",
+                    "internal",
+                    "uploaded",
+                    filename,
+                    file_path,
+                    content_type,
+                    len(body),
+                    user.get("sub", ""),
+                ))
+
+                uploaded.append({
+                    "id": resource_id,
+                    "title": filename,
+                    "file_name": filename,
+                    "file_size": len(body),
+                    "mime_type": content_type,
+                })
+
+            db.commit()
+        finally:
+            db.close()
+
+        for resource in uploaded:
+            self.log_audit(user, "Upload", "Resources", f"Compliance resource uploaded: {resource['file_name']}")
+
+        self.success({"uploaded": uploaded, "count": len(uploaded)}, 201)
+
+
+class ComplianceResourceDownloadHandler(BaseHandler):
+    """GET /api/resources/:id/download — download a compliance resource"""
+    def get(self, resource_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        resource = db.execute("SELECT * FROM compliance_resources WHERE id = ? OR slug = ?", (resource_id, resource_id)).fetchone()
+        db.close()
+        if not resource:
+            return self.error("Resource not found", 404)
+
+        file_path = resource["file_path"]
+        if not file_path:
+            return self.error("Resource file is not configured", 404)
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(STATIC_DIR, file_path)
+        if not os.path.exists(file_path):
+            return self.error("Resource file not found on server", 404)
+
+        self.set_header("Content-Type", resource.get("mime_type") or "application/octet-stream")
+        self.set_header("Content-Disposition", f'attachment; filename="{resource["file_name"]}"')
+        with open(file_path, "rb") as f:
+            self.write(f.read())
+        self.log_audit(user, "Download", "Resources", f"Compliance resource downloaded: {resource['file_name']}")
+        self.finish()
+
+
+# ══════════════════════════════════════════════════════════
+# REGULATORY INTELLIGENCE ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class RegulatoryIntelligenceHandler(BaseHandler):
+    """GET/POST /api/regulatory-intelligence — persisted regulatory document workflow"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        rows = db.execute("""
+            SELECT d.*, u.full_name AS uploaded_by_name
+            FROM regulatory_documents d
+            LEFT JOIN users u ON d.uploaded_by = u.id
+            ORDER BY d.created_at DESC, d.title ASC
+        """).fetchall()
+        db.close()
+
+        documents = []
+        for row in rows:
+            doc = dict(row)
+            for key, default in (("analysis_summary", {}), ("audit_trail", [])):
+                try:
+                    raw_value = doc.get(key)
+                    if raw_value is None:
+                        doc[key] = default
+                    elif isinstance(raw_value, (dict, list)):
+                        doc[key] = raw_value
+                    else:
+                        doc[key] = safe_json_loads(raw_value)
+                except (json.JSONDecodeError, TypeError):
+                    doc[key] = default
+            doc["workflow_state"] = build_regulatory_workflow_state(doc)
+            documents.append(doc)
+
+        self.success({"documents": documents})
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        if not self.check_rate_limit("regulatory_upload", max_attempts=10, window_seconds=60):
+            return
+
+        title = (self.get_body_argument("title", "") or "").strip()
+        regulator = (self.get_body_argument("regulator", "") or "").strip()
+        jurisdiction = (self.get_body_argument("jurisdiction", "") or "").strip()
+        doc_type = (self.get_body_argument("doc_type", "") or "").strip()
+        publication_date = (self.get_body_argument("publication_date", "") or "").strip()
+        effective_date = (self.get_body_argument("effective_date", "") or "").strip()
+        source_text = (self.get_body_argument("source_text", "") or "").strip()
+
+        if not title or not regulator or not jurisdiction or not doc_type:
+            return self.error("title, regulator, jurisdiction, and doc_type are required", 400)
+
+        file_info = None
+        files = self.request.files.get("file") or self.request.files.get("files") or []
+        if files:
+            file_info = files[0]
+
+        if not file_info and not source_text:
+            return self.error("Provide a file upload or pasted source_text for analysis", 400)
+
+        file_name = None
+        file_path = None
+        file_size = None
+        mime_type = None
+        s3_key = None
+
+        if file_info:
+            file_name = os.path.basename(file_info.get("filename") or "")
+            file_body = file_info.get("body") or b""
+            mime_type = file_info.get("content_type", "application/octet-stream")
+            if not file_name:
+                return self.error("Uploaded file must include a filename", 400)
+            if len(file_body) > 25 * 1024 * 1024:
+                return self.error("File exceeds 25MB limit", 400)
+
+            # Regulatory Intelligence accepts only PDF and DOCX (matches frontend).
+            reg_allowed_ext = {".pdf", ".docx"}
+            reg_allowed_mime = {
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            }
+            ext_check = os.path.splitext(file_name)[1].lower()
+            if ext_check not in reg_allowed_ext:
+                return self.error(f"Regulatory Intelligence accepts PDF and DOCX files only (got {ext_check})", 400)
+            if mime_type not in reg_allowed_mime:
+                return self.error(f"Regulatory Intelligence accepts PDF and DOCX files only", 400)
+
+            is_valid, upload_error = FileUploadValidator.validate(file_name, mime_type, file_body)
+            if not is_valid:
+                return self.error(f"File rejected: {upload_error}", 400)
+
+            doc_id = uuid.uuid4().hex[:16]
+            ext = os.path.splitext(file_name)[1]
+            safe_name = f"{doc_id}{ext}"
+            file_path = os.path.join(REGULATORY_UPLOAD_DIR, safe_name)
+            with open(file_path, "wb") as f:
+                f.write(file_body)
+            file_size = len(file_body)
+
+            if not source_text and mime_type.startswith("text/"):
+                try:
+                    source_text = file_body.decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    source_text = ""
+
+            if HAS_S3:
+                try:
+                    s3 = get_s3_client()
+                    success, key_or_error = s3.upload_document(
+                        file_data=file_body,
+                        client_id="regulatory-intelligence",
+                        doc_type="regulatory_intelligence",
+                        filename=safe_name,
+                        metadata={"content_type": mime_type, "original_name": file_name}
+                    )
+                    if success:
+                        s3_key = key_or_error
+                    else:
+                        logger.warning("Regulatory intelligence S3 upload failed: %s", key_or_error)
+                except Exception as e:
+                    logger.warning("Regulatory intelligence S3 upload failed: %s", e)
+
+            if ENVIRONMENT == "production" and not s3_key and file_info:
+                try:
+                    if file_path and os.path.exists(file_path):
+                        os.remove(file_path)
+                except OSError as cleanup_err:
+                    logger.warning("Failed to clean up regulatory upload after storage error: %s", cleanup_err)
+                return self.error("Regulatory document storage is temporarily unavailable. Please retry once durable storage is restored.", 503)
+        else:
+            doc_id = uuid.uuid4().hex[:16]
+
+        created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        audit_trail = [{"time": created_at, "action": f"Document uploaded by {user.get('name', 'Compliance Officer')}"}]
+
+        if source_text:
+            analysis_summary = build_regulatory_analysis({
+                "title": title,
+                "regulator": regulator,
+                "jurisdiction": jurisdiction,
+                "doc_type": doc_type,
+                "effective_date": effective_date,
+                "source_text": source_text,
+            })
+            status = "analysed"
+            audit_trail.append({
+                "time": analysis_summary["analysedAt"],
+                "action": f"Backend analysis completed — {len(analysis_summary.get('suggestions', []))} suggestions generated (confidence: {analysis_summary.get('confidence', 0)}%)"
+            })
+            analysis_source = analysis_summary.get("analysisSource", "backend_rule_assisted")
+        else:
+            analysis_summary = {
+                "summary": "Source document stored. Manual text extraction is required before structured regulatory analysis can be generated in this environment.",
+                "keyObligations": [],
+                "affectedAreas": {
+                    "onboarding": False, "kyc": False, "sanctions": False, "riskScoring": False,
+                    "edd": False, "monitoring": False, "reporting": False
+                },
+                "suggestions": [],
+                "affectedClientTypes": [],
+                "confidence": 0,
+                "analysedAt": None,
+                "analysisSource": "manual_review_required",
+                "humanReviewRequired": True,
+            }
+            status = "review_required"
+            analysis_source = "manual_review_required"
+            audit_trail.append({
+                "time": created_at,
+                "action": "Stored without text analysis — manual source text entry required before structured review."
+            })
+
+        db = get_db()
+        try:
+            db.execute("""
+                INSERT INTO regulatory_documents
+                (id, title, regulator, jurisdiction, doc_type, publication_date, effective_date,
+                 file_name, file_path, s3_key, mime_type, file_size, source_text, status,
+                 analysis_source, analysis_summary, audit_trail, uploaded_by, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+            """, (
+                doc_id,
+                title,
+                regulator,
+                jurisdiction,
+                doc_type,
+                publication_date or None,
+                effective_date or None,
+                file_name,
+                file_path,
+                s3_key,
+                mime_type,
+                file_size,
+                source_text or None,
+                status,
+                analysis_source,
+                json.dumps(analysis_summary),
+                json.dumps(audit_trail),
+                user.get("sub", ""),
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        self.log_audit(user, "Upload", "Regulatory Intelligence", f"Regulatory document uploaded: {title} ({status})")
+        self.success({
+            "id": doc_id,
+            "title": title,
+            "status": status,
+            "workflow_state": build_regulatory_workflow_state({
+                "status": status,
+                "analysis_source": analysis_source,
+                "source_text": source_text,
+                "file_name": file_name,
+            }),
+            "analysis_source": analysis_source,
+            "analysis_summary": analysis_summary,
+            "audit_trail": audit_trail,
+        }, 201)
+
+
+class RegulatoryIntelligenceReviewHandler(BaseHandler):
+    """POST /api/regulatory-intelligence/:id/review — persist suggestion review decisions"""
+    def post(self, document_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        suggestion_id = (data.get("suggestion_id") or "").strip()
+        decision = (data.get("decision") or "").strip().lower()
+        note = (data.get("note") or "").strip()
+
+        if not suggestion_id or decision not in ("approved", "rejected", "deferred"):
+            return self.error("suggestion_id and valid decision are required", 400)
+
+        db = get_db()
+        row = db.execute("SELECT * FROM regulatory_documents WHERE id = ?", (document_id,)).fetchone()
+        if not row:
+            db.close()
+            return self.error("Regulatory document not found", 404)
+
+        try:
+            raw_analysis = row.get("analysis_summary")
+            if raw_analysis is None:
+                analysis_summary = {}
+            elif isinstance(raw_analysis, dict):
+                analysis_summary = raw_analysis
+            else:
+                analysis_summary = safe_json_loads(raw_analysis)
+        except (json.JSONDecodeError, TypeError):
+            analysis_summary = {}
+        try:
+            raw_audit = row.get("audit_trail")
+            if raw_audit is None:
+                audit_trail = []
+            elif isinstance(raw_audit, list):
+                audit_trail = raw_audit
+            else:
+                audit_trail = safe_json_loads(raw_audit)
+        except (json.JSONDecodeError, TypeError):
+            audit_trail = []
+
+        suggestions = analysis_summary.get("suggestions") or []
+        suggestion = next((s for s in suggestions if s.get("id") == suggestion_id), None)
+        if not suggestion:
+            db.close()
+            return self.error("Suggestion not found on this regulatory document", 404)
+
+        reviewed_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        suggestion["status"] = decision
+        suggestion["reviewedBy"] = user.get("name", "Compliance Officer")
+        suggestion["reviewedAt"] = reviewed_at
+        suggestion["notes"] = note or suggestion.get("notes") or ""
+
+        audit_trail.append({
+            "time": reviewed_at,
+            "action": f"Suggestion {suggestion_id} {decision} by {user.get('name', 'Compliance Officer')}" + (f' — "{note}"' if note else "")
+        })
+
+        db.execute(
+            "UPDATE regulatory_documents SET analysis_summary = ?, audit_trail = ?, updated_at = datetime('now') WHERE id = ?",
+            (json.dumps(analysis_summary), json.dumps(audit_trail), document_id)
+        )
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "Review", "Regulatory Intelligence", f"Suggestion {suggestion_id} {decision} for document {document_id}")
+        self.success({"status": "recorded", "document_id": document_id, "suggestion": suggestion})
+
+
+class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
+    """POST /api/regulatory-intelligence/:id/source-text — attach manual source text and run structured review"""
+    def post(self, document_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        source_text = (data.get("source_text") or "").strip()
+        note = (data.get("note") or "").strip()
+        if not source_text:
+            return self.error("source_text is required", 400)
+
+        db = get_db()
+        row = db.execute("SELECT * FROM regulatory_documents WHERE id = ?", (document_id,)).fetchone()
+        if not row:
+            db.close()
+            return self.error("Regulatory document not found", 404)
+
+        row_dict = dict(row)
+        try:
+            raw_audit = row_dict.get("audit_trail")
+            if raw_audit is None:
+                audit_trail = []
+            elif isinstance(raw_audit, list):
+                audit_trail = raw_audit
+            else:
+                audit_trail = safe_json_loads(raw_audit)
+        except (json.JSONDecodeError, TypeError):
+            audit_trail = []
+
+        reviewed_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        analysis_summary = build_regulatory_analysis({
+            "title": row_dict.get("title"),
+            "regulator": row_dict.get("regulator"),
+            "jurisdiction": row_dict.get("jurisdiction"),
+            "doc_type": row_dict.get("doc_type"),
+            "effective_date": row_dict.get("effective_date"),
+            "source_text": source_text,
+        })
+        analysis_source = analysis_summary.get("analysisSource", "backend_rule_assisted")
+        prior_source_text = bool(row_dict.get("source_text"))
+
+        audit_trail.append({
+            "time": reviewed_at,
+            "action": (
+                f"Manual source text {'updated' if prior_source_text else 'added'} by {user.get('name', 'Compliance Officer')}" +
+                (f' — "{note}"' if note else "")
+            )
+        })
+        audit_trail.append({
+            "time": analysis_summary["analysedAt"],
+            "action": f"Structured review re-run using manual source text — {len(analysis_summary.get('suggestions', []))} suggestions generated (confidence: {analysis_summary.get('confidence', 0)}%)"
+        })
+
+        db.execute("""
+            UPDATE regulatory_documents
+            SET source_text = ?, status = ?, analysis_source = ?, analysis_summary = ?, audit_trail = ?, updated_at = datetime('now')
+            WHERE id = ?
+        """, (
+            source_text,
+            "analysed",
+            analysis_source,
+            json.dumps(analysis_summary),
+            json.dumps(audit_trail),
+            document_id,
+        ))
+        db.commit()
+        db.close()
+
+        self.log_audit(
+            user,
+            "Update",
+            "Regulatory Intelligence",
+            f"Manual source text {'updated' if prior_source_text else 'added'} and structured review re-run for document {document_id}"
+        )
+        self.success({
+            "id": document_id,
+            "status": "analysed",
+            "workflow_state": build_regulatory_workflow_state({
+                "status": "analysed",
+                "analysis_source": analysis_source,
+                "source_text": source_text,
+                "file_name": row_dict.get("file_name"),
+            }),
+            "analysis_source": analysis_source,
+            "analysis_summary": analysis_summary,
+            "audit_trail": audit_trail,
+            "source_text": source_text,
+        })
+
+
+class RegulatoryIntelligenceDownloadHandler(BaseHandler):
+    """GET /api/regulatory-intelligence/:id/download — download source document when a file exists"""
+    def get(self, document_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        row = db.execute("SELECT * FROM regulatory_documents WHERE id = ?", (document_id,)).fetchone()
+        db.close()
+        if not row:
+            return self.error("Regulatory document not found", 404)
+
+        s3_key = row.get("s3_key")
+        if s3_key and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, url_or_error = s3.get_presigned_url(
+                    key=s3_key,
+                    expiry=900,
+                    response_filename=row.get("file_name") or f"{document_id}.bin"
+                )
+                if success:
+                    self.log_audit(user, "Download", "Regulatory Intelligence", f"Downloaded regulatory document via S3: {row.get('title')}")
+                    return self.success({"download_url": url_or_error, "source": "s3", "expires_in": 900})
+            except Exception as e:
+                logger.warning("Regulatory intelligence download via S3 failed: %s", e)
+
+        file_path = row.get("file_path")
+        if not file_path:
+            return self.error("No source file is stored for this regulatory document", 404)
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(REGULATORY_UPLOAD_DIR, os.path.basename(file_path))
+        if not os.path.exists(file_path):
+            return self.error("Regulatory document file not found on server", 404)
+
+        self.set_header("Content-Type", row.get("mime_type") or "application/octet-stream")
+        self.set_header("Content-Disposition", f'attachment; filename="{row.get("file_name") or (document_id + ".bin")}"')
+        with open(file_path, "rb") as f:
+            self.write(f.read())
+        self.log_audit(user, "Download", "Regulatory Intelligence", f"Downloaded regulatory document locally: {row.get('title')}")
         self.finish()
 
 
@@ -2373,6 +3170,115 @@ class EnvironmentInfoHandler(BaseHandler):
     """GET /api/config/environment — return environment info for frontend"""
     def get(self):
         self.success(get_environment_info())
+
+
+class SystemSettingsHandler(BaseHandler):
+    """GET/PUT /api/config/system-settings"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        db = get_db()
+        row = db.execute("""
+            SELECT s.*, u.full_name as updated_by_name
+            FROM system_settings s
+            LEFT JOIN users u ON s.updated_by = u.id
+            WHERE s.id = 1
+        """).fetchone()
+        db.close()
+        if not row:
+            return self.success({
+                "company_name": "Onboarda Ltd",
+                "licence_number": "FSC-PIS-2024-001",
+                "default_retention_years": 7,
+                "auto_approve_max_score": 40,
+                "edd_threshold_score": 55,
+            })
+        self.success(dict(row))
+
+    def put(self):
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
+        data = self.get_json()
+        db = get_db()
+        current = db.execute("SELECT * FROM system_settings WHERE id=1").fetchone()
+        if current:
+            db.execute("""
+                UPDATE system_settings SET
+                    company_name=?,
+                    licence_number=?,
+                    default_retention_years=?,
+                    auto_approve_max_score=?,
+                    edd_threshold_score=?,
+                    updated_by=?,
+                    updated_at=datetime('now')
+                WHERE id=1
+            """, (
+                data.get("company_name", current["company_name"]),
+                data.get("licence_number", current["licence_number"]),
+                int(data.get("default_retention_years", current["default_retention_years"])),
+                int(data.get("auto_approve_max_score", current["auto_approve_max_score"])),
+                int(data.get("edd_threshold_score", current["edd_threshold_score"])),
+                user["sub"],
+            ))
+        else:
+            db.execute("""
+                INSERT INTO system_settings
+                (id, company_name, licence_number, default_retention_years, auto_approve_max_score, edd_threshold_score, updated_by, updated_at)
+                VALUES (1,?,?,?,?,?,?,datetime('now'))
+            """, (
+                data.get("company_name", "Onboarda Ltd"),
+                data.get("licence_number", "FSC-PIS-2024-001"),
+                int(data.get("default_retention_years", 7)),
+                int(data.get("auto_approve_max_score", 40)),
+                int(data.get("edd_threshold_score", 55)),
+                user["sub"],
+            ))
+        db.commit()
+        db.close()
+        self.log_audit(user, "Config", "System Settings", "System settings updated")
+        self.success({"status": "saved"})
+
+
+ROLE_PERMISSION_MATRIX = [
+    {"id": "view_dashboard", "label": "View dashboard", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "view_all_applications", "label": "View all applications", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "view_application_details", "label": "View application details", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "approve_low_medium", "label": "Approve applications (Low/Medium)", "roles": ["admin", "sco", "co"]},
+    {"id": "approve_high_very_high", "label": "Approve applications (High/Very High)", "roles": ["admin", "sco"]},
+    {"id": "reject_applications", "label": "Reject applications", "roles": ["admin", "sco", "co"]},
+    {"id": "request_more_information", "label": "Request more information", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "assign_reassign_cases", "label": "Assign / reassign cases", "roles": ["admin", "sco"]},
+    {"id": "escalate_to_sco", "label": "Escalate to Senior CO", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "view_compliance_memo", "label": "View compliance memo", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "override_ai_risk_score", "label": "Override AI risk score", "roles": ["admin", "sco"]},
+    {"id": "edd_review_signoff", "label": "EDD review & sign-off", "roles": ["admin", "sco"]},
+    {"id": "view_screening_results", "label": "View screening results", "roles": ["admin", "sco", "co", "analyst"]},
+    {"id": "view_reports_analytics", "label": "View reports & analytics", "roles": ["admin", "sco", "co"]},
+    {"id": "manage_users", "label": "Manage users", "roles": ["admin"]},
+    {"id": "manage_roles_permissions", "label": "Manage roles & permissions", "roles": ["admin"]},
+    {"id": "view_audit_trail", "label": "View audit trail", "roles": ["admin", "sco"]},
+    {"id": "system_settings", "label": "System settings", "roles": ["admin"]},
+]
+
+
+class RolesPermissionsHandler(BaseHandler):
+    """GET /api/config/roles-permissions — backend-owned RBAC matrix for UI/reference"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        self.success({
+            "roles": [
+                {"id": "admin", "label": "Administrator"},
+                {"id": "sco", "label": "Senior CO"},
+                {"id": "co", "label": "Compliance Officer"},
+                {"id": "analyst", "label": "Analyst"},
+            ],
+            "permissions": ROLE_PERMISSION_MATRIX,
+            "source": "backend_policy",
+        })
 
 
 # ══════════════════════════════════════════════════════════
@@ -2758,7 +3664,17 @@ class SaveResumeHandler(BaseHandler):
             return
         data = self.get_json()
         db = get_db()
-        existing = db.execute("SELECT id FROM client_sessions WHERE client_id=?", (user["sub"],)).fetchone()
+        app_id = data.get("application_id")
+        if app_id:
+            existing = db.execute(
+                "SELECT id FROM client_sessions WHERE client_id=? AND application_id=?",
+                (user["sub"], app_id)
+            ).fetchone()
+        else:
+            existing = db.execute(
+                "SELECT id FROM client_sessions WHERE client_id=? AND application_id IS NULL",
+                (user["sub"],)
+            ).fetchone()
         if existing:
             db.execute("UPDATE client_sessions SET form_data=?, last_step=?, application_id=?, updated_at=datetime('now') WHERE id=?",
                        (json.dumps(data.get("form_data",{})), data.get("last_step",0),
@@ -2967,8 +3883,8 @@ class APIStatusHandler(BaseHandler):
             },
             "anthropic": {
                 "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
-                "status": "live" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",
-                "description": "Claude AI — document verification, risk analysis, memo generation"
+                "status": "configured" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",
+                "description": "Claude-backed document verification and optional analysis paths; the live compliance memo approval path remains deterministic"
             },
             "environment": ENVIRONMENT,
         })
@@ -3560,37 +4476,39 @@ class MemoApproveHandler(BaseHandler):
 
         # Gate 2: Check validation status
         val_status = memo_row.get("validation_status") or "pending"
-        if val_status == "fail":
+        if val_status != "pass":
             db.close()
-            return self.error("Cannot approve memo with FAIL validation status. Fix issues and re-validate first.", 400)
+            return self.error(
+                f"Cannot approve memo with validation status '{val_status}'. "
+                "Validation must be PASS before memo approval.",
+                400
+            )
 
         # Gate 3: Check supervisor verdict from memo content
-        memo_content = memo_row.get("memo_content") or "{}"
+        # BUGFIX: column is memo_data, not memo_content
+        memo_data_raw = memo_row.get("memo_data") or "{}"
         try:
-            memo_data = safe_json_loads(memo_content)
+            memo_data = safe_json_loads(memo_data_raw)
         except (json.JSONDecodeError, TypeError):
             memo_data = {}
         metadata = memo_data.get("metadata", {})
-        supervisor_result = metadata.get("supervisor", {})
+        supervisor_result = memo_data.get("supervisor") or metadata.get("supervisor", {})
         supervisor_verdict = supervisor_result.get("verdict", "")
         can_approve = supervisor_result.get("can_approve", True)
         requires_sco = supervisor_result.get("requires_sco_review", False)
 
-        if supervisor_verdict == "INCONSISTENT" and not can_approve:
+        if supervisor_verdict != "CONSISTENT" or not can_approve:
             db.close()
-            return self.error("Cannot approve memo: Supervisor verdict is INCONSISTENT with unresolved contradictions.", 400)
+            return self.error(
+                f"Cannot approve memo with supervisor verdict '{supervisor_verdict or 'pending'}'. "
+                "Supervisor verdict must be CONSISTENT before memo approval.",
+                400
+            )
 
         # Gate 4: SCO review enforcement — if requires_sco_review, only SCO or admin can approve
         if requires_sco and user.get("role") not in ["sco", "admin"]:
             db.close()
             return self.error("This memo requires Senior Compliance Officer review before approval.", 403)
-
-        # Gate 5: Check rule engine violations
-        rule_engine = metadata.get("rule_engine", {})
-        rule_violations_data = rule_engine.get("violations", [])
-        if len(rule_violations_data) > 0 and supervisor_verdict == "INCONSISTENT":
-            db.close()
-            return self.error(f"Cannot approve memo with {len(rule_violations_data)} rule violation(s) and INCONSISTENT supervisor verdict.", 400)
 
         now_ts = datetime.now().isoformat()
         try:
@@ -3685,8 +4603,9 @@ class MemoPDFDownloadHandler(BaseHandler):
             "validation_status": memo_row.get("validation_status") or metadata.get("validation_status", "pending"),
             "quality_score": memo_row.get("quality_score") or metadata.get("quality_score", 0),
         }
+        stored_supervisor = memo_data.get("supervisor") or metadata.get("supervisor", {})
         supervisor_result = {
-            "verdict": memo_row.get("supervisor_status") or metadata.get("supervisor", {}).get("verdict", "N/A"),
+            "verdict": memo_row.get("supervisor_status") or stored_supervisor.get("verdict", "N/A"),
         }
 
         approved_by = memo_row.get("approved_by")
@@ -4054,6 +4973,54 @@ class MarkNotificationReadHandler(BaseHandler):
         db.close()
 
         self.success({"status": "marked_read"})
+
+
+class ClientStatusLookupHandler(BaseHandler):
+    """GET /api/status-lookup — Look up latest application status by reference and/or email"""
+    def get(self):
+        ref = self.get_argument("ref", "").strip()
+        email = self.get_argument("email", "").strip().lower()
+
+        if not ref and not email:
+            return self.error("ref or email is required", 400)
+
+        db = get_db()
+        query = """
+            SELECT a.id, a.ref, a.company_name, a.status, a.risk_level, a.risk_score, a.created_at, a.updated_at,
+                   c.email AS client_email
+            FROM applications a
+            LEFT JOIN clients c ON c.id = a.client_id
+            WHERE 1=1
+        """
+        params = []
+
+        if ref:
+            query += " AND a.ref = ?"
+            params.append(ref)
+        if email:
+            query += " AND LOWER(c.email) = ?"
+            params.append(email)
+
+        query += " ORDER BY a.updated_at DESC, a.created_at DESC LIMIT 1"
+        app = db.execute(query, params).fetchone()
+        db.close()
+
+        if not app:
+            return self.error("Application not found", 404)
+
+        self.success({
+            "application": {
+                "id": app["id"],
+                "ref": app["ref"],
+                "company_name": app["company_name"],
+                "status": app["status"],
+                "risk_level": app["risk_level"],
+                "risk_score": app["risk_score"],
+                "created_at": app["created_at"],
+                "updated_at": app["updated_at"],
+                "client_email": app["client_email"],
+            }
+        })
 
 
 # ══════════════════════════════════════════════════════════
@@ -4710,6 +5677,12 @@ def make_app():
         (r"/api/documents/([^/]+)/download", DocumentDownloadHandler),
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
         (r"/api/documents/ai-verify", DocumentAIVerifyHandler),
+        (r"/api/resources/([^/]+)/download", ComplianceResourceDownloadHandler),
+        (r"/api/resources", ComplianceResourcesHandler),
+        (r"/api/regulatory-intelligence/([^/]+)/download", RegulatoryIntelligenceDownloadHandler),
+        (r"/api/regulatory-intelligence/([^/]+)/source-text", RegulatoryIntelligenceSourceTextHandler),
+        (r"/api/regulatory-intelligence/([^/]+)/review", RegulatoryIntelligenceReviewHandler),
+        (r"/api/regulatory-intelligence", RegulatoryIntelligenceHandler),
 
         # Users
         (r"/api/users", UsersHandler),
@@ -4717,6 +5690,8 @@ def make_app():
 
         # Config
         (r"/api/config/risk-model", RiskConfigHandler),
+        (r"/api/config/system-settings", SystemSettingsHandler),
+        (r"/api/config/roles-permissions", RolesPermissionsHandler),
         (r"/api/config/ai-agents", AIAgentsHandler),
         (r"/api/config/ai-agents/([^/]+)", AIAgentDetailHandler),
         (r"/api/config/verification-checks", VerificationChecksHandler),
@@ -4748,6 +5723,7 @@ def make_app():
         # Client Notifications
         (r"/api/notifications", GetClientNotificationsHandler),
         (r"/api/notifications/([^/]+)/read", MarkNotificationReadHandler),
+        (r"/api/status-lookup", ClientStatusLookupHandler),
 
         # Monitoring
         (r"/api/monitoring/dashboard", MonitoringDashboardHandler),
