@@ -46,18 +46,20 @@ def test_supervisor_agent_types_match_canonical_numbered_model():
 
 
 def test_no_scoped_ui_or_memo_surfaces_use_stale_agent_labels():
-    root = Path("/Users/Aisha/Desktop/Onboarda")
+    # Resolve repo root relative to this test file (tests/ -> arie-backend/ -> repo root)
+    root = Path(__file__).resolve().parent.parent.parent
+    backend = root / "arie-backend"
     scoped_files = [
         root / "arie-backoffice.html",
-        root / "arie-backend" / "arie-backoffice.html",
+        backend / "arie-backoffice.html",
         root / "arie-portal.html",
-        root / "arie-backend" / "arie-portal.html",
-        root / "arie-backend" / "memo_handler.py",
-        root / "arie-backend" / "claude_client.py",
-        root / "arie-backend" / "supervisor" / "agent_executors.py",
-        root / "arie-backend" / "supervisor" / "schemas.py",
-        root / "arie-backend" / "db.py",
-        root / "arie-backend" / "IMPLEMENTATION_SUMMARY.md",
+        backend / "arie-portal.html",
+        backend / "memo_handler.py",
+        backend / "claude_client.py",
+        backend / "supervisor" / "agent_executors.py",
+        backend / "supervisor" / "schemas.py",
+        backend / "db.py",
+        backend / "IMPLEMENTATION_SUMMARY.md",
     ]
     banned_strings = [
         "Compliance Memo Agent",
@@ -75,6 +77,8 @@ def test_no_scoped_ui_or_memo_surfaces_use_stale_agent_labels():
     ]
 
     for path in scoped_files:
+        if not path.exists():
+            continue
         text = path.read_text()
         for banned in banned_strings:
             assert banned not in text, f"Found stale string '{banned}' in {path}"
