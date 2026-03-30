@@ -1,4 +1,3 @@
-from __future__ import annotations
 """
 S3 Client Helper Module for ARIE Finance Platform
 
@@ -9,6 +8,7 @@ Provides convenient methods for S3 operations:
 - delete_document: Soft delete with versioning
 - get_presigned_url: Generate temporary download URLs
 """
+from __future__ import annotations
 
 import os
 import json
