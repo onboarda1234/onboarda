@@ -295,6 +295,63 @@ class TestAuthenticatedAccess:
         assert detail_data["documents"][0]["reviewed_by"] == "admin001"
         assert detail_data["documents"][0]["reviewed_by_name"]
 
+    def test_application_detail_backfills_sparse_prescreening_from_saved_session(self, api_server):
+        """Authoritative detail should backfill sparse legacy prescreening JSON from saved portal session data."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                ownership_structure, prescreening_data, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "app_detail_backfill",
+            "ARF-2026-BACKFILL",
+            "testclient001",
+            "Legacy Backfill Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "Simple ownership",
+            json.dumps({"registered_entity_name": "Legacy Backfill Ltd"}),
+            "in_review"
+        ))
+        conn.execute("""
+            INSERT INTO client_sessions (client_id, application_id, form_data, last_step)
+            VALUES (?, ?, ?, ?)
+        """, (
+            "testclient001",
+            "app_detail_backfill",
+            json.dumps({
+                "prescreening": {
+                    "f-trade-name": "Legacy Trade Name",
+                    "f-source-wealth-type": "Business revenue / trading profits",
+                    "f-source-wealth": "Generated from software revenues.",
+                    "f-intro-method": "Introduced by partner",
+                    "f-mgmt": "Founder-led management team"
+                }
+            }),
+            2
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications/ARF-2026-BACKFILL",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["prescreening_data"]["trading_name"] == "Legacy Trade Name"
+        assert data["prescreening_data"]["source_of_wealth_type"] == "Business revenue / trading profits"
+        assert data["prescreening_data"]["introduction_method"] == "Introduced by partner"
+        assert data["prescreening_data"]["management_overview"] == "Founder-led management team"
+
 
 # ═══════════════════════════════════════════════════════════
 # 4. Security Headers — must be present on every response

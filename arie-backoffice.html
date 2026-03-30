@@ -2464,7 +2464,7 @@ async function loadFromAPI() {
           country: a.country || '',
           brn: a.brn || '',
           directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
-          ubos: (a.ubos || []).map(function(u) { return { id: u.person_key || u.id, name: u.full_name, pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
+          ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
           intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
           dims: dims,
           docs: backendDocuments.map(function(d) { return d.doc_type; }),
@@ -3710,7 +3710,7 @@ async function openAppDetail(ref, options) {
     return renderAuthoritativeAppDetail(detailApp, options);
   } catch (err) {
     console.error('Failed to load application detail:', err);
-    showToast('error', 'Detail Load Failed', err.message || 'Could not load the authoritative application detail.');
+    showToast('Detail load failed: ' + (err.message || 'Could not load application detail.'));
     return;
   }
 }

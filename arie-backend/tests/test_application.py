@@ -297,3 +297,74 @@ class TestDocuments:
         ).fetchall()
         assert len(docs) == 1
         assert docs[0]["verification_status"] == "pending"
+
+
+class TestLegacyNormalization:
+    def test_base64_wrapped_fernet_values_are_decrypted(self):
+        """Legacy base64-wrapped Fernet ciphertext must not leak into detail, risk, or memo views."""
+        from server import encrypt_pii_fields, decrypt_pii_fields
+
+        encrypted = encrypt_pii_fields({"nationality": "Mauritius"}, ["nationality"])
+        legacy_wrapped = json.loads(json.dumps({"nationality": encrypted["nationality"]}))
+        legacy_wrapped["nationality"] = __import__("base64").b64encode(
+            str(legacy_wrapped["nationality"]).encode("utf-8")
+        ).decode("utf-8")
+
+        decrypted = decrypt_pii_fields(legacy_wrapped, ["nationality"])
+        assert decrypted["nationality"] == "Mauritius"
+
+    def test_saved_session_prescreening_backfills_sparse_application_records(self):
+        """Legacy applications should surface material prescreening fields from saved portal sessions when DB JSON is sparse."""
+        from server import merge_prescreening_sources, normalize_saved_session_prescreening
+
+        form_data = {
+            "prescreening": {
+                "f-trade-name": "Legacy Trade",
+                "f-source-wealth-type": "Business revenue / trading profits",
+                "f-source-wealth": "Generated from software subscriptions.",
+                "f-intro-method": "Introduced by partner",
+                "f-mgmt": "Founder-led operations"
+            }
+        }
+        session_backfill = normalize_saved_session_prescreening(form_data)
+        merged = merge_prescreening_sources({}, session_backfill)
+
+        assert merged["trading_name"] == "Legacy Trade"
+        assert merged["source_of_wealth_type"] == "Business revenue / trading profits"
+        assert merged["source_of_wealth_detail"] == "Generated from software subscriptions."
+        assert merged["introduction_method"] == "Introduced by partner"
+        assert merged["management_overview"] == "Founder-led operations"
+
+    def test_zero_documents_do_not_generate_false_mitigant(self):
+        """Memo generation must not claim documents were received when none exist."""
+        from memo_handler import build_compliance_memo
+
+        app = {
+            "ref": "ARF-2026-NODOCS",
+            "company_name": "No Docs Ltd",
+            "brn": "C100",
+            "country": "Mauritius",
+            "sector": "Technology",
+            "entity_type": "SME",
+            "source_of_funds": "Operating revenue",
+            "expected_volume": "USD 50,000",
+            "ownership_structure": "Simple",
+            "risk_level": "LOW",
+            "risk_score": 22,
+            "assigned_to": "admin001",
+        }
+
+        memo, _, supervisor_result, _ = build_compliance_memo(
+            app,
+            [{"full_name": "Test Director", "nationality": "Mauritius", "is_pep": "No"}],
+            [{"full_name": "Test UBO", "nationality": "Mauritius", "ownership_pct": 100, "is_pep": "No"}],
+            []
+        )
+
+        mitigants = memo["sections"]["red_flags_and_mitigants"]["mitigants"]
+        red_flags = memo["sections"]["red_flags_and_mitigants"]["red_flags"]
+        assert not any("All required documents received" in item for item in mitigants)
+        assert any("no uploaded documents" in item.lower() for item in red_flags)
+        assert memo["metadata"]["document_count"] == 0
+        assert memo["metadata"]["documentation_complete"] is False
+        assert supervisor_result["can_approve"] is False

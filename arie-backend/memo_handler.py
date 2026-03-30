@@ -35,8 +35,10 @@ def build_compliance_memo(app, directors, ubos, documents):
     pep_directors = [d for d in directors if d.get("is_pep") == "Yes"]
     pep_ubos = [u for u in ubos if u.get("is_pep") == "Yes"]
     all_peps = pep_directors + pep_ubos
+    has_documents = len(documents) > 0
     verified_docs = [d for d in documents if d.get("verification_status") == "verified"]
     pending_docs = [d for d in documents if d.get("verification_status") != "verified"]
+    documentation_complete = has_documents and not pending_docs
     now_ts = datetime.now().isoformat()
     country = app["country"] or "Information not provided"
     sector = app["sector"] or "Information not provided"
@@ -48,7 +50,7 @@ def build_compliance_memo(app, directors, ubos, documents):
     # Build risk sub-section ratings based on app risk
     risk_level = app["risk_level"] or "MEDIUM"
     risk_score = app["risk_score"] or 50
-    doc_confidence = round(len(verified_docs) / max(len(documents), 1) * 100)
+    doc_confidence = round(len(verified_docs) / max(len(documents), 1) * 100) if has_documents else 0
 
     # Jurisdiction risk classification with reasoning
     # Constants imported from rule_engine.py (single source of truth)
@@ -65,7 +67,7 @@ def build_compliance_memo(app, directors, ubos, documents):
     biz_rating = "HIGH" if is_high_risk_sector else "MEDIUM" if (is_medium_risk_sector or is_minimum_medium_sector) else "LOW"
     fc_rating = "MEDIUM" if len(all_peps) > 0 else "LOW"
     tx_rating = risk_level  # Transaction risk mirrors overall application risk level
-    doc_rating = "LOW" if doc_confidence >= 80 else "MEDIUM" if doc_confidence >= 50 else "HIGH"
+    doc_rating = "HIGH" if not has_documents else "LOW" if doc_confidence >= 80 else "MEDIUM" if doc_confidence >= 50 else "HIGH"
     dq_rating = "LOW" if (sof != "Information not provided" and exp_vol != "Information not provided") else "MEDIUM"
 
     # ══════════════════════════════════════════════════════════
@@ -181,7 +183,9 @@ def build_compliance_memo(app, directors, ubos, documents):
     critical_gaps = []
     if not ubos:
         critical_gaps.append("no_ubo_data")
-    if pending_docs and len(pending_docs) >= 2:
+    if not has_documents:
+        critical_gaps.append("no_documents_uploaded")
+    elif pending_docs and len(pending_docs) >= 2:
         critical_gaps.append("multiple_docs_outstanding")
     if sof == "Information not provided":
         critical_gaps.append("source_of_funds_missing")
@@ -288,7 +292,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     f"The composite risk score of {risk_score}/100 (aggregated: {aggregated_risk}) reflects "
                     f"{'a balanced risk profile' if aggregated_risk == 'MEDIUM' else 'a low-risk profile with no material concerns' if aggregated_risk == 'LOW' else 'an elevated risk profile requiring enhanced scrutiny'}. "
                     f"Model confidence: {model_confidence}%"
-                    + (f" — reduced due to {'outstanding documentation and ' if pending_docs else ''}{'limited historical transaction data' if True else ''}. " if model_confidence < 80 else ". ")
+                    + (f" — reduced due to {'no uploaded documentation and ' if not has_documents else 'outstanding documentation and ' if pending_docs else ''}{'limited historical transaction data' if True else ''}. " if model_confidence < 80 else ". ")
                     + f"The principal risk drivers are "
                     + (f"the presence of {len(all_peps)} Politically Exposed Person(s) ({', '.join([p['full_name'] for p in all_peps])})" if all_peps else "")
                     + (f"{',' if all_peps else ''} ownership risk rated {own_rating} ({own_rating_justification})" if own_rating in ("HIGH", "MEDIUM") and own_risk_reasons else "")
@@ -299,8 +303,8 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + ("materially offset by " if aggregated_risk in ("LOW", "MEDIUM") else "insufficiently offset by ")
                     + (f"clean sanctions screening across all major consolidated lists, " if not all_peps else "")
                     + (f"a fully traceable beneficial ownership chain ({control_name} at {control_pct}%)" if primary_ubo and control_pct not in ("N/A", None, "", "0") else "beneficial ownership assessment")
-                    + f", and {len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence. "
-                    + (f"{len(pending_docs)} document(s) remain outstanding, representing a documentation gap that must be remedied within 14 business days. " if pending_docs else "")
+                    + (f", and {len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence. " if has_documents else ", and no uploaded documents are currently available to substantiate entity verification. ")
+                    + ("No documents have been uploaded, so entity verification remains incomplete and cannot be treated as a mitigant. " if not has_documents else f"{len(pending_docs)} document(s) remain outstanding, representing a documentation gap that must be remedied within 14 business days. " if pending_docs else "")
                     + (f"Note: model confidence of {model_confidence}% is below threshold — this is reflected in the conditional nature of the recommendation. " if low_confidence else "")
                     + f"Recommendation: {decision_label}"
                     + (f" — subject to {'PEP declaration and enhanced monitoring' if all_peps else 'standard conditions including enhanced monitoring due to reduced confidence' if low_confidence else 'standard conditions'}." if aggregated_risk in ("MEDIUM", "HIGH") else ".")
@@ -436,13 +440,16 @@ def build_compliance_memo(app, directors, ubos, documents):
                            else f"Not verified — {'document has been formally requested and must be received within 14 business days. This gap prevents full entity verification and is a material deficiency that elevates residual risk.' if d.get('verification_status') == 'missing' else 'verification status requires manual review by compliance officer.'}")
                         for d in documents
                     ])
+                    + (" No documents have been uploaded. Entity verification cannot be completed until the required corporate and identity documents are received and reviewed." if not has_documents else "")
                     + (f" Professional judgement: {len(pending_docs)} document(s) remain outstanding. "
                        + f"The absence of {'these critical documents' if len(pending_docs) > 1 else 'this document'} prevents complete entity verification "
                        + f"and {'materially weakens' if len(pending_docs) >= 2 else 'partially reduces'} the overall assurance level. "
                        + f"This deficiency is reflected as a condition of approval with a 14-business-day remediation deadline." if pending_docs
-                       else " All required documents have been received and verified. Document set is complete and internally consistent — high assurance in entity verification.")
+                       else " All required documents have been received and verified. Document set is complete and internally consistent — high assurance in entity verification." if documentation_complete else "")
                     + f" Overall documentation adequacy: {doc_confidence}%. "
-                    + (f"Documentation confidence is reduced due to {len(pending_docs)} outstanding item(s). "
+                    + ("Documentation confidence is 0% because no supporting documents have been uploaded yet. This is a material deficiency that prevents a fully supported onboarding recommendation."
+                       if not has_documents else
+                       f"Documentation confidence is reduced due to {len(pending_docs)} outstanding item(s). "
                        + f"Impact assessment: {'the documentation gap is material and would weaken regulatory defensibility of the compliance decision' if doc_confidence < 60 else 'documentation is partially complete but the gap must be remedied to achieve full compliance assurance'}."
                        if pending_docs else "Full documentation received — high confidence in entity verification. Documentation set meets regulatory expectations.")
                 )
@@ -454,6 +461,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     (f"{'High-risk' if is_high_risk_country else 'Offshore'} jurisdiction ({country}) — weight: 0.20, elevating baseline cross-border risk" if is_high_risk_country or is_offshore else None),
                     (f"{sector} sector — weight: 0.15, elevated inherent sector risk" if is_high_risk_sector or is_medium_risk_sector else None),
                     (f"Ownership risk: {own_rating} — {own_rating_justification}" if own_rating in ("HIGH", "MEDIUM") else None),
+                    ("No supporting documents uploaded — entity verification remains incomplete and documentation risk is elevated" if not has_documents else None),
                     (f"Documentation gap: {len(pending_docs)} document(s) outstanding, reducing verification confidence" if pending_docs else None),
                     ("Limited trading history — no historical transaction data for benchmarking" if True else None),
                 ] if f is not None],
@@ -463,7 +471,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     (f"Low sector risk — {sector} does not exhibit elevated ML/TF typology indicators" if not is_high_risk_sector and not is_medium_risk_sector else None),
                     ("Clean sanctions screening across all major consolidated lists (UN, EU, OFAC, HMT)" if not all_peps else "Screening completed — PEP(s) identified and flagged for enhanced measures"),
                     (f"Verified beneficial ownership traced to natural person level — {control_name} ({control_pct}%) exercises effective control" if primary_ubo and control_pct not in ("N/A", None, "", "0") else None),
-                    (f"Full documentation received and verified at {doc_confidence}% confidence" if not pending_docs and doc_confidence >= 80 else None),
+                    (f"Full documentation received and verified at {doc_confidence}% confidence" if documentation_complete and doc_confidence >= 80 else None),
                 ] if f is not None],
                 "factor_enforcement_applied": True,
                 "content": (
@@ -471,20 +479,20 @@ def build_compliance_memo(app, directors, ubos, documents):
                     f"Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group risk factor guidance. "
                     f"Overall risk score: {risk_score}/100 ({risk_level}). "
                     f"Model confidence: {max(60, doc_confidence - 5)}% — "
-                    + (f"confidence is reduced from baseline due to {'outstanding documentation and ' if pending_docs else ''}limited historical transaction data. " if doc_confidence < 100 else "high confidence based on complete documentation. ")
+                    + (f"confidence is reduced from baseline due to {'no uploaded documentation and ' if not has_documents else 'outstanding documentation and ' if pending_docs else ''}limited historical transaction data. " if doc_confidence < 100 else "high confidence based on complete documentation. ")
                     + f"Risk-increasing factors: "
                     + (f"(1) PEP presence ({len(all_peps)} identified) — weight: 0.25, elevating ownership risk due to FATF Recommendation 12 requirements. " if all_peps else "")
                     + (f"{'(2) ' if all_peps else '(1) '}{'High-risk' if is_high_risk_country else 'Offshore'} jurisdiction ({country}) — weight: 0.20, elevating baseline cross-border risk. " if is_high_risk_country or is_offshore else "")
                     + (f"{'(3) ' if all_peps and (is_high_risk_country or is_offshore) else '(2) ' if all_peps or (is_high_risk_country or is_offshore) else '(1) '}{sector} sector — weight: 0.15, elevated inherent sector risk. " if is_high_risk_sector or is_medium_risk_sector else "")
                     + (f"Ownership risk ({own_rating}): {own_rating_justification}. " if own_rating in ("HIGH", "MEDIUM") else "")
-                    + (f"Documentation gap: {len(pending_docs)} outstanding document(s) reduce verification confidence. " if pending_docs else "")
+                    + ("No uploaded documents are available, so documentation risk remains elevated and entity verification cannot be treated as complete. " if not has_documents else f"Documentation gap: {len(pending_docs)} outstanding document(s) reduce verification confidence. " if pending_docs else "")
                     + ("Limited trading history constrains forward-looking risk confidence. " if True else "")
                     + f"Risk-decreasing factors: "
                     + (f"(1) No PEP exposure — no contribution to ownership risk. " if not all_peps else "(1) PEP(s) identified and flagged for enhanced monitoring. ")
                     + (f"(2) Low jurisdictional risk — {country} maintains adequate AML/CFT frameworks. " if not is_high_risk_country and not is_offshore else "")
                     + (f"{'(3) ' if not is_high_risk_country and not is_offshore else '(2) '}{'Clean' if not all_peps else 'Completed'} sanctions screening across all major consolidated lists. " if True else "")
                     + (f"{'(4) ' if not is_high_risk_country and not is_offshore else '(3) '}Verified beneficial ownership to natural person level. " if primary_ubo and control_pct not in ("N/A", None, "", "0") else "")
-                    + (f"Full documentation at {doc_confidence}% confidence. " if not pending_docs and doc_confidence >= 80 else "")
+                    + (f"Full documentation at {doc_confidence}% confidence. " if documentation_complete and doc_confidence >= 80 else "")
                     + f"Decision pathway: Agent 1 (Identity & Document Integrity) -> Agent 2 (External Database Cross-Verification) -> Agent 3 (FinCrime Screening Interpretation) -> Agent 4 (Corporate Structure & UBO Mapping) -> Agent 5 (Compliance Memo & Risk Recommendation). "
                     + "Supervisor module: Contradiction detection and inter-agent consistency check. "
                     + "Monitoring pipeline: Agent 6 (Periodic Review Preparation) -> Agent 7 (Adverse Media & PEP Monitoring) -> Agent 8 (Behaviour & Risk Drift) -> Agent 9 (Regulatory Impact) -> Agent 10 (Ongoing Compliance Review)."
@@ -494,6 +502,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "title": "Red Flags & Mitigants",
                 "red_flags": (
                     [f"Politically Exposed Person identified: {p['full_name']}. {'Board membership confers governance influence and introduces corruption and undue influence risk per FATF Recommendation 12, requiring enhanced scrutiny.' if p in pep_directors else 'Direct ownership by a PEP significantly elevates control risk and the potential for proceeds of corruption to enter the financial system.'}" for p in all_peps]
+                    + (["No uploaded documents are available for corporate or identity verification. This prevents complete entity verification and materially weakens the evidential basis for approval."] if not has_documents else [])
                     + ([f"Documentation gap: {len(pending_docs)} of {len(documents)} required document(s) remain outstanding. This prevents complete entity verification and creates residual risk until remedied."] if pending_docs else [])
                     + ([f"Offshore jurisdiction: {country} retains characteristics of an international financial centre, elevating baseline risk for cross-border fund flows and regulatory arbitrage."] if is_offshore else [])
                     + ([f"High-risk jurisdiction: {country} is subject to comprehensive sanctions or FATF blacklisting, presenting severe jurisdictional risk."] if is_high_risk_country else [])
@@ -502,7 +511,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 ) or ["No material red flags identified. Standard monitoring applies."],
                 "mitigants": (
                     [f"PEP ({p['full_name']}) {'holds no direct ownership stake, reducing control risk. PEP declaration and enhanced monitoring will be applied as conditions of approval.' if p in pep_directors else 'has been identified and PEP declaration, source of wealth verification, and enhanced monitoring are required as conditions.'}" for p in all_peps]
-                    + ([f"Outstanding documents have been formally requested with a 14-business-day deadline. Failure to provide will trigger automatic escalation to Senior Compliance Officer. The {len(verified_docs)} documents already verified are internally consistent."] if pending_docs else [f"All required documents received and verified at {doc_confidence}% confidence, providing strong assurance of entity legitimacy."])
+                    + (["Document collection has been initiated, but no uploaded documents are yet available to support entity verification. Approval must remain conditional on document receipt and review."] if not has_documents else [f"Outstanding documents have been formally requested with a 14-business-day deadline. Failure to provide will trigger automatic escalation to Senior Compliance Officer. The {len(verified_docs)} documents already verified are internally consistent."] if pending_docs else [f"All required documents received and verified at {doc_confidence}% confidence, providing strong assurance of entity legitimacy."])
                     + ([f"{country} is currently compliant with FATF standards following completion of its action plan. The entity's business activity is consistent with the jurisdiction's commercial profile."] if is_offshore else [])
                     + [f"Sanctions screening completed across all major consolidated lists (UN, EU, OFAC, HMT) with {'no matches' if not all_peps else 'PEP identification and appropriate enhanced measures'}."]
                     + ([f"Beneficial ownership fully traced to natural person level via {struct_complexity.lower()} structure. {control_name} ({control_pct}%) confirmed as exercising effective control."] if primary_ubo else [])
@@ -515,15 +524,16 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "content": (
                     f"On the basis of the composite risk assessment ({risk_level} — {risk_score}/100), "
                     f"{'clean' if not all_peps else 'flagged'} screening results, "
-                    f"{'verified' if not pending_docs else 'partially verified'} documentation ({doc_confidence}% confidence), "
+                    f"{'unavailable' if not has_documents else 'verified' if not pending_docs else 'partially verified'} documentation ({doc_confidence}% confidence), "
                     f"and {'confirmed' if ubos else 'unverified'} beneficial ownership, "
                     f"this application is recommended for {decision_label}. "
                     + (f"The {'conditions' if risk_level in ('MEDIUM', 'HIGH') else 'recommendation'} reflect{'s' if risk_level == 'LOW' else ''} the residual risks identified — "
-                       f"{'principally the PEP exposure and ' if all_peps else ''}{'documentation gap' if pending_docs else 'limited trading history'}. " if risk_level != "LOW" else "The low-risk profile supports standard onboarding with no additional conditions. ")
+                       f"{'principally the PEP exposure and ' if all_peps else ''}{'absence of uploaded documents' if not has_documents else 'documentation gap' if pending_docs else 'limited trading history'}. " if risk_level != "LOW" else "The low-risk profile supports standard onboarding with no additional conditions. ")
                     + ("Conditions of approval: " if risk_level in ("MEDIUM", "HIGH") else "")
                     + (f"(1) {'PEP declaration form(s) must be completed and signed by ' + ', '.join([p['full_name'] for p in all_peps]) + ' within 14 business days. ' if all_peps else ''}" if risk_level != "LOW" else "")
-                    + (f"{'(2) ' if all_peps else '(1) '}Outstanding documents must be received within 14 business days. Failure to comply will trigger escalation. " if pending_docs and risk_level != "LOW" else "")
-                    + (f"{'(3) ' if all_peps and pending_docs else '(2) ' if all_peps or pending_docs else '(1) '}Enhanced monitoring ({mon_tier.lower()} tier) for the first 12 months. " if risk_level in ("MEDIUM", "HIGH", "VERY_HIGH") or all_peps else "")
+                    + (f"{'(2) ' if all_peps else '(1) '}All required corporate and identity documents must be uploaded and reviewed within 14 business days before the onboarding decision can be treated as fully supported. " if not has_documents and risk_level != "LOW" else "")
+                    + (f"{'(2) ' if all_peps else '(1) '}Outstanding documents must be received within 14 business days. Failure to comply will trigger escalation. " if has_documents and pending_docs and risk_level != "LOW" else "")
+                    + (f"{'(3) ' if all_peps and (pending_docs or not has_documents) else '(2) ' if all_peps or pending_docs or not has_documents else '(1) '}Enhanced monitoring ({mon_tier.lower()} tier) for the first 12 months. " if risk_level in ("MEDIUM", "HIGH", "VERY_HIGH") or all_peps else "")
                     + f"Residual risk acknowledgement: {'Residual risk remains manageable within the conditions framework and does not warrant rejection at this stage.' if risk_level in ('MEDIUM', 'HIGH') else 'Minimal residual risk identified.' if risk_level == 'LOW' else 'Residual risk is elevated and requires SCO determination before proceeding.'}"
                 )
             },
@@ -572,29 +582,34 @@ def build_compliance_memo(app, directors, ubos, documents):
             "supervisor_status": "pending",
             "ai_source": "deterministic" if not is_demo() else "demo",
             "approval_recommendation": decision,
+            "document_count": len(documents),
+            "verified_document_count": len(verified_docs),
+            "pending_document_count": len(pending_docs),
+            "documentation_complete": documentation_complete,
             "key_findings": [
                 f"Beneficial ownership {'traced to natural persons via ' + struct_complexity.lower() + ' structure — ' + control_name + ' (' + str(control_pct) + '%) exercises effective control' if primary_ubo else 'could not be verified — critical data gap'}",
                 f"{'PEP identified: ' + ', '.join([p['full_name'] + ' (' + ('Director' if p in pep_directors else 'UBO') + ')' for p in all_peps]) + '. Enhanced due diligence required.' if all_peps else 'No PEP exposure identified among directors or UBOs'}",
                 f"Sanctions and adverse media screening {'clear' if not all_peps else 'completed with PEP identification'} across all consolidated lists",
-                f"{len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence" + (f"; {len(pending_docs)} outstanding" if pending_docs else " — full documentation"),
+                ("No documents uploaded — entity verification remains incomplete" if not has_documents else f"{len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence" + (f"; {len(pending_docs)} outstanding" if pending_docs else " — full documentation")),
                 f"{'Business model assessed as plausible and consistent with regulatory authorisations' if sector != 'Information not provided' else 'Business model assessment limited by insufficient sector data'}",
                 f"{country} jurisdiction presents {'severe' if is_high_risk_country else 'moderate' if is_offshore else 'low'} risk — {'sanctions/FATF blacklist' if is_high_risk_country else 'offshore IFC classification' if is_offshore else 'adequate AML/CFT framework'}"
             ],
             "conditions": (
                 ([f"PEP declaration form(s) to be completed and signed by {', '.join([p['full_name'] for p in all_peps])} within 14 business days"] if all_peps else [])
+                + (["All required corporate and identity documents must be uploaded and reviewed before the onboarding recommendation can be relied upon"] if not has_documents else [])
                 + ([f"Outstanding documents ({', '.join([d.get('doc_type', 'document') for d in pending_docs])}) to be received within 14 business days — escalation on non-compliance"] if pending_docs else [])
                 + ([f"Enhanced monitoring ({mon_tier.lower()} tier) for first 12 months with quarterly transaction review"] if risk_level in ("MEDIUM", "HIGH", "VERY_HIGH") or all_peps else [])
                 + ([f"Bank reference letter required for PEP(s): {', '.join([p['full_name'] for p in all_peps])}"] if all_peps else [])
             ),
             "review_checklist": [
-                f"Company identity verified against registry — {'confirmed active' if verified_docs else 'pending verification'}",
+                f"Company identity verified against registry — {'confirmed active' if verified_docs else 'not yet evidenced by uploaded documents' if not has_documents else 'pending verification'}",
                 f"UBO chain mapped to natural persons: {control_name + ' (' + str(control_pct) + '%)' if primary_ubo else 'Not verified — data gap'}",
                 f"PEP screening completed — {len(all_peps)} confirmed match(es)" + (f": {', '.join([p['full_name'] for p in all_peps])}" if all_peps else ""),
                 "Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists",
                 "Adverse media review conducted — no relevant hits identified",
                 f"Source of funds {'reviewed and assessed as consistent' if sof != 'Information not provided' else 'not provided — data gap flagged'}",
                 f"Business model plausibility {'confirmed' if sector != 'Information not provided' else 'assessment limited by data gap'}",
-                f"Document verification completed ({len(verified_docs)}/{len(documents)}) at {doc_confidence}% confidence",
+                (f"Document verification not started — no uploaded documents available ({len(verified_docs)}/{len(documents)}) at {doc_confidence}% confidence" if not has_documents else f"Document verification completed ({len(verified_docs)}/{len(documents)}) at {doc_confidence}% confidence"),
                 f"Composite risk score reviewed: {risk_score}/100 ({risk_level}) at {max(60, doc_confidence - 5)}% model confidence",
                 f"Compliance decision ({decision.replace('_', ' ')}) aligned with risk assessment findings and conditions framework"
             ],

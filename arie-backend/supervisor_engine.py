@@ -123,8 +123,11 @@ def run_memo_supervisor(memo_data):
     # ── 4. Document verification vs decision conditions ──
     doc_content = _sc("document_verification").lower()
     decision_content = _sc("compliance_decision").lower()
+    has_document_count = "document_count" in metadata
+    document_count = int(metadata.get("document_count") or 0)
 
     has_outstanding_docs = "outstanding" in doc_content or "pending" in doc_content or "not verified" in doc_content
+    no_documents_uploaded = (has_document_count and document_count == 0) or "no documents have been uploaded" in doc_content
     if has_outstanding_docs and decision == "APPROVE":
         contradictions.append({
             "category": "doc_vs_decision",
@@ -133,6 +136,21 @@ def run_memo_supervisor(memo_data):
             "section_a": "document_verification",
             "section_b": "compliance_decision"
         })
+    if no_documents_uploaded:
+        if decision == "APPROVE":
+            contradictions.append({
+                "category": "missing_documents_vs_decision",
+                "severity": "critical",
+                "description": "No documents have been uploaded, but the memo recommends APPROVE. Approval cannot rely on undocumented entity verification.",
+                "section_a": "document_verification",
+                "section_b": "compliance_decision"
+            })
+        else:
+            warnings.append({
+                "category": "missing_documents",
+                "severity": "warning",
+                "description": "No supporting documents are uploaded for this application. Treat any approval recommendation as provisional until documents are received and reviewed."
+            })
 
     # ── 5. Red flags vs mitigants balance ──
     rf_section = sections.get("red_flags_and_mitigants", {})
@@ -312,6 +330,9 @@ def run_memo_supervisor(memo_data):
     # Control layer flags
     can_approve = verdict != "INCONSISTENT"
     requires_sco_review = verdict == "INCONSISTENT" or (has_rule_violations and len(rule_violations) >= 2)
+    if no_documents_uploaded and decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
+        can_approve = False
+        requires_sco_review = True
 
     return {
         "verdict": verdict,
@@ -328,5 +349,3 @@ def run_memo_supervisor(memo_data):
         "requires_sco_review": requires_sco_review,
         "checked_at": datetime.now().isoformat()
     }
-
-

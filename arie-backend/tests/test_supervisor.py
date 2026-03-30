@@ -231,6 +231,25 @@ class TestMemoCheck4_Docs:
         doc_c = [c for c in result["contradictions"] if c["category"] == "doc_vs_decision"]
         assert len(doc_c) >= 1
 
+    def test_no_documents_blocks_approval(self, temp_db):
+        from server import run_memo_supervisor
+        memo = make_base_memo({
+            "metadata": {
+                "approval_recommendation": "APPROVE_WITH_CONDITIONS",
+                "document_count": 0,
+                "documentation_complete": False
+            },
+            "sections": {
+                "document_verification": {"content": "No documents have been uploaded. Entity verification cannot be completed."},
+                "compliance_decision": {"decision": "APPROVE_WITH_CONDITIONS"}
+            }
+        })
+        result = run_memo_supervisor(memo)
+        assert result["can_approve"] is False
+        assert result["requires_sco_review"] is True
+        warning_cats = [w["category"] for w in result["warnings"]]
+        assert "missing_documents" in warning_cats
+
 
 class TestMemoCheck5_RedFlags:
     """Check 5: Red flags without mitigants."""

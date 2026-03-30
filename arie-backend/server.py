@@ -552,6 +552,109 @@ def normalize_prescreening_data(data: dict, existing=None) -> dict:
     return merged
 
 
+SESSION_PRESCREENING_FIELD_MAP = {
+    "f-reg-name": "registered_entity_name",
+    "f-trade-name": "trading_name",
+    "f-reg-address": "registered_address",
+    "f-hq-address": "headquarters_address",
+    "f-contact-first": "entity_contact_first",
+    "f-contact-last": "entity_contact_last",
+    "f-email": "entity_contact_email",
+    "f-phone-code": "entity_contact_phone_code",
+    "f-mobile": "entity_contact_mobile",
+    "f-website": "website",
+    "f-licences": "regulatory_licences",
+    "f-inc-country": "country_of_incorporation",
+    "f-inc-date": "incorporation_date",
+    "f-brn": "brn",
+    "f-sector": "sector",
+    "f-entity-type": "entity_type",
+    "f-ownership-structure": "ownership_structure",
+    "f-monthly-volume": "monthly_volume",
+    "f-txn-complexity": "transaction_complexity",
+    "f-biz-overview": "business_overview",
+    "f-source-wealth-type": "source_of_wealth_type",
+    "f-source-wealth": "source_of_wealth_detail",
+    "f-source-init-type": "source_of_funds_initial_type",
+    "f-source-init": "source_of_funds_initial_detail",
+    "f-source-ongoing-type": "source_of_funds_ongoing_type",
+    "f-source-ongoing": "source_of_funds_ongoing_detail",
+    "f-mgmt": "management_overview",
+    "f-intro-method": "introduction_method",
+    "f-referrer-name": "referrer_name",
+}
+
+
+def is_meaningful_value(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) > 0
+    return True
+
+
+def normalize_saved_session_prescreening(form_data) -> dict:
+    """Backfill authoritative prescreening aliases from save/resume session payloads."""
+    normalized = {}
+    raw_form = safe_json_loads(form_data)
+    prescreening = raw_form.get("prescreening") if isinstance(raw_form, dict) else {}
+    if not isinstance(prescreening, dict):
+        return normalized
+
+    for raw_key, normalized_key in SESSION_PRESCREENING_FIELD_MAP.items():
+        raw_value = prescreening.get(raw_key)
+        if is_meaningful_value(raw_value):
+            normalized[normalized_key] = raw_value
+
+    consent_map = {
+        "f-consent-declaration": "consent_declaration",
+        "f-consent-pricing": "consent_pricing",
+        "f-consent-terms": "consent_terms",
+    }
+    for raw_key, normalized_key in consent_map.items():
+        if raw_key in prescreening:
+            normalized[normalized_key] = bool(prescreening.get(raw_key))
+
+    normalized = normalize_prescreening_data({"prescreening_data": normalized})
+    return normalized
+
+
+def merge_prescreening_sources(primary, fallback) -> dict:
+    """Merge prescreening sources while preserving authoritative stored values over backfill."""
+    merged = {}
+    fallback_data = safe_json_loads(fallback)
+    primary_data = safe_json_loads(primary)
+    if isinstance(fallback_data, dict):
+        merged.update(fallback_data)
+    if isinstance(primary_data, dict):
+        for key, value in primary_data.items():
+            if is_meaningful_value(value):
+                merged[key] = value
+    return normalize_prescreening_data({"prescreening_data": merged})
+
+
+def load_saved_session_prescreening(db, app_record) -> dict:
+    """Load the latest saved portal form snapshot for an application, if any."""
+    app_id = app_record.get("id") if isinstance(app_record, dict) else None
+    client_id = app_record.get("client_id") if isinstance(app_record, dict) else None
+    session = None
+    if app_id:
+        session = db.execute(
+            "SELECT form_data FROM client_sessions WHERE application_id=? ORDER BY updated_at DESC LIMIT 1",
+            (app_id,)
+        ).fetchone()
+    if not session and client_id:
+        session = db.execute(
+            "SELECT form_data FROM client_sessions WHERE client_id=? ORDER BY updated_at DESC LIMIT 1",
+            (client_id,)
+        ).fetchone()
+    if not session:
+        return {}
+    return normalize_saved_session_prescreening(session.get("form_data"))
+
+
 def resolve_application_company_name(data: dict, prescreening_data: dict, fallback="") -> str:
     """Resolve the authoritative legal entity name for application persistence."""
     return first_non_empty(
@@ -732,9 +835,38 @@ def encrypt_pii_fields(record: dict, field_names: list) -> dict:
     for field in field_names:
         if field in encrypted and encrypted[field]:
             val = str(encrypted[field])
-            if val and not val.startswith("gAAAAA"):  # Don't double-encrypt Fernet tokens
+            if val and not extract_fernet_token(val):  # Don't double-encrypt Fernet tokens
                 encrypted[field] = _pii_encryptor.encrypt(val)
     return encrypted
+
+
+def extract_fernet_token(value) -> str:
+    """Return ciphertext normalized to the format expected by PIIEncryptor.decrypt()."""
+    if value in (None, ""):
+        return ""
+    raw = value.decode("utf-8", "ignore") if isinstance(value, (bytes, bytearray)) else str(value)
+    for _ in range(4):
+        if raw.startswith("gAAAAA"):
+            return base64.b64encode(raw.encode("utf-8")).decode("utf-8")
+        padded = raw + ("=" * (-len(raw) % 4))
+        decoded_next = None
+        for decoder in (base64.b64decode, base64.urlsafe_b64decode):
+            try:
+                decoded = decoder(padded.encode("utf-8"))
+            except Exception:
+                continue
+            try:
+                decoded_str = decoded.decode("utf-8")
+            except Exception:
+                continue
+            decoded_next = decoded_str
+            if decoded_str.startswith("gAAAAA"):
+                return base64.b64encode(decoded_str.encode("utf-8")).decode("utf-8")
+            break
+        if not decoded_next or decoded_next == raw:
+            break
+        raw = decoded_next
+    return ""
 
 
 def decrypt_pii_fields(record: dict, field_names: list) -> dict:
@@ -745,9 +877,10 @@ def decrypt_pii_fields(record: dict, field_names: list) -> dict:
     for field in field_names:
         if field in decrypted and decrypted[field]:
             val = str(decrypted[field])
-            if val.startswith("gAAAAA"):  # Fernet ciphertext prefix
+            token = extract_fernet_token(val)
+            if token:
                 try:
-                    decrypted[field] = _pii_encryptor.decrypt(val)
+                    decrypted[field] = _pii_encryptor.decrypt(token)
                 except Exception as e:
                     logger.warning(f"PII decryption failed for field '{field}': {e}")
                     decrypted[field] = None  # Clear encrypted blob — show as missing, not gibberish
@@ -1484,7 +1617,9 @@ class ApplicationDetailHandler(BaseHandler):
         for doc in result["documents"]:
             doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
-        result["prescreening_data"] = parse_json_field(result.get("prescreening_data"), {})
+        stored_prescreening = parse_json_field(result.get("prescreening_data"), {})
+        saved_session_prescreening = load_saved_session_prescreening(db, result)
+        result["prescreening_data"] = merge_prescreening_sources(stored_prescreening, saved_session_prescreening)
         # Bug #4: Parse risk_dimensions from JSON string for API consumers
         if result.get("risk_dimensions") and isinstance(result["risk_dimensions"], str):
             result["risk_dimensions"] = safe_json_loads(result["risk_dimensions"])
@@ -4871,6 +5006,8 @@ class ComplianceMemoHandler(BaseHandler):
         app = dict(app)
         ps_raw = app.get("prescreening_data") or "{}"
         ps = ps_raw if isinstance(ps_raw, dict) else json.loads(ps_raw)
+        ps = merge_prescreening_sources(ps, load_saved_session_prescreening(db, app))
+        app["prescreening_data"] = ps
         sof = ps.get("source_of_funds", "")
         if not sof:
             sof_parts = []
