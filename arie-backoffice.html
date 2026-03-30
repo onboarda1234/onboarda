@@ -946,6 +946,7 @@ body.role-admin .role-admin-only-block { display:block; }
   <!-- Content tabs: Overview vs Activity Log -->
   <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--border1);">
     <button class="btn btn-outline btn-sm" id="tab-overview" onclick="switchDetailTab('overview')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Overview</button>
+    <button class="btn btn-outline btn-sm" id="tab-screening" onclick="switchDetailTab('screening')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Screening Review</button>
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
     <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ AI Supervisor</button>
   </div>
@@ -1145,6 +1146,11 @@ body.role-admin .role-admin-only-block { display:block; }
       </div>
 
   </div><!-- /detail-tab-overview -->
+
+  <!-- Tab: Screening Review (hidden by default) -->
+  <div id="detail-tab-screening" style="display:none;">
+    <div id="detail-screening-review"></div>
+  </div>
 
   <!-- Tab: Activity Log (hidden by default) -->
   <div id="detail-tab-activity" style="display:none;">
@@ -2455,8 +2461,9 @@ async function loadFromAPI() {
           date: (a.created_at || '').split('T')[0].split(' ')[0],
           country: a.country || '',
           brn: a.brn || '',
-          directors: (a.directors || []).map(function(d) { return { name: d.full_name, nat: d.nationality, pep: d.is_pep || 'No' }; }),
-          ubos: (a.ubos || []).map(function(u) { return { name: u.full_name, pct: u.ownership_pct || 0, pep: u.is_pep || 'No' }; }),
+          directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
+          ubos: (a.ubos || []).map(function(u) { return { id: u.person_key || u.id, name: u.full_name, pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
+          intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
           dims: dims,
           docs: backendDocuments.map(function(d) { return d.doc_type; }),
           _documents: backendDocuments,
@@ -2820,6 +2827,7 @@ var ROLE_PERMISSIONS = null;
 
 var currentUser = USERS[0] || { id:0, name:"System", email:"", role:"admin", initials:"--", status:"active" };
 var currentApp = null;
+var currentScreeningReviewFocus = null;
 
 // ═══════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════
@@ -3123,11 +3131,13 @@ function renderApplications() {
 }
 function filterApplications() { renderApplications(); }
 
-function openAppDetail(ref) {
+function openAppDetail(ref, options) {
+  options = options || {};
   var app = APPLICATIONS.find(function(a) { return a.ref === ref; });
   if (!app) return;
   currentApp = app;
   window._currentDetailApp = app;
+  currentScreeningReviewFocus = options.screeningFocus || null;
 
   document.getElementById('detail-company-name').textContent = app.company;
   document.getElementById('detail-badges').innerHTML = riskBadge(app.risk) + ' ' + statusBadge(app.status);
@@ -4068,8 +4078,10 @@ function openAppDetail(ref) {
   if (preApprovalCard) preApprovalCard.style.display = isPreApproval ? 'flex' : 'none';
   if (standardCard) standardCard.style.display = isPreApproval ? 'none' : 'flex';
 
-  // Reset to Overview tab when opening a new application
-  switchDetailTab('overview');
+  renderScreeningReviewPanel(app, currentScreeningReviewFocus);
+
+  // Open the requested detail surface when entering from a scoped workflow.
+  switchDetailTab(options.initialTab || 'overview');
 
   showView('app-detail');
   document.getElementById('topbar-title').textContent = 'Application Review — ' + app.ref;
@@ -4264,6 +4276,198 @@ function screeningReviewBadge(row) {
     '</div>';
 }
 
+function screeningModeBadge(mode) {
+  if (!mode) return '<span class="badge pending">Mode Unknown</span>';
+  var cls = mode === 'live' ? 'approved' : mode === 'simulated' ? 'high' : 'pending';
+  var label = mode === 'live' ? 'Live Screening' : mode === 'simulated' ? 'Simulated Screening' : mode;
+  return '<span class="badge ' + cls + '">' + escapeHtml(label) + '</span>';
+}
+
+function screeningResultFacts(screeningRecord) {
+  var screening = screeningRecord || {};
+  var hitFacts = classifyScreeningHits(screening.results || []);
+  return {
+    total_hits: hitFacts.total,
+    sanctions_hits: hitFacts.sanctions_hits,
+    pep_hits: hitFacts.pep_hits,
+    other_hits: hitFacts.other_hits,
+    matched: !!screening.matched,
+    source: screening.source || null,
+    api_status: screening.api_status || null,
+    screened_at: screening.screened_at || null
+  };
+}
+
+function screeningFocusMatches(focus, subjectType, subjectName) {
+  if (!focus) return false;
+  return (focus.subject_type || '') === (subjectType || '') && (focus.subject_name || '') === (subjectName || '');
+}
+
+function screeningReviewCard(title, badgesHtml, bodyHtml, isFocused) {
+  return '<div class="card" style="' + (isFocused ? 'border:2px solid var(--brand);box-shadow:0 0 0 3px rgba(43,47,143,0.08);' : '') + '">' +
+    '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">' +
+      '<div class="card-title">' + title + '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-left:auto;">' + badgesHtml + '</div>' +
+    '</div>' +
+    bodyHtml +
+  '</div>';
+}
+
+function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus) {
+  var company = screeningSummary.company_screening || {};
+  var companySanctions = company.sanctions || {};
+  var ip = screeningSummary.ip_geolocation || {};
+  var kycApplicants = screeningSummary.kyc_applicants || [];
+  var ipFlags = [];
+  if (ip.country) ipFlags.push(ip.country + (ip.city ? ', ' + ip.city : ''));
+  if (ip.risk_level) ipFlags.push('Risk ' + ip.risk_level);
+  if (ip.is_vpn) ipFlags.push('VPN detected');
+  if (ip.is_proxy) ipFlags.push('Proxy detected');
+  if (ip.is_tor) ipFlags.push('Tor detected');
+  var redApplicants = kycApplicants.filter(function(a) { return a.review_answer === 'RED'; }).map(function(a) { return a.person_name; });
+  var companyHits = screeningResultFacts(companySanctions);
+  var badges = [
+    screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : (screeningSummary.screening_run_recorded ? 'screened_no_match' : 'awaiting_screening'), reviewRow ? reviewRow.status_label : (screeningSummary.screening_run_recorded ? 'No Provider Match' : 'Awaiting Screening')),
+    screeningBadge(reviewRow ? reviewRow.watchlist_status : (companyHits.matched ? 'match' : (screeningSummary.screening_run_recorded ? 'clear' : 'pending'))),
+    screeningModeBadge(screeningSummary.screening_mode)
+  ];
+  if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow));
+
+  var body = '';
+  body += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">';
+  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Registry Status</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(company.found ? 'Registry record found' : (screeningSummary.screening_run_recorded ? 'Registry record not found' : 'Awaiting screening')) + '</div></div>';
+  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Provider Match Count</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(String(companyHits.total_hits || 0)) + '</div></div>';
+  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Last Screened</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(((screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19)) + '</div></div>';
+  body += '</div>';
+  body += '<div style="font-size:12px;color:var(--text2);line-height:1.6;">';
+  body += '<div><strong>Company screening source:</strong> ' + escapeHtml(company.source || 'Not recorded') + (company.api_status ? ' (' + escapeHtml(company.api_status) + ')' : '') + '</div>';
+  body += '<div style="margin-top:6px;"><strong>Stored screening summary:</strong> ' + escapeHtml(companyHits.matched ? 'Provider recorded company/entity watchlist matches requiring officer review.' : (screeningSummary.screening_run_recorded ? 'No company/entity provider matches recorded in the stored screening run.' : 'No stored screening run recorded yet.')) + '</div>';
+  if (companySanctions.results && companySanctions.results.length) {
+    body += '<div style="margin-top:10px;"><strong>Provider result highlights</strong><ul style="margin:6px 0 0 18px;padding:0;">' + companySanctions.results.slice(0, 5).map(function(hit) {
+      var parts = [];
+      if (hit.name) parts.push(hit.name);
+      if (hit.sanctions_list) parts.push(hit.sanctions_list);
+      if (hit.match_score != null) parts.push('score ' + hit.match_score + '%');
+      return '<li>' + escapeHtml(parts.join(' — ')) + '</li>';
+    }).join('') + '</ul></div>';
+  }
+  if (ipFlags.length) body += '<div style="margin-top:10px;"><strong>IP / geolocation flags:</strong> ' + escapeHtml(ipFlags.join(' · ')) + '</div>';
+  if (redApplicants.length) body += '<div style="margin-top:10px;"><strong>KYC review flags:</strong> RED outcome for ' + escapeHtml(redApplicants.join(', ')) + '</div>';
+  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> Distinct adverse-media results are not persisted in the current screening report.</div>';
+  body += '</div>';
+
+  return screeningReviewCard('Entity Screening — ' + escapeHtml(app.company), badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
+}
+
+function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
+  var screeningSummary = getApplicationScreeningSummary(app);
+  var screeningRecord = null;
+  if (screeningSummary.report) {
+    var combined = (screeningSummary.report.director_screenings || []).concat(screeningSummary.report.ubo_screenings || []);
+    screeningRecord = combined.find(function(item) {
+      return (item.person_name || item.name) === person.name;
+    }) || null;
+  }
+  var screening = (screeningRecord || {}).screening || null;
+  var facts = screeningResultFacts(screening);
+  var badges = [
+    screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : (screening ? (facts.matched ? 'review_required' : 'screened_no_match') : 'awaiting_screening'), reviewRow ? reviewRow.status_label : (screening ? (facts.matched ? 'Review Required' : 'No Provider Match') : 'Awaiting Screening')),
+    screeningBadge(reviewRow ? reviewRow.watchlist_status : (screening ? (facts.sanctions_hits > 0 ? 'match' : (facts.other_hits > 0 ? 'review' : 'clear')) : 'pending')),
+    screeningBadge(reviewRow ? reviewRow.pep_declared_status : (person.pep === 'Yes' ? 'declared' : 'not_declared')),
+    screeningBadge(reviewRow ? reviewRow.pep_screening_status : (screening ? (facts.pep_hits > 0 || !!(screeningRecord || {}).undeclared_pep ? 'match' : (facts.other_hits > 0 ? 'review' : 'clear')) : 'pending'))
+  ];
+  if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow));
+
+  var body = '';
+  body += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px;">';
+  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Role</div><div style="font-size:13px;font-weight:600;text-transform:capitalize;">' + escapeHtml(person.subject_type) + '</div></div>';
+  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Nationality / Ownership</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(person.subject_type === 'ubo' ? String(person.pct || 0) + '%' : (person.nat || 'Not recorded')) + '</div></div>';
+  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Provider Match Count</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(String(facts.total_hits || 0)) + '</div></div>';
+  body += '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);"><div style="font-size:10px;text-transform:uppercase;color:var(--text3);margin-bottom:4px;">Last Screened</div><div style="font-size:13px;font-weight:600;">' + escapeHtml(((facts.screened_at || screeningSummary.screened_at || 'Not recorded') + '').replace('T', ' ').slice(0, 19)) + '</div></div>';
+  body += '</div>';
+  body += '<div style="font-size:12px;color:var(--text2);line-height:1.6;">';
+  if (!screeningSummary.screening_run_recorded) {
+    body += '<div>No screening run is recorded yet for this application.</div>';
+  } else if (!screening) {
+    body += '<div>The stored screening report does not contain a person-level screening record for this subject.</div>';
+  } else {
+    body += '<div><strong>Provider source:</strong> ' + escapeHtml(facts.source || 'Not recorded') + (facts.api_status ? ' (' + escapeHtml(facts.api_status) + ')' : '') + '</div>';
+    body += '<div style="margin-top:6px;"><strong>Declared PEP:</strong> ' + escapeHtml(person.pep === 'Yes' ? 'Yes' : 'No') + '</div>';
+    body += '<div style="margin-top:6px;"><strong>Stored provider result:</strong> ' + escapeHtml(facts.matched ? 'Provider recorded one or more potential matches that require officer review.' : 'No provider matches were recorded for this screening subject.') + '</div>';
+    if ((screeningRecord || {}).undeclared_pep) body += '<div style="margin-top:6px;"><strong>Undeclared PEP flag:</strong> Provider evidence indicates possible undeclared PEP exposure.</div>';
+    if (screening.results && screening.results.length) {
+      body += '<div style="margin-top:10px;"><strong>Provider result highlights</strong><ul style="margin:6px 0 0 18px;padding:0;">' + screening.results.slice(0, 5).map(function(hit) {
+        var labels = [];
+        if (hit.name) labels.push(hit.name);
+        if (hit.sanctions_list) labels.push(hit.sanctions_list);
+        if (hit.match_score != null) labels.push('score ' + hit.match_score + '%');
+        if (hit.is_sanctioned) labels.push('sanctions');
+        if (hit.is_pep) labels.push('pep');
+        return '<li>' + escapeHtml(labels.join(' — ')) + '</li>';
+      }).join('') + '</ul></div>';
+    }
+  }
+  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> Distinct adverse-media results are not persisted in the current screening report.</div>';
+  body += '</div>';
+
+  return screeningReviewCard(escapeHtml(person.name), badges.join(''), body, screeningFocusMatches(focus, person.subject_type, person.name));
+}
+
+function renderScreeningReviewPanel(app, focus) {
+  var host = document.getElementById('detail-screening-review');
+  if (!host || !app) return;
+
+  var screeningSummary = getApplicationScreeningSummary(app);
+  var queueRows = (SCREENING_QUEUE && SCREENING_QUEUE.rows ? SCREENING_QUEUE.rows : []).filter(function(row) {
+    return row.application_ref === app.ref;
+  });
+  var queueMap = {};
+  queueRows.forEach(function(row) {
+    queueMap[(row.subject_type || '') + '|' + (row.subject_name || '')] = row;
+  });
+
+  var html = '';
+  html += '<div class="card" style="margin-bottom:16px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.03);">';
+  html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
+  html += '<div><div class="card-title">Screening Review</div><div style="font-size:12px;color:var(--text3);margin-top:4px;">Stored provider AML/watchlist and PEP results for this application. This is the dedicated review surface opened from the Screening Queue.</div></div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-left:auto;">' + screeningModeBadge(screeningSummary.screening_mode) + (screeningSummary.screened_at ? '<span class="explain-data-source">Last screened: ' + escapeHtml(String(screeningSummary.screened_at).replace('T', ' ').slice(0, 19)) + '</span>' : '') + '</div>';
+  html += '</div>';
+  if (focus && focus.subject_name) html += '<div style="font-size:12px;color:var(--text2);padding:0 18px 18px;">Focused subject: <strong>' + escapeHtml(focus.subject_name) + '</strong> (' + escapeHtml(String(focus.subject_type || '').replace('_', ' ')) + ')</div>';
+  html += '</div>';
+
+  html += buildEntityScreeningReviewCard(app, queueMap['entity|' + app.company], screeningSummary, focus);
+
+  var people = [];
+  (app.directors || []).forEach(function(d) { people.push({ subject_type:'director', name:d.name, nat:d.nat, pct:null, pep:d.pep }); });
+  (app.ubos || []).forEach(function(u) { people.push({ subject_type:'ubo', name:u.name, nat:null, pct:u.pct, pep:u.pep }); });
+
+  if (!people.length) {
+    html += '<div class="card"><div class="card-header"><div class="card-title">Individual Screening Subjects</div></div><div style="padding:18px;font-size:12px;color:var(--text3);">No directors or UBOs are loaded for this application yet.</div></div>';
+  } else {
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:16px;">';
+    people.sort(function(a, b) {
+      var aFocused = screeningFocusMatches(focus, a.subject_type, a.name) ? 1 : 0;
+      var bFocused = screeningFocusMatches(focus, b.subject_type, b.name) ? 1 : 0;
+      return bFocused - aFocused;
+    }).forEach(function(person) {
+      html += buildPersonScreeningReviewCard(person, app, queueMap[person.subject_type + '|' + person.name], focus);
+    });
+    html += '</div>';
+  }
+
+  host.innerHTML = html;
+}
+
+function openScreeningReview(ref, subjectType, subjectName) {
+  openAppDetail(ref, {
+    initialTab: 'screening',
+    screeningFocus: {
+      subject_type: subjectType || '',
+      subject_name: subjectName || ''
+    }
+  });
+}
+
 async function saveScreeningReview(applicationRef, subjectType, subjectName, disposition) {
   var notes = window.prompt('Add screening review notes for ' + subjectName + ':', '');
   if (notes === null) return;
@@ -4301,7 +4505,7 @@ async function renderScreening() {
         screeningBadge(row.pep_declared_status || 'not_applicable') +
         screeningBadge(row.pep_screening_status || 'not_applicable') +
         '</div>';
-      var actions = '<button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + escapeHtml(row.application_ref) + '\')">View</button>';
+      var actions = '<button class="btn btn-outline btn-sm" onclick="openScreeningReview(\'' + escapeHtml(row.application_ref) + '\',\'' + escapeHtml(row.subject_type) + '\',\'' + escapeHtml(row.subject_name).replace(/'/g, "\\'") + '\')">View</button>';
       if (row.review_required) {
         actions += ' <button class="btn btn-outline btn-sm" onclick="saveScreeningReview(\'' + escapeHtml(row.application_ref) + '\',\'' + escapeHtml(row.subject_type) + '\',\'' + escapeHtml(row.subject_name).replace(/'/g, "\\'") + '\',\'cleared\')">Clear</button>';
         actions += ' <button class="btn btn-outline btn-sm" onclick="saveScreeningReview(\'' + escapeHtml(row.application_ref) + '\',\'' + escapeHtml(row.subject_type) + '\',\'' + escapeHtml(row.subject_name).replace(/'/g, "\\'") + '\',\'escalated\')">Escalate</button>';
@@ -4717,7 +4921,7 @@ function switchCaseTab(tab, btn) {
 }
 
 function switchDetailTab(tab) {
-  var tabs = ['overview', 'activity', 'supervisor'];
+  var tabs = ['overview', 'screening', 'activity', 'supervisor'];
   tabs.forEach(function(t) {
     var tabEl = document.getElementById('tab-' + t);
     var panelEl = document.getElementById('detail-tab-' + t);
