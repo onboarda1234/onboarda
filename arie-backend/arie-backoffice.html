@@ -1253,13 +1253,13 @@ body.role-admin .role-admin-only-block { display:block; }
 <!-- ═══════════════ SCREENING QUEUE ═══════════════ -->
 <div class="view" id="view-screening">
   <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);">
-    <div class="stat-card"><div class="stat-card-label">Awaiting Screening</div><div class="stat-card-value" style="color:var(--amber);" id="screening-stat-awaiting">0</div></div>
-    <div class="stat-card"><div class="stat-card-label">Screened</div><div class="stat-card-value" style="color:var(--green);" id="screening-stat-screened">0</div></div>
-    <div class="stat-card"><div class="stat-card-label">Hits Found</div><div class="stat-card-value" style="color:var(--red);" id="screening-stat-hits">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Applications Awaiting Screening</div><div class="stat-card-value" style="color:var(--amber);" id="screening-stat-awaiting">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Applications Screened</div><div class="stat-card-value" style="color:var(--green);" id="screening-stat-screened">0</div></div>
+    <div class="stat-card"><div class="stat-card-label">Review Required</div><div class="stat-card-value" style="color:var(--red);" id="screening-stat-hits">0</div></div>
   </div>
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
-      <thead><tr><th>Person</th><th>Type</th><th>Company</th><th>Sanctions</th><th>PEP</th><th>Adverse Media</th><th>Status</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Subject</th><th>Type</th><th>Company</th><th>Watchlist</th><th>PEP (Declared / Screening)</th><th>Entity / Context</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody id="screening-body"></tbody>
     </table>
   </div>
@@ -1805,8 +1805,8 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="doc-item">
       <div class="doc-icon" style="background:var(--blue-bg);">🌐</div>
       <div class="doc-info">
-        <div class="doc-name">Sumsub AML — Sanctions & PEP Screening</div>
-        <div class="doc-meta">Live screening data source used by Agent 4 (FinCrime Screening Interpretation) for sanctions, PEP, and adverse media checks.</div>
+        <div class="doc-name">Sumsub AML — Watchlist & PEP Screening</div>
+        <div class="doc-meta">Configured screening provider used for stored sanctions/watchlist and PEP-related AML checks. Distinct adverse-media results are not persisted in the current screening report.</div>
       </div>
       <a href="https://sumsub.com" target="_blank" class="btn btn-outline btn-sm">Open ↗</a>
     </div>
@@ -2736,6 +2736,7 @@ var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'
 
 var APPLICATIONS = [];
 // Demo data is no longer hardcoded. APPLICATIONS is populated from API via loadFromAPI().
+var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
 
 /* ── REMOVED: 9 hardcoded demo applications (TechPay Global, Africom Remittances, Nordic Payments,
    GoldBridge Trading, MedServe Health, CryptoVault Exchange, Pacific Logistics, Sahara Construction,
@@ -3350,7 +3351,7 @@ function openAppDetail(ref) {
   var trailSteps = [
     { name:'Agent 1: Identity & Document Integrity', time:fmtTime(0), detail:'Validated authenticity and consistency of ' + (function(){ var t=(app.docs||[]).length; (app.personDocs||[]).forEach(function(p){t+=p.docs.length;}); t+=(app.businessDocs||[]).length+(app.otherDocs||[]).length; return t; })() + ' documents across 4 sections (corporate, KYC/identity, business, other). Performed ~' + (35 + ((app.personDocs||[]).reduce(function(s,p){return s+p.docs.length;},0))*5) + ' checks including MRZ extraction, expiry validation, tampering detection, cross-document consistency, and per-person identity verification for ' + ((app.directors||[]).length + (app.ubos||[]).length) + ' individuals.', confidence:95, result:(function(){ var t=(app.docs||[]).length; (app.personDocs||[]).forEach(function(p){t+=p.docs.length;}); t+=(app.businessDocs||[]).length+(app.otherDocs||[]).length; return t; })() + ' documents checked across all sections' },
     { name:'Agent 2: External Database Cross-Verification', time:fmtTime(3000), detail:'Secondary verification layer. Checked passport/company document data against external registries (OpenCorporates, Companies House, ADGM, DIFC). Confirmed persons exist in official records as declared directors/shareholders. ' + (screening ? 'Registry data retrieved.' : 'Awaiting screening.'), confidence:92, result:'12 checks — ' + ((app.directors||[]).length + (app.ubos||[]).length) + ' persons cross-referenced' },
-    { name:'Agent 3: FinCrime Screening Interpretation', time:fmtTime(6000), detail:'Screened individuals and entities against sanctions lists, PEP databases, watchlists, and adverse media. Distinguished false positives, assessed match confidence, classified political exposure. ' + (app.pepCount>0?app.pepCount+' PEP match(es) identified.':'No matches.'), confidence:app.pepCount>0?78:97, result:app.pepCount>0?'PEP DETECTED — enhanced review':'All clear — no matches' },
+    { name:'Agent 3: FinCrime Screening Interpretation', time:fmtTime(6000), detail:'Reviewed stored provider AML/watchlist results for individuals and entities, assessed declared PEP exposure, and highlighted rows requiring officer review. Distinct adverse-media findings are not persisted in the current screening report. ' + (app.pepCount>0?app.pepCount+' declared PEP(s) present.':'No declared PEPs.'), confidence:app.pepCount>0?78:97, result:app.pepCount>0?'PEP REVIEW REQUIRED':'Provider results recorded' },
     { name:'Agent 4: Corporate Structure & UBO Mapping', time:fmtTime(9000), detail:'Mapped ownership layers for ' + (app.ubos||[]).length + ' UBO(s) and ' + (app.directors||[]).length + ' director(s). ' + ((app.intermediaries||[]).length > 0 ? 'Detected ' + (app.intermediaries||[]).length + ' intermediary layer(s) — nominee structures flagged.' : 'Simple direct ownership confirmed.') + ' Cross-referenced UBOs with sanctions/PEP results from Agent 3.', confidence:91, result:(app.ubos||[]).length + ' UBOs mapped, ' + (app.directors||[]).length + ' directors verified' },
     { name:'Agent 5: Compliance Memo & Risk Recommendation', time:fmtTime(12000), detail:'Final synthesis agent. Compiled results from Agents 1-4, assessed business plausibility within Agent 5, recommended ' + app.risk.replace('_',' ') + ' risk rating. Generated onboarding memo and review checklist. Score: ' + app.score + '/100. Configured ' + (app.risk==='VERY_HIGH'?'quarterly':app.risk==='HIGH'?'semi-annual':app.risk==='MEDIUM'?'annual':'biennial') + ' periodic review schedule.', confidence:94, result:app.risk.replace('_',' ') + ' RISK — ' + (app.risk==='LOW'?'Recommend Approve':'Review Required') }
   ];
@@ -3375,7 +3376,7 @@ function openAppDetail(ref) {
       { icon:'🏢', text:'Entity type: ' + escapeHtml(app.entityType || 'Corporate entity') + ' — scored based on regulatory complexity and ML/TF exposure', impact:app.dims.d1 <= 2 ? '+Low' : '+High', color:app.dims.d1 <= 2 ? 'var(--green)' : 'var(--amber)' },
       { icon:'🔗', text:'Ownership structure complexity assessed. ' + (app.ubos||[]).length + ' UBO(s) declared with ' + ((app.ubos||[]).some(function(u){return u.pct >= 25}) ? 'clear' : 'unclear') + ' beneficial ownership chain', impact:'Neutral', color:'var(--text3)' },
       { icon:'👤', text:'PEP status: ' + (app.pepCount > 0 ? app.pepCount + ' PEP(s) — automatically elevates entity risk' : 'No PEPs — no risk elevation'), impact:app.pepCount > 0 ? '+High' : '+Low', color:app.pepCount > 0 ? 'var(--red)' : 'var(--green)' },
-      { icon:'📰', text:'Adverse media scan: ' + (screening && screening.total_hits > 0 ? 'Matches found — reviewed for relevance' : 'No adverse media identified'), impact:screening && screening.total_hits > 0 ? '+High' : '+Low', color:screening && screening.total_hits > 0 ? 'var(--red)' : 'var(--green)' },
+      { icon:'📰', text:'Adverse media: Distinct adverse-media results are not stored in the current screening report', impact:'Limited', color:'var(--text3)' },
       { icon:'💰', text:'Source of wealth assessed against entity profile and sector norms for ' + escapeHtml(app.sector || 'N/A'), impact:'Neutral', color:'var(--text3)' }
     ]},
     { name:'D2: Geographic Risk', weight:'25%', score:app.dims.d2, factors:[
@@ -3607,8 +3608,8 @@ function openAppDetail(ref) {
     a3checks.push({l:'Sanctions screening (UN/EU/OFAC/HMT)', r:'Pending — no screening run recorded', c:'warn'});
     a3checks.push({l:'PEP database screening', r:app.pepCount>0 ? 'Pending live screening — ' + app.pepCount + ' PEP declaration(s) on file' : 'Pending — no screening run recorded', c:'warn'});
   }
-  a3checks.push({l:'Adverse media scan', r:screening ? (screening.total_hits > 0 ? screening.total_hits + ' hit(s)' : 'No adverse media') : 'Pending — no screening run recorded', c:screening ? (screening.total_hits > 0 ? 'warn' : 'pass') : 'warn'});
-  a3checks.push({l:'False positive assessment', r:screening ? 'Applied — match confidence thresholds enforced' : 'Pending — requires screening results', c:screening ? 'pass' : 'warn'});
+  a3checks.push({l:'Adverse media', r:screening ? 'Not available in stored screening report' : 'No screening run recorded', c:'warn'});
+  a3checks.push({l:'Match disposition', r:screening ? 'Officer review required for any provider match or declared PEP' : 'Pending — requires screening results', c:screening ? 'warn' : 'warn'});
   a3checks.push({l:'PEP classification', r:screening ? (app.pepCount > 0 ? app.pepCount + ' PEP(s) classified' : 'No PEPs') : (app.pepCount > 0 ? 'Pending live screening — ' + app.pepCount + ' declared PEP(s)' : 'Pending — no screening run recorded'), c:screening ? (app.pepCount > 0 ? 'warn' : 'pass') : 'warn'});
   agents.push({ name:'Agent 3: FinCrime Screening Interpretation', icon:'🏛️', checks:a3checks });
 
@@ -3729,12 +3730,12 @@ function openAppDetail(ref) {
           business_risk: { title: 'Business Risk', rating: bRating, content: 'Sector: ' + escapeHtml(app.sector||'Information not provided') + '. ' + (isHighRiskSector ? 'The ' + escapeHtml(app.sector) + ' sector carries elevated inherent ML/TF risk due to the potential for anonymous transactions, rapid value transfer, or regulatory arbitrage.' : isMediumRiskSector ? 'The ' + escapeHtml(app.sector) + ' sector carries moderate inherent risk due to the intermediary nature of the business and exposure to third-party funds. The stated business model appears plausible and consistent with the entity\'s jurisdictional profile, partially mitigating this concern.' : 'The stated business sector presents low inherent risk and does not exhibit typology indicators associated with elevated ML/TF risk.') + ' Business model plausibility assessed within Agent 5. Risk weighting factor: 0.15.' },
           transaction_risk: { title: 'Transaction Risk', rating: riskLevel, content: 'Expected transaction volume: ' + escapeHtml(app.expectedVolume||'Information not provided') + '. Source of funds: ' + escapeHtml(app.sourceOfFunds||'Information not provided') + '. As a newly onboarded entity, limited historical transaction data is available, which constrains the ability to identify anomalous patterns at this stage and creates a monitoring dependency. Risk weighting factor: 0.10.' },
           ownership_risk: { title: 'Ownership Risk', rating: oRating, content: (app.directors||[]).length + ' director(s), ' + (app.ubos||[]).length + ' UBO(s). Structure complexity: ' + structComplexity + '. ' + (pepList.length>0 ? pepList.length + ' PEP(s) identified. PEP exposure introduces corruption and undue influence risk per FATF Recommendation 12.' + (pepDirList.length>0&&pepUboList.length===0 ? ' The PEP(s) hold board positions but no direct ownership, partially mitigating control risk.' : '') : 'No PEP exposure identified — positive indicator.') + (primaryUbo ? ' Beneficial ownership identified to natural person level.' : ' Beneficial ownership could not be verified — critical gap.') + ' Risk weighting factor: 0.25.' },
-          financial_crime_risk: { title: 'Financial Crime Risk', rating: fRating, content: 'Sanctions screening conducted across UN, EU, OFAC SDN, and HMT consolidated lists via ' + screeningProvider + '. ' + (sanctionsHits>0 ? sanctionsHits + ' match(es) identified requiring further assessment. ' : 'No matches returned for any associated individual or the entity. ') + 'PEP screening: ' + pepList.length + ' confirmed match(es). Adverse media: No relevant hits across global databases. The entity\'s business model ' + (fRating==='LOW'?'does not exhibit':'may exhibit') + ' typology indicators associated with ML/TF. Risk weighting factor: 0.10.' }
+          financial_crime_risk: { title: 'Financial Crime Risk', rating: fRating, content: 'Stored provider watchlist screening was run via ' + screeningProvider + '. ' + (sanctionsHits>0 ? sanctionsHits + ' provider match(es) were recorded and require officer assessment. ' : 'No provider watchlist matches were recorded for the stored screening run. ') + 'Declared PEPs: ' + pepList.length + '. Distinct adverse-media results are not persisted in the current screening report. The entity\'s business model ' + (fRating==='LOW'?'does not exhibit':'may exhibit') + ' typology indicators associated with ML/TF. Risk weighting factor: 0.10.' }
         }
       },
       screening_results: {
         title: 'Screening Results',
-        content: 'Sanctions Screening: Conducted against UN Security Council, EU, OFAC SDN, and HMT consolidated lists via ' + screeningProvider + '. ' + (sanctionsHits>0 ? sanctionsHits + ' match(es) identified — assessed for false positive determination based on identity data verification. ' : 'No matches returned for any associated individual or the entity. ') + 'PEP Screening: ' + pepList.length + ' confirmed match(es)' + (pepList.length>0 ? ' — ' + pepList.map(function(p){ return p + ' identified as PEP. Confirmed true positive based on verified identity data. PEP declaration form and enhanced due diligence documentation requested.'; }).join(' ') : ' — no matches identified.') + ' Adverse Media: Comprehensive search conducted across global news and regulatory enforcement databases. No relevant hits identified. Company Registry Verification: ' + escapeHtml(app.company) + ' — ' + companyVerified + ' via ' + screeningProvider + '.'
+        content: 'Watchlist Screening: Stored provider AML results were recorded via ' + screeningProvider + '. ' + (sanctionsHits>0 ? sanctionsHits + ' provider match(es) were recorded and remain subject to officer disposition. ' : 'No provider watchlist matches were recorded for the stored screening run. ') + 'Declared PEPs: ' + pepList.length + (pepList.length>0 ? ' — ' + pepList.map(function(p){ return p + ' declared as PEP and requires enhanced due diligence review.'; }).join(' ') : ' — none declared.') + ' Distinct adverse-media results are not persisted in the current screening report. Company Registry Verification: ' + escapeHtml(app.company) + ' — ' + companyVerified + ' via ' + screeningProvider + '.'
       },
       document_verification: {
         title: 'Document Verification',
@@ -3748,7 +3749,7 @@ function openAppDetail(ref) {
       },
       ai_explainability: {
         title: 'AI Explainability Layer',
-        content: 'Risk scoring model: Onboarda Composite Risk Engine v2.1. Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group guidance. Overall risk score: ' + riskScore + '/100 (' + riskLevel + '). Model confidence: ' + modelConf + '% — ' + (docConfidence<100 ? 'confidence reduced from baseline due to outstanding documentation and limited historical transaction data.' : 'high confidence based on complete documentation.') + ' Top risk-increasing factors: (1) ' + (pepList.length>0 ? 'PEP presence — weight: 0.25, elevating ownership risk per FATF Recommendation 12.' : 'No PEP exposure — no contribution to ownership risk.') + ' (2) ' + (isOffshore||isHighRiskCountry ? (isHighRiskCountry?'High-risk':'Offshore') + ' jurisdiction (' + escapeHtml(app.country) + ') — weight: 0.20, elevating baseline cross-border risk.' : 'Jurisdiction (' + escapeHtml(app.country) + ') — weight: 0.20, low contribution.') + ' (3) ' + escapeHtml(app.sector||'Unspecified') + ' sector — weight: 0.15. Top risk-decreasing factors: (1) ' + (sanctionsHits===0?'Clean sanctions screening':'Screening completed') + ' — weight: 0.20. (2) ' + (primaryUbo?'Verified beneficial ownership to natural person level':'Ownership verification incomplete') + ' — weight: 0.15. (3) Documentation at ' + docConfidence + '% — weight: 0.10. Decision pathway: Agent 1 (Identity & Document Integrity) → Agent 2 (External Database Cross-Verification) → Agent 3 (FinCrime Screening Interpretation) → Agent 4 (Corporate Structure & UBO Mapping) → Agent 5 (Compliance Memo & Risk Recommendation). Supervisor: No inter-agent contradictions flagged.'
+        content: 'Risk scoring model: Onboarda Composite Risk Engine v2.1. Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group guidance. Overall risk score: ' + riskScore + '/100 (' + riskLevel + '). Model confidence: ' + modelConf + '% — ' + (docConfidence<100 ? 'confidence reduced from baseline due to outstanding documentation and limited historical transaction data.' : 'high confidence based on complete documentation.') + ' Top risk-increasing factors: (1) ' + (pepList.length>0 ? 'Declared PEP presence — weight: 0.25, elevating ownership risk per FATF Recommendation 12.' : 'No declared PEP exposure — no contribution to ownership risk.') + ' (2) ' + (isOffshore||isHighRiskCountry ? (isHighRiskCountry?'High-risk':'Offshore') + ' jurisdiction (' + escapeHtml(app.country) + ') — weight: 0.20, elevating baseline cross-border risk.' : 'Jurisdiction (' + escapeHtml(app.country) + ') — weight: 0.20, low contribution.') + ' (3) ' + escapeHtml(app.sector||'Unspecified') + ' sector — weight: 0.15. Top risk-decreasing factors: (1) ' + (sanctionsHits===0?'No provider watchlist matches recorded':'Stored screening completed with provider matches requiring review') + ' — weight: 0.20. (2) ' + (primaryUbo?'Verified beneficial ownership to natural person level':'Ownership verification incomplete') + ' — weight: 0.15. (3) Documentation at ' + docConfidence + '% — weight: 0.10. Decision pathway: Agent 1 (Identity & Document Integrity) → Agent 2 (External Database Cross-Verification) → Agent 3 (FinCrime Screening Interpretation) → Agent 4 (Corporate Structure & UBO Mapping) → Agent 5 (Compliance Memo & Risk Recommendation). Supervisor: No inter-agent contradictions flagged.'
       },
       red_flags_and_mitigants: {
         title: 'Red Flags & Mitigants',
@@ -3789,7 +3790,7 @@ function openAppDetail(ref) {
       key_findings: [
         'Beneficial ownership ' + (primaryUbo ? 'traced to natural persons — ' + controlName + ' (' + controlPct + '%) exercises effective control' : 'could not be verified — critical data gap'),
         (pepList.length>0 ? 'PEP identified: ' + pepList.join(', ') + '. Enhanced due diligence required.' : 'No PEP exposure identified'),
-        'Sanctions and adverse media screening ' + (sanctionsHits===0?'clear':'completed with findings') + ' across all consolidated lists',
+        'Stored watchlist screening ' + (sanctionsHits===0?'recorded with no provider matches':'recorded with provider matches requiring officer review'),
         verifiedDocs + ' of ' + numDocs + ' documents verified across 4 sections (' + numCorpDocs + ' corporate, ' + numPersonDocs + ' KYC/identity, ' + numBizDocs + ' business, ' + numOtherDocs + ' other) at ' + docConfidence + '% confidence',
         escapeHtml(app.country) + ' jurisdiction presents ' + (isHighRiskCountry?'severe':isOffshore?'moderate':'low') + ' risk',
         'Composite risk: ' + riskScore + '/100 (' + riskLevel + ') at ' + modelConf + '% model confidence'
@@ -4100,78 +4101,229 @@ function renderAudit() {
   });
 }
 
-function getPersonScreeningResult(app, personName) {
-  // Look up real screening data from prescreening_data.screening_report
+function getApplicationScreeningReport(app) {
   try {
     var psd = typeof app._raw_prescreening === 'string' ? JSON.parse(app._raw_prescreening) : (app._raw_prescreening || {});
-    var report = psd.screening_report;
-    if (report) {
-      var allScreenings = (report.director_screenings || []).concat(report.ubo_screenings || []);
-      var match = allScreenings.find(function(s) { return s.name === personName || s.person_name === personName; });
-      if (match) {
-        return {
-          sanctions: match.sanctions && match.sanctions.status ? match.sanctions.status : (match.sanctions && match.sanctions.result ? match.sanctions.result : 'clear'),
-          pep: match.pep && match.pep.status ? match.pep.status : (match.pep && match.pep.result ? match.pep.result : 'clear'),
-          adverse_media: match.adverse_media && match.adverse_media.status ? match.adverse_media.status : (match.adverse_media && match.adverse_media.result ? match.adverse_media.result : 'clear')
-        };
-      }
-    }
+    return {
+      report: psd.screening_report || null,
+      meta: psd || {}
+    };
   } catch(e) {}
-  return null; // No screening data available
+  return { report:null, meta:{} };
+}
+
+function classifyScreeningHits(results) {
+  var hits = Array.isArray(results) ? results : [];
+  var facts = {
+    total: hits.length,
+    sanctions_hits: 0,
+    pep_hits: 0,
+    other_hits: 0
+  };
+  hits.forEach(function(hit) {
+    if (hit && hit.is_sanctioned) facts.sanctions_hits++;
+    if (hit && hit.is_pep) facts.pep_hits++;
+  });
+  facts.other_hits = Math.max(0, facts.total - facts.sanctions_hits - facts.pep_hits);
+  return facts;
+}
+
+function getApplicationScreeningSummary(app) {
+  var screeningData = getApplicationScreeningReport(app);
+  var report = screeningData.report;
+  if (!report) {
+    return {
+      screening_run_recorded: false,
+      report: null,
+      overall_flags: [],
+      total_hits: 0,
+      company_screening: null,
+      ip_geolocation: null,
+      kyc_applicants: [],
+      screening_mode: null,
+      screened_at: screeningData.meta.last_screened_at || null,
+      screened_by: screeningData.meta.screened_by || null,
+      last_screened_at: screeningData.meta.last_screened_at || null
+    };
+  }
+
+  return {
+    screening_run_recorded: true,
+    report: report,
+    overall_flags: Array.isArray(report.overall_flags) ? report.overall_flags : [],
+    total_hits: report.total_hits || 0,
+    company_screening: report.company_screening || null,
+    ip_geolocation: report.ip_geolocation || null,
+    kyc_applicants: Array.isArray(report.kyc_applicants) ? report.kyc_applicants : [],
+    screening_mode: report.screening_mode || null,
+    screened_at: report.screened_at || screeningData.meta.last_screened_at || null,
+    screened_by: screeningData.meta.screened_by || null,
+    last_screened_at: screeningData.meta.last_screened_at || report.screened_at || null
+  };
+}
+
+function getPersonScreeningResult(app, personName) {
+  var screeningSummary = getApplicationScreeningSummary(app);
+  var report = screeningSummary.report;
+  if (!report) return null;
+
+  var allScreenings = (report.director_screenings || []).concat(report.ubo_screenings || []);
+  var match = allScreenings.find(function(s) { return s.name === personName || s.person_name === personName; });
+  if (!match) return null;
+
+  var screening = match.screening || {};
+  var hitFacts = classifyScreeningHits(screening.results || []);
+  var hasMatchedRecord = !!screening.matched;
+  var hasSanctionsHit = hitFacts.sanctions_hits > 0;
+  var hasPepHit = hitFacts.pep_hits > 0 || !!match.undeclared_pep;
+  var hasOtherHit = hitFacts.other_hits > 0;
+
+  return {
+    sanctions: hasMatchedRecord ? (hasSanctionsHit ? 'match' : (hasOtherHit ? 'review' : 'clear')) : 'clear',
+    pep: hasMatchedRecord ? (hasPepHit ? 'match' : (hasOtherHit ? 'review' : 'clear')) : 'clear',
+    adverse_media: 'not_available',
+    adverse_media_available: false,
+    raw_match_count: hitFacts.total,
+    sanctions_hit_count: hitFacts.sanctions_hits,
+    pep_hit_count: hitFacts.pep_hits,
+    other_hit_count: hitFacts.other_hits,
+    undeclared_pep: !!match.undeclared_pep,
+    screening_source: screening.source || null,
+    screening_api_status: screening.api_status || null,
+    screened_at: screening.screened_at || screeningSummary.screened_at || null,
+    requires_review: hasMatchedRecord || !!match.undeclared_pep,
+    raw_screening: screening
+  };
 }
 
 function screeningBadge(status) {
   if (!status) return '<span class="badge pending">Pending</span>';
   var s = String(status).toLowerCase();
+  if (s === 'not_available' || s === 'unavailable') return '<span class="badge draft">Not Available</span>';
+  if (s === 'not_applicable' || s === 'n/a') return '<span class="badge draft">N/A</span>';
+  if (s === 'declared') return '<span class="badge pending">Declared</span>';
+  if (s === 'not_declared') return '<span class="badge approved">Not Declared</span>';
   if (s === 'clear' || s === 'no_match' || s === 'passed') return '<span class="badge approved">Clear</span>';
   if (s === 'match' || s === 'hit' || s === 'failed') return '<span class="badge high">Match</span>';
   if (s === 'possible_match' || s === 'review') return '<span class="badge pending">Review</span>';
   return '<span class="badge pending">' + escapeHtml(status) + '</span>';
 }
 
-function renderScreening() {
+async function loadScreeningQueue() {
+  if (!BO_AUTH_TOKEN) {
+    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:'Authentication required' };
+    return false;
+  }
+  try {
+    var payload = await boApiCall('GET', '/screening/queue');
+    SCREENING_QUEUE = {
+      metrics: payload.metrics || null,
+      rows: payload.rows || [],
+      generated_at: payload.generated_at || null,
+      load_error: null
+    };
+    return true;
+  } catch(e) {
+    console.warn('Failed to load screening queue:', e);
+    SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:(e && e.message) || 'Queue unavailable' };
+    return false;
+  }
+}
+
+function screeningQueueStatusBadge(statusKey, statusLabel) {
+  var cls = 'pending';
+  if (statusKey === 'screened_no_match') cls = 'approved';
+  else if (statusKey === 'awaiting_screening' || statusKey === 'incomplete_record' || statusKey === 'declared_pep_review') cls = 'pending';
+  else if (statusKey === 'review_required') cls = 'high';
+  return '<span class="badge ' + cls + '">' + escapeHtml(statusLabel || statusKey || 'Pending') + '</span>';
+}
+
+function screeningQueueContextCell(row) {
+  var parts = (row.entity_context || []).slice();
+  if (row.screening_mode) parts.push('Mode: ' + row.screening_mode);
+  if (row.screened_at) parts.push('Screened: ' + String(row.screened_at).substring(0, 19).replace('T', ' '));
+  if (!parts.length) return '<span style="font-size:12px;color:var(--text3);">—</span>';
+  return '<div style="display:flex;flex-wrap:wrap;gap:4px;">' + parts.map(function(part) {
+    return '<span class="explain-data-source" style="margin:0;">' + escapeHtml(part) + '</span>';
+  }).join('') + '</div>';
+}
+
+function screeningReviewBadge(row) {
+  if (!row || !row.review_disposition) return '';
+  var labelMap = {
+    cleared: 'Officer Cleared',
+    escalated: 'Escalated',
+    follow_up_required: 'Follow-Up Required'
+  };
+  var status = row.review_disposition;
+  var cls = status === 'cleared' ? 'approved' : status === 'escalated' ? 'high' : 'pending';
+  var meta = row.reviewed_by ? ' by ' + row.reviewed_by : '';
+  return '<div style="margin-top:4px;"><span class="badge ' + cls + '">' + escapeHtml(labelMap[status] || status) + '</span>' +
+    (meta ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(meta + (row.reviewed_at ? ' • ' + String(row.reviewed_at).substring(0, 19).replace('T', ' ') : '')) + '</div>' : '') +
+    (row.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:2px;">' + escapeHtml(row.review_notes) + '</div>' : '') +
+    '</div>';
+}
+
+async function saveScreeningReview(applicationRef, subjectType, subjectName, disposition) {
+  var notes = window.prompt('Add screening review notes for ' + subjectName + ':', '');
+  if (notes === null) return;
+  try {
+    await boApiCall('POST', '/screening/review', {
+      application_id: applicationRef,
+      subject_type: subjectType,
+      subject_name: subjectName,
+      disposition: disposition,
+      notes: notes
+    });
+    showToast('Screening review saved');
+    await renderScreening();
+  } catch(e) {
+    showToast(e.message || 'Failed to save screening review', 'error');
+  }
+}
+
+async function renderScreening() {
   var tbody = document.getElementById('screening-body');
   tbody.innerHTML = '';
-  var awaitingCount = 0, screenedCount = 0, hitsCount = 0;
-  APPLICATIONS.forEach(function(app) {
-    app.directors.concat(app.ubos).forEach(function(p) {
-      var tr = document.createElement('tr');
-      var isPEP = p.pep === 'Yes';
-      var sr = getPersonScreeningResult(app, p.name);
 
-      var sanctionsBadge, pepBadge, adverseBadge, overallBadge;
-      if (sr) {
-        screenedCount++;
-        sanctionsBadge = screeningBadge(sr.sanctions);
-        pepBadge = isPEP ? '<span class="badge high">Match</span>' : screeningBadge(sr.pep);
-        adverseBadge = screeningBadge(sr.adverse_media);
-        var hasSanctionHit = sr.sanctions === 'match' || sr.sanctions === 'hit';
-        var hasAdverseHit = sr.adverse_media === 'match' || sr.adverse_media === 'hit';
-        var hasIssue = isPEP || hasSanctionHit || hasAdverseHit;
-        if (hasIssue) hitsCount++;
-        overallBadge = '<span class="badge ' + (hasIssue ? 'pending' : 'approved') + '">' + (hasIssue ? 'Review' : 'Cleared') + '</span>';
-      } else {
-        awaitingCount++;
-        sanctionsBadge = '<span class="badge pending">Pending</span>';
-        pepBadge = isPEP ? '<span class="badge high">Match</span>' : '<span class="badge pending">Pending</span>';
-        adverseBadge = '<span class="badge pending">Pending</span>';
-        overallBadge = '<span class="badge pending">' + (isPEP ? 'Review' : 'Pending') + '</span>';
+  await loadScreeningQueue();
+
+  if (!SCREENING_QUEUE.rows.length) {
+    var empty = document.createElement('tr');
+    empty.innerHTML = '<td colspan="8" style="padding:24px;text-align:center;color:var(--text3);font-size:13px;">' +
+      escapeHtml(SCREENING_QUEUE.load_error || 'No screening queue items available from the backend.') +
+      '</td>';
+    tbody.appendChild(empty);
+  } else {
+    SCREENING_QUEUE.rows.forEach(function(row) {
+      var tr = document.createElement('tr');
+      var pepCell = '<div style="display:flex;flex-wrap:wrap;gap:4px;">' +
+        screeningBadge(row.pep_declared_status || 'not_applicable') +
+        screeningBadge(row.pep_screening_status || 'not_applicable') +
+        '</div>';
+      var actions = '<button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + escapeHtml(row.application_ref) + '\')">View</button>';
+      if (row.review_required) {
+        actions += ' <button class="btn btn-outline btn-sm" onclick="saveScreeningReview(\'' + escapeHtml(row.application_ref) + '\',\'' + escapeHtml(row.subject_type) + '\',\'' + escapeHtml(row.subject_name).replace(/'/g, "\\'") + '\',\'cleared\')">Clear</button>';
+        actions += ' <button class="btn btn-outline btn-sm" onclick="saveScreeningReview(\'' + escapeHtml(row.application_ref) + '\',\'' + escapeHtml(row.subject_type) + '\',\'' + escapeHtml(row.subject_name).replace(/'/g, "\\'") + '\',\'escalated\')">Escalate</button>';
       }
 
-      tr.innerHTML = '<td>' + escapeHtml(p.name) + '</td><td style="font-size:12px;">' + (p.pct !== undefined ? 'UBO' : 'Director') + '</td><td style="font-size:12px;">' + escapeHtml(app.company) + '</td>' +
-        '<td>' + sanctionsBadge + '</td>' +
-        '<td>' + pepBadge + '</td>' +
-        '<td>' + adverseBadge + '</td>' +
-        '<td>' + overallBadge + '</td>' +
-        '<td><button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + app.ref + '\')">View</button></td>';
+      tr.innerHTML = '<td>' + escapeHtml(row.subject_name) + '</td>' +
+        '<td style="font-size:12px;text-transform:capitalize;">' + escapeHtml(String(row.subject_type || '').replace('_', ' ')) + '</td>' +
+        '<td style="font-size:12px;">' + escapeHtml(row.company_name || '') + '</td>' +
+        '<td>' + screeningBadge(row.watchlist_status) + '</td>' +
+        '<td>' + pepCell + '</td>' +
+        '<td>' + screeningQueueContextCell(row) + '</td>' +
+        '<td>' + screeningQueueStatusBadge(row.status_key, row.status_label) + screeningReviewBadge(row) + '</td>' +
+        '<td>' + actions + '</td>';
       tbody.appendChild(tr);
     });
-  });
+  }
+
   // Update screening stat cards
   var el;
-  el = document.getElementById('screening-stat-awaiting'); if (el) el.textContent = awaitingCount;
-  el = document.getElementById('screening-stat-screened'); if (el) el.textContent = screenedCount;
-  el = document.getElementById('screening-stat-hits'); if (el) el.textContent = hitsCount;
+  el = document.getElementById('screening-stat-awaiting'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_awaiting_screening : 0;
+  el = document.getElementById('screening-stat-screened'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_screened : 0;
+  el = document.getElementById('screening-stat-hits'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_requiring_review : 0;
 }
 
 function renderEDD() {
@@ -4978,9 +5130,9 @@ function renderKPIDashboard() {
       var sr = getPersonScreeningResult(app, p.name);
       if (sr) {
         var s = String(sr.sanctions || '').toLowerCase();
-        var am = String(sr.adverse_media || '').toLowerCase();
+        var pep = String(sr.pep || '').toLowerCase();
         if (s === 'match' || s === 'hit') sanctionsHits++;
-        if (am === 'match' || am === 'hit') sanctionsHits++;
+        if (pep === 'match' || pep === 'hit') sanctionsHits++;
       }
     });
   });

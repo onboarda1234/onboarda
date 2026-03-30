@@ -3730,9 +3730,301 @@ class BackOfficeHandler(tornado.web.RequestHandler):
             self.write(f.read())
 
 
+def _screening_hit_facts(screening_record):
+    results = (screening_record or {}).get("results", []) or []
+    sanctions_hits = sum(1 for hit in results if hit.get("is_sanctioned"))
+    pep_hits = sum(1 for hit in results if hit.get("is_pep"))
+    return {
+        "total_hits": len(results),
+        "sanctions_hits": sanctions_hits,
+        "pep_hits": pep_hits,
+        "other_hits": max(0, len(results) - sanctions_hits - pep_hits),
+    }
+
+
+def upsert_screening_review(db, application_id, subject_type, subject_name, disposition, notes, reviewer_id, reviewer_name):
+    db.execute(
+        """
+        INSERT INTO screening_reviews
+        (application_id, subject_type, subject_name, disposition, notes, reviewer_id, reviewer_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(application_id, subject_type, subject_name)
+        DO UPDATE SET
+            disposition=excluded.disposition,
+            notes=excluded.notes,
+            reviewer_id=excluded.reviewer_id,
+            reviewer_name=excluded.reviewer_name,
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        (application_id, subject_type, subject_name, disposition, notes, reviewer_id, reviewer_name),
+    )
+
+
+def _build_screening_queue_payload(db, user):
+    query = "SELECT * FROM applications WHERE 1=1"
+    params = []
+    if user["type"] == "client":
+        query += " AND client_id = ?"
+        params.append(user["sub"])
+    query += " ORDER BY created_at DESC LIMIT 200"
+
+    apps = [dict(r) for r in db.execute(query, params).fetchall()]
+    rows = []
+    metrics = {
+        "applications_awaiting_screening": 0,
+        "applications_screened": 0,
+        "applications_requiring_review": 0,
+        "subject_rows": 0,
+    }
+
+    for app in apps:
+        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
+            "SELECT * FROM directors WHERE application_id = ?", (app["id"],)).fetchall()]
+        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
+            "SELECT * FROM ubos WHERE application_id = ?", (app["id"],)).fetchall()]
+        review_map = {}
+        for review in db.execute(
+            "SELECT * FROM screening_reviews WHERE application_id = ?",
+            (app["id"],),
+        ).fetchall():
+            review = dict(review)
+            review_map[(review.get("subject_type"), review.get("subject_name"))] = review
+
+        prescreening = safe_json_loads(app.get("prescreening_data"))
+        report = prescreening.get("screening_report") or None
+        overall_flags = report.get("overall_flags", []) if report else []
+        screening_mode = report.get("screening_mode") if report else None
+        screened_at = (report or {}).get("screened_at") or prescreening.get("last_screened_at")
+        screened_by = prescreening.get("screened_by")
+
+        if report:
+            metrics["applications_screened"] += 1
+        else:
+            metrics["applications_awaiting_screening"] += 1
+
+        person_screenings = {}
+        if report:
+            for item in (report.get("director_screenings") or []) + (report.get("ubo_screenings") or []):
+                person_screenings[item.get("person_name")] = item
+
+        company_screening = (report or {}).get("company_screening") or {}
+        company_sanctions = company_screening.get("sanctions") or {}
+        company_ip = (report or {}).get("ip_geolocation") or {}
+        company_kyc = (report or {}).get("kyc_applicants") or []
+        company_registry_found = company_screening.get("found")
+        company_watchlist_status = "pending"
+        if report:
+            company_watchlist_status = "match" if company_sanctions.get("matched") else "clear"
+
+        company_context = []
+        if report:
+            company_context.append(
+                "Registry found" if company_registry_found else "Registry not found"
+            )
+            if company_ip.get("risk_level"):
+                company_context.append("IP risk: " + company_ip.get("risk_level"))
+            if company_ip.get("is_vpn"):
+                company_context.append("VPN detected")
+            if company_ip.get("is_proxy"):
+                company_context.append("Proxy detected")
+            if company_ip.get("is_tor"):
+                company_context.append("Tor detected")
+            rejected_kyc = [a.get("person_name") for a in company_kyc if a.get("review_answer") == "RED"]
+            if rejected_kyc:
+                company_context.append("KYC RED: " + ", ".join(rejected_kyc))
+
+        company_requires_review = False
+        if report:
+            company_requires_review = (
+                bool(company_sanctions.get("matched")) or
+                company_registry_found is False or
+                company_ip.get("risk_level") in ("HIGH", "VERY_HIGH") or
+                company_ip.get("is_vpn") or
+                company_ip.get("is_proxy") or
+                company_ip.get("is_tor") or
+                any(a.get("review_answer") == "RED" for a in company_kyc)
+            )
+
+        application_requires_review = company_requires_review
+
+        company_review = review_map.get(("entity", app["company_name"]))
+        if directors or ubos or report:
+            rows.append({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "company_name": app["company_name"],
+                "subject_name": app["company_name"],
+                "subject_type": "entity",
+                "watchlist_status": company_watchlist_status,
+                "pep_declared_status": "not_applicable",
+                "pep_screening_status": "not_applicable",
+                "entity_context": company_context,
+                "status_key": "review_required" if company_requires_review else ("screened_no_match" if report else "awaiting_screening"),
+                "status_label": "Review Required" if company_requires_review else ("No Provider Match" if report else "Awaiting Screening"),
+                "screening_mode": screening_mode,
+                "screened_at": screened_at,
+                "screened_by": screened_by,
+                "flag_count": len(overall_flags),
+                "total_hits": (report or {}).get("total_hits", 0),
+                "review_required": company_requires_review,
+                "review_disposition": (company_review or {}).get("disposition"),
+                "review_notes": (company_review or {}).get("notes"),
+                "reviewed_by": (company_review or {}).get("reviewer_name"),
+                "reviewed_at": (company_review or {}).get("updated_at") or (company_review or {}).get("created_at"),
+            })
+
+        for person, subject_type in [(d, "director") for d in directors] + [(u, "ubo") for u in ubos]:
+            person_name = person.get("full_name", "")
+            item = person_screenings.get(person_name)
+            screening = (item or {}).get("screening") or {}
+            facts = _screening_hit_facts(screening)
+            declared_pep = person.get("is_pep", "No") == "Yes"
+            provider_pep = facts["pep_hits"] > 0 or bool((item or {}).get("undeclared_pep"))
+            provider_sanctions = facts["sanctions_hits"] > 0
+            provider_other = facts["other_hits"] > 0
+
+            if not report:
+                watchlist_status = "pending"
+                pep_screening_status = "pending"
+                status_key = "awaiting_screening"
+                status_label = "Awaiting Screening"
+            elif not item:
+                watchlist_status = "pending"
+                pep_screening_status = "pending"
+                status_key = "incomplete_record"
+                status_label = "Incomplete Screening Record"
+            else:
+                watchlist_status = "match" if provider_sanctions else ("review" if provider_other else "clear")
+                pep_screening_status = "match" if provider_pep else ("review" if provider_other else "clear")
+                if provider_sanctions or provider_pep or provider_other:
+                    status_key = "review_required"
+                    status_label = "Review Required"
+                elif declared_pep:
+                    status_key = "declared_pep_review"
+                    status_label = "Declared PEP Review"
+                else:
+                    status_key = "screened_no_match"
+                    status_label = "No Provider Match"
+
+            requires_review = status_key in ("review_required", "declared_pep_review", "incomplete_record")
+            person_review = review_map.get((subject_type, person_name))
+            review_disposition = (person_review or {}).get("disposition")
+            review_resolved = review_disposition == "cleared"
+            if requires_review and not review_resolved:
+                application_requires_review = True
+
+            entity_context = []
+            if screening.get("source"):
+                entity_context.append("Source: " + screening.get("source"))
+            if screening.get("api_status"):
+                entity_context.append("API: " + screening.get("api_status"))
+            if (item or {}).get("undeclared_pep"):
+                entity_context.append("Undeclared PEP")
+
+            rows.append({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "company_name": app["company_name"],
+                "subject_name": person_name,
+                "subject_type": subject_type,
+                "watchlist_status": watchlist_status,
+                "pep_declared_status": "declared" if declared_pep else "not_declared",
+                "pep_screening_status": pep_screening_status,
+                "entity_context": entity_context,
+                "status_key": status_key,
+                "status_label": status_label,
+                "screening_mode": screening_mode,
+                "screened_at": screening.get("screened_at") or screened_at,
+                "screened_by": screened_by,
+                "flag_count": len(overall_flags),
+                "total_hits": facts["total_hits"],
+                "review_required": requires_review,
+                "review_disposition": review_disposition,
+                "review_notes": (person_review or {}).get("notes"),
+                "reviewed_by": (person_review or {}).get("reviewer_name"),
+                "reviewed_at": (person_review or {}).get("updated_at") or (person_review or {}).get("created_at"),
+            })
+
+        if company_requires_review and (company_review or {}).get("disposition") != "cleared":
+            application_requires_review = True
+        if application_requires_review:
+            metrics["applications_requiring_review"] += 1
+
+    metrics["subject_rows"] = len(rows)
+    return {
+        "metrics": metrics,
+        "rows": rows,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
 # ══════════════════════════════════════════════════════════
 # SCREENING ENDPOINTS (Real API Integrations)
 # ══════════════════════════════════════════════════════════
+
+class ScreeningQueueHandler(BaseHandler):
+    """GET /api/screening/queue — authoritative screening queue payload"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        payload = _build_screening_queue_payload(db, user)
+        db.close()
+        self.success(payload)
+
+
+class ScreeningReviewHandler(BaseHandler):
+    """POST /api/screening/review — persist reviewer disposition for a screening queue row"""
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        data = self.get_json()
+        app_id = data.get("application_id")
+        subject_type = (data.get("subject_type") or "").strip().lower()
+        subject_name = (data.get("subject_name") or "").strip()
+        disposition = (data.get("disposition") or "").strip().lower()
+        notes = (data.get("notes") or "").strip()
+
+        if not app_id or not subject_type or not subject_name or not disposition:
+            return self.error("application_id, subject_type, subject_name, and disposition are required")
+
+        if disposition not in ("cleared", "escalated", "follow_up_required"):
+            return self.error("Unsupported screening review disposition", 400)
+
+        db = get_db()
+        app = db.execute("SELECT id, ref FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        upsert_screening_review(
+            db,
+            app["id"],
+            subject_type,
+            subject_name,
+            disposition,
+            notes,
+            user["sub"],
+            user.get("name") or user.get("full_name") or user["sub"],
+        )
+        db.commit()
+
+        disposition_label = disposition.replace("_", " ")
+        self.log_audit(user, "Screening Review", app["ref"], f"{subject_type}:{subject_name} -> {disposition_label}", db=db)
+        review = dict(db.execute(
+            """
+            SELECT application_id, subject_type, subject_name, disposition, notes, reviewer_name, created_at, updated_at
+            FROM screening_reviews WHERE application_id=? AND subject_type=? AND subject_name=?
+            """,
+            (app["id"], subject_type, subject_name),
+        ).fetchone())
+        db.close()
+        self.success({"review": review})
+
 
 class ScreeningHandler(BaseHandler):
     """POST /api/screening/run — run full screening for an application"""
@@ -3783,6 +4075,9 @@ class ScreeningHandler(BaseHandler):
         }
 
         report = run_full_screening(app_data, directors, ubos, client_ip=self.get_client_ip())
+        screening_mode = determine_screening_mode(report)
+        report["screening_mode"] = screening_mode
+        store_screening_mode(db, real_id, screening_mode)
 
         # Store screening report
         prescreening = safe_json_loads(app["prescreening_data"])
@@ -5699,6 +5994,8 @@ def make_app():
 
         # Screening (Real API Integrations)
         (r"/api/screening/run", ScreeningHandler),
+        (r"/api/screening/queue", ScreeningQueueHandler),
+        (r"/api/screening/review", ScreeningReviewHandler),
         (r"/api/screening/sanctions", SanctionsCheckHandler),
         (r"/api/screening/company", CompanyLookupHandler),
         (r"/api/screening/ip", IPCheckHandler),

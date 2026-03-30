@@ -162,15 +162,33 @@ class ApprovalGateValidator:
                     f"Flagged documents must be resolved before approval: {doc_types}"
                 )
 
-            # 5. Check screening report for any simulated api_status
-            for check_name in ('sanctions', 'company_registry', 'ip_geolocation', 'kyc'):
-                check_data = screening_report.get(check_name, {})
-                if isinstance(check_data, dict) and check_data.get('api_status') == 'simulated':
-                    return (
-                        False,
-                        f"Screening check '{check_name}' used simulated data (api_status=simulated). "
-                        "Live screening results are required for approval."
-                    )
+            # 5. Check screening report for any simulated or degraded provider statuses
+            screening_evidence = _collect_screening_provider_evidence(screening_report)
+            if screening_evidence:
+                for item in screening_evidence:
+                    api_status = (item.get("api_status") or "").lower()
+                    source = (item.get("source") or "").lower()
+                    if api_status in ("simulated", "mocked") or source in ("simulated", "mocked"):
+                        return (
+                            False,
+                            f"Screening check '{item.get('name', 'unknown')}' used simulated data. "
+                            "Live screening results are required for approval."
+                        )
+                    if api_status in ("error", "blocked"):
+                        return (
+                            False,
+                            f"Screening check '{item.get('name', 'unknown')}' is not in a live usable state "
+                            f"(api_status={api_status or 'unknown'}).",
+                        )
+            else:
+                for check_name in ('sanctions', 'company_registry', 'ip_geolocation', 'kyc'):
+                    check_data = screening_report.get(check_name, {})
+                    if isinstance(check_data, dict) and check_data.get('api_status') == 'simulated':
+                        return (
+                            False,
+                            f"Screening check '{check_name}' used simulated data (api_status=simulated). "
+                            "Live screening results are required for approval."
+                        )
 
             # 6. Check AI source provenance from memo data
             memo_data_str = memo_row.get('memo_data', '{}') if memo_row else '{}'
@@ -262,6 +280,37 @@ class ApprovalGateValidator:
 # 2. Screening Mode Tracker (P0-02)
 # ============================================================================
 
+def _collect_screening_provider_evidence(screening_report: Dict) -> list:
+    evidence = []
+    if not isinstance(screening_report, dict):
+        return evidence
+
+    def add(name: str, item):
+        if not isinstance(item, dict):
+            return
+        evidence.append({
+            "name": name,
+            "api_status": item.get("api_status"),
+            "source": item.get("source"),
+        })
+
+    company_screening = screening_report.get("company_screening") or {}
+    add("company_registry", company_screening)
+    add("company_watchlist", company_screening.get("sanctions"))
+
+    for idx, person in enumerate(screening_report.get("director_screenings") or []):
+        add(f"director_screening_{idx}", (person or {}).get("screening"))
+
+    for idx, person in enumerate(screening_report.get("ubo_screenings") or []):
+        add(f"ubo_screening_{idx}", (person or {}).get("screening"))
+
+    add("ip_geolocation", screening_report.get("ip_geolocation"))
+
+    for idx, applicant in enumerate(screening_report.get("kyc_applicants") or []):
+        add(f"kyc_applicant_{idx}", applicant)
+
+    return evidence
+
 def determine_screening_mode(screening_report: Dict) -> str:
     """
     Analyzes a screening report to determine if it used live or simulated sources.
@@ -273,7 +322,26 @@ def determine_screening_mode(screening_report: Dict) -> str:
         'live' if all screening sources are production, 'simulated' if any source is mocked
     """
     try:
-        # Check if any screening source is marked as simulated/mock
+        if not isinstance(screening_report, dict) or not screening_report:
+            return 'unknown'
+
+        provider_evidence = _collect_screening_provider_evidence(screening_report)
+        if provider_evidence:
+            saw_live = False
+            for item in provider_evidence:
+                api_status = (item.get("api_status") or "").lower()
+                source_name = (item.get("source") or "").lower()
+                if api_status in ("simulated", "mocked") or any(tag in source_name for tag in ("simulated", "mock", "demo")):
+                    logger.warning(f"Screening contains simulated source: {item}")
+                    return 'simulated'
+                if api_status in ("error", "blocked"):
+                    logger.warning(f"Screening contains non-live provider state: {item}")
+                    return 'unknown'
+                if api_status == "live" or source_name in ("sumsub", "opencorporates", "ipapi", "local"):
+                    saw_live = True
+            return 'live' if saw_live else 'unknown'
+
+        # Legacy fallback for older report shapes
         sources = screening_report.get('sources', [])
         rules_results = screening_report.get('rules_results', [])
 
@@ -288,12 +356,11 @@ def determine_screening_mode(screening_report: Dict) -> str:
                 logger.warning("Screening contains simulated rule results")
                 return 'simulated'
 
-        # Check overall environment flag
         if screening_report.get('is_simulated') or screening_report.get('testMode'):
             logger.warning("Screening report marked as simulated/test mode")
             return 'simulated'
 
-        return 'live'
+        return 'unknown'
 
     except Exception as e:
         logger.error(f"Error determining screening mode: {e}")
@@ -317,9 +384,10 @@ def store_screening_mode(db, app_id: str, mode: str) -> bool:
             logger.error(f"Invalid screening mode: {mode}")
             return False
 
-        # screening_mode is stored inside prescreening_data.screening_report JSON
-        # (set by the caller in server.py before saving prescreening_data).
-        # This function logs the mode for audit trail.
+        db.execute(
+            "UPDATE applications SET screening_mode=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (mode, app_id),
+        )
         logger.info(f"Screening mode='{mode}' for application {app_id}")
         return True
 

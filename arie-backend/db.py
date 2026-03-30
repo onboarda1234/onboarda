@@ -452,6 +452,21 @@ def _get_postgres_schema() -> str:
         error_message TEXT
     );
 
+    -- Screening Review Dispositions
+    CREATE TABLE IF NOT EXISTS screening_reviews (
+        id SERIAL PRIMARY KEY,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        subject_type TEXT NOT NULL,
+        subject_name TEXT NOT NULL,
+        disposition TEXT NOT NULL CHECK(disposition IN ('cleared','escalated','follow_up_required')),
+        notes TEXT,
+        reviewer_id TEXT REFERENCES users(id),
+        reviewer_name TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(application_id, subject_type, subject_name)
+    );
+
     -- Audit Trail
     CREATE TABLE IF NOT EXISTS audit_log (
         id SERIAL PRIMARY KEY,
@@ -889,6 +904,21 @@ def _get_sqlite_schema() -> str:
         started_at TEXT,
         completed_at TEXT DEFAULT (datetime('now')),
         error_message TEXT
+    );
+
+    -- Screening Review Dispositions
+    CREATE TABLE IF NOT EXISTS screening_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        subject_type TEXT NOT NULL,
+        subject_name TEXT NOT NULL,
+        disposition TEXT NOT NULL CHECK(disposition IN ('cleared','escalated','follow_up_required')),
+        notes TEXT,
+        reviewer_id TEXT REFERENCES users(id),
+        reviewer_name TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(application_id, subject_type, subject_name)
     );
 
     -- Audit Trail
