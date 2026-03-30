@@ -22,6 +22,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
+from config import (
+    OPENCORPORATES_API_URL,
+    IP_GEOLOCATION_API_URL,
+    SUMSUB_WEBHOOK_SECRET,
+)
 from rule_engine import SANCTIONED, FATF_BLACK, FATF_GREY
 from environment import (
     ENV, is_production, is_staging, is_demo,
@@ -834,4 +839,3 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
                 report["total_hits"] += 1
 
     return report
-

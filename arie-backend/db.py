@@ -196,7 +196,6 @@ class DBConnection:
             self._cursor.close()
         if self.is_postgres:
             # Return connection to pool
-            global _pg_pool
             if _pg_pool:
                 _pg_pool.putconn(self.conn)
         else:
