@@ -62,18 +62,18 @@ def test_no_scoped_ui_or_memo_surfaces_use_stale_agent_labels():
         backend / "IMPLEMENTATION_SUMMARY.md",
     ]
     banned_strings = [
-        "Compliance Memo Agent",
-        "Agent 9: Compliance Memo Agent",
-        "66 automated checks",
-        "66 checks",
-        "10-agent verification pipeline",
-        "AI Compliance Engine",
-        "fully automated through our 10-agent pipeline",
-        "external_db_verification",
-        "Regulatory Impact Agent has no supervisor equivalent",
+        "Compliance " + "Memo " + "Agent",
+        "Agent 9: " + "Compliance " + "Memo " + "Agent",
+        "66 " + "automated " + "checks",
+        "66 " + "checks",
+        "10-agent " + "verification " + "pipeline",
+        "AI " + "Compliance " + "Engine",
+        "fully automated through our " + "10-agent " + "pipeline",
+        "external_" + "db_" + "verification",
+        "Regulatory Impact Agent has no " + "supervisor equivalent",
         "Agent 2a: ",
-        "Agent 2: Corporate Structure & UBO Mapping",
-        "Agent 4: FinCrime Screening Interpretation",
+        "Agent 2: " + "Corporate Structure & UBO Mapping",
+        "Agent 4: " + "FinCrime Screening Interpretation",
     ]
 
     for path in scoped_files:
