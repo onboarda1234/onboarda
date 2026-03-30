@@ -660,10 +660,12 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             entity_name = first_non_empty(intermediary.get("entity_name"), intermediary.get("full_name"))
             if not entity_name:
                 continue
+            intermediary_id = first_non_empty(intermediary.get("id"), secrets.token_hex(8))
             db.execute("""
-                INSERT INTO intermediaries (application_id, person_key, entity_name, jurisdiction, ownership_pct)
-                VALUES (?,?,?,?,?)
+                INSERT INTO intermediaries (id, application_id, person_key, entity_name, jurisdiction, ownership_pct)
+                VALUES (?,?,?,?,?,?)
             """, (
+                intermediary_id,
                 application_id,
                 intermediary.get("person_key"),
                 entity_name,
