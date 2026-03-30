@@ -71,7 +71,7 @@ def main():
             token = data.get("token", "")
             check("Client auth (login fallback)", bool(token))
         else:
-            check("Client registration", r.status_code == 200 and bool(token))
+            check("Client registration", r.status_code in (200, 201) and bool(token), f"status={r.status_code}")
     except Exception as e:
         check("Client registration", False, str(e))
         token = ""

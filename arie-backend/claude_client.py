@@ -3,13 +3,13 @@
 Claude AI Integration Module for ARIE Finance Compliance Platform
 ==================================================================
 
-Powers 5 Onboarding AI agents in the compliance workflow:
+Powers 5 onboarding AI functions in the compliance workflow:
 
-1. Identity & Document Integrity Agent — 66 automated checks, OCR, validation, cross-document consistency
+1. Identity & Document Integrity Agent — document verification, OCR, validation, cross-document consistency
 2. External Database Cross-Verification Agent — Registry lookups, OpenCorporates, Companies House, ADGM, DIFC verification
 3. FinCrime Screening Interpretation Agent — Sanctions/PEP/adverse media analysis, false positive reduction, hit severity ranking
 4. Corporate Structure & UBO Mapping Agent — Ownership chains, UBO identification, nominee detection, complex chain flagging
-5. Compliance Memo Agent — 7-dimension composite scoring, risk routing, compliance memo generation
+5. Compliance Memo & Risk Recommendation Agent — composite scoring, business plausibility assessment, risk routing, compliance memo generation
 
 Usage:
     from claude_client import ClaudeClient
@@ -18,13 +18,13 @@ Usage:
     # Agent 1: Verify document
     result = client.verify_document(doc_type, file_name, person_name)
 
-    # Agent 2: Analyze corporate structure
+    # Agent 4: Analyze corporate structure
     result = client.analyze_corporate_structure(directors, ubos, jurisdiction)
 
-    # Agent 3: Assess business plausibility
+    # Internal support for Agent 5: Assess business plausibility
     result = client.assess_business_plausibility(business_data, registry_data)
 
-    # Agent 4: Interpret FinCrime screening
+    # Agent 3: Interpret FinCrime screening
     result = client.interpret_fincrime_screening(screening_results, person_name, entity_type)
 
     # Agent 5: Score risk and generate compliance memo
@@ -47,7 +47,10 @@ from enum import Enum
 from config import (
     ANTHROPIC_API_KEY as _CFG_ANTHROPIC_API_KEY,
     CLAUDE_MOCK_MODE as _CFG_CLAUDE_MOCK_MODE,
+    ENVIRONMENT as _CFG_ENVIRONMENT,
     IS_PRODUCTION as _CFG_IS_PRODUCTION,
+    IS_DEMO as _CFG_IS_DEMO,
+    IS_STAGING as _CFG_IS_STAGING,
     ARIE_MODEL_FAST as _CFG_ARIE_MODEL_FAST,
     ARIE_MODEL_THOROUGH as _CFG_ARIE_MODEL_THOROUGH,
     AI_CONFIDENCE_THRESHOLD as _CFG_AI_CONFIDENCE_THRESHOLD,
@@ -85,21 +88,21 @@ if PYDANTIC_AVAILABLE:
         red_flags: List[str] = Field(default_factory=list)
 
     class CorporateStructureSchema(BaseModel):
-        """Agent 2: Corporate structure analysis output validation."""
+        """Agent 4: Corporate structure analysis output validation."""
         complexity_level: str = Field(default="")
         ubos_identified: List[Dict[str, Any]] = Field(default_factory=list)
         risk_indicators: List[str] = Field(default_factory=list)
         nominee_structures: bool = False
 
     class BusinessPlausibilitySchema(BaseModel):
-        """Agent 3: Business model plausibility output validation."""
+        """Internal business plausibility output validation supporting Agent 5."""
         plausibility_score: float = Field(ge=0.0, le=1.0, default=0.5)
         concerns: List[str] = Field(default_factory=list)
         sector_alignment: str = Field(default="")
         recommendation: str = Field(default="")
 
     class FinCrimeScreeningSchema(BaseModel):
-        """Agent 4: FinCrime screening interpretation output validation."""
+        """Agent 3: FinCrime screening interpretation output validation."""
         total_hits: int = Field(ge=0, default=0)
         confirmed_matches: int = Field(ge=0, default=0)
         false_positives: int = Field(ge=0, default=0)
@@ -484,7 +487,7 @@ def _mock_assess_business_plausibility() -> Dict[str, Any]:
 
 
 def _mock_analyze_corporate_structure() -> Dict[str, Any]:
-    """Generate realistic mock corporate structure analysis (Agent 2: Corporate Structure & UBO Mapping)."""
+    """Generate realistic mock corporate structure analysis (Agent 4: Corporate Structure & UBO Mapping)."""
     return {
         "structure_type": "Multi-layered holding",
         "complexity_score": 6,
@@ -505,7 +508,7 @@ def _mock_analyze_corporate_structure() -> Dict[str, Any]:
 
 
 def _mock_interpret_fincrime_screening() -> Dict[str, Any]:
-    """Generate realistic mock FinCrime screening interpretation (Agent 4: FinCrime Screening Interpretation)."""
+    """Generate realistic mock FinCrime screening interpretation (Agent 3: FinCrime Screening Interpretation)."""
     return {
         "consolidation_status": "All Clear",
         "total_hits": 3,
@@ -581,7 +584,7 @@ def _mock_generate_compliance_memo() -> Dict[str, Any]:
             },
             "ai_explainability": {
                 "title": "AI Explainability Layer",
-                "content": "Risk scoring model: Onboarda Composite Risk Engine v2.1. Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group risk factor guidance. Overall risk score: 52/100 (MEDIUM). Model confidence: 87% — confidence is reduced from baseline 95% due to limited historical transaction data and two missing documents. Top 3 risk-increasing factors: (1) PEP presence among directors — weight: 0.25, contribution: +13 points. Robert Lee's PEP status triggers FATF Recommendation 12 enhanced scrutiny requirements. (2) Offshore jurisdiction classification — weight: 0.20, contribution: +10 points. Mauritius's IFC characteristics elevate cross-border risk baseline. (3) Financial services sector — weight: 0.15, contribution: +8 points. Fund administration carries inherent intermediary risk. Top 3 risk-decreasing factors: (1) Clean sanctions screening — weight: 0.20, contribution: -10 points. No matches across any consolidated list. (2) Verified beneficial ownership — weight: 0.15, contribution: -8 points. Single-tier structure with UBO identified to natural person. (3) Adequate documentation — weight: 0.10, contribution: -5 points. 7 of 9 documents verified with high confidence. Decision pathway: Data ingestion → Agent 1 (Identity & Document Integrity: 94% confidence) → Agent 2 (External Database Cross-Verification: registry confirmed) → Agent 3 (FinCrime Screening Interpretation: clear) → Agent 4 (Corporate Structure & UBO Mapping: simple structure, no concerns) → Agent 5 (Compliance Memo). Supervisor module: No inter-agent contradictions flagged. All agent outputs are mutually consistent. Limitations: Limited historical transaction data reduces forward-looking risk confidence. Two missing documents prevent complete verification."
+                "content": "Risk scoring model: Onboarda Composite Risk Engine v2.1. Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group risk factor guidance. Overall risk score: 52/100 (MEDIUM). Model confidence: 87% — confidence is reduced from baseline 95% due to limited historical transaction data and two missing documents. Top 3 risk-increasing factors: (1) PEP presence among directors — weight: 0.25, contribution: +13 points. Robert Lee's PEP status triggers FATF Recommendation 12 enhanced scrutiny requirements. (2) Offshore jurisdiction classification — weight: 0.20, contribution: +10 points. Mauritius's IFC characteristics elevate cross-border risk baseline. (3) Financial services sector — weight: 0.15, contribution: +8 points. Fund administration carries inherent intermediary risk. Top 3 risk-decreasing factors: (1) Clean sanctions screening — weight: 0.20, contribution: -10 points. No matches across any consolidated list. (2) Verified beneficial ownership — weight: 0.15, contribution: -8 points. Single-tier structure with UBO identified to natural person. (3) Adequate documentation — weight: 0.10, contribution: -5 points. 7 of 9 documents verified with high confidence. Decision pathway: Data ingestion → Agent 1 (Identity & Document Integrity: 94% confidence) → Agent 2 (External Database Cross-Verification: registry confirmed) → Agent 3 (FinCrime Screening Interpretation: clear) → Agent 4 (Corporate Structure & UBO Mapping: simple structure, no concerns) → Agent 5 (Compliance Memo & Risk Recommendation). Supervisor module: No inter-agent contradictions flagged. All agent outputs are mutually consistent. Limitations: Limited historical transaction data reduces forward-looking risk confidence. Two missing documents prevent complete verification."
             },
             "red_flags_and_mitigants": {
                 "title": "Red Flags & Mitigants",
@@ -607,7 +610,7 @@ def _mock_generate_compliance_memo() -> Dict[str, Any]:
             },
             "audit_and_governance": {
                 "title": "Audit & Governance",
-                "content": "This compliance onboarding memo was generated by the Onboarda AI Compliance Engine (Agent 5: Compliance Memo), version 2.1. All data inputs were validated through the 10-agent verification pipeline comprising document verification, corporate structure analysis, business plausibility assessment, FinCrime screening interpretation, and composite risk scoring. The supervisor module confirmed inter-agent consistency with no contradictions flagged. Document classification: CONFIDENTIAL — this document contains personal data subject to GDPR (as applicable) and Mauritius Data Protection Act 2017 requirements. Retention period: 7 years from date of generation or termination of business relationship, whichever is later, in accordance with FIAMLA 2002 (Mauritius) record-keeping requirements. Applicable compliance frameworks: Financial Intelligence and Anti-Money Laundering Act 2002 (Mauritius), AML/CFT Codes and Guidance Notes (FSC Mauritius), EU Sixth Anti-Money Laundering Directive (6AMLD), FATF 40 Recommendations (2012, as updated). Generated: 2025-03-16T14:30:00Z. Memo version: 1.0. Reviewed by: Information not provided — memo pending Senior Compliance Officer review."
+                "content": "This compliance onboarding memo was generated by the Compliance Memo & Risk Recommendation workflow, version 2.1. In the live approval path, memo generation remains subject to downstream validation and memo supervisor checks before any human approval decision is made. Document classification: CONFIDENTIAL — this document contains personal data subject to GDPR (as applicable) and Mauritius Data Protection Act 2017 requirements. Retention period: 7 years from date of generation or termination of business relationship, whichever is later, in accordance with FIAMLA 2002 (Mauritius) record-keeping requirements. Applicable compliance frameworks: Financial Intelligence and Anti-Money Laundering Act 2002 (Mauritius), AML/CFT Codes and Guidance Notes (FSC Mauritius), EU Sixth Anti-Money Laundering Directive (6AMLD), FATF 40 Recommendations (2012, as updated). Generated: 2025-03-16T14:30:00Z. Memo version: 1.0. Reviewed by: Information not provided — memo pending Senior Compliance Officer review."
             }
         },
         "metadata": {
@@ -636,7 +639,7 @@ def _mock_generate_compliance_memo() -> Dict[str, Any]:
                 "Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists",
                 "Adverse media review conducted — no relevant hits identified",
                 "Source of funds verified through audited financial statements (Baker Tilly, FY2024)",
-                "Business model plausibility confirmed by Agent 3 — consistent with FSC licence and sector norms",
+                "Business model plausibility confirmed within Agent 5 — consistent with FSC licence and sector norms",
                 "Document verification completed (7/9) — 2 documents outstanding with formal request issued",
                 "Composite risk score reviewed: 52/100 (MEDIUM) at 87% confidence",
                 "Compliance decision (APPROVE WITH CONDITIONS) aligned with risk assessment findings and conditions framework"
@@ -727,36 +730,79 @@ class ClaudeClient:
                 "Set CLAUDE_MOCK_MODE=false or unset it, and provide a valid ANTHROPIC_API_KEY."
             )
 
+        # Determine if we are in a non-demo environment where mock is unsafe
+        _is_regulated_env = _CFG_IS_STAGING or _CFG_IS_PRODUCTION
+        self._fail_closed = False  # Set True if AI service unavailable in regulated env
+
         if self.mock_mode:
             logger.info("Claude client initialized in MOCK MODE (no API calls)")
             self.client = None
         else:
             if not ANTHROPIC_AVAILABLE:
-                logger.warning(
-                    "Anthropic library not available — falling back to mock mode. "
-                    "Install with: pip install anthropic"
-                )
-                self.mock_mode = True
-                self.client = None
+                if _is_regulated_env:
+                    logger.error(
+                        "FAIL-CLOSED: Anthropic library not available in %s. "
+                        "AI verification will return ERROR, not mock PASS. "
+                        "Install with: pip install anthropic", _CFG_ENVIRONMENT
+                    )
+                    self.mock_mode = False  # Do NOT enable mock — fail closed
+                    self.client = None
+                    self._fail_closed = True
+                else:
+                    logger.warning("Anthropic library not available — falling back to mock mode (demo/dev).")
+                    self.mock_mode = True
+                    self.client = None
             elif not self.api_key:
-                logger.warning(
-                    "No API key provided — falling back to mock mode. "
-                    "Set ANTHROPIC_API_KEY environment variable or pass api_key parameter."
-                )
-                self.mock_mode = True
-                self.client = None
+                if _is_regulated_env:
+                    logger.error(
+                        "FAIL-CLOSED: No ANTHROPIC_API_KEY in %s. "
+                        "AI verification will return ERROR, not mock PASS.", _CFG_ENVIRONMENT
+                    )
+                    self.mock_mode = False
+                    self.client = None
+                    self._fail_closed = True
+                else:
+                    logger.warning("No API key — falling back to mock mode (demo/dev).")
+                    self.mock_mode = True
+                    self.client = None
             else:
                 try:
                     self.client = Anthropic(api_key=self.api_key)
                     logger.info("Claude client initialized with Anthropic API")
                 except Exception as e:
-                    logger.warning(f"Failed to initialize Anthropic client: {e} — using mock mode")
-                    self.mock_mode = True
-                    self.client = None
+                    if _is_regulated_env:
+                        logger.error(
+                            "FAIL-CLOSED: Anthropic client init failed in %s: %s. "
+                            "AI verification will return ERROR.", _CFG_ENVIRONMENT, e
+                        )
+                        self.mock_mode = False
+                        self.client = None
+                        self._fail_closed = True
+                    else:
+                        logger.warning(f"Anthropic client init failed: {e} — using mock mode (demo/dev)")
+                        self.mock_mode = True
+                        self.client = None
 
         self.usage_tracker = UsageTracker(monthly_budget_usd)
         self.max_retries = 3
         self.timeout_seconds = 30
+
+    def _check_fail_closed(self, method_name: str) -> Optional[Dict[str, Any]]:
+        """Return an error result if the client is in fail-closed state (regulated env, no AI service).
+        Returns None if the client is operational (real API or allowed mock mode)."""
+        if getattr(self, '_fail_closed', False):
+            logger.error(f"FAIL-CLOSED: {method_name} called but AI service is unavailable in {_CFG_ENVIRONMENT}")
+            return {
+                "status": "error",
+                "error": f"AI service unavailable in {_CFG_ENVIRONMENT}. Cannot produce mock results in regulated environment.",
+                "checks": [],
+                "requires_review": True,
+                "_validated": False,
+                "_rejected": True,
+                "_fail_closed": True,
+                "ai_source": "fail-closed",
+            }
+        return None
 
     def _sanitize_for_prompt(self, text: str, max_length: int = 500) -> str:
         """
@@ -856,7 +902,7 @@ class ClaudeClient:
 
     def score_risk(self, application_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Agent 5 (Part 1): Compliance Memo Agent — Compute 5-dimension composite risk scoring.
+        Agent 5 (Part 1): Compliance Memo & Risk Recommendation Agent — Compute 5-dimension composite risk scoring.
 
         Scores application risk across 5 compliance dimensions:
         1. Jurisdiction Risk
@@ -885,6 +931,9 @@ class ClaudeClient:
                 "recommendation": "REVIEW"
             }
         """
+        fail_result = self._check_fail_closed("score_risk")
+        if fail_result:
+            return fail_result
         if self.mock_mode:
             logger.info("Returning mock risk score (mock mode)")
             result = _mock_risk_score()
@@ -941,6 +990,10 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
             result["ai_source"] = "claude-sonnet-4-6"
             return result
         except Exception as e:
+            fail_result = self._check_fail_closed("score_risk")
+            if fail_result:
+                fail_result["ai_error"] = str(e)[:200]
+                return fail_result
             logger.error(f"Risk scoring failed: {e} — returning mock fallback")
             result = _mock_risk_score()
             result["ai_source"] = "mock"
@@ -974,6 +1027,9 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
                 "confidence": 0.85
             }
         """
+        fail_result = self._check_fail_closed("assess_business_plausibility")
+        if fail_result:
+            return fail_result
         if self.mock_mode:
             logger.info("Returning mock business plausibility assessment (mock mode)")
             result = _mock_assess_business_plausibility()
@@ -1019,6 +1075,10 @@ geographic logic, and source of funds alignment."""
             result["ai_source"] = "claude-sonnet-4-6"
             return result
         except Exception as e:
+            fail_result = self._check_fail_closed("assess_business_plausibility")
+            if fail_result:
+                fail_result["ai_error"] = str(e)[:200]
+                return fail_result
             logger.error(f"Business plausibility assessment failed: {e} — returning mock response")
             result = _mock_assess_business_plausibility()
             result["ai_source"] = "mock"
@@ -1034,7 +1094,7 @@ geographic logic, and source of funds alignment."""
         jurisdiction: str,
     ) -> Dict[str, Any]:
         """
-        Agent 2: Corporate Structure & UBO Mapping Agent — Map ownership chains and identify beneficial owners.
+        Agent 4: Corporate Structure & UBO Mapping Agent — Map ownership chains and identify beneficial owners.
 
         Analyzes corporate structure, identifies UBO chains, detects nominee arrangements, and flags structural risks.
         Uses claude-sonnet-4-6 for speed and cost efficiency.
@@ -1055,6 +1115,9 @@ geographic logic, and source of funds alignment."""
                 "recommendations": ["recommendation1", "recommendation2"]
             }
         """
+        fail_result = self._check_fail_closed("analyze_corporate_structure")
+        if fail_result:
+            return fail_result
         if self.mock_mode:
             logger.info("Returning mock structure analysis (mock mode)")
             result = _mock_analyze_corporate_structure()
@@ -1116,6 +1179,10 @@ Map the ownership chain, identify the ultimate beneficial owner, and flag any ri
             result["ai_source"] = "claude-sonnet-4-6"
             return result
         except Exception as e:
+            fail_result = self._check_fail_closed("analyze_corporate_structure")
+            if fail_result:
+                fail_result["ai_error"] = str(e)[:200]
+                return fail_result
             logger.error(f"Structure analysis failed: {e} — returning mock response")
             result = _mock_analyze_corporate_structure()
             result["ai_source"] = "mock"
@@ -1131,7 +1198,7 @@ Map the ownership chain, identify the ultimate beneficial owner, and flag any ri
         entity_type: str = "individual",
     ) -> Dict[str, Any]:
         """
-        Agent 4: FinCrime Screening Interpretation Agent — Analyze sanctions/PEP/adverse media hits.
+        Agent 3: FinCrime Screening Interpretation Agent — Analyze sanctions/PEP/adverse media hits.
 
         Consolidates screening results, removes false positives, ranks severity, and provides recommendations.
         Uses claude-sonnet-4-6 for speed and cost efficiency.
@@ -1153,6 +1220,9 @@ Map the ownership chain, identify the ultimate beneficial owner, and flag any ri
                 "reasoning": "detailed reasoning"
             }
         """
+        fail_result = self._check_fail_closed("interpret_fincrime_screening")
+        if fail_result:
+            return fail_result
         if self.mock_mode:
             logger.info("Returning mock FinCrime screening interpretation (mock mode)")
             result = _mock_interpret_fincrime_screening()
@@ -1210,6 +1280,10 @@ Identify false positives, consolidate confirmed hits, rank severity, and provide
             result["ai_source"] = "claude-sonnet-4-6"
             return result
         except Exception as e:
+            fail_result = self._check_fail_closed("interpret_fincrime_screening")
+            if fail_result:
+                fail_result["ai_error"] = str(e)[:200]
+                return fail_result
             logger.error(f"FinCrime screening interpretation failed: {e} — returning mock response")
             result = _mock_interpret_fincrime_screening()
             result["ai_source"] = "mock"
@@ -1224,7 +1298,7 @@ Identify false positives, consolidate confirmed hits, rank severity, and provide
         agent_results: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Agent 5 (Part 2): Compliance Memo Agent — Generate comprehensive compliance narrative.
+        Agent 5 (Part 2): Compliance Memo & Risk Recommendation Agent — Generate comprehensive compliance narrative.
 
         Synthesizes risk scoring, beneficial ownership analysis, FinCrime interpretation, and business plausibility
         assessment into a professional compliance memo suitable for board and regulatory review.
@@ -1249,6 +1323,9 @@ Identify false positives, consolidate confirmed hits, rank severity, and provide
                 }
             }
         """
+        fail_result = self._check_fail_closed("generate_compliance_memo")
+        if fail_result:
+            return fail_result
         if self.mock_mode:
             logger.info("Returning mock compliance memo (mock mode)")
             result = _mock_generate_compliance_memo()
@@ -1404,6 +1481,10 @@ CRITICAL REQUIREMENTS:
             result["ai_routing_reason"] = routing_reason
             return result
         except Exception as e:
+            fail_result = self._check_fail_closed("generate_compliance_memo")
+            if fail_result:
+                fail_result["ai_error"] = str(e)[:200]
+                return fail_result
             logger.error(f"Memo generation failed: {e} — returning mock response")
             result = _mock_generate_compliance_memo()
             result["ai_source"] = "mock"
@@ -1575,6 +1656,9 @@ CRITICAL REQUIREMENTS:
                 "ai_source": "claude-sonnet-4-6"
             }
         """
+        fail_result = self._check_fail_closed("verify_document")
+        if fail_result:
+            return fail_result
         if self.mock_mode:
             logger.info("Returning mock document verification (mock mode)")
             result = _mock_verify_document()

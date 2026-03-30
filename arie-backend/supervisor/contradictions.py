@@ -224,11 +224,12 @@ class ContradictionDetector:
         pipeline_id: str, application_id: str
     ) -> Optional[Contradiction]:
         """
-        Screening flags severe adverse media, but business model says low concern.
+        Screening flags severe adverse media, but the final memo/risk agent
+        still presents the case as low concern.
         """
         screening = outputs.get(AgentType.FINCRIME_SCREENING)
-        business = outputs.get(AgentType.BUSINESS_MODEL_PLAUSIBILITY)
-        if not screening or not business:
+        memo = outputs.get(AgentType.COMPLIANCE_MEMO_RISK)
+        if not screening or not memo:
             return None
 
         has_severe_findings = (
@@ -237,14 +238,18 @@ class ContradictionDetector:
         )
         screening_high_concern = has_severe_findings and screening.confidence_score > 0.7
 
-        business_low_concern = (
-            business.status.value == "clean"
-            or (business.confidence_score > 0.8 and not business.risk_indicators)
+        memo_low_concern = (
+            memo.status.value == "clean"
+            or (
+                memo.confidence_score > 0.8
+                and getattr(memo, "recommended_risk_level", "") in ("LOW", "MEDIUM", None)
+                and not memo.risk_indicators
+            )
         )
 
-        if screening_high_concern and business_low_concern:
+        if screening_high_concern and memo_low_concern:
             severity_score = self._calc_severity_score(
-                base=0.80, confidence_gap=abs(screening.confidence_score - business.confidence_score)
+                base=0.80, confidence_gap=abs(screening.confidence_score - memo.confidence_score)
             )
             return Contradiction(
                 pipeline_id=pipeline_id,
@@ -256,14 +261,14 @@ class ContradictionDetector:
                 agent_a_run_id=screening.run_id,
                 agent_a_type=screening.agent_type,
                 agent_a_finding="Severe screening flags detected (sanctions/adverse media)",
-                agent_b_run_id=business.run_id,
-                agent_b_type=business.agent_type,
-                agent_b_finding="Business model analysis shows low concern",
+                agent_b_run_id=memo.run_id,
+                agent_b_type=memo.agent_type,
+                agent_b_finding="Memo/risk recommendation output shows low concern",
                 description=(
                     "The FinCrime Screening Agent detected severe adverse media or sanctions "
-                    "flags, but the Business Model Plausibility Agent rated the business as "
-                    "low concern. This requires manual review to assess whether the business "
-                    "model analysis adequately considered the screening results."
+                    "flags, but the final memo and risk recommendation still present the case "
+                    "as low concern. This requires manual review to assess whether the final "
+                    "risk synthesis adequately considered the screening results."
                 ),
             )
         return None
@@ -464,7 +469,7 @@ class ContradictionDetector:
                 agent_b_type=ubo.agent_type,
                 agent_b_finding="Missing UBO or incomplete ownership data",
                 description=(
-                    "The Compliance Memo Agent considers the data complete, but the "
+                    "The Compliance Memo & Risk Recommendation Agent considers the data complete, but the "
                     "UBO Mapping Agent reports missing beneficial owner information or "
                     "incomplete ownership structure."
                 ),
@@ -505,7 +510,7 @@ class ContradictionDetector:
                 agent_b_finding=f"Recommended risk level: {recommended_risk}",
                 description=(
                     "The FinCrime Screening Agent found sanctions or PEP matches, but the "
-                    "Compliance Memo Agent recommends a low/standard risk level. Sanctions and "
+                    "Compliance Memo & Risk Recommendation Agent recommends a low/standard risk level. Sanctions and "
                     "PEP matches should always result in elevated risk assessment."
                 ),
             )

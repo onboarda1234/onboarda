@@ -1432,6 +1432,9 @@
   <button type="button" class="dash-nav-item" onclick="showView('status-lookup')">
     <span class="dash-nav-icon">🔍</span> Track by Reference
   </button>
+  <button type="button" class="dash-nav-item" onclick="showView('account-security')">
+    <span class="dash-nav-icon">🔐</span> Security
+  </button>
 
   <div style="flex:1;"></div>
   <div class="dash-nav-sep"></div>
@@ -1609,7 +1612,7 @@
             </div>
           </div>
           <div style="text-align:right;margin-top:-12px;margin-bottom:20px;">
-            <a href="#" style="font-size:12px;color:var(--gold);">Forgot password?</a>
+            <a onclick="showView('forgot-password')" style="font-size:12px;color:var(--gold);cursor:pointer;">Forgot password?</a>
           </div>
           <button type="submit" class="btn-submit">
             🔒 Sign In
@@ -1617,6 +1620,92 @@
         </form>
 
         <div class="auth-switch">Don't have an account? <a onclick="showView('register')">Create one →</a></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-forgot-password" class="hidden">
+    <div class="auth-wrap">
+      <div class="auth-card">
+        <div class="auth-title">Reset your password</div>
+        <div class="auth-sub">Enter your email address and we will send you a password reset token.</div>
+        <form onsubmit="submitForgotPassword(event)">
+          <div class="form-group mb-3">
+            <label>Email Address <span class="req">*</span></label>
+            <input type="email" id="fp-email" placeholder="you@company.com" required autocomplete="email"/>
+          </div>
+          <button type="submit" class="btn-submit" id="forgot-password-btn">📩 Send Reset Token</button>
+        </form>
+        <div class="auth-switch">Remembered it? <a onclick="showView('login')">Back to sign in →</a></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-reset-password" class="hidden">
+    <div class="auth-wrap">
+      <div class="auth-card">
+        <div class="auth-title">Choose a new password</div>
+        <div class="auth-sub">Paste your reset token below and create a new password that meets policy requirements.</div>
+        <form onsubmit="submitResetPassword(event)">
+          <div class="form-group mb-2">
+            <label>Reset Token <span class="req">*</span></label>
+            <input type="text" id="rp-token" placeholder="Paste reset token" required autocomplete="one-time-code"/>
+          </div>
+          <div class="form-group mb-2">
+            <label>New Password <span class="req">*</span></label>
+            <div class="input-password-wrap">
+              <input type="password" id="rp-password" placeholder="Min. 12 characters" required autocomplete="new-password"/>
+              <button type="button" class="pwd-toggle" onclick="togglePwd('rp-password', this)">👁</button>
+            </div>
+          </div>
+          <div class="form-group mb-3">
+            <label>Confirm New Password <span class="req">*</span></label>
+            <div class="input-password-wrap">
+              <input type="password" id="rp-confirm" placeholder="Repeat new password" required autocomplete="new-password"/>
+              <button type="button" class="pwd-toggle" onclick="togglePwd('rp-confirm', this)">👁</button>
+            </div>
+          </div>
+          <button type="submit" class="btn-submit" id="reset-password-btn">🔐 Reset Password</button>
+        </form>
+        <div class="auth-switch">Need a token? <a onclick="showView('forgot-password')">Request one →</a></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-account-security" class="hidden">
+    <div class="page" style="max-width:560px;">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon blue">🔐</div>
+          <div>
+            <div class="card-title">Account Security</div>
+            <div class="card-sub">Change your portal password.</div>
+          </div>
+        </div>
+        <form onsubmit="submitChangePassword(event)" style="margin-top:16px;">
+          <div class="form-group mb-2">
+            <label>Current Password <span class="req">*</span></label>
+            <div class="input-password-wrap">
+              <input type="password" id="cp-current" placeholder="Current password" required autocomplete="current-password"/>
+              <button type="button" class="pwd-toggle" onclick="togglePwd('cp-current', this)">👁</button>
+            </div>
+          </div>
+          <div class="form-group mb-2">
+            <label>New Password <span class="req">*</span></label>
+            <div class="input-password-wrap">
+              <input type="password" id="cp-new" placeholder="Min. 12 characters" required autocomplete="new-password"/>
+              <button type="button" class="pwd-toggle" onclick="togglePwd('cp-new', this)">👁</button>
+            </div>
+          </div>
+          <div class="form-group mb-3">
+            <label>Confirm New Password <span class="req">*</span></label>
+            <div class="input-password-wrap">
+              <input type="password" id="cp-confirm" placeholder="Repeat new password" required autocomplete="new-password"/>
+              <button type="button" class="pwd-toggle" onclick="togglePwd('cp-confirm', this)">👁</button>
+            </div>
+          </div>
+          <button type="submit" class="btn-submit" id="change-password-btn">🔒 Change Password</button>
+        </form>
       </div>
     </div>
   </div>
@@ -2849,14 +2938,6 @@
         </div>
       </div>
 
-      <!-- Demo: Simulate approval -->
-      <div style="text-align:center; margin-top:24px;">
-        <p class="text-sm" style="color:var(--text3); margin-bottom:12px;">[ Demo Mode — Simulate decision ]</p>
-        <div class="btn-group">
-          <button class="btn btn-primary" onclick="simulateApproval()">✅ Simulate Approval</button>
-          <button class="btn btn-outline" onclick="simulateRejection()">❌ Simulate Rejection</button>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -2876,7 +2957,7 @@
       <div class="risk-computing-overlay" id="risk-computing">
         <div class="risk-spinner"></div>
         <h2>Computing Risk Profile</h2>
-        <p style="color:var(--text3);max-width:400px;margin:0 auto;">Our AI engine is analysing your pre-screening data across five risk dimensions&hellip;</p>
+        <p style="color:var(--text3);max-width:480px;margin:0 auto;">We are calculating your submitted risk profile using our backend compliance scoring workflow across five weighted dimensions.</p>
         <div class="risk-dimension-bars" id="risk-dim-bars">
           <div class="risk-dim-row"><div class="risk-dim-label"><span>Customer / Entity Risk</span><span id="dim1-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim1-bar"></div></div></div>
           <div class="risk-dim-row"><div class="risk-dim-label"><span>Geographic Risk</span><span id="dim2-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim2-bar"></div></div></div>
@@ -2885,60 +2966,6 @@
           <div class="risk-dim-row"><div class="risk-dim-label"><span>Delivery Channel Risk</span><span id="dim5-pct"></span></div><div class="risk-dim-track"><div class="risk-dim-fill" id="dim5-bar"></div></div></div>
         </div>
 
-        <div style="margin-top:32px;border-top:1px solid var(--border2);padding-top:24px;">
-          <div style="font-size:13px;color:var(--text3);margin-bottom:16px;text-align:center;">Onboarding Agents Running...</div>
-          <div style="display:grid;grid-template-columns:1fr;gap:16px;max-width:100%;">
-            <div class="ai-agent-panel">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <span style="font-weight:600;font-size:13px;">🔍 Agent 1: Identity & Document Integrity</span>
-                <span class="ai-agent-badge clear" id="agent1-badge">Running…</span>
-              </div>
-              <div class="ai-agent-checks" id="agent1-checks"></div>
-            </div>
-            <div class="ai-agent-panel">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <span style="font-weight:600;font-size:13px;">🔎 Agent 2: Corporate Structure & UBO Mapping</span>
-                <span class="ai-agent-badge clear" id="agent2-badge">Running…</span>
-              </div>
-              <div class="ai-agent-checks" id="agent2-checks"></div>
-            </div>
-            <div class="ai-agent-panel">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <span style="font-weight:600;font-size:13px;">💼 Agent 3: Business Model Plausibility</span>
-                <span class="ai-agent-badge clear" id="agent3-badge">Running…</span>
-              </div>
-              <div class="ai-agent-checks" id="agent3-checks"></div>
-            </div>
-            <div class="ai-agent-panel">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <span style="font-weight:600;font-size:13px;">🏗️ Agent 4: FinCrime Screening Interpretation</span>
-                <span class="ai-agent-badge clear" id="agent4-badge">Running…</span>
-              </div>
-              <div class="ai-agent-checks" id="agent4-checks"></div>
-            </div>
-            <div class="ai-agent-panel">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                <span style="font-weight:600;font-size:13px;">📝 Agent 5: Compliance Memo & Risk Recommendation</span>
-                <span class="ai-agent-badge clear" id="agent5-badge">Running…</span>
-              </div>
-              <div class="ai-agent-checks" id="agent5-checks"></div>
-            </div>
-          </div>
-
-          <!-- Consolidation Step -->
-          <div id="consolidation-step" style="display:none;margin-top:24px;border-top:1px solid var(--border2);padding-top:24px;text-align:center;">
-            <div class="ai-orbit" style="margin:0 auto 16px;width:40px;height:40px;"></div>
-            <div style="font-weight:600;font-size:14px;margin-bottom:8px;">🔧 AI Risk Engine Consolidating Results</div>
-            <div style="font-size:12px;color:var(--text3);">Aggregating findings from all agents...</div>
-          </div>
-
-          <!-- Memo Generation Step -->
-          <div id="memo-generation-step" style="display:none;margin-top:24px;border-top:1px solid var(--border2);padding-top:24px;text-align:center;">
-            <div class="ai-orbit" style="margin:0 auto 16px;width:40px;height:40px;"></div>
-            <div style="font-weight:600;font-size:14px;margin-bottom:8px;">📄 Compliance Memo Being Generated</div>
-            <div style="font-size:12px;color:var(--text3);">Creating comprehensive onboarding memo...</div>
-          </div>
-        </div>
       </div>
 
       <div id="risk-result" class="hidden">
@@ -2960,14 +2987,14 @@
               <span style="font-size:10px;color:var(--text3);margin-left:auto;">AI Transparency</span>
             </div>
             <div style="font-size:12px;color:var(--text2);line-height:1.7;margin-bottom:14px;">
-              Your application was assessed by our AI-powered compliance pipeline, which evaluates risk across <strong>5 weighted dimensions</strong> using a combination of rule-based scoring and AI verification. Each dimension is scored from 1 (Low Risk) to 4 (Very High Risk), then combined into a composite score out of 100.
+              Your application was assessed using our backend compliance scoring workflow across <strong>5 weighted dimensions</strong>. Each dimension is scored from 1 (Low Risk) to 4 (Very High Risk), then combined into a composite score out of 100. Where additional verification is required, it is handled separately during document review.
             </div>
             <div id="portal-explain-dimensions" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;"></div>
             <div id="portal-explain-summary" style="padding:12px 16px;border-radius:8px;font-size:12px;line-height:1.6;"></div>
             <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
               <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">📐 Scoring Model v1.4</span>
               <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">🏦 FATF Risk-Based Approach</span>
-              <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">🤖 10 AI Agents</span>
+              <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;background:var(--surface2);border:1px solid var(--border1);border-radius:10px;font-size:10px;color:var(--text3);">🛡️ Backend Validated</span>
             </div>
           </div>
 
@@ -3046,15 +3073,6 @@
         </div>
       </div>
 
-      <!-- Demo controls -->
-      <div style="text-align:center;margin-top:24px;">
-        <p class="text-sm" style="color:var(--text3);margin-bottom:12px;">[ Demo Mode — Simulate pre-approval decision ]</p>
-        <div class="btn-group">
-          <button class="btn btn-primary" onclick="simulatePreApproval()">✅ Simulate Pre-Approval</button>
-          <button class="btn btn-outline" onclick="simulatePreApprovalRMI()">📋 Simulate Request Info</button>
-          <button class="btn btn-outline" onclick="simulateRejection()">❌ Simulate Rejection</button>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -3087,14 +3105,6 @@
         </div>
       </div>
 
-      <!-- Demo controls -->
-      <div style="text-align:center;margin-top:24px;">
-        <p class="text-sm" style="color:var(--text3);margin-bottom:12px;">[ Demo Mode — Simulate compliance decision ]</p>
-        <div class="btn-group">
-          <button class="btn btn-primary" onclick="complianceApproved()">✅ Simulate Approval</button>
-          <button class="btn btn-outline" onclick="simulateRejection()">❌ Simulate Rejection</button>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -3805,12 +3815,12 @@
   <div id="view-docs-review" class="hidden">
     <div class="page">
 
-      <!-- Agent 9: Compliance Memo Agent — HIDDEN from client (back-office only) -->
+      <!-- Deterministic compliance memo summary — hidden from client -->
       <div class="ai-agent-panel" id="agent-compliance-memo" style="display:none;">
         <div class="ai-agent-header">
           <div class="ai-agent-icon green">📝</div>
-          <div><div class="ai-agent-name">Compliance Memo Agent</div><div class="ai-agent-sub">Auto-generated case summary for compliance review</div></div>
-          <span class="ai-agent-badge clear" id="agent9-badge">Generated</span>
+          <div><div class="ai-agent-name">Compliance Memo Summary</div><div class="ai-agent-sub">Deterministic case summary for compliance review</div></div>
+          <span class="ai-agent-badge clear" id="agent9-badge">Prepared</span>
         </div>
         <div id="compliance-memo-content">
           <div class="memo-section">
@@ -3860,10 +3870,6 @@
         </div>
       </div>
 
-      <div style="text-align:center; margin-top:24px;">
-        <p class="text-sm" style="color:var(--text3); margin-bottom:12px;">[ Demo Mode ]</p>
-        <button class="btn btn-primary" onclick="simulateFinalApproval()">🎉 Simulate Final Approval</button>
-      </div>
     </div>
   </div>
 
@@ -3918,8 +3924,8 @@
             </div>
           </div>
 
-          <div style="padding:12px;background:var(--blue-dim);border-radius:var(--radius-sm);color:var(--blue);font-size:12px;text-align:center;">
-            <strong>Current Status:</strong> Your application is currently under review. Our compliance team is processing your documents and conducting risk assessments. You will be notified when a decision has been made.
+          <div id="client-status-summary" style="padding:12px;background:var(--blue-dim);border-radius:var(--radius-sm);color:var(--blue);font-size:12px;text-align:center;">
+            <strong>Current Status:</strong> Live updates will appear here when your application status changes.
           </div>
         </div>
       </div>
@@ -3935,52 +3941,8 @@
         </div>
 
         <div id="notifications-container" style="margin-top:16px;display:flex;flex-direction:column;gap:12px;">
-          <!-- Message 1: Received -->
-          <div style="padding:12px;background:var(--green-dim);border-left:4px solid var(--green);border-radius:4px;">
-            <div style="font-weight:600;color:var(--green);font-size:13px;margin-bottom:4px;">✓ Application Received</div>
-            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Your application (Ref: <strong id="notif-ref">ARF-2026-XXXXXX</strong>) has been successfully submitted to our compliance team.</div>
-            <div style="font-size:11px;color:var(--text3);">Submitted on <strong id="notif-date">Today at 2:34 PM</strong></div>
-          </div>
-
-          <!-- Message 2: Under Review (Simulated) -->
-          <div id="message-under-review" style="display:none;padding:12px;background:var(--blue-dim);border-left:4px solid var(--blue);border-radius:4px;">
-            <div style="font-weight:600;color:var(--blue);font-size:13px;margin-bottom:4px;">⏳ Application Under Review</div>
-            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Your application is currently being reviewed by our compliance team. We will notify you as soon as a decision has been made.</div>
-            <div style="font-size:11px;color:var(--text3);">Expected response: <strong>Within 5-7 business days</strong></div>
-          </div>
-
-          <!-- Message 3: Additional Documents Required (Simulated) -->
-          <div id="message-docs-required" style="display:none;padding:12px;background:var(--amber-dim);border-left:4px solid var(--amber);border-radius:4px;">
-            <div style="font-weight:600;color:var(--amber);font-size:13px;margin-bottom:4px;">⚠️ Additional Documents Required</div>
-            <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Our compliance team has identified the following documents needed to complete your review:</div>
-            <ul style="font-size:12px;color:var(--text2);margin:8px 0;padding-left:20px;">
-              <li>Updated Director CV (PDF)</li>
-              <li>Bank reference letter (dated within last 6 months)</li>
-            </ul>
-            <div style="margin-top:10px;">
-              <button class="btn btn-primary" onclick="alert('Upload interface would appear here')" style="font-size:11px;padding:6px 12px;">📤 Upload Documents</button>
-            </div>
-          </div>
-
-          <!-- Message 4: Approved (Simulated) -->
-          <div id="message-approved" style="display:none;padding:12px;background:var(--green-dim);border-left:4px solid var(--green);border-radius:4px;">
-            <div style="font-weight:600;color:var(--green);font-size:13px;margin-bottom:4px;">✓ Application Approved</div>
-            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Congratulations! Your application has been approved. Your account is being activated and a dedicated relationship manager will contact you shortly.</div>
-            <div style="font-size:11px;color:var(--text3);">Next step: Account activation</div>
-          </div>
-
-          <!-- Message 5: Declined (Simulated) -->
-          <div id="message-declined" style="display:none;padding:12px;background:var(--red-dim);border-left:4px solid var(--red);border-radius:4px;">
-            <div style="font-weight:600;color:var(--red);font-size:13px;margin-bottom:4px;">✗ Application Declined</div>
-            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">We regret to inform you that your application has not been approved at this time. A detailed explanation has been sent to your email address.</div>
-            <div style="font-size:11px;color:var(--text3);">You may contact our compliance team to request a review</div>
-          </div>
-
-          <!-- Message 6: Generic Update (Simulated) -->
-          <div id="message-generic" style="display:none;padding:12px;background:var(--bg3);border-left:4px solid var(--brand);border-radius:4px;">
-            <div style="font-weight:600;color:var(--brand);font-size:13px;margin-bottom:4px;">ℹ️ Application Update</div>
-            <div style="font-size:12px;color:var(--text2);">Your application is progressing well. One of our compliance officers will reach out if we need any clarification on the documents you submitted.</div>
-            <div style="font-size:11px;color:var(--text3);">Updated <strong>2 hours ago</strong></div>
+          <div style="padding:16px;border:1px dashed var(--border2);border-radius:8px;color:var(--text3);font-size:12px;text-align:center;">
+            Loading live notifications...
           </div>
         </div>
 
@@ -3989,12 +3951,8 @@
         </div>
       </div>
 
-      <!-- Quick Actions -->
       <div class="card">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <button class="btn btn-outline" style="padding:12px;font-size:12px;" onclick="simulateStatusUpdate('under-review')">🔄 Simulate: Under Review Update</button>
-          <button class="btn btn-outline" style="padding:12px;font-size:12px;" onclick="simulateStatusUpdate('approved')">✓ Simulate: Approval</button>
-        </div>
+        <button class="btn btn-outline" style="padding:12px;font-size:12px;width:100%;" onclick="loadClientNotifications()">Refresh Notifications</button>
       </div>
     </div>
   </div>
@@ -4127,6 +4085,7 @@
           <input type="email" id="lookup-email" placeholder="your@email.com" />
         </div>
         <button class="btn-submit" onclick="lookupApplication()">🔍 Track Application</button>
+        <div id="status-lookup-result" style="display:none;margin-top:16px;padding:14px;border:1px solid var(--border2);border-radius:8px;background:var(--surface2);"></div>
       </div>
     </div>
   </div>
@@ -4642,7 +4601,7 @@ function updateTotalRequiredDocs() {
 
 // ─── View switching ───────────────────────────────────────
 // Views where the persistent client sidebar is shown
-const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','client-notifications'];
+const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','client-notifications','account-security'];
 
 function showView(name) {
   document.querySelectorAll('[id^="view-"]').forEach(v => v.classList.add('hidden'));
@@ -4725,7 +4684,7 @@ async function loadMyApplications() {
       var riskColors = {LOW:'#10b981',MEDIUM:'#f59e0b',HIGH:'#ef4444',VERY_HIGH:'#dc2626'};
       var riskColor = riskColors[app.risk_level] || '#999';
       var date = app.created_at ? new Date(app.created_at).toLocaleDateString() : '';
-      html += '<tr>';
+      html += '<tr style="cursor:pointer;" onclick="resumeApplication(\'' + escapeHtml(app.ref || app.id) + '\', \'' + escapeHtml(app.status || '') + '\')">';
       html += '<td style="font-weight:600;">' + escapeHtml(app.ref || app.id) + '</td>';
       html += '<td>' + escapeHtml(app.company_name || '-') + '</td>';
       html += '<td><span style="background:' + color + '20;color:' + color + ';padding:4px 12px;border-radius:20px;font-size:0.85rem;">' + escapeHtml(label) + '</span></td>';
@@ -5385,26 +5344,25 @@ async function submitPrescreening(e) {
   };
 
   try {
-    // Create application via API
-    var resp = await apiCall('POST', '/applications', payload);
-    appRef = resp.ref;
-    currentApplicationId = resp.id;
-    // Security: application ID kept in memory only, not in localStorage
+    var createResp = await apiCall('POST', '/applications', payload);
+    currentApplicationId = createResp.id;
+    appRef = createResp.ref;
+
+    var submitResp = await apiCall('POST', '/applications/' + currentApplicationId + '/submit');
+    if (!submitResp || !submitResp.risk_level) {
+      throw new Error('Authoritative risk result was not returned by the server.');
+    }
 
     btn.disabled = false;
-    btn.innerHTML = '🔒 Submit Application';
+    btn.innerHTML = '🚀 Submit Pre-Screening';
     showView('risk-scoring');
     showToast('success', 'Application Submitted', 'Reference: ' + appRef);
-    startRiskScoring();
+    startRiskScoring(submitResp);
   } catch (err) {
-    // Fallback to client-side if API fails
-    console.warn('API create failed, using client-side fallback:', err);
-    appRef = generateRef();
+    console.error('Pre-screening submission failed:', err);
     btn.disabled = false;
-    btn.innerHTML = '🔒 Submit Application';
-    showView('risk-scoring');
-    showToast('success', 'Application Submitted', 'Reference: ' + appRef);
-    startRiskScoring();
+    btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Submission Failed', err.message || 'Could not submit your application. Please try again.');
   }
 }
 
@@ -5428,112 +5386,32 @@ function scoreFromValue(val, mapping) {
   return 2;
 }
 
-function computeRiskFromForm() {
-  // D1: Customer/Entity Risk (30%)
-  var entityMap = { 'Listed':1, 'Regulated Financial':1, 'Government':1, 'Large Private':2, 'SME':2, 'Newly Incorporated':3, 'Trust':3, 'Foundation':3, 'Non-Profit':3, 'Shell':4 };
-  var ownerMap = { 'Simple':1, '1–2':2, '3+':3, 'Complex':4 };
-  var pepSelects = document.querySelectorAll('.pep-select');
-  var pepScore = 1;
-  pepSelects.forEach(function(s) { if (s.value === 'Yes') pepScore = Math.max(pepScore, 3); });
-  var sowMap = { 'Business revenue':1, 'Investment returns':1, 'Government funding':1, 'Sale of assets':2, 'Venture capital':2, 'Inheritance':3, 'Loan':3, 'Other':3 };
-  var sofMap = { 'Transfer from company':1, 'Parent company':1, 'Client payments':1, 'Revenue from business':1, 'Shareholder':2, 'Investment round':2, 'Sale of assets':2, 'Loan':3, 'Other':3 };
-
-  var d1_entity = scoreFromValue(document.getElementById('f-entity-type').value, entityMap);
-  var d1_owner = scoreFromValue(document.getElementById('f-ownership-structure').value, ownerMap);
-  var d1_pep = pepScore;
-  var d1_adverse = 1; // assumed no adverse media at pre-screening
-  var d1_sow = scoreFromValue(document.getElementById('f-source-wealth-type').value, sowMap);
-  var d1_sof = scoreFromValue(document.getElementById('f-source-init-type').value, sofMap);
-  var d1 = d1_entity*0.20 + d1_owner*0.20 + d1_pep*0.25 + d1_adverse*0.15 + d1_sow*0.10 + d1_sof*0.10;
-
-  // D2: Geographic Risk (25%)
-  var incMap = { 'low risk':1, 'standard':2, 'Grey':3, 'Black':4, 'sanctioned':4 };
-  var d2_inc = scoreFromValue(document.getElementById('f-inc-country').value, incMap);
-  // Countries of operation — check selected tags
-  var opTags = document.querySelectorAll('#ms-op-countries-tags .ms-tag');
-  var d2_op = 1;
-  // Simplified: check for known high-risk keywords
-  opTags.forEach(function(t) {
-    var c = t.textContent.toLowerCase();
-    if (c.indexOf('iran')>=0||c.indexOf('north korea')>=0||c.indexOf('myanmar')>=0||c.indexOf('syria')>=0||c.indexOf('russia')>=0) d2_op = 4;
-    else if ((c.indexOf('nigeria')>=0||c.indexOf('south africa')>=0||c.indexOf('kenya')>=0||c.indexOf('philippines')>=0) && d2_op < 3) d2_op = 3;
-    else if ((c.indexOf('mauritius')>=0||c.indexOf('uae')>=0||c.indexOf('india')>=0||c.indexOf('brazil')>=0||c.indexOf('china')>=0) && d2_op < 2) d2_op = 2;
-  });
-  var targetTags = document.querySelectorAll('#ms-target-markets-tags .ms-tag');
-  var d2_tgt = 1;
-  targetTags.forEach(function(t) {
-    var c = t.textContent.toLowerCase();
-    if (c.indexOf('iran')>=0||c.indexOf('north korea')>=0||c.indexOf('myanmar')>=0||c.indexOf('syria')>=0||c.indexOf('russia')>=0) d2_tgt = 4;
-    else if ((c.indexOf('nigeria')>=0||c.indexOf('south africa')>=0||c.indexOf('kenya')>=0||c.indexOf('philippines')>=0) && d2_tgt < 3) d2_tgt = 3;
-    else if ((c.indexOf('mauritius')>=0||c.indexOf('uae')>=0||c.indexOf('india')>=0||c.indexOf('brazil')>=0||c.indexOf('china')>=0) && d2_tgt < 2) d2_tgt = 2;
-  });
-  var d2 = d2_inc*0.40 + d2_op*0.30 + d2_tgt*0.30;
-
-  // D3: Product/Service Risk (20%)
-  var svcChecks = document.querySelectorAll('#service-grid input[type=checkbox]:checked');
-  var d3_svc = 1;
-  svcChecks.forEach(function(cb) {
-    var v = cb.value;
-    if (v.indexOf('Cross-border') >= 0) d3_svc = Math.max(d3_svc, 3);
-    else if (v.indexOf('Multi-currency') >= 0) d3_svc = Math.max(d3_svc, 2);
-  });
-  var volMap = { 'Under':1, '50,000 to':2, '500,000 to':3, 'Over USD 5':4 };
-  var txnMap = { 'Simple':1, 'Standard':2, 'Complex':3, 'Very complex':4 };
-  var d3_vol = scoreFromValue(document.getElementById('f-monthly-volume').value, volMap);
-  var d3_txn = scoreFromValue(document.getElementById('f-txn-complexity').value, txnMap);
-  var d3 = d3_svc*0.40 + d3_vol*0.30 + d3_txn*0.30;
-
-  // D4: Industry/Sector Risk (15%)
-  var sectorVal = document.getElementById('f-sector').value;
-  var sectorMap = {
-    'Regulated Financial':1,'Government':1,'Listed Company':1,'Bank':1,
-    'Healthcare':2,'Technology':2,'Software':2,'SaaS':2,'Manufacturing':2,'Retail':2,'E-commerce':2,
-    'Hospitality':2,'Tourism':2,'Logistics':2,'Supply Chain':2,'Education':2,'Media':2,'Entertainment':2,
-    'Import':3,'Export':3,'Real Estate':3,'Legal':3,'Advisory':3,'MSB':3,'Money Services':3,'Forex':3,
-    'Precious':3,'Jewel':3,'Non-Profit':3,'NGO':3,'Charity':3,'Oil':3,'Gas':3,'Mining':3,'Construction':3,
-    'Private Banking':3,'Wealth':3,'Bureau':3,'Brokerage':3,'Accounting':3,'Audit':3,'Corporate Services':3,'Trust':3,'Fiduciary':3,
-    'Crypto':4,'Virtual Asset':4,'Gambling':4,'Gaming':4,'Betting':4,'Arms':4,'Defence':4,'Military':4,
-    'Adult Entertainment':4,'Shell Company':4,'Nominee':4,'NFT':4
-  };
-  var d4 = scoreFromValue(sectorVal, sectorMap);
-
-  // D5: Delivery Channel Risk (10%)
-  var introMap = { 'Direct application':1, 'regulated intermediary':1, 'non-regulated':3, 'Unsolicited':4 };
-  var d5_intro = scoreFromValue(document.getElementById('f-intro-method').value, introMap);
-  var d5_channel = 2; // non-face-to-face by default (online portal)
-  var d5 = d5_intro*0.50 + d5_channel*0.50;
-
-  // Composite
-  var composite = (d1*0.30 + d2*0.25 + d3*0.20 + d4*0.15 + d5*0.10) / 4 * 100;
-  composite = Math.round(composite * 10) / 10;
-
-  dimScores = {
-    d1: Math.round(d1*100)/100,
-    d2: Math.round(d2*100)/100,
-    d3: Math.round(d3*100)/100,
-    d4: Math.round(d4*100)/100,
-    d5: Math.round(d5*100)/100
-  };
-
-  computedRiskScore = composite;
-  if (composite >= 70) computedRiskLevel = 'VERY_HIGH';
-  else if (composite >= 55) computedRiskLevel = 'HIGH';
-  else if (composite >= 40) computedRiskLevel = 'MEDIUM';
-  else computedRiskLevel = 'LOW';
-
-  return { score: composite, level: computedRiskLevel, dims: dimScores };
-}
-
-function startRiskScoring() {
+function startRiskScoring(serverResult) {
   document.getElementById('risk-computing').classList.remove('hidden');
   document.getElementById('risk-result').classList.add('hidden');
-  runAllScoringAgents();
+  if (!serverResult || !serverResult.risk_level) {
+    document.getElementById('risk-computing').classList.add('hidden');
+    showToast('error', 'Risk Scoring Failed', 'The backend did not return a valid risk assessment.');
+    showView('prescreening');
+    return;
+  }
 
-  var result = computeRiskFromForm();
+  var result = {
+    score: Number(serverResult.risk_score || 0),
+    level: serverResult.risk_level || 'LOW',
+    dims: serverResult.risk_dimensions || {}
+  };
+  computedRiskScore = Number(result.score || 0);
+  computedRiskLevel = result.level || 'LOW';
+  dimScores = result.dims || {};
   var dims = ['dim1','dim2','dim3','dim4','dim5'];
-  var dimVals = [result.dims.d1, result.dims.d2, result.dims.d3, result.dims.d4, result.dims.d5];
-  var labels = ['Customer / Entity','Geographic','Product / Service','Industry / Sector','Delivery Channel'];
-  var weights = [0.30, 0.25, 0.20, 0.15, 0.10];
+  var dimVals = [
+    Number((result.dims || {}).d1 || 0),
+    Number((result.dims || {}).d2 || 0),
+    Number((result.dims || {}).d3 || 0),
+    Number((result.dims || {}).d4 || 0),
+    Number((result.dims || {}).d5 || 0)
+  ];
 
   // Animate bars sequentially
   dims.forEach(function(d, i) {
@@ -5550,9 +5428,9 @@ function startRiskScoring() {
     }, 600 + i * 500);
   });
 
-  // The full scoring agent animation (runAllScoringAgents) handles the transition
-  // to the pending view after all agents complete at ~11.5s.
-  // No early showRiskResult call here — let the agents finish their animation first.
+  setTimeout(function() {
+    showRiskResult(result);
+  }, 2200);
 }
 
 function showRiskResult(result) {
@@ -5683,18 +5561,27 @@ function populatePricing(level) {
 }
 
 async function acceptPricing() {
-  // Call backend to accept pricing and determine next step
-  if (AUTH_TOKEN && currentApplicationId) {
-    try {
-      var result = await apiCall('POST', '/applications/' + currentApplicationId + '/accept-pricing');
-      console.log('Pricing acceptance result:', result);
-    } catch(err) {
-      console.warn('Pricing accept API failed, continuing with client-side flow:', err);
-    }
+  if (!AUTH_TOKEN || !currentApplicationId) {
+    showToast('error', 'Session Required', 'Please sign in again before accepting pricing.');
+    return;
+  }
+
+  var result;
+  try {
+    result = await apiCall('POST', '/applications/' + currentApplicationId + '/accept-pricing');
+  } catch(err) {
+    console.error('Pricing acceptance failed:', err);
+    showToast('error', 'Pricing Acceptance Failed', err.message || 'Could not accept pricing. Please try again.');
+    return;
   }
 
   // After pricing acceptance: route based on risk level
-  if (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH') {
+  if (!result.risk_level) {
+    showToast('error', 'Pricing Acceptance Failed', 'The backend response was incomplete. Please try again.');
+    return;
+  }
+
+  if (result.risk_level === 'HIGH' || result.risk_level === 'VERY_HIGH') {
     // HIGH/VERY_HIGH → Pre-Approval Hold (KYC blocked until officer pre-approves)
     showPreApprovalHold();
     showToast('info', 'Pre-Approval Required', 'Pricing accepted. Your application now requires initial compliance review before document submission.');
@@ -5712,15 +5599,9 @@ async function acceptPricing() {
 function showComplianceHold() {
   var riskLvl = computedRiskLevel || 'HIGH';
   document.getElementById('compliance-risk-label').textContent = riskLvl.replace('_',' ') + ' Risk';
-  document.getElementById('compliance-ref-display').textContent = appRef || generateRef();
+  document.getElementById('compliance-ref-display').textContent = appRef || '—';
   showView('compliance-hold');
   showToast('info', 'Compliance Referral', 'Your application has been referred for manual compliance review.');
-}
-
-function complianceApproved() {
-  showView('pricing');
-  populatePricing(computedRiskLevel);
-  showToast('success', 'Compliance Approved', 'Your application has been approved. Please review pricing to proceed.');
 }
 
 // ─── Pre-Approval Hold Flow (v2.1) ──────────────────────────
@@ -5730,7 +5611,7 @@ function showPreApprovalHold() {
   var badgeColors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
 
   var refEl = document.getElementById('pre-approval-ref-display');
-  if (refEl) refEl.textContent = appRef || generateRef();
+  if (refEl) refEl.textContent = appRef || '—';
 
   var badge = document.getElementById('pre-approval-risk-badge');
   if (badge) {
@@ -5742,22 +5623,6 @@ function showPreApprovalHold() {
   if (scoreEl) scoreEl.textContent = (computedRiskScore || 0).toFixed(1);
 
   showView('pre-approval-hold');
-}
-
-function simulatePreApproval() {
-  // Simulate officer pre-approving → client proceeds to KYC (pricing already accepted)
-  showHighRiskDocs();
-  updateTotalRequiredDocs();
-  syncDirectorsUBOsToKYC();
-  checkPEPAndShowDeclaration();
-  showView('onboarding');
-  showToast('success', 'Pre-Approval Granted', 'Your application has been pre-approved. Please proceed with KYC verification and document submission.');
-}
-
-function simulatePreApprovalRMI() {
-  // Simulate officer requesting more info → client returns to edit
-  showView('prescreening');
-  showToast('info', 'Additional Information Required', 'The compliance team has requested additional information. Please update your pre-screening data and resubmit.');
 }
 
 
@@ -6308,7 +6173,7 @@ async function saveDraft() {
         form_data: data,
         last_step: getCurrentStep()
       });
-    } catch(e) { console.warn('API save failed, localStorage backup used'); }
+    } catch(e) { console.warn('API save failed', e); }
   }
 
   var statusEl = document.getElementById('save-status');
@@ -6374,8 +6239,6 @@ function startAutoSave() {
   autoSaveTimer = setInterval(async function() {
     if (appRef) {
       var data = collectFormData();
-      try { localStorage.setItem(getSaveKey(), JSON.stringify(data)); } catch(e) {}
-      // Also sync to API
       if (AUTH_TOKEN) {
         try {
           await apiCall('POST', '/save-resume', {
@@ -6402,6 +6265,9 @@ showView = function(name) {
     var refDisplay = document.getElementById('save-ref-display');
     if (refDisplay) refDisplay.textContent = appRef || '';
     startAutoSave();
+  }
+  if (name === 'client-notifications') {
+    loadClientNotifications();
   }
 };
 
@@ -6607,14 +6473,16 @@ function buildReviewScreen() {
 }
 
 async function finalSubmitFromReview() {
-  // Submit KYC documents for compliance review — ALL applications require officer approval
-  if (AUTH_TOKEN && currentApplicationId) {
-    try {
-      var result = await apiCall('POST', '/applications/' + currentApplicationId + '/submit-kyc');
-      console.log('KYC Submit result:', result);
-    } catch(err) {
-      console.warn('KYC submit API failed, continuing with client-side flow:', err);
-    }
+  if (!AUTH_TOKEN || !currentApplicationId) {
+    showToast('error', 'Session Required', 'Please sign in again before submitting your KYC documents.');
+    return;
+  }
+  try {
+    await apiCall('POST', '/applications/' + currentApplicationId + '/submit-kyc');
+  } catch(err) {
+    console.error('KYC submission failed:', err);
+    showToast('error', 'Submission Failed', err.message || 'Could not submit your KYC documents. Please try again.');
+    return;
   }
   generateComplianceMemo();
   showView('docs-review');
@@ -6626,236 +6494,7 @@ async function finalSubmitFromReview() {
 
 
 // ═══════════════════════════════════════════════════════════
-// AGENTS 1-5: Onboarding Pipeline
-// ═══════════════════════════════════════════════════════════
-// NEW 5 ONBOARDING AGENTS
-// ═══════════════════════════════════════════════════════════
-
-function runAllScoringAgents() {
-  // Pipeline: Agent 1 (document integrity) → Agent 2 (corporate structure & UBO) → Agent 3 (business plausibility) → Agent 4 (fincrime screening) → Agent 5 (compliance memo & risk)
-  runAgent1_IdentityDoc();
-  setTimeout(runAgent2_CorporateUBO, 1500);
-  setTimeout(runAgent3_BusinessPlausibility, 3000);
-  setTimeout(runAgent4_FinCrime, 4500);
-  setTimeout(runAgent5_ComplianceMemo, 6500);
-  // Show consolidation step after agents complete
-  setTimeout(() => {
-    const consolidationEl = document.getElementById('consolidation-step');
-    if (consolidationEl) consolidationEl.style.display = 'block';
-  }, 8000);
-  // Show memo generation step
-  setTimeout(() => {
-    const memoEl = document.getElementById('memo-generation-step');
-    if (memoEl) memoEl.style.display = 'block';
-  }, 9500);
-  // Hide agents section and show result after memo generation
-  setTimeout(() => {
-    document.getElementById('risk-computing').classList.add('hidden');
-    document.getElementById('risk-result').classList.remove('hidden');
-    generateComplianceMemo();
-
-    // Route based on computed risk level
-    if (computedRiskLevel === 'LOW' || computedRiskLevel === 'MEDIUM') {
-      // LOW / MEDIUM risk → show pricing directly (client proceeds to KYC after accepting)
-      showPricingView();
-      showToast('success', 'Pre-Screening Approved', 'Risk level: ' + computedRiskLevel.replace('_',' ') + '. Please review the pricing schedule and accept to proceed to KYC documents.');
-    } else {
-      // HIGH / VERY_HIGH risk → submitted for compliance review (pending)
-      document.getElementById('ref-display').textContent = appRef || generateRef();
-      updatePendingRiskCard();
-      showView('pending');
-      showToast('warning', 'Submitted for Review', 'Risk level: ' + computedRiskLevel.replace('_',' ') + '. Your application has been referred for compliance review due to the elevated risk profile.');
-    }
-  }, 11500);
-}
-
-// Agent 1: Identity & Document Integrity Agent (36 checks)
-function runAgent1_IdentityDoc() {
-  var checks = document.getElementById('agent1-checks');
-  var badge = document.getElementById('agent1-badge');
-  if (!checks || !badge) return;
-  checks.innerHTML = '';
-
-  var items = [
-    { label: 'Passport MRZ extraction & checksum validation', delay: 200 },
-    { label: 'Name match: passport vs application form', delay: 400 },
-    { label: 'DOB consistency across all documents', delay: 600 },
-    { label: 'Document expiry date check', delay: 800 },
-    { label: 'Tampering & image manipulation detection', delay: 1000 },
-    { label: 'Watermark & security feature verification', delay: 1200 },
-    { label: 'Certificate of incorporation validation', delay: 1400 },
-    { label: 'Shareholder register completeness check', delay: 1600 },
-    { label: 'Director list consistency check', delay: 1800 },
-    { label: 'Address vs proof-of-address match', delay: 2000 },
-    { label: 'Document completeness assessment (36 checks)', delay: 2200 }
-  ];
-
-  var warnings = 0;
-  // Deterministic results based on computed risk level instead of Math.random
-  var riskFail = computedRiskLevel === 'VERY_HIGH' ? 3 : computedRiskLevel === 'HIGH' ? 2 : computedRiskLevel === 'MEDIUM' ? 1 : 0;
-  items.forEach(function(item, idx) {
-    setTimeout(function() {
-      var passed = idx >= riskFail; // Lower-risk = more passes
-      if (!passed) warnings++;
-      var icon = passed ? '✅' : '⚠️';
-      var resultClass = passed ? 'pass' : 'warn';
-      var resultText = passed ? 'Verified' : 'Review required';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result ' + resultClass + '">' + escapeHtml(resultText) + '</span></div>';
-
-      if (idx === items.length - 1) {
-        badge.textContent = warnings > 0 ? warnings + ' flags' : 'Clear';
-        badge.className = 'ai-agent-badge ' + (warnings > 0 ? 'review' : 'clear');
-      }
-    }, item.delay);
-  });
-}
-
-// Agent 2: Corporate Structure & UBO Mapping Agent (12 checks)
-function runAgent2_CorporateUBO() {
-  var checks = document.getElementById('agent2-checks');
-  var badge = document.getElementById('agent2-badge');
-  if (!checks || !badge) return;
-  checks.innerHTML = '';
-
-  var items = [
-    { label: 'Company registry lookup (OpenCorporates)', delay: 300 },
-    { label: 'Registration number verification', delay: 600 },
-    { label: 'Incorporation date cross-check', delay: 900 },
-    { label: 'Active/dissolved status confirmation', delay: 1200 },
-    { label: 'Director name vs registry match', delay: 1500 },
-    { label: 'Registered address verification', delay: 1800 },
-    { label: 'Jurisdiction status check', delay: 2100 },
-    { label: 'Registry data confidence scoring', delay: 2400 }
-  ];
-
-  var warnings = 0;
-  // Deterministic results based on computed risk level instead of Math.random
-  var riskFail = computedRiskLevel === 'VERY_HIGH' ? 2 : computedRiskLevel === 'HIGH' ? 1 : 0;
-  items.forEach(function(item, idx) {
-    setTimeout(function() {
-      var passed = idx >= riskFail; // Lower-risk = more passes
-      if (!passed) warnings++;
-      var icon = passed ? '✅' : '⚠️';
-      var resultClass = passed ? 'pass' : 'warn';
-      var resultText = passed ? 'Confirmed' : 'Mismatch';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result ' + resultClass + '">' + escapeHtml(resultText) + '</span></div>';
-
-      if (idx === items.length - 1) {
-        badge.textContent = warnings > 0 ? warnings + ' mismatches' : 'All confirmed';
-        badge.className = 'ai-agent-badge ' + (warnings > 0 ? 'review' : 'clear');
-      }
-    }, item.delay);
-  });
-}
-
-// Agent 3: Business Model Plausibility Agent (10 checks)
-function runAgent3_BusinessPlausibility() {
-  var checks = document.getElementById('agent3-checks');
-  var badge = document.getElementById('agent3-badge');
-  if (!checks || !badge) return;
-  checks.innerHTML = '';
-
-  var pepSelects = document.querySelectorAll('.pep-select');
-  var hasPep = false;
-  pepSelects.forEach(function(s) { if (s.value === 'Yes') hasPep = true; });
-
-  var items = [
-    { label: 'Global sanctions screening (UN, EU, OFAC, HMT)', delay: 300, passed: !hasPep },
-    { label: 'PEP database screening', delay: 600, passed: !hasPep },
-    { label: 'Adverse media scan (100K+ sources)', delay: 900, passed: true },
-    { label: 'False positive analysis', delay: 1200, passed: !hasPep },
-    { label: 'Political exposure assessment', delay: 1500, passed: !hasPep },
-    { label: 'Country risk cross-reference', delay: 1800, passed: true },
-    { label: 'Screening summary generation', delay: 2100, passed: true }
-  ];
-
-  var warnings = hasPep ? 1 : 0;
-
-  items.forEach(function(item, idx) {
-    setTimeout(function() {
-      var icon = item.passed ? '✅' : '⚠️';
-      var resultClass = item.passed ? 'pass' : 'warn';
-      var resultText = item.passed ? 'Clear' : 'Match found';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result ' + resultClass + '">' + escapeHtml(resultText) + '</span></div>';
-
-      if (idx === items.length - 1) {
-        badge.textContent = warnings > 0 ? 'PEP match' : 'All clear';
-        badge.className = 'ai-agent-badge ' + (warnings > 0 ? 'review' : 'clear');
-      }
-    }, item.delay);
-  });
-}
-
-// Agent 4: FinCrime Screening Interpretation Agent (10 checks)
-function runAgent4_FinCrime() {
-  var checks = document.getElementById('agent4-checks');
-  var badge = document.getElementById('agent4-badge');
-  if (!checks || !badge) return;
-  checks.innerHTML = '';
-
-  var items = [
-    { label: 'Shareholder register parsing', delay: 300 },
-    { label: 'Ownership chain mapping', delay: 600 },
-    { label: 'Natural-person UBO identification', delay: 900 },
-    { label: 'Nominee structure detection', delay: 1200 },
-    { label: 'Layered structure analysis', delay: 1500 },
-    { label: 'High-risk jurisdiction scan', delay: 1800 },
-    { label: 'Circular ownership detection', delay: 2100 },
-    { label: 'Structure complexity scoring', delay: 2400 }
-  ];
-
-  var warnings = 0;
-  // Deterministic results based on computed risk level instead of Math.random
-  var riskFail = computedRiskLevel === 'VERY_HIGH' ? 3 : computedRiskLevel === 'HIGH' ? 2 : computedRiskLevel === 'MEDIUM' ? 1 : 0;
-  items.forEach(function(item, idx) {
-    setTimeout(function() {
-      var passed = idx >= riskFail; // Lower-risk = more passes
-      if (!passed) warnings++;
-      var icon = passed ? '✅' : '⚠️';
-      var resultClass = passed ? 'pass' : 'warn';
-      var resultText = passed ? 'Assessed' : 'Risk detected';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result ' + resultClass + '">' + escapeHtml(resultText) + '</span></div>';
-
-      if (idx === items.length - 1) {
-        badge.textContent = warnings > 0 ? 'Complex' : 'Simple';
-        badge.className = 'ai-agent-badge ' + (warnings > 0 ? 'review' : 'clear');
-      }
-    }, item.delay);
-  });
-}
-
-// Agent 5: Compliance Memo & Risk Recommendation Agent (10 checks)
-function runAgent5_ComplianceMemo() {
-  var checks = document.getElementById('agent5-checks');
-  var badge = document.getElementById('agent5-badge');
-  if (!checks || !badge) return;
-  checks.innerHTML = '';
-
-  var level = computedRiskLevel || 'LOW';
-
-  var items = [
-    { label: 'Agent outputs consolidation', delay: 300 },
-    { label: 'Risk factor identification', delay: 600 },
-    { label: 'Onboarding memo generation', delay: 900 },
-    { label: 'Risk rating recommendation', delay: 1200 },
-    { label: 'Review checklist creation', delay: 1500 }
-  ];
-
-  items.forEach(function(item, idx) {
-    setTimeout(function() {
-      var icon = '✅';
-      checks.innerHTML += '<div class="ai-agent-check"><span class="check-icon">' + icon + '</span><span class="check-label">' + escapeHtml(item.label) + '</span><span class="check-result pass">Generated</span></div>';
-
-      if (idx === items.length - 1) {
-        badge.textContent = level.replace('_', ' ') + ' RISK';
-        badge.className = 'ai-agent-badge ' + (level === 'LOW' ? 'clear' : (level === 'MEDIUM' ? 'clear' : 'review'));
-      }
-    }, item.delay);
-  });
-}
-
-// ═══════════════════════════════════════════════════════════
-// AGENT 9: Compliance Memo Agent
+// Deterministic compliance memo summary panel
 // ═══════════════════════════════════════════════════════════
 function generateComplianceMemo() {
   var d = MOCK_COMPANY_DATA;
@@ -6915,20 +6554,6 @@ function generateComplianceMemo() {
   }
 }
 
-// ─── Simulation buttons ───────────────────────────────────
-function simulateApproval() {
-  showPricingView();
-  showToast('success', 'Pre-Screening Approved!', 'Please review the pricing and accept to proceed to KYC documents.');
-}
-function simulateRejection() {
-  showView('rejected');
-}
-function simulateFinalApproval() {
-  document.getElementById('approved-ref').textContent = appRef || generateRef();
-  showView('approved');
-  showToast('success', 'Account Approved!', 'Welcome to Onboarda.');
-}
-
 // ─── Document upload ──────────────────────────────────────
 function triggerUpload(docId) {
   document.querySelector('#' + docId + ' .file-input').click();
@@ -6942,49 +6567,60 @@ function handleUpload(docId, input) {
 
   // Build file names
   const names = Array.from(files).map(f => f.name).join(', ');
-  label.textContent = '✓ ' + names;
-  item.classList.add('uploaded');
-
-  uploadedDocs.add(docId);
-  updateProgress();
+  label.textContent = '⏳ Uploading ' + names;
 
   // Upload to API if authenticated
   if (AUTH_TOKEN && currentApplicationId) {
-    Array.from(files).forEach(async function(file) {
-      try {
-        var fd = new FormData();
-        fd.append('file', file);
-        fd.append('doc_type', docId);
-        var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(docId), fd, true);
-        console.log('Doc uploaded to API:', resp);
-        // Trigger AI verification on server
-        if (resp.id) {
-          try { await apiCall('POST', '/documents/' + resp.id + '/verify'); } catch(e) {}
-        }
-      } catch(err) {
-        console.warn('API upload failed for', docId, err);
+    Promise.all(Array.from(files).map(async function(file) {
+      var fd = new FormData();
+      fd.append('file', file);
+      fd.append('doc_type', docId);
+      var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(docId), fd, true);
+      if (resp.id) {
+        try { await apiCall('POST', '/documents/' + resp.id + '/verify'); } catch(e) {}
       }
+      return resp;
+    })).then(function() {
+      label.textContent = '✓ ' + names;
+      item.classList.add('uploaded');
+      uploadedDocs.add(docId);
+      updateProgress();
+
+      const checks = document.getElementById('doc-ai-checks');
+      if (checks) checks.style.display = 'grid';
+
+      showToast('success', 'File Uploaded', 'Verification started for: ' + names);
+      runAIDocVerification(docId, names);
+
+      if (docId.includes('passport') || docId.includes('kyc-passport') || docId.includes('identity')) {
+        runRealtimePassportValidation(docId, names);
+      }
+
+      if (docId.includes('proof-address') || docId.includes('poa')) {
+        runRealtimeDocumentIntegrityCheck(docId, names);
+      }
+    }).catch(function(err) {
+      console.error('API upload failed for', docId, err);
+      label.textContent = 'Click to upload';
+      item.classList.remove('uploaded');
+      input.value = '';
+      showToast('error', 'Upload Failed', err.message || 'Could not upload this document. Please try again.');
     });
+    return;
   }
 
-  // Show AI checks animation on first upload
-  const checks = document.getElementById('doc-ai-checks');
-  if (checks) checks.style.display = 'grid';
-
-  showToast('success', 'File Uploaded', 'AI verification running for: ' + names);
-
-  // Run real-time AI document verification
-  runAIDocVerification(docId, names);
-
-  // Trigger real-time passport/identity document validation
-  if (docId.includes('passport') || docId.includes('kyc-passport') || docId.includes('identity')) {
-    runRealtimePassportValidation(docId, names);
+  if (ARIE_ENV !== 'demo') {
+    label.textContent = 'Click to upload';
+    input.value = '';
+    showToast('error', 'Authentication Required', 'Please sign in before uploading documents.');
+    return;
   }
 
-  // Trigger document integrity checks
-  if (docId.includes('proof-address') || docId.includes('poa')) {
-    runRealtimeDocumentIntegrityCheck(docId, names);
-  }
+  label.textContent = '✓ ' + names;
+  item.classList.add('uploaded');
+  uploadedDocs.add(docId);
+  updateProgress();
+  showToast('success', 'File Uploaded', 'Document saved in demo mode: ' + names);
 }
 
 function updateProgress() {
@@ -7011,72 +6647,159 @@ function submitDocuments() {
 }
 
 // ─── Status lookup ────────────────────────────────────────
-function lookupApplication() {
+async function lookupApplication() {
   const ref = document.getElementById('lookup-ref').value.trim();
   const email = document.getElementById('lookup-email').value.trim();
+  const resultEl = document.getElementById('status-lookup-result');
   if (!ref && !email) {
     showToast('warn', 'Input Required', 'Please enter a reference number or email address.');
     return;
   }
-  showToast('info', 'Looking up…', 'Checking application status…');
-  setTimeout(() => {
-    showToast('success', 'Status Found', 'Your application is currently under review. Ref: ' + (ref || 'N/A'));
-  }, 1500);
-}
 
-// ─── Client Notification Functions ────────────────────────────────────────
-function showClientNotifications(ref) {
-  // Update the reference number in the notification
-  if (ref) {
-    const refElements = document.querySelectorAll('#notif-ref');
-    refElements.forEach(el => el.textContent = ref);
+  if (resultEl) {
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = '<div style="font-size:12px;color:var(--text3);">Looking up live application status...</div>';
   }
 
-  // Set the current date/time
-  const now = new Date();
-  const dateStr = now.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}) + ' at ' + now.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
-  const dateEls = document.querySelectorAll('#notif-date');
-  dateEls.forEach(el => el.textContent = dateStr);
-
-  showView('client-notifications');
+  try {
+    const query = new URLSearchParams();
+    if (ref) query.set('ref', ref);
+    if (email) query.set('email', email);
+    const resp = await apiCall('GET', '/status-lookup?' + query.toString());
+    const app = resp.application || {};
+    const statusLabel = String(app.status || 'unknown').replace(/_/g, ' ');
+    const riskLabel = app.risk_level ? String(app.risk_level).replace(/_/g, ' ') : 'Not scored';
+    const updatedAt = app.updated_at ? new Date(app.updated_at).toLocaleString() : 'Unknown';
+    if (resultEl) {
+      resultEl.innerHTML =
+        '<div style="font-weight:700;font-size:13px;margin-bottom:8px;">' + escapeHtml(app.company_name || 'Application') + '</div>' +
+        '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Reference:</strong> ' + escapeHtml(app.ref || 'N/A') + '</div>' +
+        '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Status:</strong> ' + escapeHtml(statusLabel) + '</div>' +
+        '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Risk Level:</strong> ' + escapeHtml(riskLabel) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);"><strong>Last Updated:</strong> ' + escapeHtml(updatedAt) + '</div>';
+    }
+    showToast('success', 'Status Found', 'Reference ' + (app.ref || ref) + ' is currently ' + statusLabel + '.');
+  } catch (err) {
+    if (resultEl) {
+      resultEl.innerHTML = '<div style="font-size:12px;color:var(--red);">No application matched the details provided.</div>';
+    }
+    showToast('error', 'Lookup Failed', err.message || 'Could not find an application with those details.');
+  }
 }
 
-function simulateStatusUpdate(status) {
-  const msgUnderReview = document.getElementById('message-under-review');
-  const msgDocsRequired = document.getElementById('message-docs-required');
-  const msgApproved = document.getElementById('message-approved');
-  const msgDeclined = document.getElementById('message-declined');
+function updateClientStatusTracker(status) {
   const stageReview = document.getElementById('stage-under-review');
   const stageDecision = document.getElementById('stage-decision');
+  const summary = document.getElementById('client-status-summary');
+  const normalized = String(status || '').toLowerCase();
 
-  if (status === 'under-review') {
-    msgUnderReview.style.display = 'block';
-    showToast('info', 'Status Updated', 'Application moved to Under Review');
-  } else if (status === 'docs-required') {
-    msgDocsRequired.style.display = 'block';
-    stageReview.innerHTML = '📄';
-    showToast('info', 'Documents Needed', 'Additional documents requested for review');
-  } else if (status === 'approved') {
-    msgApproved.style.display = 'block';
+  if (!stageReview || !stageDecision || !summary) return;
+
+  stageReview.style.background = 'var(--blue-dim)';
+  stageReview.style.borderColor = 'var(--blue)';
+  stageReview.style.color = 'var(--blue)';
+  stageReview.innerHTML = '⏳';
+  stageDecision.style.background = 'var(--bg3)';
+  stageDecision.style.borderColor = 'var(--border2)';
+  stageDecision.style.color = 'var(--text3)';
+  stageDecision.innerHTML = '?';
+
+  if (normalized === 'approved') {
     stageReview.style.background = 'var(--green-dim)';
     stageReview.style.borderColor = 'var(--green)';
+    stageReview.style.color = 'var(--green)';
     stageReview.innerHTML = '✓';
     stageDecision.style.background = 'var(--green-dim)';
     stageDecision.style.borderColor = 'var(--green)';
     stageDecision.style.color = 'var(--green)';
     stageDecision.innerHTML = '✓';
-    showToast('success', 'Application Approved!', 'Your application has been approved');
-  } else if (status === 'declined') {
-    msgDeclined.style.display = 'block';
+    summary.innerHTML = '<strong>Current Status:</strong> Your application has been approved.';
+  } else if (normalized === 'rejected') {
     stageReview.style.background = 'var(--red-dim)';
     stageReview.style.borderColor = 'var(--red)';
+    stageReview.style.color = 'var(--red)';
     stageReview.innerHTML = '✗';
     stageDecision.style.background = 'var(--red-dim)';
     stageDecision.style.borderColor = 'var(--red)';
     stageDecision.style.color = 'var(--red)';
     stageDecision.innerHTML = '✗';
-    showToast('error', 'Application Declined', 'Your application was not approved');
+    summary.innerHTML = '<strong>Current Status:</strong> Your application was declined.';
+  } else if (normalized === 'kyc_documents') {
+    stageReview.innerHTML = '📄';
+    summary.innerHTML = '<strong>Current Status:</strong> Additional KYC documents are required before review can continue.';
+  } else {
+    summary.innerHTML = '<strong>Current Status:</strong> Your application is under compliance review. We will notify you when a decision has been made.';
   }
+}
+
+function renderClientNotifications(notifications) {
+  const container = document.getElementById('notifications-container');
+  if (!container) return;
+
+  if (!notifications || notifications.length === 0) {
+    container.innerHTML = '<div style="padding:16px;border:1px dashed var(--border2);border-radius:8px;color:var(--text3);font-size:12px;text-align:center;">No notifications yet. We will display live compliance updates here.</div>';
+    return;
+  }
+
+  const toneMap = {
+    approved: { bg: 'var(--green-dim)', border: 'var(--green)', color: 'var(--green)', icon: '✓' },
+    rejected: { bg: 'var(--red-dim)', border: 'var(--red)', color: 'var(--red)', icon: '✗' },
+    request_documents: { bg: 'var(--amber-dim)', border: 'var(--amber)', color: 'var(--amber)', icon: '⚠️' },
+    pre_approved: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: '📋' },
+    default: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: 'ℹ️' }
+  };
+
+  container.innerHTML = notifications.map(function(n) {
+    const tone = toneMap[n.notification_type] || toneMap.default;
+    const createdAt = n.created_at ? new Date(n.created_at).toLocaleString() : 'Unknown';
+    const docs = Array.isArray(n.documents_list) && n.documents_list.length
+      ? '<div style="margin-top:8px;font-size:11px;color:var(--text2);"><strong>Requested documents:</strong> ' + escapeHtml(n.documents_list.join(', ')) + '</div>'
+      : '';
+    return '<div style="padding:12px;background:' + tone.bg + ';border-left:4px solid ' + tone.border + ';border-radius:4px;">' +
+      '<div style="font-weight:600;color:' + tone.color + ';font-size:13px;margin-bottom:4px;">' + tone.icon + ' ' + escapeHtml(n.title || 'Notification') + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">' + escapeHtml(n.message || '') + '</div>' +
+      docs +
+      '<div style="font-size:11px;color:var(--text3);">Updated <strong>' + escapeHtml(createdAt) + '</strong></div>' +
+    '</div>';
+  }).join('');
+}
+
+async function loadClientNotifications() {
+  const container = document.getElementById('notifications-container');
+  if (!container) return;
+
+  if (!AUTH_TOKEN) {
+    container.innerHTML = '<div style="padding:16px;border:1px dashed var(--border2);border-radius:8px;color:var(--text3);font-size:12px;text-align:center;">Sign in to view live compliance messages.</div>';
+    updateClientStatusTracker('');
+    return;
+  }
+
+  container.innerHTML = '<div style="padding:16px;border:1px dashed var(--border2);border-radius:8px;color:var(--text3);font-size:12px;text-align:center;">Loading live notifications...</div>';
+
+  try {
+    const resp = await apiCall('GET', '/notifications');
+    const notifications = resp.notifications || [];
+    renderClientNotifications(notifications);
+    if (notifications.length > 0) {
+      const latest = notifications[0];
+      let inferredStatus = '';
+      if (latest.notification_type === 'approved') inferredStatus = 'approved';
+      else if (latest.notification_type === 'rejected') inferredStatus = 'rejected';
+      else if (latest.notification_type === 'request_documents') inferredStatus = 'kyc_documents';
+      else inferredStatus = 'in_review';
+      updateClientStatusTracker(inferredStatus);
+    } else {
+      updateClientStatusTracker('in_review');
+    }
+  } catch (err) {
+    container.innerHTML = '<div style="padding:16px;border:1px dashed var(--border2);border-radius:8px;color:var(--red);font-size:12px;text-align:center;">Could not load notifications right now.</div>';
+    updateClientStatusTracker('');
+  }
+}
+
+function showClientNotifications(ref) {
+  showView('client-notifications');
+  loadClientNotifications();
 }
 
 // ─── Countries list ──────────────────────────────────────────
@@ -7261,6 +6984,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Staff back office access via URL hash: file.html#backoffice
   if (window.location.hash === '#backoffice') {
     toggleBackOffice();
+  }
+  const params = new URLSearchParams(window.location.search);
+  const resetToken = params.get('reset_token');
+  if (resetToken) {
+    const tokenEl = document.getElementById('rp-token');
+    if (tokenEl) tokenEl.value = resetToken;
+    showView('reset-password');
   }
   loadEnvironment();
 });
@@ -7459,8 +7189,8 @@ async function submitLogin(e) {
     try {
       resp = await apiCall('POST', '/auth/client/login', { email, password });
     } catch(apiErr) {
-      // Backend not running — demo/offline mode
-      if (password === DEMO_PORTAL_PASSWORD || password === 'demo123') {
+      // Backend not running — demo/offline mode (only allowed in demo environment)
+      if (ARIE_ENV === 'demo' && (password === DEMO_PORTAL_PASSWORD || password === 'demo123')) {
         isOffline = true;
         const demoName = email.split('@')[0].replace(/[._]/g,' ').replace(/\b\w/g, c => c.toUpperCase());
         resp = {
@@ -7493,7 +7223,92 @@ async function submitLogin(e) {
     showToast('success', isOffline ? 'Demo Mode' : 'Welcome back!', isOffline ? 'Signed in offline — explore the portal demo.' : 'Pick up where you left off.');
   } catch (err) {
     btn.disabled = false; btn.textContent = '🔒 Sign In';
-    showToast('error', 'Login Failed', 'Invalid credentials. Try password: Arie2026!');
+    showToast('error', 'Login Failed', ARIE_ENV === 'demo' ? 'Invalid credentials. Try password: Arie2026!' : 'Invalid credentials. Please check your email and password.');
+  }
+}
+
+async function submitForgotPassword(e) {
+  e.preventDefault();
+  const btn = document.getElementById('forgot-password-btn');
+  const email = document.getElementById('fp-email').value.trim();
+  btn.disabled = true;
+  btn.textContent = '⏳ Sending...';
+  try {
+    const resp = await apiCall('POST', '/auth/client/forgot-password', { email: email });
+    btn.disabled = false;
+    btn.textContent = '📩 Send Reset Token';
+    if (resp.reset_token) {
+      document.getElementById('rp-token').value = resp.reset_token;
+      showView('reset-password');
+      showToast('success', 'Reset Token Generated', 'A reset token was generated and prefilled for this non-production environment.');
+    } else {
+      showToast('success', 'Reset Requested', 'If the email is registered, a password reset token has been sent.');
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '📩 Send Reset Token';
+    showToast('error', 'Reset Failed', err.message || 'Could not start password reset.');
+  }
+}
+
+async function submitResetPassword(e) {
+  e.preventDefault();
+  const btn = document.getElementById('reset-password-btn');
+  const token = document.getElementById('rp-token').value.trim();
+  const password = document.getElementById('rp-password').value;
+  const confirm = document.getElementById('rp-confirm').value;
+  if (password !== confirm) {
+    showToast('error', 'Password Mismatch', 'The new passwords do not match.');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '⏳ Resetting...';
+  try {
+    await apiCall('POST', '/auth/client/reset-password', {
+      token: token,
+      new_password: password
+    });
+    btn.disabled = false;
+    btn.textContent = '🔐 Reset Password';
+    document.getElementById('rp-token').value = '';
+    document.getElementById('rp-password').value = '';
+    document.getElementById('rp-confirm').value = '';
+    showView('login');
+    showToast('success', 'Password Reset', 'Your password has been reset. You can now sign in.');
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '🔐 Reset Password';
+    showToast('error', 'Reset Failed', err.message || 'Could not reset your password.');
+  }
+}
+
+async function submitChangePassword(e) {
+  e.preventDefault();
+  const btn = document.getElementById('change-password-btn');
+  const currentPassword = document.getElementById('cp-current').value;
+  const newPassword = document.getElementById('cp-new').value;
+  const confirmPassword = document.getElementById('cp-confirm').value;
+  if (newPassword !== confirmPassword) {
+    showToast('error', 'Password Mismatch', 'The new passwords do not match.');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '⏳ Updating...';
+  try {
+    await apiCall('POST', '/auth/client/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword
+    });
+    btn.disabled = false;
+    btn.textContent = '🔒 Change Password';
+    document.getElementById('cp-current').value = '';
+    document.getElementById('cp-new').value = '';
+    document.getElementById('cp-confirm').value = '';
+    showToast('success', 'Password Updated', 'Your password has been changed successfully.');
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '🔒 Change Password';
+    showToast('error', 'Update Failed', err.message || 'Could not change your password.');
   }
 }
 
@@ -7862,7 +7677,7 @@ async function sendKYCLink(personId) {
     });
 
     // Generate WebSDK access token
-    const tokenRes = await apiCall('POST', '/api/kyc/token', {
+    const tokenRes = await apiCall('POST', '/kyc/token', {
       external_user_id: personId,
       level_name: 'individual'
     });
@@ -8086,24 +7901,48 @@ function setKYCType(personId, type, btn) {
 // Map ref → sidebar nav ID (populated dynamically by renderSidebarApps)
 var REF_TO_SNAV = {};
 
-function resumeApplication(ref, stage) {
+function getApplicationView(status) {
   const stageMap = {
-    'prescreening': 'prescreening',
-    'onboarding':   'onboarding',
-    'approved':     'approved',
-    'rejected':     'rejected',
-    'pending':      'pending',
+    draft: 'prescreening',
+    submitted: 'pending',
+    pricing_review: 'pricing',
+    pricing_accepted: 'onboarding',
+    pre_approval_review: 'pre-approval-hold',
+    pre_approved: 'onboarding',
+    kyc_documents: 'onboarding',
+    pending_review: 'pending',
+    in_review: 'pending',
+    compliance_review: 'compliance-hold',
+    approved: 'approved',
+    rejected: 'rejected',
+    edd_required: 'pending'
   };
-  const target = stageMap[stage] || 'pending';
+  return stageMap[status] || 'pending';
+}
+
+async function resumeApplication(ref, stage) {
+  var target = getApplicationView(stage);
+  try {
+    if (AUTH_TOKEN && ref) {
+      var app = await apiCall('GET', '/applications/' + encodeURIComponent(ref));
+      currentApplicationId = app.id || currentApplicationId;
+      appRef = app.ref || ref;
+      computedRiskLevel = app.risk_level || computedRiskLevel;
+      computedRiskScore = Number(app.risk_score || computedRiskScore || 0);
+      if (app.risk_dimensions) dimScores = app.risk_dimensions;
+      target = getApplicationView(app.status || stage);
+    }
+  } catch (err) {
+    console.error('Failed to load application detail for resume:', err);
+  }
   showView(target);
-  // Highlight the matching sidebar item
   document.querySelectorAll('#global-client-sidebar .dash-nav-item').forEach(b => b.classList.remove('active'));
   const snavId = REF_TO_SNAV[ref];
   if (snavId) {
     const el = document.getElementById(snavId);
     if (el) el.classList.add('active');
   }
-  showToast('info', 'Application Loaded', 'Ref: ' + ref + ' — pick up from where you left off.');
+  showToast('info', 'Application Loaded', 'Ref: ' + ref + ' — view restored to the latest saved stage.');
 }
 
 function renderSidebarApps(apps) {
@@ -8124,7 +7963,7 @@ function renderSidebarApps(apps) {
     var statusClasses = {pending:'review',in_review:'review',approved:'approved',rejected:'rejected',edd_required:'kyc',kyc_documents:'kyc',prescreening_submitted:'review',draft:'review'};
     var label = statusLabels[app.status] || app.status || '';
     var cls = statusClasses[app.status] || 'review';
-    var stage = app.status === 'approved' ? 'approved' : app.status === 'rejected' ? 'rejected' : 'onboarding';
+    var stage = app.status || 'pending';
     var name = app.company_name || app.ref || 'Application';
     html += '<button type="button" class="dash-nav-item" id="' + snavId + '" onclick="resumeApplication(\'' + escapeHtml(ref) + '\',\'' + stage + '\')">' +
       '<span class="dash-nav-icon">' + icon + '</span>' +
@@ -8145,7 +7984,7 @@ function renderResumeCTA(apps) {
   }
   var app = inProgress[0];
   var ref = app.ref || app.id || '';
-  var stage = 'onboarding';
+  var stage = app.status || 'pending';
   cta.style.display = '';
   cta.setAttribute('onclick', "resumeApplication('" + ref + "','" + stage + "')");
   var desc = document.getElementById('resume-cta-desc');

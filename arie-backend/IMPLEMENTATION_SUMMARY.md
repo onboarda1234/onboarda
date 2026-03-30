@@ -1,4 +1,9 @@
-# Claude AI Integration Module - Implementation Summary
+# Claude AI Integration Module - Historical Implementation Summary
+
+> This file is retained as historical implementation context. The current
+> canonical AI agent numbering model is defined in
+> `arie-backend/ai_agent_catalog.py` and documented in
+> `docs/compliance/AI_AGENT_NUMBERING_MIGRATION.md`.
 
 ## Deliverable
 

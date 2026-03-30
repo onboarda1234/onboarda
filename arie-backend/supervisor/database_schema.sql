@@ -40,12 +40,12 @@ CREATE TABLE IF NOT EXISTS supervisor_agent_registry (
         'identity_document_integrity',
         'external_database_verification',
         'corporate_structure_ubo',
-        'business_model_plausibility',
         'fincrime_screening',
         'compliance_memo_risk',
         'periodic_review_preparation',
         'adverse_media_pep_monitoring',
         'behaviour_risk_drift',
+        'regulatory_impact',
         'ongoing_compliance_review'
     )),
     version         TEXT NOT NULL,                             -- Semantic version "2.1.0"

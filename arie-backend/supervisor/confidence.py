@@ -55,12 +55,12 @@ AGENT_WEIGHTS: Dict[AgentType, float] = {
     AgentType.IDENTITY_DOCUMENT_INTEGRITY: 1.0,
     AgentType.EXTERNAL_DATABASE_VERIFICATION: 1.0,
     AgentType.CORPORATE_STRUCTURE_UBO: 1.2,        # UBO is critical for AML
-    AgentType.BUSINESS_MODEL_PLAUSIBILITY: 0.9,
     AgentType.FINCRIME_SCREENING: 1.3,             # Screening is highest priority
     AgentType.COMPLIANCE_MEMO_RISK: 0.8,           # Derived from other agents
     AgentType.PERIODIC_REVIEW_PREPARATION: 0.7,
     AgentType.ADVERSE_MEDIA_PEP_MONITORING: 1.1,
     AgentType.BEHAVIOUR_RISK_DRIFT: 0.8,
+    AgentType.REGULATORY_IMPACT: 0.6,
     AgentType.ONGOING_COMPLIANCE_REVIEW: 0.7,
 }
 

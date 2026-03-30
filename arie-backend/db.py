@@ -344,6 +344,48 @@ def _get_postgres_schema() -> str:
         verified_at TIMESTAMP
     );
 
+    -- Compliance Resources
+    CREATE TABLE IF NOT EXISTS compliance_resources (
+        id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
+        slug TEXT UNIQUE,
+        title TEXT NOT NULL,
+        description TEXT,
+        category TEXT DEFAULT 'internal',
+        resource_type TEXT DEFAULT 'uploaded' CHECK(resource_type IN ('system','uploaded')),
+        file_name TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        s3_key TEXT,
+        mime_type TEXT,
+        file_size INTEGER,
+        uploaded_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Regulatory Intelligence Documents
+    CREATE TABLE IF NOT EXISTS regulatory_documents (
+        id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
+        title TEXT NOT NULL,
+        regulator TEXT NOT NULL,
+        jurisdiction TEXT NOT NULL,
+        doc_type TEXT NOT NULL,
+        publication_date TEXT,
+        effective_date TEXT,
+        file_name TEXT,
+        file_path TEXT,
+        s3_key TEXT,
+        mime_type TEXT,
+        file_size INTEGER,
+        source_text TEXT,
+        status TEXT DEFAULT 'uploaded' CHECK(status IN ('uploaded','analysed','review_required','analysis_failed')),
+        analysis_source TEXT,
+        analysis_summary JSONB DEFAULT '{}',
+        audit_trail JSONB DEFAULT '[]',
+        uploaded_by TEXT REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Risk Model Configuration
     CREATE TABLE IF NOT EXISTS risk_config (
         id INTEGER PRIMARY KEY DEFAULT 1,
@@ -352,6 +394,18 @@ def _get_postgres_schema() -> str:
         country_risk_scores JSONB DEFAULT '{}',
         sector_risk_scores JSONB DEFAULT '{}',
         entity_type_scores JSONB DEFAULT '{}',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT REFERENCES users(id)
+    );
+
+    -- System Settings
+    CREATE TABLE IF NOT EXISTS system_settings (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        company_name TEXT NOT NULL DEFAULT 'Onboarda Ltd',
+        licence_number TEXT DEFAULT 'FSC-PIS-2024-001',
+        default_retention_years INTEGER NOT NULL DEFAULT 7,
+        auto_approve_max_score INTEGER NOT NULL DEFAULT 40,
+        edd_threshold_score INTEGER NOT NULL DEFAULT 55,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_by TEXT REFERENCES users(id)
     );
@@ -560,6 +614,10 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_directors_application_id ON directors(application_id);
     CREATE INDEX IF NOT EXISTS idx_ubos_application_id ON ubos(application_id);
     CREATE INDEX IF NOT EXISTS idx_documents_application_id ON documents(application_id);
+    CREATE INDEX IF NOT EXISTS idx_compliance_resources_category ON compliance_resources(category);
+    CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
+    CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
+    CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_application_id ON monitoring_alerts(application_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_application_id ON periodic_reviews(application_id);
     CREATE INDEX IF NOT EXISTS idx_sar_reports_application_id ON sar_reports(application_id);
@@ -725,6 +783,48 @@ def _get_sqlite_schema() -> str:
         verified_at TEXT
     );
 
+    -- Compliance Resources
+    CREATE TABLE IF NOT EXISTS compliance_resources (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+        slug TEXT UNIQUE,
+        title TEXT NOT NULL,
+        description TEXT,
+        category TEXT DEFAULT 'internal',
+        resource_type TEXT DEFAULT 'uploaded' CHECK(resource_type IN ('system','uploaded')),
+        file_name TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        s3_key TEXT,
+        mime_type TEXT,
+        file_size INTEGER,
+        uploaded_by TEXT REFERENCES users(id),
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Regulatory Intelligence Documents
+    CREATE TABLE IF NOT EXISTS regulatory_documents (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+        title TEXT NOT NULL,
+        regulator TEXT NOT NULL,
+        jurisdiction TEXT NOT NULL,
+        doc_type TEXT NOT NULL,
+        publication_date TEXT,
+        effective_date TEXT,
+        file_name TEXT,
+        file_path TEXT,
+        s3_key TEXT,
+        mime_type TEXT,
+        file_size INTEGER,
+        source_text TEXT,
+        status TEXT DEFAULT 'uploaded' CHECK(status IN ('uploaded','analysed','review_required','analysis_failed')),
+        analysis_source TEXT,
+        analysis_summary TEXT DEFAULT '{}',
+        audit_trail TEXT DEFAULT '[]',
+        uploaded_by TEXT REFERENCES users(id),
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     -- Risk Model Configuration
     CREATE TABLE IF NOT EXISTS risk_config (
         id INTEGER PRIMARY KEY DEFAULT 1,
@@ -733,6 +833,18 @@ def _get_sqlite_schema() -> str:
         country_risk_scores TEXT DEFAULT '{}',
         sector_risk_scores TEXT DEFAULT '{}',
         entity_type_scores TEXT DEFAULT '{}',
+        updated_at TEXT DEFAULT (datetime('now')),
+        updated_by TEXT REFERENCES users(id)
+    );
+
+    -- System Settings
+    CREATE TABLE IF NOT EXISTS system_settings (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        company_name TEXT NOT NULL DEFAULT 'Onboarda Ltd',
+        licence_number TEXT DEFAULT 'FSC-PIS-2024-001',
+        default_retention_years INTEGER NOT NULL DEFAULT 7,
+        auto_approve_max_score INTEGER NOT NULL DEFAULT 40,
+        edd_threshold_score INTEGER NOT NULL DEFAULT 55,
         updated_at TEXT DEFAULT (datetime('now')),
         updated_by TEXT REFERENCES users(id)
     );
@@ -949,6 +1061,10 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_directors_application_id ON directors(application_id);
     CREATE INDEX IF NOT EXISTS idx_ubos_application_id ON ubos(application_id);
     CREATE INDEX IF NOT EXISTS idx_documents_application_id ON documents(application_id);
+    CREATE INDEX IF NOT EXISTS idx_compliance_resources_category ON compliance_resources(category);
+    CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
+    CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
+    CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
 
     -- Sprint 3: GDPR Data Retention Policy
     CREATE TABLE IF NOT EXISTS data_retention_policies (
@@ -1059,6 +1175,14 @@ def init_db():
         _run_migrations(db)
         db.commit()
 
+        # Ensure built-in resources exist for the back-office reference library.
+        _ensure_default_compliance_resources(db)
+        db.commit()
+
+        # Ensure system settings row exists for configuration-backed settings.
+        _ensure_default_system_settings(db)
+        db.commit()
+
         # ── Fix: Add 'submitted' to applications status CHECK constraint (PostgreSQL only) ──
         if USE_POSTGRESQL:
             try:
@@ -1079,6 +1203,85 @@ def init_db():
         raise
     finally:
         db.close()
+
+
+def _ensure_default_compliance_resources(db: DBConnection):
+    """Seed a small internal resource library with real files already present in the repo."""
+    repo_root = Path(__file__).resolve().parent.parent
+    default_resources = [
+        {
+            "slug": "risk-score-sheet",
+            "title": "ARIE Risk Score Sheet",
+            "description": "Excel workbook with the current risk scoring matrix and supporting dimensions.",
+            "category": "internal",
+            "resource_type": "system",
+            "path": repo_root / "docs" / "compliance" / "ARIE_Risk_Score_Sheet.xlsx",
+            "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+        {
+            "slug": "regulatory-compliance-report",
+            "title": "Onboarda Regulatory Compliance Report",
+            "description": "Internal compliance reference report for regulatory obligations and remediation context.",
+            "category": "internal",
+            "resource_type": "system",
+            "path": repo_root / "docs" / "compliance" / "Onboarda_Regulatory_Compliance_Report.docx",
+            "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        },
+        {
+            "slug": "sample-compliance-memo",
+            "title": "Onboarda Sample Compliance Memo",
+            "description": "Reference memo format used by officers when reviewing onboarding decisions.",
+            "category": "internal",
+            "resource_type": "system",
+            "path": repo_root / "docs" / "compliance" / "Onboarda_Sample_Compliance_Memo.pdf",
+            "mime_type": "application/pdf",
+        },
+    ]
+
+    for resource in default_resources:
+        path = resource["path"]
+        if not path.exists():
+            logger.warning("Skipping default compliance resource because file is missing: %s", path)
+            continue
+        try:
+            db.execute(
+                """
+                INSERT OR IGNORE INTO compliance_resources
+                (slug, title, description, category, resource_type, file_name, file_path, mime_type, file_size)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    resource["slug"],
+                    resource["title"],
+                    resource["description"],
+                    resource["category"],
+                    resource["resource_type"],
+                    path.name,
+                    str(path),
+                    resource["mime_type"],
+                    path.stat().st_size,
+                ),
+            )
+        except Exception as e:
+            logger.debug("Default compliance resource seed skipped for %s: %s", resource["slug"], e)
+
+
+def _ensure_default_system_settings(db: DBConnection):
+    """Seed default system settings row for the back-office settings view."""
+    try:
+        db.execute("""
+            INSERT OR IGNORE INTO system_settings
+            (id, company_name, licence_number, default_retention_years, auto_approve_max_score, edd_threshold_score)
+            VALUES (1,?,?,?,?,?)
+        """, (
+            "Onboarda Ltd",
+            "FSC-PIS-2024-001",
+            7,
+            40,
+            55,
+        ))
+    except Exception as e:
+        logger.debug("Default system settings seed skipped: %s", e)
 
 
 def _run_migrations(db: DBConnection):
@@ -1140,6 +1343,149 @@ def _run_migrations(db: DBConnection):
         except Exception as e:
             logger.debug(f"Migration s3_key column may already exist: {e}")
         logger.info("Migration v2.3: s3_key column added")
+
+    # Migration v2.4: Add compliance_resources table for back-office reference materials
+    try:
+        db.execute("SELECT slug FROM compliance_resources LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.4: Creating compliance_resources table")
+        if USE_POSTGRESQL:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS compliance_resources (
+                id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
+                slug TEXT UNIQUE,
+                title TEXT NOT NULL,
+                description TEXT,
+                category TEXT DEFAULT 'internal',
+                resource_type TEXT DEFAULT 'uploaded' CHECK(resource_type IN ('system','uploaded')),
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                s3_key TEXT,
+                mime_type TEXT,
+                file_size INTEGER,
+                uploaded_by TEXT REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_compliance_resources_category ON compliance_resources(category);
+            CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
+            """)
+        else:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS compliance_resources (
+                id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+                slug TEXT UNIQUE,
+                title TEXT NOT NULL,
+                description TEXT,
+                category TEXT DEFAULT 'internal',
+                resource_type TEXT DEFAULT 'uploaded' CHECK(resource_type IN ('system','uploaded')),
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                s3_key TEXT,
+                mime_type TEXT,
+                file_size INTEGER,
+                uploaded_by TEXT REFERENCES users(id),
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_compliance_resources_category ON compliance_resources(category);
+            CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
+            """)
+        logger.info("Migration v2.4: compliance_resources table ready")
+
+    # Migration v2.5: Add system_settings table for persisted back-office settings
+    try:
+        db.execute("SELECT company_name FROM system_settings LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.5: Creating system_settings table")
+        if USE_POSTGRESQL:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS system_settings (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                company_name TEXT NOT NULL DEFAULT 'Onboarda Ltd',
+                licence_number TEXT DEFAULT 'FSC-PIS-2024-001',
+                default_retention_years INTEGER NOT NULL DEFAULT 7,
+                auto_approve_max_score INTEGER NOT NULL DEFAULT 40,
+                edd_threshold_score INTEGER NOT NULL DEFAULT 55,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_by TEXT REFERENCES users(id)
+            );
+            """)
+        else:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS system_settings (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                company_name TEXT NOT NULL DEFAULT 'Onboarda Ltd',
+                licence_number TEXT DEFAULT 'FSC-PIS-2024-001',
+                default_retention_years INTEGER NOT NULL DEFAULT 7,
+                auto_approve_max_score INTEGER NOT NULL DEFAULT 40,
+                edd_threshold_score INTEGER NOT NULL DEFAULT 55,
+                updated_at TEXT DEFAULT (datetime('now')),
+                updated_by TEXT REFERENCES users(id)
+            );
+            """)
+        logger.info("Migration v2.5: system_settings table ready")
+
+    # Migration v2.6: Add regulatory_documents table for regulatory intelligence workflow
+    try:
+        db.execute("SELECT regulator FROM regulatory_documents LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.6: Creating regulatory_documents table")
+        if USE_POSTGRESQL:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS regulatory_documents (
+                id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
+                title TEXT NOT NULL,
+                regulator TEXT NOT NULL,
+                jurisdiction TEXT NOT NULL,
+                doc_type TEXT NOT NULL,
+                publication_date TEXT,
+                effective_date TEXT,
+                file_name TEXT,
+                file_path TEXT,
+                s3_key TEXT,
+                mime_type TEXT,
+                file_size INTEGER,
+                source_text TEXT,
+                status TEXT DEFAULT 'uploaded' CHECK(status IN ('uploaded','analysed','review_required','analysis_failed')),
+                analysis_source TEXT,
+                analysis_summary JSONB DEFAULT '{}',
+                audit_trail JSONB DEFAULT '[]',
+                uploaded_by TEXT REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
+            CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
+            """)
+        else:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS regulatory_documents (
+                id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+                title TEXT NOT NULL,
+                regulator TEXT NOT NULL,
+                jurisdiction TEXT NOT NULL,
+                doc_type TEXT NOT NULL,
+                publication_date TEXT,
+                effective_date TEXT,
+                file_name TEXT,
+                file_path TEXT,
+                s3_key TEXT,
+                mime_type TEXT,
+                file_size INTEGER,
+                source_text TEXT,
+                status TEXT DEFAULT 'uploaded' CHECK(status IN ('uploaded','analysed','review_required','analysis_failed')),
+                analysis_source TEXT,
+                analysis_summary TEXT DEFAULT '{}',
+                audit_trail TEXT DEFAULT '[]',
+                uploaded_by TEXT REFERENCES users(id),
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
+            CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
+            """)
+        logger.info("Migration v2.6: regulatory_documents table ready")
 
 
 def _populate_default_scoring_config(db: 'DBConnection'):
@@ -1444,7 +1790,7 @@ def seed_initial_data(db: DBConnection):
                 1, agent4_checks
             ),
             (
-                5, "Compliance Memo Agent", "📝", "Onboarding",
+                5, "Compliance Memo & Risk Recommendation Agent", "📝", "Onboarding",
                 "Final synthesis agent. Compiles results from Agents 1-4, including business model plausibility assessment. "
                 "Summarizes findings, recommends risk rating, generates onboarding memo and review checklist. "
                 "Computes 5-dimension composite risk scoring (Entity 30%, Geographic 25%, Product/Service 20%, Sector 15%, Channel 10%), "
@@ -1506,14 +1852,14 @@ def seed_initial_data(db: DBConnection):
         # Supervisor agent type mapping: agent_number → supervisor schema AgentType
         supervisor_type_map = {
             1: "identity_document_integrity",
-            2: "external_db_verification",
+            2: "external_database_verification",
             3: "fincrime_screening",
             4: "corporate_structure_ubo",
             5: "compliance_memo_risk",
             6: "periodic_review_preparation",
             7: "adverse_media_pep_monitoring",
             8: "behaviour_risk_drift",
-            9: None,  # Regulatory Impact Agent has no supervisor equivalent yet
+            9: "regulatory_impact",
             10: "ongoing_compliance_review",
         }
     

@@ -36,12 +36,12 @@ class AgentType(str, Enum):
     IDENTITY_DOCUMENT_INTEGRITY = "identity_document_integrity"
     EXTERNAL_DATABASE_VERIFICATION = "external_database_verification"
     CORPORATE_STRUCTURE_UBO = "corporate_structure_ubo"
-    BUSINESS_MODEL_PLAUSIBILITY = "business_model_plausibility"
     FINCRIME_SCREENING = "fincrime_screening"
     COMPLIANCE_MEMO_RISK = "compliance_memo_risk"
     PERIODIC_REVIEW_PREPARATION = "periodic_review_preparation"
     ADVERSE_MEDIA_PEP_MONITORING = "adverse_media_pep_monitoring"
     BEHAVIOUR_RISK_DRIFT = "behaviour_risk_drift"
+    REGULATORY_IMPACT = "regulatory_impact"
     ONGOING_COMPLIANCE_REVIEW = "ongoing_compliance_review"
 
 
@@ -344,7 +344,7 @@ class ExternalDatabaseOutput(AgentOutputBase):
 
 
 class CorporateStructureUBOOutput(AgentOutputBase):
-    """Agent 2: Corporate Structure & UBO Mapping Agent
+    """Agent 4: Corporate Structure & UBO Mapping Agent
 
     Maps ownership chains, identifies UBOs, detects nominee structures,
     flags complex chains, cross-references UBOs with screening results.
@@ -363,31 +363,13 @@ class CorporateStructureUBOOutput(AgentOutputBase):
     total_ownership_mapped_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
 
 
-class BusinessModelOutput(AgentOutputBase):
-    """Agent 3: Business Model Plausibility Agent
-
-    Evaluates business story, sector alignment, transaction benchmarking,
-    source of funds consistency. Part of the onboarding pipeline.
-    """
-    agent_type: AgentType = AgentType.BUSINESS_MODEL_PLAUSIBILITY
-
-    business_description_analysis: Optional[Dict[str, Any]] = None
-    revenue_model_plausibility: Optional[str] = None
-    industry_risk_level: Optional[str] = None
-    geographic_risk_assessment: Optional[Dict[str, Any]] = None
-    transaction_pattern_concerns: List[str] = Field(default_factory=list)
-    regulatory_license_requirements: List[str] = Field(default_factory=list)
-    plausibility_score: Optional[float] = Field(None, ge=0.0, le=1.0)
-    red_flags: List[str] = Field(default_factory=list)
-
-
 class FinCrimeScreeningOutput(AgentOutputBase):
-    """Agent 4: FinCrime Screening Interpretation Agent
+    """Agent 3: FinCrime Screening Interpretation Agent
 
     Screens individuals/entities against sanctions lists, PEP databases,
     watchlists, and adverse media. Distinguishes false positives,
     assesses match confidence, classifies political exposure.
-    Runs AFTER Identity Agent (Agent 1) and Corporate Structure Agent (Agent 2).
+    Runs AFTER Identity Agent (Agent 1) and can inform Agent 4 ownership review.
     """
     agent_type: AgentType = AgentType.FINCRIME_SCREENING
 
@@ -471,6 +453,21 @@ class BehaviourRiskDriftOutput(AgentOutputBase):
     recommended_action: Optional[str] = None
 
 
+class RegulatoryImpactOutput(AgentOutputBase):
+    """Agent 9: Regulatory Impact Agent
+
+    Future-phase agent reserved in the canonical model. It is not part of the
+    live approval chain in the current implementation.
+    """
+    agent_type: AgentType = AgentType.REGULATORY_IMPACT
+
+    impact_summary: Optional[str] = None
+    affected_jurisdictions: List[str] = Field(default_factory=list)
+    affected_controls: List[str] = Field(default_factory=list)
+    implementation_required: bool = False
+    implementation_deadline: Optional[str] = None
+
+
 class OngoingComplianceOutput(AgentOutputBase):
     """Agent 10: Ongoing Compliance Review Agent"""
     agent_type: AgentType = AgentType.ONGOING_COMPLIANCE_REVIEW
@@ -490,12 +487,12 @@ AGENT_OUTPUT_MODELS: Dict[AgentType, type] = {
     AgentType.IDENTITY_DOCUMENT_INTEGRITY: IdentityDocumentOutput,
     AgentType.EXTERNAL_DATABASE_VERIFICATION: ExternalDatabaseOutput,
     AgentType.CORPORATE_STRUCTURE_UBO: CorporateStructureUBOOutput,
-    AgentType.BUSINESS_MODEL_PLAUSIBILITY: BusinessModelOutput,
     AgentType.FINCRIME_SCREENING: FinCrimeScreeningOutput,
     AgentType.COMPLIANCE_MEMO_RISK: ComplianceMemoOutput,
     AgentType.PERIODIC_REVIEW_PREPARATION: PeriodicReviewOutput,
     AgentType.ADVERSE_MEDIA_PEP_MONITORING: AdverseMediaPEPOutput,
     AgentType.BEHAVIOUR_RISK_DRIFT: BehaviourRiskDriftOutput,
+    AgentType.REGULATORY_IMPACT: RegulatoryImpactOutput,
     AgentType.ONGOING_COMPLIANCE_REVIEW: OngoingComplianceOutput,
 }
 

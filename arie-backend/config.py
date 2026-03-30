@@ -171,7 +171,9 @@ def validate_config():
         if not PII_ENCRYPTION_KEY:
             errors.append("PII_ENCRYPTION_KEY is required in production")
         if not S3_BUCKET or S3_BUCKET == "arie-documents":
-            warnings.append("S3_BUCKET not set or using default — documents may use local storage")
+            errors.append("S3_BUCKET must be explicitly configured in production")
+        if not os.environ.get("SMTP_HOST") or not os.environ.get("SMTP_USER"):
+            warnings.append("SMTP_HOST/SMTP_USER not set — forgot-password emails will not be delivered")
         if not REDIS_URL:
             warnings.append("REDIS_URL not set — using in-memory session store (not scalable)")
         if CLAUDE_MOCK_MODE:

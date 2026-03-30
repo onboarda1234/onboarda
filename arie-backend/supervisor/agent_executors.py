@@ -1,13 +1,13 @@
 """
 ARIE Finance — AI Agent Supervisor: Agent Executor Integration
 ================================================================
-Bridges the existing ClaudeClient + application data layer to the
-supervisor's agent executor interface.
+Maps stored application data into the supervisor's agent executor
+interface for decision-support style outputs.
 
 Each executor function:
   - Accepts (application_id, context_data)
   - Fetches application data from the DB
-  - Calls the appropriate ClaudeClient method or builds output from existing data
+  - Builds output from stored data using deterministic, heuristic, or synthetic logic
   - Returns a raw dict matching the agent's Pydantic schema
 
 Usage:
@@ -198,18 +198,19 @@ def execute_identity_document(application_id: str, context: Dict[str, Any]) -> D
 
 
 # ═══════════════════════════════════════════════════════════
-# AGENT 2a: External Database Verification
+# AGENT 2: External Database Verification
 # ═══════════════════════════════════════════════════════════
 
 def execute_external_database(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 2a: Cross-reference application data against external registries."""
+    """Agent 2: Heuristic registry cross-reference from stored application data."""
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
     directors = data["directors"]
     run_id = str(uuid4())
 
-    # Simulate registry lookup based on application data
+    # Simulate registry lookup based on application data.
+    # This executor is decision-support only until a real registry integration is wired here.
     company_name = app.get("company_name", "")
     country = app.get("country", "")
     reg_number = app.get("registration_number", "")
@@ -257,7 +258,7 @@ def execute_external_database(application_id: str, context: Dict[str, Any]) -> D
     confidence = 0.88 if company_found else 0.60
     status = AgentStatus.CLEAN if company_found and not discrepancies else AgentStatus.ISSUES_FOUND
 
-    output = _base_output(AgentType.EXTERNAL_DATABASE_VERIFICATION, "Agent 2a: External Database Verification", application_id, run_id)
+    output = _base_output(AgentType.EXTERNAL_DATABASE_VERIFICATION, "Agent 2: External Database Cross-Verification", application_id, run_id)
     output.update({
         "status": status.value,
         "confidence_score": round(confidence, 3),
@@ -284,7 +285,7 @@ def execute_external_database(application_id: str, context: Dict[str, Any]) -> D
 # ═══════════════════════════════════════════════════════════
 
 def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 2: Map ownership chains and identify UBOs."""
+    """Agent 4: Deterministic UBO mapping from stored application data."""
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
@@ -292,19 +293,9 @@ def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]
     ubos = data["ubos"]
     run_id = str(uuid4())
 
-    # Try to use ClaudeClient if available
-    claude_result = None
-    try:
-        from claude_client import ClaudeClient
-        client = ClaudeClient()
-        claude_result = client.analyze_corporate_structure(
-            directors=directors, ubos=ubos,
-            jurisdiction=app.get("country", "Unknown")
-        )
-    except Exception as e:
-        logger.warning("ClaudeClient unavailable for corporate structure: %s", e)
-
-    # Build UBO analysis
+    # Build UBO analysis from stored application data only.
+    # Do not make provider calls here unless the provider output becomes part of the
+    # authoritative returned payload and is clearly labelled as such.
     ubo_list = []
     total_ownership = 0
     for u in ubos:
@@ -339,7 +330,7 @@ def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]
                        f"Structure complexity: {'Complex' if complex_structure else 'Simple'}.",
         "severity": Severity.INFO.value if ubo_completeness > 0.75 else Severity.HIGH.value,
         "confidence": confidence,
-        "source": "corporate_analysis",
+        "source": "deterministic_ubo_mapping",
         "evidence_refs": [],
         "regulatory_relevance": "FATF R24/R25 require identification of all beneficial owners >25%"
     }]
@@ -377,7 +368,7 @@ def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]
             "related_findings": [],
         })
 
-    output = _base_output(AgentType.CORPORATE_STRUCTURE_UBO, "Agent 2: Corporate Structure & UBO Mapping", application_id, run_id)
+    output = _base_output(AgentType.CORPORATE_STRUCTURE_UBO, "Agent 4: Corporate Structure & UBO Mapping", application_id, run_id)
     output.update({
         "status": status.value,
         "confidence_score": round(confidence, 3),
@@ -402,16 +393,11 @@ def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]
 
 
 # ═══════════════════════════════════════════════════════════
-# AGENT 3: Business Model Plausibility
+# INTERNAL SUB-ANALYSIS: Business Model Plausibility
 # ═══════════════════════════════════════════════════════════
 
-def execute_business_model(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 3: Evaluate business model plausibility."""
-    db_path = context.get("db_path", "")
-    data = _get_app_data(db_path, application_id)
-    app = data["application"]
-    run_id = str(uuid4())
-
+def _build_business_model_summary(app: Dict[str, Any]) -> Dict[str, Any]:
+    """Internal business plausibility summary used inside Agent 5."""
     sector = app.get("sector", "Unknown")
     country = app.get("country", "Unknown")
     sof = app.get("source_of_funds", "")
@@ -433,56 +419,27 @@ def execute_business_model(application_id: str, context: Dict[str, Any]) -> Dict
         red_flags.append("Source of funds not declared")
 
     confidence = 0.85 if plausibility > 0.7 else 0.65
-    status = AgentStatus.CLEAN if not red_flags else AgentStatus.ISSUES_FOUND
-
-    findings = [{
-        "finding_id": str(uuid4())[:12],
-        "category": "business_plausibility",
-        "title": f"Business model assessment: {sector}",
-        "description": f"Entity operates in {sector} sector from {country}. Industry risk: {industry_risk}. "
-                       f"Source of funds: {'declared' if sof and sof != 'Information not provided' else 'not declared'}.",
-        "severity": Severity.INFO.value if not red_flags else Severity.MEDIUM.value,
-        "confidence": plausibility,
-        "source": "business_analysis",
-        "evidence_refs": [],
-        "regulatory_relevance": "FATF R12 requires understanding of business purpose and intended nature of relationship"
-    }]
-
-    evidence = [{
-        "evidence_id": str(uuid4())[:12],
-        "evidence_type": "application_data",
-        "source": "application_form",
-        "content_summary": f"Business model: {sector} in {country}, SoF: {sof or 'not declared'}",
-        "reference": app.get("ref", application_id),
-        "verified": False,
-    }]
-
-    output = _base_output(AgentType.BUSINESS_MODEL_PLAUSIBILITY, "Agent 3: Business Model Plausibility", application_id, run_id)
-    output.update({
-        "status": status.value,
-        "confidence_score": round(confidence, 3),
-        "findings": findings,
-        "evidence": evidence,
-        "detected_issues": [],
-        "risk_indicators": [{"indicator_type": f, "description": f, "risk_level": "medium", "source_agent": "business_model_plausibility", "contributing_factors": []} for f in red_flags],
-        "recommendation": "Business model appears plausible" if not red_flags else "Business model requires enhanced scrutiny",
-        "escalation_flag": False,
-        "escalation_reason": None,
-        "business_description_analysis": {"sector": sector, "country": country, "plausibility": plausibility},
-        "revenue_model_plausibility": "plausible" if plausibility > 0.7 else "requires_review",
+    return {
+        "sector": sector,
+        "country": country,
+        "plausibility": round(plausibility, 3),
         "industry_risk_level": industry_risk,
-        "plausibility_score": round(plausibility, 3),
+        "revenue_model_plausibility": "plausible" if plausibility > 0.7 else "requires_review",
         "red_flags": red_flags,
-    })
-    return output
+        "confidence_score": round(confidence, 3),
+        "summary": (
+            f"Business model: {sector} in {country}. "
+            f"Source of funds: {'declared' if sof and sof != 'Information not provided' else 'not declared'}."
+        ),
+    }
 
 
 # ═══════════════════════════════════════════════════════════
-# AGENT 4: FinCrime Screening Interpretation
+# AGENT 3: FinCrime Screening Interpretation
 # ═══════════════════════════════════════════════════════════
 
 def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 4: Screen entities against sanctions, PEP, adverse media databases."""
+    """Agent 3: Deterministic interpretation of stored screening-related fields."""
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
@@ -490,7 +447,8 @@ def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> 
     ubos = data["ubos"]
     run_id = str(uuid4())
 
-    # Aggregate screening results from application data
+    # Aggregate screening-related fields from stored application data.
+    # This executor is not a live screening provider integration.
     all_persons = directors + ubos
     screened_entities = [app.get("company_name", "")] + [p.get("full_name", "") for p in all_persons]
     screened_entities = [e for e in screened_entities if e]
@@ -521,14 +479,14 @@ def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> 
                                f"Role: {p.get('position', 'N/A')}. Enhanced due diligence required per FATF R12.",
                 "severity": Severity.HIGH.value,
                 "confidence": 0.90,
-                "source": "pep_screening",
+                "source": "stored_pep_flag",
                 "evidence_refs": [],
                 "regulatory_relevance": "FATF R12: Enhanced CDD required for PEPs"
             })
             evidence.append({
                 "evidence_id": str(uuid4())[:12],
                 "evidence_type": "screening_result",
-                "source": "pep_database",
+                "source": "stored_screening_record",
                 "content_summary": f"PEP match: {p.get('full_name', '')}",
                 "reference": f"PEP-{str(uuid4())[:8]}",
                 "verified": True,
@@ -542,19 +500,19 @@ def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> 
             "description": f"Screened {len(screened_entities)} entities. No sanctions, PEP, or adverse media matches.",
             "severity": Severity.INFO.value,
             "confidence": 0.90,
-            "source": "fincrime_screening",
+            "source": "heuristic_screening_summary",
             "evidence_refs": [],
         })
         evidence.append({
             "evidence_id": str(uuid4())[:12],
             "evidence_type": "screening_result",
-            "source": "sanctions_database",
+            "source": "stored_screening_record",
             "content_summary": f"Clean screening for {len(screened_entities)} entities",
             "reference": f"SCR-{str(uuid4())[:8]}",
             "verified": True,
         })
 
-    output = _base_output(AgentType.FINCRIME_SCREENING, "Agent 4: FinCrime Screening Interpretation", application_id, run_id)
+    output = _base_output(AgentType.FINCRIME_SCREENING, "Agent 3: FinCrime Screening Interpretation", application_id, run_id)
     output.update({
         "status": status.value,
         "confidence_score": round(confidence, 3),
@@ -573,7 +531,7 @@ def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> 
         "adverse_media_found": adverse_media,
         "highest_match_score": 0.90 if pep_found else 0.0,
         "screened_entities": screened_entities,
-        "screening_provider": "internal",
+        "screening_provider": "stored_application_data",
         "screening_date": datetime.utcnow().isoformat(),
     })
     return output
@@ -584,10 +542,11 @@ def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> 
 # ═══════════════════════════════════════════════════════════
 
 def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 5: Generate compliance memo and risk recommendation.
+    """Agent 5: Deterministic risk summary and recommendation.
 
-    This agent synthesizes outputs from Agents 1-4 into the final
-    compliance onboarding memo with risk scoring.
+    This executor summarizes stored risk and screening fields for supervisor-side
+    decision support. It does not generate the authoritative compliance memo used
+    in the live approval path.
     """
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
@@ -596,6 +555,7 @@ def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dic
     ubos = data["ubos"]
     docs = data["documents"]
     run_id = str(uuid4())
+    business_model = _build_business_model_summary(app)
 
     # Determine risk level and recommendation
     risk_level = app.get("risk_level", "MEDIUM") or "MEDIUM"
@@ -617,10 +577,11 @@ def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dic
         "description": f"Composite risk score: {risk_score}/100. Recommendation: {decision}. "
                        f"PEP exposure: {len(all_peps)}. "
                        f"Sector: {app.get('sector', 'N/A')}. "
-                       f"Jurisdiction: {app.get('country', 'N/A')}.",
+                       f"Jurisdiction: {app.get('country', 'N/A')}. "
+                       f"Business plausibility: {business_model['revenue_model_plausibility']}.",
         "severity": Severity.INFO.value if risk_level == "LOW" else Severity.MEDIUM.value if risk_level == "MEDIUM" else Severity.HIGH.value,
         "confidence": confidence,
-        "source": "risk_model",
+        "source": "stored_risk_fields",
         "evidence_refs": [],
         "regulatory_relevance": "Risk-based approach per FATF R1"
     }]
@@ -628,7 +589,7 @@ def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dic
     evidence = [{
         "evidence_id": str(uuid4())[:12],
         "evidence_type": "risk_model_output",
-        "source": "arie_risk_engine",
+        "source": "stored_application_data",
         "content_summary": f"Risk model: score={risk_score}, level={risk_level}, peps={len(all_peps)}",
         "reference": app.get("ref", application_id),
         "verified": True,
@@ -663,16 +624,22 @@ def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dic
             "complete": len(docs) >= 3 and len(ubos) > 0,
             "score": 0.8 if len(docs) >= 3 else 0.5,
         },
+        "risk_indicators_summary": [{
+            "category": "business_plausibility",
+            "summary": business_model["summary"],
+            "plausibility_score": business_model["plausibility"],
+            "red_flags": business_model["red_flags"],
+        }],
     })
     return output
 
 
 # ═══════════════════════════════════════════════════════════
-# MONITORING AGENTS (6, 7, 8, 10)
+# MONITORING AGENTS (6, 7, 8, 9, 10)
 # ═══════════════════════════════════════════════════════════
 
 def execute_periodic_review(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 6: Periodic Review Preparation."""
+    """Agent 6: Synthetic periodic review preparation summary."""
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
@@ -689,13 +656,13 @@ def execute_periodic_review(application_id: str, context: Dict[str, Any]) -> Dic
             "description": f"Review preparation for {app.get('company_name', 'entity')}. Current risk: {app.get('risk_level', 'N/A')}.",
             "severity": Severity.INFO.value,
             "confidence": 0.85,
-            "source": "review_engine",
+            "source": "synthetic_review_summary",
             "evidence_refs": [],
         }],
         "evidence": [{
             "evidence_id": str(uuid4())[:12],
             "evidence_type": "review_data",
-            "source": "arie_platform",
+            "source": "stored_application_data",
             "content_summary": f"Review data for {app.get('company_name', '')}",
             "reference": app.get("ref", application_id),
             "verified": True,
@@ -715,7 +682,7 @@ def execute_periodic_review(application_id: str, context: Dict[str, Any]) -> Dic
 
 
 def execute_adverse_media_pep(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 7: Adverse Media & PEP Monitoring."""
+    """Agent 7: Synthetic adverse media and PEP monitoring summary."""
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
@@ -732,13 +699,13 @@ def execute_adverse_media_pep(application_id: str, context: Dict[str, Any]) -> D
             "description": f"Monitoring scan for {app.get('company_name', 'entity')}: no new hits.",
             "severity": Severity.INFO.value,
             "confidence": 0.88,
-            "source": "media_monitoring",
+            "source": "synthetic_monitoring_summary",
             "evidence_refs": [],
         }],
         "evidence": [{
             "evidence_id": str(uuid4())[:12],
             "evidence_type": "monitoring_scan",
-            "source": "media_monitoring_service",
+            "source": "synthetic_monitoring_summary",
             "content_summary": "Clean monitoring scan",
             "reference": f"MON-{str(uuid4())[:8]}",
             "verified": True,
@@ -756,7 +723,7 @@ def execute_adverse_media_pep(application_id: str, context: Dict[str, Any]) -> D
 
 
 def execute_behaviour_risk_drift(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 8: Behaviour & Risk Drift."""
+    """Agent 8: Synthetic behaviour and risk drift summary."""
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
@@ -773,13 +740,13 @@ def execute_behaviour_risk_drift(application_id: str, context: Dict[str, Any]) -
             "description": f"Risk profile for {app.get('company_name', 'entity')} remains stable.",
             "severity": Severity.INFO.value,
             "confidence": 0.85,
-            "source": "behaviour_analysis",
+            "source": "synthetic_risk_drift_summary",
             "evidence_refs": [],
         }],
         "evidence": [{
             "evidence_id": str(uuid4())[:12],
             "evidence_type": "behaviour_analysis",
-            "source": "transaction_monitoring",
+            "source": "synthetic_risk_drift_summary",
             "content_summary": "Stable risk profile",
             "reference": f"BRD-{str(uuid4())[:8]}",
             "verified": True,
@@ -796,8 +763,31 @@ def execute_behaviour_risk_drift(application_id: str, context: Dict[str, Any]) -
     return output
 
 
+def execute_regulatory_impact(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Agent 9: Future-phase regulatory impact placeholder."""
+    run_id = str(uuid4())
+    output = _base_output(AgentType.REGULATORY_IMPACT, "Agent 9: Regulatory Impact", application_id, run_id)
+    output.update({
+        "status": AgentStatus.PARTIAL.value,
+        "confidence_score": 0.0,
+        "findings": [],
+        "evidence": [],
+        "detected_issues": [],
+        "risk_indicators": [],
+        "recommendation": "Future phase — manual regulatory review required",
+        "escalation_flag": False,
+        "escalation_reason": None,
+        "impact_summary": "Regulatory Impact is a registered future-phase agent and is not active in the live approval chain.",
+        "affected_jurisdictions": [],
+        "affected_controls": [],
+        "implementation_required": False,
+        "implementation_deadline": None,
+    })
+    return output
+
+
 def execute_ongoing_compliance(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 10: Ongoing Compliance Review."""
+    """Agent 10: Synthetic ongoing compliance review summary."""
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
@@ -814,13 +804,13 @@ def execute_ongoing_compliance(application_id: str, context: Dict[str, Any]) -> 
             "description": f"Compliance review for {app.get('company_name', 'entity')}: compliant.",
             "severity": Severity.INFO.value,
             "confidence": 0.87,
-            "source": "compliance_engine",
+            "source": "synthetic_compliance_review",
             "evidence_refs": [],
         }],
         "evidence": [{
             "evidence_id": str(uuid4())[:12],
             "evidence_type": "compliance_check",
-            "source": "compliance_engine",
+            "source": "synthetic_compliance_review",
             "content_summary": "Compliant status",
             "reference": f"OCR-{str(uuid4())[:8]}",
             "verified": True,
@@ -845,12 +835,12 @@ EXECUTOR_MAP = {
     AgentType.IDENTITY_DOCUMENT_INTEGRITY: execute_identity_document,
     AgentType.EXTERNAL_DATABASE_VERIFICATION: execute_external_database,
     AgentType.CORPORATE_STRUCTURE_UBO: execute_corporate_structure_ubo,
-    AgentType.BUSINESS_MODEL_PLAUSIBILITY: execute_business_model,
     AgentType.FINCRIME_SCREENING: execute_fincrime_screening,
     AgentType.COMPLIANCE_MEMO_RISK: execute_compliance_memo,
     AgentType.PERIODIC_REVIEW_PREPARATION: execute_periodic_review,
     AgentType.ADVERSE_MEDIA_PEP_MONITORING: execute_adverse_media_pep,
     AgentType.BEHAVIOUR_RISK_DRIFT: execute_behaviour_risk_drift,
+    AgentType.REGULATORY_IMPACT: execute_regulatory_impact,
     AgentType.ONGOING_COMPLIANCE_REVIEW: execute_ongoing_compliance,
 }
 

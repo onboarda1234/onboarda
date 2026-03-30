@@ -58,10 +58,9 @@ PIPELINE_AGENTS: Dict[TriggerType, List[AgentType]] = {
     TriggerType.ONBOARDING: [
         AgentType.IDENTITY_DOCUMENT_INTEGRITY,       # Agent 1: Identity & Document Integrity
         AgentType.EXTERNAL_DATABASE_VERIFICATION,     # Agent 2 (sub): Registry cross-check
-        AgentType.CORPORATE_STRUCTURE_UBO,            # Agent 2: Corporate Structure & UBO Mapping
-        AgentType.BUSINESS_MODEL_PLAUSIBILITY,        # Agent 3: Business Model Plausibility
-        AgentType.FINCRIME_SCREENING,                 # Agent 4: FinCrime Screening Interpretation
-        AgentType.COMPLIANCE_MEMO_RISK,               # Agent 5: Compliance Memo & Risk Recommendation
+        AgentType.FINCRIME_SCREENING,                 # Agent 3: FinCrime Screening Interpretation
+        AgentType.CORPORATE_STRUCTURE_UBO,            # Agent 4: Corporate Structure & UBO Mapping
+        AgentType.COMPLIANCE_MEMO_RISK,               # Agent 5: Compliance Memo & Risk Recommendation (includes business plausibility sub-analysis)
     ],
     TriggerType.PERIODIC_REVIEW: [
         AgentType.PERIODIC_REVIEW_PREPARATION,        # Agent 6: Periodic Review Preparation

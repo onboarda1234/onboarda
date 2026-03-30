@@ -117,6 +117,8 @@ class ApprovalGateValidator:
             if not memo_row:
                 return (False, "Compliance memo must be generated before approval. "
                         "Generate via POST /api/applications/{id}/memo first.")
+            if not isinstance(memo_row, dict):
+                memo_row = dict(memo_row)
 
             # 3a. Memo must not be blocked
             if memo_row.get('blocked'):
@@ -129,17 +131,23 @@ class ApprovalGateValidator:
                 return (False, f"Compliance memo review_status is '{memo_review}', must be 'approved'. "
                         "Memo must be reviewed and approved before application approval.")
 
-            # 3c. Memo validation must not have failed
+            # 3c. Memo validation must have an explicit positive pass
             memo_validation = (memo_row.get('validation_status') or '').lower()
-            if memo_validation == 'fail':
-                return (False, "Compliance memo has validation_status='fail'. "
-                        "Fix validation issues and re-generate before approval.")
+            if memo_validation != 'pass':
+                return (
+                    False,
+                    f"Compliance memo validation_status is '{memo_validation}', must be 'pass'. "
+                    "Validation warnings or pending states must be resolved before approval."
+                )
 
-            # 3d. Supervisor must not be INCONSISTENT (unless explicitly overridden)
+            # 3d. Supervisor must have an explicit positive verdict
             memo_supervisor = (memo_row.get('supervisor_status') or '').upper()
-            if memo_supervisor == 'INCONSISTENT':
-                return (False, "Compliance memo has supervisor_status='INCONSISTENT'. "
-                        "Resolve contradictions or obtain SCO override before approval.")
+            if memo_supervisor != 'CONSISTENT':
+                return (
+                    False,
+                    f"Compliance memo supervisor_status is '{memo_supervisor}', must be 'CONSISTENT'. "
+                    "Supervisor warnings or inconsistencies must be resolved before approval."
+                )
 
             # 4. Check all documents are not flagged (from DB, not app dict)
             flagged_docs = db.execute(
@@ -1097,12 +1105,15 @@ class FileUploadValidator:
 
     ALLOWED_MIME_TYPES = {
         'application/pdf',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         'image/png',
         'image/jpeg',
         'image/jpg',
     }
 
-    ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg'}
+    ALLOWED_EXTENSIONS = {'.pdf', '.docx', '.xlsx', '.pptx', '.png', '.jpg', '.jpeg'}
 
     MAX_FILE_SIZE = 25 * 1024 * 1024  # 25MB
 
@@ -1228,6 +1239,14 @@ class FileUploadValidator:
 
         # Handle JPEG variants (image/jpg vs image/jpeg)
         if magic_type in ['image/jpeg', 'image/jpg'] and content_type in ['image/jpeg', 'image/jpg']:
+            return True
+
+        # Office Open XML formats are ZIP containers and share the same magic bytes.
+        if magic_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' and content_type in [
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        ]:
             return True
 
         return False
