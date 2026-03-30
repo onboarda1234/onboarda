@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 S3 Client Helper Module for ARIE Finance Platform
 
@@ -13,7 +14,7 @@ import os
 import json
 import re
 from datetime import datetime
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Union
 import boto3
 from botocore.exceptions import ClientError
 import logging
