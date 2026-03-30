@@ -584,6 +584,48 @@ SESSION_PRESCREENING_FIELD_MAP = {
     "f-referrer-name": "referrer_name",
 }
 
+LEGACY_SESSION_PRESCREENING_FIELD_MAP = {
+    "regName": "registered_entity_name",
+    "tradeName": "trading_name",
+    "regAddress": "registered_address",
+    "hqAddress": "headquarters_address",
+    "contactFirst": "entity_contact_first",
+    "contactLast": "entity_contact_last",
+    "contactEmail": "entity_contact_email",
+    "phoneCode": "entity_contact_phone_code",
+    "mobile": "entity_contact_mobile",
+    "website": "website",
+    "licences": "regulatory_licences",
+    "incCountry": "country_of_incorporation",
+    "incDate": "incorporation_date",
+    "brn": "brn",
+    "sector": "sector",
+    "entityType": "entity_type",
+    "ownershipStructure": "ownership_structure",
+    "monthlyVolume": "monthly_volume",
+    "expectedVolume": "expected_volume",
+    "txnComplexity": "transaction_complexity",
+    "bizOverview": "business_overview",
+    "businessOverview": "business_overview",
+    "servicesRequired": "services_required",
+    "countriesOfOperation": "countries_of_operation",
+    "targetMarkets": "target_markets",
+    "accountPurposes": "account_purposes",
+    "hasBank": "existing_bank_account",
+    "bankName": "existing_bank_name",
+    "currencies": "currencies",
+    "sourceWealthType": "source_of_wealth_type",
+    "sourceWealth": "source_of_wealth_detail",
+    "sourceInitType": "source_of_funds_initial_type",
+    "sourceInit": "source_of_funds_initial_detail",
+    "sourceOngoingType": "source_of_funds_ongoing_type",
+    "sourceOngoing": "source_of_funds_ongoing_detail",
+    "mgmt": "management_overview",
+    "managementOverview": "management_overview",
+    "introMethod": "introduction_method",
+    "referrerName": "referrer_name",
+}
+
 
 def is_meaningful_value(value) -> bool:
     if value is None:
@@ -599,23 +641,59 @@ def normalize_saved_session_prescreening(form_data) -> dict:
     """Backfill authoritative prescreening aliases from save/resume session payloads."""
     normalized = {}
     raw_form = safe_json_loads(form_data)
-    prescreening = raw_form.get("prescreening") if isinstance(raw_form, dict) else {}
-    if not isinstance(prescreening, dict):
+    if not isinstance(raw_form, dict):
         return normalized
 
-    for raw_key, normalized_key in SESSION_PRESCREENING_FIELD_MAP.items():
-        raw_value = prescreening.get(raw_key)
-        if is_meaningful_value(raw_value):
-            normalized[normalized_key] = raw_value
+    sources = []
+    prescreening = raw_form.get("prescreening")
+    if isinstance(prescreening, dict):
+        sources.append(prescreening)
+    sources.append(raw_form)
+
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for raw_key, normalized_key in SESSION_PRESCREENING_FIELD_MAP.items():
+            raw_value = source.get(raw_key)
+            if is_meaningful_value(raw_value):
+                normalized[normalized_key] = raw_value
+        for raw_key, normalized_key in LEGACY_SESSION_PRESCREENING_FIELD_MAP.items():
+            raw_value = source.get(raw_key)
+            if is_meaningful_value(raw_value):
+                normalized[normalized_key] = raw_value
+
+    if isinstance(raw_form.get("servicesRequired"), list):
+        normalized["services_required"] = raw_form.get("servicesRequired")
+    if isinstance(raw_form.get("countriesOfOperation"), list):
+        normalized["countries_of_operation"] = raw_form.get("countriesOfOperation")
+    if isinstance(raw_form.get("targetMarkets"), list):
+        normalized["target_markets"] = raw_form.get("targetMarkets")
+    if isinstance(raw_form.get("accountPurposes"), list):
+        normalized["account_purposes"] = raw_form.get("accountPurposes")
 
     consent_map = {
         "f-consent-declaration": "consent_declaration",
         "f-consent-pricing": "consent_pricing",
         "f-consent-terms": "consent_terms",
     }
-    for raw_key, normalized_key in consent_map.items():
-        if raw_key in prescreening:
-            normalized[normalized_key] = bool(prescreening.get(raw_key))
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for raw_key, normalized_key in consent_map.items():
+            if raw_key in source:
+                normalized[normalized_key] = bool(source.get(raw_key))
+
+    legacy_consent_map = {
+        "consentDeclaration": "consent_declaration",
+        "consentPricing": "consent_pricing",
+        "consentTerms": "consent_terms",
+    }
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for raw_key, normalized_key in legacy_consent_map.items():
+            if raw_key in source:
+                normalized[normalized_key] = bool(source.get(raw_key))
 
     normalized = normalize_prescreening_data({"prescreening_data": normalized})
     return normalized

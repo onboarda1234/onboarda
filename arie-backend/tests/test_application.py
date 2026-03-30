@@ -335,6 +335,33 @@ class TestLegacyNormalization:
         assert merged["introduction_method"] == "Introduced by partner"
         assert merged["management_overview"] == "Founder-led operations"
 
+    def test_legacy_camelcase_session_shape_is_backfilled(self):
+        """Older saved-session payloads with camelCase keys should still populate prescreening detail."""
+        from server import normalize_saved_session_prescreening
+
+        form_data = {
+            "regName": "Legacy Camel Ltd",
+            "tradeName": "Legacy Trade",
+            "regAddress": "10 Harbour Street",
+            "monthlyVolume": "USD 50,000 to USD 500,000 per month",
+            "sourceWealthType": "Business revenue / trading profits",
+            "sourceWealth": "Generated from operating revenues.",
+            "introMethod": "Introduced by partner",
+            "referrerName": "Legacy Referrer",
+            "managementOverview": "Founder-led management team"
+        }
+
+        normalized = normalize_saved_session_prescreening(form_data)
+        assert normalized["registered_entity_name"] == "Legacy Camel Ltd"
+        assert normalized["trading_name"] == "Legacy Trade"
+        assert normalized["registered_address"] == "10 Harbour Street"
+        assert normalized["expected_volume"] == "USD 50,000 to USD 500,000 per month"
+        assert normalized["source_of_wealth_type"] == "Business revenue / trading profits"
+        assert normalized["source_of_wealth_detail"] == "Generated from operating revenues."
+        assert normalized["introduction_method"] == "Introduced by partner"
+        assert normalized["referrer_name"] == "Legacy Referrer"
+        assert normalized["management_overview"] == "Founder-led management team"
+
     def test_zero_documents_do_not_generate_false_mitigant(self):
         """Memo generation must not claim documents were received when none exist."""
         from memo_handler import build_compliance_memo
