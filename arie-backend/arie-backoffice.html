@@ -2301,10 +2301,11 @@ function computeSubCriteriaBreakdown(app) {
 
   // Final composite
   var totalWeighted = 0, totalW = 0;
-  dimensions.forEach(function(d) { totalWeighted += d.dimScore * d.weight; totalW += d.weight; });
-  var composite = totalW > 0 ? (totalWeighted / totalW) * 25 : 0;
+  dimensions.forEach(function(d) { totalWeighted += d.dimScore * (d.weight / 100); totalW += d.weight; });
+  var weightedAverage = totalW > 0 ? totalWeighted / (totalW / 100) : 0;
+  var composite = totalW > 0 ? (((weightedAverage - 1) / 3) * 100) : 0;
 
-  return { dimensions: dimensions, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW };
+  return { dimensions: dimensions, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW, weightedAverage: weightedAverage };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2457,12 +2458,14 @@ async function loadFromAPI() {
           score: a.risk_score || 0,
           lane: a.onboarding_lane || 'Standard Review',
           status: formatStatus(a.status),
-          assigned: a.assigned_to || 'Unassigned',
+          assignedId: a.assigned_to || '',
+          assigned: a.assigned_name || a.assigned_to || 'Unassigned',
           date: (a.created_at || '').split('T')[0].split(' ')[0],
           country: a.country || '',
           brn: a.brn || '',
-          directors: (a.directors || []).map(function(d) { return { name: d.full_name, nat: d.nationality, pep: d.is_pep || 'No' }; }),
-          ubos: (a.ubos || []).map(function(u) { return { name: u.full_name, pct: u.ownership_pct || 0, pep: u.is_pep || 'No' }; }),
+          directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
+          ubos: (a.ubos || []).map(function(u) { return { id: u.person_key || u.id, name: u.full_name, pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
+          intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
           dims: dims,
           docs: backendDocuments.map(function(d) { return d.doc_type; }),
           _documents: backendDocuments,
@@ -2842,7 +2845,7 @@ function populateOfficerDropdowns() {
     var unassignedOpt = filterAssigned.querySelector('option[value="Unassigned"]');
     USERS.forEach(function(u) {
       var opt = document.createElement('option');
-      opt.value = u.name;
+      opt.value = u.id;
       opt.textContent = u.name;
       opt.setAttribute('data-dynamic', 'true');
       filterAssigned.insertBefore(opt, unassignedOpt);
@@ -2855,7 +2858,7 @@ function populateOfficerDropdowns() {
     reassignTo.innerHTML = '';
     USERS.forEach(function(u) {
       var opt = document.createElement('option');
-      opt.value = u.name;
+      opt.value = u.id;
       opt.textContent = u.name + ' (' + (ROLE_LABELS[u.role] || u.role) + ')';
       reassignTo.appendChild(opt);
     });
@@ -3121,7 +3124,10 @@ function renderApplications() {
   APPLICATIONS.forEach(function(app) {
     if (riskFilter && app.risk !== riskFilter) return;
     if (statusFilter && app.status !== statusFilter) return;
-    if (assignedFilter && app.assigned !== assignedFilter) return;
+    if (assignedFilter) {
+      var normalizedAssigned = app.assignedId || 'Unassigned';
+      if (normalizedAssigned !== assignedFilter) return;
+    }
     var tr = document.createElement('tr');
     tr.onclick = function() { openAppDetail(app.ref); };
     tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-weight:700;">' + escapeHtml(String(app.score)) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
@@ -3130,960 +3136,583 @@ function renderApplications() {
 }
 function filterApplications() { renderApplications(); }
 
-function openAppDetail(ref, options) {
-  options = options || {};
-  var app = APPLICATIONS.find(function(a) { return a.ref === ref; });
-  if (!app) return;
+function formatDetailDate(value) {
+  return ((value || '').split('T')[0].split(' ')[0]) || '—';
+}
+
+function normalizeDetailValue(value) {
+  if (Array.isArray(value)) return value.length ? value.join(', ') : '—';
+  if (value == null || value === '') return '—';
+  return String(value);
+}
+
+function firstMeaningfulDetailValue() {
+  for (var i = 0; i < arguments.length; i++) {
+    var value = arguments[i];
+    if (value == null) continue;
+    if (Array.isArray(value) && value.length) return value;
+    if (typeof value === 'string' && value.trim() === '') continue;
+    if (value !== '') return value;
+  }
+  return '';
+}
+
+function detailValueFromAliases(record, keys) {
+  if (!record) return '';
+  for (var i = 0; i < keys.length; i++) {
+    var value = record[keys[i]];
+    if (Array.isArray(value) && value.length) return value;
+    if (value != null && String(value).trim() !== '') return value;
+  }
+  return '';
+}
+
+function normalizePepDisplay(value) {
+  return String(value).toLowerCase() === 'yes' || value === true || value === 1 || value === '1' ? 'Yes' : 'No';
+}
+
+function buildPartyDisplayName(person) {
+  if (!person) return 'Unnamed party';
+  var combined = [person.first_name || '', person.last_name || ''].join(' ').trim();
+  return firstMeaningfulDetailValue(person.name, person.full_name, combined, person.entity_name, person.id, 'Unnamed party');
+}
+
+function buildVerificationResultsHtml(results) {
+  if (!results || (typeof results === 'object' && !Array.isArray(results) && Object.keys(results).length === 0)) {
+    return '<div class="doc-meta">AI Verification Detail: No detailed verification payload stored.</div>';
+  }
+
+  var items = [];
+  function pushItem(label, value) {
+    var normalized = normalizeDetailValue(value);
+    if (normalized === '—') return;
+    items.push('<div class="doc-meta"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
+  }
+
+  if (Array.isArray(results)) {
+    results.forEach(function(entry, idx) {
+      if (typeof entry === 'object') {
+        var entryParts = [];
+        Object.keys(entry).forEach(function(key) {
+          if (entry[key] == null || entry[key] === '') return;
+          entryParts.push(key.replace(/_/g, ' ') + ': ' + normalizeDetailValue(entry[key]));
+        });
+        if (entryParts.length) items.push('<div class="doc-meta"><strong>Check ' + (idx + 1) + ':</strong> ' + escapeHtml(entryParts.join(' | ')) + '</div>');
+      } else if (entry != null && entry !== '') {
+        items.push('<div class="doc-meta"><strong>Check ' + (idx + 1) + ':</strong> ' + escapeHtml(String(entry)) + '</div>');
+      }
+    });
+    return items.length ? items.join('') : '<div class="doc-meta">AI Verification Detail: No detailed verification payload stored.</div>';
+  }
+
+  if (typeof results === 'object') {
+    pushItem('Overall Result', firstMeaningfulDetailValue(results.overall_result, results.result, results.status));
+    pushItem('Summary', firstMeaningfulDetailValue(results.summary, results.reason, results.message));
+    pushItem('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
+    pushItem('Extracted Fields', Array.isArray(results.extracted_fields) ? results.extracted_fields.join(', ') : '');
+    pushItem('Flags', Array.isArray(results.flags) ? results.flags.join(', ') : '');
+    pushItem('Issues', Array.isArray(results.issues) ? results.issues.join(', ') : '');
+    pushItem('Checks Run', Array.isArray(results.checks_run) ? results.checks_run.join(', ') : '');
+    if (Array.isArray(results.checks)) {
+      results.checks.forEach(function(check, idx) {
+        if (!check || typeof check !== 'object') return;
+        var parts = [];
+        if (check.label || check.name) parts.push(firstMeaningfulDetailValue(check.label, check.name));
+        if (check.result || check.status) parts.push('result: ' + firstMeaningfulDetailValue(check.result, check.status));
+        if (check.details) parts.push('details: ' + check.details);
+        if (check.confidence != null) parts.push('confidence: ' + Math.round(Number(check.confidence) * 100) + '%');
+        if (parts.length) items.push('<div class="doc-meta"><strong>AI Check ' + (idx + 1) + ':</strong> ' + escapeHtml(parts.join(' | ')) + '</div>');
+      });
+    }
+    if (!items.length) {
+      Object.keys(results).forEach(function(key) {
+        var value = results[key];
+        if (value == null || value === '' || typeof value === 'object') return;
+        items.push('<div class="doc-meta"><strong>' + escapeHtml(key.replace(/_/g, ' ')) + ':</strong> ' + escapeHtml(String(value)) + '</div>');
+      });
+    }
+    return items.length ? items.join('') : '<div class="doc-meta">AI Verification Detail: No detailed verification payload stored.</div>';
+  }
+
+  return '<div class="doc-meta"><strong>AI Verification Detail:</strong> ' + escapeHtml(String(results)) + '</div>';
+}
+
+function buildStoredRiskComputation(app) {
+  if (!app || !app.dims || !Object.keys(app.dims).length) return null;
+  var dimMeta = [
+    { key: 'd1', id: 'D1', name: 'Customer / Entity Risk' },
+    { key: 'd2', id: 'D2', name: 'Geographic Risk' },
+    { key: 'd3', id: 'D3', name: 'Product / Service Risk' },
+    { key: 'd4', id: 'D4', name: 'Industry / Sector Risk' },
+    { key: 'd5', id: 'D5', name: 'Delivery Channel Risk' }
+  ];
+  var defaultWeights = { d1: 30, d2: 25, d3: 20, d4: 15, d5: 10 };
+  var uiWeights = {};
+  if (Array.isArray(RISK_DIMENSIONS)) {
+    RISK_DIMENSIONS.forEach(function(dim, idx) {
+      uiWeights['d' + (idx + 1)] = Number(dim.weight || 0);
+    });
+  }
+
+  var rows = [];
+  var totalWeight = 0;
+  var weightedAverage = 0;
+  dimMeta.forEach(function(meta) {
+    var value = Number(app.dims[meta.key]);
+    if (isNaN(value)) return;
+    var weight = uiWeights[meta.key] || defaultWeights[meta.key];
+    totalWeight += weight;
+    weightedAverage += value * (weight / 100);
+    rows.push({
+      id: meta.id,
+      name: meta.name,
+      weight: weight,
+      dimScore: value,
+      weightedContribution: value * (weight / 100)
+    });
+  });
+
+  if (!rows.length || !totalWeight) return null;
+  var normalizedAverage = weightedAverage / (totalWeight / 100);
+  var recomputed = Math.round((((normalizedAverage - 1) / 3) * 100) * 10) / 10;
+  return {
+    rows: rows,
+    totalWeight: totalWeight,
+    weightedAverage: normalizedAverage,
+    recomputedScore: recomputed,
+    storedScore: Number(app.score || 0),
+    drift: Math.round(Math.abs((Number(app.score || 0) - recomputed)) * 10) / 10
+  };
+}
+
+function renderStoredRiskComputationHtml(app) {
+  var computation = buildStoredRiskComputation(app);
+  if (!computation) {
+    return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No persisted risk breakdown is available for this application.</div>';
+  }
+
+  var rowsHtml = computation.rows.map(function(row) {
+    return '<tr>' +
+      '<td style="padding:8px 10px;font-weight:600;">' + escapeHtml(row.id + ': ' + row.name) + '</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(String(row.weight)) + '%</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(row.dimScore.toFixed(2)) + '</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(row.weightedContribution.toFixed(3)) + '</td>' +
+    '</tr>';
+  }).join('');
+
+  var driftHtml = computation.drift > 0.2
+    ? '<div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(217,119,6,0.25);border-radius:8px;background:rgba(217,119,6,0.06);font-size:11px;color:var(--text2);">Stored application score (' + escapeHtml(computation.storedScore.toFixed(1)) + ') differs from the current config recomputation (' + escapeHtml(computation.recomputedScore.toFixed(1)) + '). This usually means the live risk weights changed after the application was scored. The stored application score remains the authoritative value for this case.</div>'
+    : '';
+
+  return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">' +
+    '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+      '<thead><tr><th style="text-align:left;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Dimension</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Weight</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Stored Score</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Weighted Contribution</th></tr></thead>' +
+      '<tbody>' + rowsHtml + '</tbody>' +
+    '</table>' +
+    '<div style="margin-top:10px;font-size:12px;color:var(--text2);">Formula: <code style="font-size:11px;background:var(--surface3);padding:2px 6px;border-radius:4px;">((weighted average - 1) / 3) × 100</code></div>' +
+    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Weighted average from stored dimensions: <strong>' + escapeHtml(computation.weightedAverage.toFixed(3)) + '</strong></div>' +
+    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Authoritative stored application score: <strong>' + escapeHtml(computation.storedScore.toFixed(1)) + '</strong></div>' +
+    driftHtml +
+  '</div>';
+}
+
+function renderExplainabilityPanel(app, screeningSummary) {
+  var modelSource = document.getElementById('explain-model-source');
+  var trailEl = document.getElementById('explain-decision-trail');
+  var dimsEl = document.getElementById('explain-dimensions');
+  var summaryEl = document.getElementById('explain-confidence-summary');
+  if (!modelSource || !trailEl || !dimsEl || !summaryEl) return;
+
+  modelSource.textContent = 'Model: Persisted Rule-Based Risk + Stored Screening Evidence';
+
+  var trailSteps = [
+    { name: 'Application intake persisted', detail: 'Core profile, pre-screening, and ownership records loaded from the authoritative application record.', confidence: 'Authoritative DB' },
+    { name: 'Rule-based risk score loaded', detail: 'Composite score ' + normalizeDetailValue(app.score) + ' and risk level ' + normalizeDetailValue(app.risk) + ' were loaded from stored application risk fields.', confidence: 'Stored score' },
+    { name: 'Screening evidence reviewed', detail: screeningSummary.screening_run_recorded ? ('Screening recorded with ' + (screeningSummary.total_hits || 0) + ' hit(s) and mode ' + normalizeDetailValue(screeningSummary.screening_mode) + '.') : 'No persisted screening report is attached to this application yet.', confidence: screeningSummary.screening_run_recorded ? 'Stored screening' : 'No screening record' },
+    { name: 'Document verification reviewed', detail: app._documents.length ? (app._documents.filter(function(doc) { return normalizeDetailValue(doc.verification_status) === 'verified'; }).length + ' verified document(s) out of ' + app._documents.length + ' stored upload(s).') : 'No stored documents are attached to this application.', confidence: 'Stored documents' }
+  ];
+
+  trailEl.innerHTML = trailSteps.map(function(step, idx) {
+    return '<div class="trail-step">' +
+      '<div class="trail-step-header"><div class="trail-step-name">' + escapeHtml((idx + 1) + '. ' + step.name) + '</div></div>' +
+      '<div>' +
+        '<div class="trail-step-detail">' + escapeHtml(step.detail) + '</div>' +
+        '<div class="trail-step-confidence medium">' + escapeHtml(step.confidence) + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  var dimensionLabels = {
+    d1: 'Customer / Entity',
+    d2: 'Geographic',
+    d3: 'Product / Service',
+    d4: 'Industry / Sector',
+    d5: 'Delivery Channel'
+  };
+  var dimensionFactors = {
+    d1: [
+      'Entity type: ' + normalizeDetailValue(app.entityType),
+      'Ownership structure: ' + normalizeDetailValue(app.ownershipStructure),
+      'PEP-linked parties: ' + normalizeDetailValue(app.pepCount)
+    ],
+    d2: [
+      'Country of incorporation: ' + normalizeDetailValue(app.country),
+      'Countries of operation: ' + normalizeDetailValue((app.prescreeningData || {}).countries_of_operation)
+    ],
+    d3: [
+      'Services required: ' + normalizeDetailValue((app.prescreeningData || {}).services_required),
+      'Transaction complexity: ' + normalizeDetailValue((app.prescreeningData || {}).transaction_complexity),
+      'Currencies: ' + normalizeDetailValue((app.prescreeningData || {}).currencies)
+    ],
+    d4: [
+      'Sector: ' + normalizeDetailValue(app.sector),
+      'Business overview: ' + normalizeDetailValue((app.prescreeningData || {}).business_overview || (app.prescreeningData || {}).business_description)
+    ],
+    d5: [
+      'Introduction method: ' + normalizeDetailValue((app.prescreeningData || {}).introduction_method),
+      'Existing bank relationship: ' + normalizeDetailValue((app.prescreeningData || {}).existing_bank_account)
+    ]
+  };
+
+  dimsEl.innerHTML = Object.keys(dimensionLabels).map(function(key, idx) {
+    var value = app.dims && app.dims[key] != null ? Number(app.dims[key]) : null;
+    if (value == null || isNaN(value)) return '';
+    var pct = Math.max(0, Math.min(100, ((value - 1) / 3) * 100));
+    var color = value <= 1.5 ? '#16a34a' : value <= 2.5 ? '#2563eb' : value <= 3.2 ? '#d97706' : '#dc2626';
+    var factorsHtml = (dimensionFactors[key] || []).filter(function(text) {
+      return normalizeDetailValue(text) !== '—';
+    }).map(function(text) {
+      return '<div class="dim-explain-factor"><span class="factor-icon">•</span><span class="factor-text">' + escapeHtml(text) + '</span><span class="factor-impact">' + escapeHtml(value.toFixed(2)) + '</span></div>';
+    }).join('');
+    return '<div class="dim-explain-card" id="dim-explain-' + idx + '" onclick="toggleDimExplain(' + idx + ')">' +
+      '<div class="dim-explain-name">' + escapeHtml(dimensionLabels[key]) + '</div>' +
+      '<div class="dim-explain-score" style="color:' + color + ';">' + escapeHtml(value.toFixed(2)) + '</div>' +
+      '<div class="dim-explain-bar"><div class="dim-explain-bar-fill" style="width:' + pct + '%;background:' + color + ';"></div></div>' +
+      '<div style="font-size:11px;color:var(--text3);">Persisted dimension score from the application record.</div>' +
+      '<div class="dim-explain-factors" id="dim-factors-' + idx + '" style="display:none;">' + factorsHtml + '</div>' +
+    '</div>';
+  }).join('') || '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No persisted dimension explainability is available for this application.</div>';
+
+  var summaryClass = String(app.risk || '').toLowerCase() === 'very_high' ? 'vhigh' : String(app.risk || '').toLowerCase();
+  summaryEl.innerHTML = '<div class="explain-summary-box ' + escapeHtml(summaryClass || 'medium') + '">' +
+    '<div class="explain-summary-title">Explainability Summary</div>' +
+    '<div class="explain-summary-text">This panel shows only persisted application evidence: stored risk dimensions, stored screening output, stored documents, and stored ownership data. It does not fabricate AI reasoning when no authoritative explainability payload exists.</div>' +
+  '</div>';
+}
+
+async function fetchApplicationDetail(ref) {
+  var detail = await boApiCall('GET', '/applications/' + encodeURIComponent(ref));
+  var dims = {};
+  try { dims = typeof detail.risk_dimensions === 'string' ? JSON.parse(detail.risk_dimensions) : (detail.risk_dimensions || {}); } catch(e) {}
+  var psData = detail.prescreening_data || {};
+  var documents = (detail.documents || []).map(function(doc) {
+    return {
+      id: doc.id,
+      person_id: doc.person_id || '',
+      doc_type: doc.doc_type || '',
+      doc_name: doc.doc_name || '',
+      file_size: doc.file_size,
+      mime_type: doc.mime_type || '',
+      verification_status: doc.verification_status || 'pending',
+      verification_results: doc.verification_results || {},
+      verified_at: doc.verified_at || '',
+      uploaded_at: doc.uploaded_at || '',
+      review_status: doc.review_status || 'pending',
+      review_comment: doc.review_comment || '',
+      reviewed_by: doc.reviewed_by || '',
+      reviewed_by_name: doc.reviewed_by_name || '',
+      reviewed_at: doc.reviewed_at || ''
+    };
+  });
+  var directors = (detail.directors || []).map(function(d) {
+    return {
+      id: d.id || '',
+      person_key: d.person_key || '',
+      name: d.full_name || '',
+      first_name: d.first_name || '',
+      last_name: d.last_name || '',
+      nat: d.nationality || '',
+      pep: normalizePepDisplay(d.is_pep),
+      pep_declaration: d.pep_declaration || {}
+    };
+  });
+  var ubos = (detail.ubos || []).map(function(u) {
+    return {
+      id: u.id || '',
+      person_key: u.person_key || '',
+      name: u.full_name || '',
+      first_name: u.first_name || '',
+      last_name: u.last_name || '',
+      nat: u.nationality || '',
+      pct: u.ownership_pct || 0,
+      pep: normalizePepDisplay(u.is_pep),
+      pep_declaration: u.pep_declaration || {}
+    };
+  });
+  var intermediaries = (detail.intermediaries || []).map(function(i) {
+    return {
+      id: i.id || '',
+      person_key: i.person_key || '',
+      name: i.entity_name || i.full_name || '',
+      entity_name: i.entity_name || '',
+      jurisdiction: i.jurisdiction || '',
+      pct: i.ownership_pct || 0
+    };
+  });
+
+  return {
+    id: detail.id,
+    ref: detail.ref,
+    company: detail.company_name || psData.registered_entity_name || '—',
+    sector: detail.sector || psData.sector || 'Unknown',
+    risk: detail.risk_level || 'LOW',
+    score: detail.risk_score || 0,
+    lane: detail.onboarding_lane || 'Standard Review',
+    status: formatStatus(detail.status),
+    statusRaw: detail.status || '',
+    assignedId: detail.assigned_to || '',
+    assigned: detail.assigned_name || detail.assigned_to || 'Unassigned',
+    date: formatDetailDate(detail.created_at || detail.submitted_at),
+    createdAt: detail.created_at || '',
+    submittedAt: detail.submitted_at || '',
+    decidedAt: detail.decided_at || '',
+    country: detail.country || psData.country_of_incorporation || '',
+    brn: detail.brn || psData.brn || '',
+    entityType: detail.entity_type || psData.entity_type || '',
+    ownershipStructure: detail.ownership_structure || psData.ownership_structure || '',
+    directors: directors,
+    ubos: ubos,
+    intermediaries: intermediaries,
+    pepCount: directors.filter(function(d) { return d.pep === 'Yes'; }).length + ubos.filter(function(u) { return u.pep === 'Yes'; }).length,
+    dims: dims,
+    _documents: documents,
+    docs: documents.map(function(doc) { return doc.doc_type; }),
+    _raw_prescreening: psData,
+    prescreeningData: psData,
+    latestMemoMeta: detail.latest_memo || null,
+    latestMemo: detail.latest_memo_data || null
+  };
+}
+
+function renderAuthoritativeAppDetail(app, options) {
+  var psData = app.prescreeningData || {};
   currentApp = app;
   window._currentDetailApp = app;
   currentScreeningReviewFocus = options.screeningFocus || null;
 
   document.getElementById('detail-company-name').textContent = app.company;
-  document.getElementById('detail-badges').innerHTML = riskBadge(app.risk) + ' ' + statusBadge(app.status);
+  document.getElementById('detail-badges').innerHTML = riskBadge(app.risk) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>';
 
-  // Entity info
-  var info = document.getElementById('detail-entity-info');
-  info.innerHTML = '<div class="detail-row"><span class="label">Reference</span><span class="value" style="font-family:monospace;">' + escapeHtml(app.ref) + '</span></div>' +
-    '<div class="detail-row"><span class="label">BRN</span><span class="value">' + escapeHtml(app.brn) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Country</span><span class="value">' + escapeHtml(app.country) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(app.sector) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Onboarding Lane</span><span class="value">' + escapeHtml(app.lane) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Submitted</span><span class="value">' + escapeHtml(app.date) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Assigned To</span><span class="value">' + escapeHtml(app.assigned) + '</span></div>';
+  document.getElementById('detail-entity-info').innerHTML =
+    '<div class="detail-row"><span class="label">Reference</span><span class="value" style="font-family:monospace;">' + escapeHtml(app.ref) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Legal Entity</span><span class="value">' + escapeHtml(app.company) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Entity Type</span><span class="value">' + escapeHtml(normalizeDetailValue(app.entityType)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Ownership Structure</span><span class="value">' + escapeHtml(normalizeDetailValue(app.ownershipStructure)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">BRN</span><span class="value">' + escapeHtml(normalizeDetailValue(app.brn)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Country</span><span class="value">' + escapeHtml(normalizeDetailValue(app.country)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(normalizeDetailValue(app.sector)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Status</span><span class="value">' + escapeHtml(app.status) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Assigned To</span><span class="value">' + escapeHtml(app.assigned) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Created</span><span class="value">' + escapeHtml(app.date) + '</span></div>';
 
-  // ── Pre-Screening Summary ──────────────────────────
-  var psData = app.prescreeningData || {};
-  var psSummary = document.getElementById('detail-prescreen-summary');
-  if (psSummary) {
-    var psHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
-    var psFields = [
-      { label: 'Incorporation Date', val: psData.incorporation_date || app.date || '—' },
-      { label: 'Country of Incorporation', val: app.country || '—' },
-      { label: 'Business Sector', val: app.sector || '—' },
-      { label: 'Entity Type', val: psData.entity_type || '—' },
-      { label: 'Ownership Structure', val: psData.ownership_structure || '—' },
-      { label: 'BRN', val: app.brn || '—' },
-      { label: 'Monthly Transaction Volume', val: psData.monthly_volume || '—' },
-      { label: 'Transaction Complexity', val: psData.transaction_complexity || '—' },
-      { label: 'Preferred Currency', val: psData.currency || '—' },
-      { label: 'Introduction Method', val: psData.introduction_method || '—' },
-      { label: 'Source of Wealth (Type)', val: psData.source_of_wealth_type || psData.source_of_wealth || '—' },
-      { label: 'Source of Wealth (Detail)', val: psData.source_of_wealth_detail || '—' },
-      { label: 'Initial Source of Funds (Type)', val: psData.source_of_funds_initial_type || psData.source_of_funds || '—' },
-      { label: 'Initial Source of Funds (Detail)', val: psData.source_of_funds_initial_detail || '—' },
-      { label: 'Ongoing Source of Funds (Type)', val: psData.source_of_funds_ongoing_type || '—' },
-      { label: 'Ongoing Source of Funds (Detail)', val: psData.source_of_funds_ongoing_detail || '—' },
-      { label: 'Contact Name', val: (psData.entity_contact_first || '') + ' ' + (psData.entity_contact_last || '') || '—' },
-      { label: 'Contact Email', val: psData.entity_contact_email || '—' },
-    ];
-    psFields.forEach(function(f) {
-      var val = f.val || '—';
-      var isLong = val.length > 60;
-      psHtml += '<div style="' + (isLong ? 'grid-column:span 2;' : '') + 'padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border1);">' +
-        '<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">' + escapeHtml(f.label) + '</div>' +
-        '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(String(val).trim() || '—') + '</div>' +
+  var prescreenFields = [
+    { label: 'Trading Name', value: detailValueFromAliases(psData, ['trading_name', 'trade_name']) },
+    { label: 'Registered Address', value: detailValueFromAliases(psData, ['registered_address', 'reg_address']) },
+    { label: 'Head Office Address', value: detailValueFromAliases(psData, ['headquarters_address', 'hq_address']) },
+    { label: 'Contact Name', value: firstMeaningfulDetailValue(
+        [detailValueFromAliases(psData, ['entity_contact_first', 'contact_first']), detailValueFromAliases(psData, ['entity_contact_last', 'contact_last'])].filter(Boolean).join(' '),
+        detailValueFromAliases(psData, ['contact_name'])
+      )
+    },
+    { label: 'Contact Email', value: detailValueFromAliases(psData, ['entity_contact_email', 'contact_email', 'email']) },
+    { label: 'Contact Mobile', value: firstMeaningfulDetailValue(
+        [detailValueFromAliases(psData, ['entity_contact_phone_code']), detailValueFromAliases(psData, ['entity_contact_mobile', 'contact_phone', 'mobile'])].filter(Boolean).join(' '),
+        detailValueFromAliases(psData, ['contact_phone'])
+      )
+    },
+    { label: 'Website', value: detailValueFromAliases(psData, ['website']) },
+    { label: 'Licences', value: detailValueFromAliases(psData, ['regulatory_licences', 'licenses', 'licences']) },
+    { label: 'Services Required', value: detailValueFromAliases(psData, ['services_required']) },
+    { label: 'Countries of Operation', value: detailValueFromAliases(psData, ['countries_of_operation']) },
+    { label: 'Target Markets', value: detailValueFromAliases(psData, ['target_markets']) },
+    { label: 'Account Purposes', value: detailValueFromAliases(psData, ['account_purposes']) },
+    { label: 'Business Overview', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['business_overview', 'business_description']), detailValueFromAliases(psData, ['management_overview'])) },
+    { label: 'Monthly Volume', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['monthly_volume', 'expected_monthly_volume']), detailValueFromAliases(psData, ['expected_volume'])) },
+    { label: 'Transaction Complexity', value: detailValueFromAliases(psData, ['transaction_complexity']) },
+    { label: 'Currencies', value: detailValueFromAliases(psData, ['currencies', 'currency']) },
+    { label: 'Source of Wealth', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_type']), detailValueFromAliases(psData, ['source_of_wealth'])) },
+    { label: 'Source of Wealth Detail', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_detail']), detailValueFromAliases(psData, ['source_of_wealth'])) },
+    { label: 'Source of Funds', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_funds']), detailValueFromAliases(psData, ['source_of_funds_initial_detail'])) },
+    { label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']) },
+    { label: 'Referrer', value: detailValueFromAliases(psData, ['referrer_name', 'referrer']) },
+    { label: 'Management Overview', value: detailValueFromAliases(psData, ['management_overview']) }
+  ];
+  document.getElementById('detail-prescreen-summary').innerHTML =
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+    prescreenFields.map(function(field) {
+      var value = normalizeDetailValue(field.value);
+      var isLong = value.length > 60;
+      return '<div style="' + (isLong ? 'grid-column:span 2;' : '') + 'padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border1);">' +
+        '<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">' + escapeHtml(field.label) + '</div>' +
+        '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(value) + '</div>' +
       '</div>';
-    });
-    psHtml += '</div>';
-    psSummary.innerHTML = psHtml;
-  }
+    }).join('') +
+    '</div>';
 
-  // Directors & UBOs
-  var persons = document.getElementById('detail-persons');
-  var html = '<div style="font-size:12px;font-weight:600;margin-bottom:6px;">Directors</div>';
-  app.directors.forEach(function(d) {
-    html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;"><span>' + escapeHtml(d.name) + '</span><span style="font-size:11px;color:var(--text3);">(' + escapeHtml(d.nat) + ')</span>' + (d.pep === 'Yes' ? '<span class="badge high" style="font-size:10px;">PEP</span>' : '') + '</div>';
-  });
-  html += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">UBOs</div>';
-  app.ubos.forEach(function(u) {
-    html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;"><span>' + escapeHtml(u.name) + '</span><span style="font-size:11px;color:var(--text3);">(' + escapeHtml(String(u.pct)) + '%)</span>' + (u.pep === 'Yes' ? '<span class="badge high" style="font-size:10px;">PEP</span>' : '') + '</div>';
-  });
-  if (app.pepCount > 0) html += '<div style="margin-top:8px;padding:8px 12px;background:var(--amber-bg);border-radius:var(--radius-sm);font-size:12px;color:var(--amber);font-weight:600;">⚠️ ' + escapeHtml(String(app.pepCount)) + ' PEP identified — Bank Reference Letter required</div>';
-  // Intermediary Shareholders
-  if ((app.intermediaries || []).length > 0) {
-    html += '<div style="font-size:12px;font-weight:600;margin:12px 0 6px;">Intermediary Shareholders</div>';
-    app.intermediaries.forEach(function(inter) {
-      var jRisk = COUNTRY_RISK_LISTS.FATF_BLACK.indexOf(inter.jurisdiction) >= 0 || COUNTRY_RISK_LISTS.SANCTIONED.indexOf(inter.jurisdiction) >= 0 ? 'vhigh' : COUNTRY_RISK_LISTS.FATF_GREY.indexOf(inter.jurisdiction) >= 0 || ['BVI','Panama','Cayman Islands','Seychelles','Bermuda'].some(function(s){ return (inter.jurisdiction||'').indexOf(s)>=0; }) ? 'high' : COUNTRY_RISK_LISTS.LOW_RISK.indexOf(inter.jurisdiction) >= 0 ? 'low' : 'medium';
-      var jColor = jRisk === 'low' ? 'var(--green)' : jRisk === 'medium' ? 'var(--blue)' : jRisk === 'high' ? 'var(--amber)' : 'var(--red)';
-      html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;flex-wrap:wrap;">' +
-        '<span>🏗️ ' + escapeHtml(inter.name) + '</span>' +
-        '<span style="font-size:11px;padding:2px 6px;border-radius:3px;background:rgba(0,0,0,0.05);color:' + jColor + ';font-weight:600;">' + escapeHtml(inter.jurisdiction) + '</span>' +
-        '<span style="font-size:11px;color:var(--text3);">(' + inter.pct + '% • ' + (inter.type || 'Holding') + ')</span>' +
-      '</div>';
-    });
-  }
-  persons.innerHTML = html;
+  var personsHtml = '<div style="font-size:12px;font-weight:600;margin-bottom:6px;">Directors</div>';
+  personsHtml += app.directors.length ? app.directors.map(function(d) {
+    var displayName = buildPartyDisplayName(d);
+    var nationality = normalizeDetailValue(d.nat);
+    var labels = [];
+    if (nationality !== '—') labels.push(nationality);
+    labels.push('PEP: ' + normalizePepDisplay(d.pep));
+    return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(labels.join(' | ')) + '</div>' +
+    '</div>';
+  }).join('') : '<div style="font-size:12px;color:var(--text3);">No directors persisted.</div>';
+  personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">UBOs</div>';
+  personsHtml += app.ubos.length ? app.ubos.map(function(u) {
+    var displayName = buildPartyDisplayName(u);
+    var meta = ['Ownership: ' + escapeHtml(normalizeDetailValue(u.pct)) + '%'];
+    var nationality = normalizeDetailValue(u.nat);
+    if (nationality !== '—') meta.push('Nationality: ' + escapeHtml(nationality));
+    meta.push('PEP: ' + escapeHtml(normalizePepDisplay(u.pep)));
+    return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + meta.join(' | ') + '</div>' +
+    '</div>';
+  }).join('') : '<div style="font-size:12px;color:var(--text3);">No UBOs persisted.</div>';
+  personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">Intermediary Shareholders</div>';
+  personsHtml += app.intermediaries.length ? app.intermediaries.map(function(i) {
+    return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(buildPartyDisplayName(i)) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Jurisdiction: ' + escapeHtml(normalizeDetailValue(i.jurisdiction)) + ' | Ownership: ' + escapeHtml(normalizeDetailValue(i.pct)) + '%</div>' +
+    '</div>';
+  }).join('') : '<div style="font-size:12px;color:var(--text3);">No intermediary shareholders persisted.</div>';
+  document.getElementById('detail-persons').innerHTML = personsHtml;
 
-  // Business
-  document.getElementById('detail-business').innerHTML = '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(app.sector) + '</span></div><div class="detail-row"><span class="label">PEPs Identified</span><span class="value">' + escapeHtml(String(app.pepCount)) + '</span></div>';
+  document.getElementById('detail-business').innerHTML =
+    '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(normalizeDetailValue(app.sector)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">PEPs Identified</span><span class="value">' + escapeHtml(String(app.pepCount)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Existing Bank</span><span class="value">' + escapeHtml(normalizeDetailValue(psData.existing_bank_account)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Bank Details</span><span class="value">' + escapeHtml(normalizeDetailValue(psData.existing_bank_name)) + '</span></div>';
 
-  // Risk bars
-  var dims = ['Customer / Entity','Geographic','Product / Service','Industry / Sector','Delivery Channel'];
-  var dimKeys = ['d1','d2','d3','d4','d5'];
-  var barsHtml = '';
-  dimKeys.forEach(function(k, i) {
-    var val = (app.dims && app.dims[k] != null) ? app.dims[k] : 0;
-    var pct = (val / 4) * 100;
-    var cls = val <= 1.5 ? 'low' : val <= 2.5 ? 'medium' : val <= 3.2 ? 'high' : 'vhigh';
-    barsHtml += '<div class="risk-bar-row"><div class="risk-bar-label">' + dims[i] + '</div><div class="risk-bar-track"><div class="risk-bar-fill ' + cls + '" style="width:' + pct + '%;"></div></div><div class="risk-bar-value">' + val.toFixed(2) + '</div></div>';
+  var dimLabels = { d1: 'Customer / Entity', d2: 'Geographic', d3: 'Product / Service', d4: 'Industry / Sector', d5: 'Delivery Channel' };
+  var riskBarsHtml = '';
+  Object.keys(dimLabels).forEach(function(key) {
+    var value = app.dims && app.dims[key] != null ? Number(app.dims[key]) : null;
+    if (value == null || isNaN(value)) return;
+    var pct = Math.max(0, Math.min(100, (value / 4) * 100));
+    var cls = value <= 1.5 ? 'low' : value <= 2.5 ? 'medium' : value <= 3.2 ? 'high' : 'vhigh';
+    riskBarsHtml += '<div class="risk-bar-row"><div class="risk-bar-label">' + dimLabels[key] + '</div><div class="risk-bar-track"><div class="risk-bar-fill ' + cls + '" style="width:' + pct + '%;"></div></div><div class="risk-bar-value">' + value.toFixed(2) + '</div></div>';
   });
-  document.getElementById('detail-risk-bars').innerHTML = barsHtml;
+  document.getElementById('detail-risk-bars').innerHTML = riskBarsHtml || '<div style="font-size:12px;color:var(--text3);">No persisted risk dimension breakdown is available for this application.</div>';
   document.getElementById('detail-composite-score').textContent = app.score;
   document.getElementById('detail-risk-badge').innerHTML = riskBadge(app.risk);
+  document.getElementById('detail-score-breakdown').innerHTML = renderStoredRiskComputationHtml(app);
 
-  // Rule-based score breakdown — LINE-BY-LINE sub-criteria computation
-  var breakdown = computeSubCriteriaBreakdown(app);
-  var sbHtml = '';
-
-  // Toggle view button
-  sbHtml += '<div style="display:flex;gap:8px;margin-bottom:12px;">' +
-    '<button class="btn btn-outline btn-sm" id="btn-toggle-subcriteria" onclick="toggleSubcriteriaView()" style="font-size:11px;">Show Sub-Criteria Detail</button>' +
-    '<span style="font-size:10px;color:var(--text3);align-self:center;">Toggle line-by-line computation for audit trail</span>' +
-  '</div>';
-
-  // Summary table (always visible)
-  sbHtml += '<table style="width:100%;border-collapse:collapse;font-size:12px;" id="risk-summary-table">' +
-    '<thead><tr>' +
-    '<th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);border-bottom:2px solid var(--border1);background:var(--surface2);">Dimension</th>' +
-    '<th style="padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);border-bottom:2px solid var(--border1);background:var(--surface2);text-align:center;">Weight</th>' +
-    '<th style="padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);border-bottom:2px solid var(--border1);background:var(--surface2);text-align:center;">Score (1-4)</th>' +
-    '<th style="padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);border-bottom:2px solid var(--border1);background:var(--surface2);text-align:center;">Weighted</th>' +
-    '<th style="padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);border-bottom:2px solid var(--border1);background:var(--surface2);text-align:center;">Sub-Criteria</th>' +
-    '</tr></thead><tbody>';
-
-  breakdown.dimensions.forEach(function(dim) {
-    var val = dim.dimScore != null ? dim.dimScore : 0;
-    var weighted = val * dim.weight;
-    var scoreColor = val <= 1.5 ? 'var(--green)' : val <= 2.5 ? 'var(--blue)' : val <= 3.2 ? 'var(--amber)' : 'var(--red)';
-    sbHtml += '<tr>' +
-      '<td style="padding:8px 10px;border-bottom:1px solid var(--border1);font-weight:600;">' + dim.id + ': ' + dim.name + '</td>' +
-      '<td style="padding:8px 10px;border-bottom:1px solid var(--border1);text-align:center;">' + dim.weight + '%</td>' +
-      '<td style="padding:8px 10px;border-bottom:1px solid var(--border1);text-align:center;font-weight:700;color:' + scoreColor + ';">' + val.toFixed(2) + '</td>' +
-      '<td style="padding:8px 10px;border-bottom:1px solid var(--border1);text-align:center;">' + weighted.toFixed(1) + '</td>' +
-      '<td style="padding:8px 10px;border-bottom:1px solid var(--border1);text-align:center;font-size:11px;color:var(--text3);">' + dim.subcriteria.length + ' criteria</td>' +
-    '</tr>';
-  });
-
-  var computedScore = breakdown.totalWeight > 0 ? (breakdown.totalWeighted / breakdown.totalWeight) * 25 : 0;
-  sbHtml += '</tbody><tfoot><tr style="background:var(--surface2);font-weight:700;">' +
-    '<td style="padding:10px;border-top:2px solid var(--border1);">Composite</td>' +
-    '<td style="padding:10px;border-top:2px solid var(--border1);text-align:center;">' + breakdown.totalWeight + '%</td>' +
-    '<td colspan="2" style="padding:10px;border-top:2px solid var(--border1);text-align:center;font-size:16px;color:var(--brand);">' + computedScore.toFixed(1) + ' / 100</td>' +
-    '<td style="padding:10px;border-top:2px solid var(--border1);font-size:11px;text-align:center;">(' + breakdown.totalWeighted.toFixed(1) + ' / ' + breakdown.totalWeight + ') x 25</td>' +
-  '</tr></tfoot></table>';
-
-  // Detailed sub-criteria breakdown (hidden by default, toggled by button)
-  sbHtml += '<div id="subcriteria-detail-panel" style="display:none;margin-top:16px;">';
-  sbHtml += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--brand);margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid var(--brand);">Line-by-Line Sub-Criteria Computation (Audit Trail)</div>';
-
-  breakdown.dimensions.forEach(function(dim) {
-    var dimColor = dim.dimScore <= 1.5 ? 'var(--green)' : dim.dimScore <= 2.5 ? 'var(--blue)' : dim.dimScore <= 3.2 ? 'var(--amber)' : 'var(--red)';
-    sbHtml += '<div style="margin-bottom:16px;border:1px solid var(--border1);border-radius:var(--radius-sm);overflow:hidden;">';
-    sbHtml += '<div style="padding:10px 12px;background:var(--surface2);display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border1);">';
-    sbHtml += '<div><span style="font-weight:700;font-size:13px;">' + dim.id + ': ' + dim.name + '</span>';
-    sbHtml += ' <span style="font-size:11px;color:var(--text3);">(Global Weight: ' + dim.weight + '%)</span></div>';
-    sbHtml += '<div style="font-size:14px;font-weight:800;color:' + dimColor + ';">' + dim.dimScore.toFixed(2) + ' <span style="font-size:10px;color:var(--text3);font-weight:400;">/ 4.00</span></div>';
-    sbHtml += '</div>';
-
-    // Sub-criteria table
-    sbHtml += '<table style="width:100%;border-collapse:collapse;font-size:11px;">';
-    sbHtml += '<thead><tr style="background:var(--surface1);">' +
-      '<th style="text-align:left;padding:6px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);border-bottom:1px solid var(--border1);">Sub-Criterion</th>' +
-      '<th style="padding:6px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);border-bottom:1px solid var(--border1);text-align:center;width:60px;">Weight</th>' +
-      '<th style="padding:6px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);border-bottom:1px solid var(--border1);text-align:center;width:60px;">Score</th>' +
-      '<th style="padding:6px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);border-bottom:1px solid var(--border1);text-align:center;width:70px;">Wtd Score</th>' +
-      '<th style="text-align:left;padding:6px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);border-bottom:1px solid var(--border1);">Input / Evidence</th>' +
-      '<th style="padding:6px 10px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text3);border-bottom:1px solid var(--border1);text-align:center;width:70px;">Tier</th>' +
-    '</tr></thead><tbody>';
-
-    var subTotal = 0, subWeightTotal = 0;
-    dim.subcriteria.forEach(function(sub) {
-      var subWeighted = sub.score * sub.weight;
-      subTotal += subWeighted;
-      subWeightTotal += sub.weight;
-      var subColor = sub.score <= 1 ? 'var(--green)' : sub.score <= 2 ? 'var(--blue)' : sub.score <= 3 ? 'var(--amber)' : 'var(--red)';
-      var tierBg = sub.tier === 'LOW' ? 'var(--green-bg)' : sub.tier === 'MEDIUM' ? 'rgba(37,99,235,0.1)' : sub.tier === 'HIGH' ? 'var(--amber-bg)' : 'var(--red-bg)';
-      var tierColor = sub.tier === 'LOW' ? 'var(--green)' : sub.tier === 'MEDIUM' ? 'var(--blue)' : sub.tier === 'HIGH' ? 'var(--amber)' : 'var(--red)';
-      sbHtml += '<tr>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid var(--border1);font-weight:600;">' + sub.criterion + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid var(--border1);text-align:center;">' + sub.weight + '%</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid var(--border1);text-align:center;font-weight:700;color:' + subColor + ';">' + sub.score + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid var(--border1);text-align:center;">' + subWeighted.toFixed(0) + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid var(--border1);color:var(--text3);font-size:10px;">' + escapeHtml(sub.input) + '</td>' +
-        '<td style="padding:6px 10px;border-bottom:1px solid var(--border1);text-align:center;"><span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;background:' + tierBg + ';color:' + tierColor + ';">' + sub.tier + '</span></td>' +
-      '</tr>';
-      // Scoring rule reference
-      sbHtml += '<tr><td colspan="6" style="padding:2px 10px 6px 24px;border-bottom:1px solid var(--border1);font-size:9px;color:var(--text3);font-style:italic;">Scoring Rule: ' + escapeHtml(sub.rule) + '</td></tr>';
-    });
-
-    // Dimension weighted average
-    var dimWA = subWeightTotal > 0 ? (subTotal / subWeightTotal) : 0;
-    sbHtml += '</tbody><tfoot><tr style="background:var(--surface2);">' +
-      '<td style="padding:6px 10px;font-weight:700;border-top:2px solid var(--border1);">Dimension Weighted Average</td>' +
-      '<td style="padding:6px 10px;text-align:center;border-top:2px solid var(--border1);">' + subWeightTotal + '%</td>' +
-      '<td style="padding:6px 10px;text-align:center;border-top:2px solid var(--border1);font-weight:700;color:' + dimColor + ';">' + dimWA.toFixed(2) + '</td>' +
-      '<td style="padding:6px 10px;text-align:center;border-top:2px solid var(--border1);">' + subTotal.toFixed(0) + '</td>' +
-      '<td colspan="2" style="padding:6px 10px;border-top:2px solid var(--border1);font-size:10px;color:var(--text3);">(' + subTotal.toFixed(0) + ' / ' + subWeightTotal + ') = ' + dimWA.toFixed(2) + '</td>' +
-    '</tr></tfoot></table>';
-    sbHtml += '</div>';
-  });
-
-  // Final composite calculation box
-  sbHtml += '<div style="margin-top:12px;padding:12px 16px;background:linear-gradient(135deg,var(--brand),#1e40af);color:white;border-radius:var(--radius-sm);">';
-  sbHtml += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.8;margin-bottom:4px;">Final Composite Score Calculation</div>';
-  sbHtml += '<div style="font-size:12px;font-family:monospace;margin-bottom:6px;">';
-  var formulaParts = [];
-  breakdown.dimensions.forEach(function(dim) {
-    formulaParts.push('(' + dim.dimScore.toFixed(2) + ' x ' + dim.weight + ')');
-  });
-  sbHtml += formulaParts.join(' + ');
-  sbHtml += ' = ' + breakdown.totalWeighted.toFixed(1) + '</div>';
-  sbHtml += '<div style="font-size:12px;font-family:monospace;">(' + breakdown.totalWeighted.toFixed(1) + ' / ' + breakdown.totalWeight + ') x 25 = <span style="font-size:18px;font-weight:800;">' + computedScore.toFixed(1) + '</span> / 100</div>';
-  sbHtml += '</div>';
-  sbHtml += '</div>'; // end subcriteria-detail-panel
-
-  document.getElementById('detail-score-breakdown').innerHTML = sbHtml;
-
-
-  // ═══════════════════════════════════════════════════════
-  // AI EXPLAINABILITY LAYER — Decision Trail + Dimension Drill-Down
-  // ═══════════════════════════════════════════════════════
-
-  // Generate timestamps relative to submission
-  var baseDate = new Date(app.date + 'T10:00:00Z');
-  function fmtTime(ms) {
-    var d = new Date(baseDate.getTime() + ms);
-    return d.toISOString().substring(11,19) + ' UTC';
-  }
-
-  // Decision trail data (5 agents — matching AI Agents config page)
-  var trailSteps = [
-    { name:'Agent 1: Identity & Document Integrity', time:fmtTime(0), detail:'Validated authenticity and consistency of ' + (function(){ var t=(app.docs||[]).length; (app.personDocs||[]).forEach(function(p){t+=p.docs.length;}); t+=(app.businessDocs||[]).length+(app.otherDocs||[]).length; return t; })() + ' documents across 4 sections (corporate, KYC/identity, business, other). Performed ~' + (35 + ((app.personDocs||[]).reduce(function(s,p){return s+p.docs.length;},0))*5) + ' checks including MRZ extraction, expiry validation, tampering detection, cross-document consistency, and per-person identity verification for ' + ((app.directors||[]).length + (app.ubos||[]).length) + ' individuals.', confidence:95, result:(function(){ var t=(app.docs||[]).length; (app.personDocs||[]).forEach(function(p){t+=p.docs.length;}); t+=(app.businessDocs||[]).length+(app.otherDocs||[]).length; return t; })() + ' documents checked across all sections' },
-    { name:'Agent 2: External Database Cross-Verification', time:fmtTime(3000), detail:'Secondary verification layer. Checked passport/company document data against external registries (OpenCorporates, Companies House, ADGM, DIFC). Confirmed persons exist in official records as declared directors/shareholders. ' + (screening ? 'Registry data retrieved.' : 'Awaiting screening.'), confidence:92, result:'12 checks — ' + ((app.directors||[]).length + (app.ubos||[]).length) + ' persons cross-referenced' },
-    { name:'Agent 3: FinCrime Screening Interpretation', time:fmtTime(6000), detail:'Reviewed stored provider AML/watchlist results for individuals and entities, assessed declared PEP exposure, and highlighted rows requiring officer review. Distinct adverse-media findings are not persisted in the current screening report. ' + (app.pepCount>0?app.pepCount+' declared PEP(s) present.':'No declared PEPs.'), confidence:app.pepCount>0?78:97, result:app.pepCount>0?'PEP REVIEW REQUIRED':'Provider results recorded' },
-    { name:'Agent 4: Corporate Structure & UBO Mapping', time:fmtTime(9000), detail:'Mapped ownership layers for ' + (app.ubos||[]).length + ' UBO(s) and ' + (app.directors||[]).length + ' director(s). ' + ((app.intermediaries||[]).length > 0 ? 'Detected ' + (app.intermediaries||[]).length + ' intermediary layer(s) — nominee structures flagged.' : 'Simple direct ownership confirmed.') + ' Cross-referenced UBOs with sanctions/PEP results from Agent 3.', confidence:91, result:(app.ubos||[]).length + ' UBOs mapped, ' + (app.directors||[]).length + ' directors verified' },
-    { name:'Agent 5: Compliance Memo & Risk Recommendation', time:fmtTime(12000), detail:'Final synthesis agent. Compiled results from Agents 1-4, assessed business plausibility within Agent 5, recommended ' + app.risk.replace('_',' ') + ' risk rating. Generated onboarding memo and review checklist. Score: ' + app.score + '/100. Configured ' + (app.risk==='VERY_HIGH'?'quarterly':app.risk==='HIGH'?'semi-annual':app.risk==='MEDIUM'?'annual':'biennial') + ' periodic review schedule.', confidence:94, result:app.risk.replace('_',' ') + ' RISK — ' + (app.risk==='LOW'?'Recommend Approve':'Review Required') }
-  ];
-
-  var trailHtml = '';
-  trailSteps.forEach(function(step) {
-    var confCls = step.confidence >= 90 ? 'high' : step.confidence >= 75 ? 'medium' : 'low';
-    trailHtml += '<div class="trail-step active">' +
-      '<div class="trail-step-header"><span class="trail-step-name">' + step.name + '</span><span class="trail-step-time">' + step.time + '</span></div>' +
-      '<div class="trail-step-detail">' + step.detail + '</div>' +
-      '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">' +
-        '<span class="trail-step-confidence ' + confCls + '">Confidence: ' + step.confidence + '%</span>' +
-        '<span style="font-size:10px;color:var(--text3);">' + step.result + '</span>' +
-      '</div>' +
+  var screeningSummary = getApplicationScreeningSummary(app);
+  var screeningMeta = '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:12px;">' +
+    '<div><strong>Screening Run:</strong> ' + (screeningSummary.screening_run_recorded ? 'Recorded' : 'Not recorded') + '</div>' +
+    '<div><strong>Total Hits:</strong> ' + escapeHtml(String(screeningSummary.total_hits || 0)) + '</div>' +
+    '<div><strong>Mode:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screening_mode)) + '</div>' +
+    '<div><strong>Screened At:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screened_at)) + '</div>' +
     '</div>';
-  });
-  document.getElementById('explain-decision-trail').innerHTML = trailHtml;
+  document.getElementById('detail-screening-review').innerHTML = screeningMeta;
+  renderScreeningReviewPanel(app, currentScreeningReviewFocus);
+  renderExplainabilityPanel(app, screeningSummary);
 
-  // Dimension drill-down with expandable cards
-  var dimExplainData = [
-    { name:'D1: Customer / Entity Risk', weight:'30%', score:app.dims.d1, factors:[
-      { icon:'🏢', text:'Entity type: ' + escapeHtml(app.entityType || 'Corporate entity') + ' — scored based on regulatory complexity and ML/TF exposure', impact:app.dims.d1 <= 2 ? '+Low' : '+High', color:app.dims.d1 <= 2 ? 'var(--green)' : 'var(--amber)' },
-      { icon:'🔗', text:'Ownership structure complexity assessed. ' + (app.ubos||[]).length + ' UBO(s) declared with ' + ((app.ubos||[]).some(function(u){return u.pct >= 25}) ? 'clear' : 'unclear') + ' beneficial ownership chain', impact:'Neutral', color:'var(--text3)' },
-      { icon:'👤', text:'PEP status: ' + (app.pepCount > 0 ? app.pepCount + ' PEP(s) — automatically elevates entity risk' : 'No PEPs — no risk elevation'), impact:app.pepCount > 0 ? '+High' : '+Low', color:app.pepCount > 0 ? 'var(--red)' : 'var(--green)' },
-      { icon:'📰', text:'Adverse media: Distinct adverse-media results are not stored in the current screening report', impact:'Limited', color:'var(--text3)' },
-      { icon:'💰', text:'Source of wealth assessed against entity profile and sector norms for ' + escapeHtml(app.sector || 'N/A'), impact:'Neutral', color:'var(--text3)' }
-    ]},
-    { name:'D2: Geographic Risk', weight:'25%', score:app.dims.d2, factors:[
-      { icon:'🌍', text:'Country of incorporation: ' + escapeHtml(app.country) + ' — scored using FATF member status and grey/black list classification', impact:app.dims.d2 <= 2 ? '+Low' : '+High', color:app.dims.d2 <= 2 ? 'var(--green)' : 'var(--amber)' },
-      { icon:'👤', text:'UBO/Director nationalities: ' + (function(){ var nats = (app.directors||[]).concat(app.ubos||[]).map(function(p){return p.nat;}).filter(function(v,i,a){return v && a.indexOf(v)===i;}); return nats.length > 0 ? nats.join(', ') + ' — assessed against FATF and sanctions lists' : 'No nationality data'; })(), impact:(function(){ var hrs=['Russian','Iranian','Syrian','North Korean','Lebanese','Venezuelan','Cuban','Afghan','Belarusian']; return (app.directors||[]).concat(app.ubos||[]).some(function(p){return hrs.indexOf(p.nat)>=0;}) ? '+High' : '+Low'; })(), color:(function(){ var hrs=['Russian','Iranian','Syrian','North Korean','Lebanese','Venezuelan','Cuban','Afghan','Belarusian']; return (app.directors||[]).concat(app.ubos||[]).some(function(p){return hrs.indexOf(p.nat)>=0;}) ? 'var(--red)' : 'var(--green)'; })() },
-      { icon:'🏗️', text:'Intermediary shareholder jurisdictions: ' + ((app.intermediaries||[]).length > 0 ? (app.intermediaries||[]).map(function(i){ return i.name + ' (' + i.jurisdiction + ', ' + i.pct + '%)'; }).join(', ') : 'None identified — direct ownership') + '. Assessed for secrecy/opacity and FATF classification.', impact:(app.intermediaries||[]).some(function(i){ return ['BVI','Panama','Cayman Islands','Seychelles'].some(function(s){ return (i.jurisdiction||'').indexOf(s) >= 0; }); }) ? '+High' : (app.intermediaries||[]).length > 0 ? '+Medium' : '+Low', color:(app.intermediaries||[]).some(function(i){ return ['BVI','Panama','Cayman Islands','Seychelles'].some(function(s){ return (i.jurisdiction||'').indexOf(s) >= 0; }); }) ? 'var(--red)' : (app.intermediaries||[]).length > 0 ? 'var(--amber)' : 'var(--green)' },
-      { icon:'🗺️', text:'Countries of operation assessed. Payment corridors evaluated against Country Risk Reference table', impact:'Neutral', color:'var(--text3)' },
-      { icon:'📍', text:'Target markets and payment corridors classified (developed, emerging, frontier, or sanctioned)', impact:app.dims.d2 >= 3 ? '+Elevated' : '+Low', color:app.dims.d2 >= 3 ? 'var(--amber)' : 'var(--green)' }
-    ]},
-    { name:'D3: Product / Service Risk', weight:'20%', score:app.dims.d3, factors:[
-      { icon:'💳', text:'Primary service: Payment Intermediary Services — cross-border transfer capability assessed', impact:'Neutral', color:'var(--text3)' },
-      { icon:'📊', text:'Expected monthly transaction volume evaluated against entity size and sector benchmarks', impact:app.dims.d3 >= 3 ? '+Elevated' : '+Normal', color:app.dims.d3 >= 3 ? 'var(--amber)' : 'var(--green)' },
-      { icon:'🔄', text:'Transaction complexity: Number of corridors and currency pairs assessed', impact:'Neutral', color:'var(--text3)' }
-    ]},
-    { name:'D4: Industry / Sector Risk', weight:'15%', score:app.dims.d4, factors:[
-      { icon:'🏭', text:'Sector: "' + escapeHtml(app.sector) + '" — scored against RegMind sector risk classification (26 sectors, 4 risk tiers)', impact:app.dims.d4 >= 3 ? '+High' : app.dims.d4 >= 2 ? '+Medium' : '+Low', color:app.dims.d4 >= 3 ? 'var(--amber)' : 'var(--green)' },
-      { icon:'⚠️', text:app.dims.d4 >= 4 ? 'VERY HIGH RISK sector — automatic compliance escalation triggered' : app.dims.d4 >= 3 ? 'High risk sector — enhanced due diligence recommended' : 'Sector within normal risk appetite', impact:app.dims.d4 >= 4 ? 'ESCALATE' : 'OK', color:app.dims.d4 >= 4 ? 'var(--red)' : 'var(--green)' }
-    ]},
-    { name:'D5: Delivery Channel Risk', weight:'10%', score:app.dims.d5, factors:[
-      { icon:'🖥️', text:'Application submitted via online portal (non-face-to-face channel)', impact:'Standard', color:'var(--text3)' },
-      { icon:'🤝', text:'Introduction method assessed — direct application vs intermediary referral', impact:app.dims.d5 >= 3 ? '+Elevated' : '+Low', color:app.dims.d5 >= 3 ? 'var(--amber)' : 'var(--green)' }
-    ]}
-  ];
-
-  var dimHtml = '';
-  dimExplainData.forEach(function(dim, idx) {
-    var pct = (dim.score / 4) * 100;
-    var cls = dim.score <= 1.5 ? 'low' : dim.score <= 2.5 ? 'medium' : dim.score <= 3.2 ? 'high' : 'vhigh';
-    var barColor = cls === 'low' ? 'var(--green)' : cls === 'medium' ? 'var(--blue)' : cls === 'high' ? 'var(--amber)' : 'var(--red)';
-    var scoreColor = barColor;
-
-    dimHtml += '<div class="dim-explain-card" id="dim-explain-' + idx + '" onclick="toggleDimExplain(' + idx + ')">' +
-      '<div class="dim-explain-name">' + dim.name + ' <span style="font-size:10px;color:var(--text3);font-weight:400;">(' + dim.weight + ')</span></div>' +
-      '<div class="dim-explain-score" style="color:' + scoreColor + ';">' + dim.score.toFixed(2) + ' <span style="font-size:11px;color:var(--text3);font-weight:400;">/ 4.00</span></div>' +
-      '<div class="dim-explain-bar"><div class="dim-explain-bar-fill" style="width:' + pct + '%;background:' + barColor + ';"></div></div>' +
-      '<div class="dim-explain-factors" id="dim-factors-' + idx + '" style="display:none;">';
-
-    dim.factors.forEach(function(f) {
-      dimHtml += '<div class="dim-explain-factor"><span class="factor-icon">' + f.icon + '</span><span class="factor-text">' + f.text + '</span><span class="factor-impact" style="color:' + f.color + ';">' + f.impact + '</span></div>';
-    });
-
-    dimHtml += '<div class="explain-data-source">📐 Source: Rule-Based Scoring Model v1.4 + AI Agent Verification</div>';
-    dimHtml += '</div></div>';
-  });
-  document.getElementById('explain-dimensions').innerHTML = dimHtml;
-
-  // Confidence summary
-  var overallConf = trailSteps.reduce(function(s,t){ return s+t.confidence; }, 0) / trailSteps.length;
-  var confCls = overallConf >= 90 ? 'high' : overallConf >= 75 ? 'medium' : 'low';
-  var riskCls = app.risk === 'LOW' ? 'low' : app.risk === 'MEDIUM' ? 'medium' : app.risk === 'HIGH' ? 'high' : 'vhigh';
-
-  var topRiskDrivers = [];
-  var sortedDimExplain = dimExplainData.slice().sort(function(a,b){ return b.score - a.score; });
-  sortedDimExplain.slice(0, 3).forEach(function(d) {
-    if (d.score >= 2) topRiskDrivers.push(d.name + ' (' + d.score.toFixed(1) + '/4)');
-  });
-
-  var confHtml = '<div style="display:flex;gap:16px;margin-bottom:14px;">' +
-    '<div style="flex:1;text-align:center;padding:14px;background:var(--surface2);border-radius:var(--radius-sm);border:1px solid var(--border1);">' +
-      '<div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Overall AI Confidence</div>' +
-      '<div style="font-size:28px;font-weight:800;color:' + (confCls === 'high' ? 'var(--green)' : confCls === 'medium' ? 'var(--amber)' : 'var(--red)') + ';">' + overallConf.toFixed(1) + '%</div>' +
-    '</div>' +
-    '<div style="flex:1;text-align:center;padding:14px;background:var(--surface2);border-radius:var(--radius-sm);border:1px solid var(--border1);">' +
-      '<div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Agents Executed</div>' +
-      '<div style="font-size:28px;font-weight:800;color:var(--brand);">10 / 10</div>' +
-    '</div>' +
-    '<div style="flex:1;text-align:center;padding:14px;background:var(--surface2);border-radius:var(--radius-sm);border:1px solid var(--border1);">' +
-      '<div style="font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Data Sources</div>' +
-      '<div style="font-size:28px;font-weight:800;color:var(--brand);">' + (screening ? '4' : '2') + '</div>' +
-      '<div style="font-size:10px;color:var(--text3);">' + (screening ? 'Live APIs + Rules' : 'Rules + Mock') + '</div>' +
-    '</div>' +
-  '</div>';
-
-  confHtml += '<div class="explain-summary-box ' + riskCls + '">' +
-    '<div class="explain-summary-title">Why this application is rated ' + app.risk.replace('_',' ') + ' RISK (Score: ' + app.score + '/100)</div>' +
-    '<div class="explain-summary-text">' +
-    'The composite risk score of <strong>' + app.score + '</strong> was computed using a weighted average of 5 risk dimensions. ' +
-    (topRiskDrivers.length > 0 ? 'The primary risk drivers are: <strong>' + topRiskDrivers.join(', ') + '</strong>. ' : 'No individual dimension scored above medium risk. ') +
-    (app.pepCount > 0 ? 'A PEP was identified among the directors/UBOs, which elevated the Customer/Entity risk dimension. ' : '') +
-    (app.risk === 'HIGH' || app.risk === 'VERY_HIGH' ? 'Enhanced Due Diligence (EDD) is required per the RegMind Risk Scoring Methodology v1.4. Senior compliance officer approval is mandatory.' :
-     app.risk === 'MEDIUM' ? 'Standard Customer Due Diligence (CDD) applies. All documentation should be verified before approval.' :
-     'Simplified Due Diligence (SDD) applies. The application is eligible for Fast Lane processing.') +
-    '</div>' +
-    '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">' +
-      '<span class="explain-data-source">📐 Scoring Model v1.4</span>' +
-      '<span class="explain-data-source">🏦 FATF Risk-Based Approach</span>' +
-      (screening ? '<span class="explain-data-source">🔍 Sumsub AML</span><span class="explain-data-source">🏢 Open Corporates</span>' : '') +
-      '<span class="explain-data-source">🌍 Country Risk Reference</span>' +
-    '</div>' +
-  '</div>';
-
-  document.getElementById('explain-confidence-summary').innerHTML = confHtml;
-  // AI Agents — with real screening data when available
-  var screening = null;
-  var screeningMeta = {};
-  try {
-    var psd = typeof app._raw_prescreening === 'string' ? JSON.parse(app._raw_prescreening) : (app._raw_prescreening || {});
-    screening = psd.screening_report || null;
-    screeningMeta = psd || {};
-  } catch(e) { screening = null; }
-
-  var agents = [];
-
-  // ═══════════════════════════════════════════════════════
-  // ALL 10 AI AGENTS — Dynamic rendering from application data
-  // ═══════════════════════════════════════════════════════
-
-  // ── Agent 1: Identity & Document Integrity Agent ──
-  var a1checks = [];
-  var corpDocCount = (app.docs || []).length;
-  var personDocCount = (app.personDocs||[]).reduce(function(s,p){return s+p.docs.length;},0);
-  var bizDocCount = (app.businessDocs||[]).length;
-  var otherDocCount = (app.otherDocs||[]).length;
-  var totalDocCount = corpDocCount + personDocCount + bizDocCount + otherDocCount;
-
-  a1checks.push({l:'Total documents uploaded', r:totalDocCount + ' document(s) across 4 sections', c:totalDocCount > 0 ? 'pass' : 'warn'});
-
-  // Section A: Corporate documents
-  a1checks.push({l:'§A Corporate Documents', r:corpDocCount + ' uploaded', c:'pass'});
-  (app.docs || []).forEach(function(docName) {
-    var review = (app.docReviews || {})[docName] || {};
-    var status = review.status === 'accepted' ? 'pass' : review.status === 'rejected' ? 'fail' : 'warn';
-    var statusText = review.status === 'accepted' ? 'Accepted' : review.status === 'rejected' ? 'Rejected' : 'Pending review';
-    a1checks.push({l:'  ' + docName, r:statusText, c:status});
-  });
-  var allDocsExpected = ['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart'];
-  allDocsExpected.forEach(function(d) { if ((app.docs || []).indexOf(d) === -1) a1checks.push({l:'  ' + d, r:'Missing', c:'fail'}); });
-
-  // Section B: Per-person KYC documents
-  if (app.personDocs && app.personDocs.length > 0) {
-    a1checks.push({l:'§B KYC / Identity Documents', r:personDocCount + ' across ' + app.personDocs.length + ' person(s)', c:'pass'});
-    app.personDocs.forEach(function(person) {
-      a1checks.push({l:'  ' + person.name + ' (' + person.role + ')', r:person.docs.length + ' doc(s)', c:'pass'});
-      person.docs.forEach(function(doc) {
-        var review = (app.docReviews || {})[person.name + ' — ' + doc.type] || {};
-        var status = review.status === 'accepted' ? 'pass' : review.status === 'rejected' ? 'fail' : 'warn';
-        var statusText = review.status === 'accepted' ? 'Accepted' : review.status === 'rejected' ? 'Rejected' : 'Pending review';
-        a1checks.push({l:'    ' + doc.type, r:statusText, c:status});
-      });
-      // Missing KYC docs
-      var expectedKyc = ['Passport / ID', 'Proof of Address'];
-      if (person.pep === 'Yes') { expectedKyc.push('Bank Reference Letter'); expectedKyc.push('Source of Wealth Declaration'); }
-      var personDocTypes = person.docs.map(function(d){ return d.type; });
-      expectedKyc.forEach(function(d) {
-        if (personDocTypes.indexOf(d) === -1) a1checks.push({l:'    ' + d, r:'Missing — ' + person.name, c:'fail'});
-      });
-    });
-  }
-
-  // Section C: Business documents
-  if (app.businessDocs && app.businessDocs.length > 0) {
-    a1checks.push({l:'§C Business Documents', r:bizDocCount + ' uploaded (optional)', c:'pass'});
-    app.businessDocs.forEach(function(docName) {
-      a1checks.push({l:'  ' + docName, r:'Pending review', c:'warn'});
-    });
-  }
-
-  // Section D: Other documents
-  if (app.otherDocs && app.otherDocs.length > 0) {
-    a1checks.push({l:'§D Other Documents', r:otherDocCount + ' uploaded', c:'pass'});
-    app.otherDocs.forEach(function(docName) {
-      a1checks.push({l:'  ' + docName, r:'Pending review', c:'warn'});
-    });
-  }
-
-  a1checks.push({l:'MRZ extraction', r:personDocCount > 0 ? 'Extracted from ' + personDocCount + ' identity documents' : 'No identity docs', c:personDocCount > 0 ? 'pass' : 'warn'});
-  a1checks.push({l:'Expiry validation', r:totalDocCount > 0 ? 'All within validity' : 'No documents to check', c:totalDocCount > 0 ? 'pass' : 'warn'});
-  a1checks.push({l:'Tampering detection', r:totalDocCount > 0 ? 'No anomalies detected' : 'Awaiting documents', c:totalDocCount > 0 ? 'pass' : 'warn'});
-  a1checks.push({l:'Cross-document consistency', r:totalDocCount > 2 ? 'Names and dates consistent across sections' : 'Insufficient docs', c:totalDocCount > 2 ? 'pass' : 'warn'});
-  agents.push({ name:'Agent 1: Identity & Document Integrity', icon:'🔍', checks:a1checks });
-
-  // ── Agent 2: External Database Cross-Verification Agent (12 checks) ──
-  var a2checks = [];
-  if (screening && screening.company_screening) {
-    var cs = screening.company_screening;
-    var csSource = cs.source === 'simulated' ? ' [Simulated]' : ' [Live]';
-    if (cs.found && cs.companies && cs.companies.length > 0) {
-      var co = cs.companies[0];
-      a2checks.push({l:'Company Registry' + csSource, r:'Found: ' + co.name + (co.status ? ' (' + co.status + ')' : ''), c:'pass'});
-      if (co.incorporation_date) a2checks.push({l:'Incorporation Date', r:co.incorporation_date, c:'pass'});
-      if (co.company_type) a2checks.push({l:'Company Type', r:co.company_type, c:'pass'});
-    } else {
-      a2checks.push({l:'Company Registry' + csSource, r:'Company NOT found in registry', c:'warn'});
-    }
-  } else {
-    a2checks.push({l:'Company Registry', r:'Not yet screened — click Re-Screen', c:'warn'});
-  }
-  if (screening && screening.ip_geolocation && screening.ip_geolocation.country) {
-    var ipg = screening.ip_geolocation;
-    var ipRisk = ipg.risk_level || 'LOW';
-    a2checks.push({l:'IP Geolocation', r:ipg.country + (ipg.city ? ', ' + ipg.city : '') + ' [' + (ipg.source === 'simulated' ? 'Simulated' : 'Live') + ']', c:ipRisk === 'LOW' || ipRisk === 'MEDIUM' ? 'pass' : 'warn'});
-    a2checks.push({l:'VPN/Proxy Detection', r: ipg.is_vpn ? 'VPN DETECTED' : ipg.is_proxy ? 'PROXY DETECTED' : 'Clean', c: (ipg.is_vpn || ipg.is_proxy) ? 'fail' : 'pass'});
-  }
-  a2checks.push({l:'OpenCorporates lookup', r:screening ? 'Checked' : 'Pending', c:screening ? 'pass' : 'warn'});
-  a2checks.push({l:'Companies House / ADGM / DIFC', r:'Cross-referenced', c:'pass'});
-  a2checks.push({l:'Director registry confirmation', r:(app.directors||[]).length + ' director(s) confirmed in official records', c:(app.directors||[]).length > 0 ? 'pass' : 'warn'});
-  agents.push({ name:'Agent 2: External Database Cross-Verification', icon:'🔑', checks:a2checks });
-
-  // ── Agent 3: FinCrime Screening Interpretation Agent (10 checks) ──
-  var a3checks = [];
-  if (screening) {
-    var src = screening.director_screenings && screening.director_screenings.length > 0 ? screening.director_screenings[0].screening.source : 'unknown';
-    var srcLabel = src === 'simulated' ? ' [Simulated]' : src === 'sumsub' ? ' [Live - Sumsub AML]' : src === 'opensanctions' ? ' [Live - OpenSanctions]' : '';
-    (screening.director_screenings || []).forEach(function(ds) {
-      if (ds.screening.matched) {
-        var topHit = ds.screening.results[0];
-        a3checks.push({l:'Director: ' + ds.person_name, r:'MATCH — Score: ' + topHit.match_score + '% (' + topHit.sanctions_list + ')', c:'fail'});
-        if (ds.undeclared_pep) a3checks.push({l:'Undeclared PEP: ' + ds.person_name, r:'PEP match but NOT declared', c:'fail'});
-      } else {
-        a3checks.push({l:'Director: ' + ds.person_name, r:'Clear' + srcLabel, c:'pass'});
-      }
-    });
-    (screening.ubo_screenings || []).forEach(function(us) {
-      if (us.screening.matched) {
-        var topHit = us.screening.results[0];
-        a3checks.push({l:'UBO: ' + us.person_name + ' (' + us.ownership_pct + '%)', r:'MATCH — Score: ' + topHit.match_score + '%', c:'fail'});
-        if (us.undeclared_pep) a3checks.push({l:'Undeclared PEP: ' + us.person_name, r:'PEP match but NOT declared', c:'fail'});
-      } else {
-        a3checks.push({l:'UBO: ' + us.person_name + ' (' + us.ownership_pct + '%)', r:'Clear' + srcLabel, c:'pass'});
-      }
-    });
-    if (screening.company_screening && screening.company_screening.sanctions && screening.company_screening.sanctions.matched) {
-      a3checks.push({l:'Company Sanctions', r:screening.company_screening.sanctions.results.length + ' MATCH(ES)', c:'fail'});
-    } else {
-      a3checks.push({l:'Company Sanctions', r:'No matches', c:'pass'});
-    }
-    if (a3checks.length === 0) a3checks.push({l:'Sanctions/PEP Screening', r:'No persons to screen', c:'warn'});
-  } else {
-    a3checks.push({l:'Sanctions screening (UN/EU/OFAC/HMT)', r:'Pending — no screening run recorded', c:'warn'});
-    a3checks.push({l:'PEP database screening', r:app.pepCount>0 ? 'Pending live screening — ' + app.pepCount + ' PEP declaration(s) on file' : 'Pending — no screening run recorded', c:'warn'});
-  }
-  a3checks.push({l:'Adverse media', r:screening ? 'Not available in stored screening report' : 'No screening run recorded', c:'warn'});
-  a3checks.push({l:'Match disposition', r:screening ? 'Officer review required for any provider match or declared PEP' : 'Pending — requires screening results', c:screening ? 'warn' : 'warn'});
-  a3checks.push({l:'PEP classification', r:screening ? (app.pepCount > 0 ? app.pepCount + ' PEP(s) classified' : 'No PEPs') : (app.pepCount > 0 ? 'Pending live screening — ' + app.pepCount + ' declared PEP(s)' : 'Pending — no screening run recorded'), c:screening ? (app.pepCount > 0 ? 'warn' : 'pass') : 'warn'});
-  agents.push({ name:'Agent 3: FinCrime Screening Interpretation', icon:'🏛️', checks:a3checks });
-
-  // ── Agent 4: Corporate Structure & UBO Mapping Agent (10 checks) ──
-  var a4checks = [];
-  var uboCount = (app.ubos || []).length;
-  var dirCount = (app.directors || []).length;
-  a4checks.push({l:'UBO chain mapped', r:uboCount + ' UBO(s) identified', c:uboCount > 0 ? 'pass' : 'warn'});
-  a4checks.push({l:'Ownership threshold (25%)', r:uboCount > 0 ? 'Met' : 'No UBOs declared', c:uboCount > 0 ? 'pass' : 'warn'});
-  a4checks.push({l:'Directors verified', r:dirCount + ' director(s)', c:dirCount > 0 ? 'pass' : 'warn'});
-  a4checks.push({l:'Ownership structure complexity', r:(app.intermediaries||[]).length > 0 ? 'Multi-layered — ' + (app.intermediaries||[]).length + ' intermediary(ies)' : 'Simple — direct ownership', c:(app.intermediaries||[]).length > 0 ? 'warn' : 'pass'});
-  a4checks.push({l:'Nominee structure detection', r:(app.intermediaries||[]).length > 0 ? 'Intermediary layers detected — review required' : 'No nominee structures', c:(app.intermediaries||[]).length > 0 ? 'warn' : 'pass'});
-  a4checks.push({l:'Complex chain flagging', r:uboCount > 3 ? 'Complex — multiple UBO layers' : 'Within normal limits', c:uboCount > 3 ? 'warn' : 'pass'});
-  a4checks.push({l:'Sanctions/PEP cross-reference', r:'Cross-referenced with Agent 3 results', c:'pass'});
-  agents.push({ name:'Agent 4: Corporate Structure & UBO Mapping', icon:'📊', checks:a4checks });
-
-  // ── Agent 5: Compliance Memo & Risk Recommendation Agent (10 checks) ──────────
-  var a5checks = [];
-  a5checks.push({l:'Compile Agent 1-4 results', r:'All agent outputs received', c:'pass'});
-  a5checks.push({l:'Composite risk score', r:app.score + '/100 — ' + app.risk.replace('_',' '), c:app.risk==='LOW'?'pass':app.risk==='MEDIUM'?'pass':'warn'});
-  a5checks.push({l:'Onboarding lane', r:app.lane, c:app.lane==='Fast Lane'?'pass':'warn'});
-  a5checks.push({l:'Key findings summary', r:'Generated', c:'pass'});
-  a5checks.push({l:'Risk indicators documented', r:app.risk + ' — Score: ' + (app.score || 'N/A'), c:'pass'});
-  a5checks.push({l:'Risk rating recommendation', r:app.risk === 'LOW' ? 'Approve' : app.risk === 'MEDIUM' ? 'Standard Review' : 'Escalate to SCO', c:app.risk === 'LOW' ? 'pass' : 'warn'});
-  a5checks.push({l:'Onboarding memo', r:'Generated — regulator-ready format', c:'pass'});
-  a5checks.push({l:'Review checklist', r:'Produced — 6 items', c:'pass'});
-  a5checks.push({l:'Periodic review schedule', r:app.risk === 'VERY_HIGH' ? 'Quarterly' : app.risk === 'HIGH' ? 'Semi-annual' : app.risk === 'MEDIUM' ? 'Annual' : 'Biennial', c:'pass'});
-  agents.push({ name:'Agent 5: Compliance Memo & Risk Recommendation', icon:'📝', checks:a5checks });
-
-  // Re-Screen button
-  var agentHtml = '<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">';
-  agentHtml += '<button class="btn btn-primary btn-sm" onclick="reScreenApplication(\'' + app.ref + '\')" style="font-size:11px;">🔄 Run Screening</button>';
-  if (screening || screeningMeta.last_screened_at) {
-    var screenedAtLabel = screeningMeta.last_screened_at || screening && screening.screened_at || 'N/A';
-    agentHtml += '<span style="font-size:10px;color:var(--text3);margin-left:8px;align-self:center;">Last screened: ' + screenedAtLabel + '</span>';
-  }
-  agentHtml += '</div>';
-
-  agents.forEach(function(a) {
-    agentHtml += '<div class="agent-panel"><div class="agent-header"><span style="font-size:18px;">' + a.icon + '</span><span class="agent-name">' + a.name + '</span></div>';
-    a.checks.forEach(function(ch) {
-      agentHtml += '<div class="agent-check"><span class="icon">' + (ch.c==='pass'?'✅':ch.c==='warn'?'⚠️':'❌') + '</span><span>' + ch.l + '</span><span class="result ' + ch.c + '">' + ch.r + '</span></div>';
-    });
-    agentHtml += '</div>';
-  });
-  document.getElementById('detail-agents').innerHTML = agentHtml;
-
-  // Compliance Memo — Big 4-grade 11-section format with professional judgement
   var memoEl = document.getElementById('detail-memo');
-  window._currentMemoData = null;
-
-  // Build analytical variables
-  var riskLevel = app.risk || 'MEDIUM';
-  var riskScore = app.score || 50;
-  var pepDirList = []; var pepUboList = []; var pepList = [];
-  (app.directors||[]).forEach(function(d){ if(d.is_pep==='Yes'||d.isPep){ pepDirList.push(d.name||d.full_name); pepList.push(d.name||d.full_name); }});
-  (app.ubos||[]).forEach(function(u){ if(u.is_pep==='Yes'||u.isPep){ pepUboList.push(u.name||u.full_name); pepList.push(u.name||u.full_name); }});
-  var sanctionsHits = screening ? (screening.total_hits||0) : 0;
-  var companyVerified = screening ? ((screening.company_screening||{}).found ? 'Verified — registration details consistent with application data' : 'Not found in registry — this discrepancy requires investigation') : 'Information not provided — registry verification pending';
-  var screeningProvider = screening ? ((screening.company_screening||{}).source === 'opencorporates' ? 'OpenCorporates API' : (screening.company_screening||{}).source === 'sumsub' ? 'Sumsub AML' : 'Onboarda screening engine') : 'Onboarda screening engine';
-
-  var isOffshore = ['Mauritius','Seychelles','Cayman Islands','BVI','Panama','Jersey','Guernsey','Isle of Man','Bermuda'].indexOf(app.country) >= 0;
-  var isHighRiskCountry = ['Iran','North Korea','Syria','Myanmar','Afghanistan','Yemen','Libya'].indexOf(app.country) >= 0;
-  var isMediumRiskSector = ['Financial Services','Real Estate','Legal Services','Trust Services'].indexOf(app.sector||'') >= 0;
-  var isHighRiskSector = ['Cryptocurrency','Money Services','Gaming','Arms','Precious Metals'].indexOf(app.sector||'') >= 0;
-  var numCorpDocs = (app.docs||[]).length;
-  var numPersonDocs = (app.personDocs||[]).reduce(function(s,p){return s+p.docs.length;},0);
-  var numBizDocs = (app.businessDocs||[]).length;
-  var numOtherDocs = (app.otherDocs||[]).length;
-  var numDocs = numCorpDocs + numPersonDocs + numBizDocs + numOtherDocs;
-  var docReviews = app.docReviews || {};
-  var verifiedDocs = (app.docs||[]).filter(function(d){ return (docReviews[d]||{}).status === 'accepted'; }).length;
-  var docConfidence = numDocs > 0 ? Math.round(verifiedDocs/numDocs*100) : 0;
-  var monTier = (riskLevel==='HIGH'||riskLevel==='VERY_HIGH'||pepList.length>0) ? 'Enhanced' : 'Standard';
-  var decision = riskLevel==='LOW'?'APPROVE':riskLevel==='MEDIUM'?'APPROVE_WITH_CONDITIONS':riskLevel==='HIGH'?'REVIEW':'REJECT';
-  var decisionLabel = riskLevel==='LOW'?'APPROVAL':riskLevel==='MEDIUM'?'APPROVAL WITH CONDITIONS':riskLevel==='HIGH'?'SENIOR COMPLIANCE OFFICER REVIEW':'REJECTION';
-
-  // Determine primary UBO and structure complexity
-  var primaryUbo = null; var maxPct = 0;
-  (app.ubos||[]).forEach(function(u){ var pct = parseFloat(u.ownership_pct||u.ownershipPct||0); if(pct > maxPct){ maxPct = pct; primaryUbo = u; }});
-  var structComplexity = (app.ubos||[]).length > 3 ? 'Complex' : (app.ubos||[]).length > 1 ? 'Layered' : 'Simple';
-  var controlName = primaryUbo ? (primaryUbo.name||primaryUbo.full_name) : 'Information not provided';
-  var controlPct = primaryUbo ? (primaryUbo.ownership_pct||primaryUbo.ownershipPct||'N/A') : 'N/A';
-
-  var jRating = isHighRiskCountry?'HIGH':isOffshore?'MEDIUM':'LOW';
-  var bRating = isHighRiskSector?'HIGH':isMediumRiskSector?'MEDIUM':'LOW';
-  var oRating = pepList.length>1?'HIGH':pepList.length===1?'MEDIUM':'LOW';
-  var fRating = sanctionsHits>0?'HIGH':pepList.length>0?'MEDIUM':'LOW';
-  var modelConf = Math.max(60, docConfidence - 5);
-
-  var memoData = {
-    application_ref: app.ref,
-    company_name: app.company,
-    memo_generated: new Date().toISOString(),
-    sections: {
-      executive_summary: {
-        title: 'Executive Summary',
-        content: 'This memo presents the compliance assessment of ' + escapeHtml(app.company) + ' (BRN: ' + escapeHtml(app.brn) + '), a ' + escapeHtml(app.entityType||'corporate entity') + ' incorporated in ' + escapeHtml(app.country) + ', operating in the ' + escapeHtml(app.sector||'unspecified') + ' sector. The composite risk score of ' + riskScore + '/100 (' + riskLevel + ') reflects ' + (riskLevel==='LOW'?'a low-risk profile with no material concerns identified':riskLevel==='MEDIUM'?'a balanced risk profile where identified risk drivers are materially offset by mitigating factors':'an elevated risk profile requiring enhanced scrutiny before onboarding can proceed') + '. The principal risk drivers are ' + (pepList.length>0?'the presence of ' + pepList.length + ' Politically Exposed Person(s) (' + pepList.join(', ') + ')':'the absence of PEP exposure (positive indicator)') + (isOffshore||isHighRiskCountry?' and the ' + (isHighRiskCountry?'high-risk':'offshore') + ' jurisdictional classification of ' + escapeHtml(app.country):'') + '. ' + (numDocs>verifiedDocs?(numDocs-verifiedDocs) + ' document(s) remain outstanding, representing a documentation gap that must be remedied within 14 business days. ':'') + 'Recommendation: ' + decisionLabel + (pepList.length>0?' — subject to PEP declaration, enhanced monitoring, and conditions as detailed below.':'.')
-      },
-      client_overview: {
-        title: 'Client Overview',
-        content: 'Entity Name: ' + escapeHtml(app.company) + '. Business Registration Number: ' + escapeHtml(app.brn) + '. Jurisdiction of Incorporation: ' + escapeHtml(app.country) + '. Entity Type: ' + escapeHtml(app.entityType||'Information not provided') + '. Sector: ' + escapeHtml(app.sector||'Information not provided') + '. Application Reference: ' + escapeHtml(app.ref) + '. Date of Application: ' + escapeHtml(app.date) + '. Source of Funds: ' + escapeHtml(app.sourceOfFunds||'Information not provided — this data gap prevents assessment of fund origin legitimacy and elevates residual risk') + '. Expected Transaction Volume: ' + escapeHtml(app.expectedVolume||'Information not provided — this reduces the ability to benchmark transaction patterns and creates a monitoring dependency') + '.'
-      },
-      ownership_and_control: {
-        title: 'Ownership & Control',
-        structure_complexity: structComplexity,
-        control_statement: primaryUbo ? controlName + ' exercises effective control as ' + (parseFloat(controlPct)>50?'majority':'significant') + ' shareholder (' + controlPct + '%).' : 'Effective control cannot be determined from available data — this represents a material data gap requiring resolution.',
-        content: 'The entity operates a ' + structComplexity.toLowerCase() + ' corporate structure with ' + (app.directors||[]).length + ' director(s) and ' + (app.ubos||[]).length + ' UBO(s). ' +
-          (app.directors||[]).map(function(d){ return 'Director: ' + escapeHtml(d.name||d.full_name) + ' (' + escapeHtml(d.nationality||'nationality not provided') + ' national)' + (d.is_pep==='Yes'||d.isPep ? ' — identified as PEP. Board membership confers governance influence and introduces corruption risk per FATF Recommendation 12, requiring enhanced scrutiny.' : ' — not a PEP.'); }).join(' ') + ' ' +
-          (app.ubos||[]).map(function(u){ var pct = u.ownership_pct||u.ownershipPct||''; return 'UBO: ' + escapeHtml(u.name||u.full_name) + ' — ' + (pct ? pct + '% direct ownership' : 'ownership percentage not provided — this data gap prevents full UBO analysis') + (u.nationality ? ' (' + escapeHtml(u.nationality) + ' national)' : '') + (u.is_pep==='Yes'||u.isPep ? '. Identified as PEP — this UBO exercises both ownership and potential political influence, significantly elevating risk.' : '.'); }).join(' ') +
-          ((app.ubos||[]).length===0 ? ' No UBO information provided — this is a critical data gap that prevents beneficial ownership verification.' : '') +
-          ' No nominee arrangements or bearer shares were disclosed.'
-      },
-      risk_assessment: {
-        title: 'Risk Assessment',
-        sub_sections: {
-          jurisdiction_risk: { title: 'Jurisdiction Risk', rating: jRating, content: 'Jurisdiction of incorporation: ' + escapeHtml(app.country) + '. ' + (isHighRiskCountry ? escapeHtml(app.country) + ' is designated as a high-risk jurisdiction due to comprehensive international sanctions, FATF blacklisting, or active conflict zone status. This presents severe jurisdictional risk that materially affects the overall risk assessment.' : isOffshore ? escapeHtml(app.country) + ' presents moderate jurisdictional risk. While currently compliant with FATF standards, the jurisdiction retains characteristics of an offshore financial centre — including cross-border capital flow facilitation and international business licence regimes — that elevate baseline risk for ML/TF purposes.' : escapeHtml(app.country) + ' presents low jurisdictional risk. The jurisdiction maintains adequate AML/CFT frameworks and does not exhibit characteristics associated with elevated ML/TF risk.') + ' Risk weighting factor: 0.20.' },
-          business_risk: { title: 'Business Risk', rating: bRating, content: 'Sector: ' + escapeHtml(app.sector||'Information not provided') + '. ' + (isHighRiskSector ? 'The ' + escapeHtml(app.sector) + ' sector carries elevated inherent ML/TF risk due to the potential for anonymous transactions, rapid value transfer, or regulatory arbitrage.' : isMediumRiskSector ? 'The ' + escapeHtml(app.sector) + ' sector carries moderate inherent risk due to the intermediary nature of the business and exposure to third-party funds. The stated business model appears plausible and consistent with the entity\'s jurisdictional profile, partially mitigating this concern.' : 'The stated business sector presents low inherent risk and does not exhibit typology indicators associated with elevated ML/TF risk.') + ' Business model plausibility assessed within Agent 5. Risk weighting factor: 0.15.' },
-          transaction_risk: { title: 'Transaction Risk', rating: riskLevel, content: 'Expected transaction volume: ' + escapeHtml(app.expectedVolume||'Information not provided') + '. Source of funds: ' + escapeHtml(app.sourceOfFunds||'Information not provided') + '. As a newly onboarded entity, limited historical transaction data is available, which constrains the ability to identify anomalous patterns at this stage and creates a monitoring dependency. Risk weighting factor: 0.10.' },
-          ownership_risk: { title: 'Ownership Risk', rating: oRating, content: (app.directors||[]).length + ' director(s), ' + (app.ubos||[]).length + ' UBO(s). Structure complexity: ' + structComplexity + '. ' + (pepList.length>0 ? pepList.length + ' PEP(s) identified. PEP exposure introduces corruption and undue influence risk per FATF Recommendation 12.' + (pepDirList.length>0&&pepUboList.length===0 ? ' The PEP(s) hold board positions but no direct ownership, partially mitigating control risk.' : '') : 'No PEP exposure identified — positive indicator.') + (primaryUbo ? ' Beneficial ownership identified to natural person level.' : ' Beneficial ownership could not be verified — critical gap.') + ' Risk weighting factor: 0.25.' },
-          financial_crime_risk: { title: 'Financial Crime Risk', rating: fRating, content: 'Stored provider watchlist screening was run via ' + screeningProvider + '. ' + (sanctionsHits>0 ? sanctionsHits + ' provider match(es) were recorded and require officer assessment. ' : 'No provider watchlist matches were recorded for the stored screening run. ') + 'Declared PEPs: ' + pepList.length + '. Distinct adverse-media results are not persisted in the current screening report. The entity\'s business model ' + (fRating==='LOW'?'does not exhibit':'may exhibit') + ' typology indicators associated with ML/TF. Risk weighting factor: 0.10.' }
-        }
-      },
-      screening_results: {
-        title: 'Screening Results',
-        content: 'Watchlist Screening: Stored provider AML results were recorded via ' + screeningProvider + '. ' + (sanctionsHits>0 ? sanctionsHits + ' provider match(es) were recorded and remain subject to officer disposition. ' : 'No provider watchlist matches were recorded for the stored screening run. ') + 'Declared PEPs: ' + pepList.length + (pepList.length>0 ? ' — ' + pepList.map(function(p){ return p + ' declared as PEP and requires enhanced due diligence review.'; }).join(' ') : ' — none declared.') + ' Distinct adverse-media results are not persisted in the current screening report. Company Registry Verification: ' + escapeHtml(app.company) + ' — ' + companyVerified + ' via ' + screeningProvider + '.'
-      },
-      document_verification: {
-        title: 'Document Verification',
-        content: numDocs + ' document(s) submitted across 4 sections, ' + verifiedDocs + ' verified. ' +
-          'SECTION A — Corporate Entity Documents (' + numCorpDocs + '): ' + (app.docs||[]).map(function(d){ var r = docReviews[d]||{}; return d + ': ' + (r.status==='accepted' ? 'Verified — authentic and consistent.' : r.status==='rejected' ? 'Rejected — ' + (r.comment||'discrepancy identified') + '.' : r.status==='info_requested' ? 'Info requested — ' + (r.comment||'additional verification needed') + '.' : 'Pending verification.'); }).join(' ') +
-          ' SECTION B — Directors, UBOs & Intermediary KYC Documents (' + numPersonDocs + '): ' + (app.personDocs||[]).map(function(p){ return p.name + ' (' + p.role + '): ' + p.docs.map(function(d){ return d.type; }).join(', ') + ' — all submitted' + (p.pep==='Yes'?' (PEP — enhanced documents included)':'') + '.'; }).join(' ') +
-          (numBizDocs > 0 ? ' SECTION C — Business Operating Documents (' + numBizDocs + '): ' + (app.businessDocs||[]).join(', ') + ' — submitted (optional supporting documentation).' : '') +
-          (numOtherDocs > 0 ? ' SECTION D — Other Documents (' + numOtherDocs + '): ' + (app.otherDocs||[]).join(', ') + ' — submitted as additional supporting evidence.' : '') +
-          (numDocs>verifiedDocs ? ' ' + (numDocs-verifiedDocs) + ' document(s) require action across sections. This gap prevents complete entity verification and is reflected as a condition of approval.' : ' All documents verified — high confidence in entity documentation.') +
-          ' Overall documentation adequacy: ' + docConfidence + '%. Model confidence adjusted accordingly.'
-      },
-      ai_explainability: {
-        title: 'AI Explainability Layer',
-        content: 'Risk scoring model: Onboarda Composite Risk Engine v2.1. Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group guidance. Overall risk score: ' + riskScore + '/100 (' + riskLevel + '). Model confidence: ' + modelConf + '% — ' + (docConfidence<100 ? 'confidence reduced from baseline due to outstanding documentation and limited historical transaction data.' : 'high confidence based on complete documentation.') + ' Top risk-increasing factors: (1) ' + (pepList.length>0 ? 'Declared PEP presence — weight: 0.25, elevating ownership risk per FATF Recommendation 12.' : 'No declared PEP exposure — no contribution to ownership risk.') + ' (2) ' + (isOffshore||isHighRiskCountry ? (isHighRiskCountry?'High-risk':'Offshore') + ' jurisdiction (' + escapeHtml(app.country) + ') — weight: 0.20, elevating baseline cross-border risk.' : 'Jurisdiction (' + escapeHtml(app.country) + ') — weight: 0.20, low contribution.') + ' (3) ' + escapeHtml(app.sector||'Unspecified') + ' sector — weight: 0.15. Top risk-decreasing factors: (1) ' + (sanctionsHits===0?'No provider watchlist matches recorded':'Stored screening completed with provider matches requiring review') + ' — weight: 0.20. (2) ' + (primaryUbo?'Verified beneficial ownership to natural person level':'Ownership verification incomplete') + ' — weight: 0.15. (3) Documentation at ' + docConfidence + '% — weight: 0.10. Decision pathway: Agent 1 (Identity & Document Integrity) → Agent 2 (External Database Cross-Verification) → Agent 3 (FinCrime Screening Interpretation) → Agent 4 (Corporate Structure & UBO Mapping) → Agent 5 (Compliance Memo & Risk Recommendation). Supervisor: No inter-agent contradictions flagged.'
-      },
-      red_flags_and_mitigants: {
-        title: 'Red Flags & Mitigants',
-        red_flags:
-          pepList.map(function(p){ return 'Politically Exposed Person identified: ' + p + '. ' + (pepDirList.indexOf(p)>=0 ? 'Board membership confers governance influence and introduces corruption and undue influence risk per FATF Recommendation 12, requiring enhanced scrutiny.' : 'Direct ownership by a PEP significantly elevates control risk and the potential for proceeds of corruption to enter the financial system.'); })
-          .concat(numDocs>verifiedDocs ? ['Documentation gap: ' + (numDocs-verifiedDocs) + ' of ' + numDocs + ' required document(s) remain outstanding. This prevents complete entity verification and creates residual risk until remedied.'] : [])
-          .concat(isOffshore ? ['Offshore jurisdiction: ' + escapeHtml(app.country) + ' retains characteristics of an international financial centre, elevating baseline risk for cross-border fund flows and regulatory arbitrage.'] : [])
-          .concat(isHighRiskCountry ? ['High-risk jurisdiction: ' + escapeHtml(app.country) + ' is subject to comprehensive sanctions or FATF blacklisting, presenting severe jurisdictional risk.'] : [])
-          .concat(isHighRiskSector ? ['High-risk sector: ' + escapeHtml(app.sector) + ' carries elevated inherent ML/TF risk.'] : [])
-          .concat(['Limited trading history: As a new onboarding, there is no historical transaction data against which to benchmark expected volumes. This reduces forward-looking risk confidence and creates a monitoring dependency.']),
-        mitigants:
-          pepList.map(function(p){ return pepDirList.indexOf(p)>=0 ? p + ' holds no direct ownership stake, reducing control risk. PEP declaration and enhanced monitoring will be applied as conditions of approval.' : p + ' has been identified and PEP declaration, source of wealth verification, and enhanced monitoring are required as conditions.'; })
-          .concat(numDocs>verifiedDocs ? ['Outstanding documents formally requested with 14-business-day deadline. Failure to provide triggers automatic escalation. The ' + verifiedDocs + ' documents already verified are internally consistent.'] : ['All required documents received and verified at ' + docConfidence + '% confidence, providing strong assurance of entity legitimacy.'])
-          .concat(isOffshore ? [escapeHtml(app.country) + ' is currently compliant with FATF standards. The entity\'s business activity is consistent with the jurisdiction\'s commercial profile.'] : [])
-          .concat(['Sanctions screening completed across all consolidated lists (UN, EU, OFAC, HMT) with ' + (pepList.length===0?'no matches':'PEP identification and appropriate enhanced measures') + '.'])
-          .concat(primaryUbo ? ['Beneficial ownership traced to natural person level via ' + structComplexity.toLowerCase() + ' structure. ' + controlName + ' (' + controlPct + '%) confirmed as exercising effective control.'] : [])
-          .concat(['Transaction monitoring will be applied on a quarterly basis for the first 12 months, with automated alerts for anomalous volumes, compensating for the absence of historical benchmarking data.'])
-      },
-      compliance_decision: {
-        title: 'Compliance Decision',
-        decision: decision,
-        content: 'On the basis of the composite risk assessment (' + riskLevel + ' — ' + riskScore + '/100), ' + (pepList.length===0?'clean':'flagged') + ' screening results, ' + (verifiedDocs===numDocs?'verified':'partially verified') + ' documentation (' + docConfidence + '% confidence), and ' + (primaryUbo?'confirmed':'unverified') + ' beneficial ownership, this application is recommended for ' + decisionLabel + '. ' + (riskLevel!=='LOW' ? 'Conditions of approval: ' + (pepList.length>0 ? '(1) PEP declaration form(s) must be completed by ' + pepList.join(', ') + ' within 14 business days. ' : '') + (numDocs>verifiedDocs ? (pepList.length>0?'(2)':'(1)') + ' Outstanding documents must be received within 14 business days. Failure triggers escalation. ' : '') + ((pepList.length>0&&numDocs>verifiedDocs?'(3)':pepList.length>0||numDocs>verifiedDocs?'(2)':'(1)') + ' ' + monTier + ' monitoring for the first 12 months. ') : '') + 'Residual risk acknowledgement: ' + (riskLevel==='LOW'?'Minimal residual risk identified.':riskLevel==='MEDIUM'||riskLevel==='HIGH'?'Residual risk remains manageable within the conditions framework and does not warrant rejection at this stage.':'Residual risk is elevated and requires SCO determination.')
-      },
-      ongoing_monitoring: {
-        title: 'Ongoing Monitoring & Review',
-        content: 'Monitoring tier: ' + monTier + ' — assigned due to ' + (monTier==='Enhanced' ? 'the combination of ' + (pepList.length>0?'PEP presence, ':'') + (isOffshore?'offshore jurisdiction, ':'') + riskLevel + ' composite risk.' : 'the ' + riskLevel + ' composite risk profile with no material PEP or jurisdictional concerns.') + ' Review frequency: ' + (riskLevel==='HIGH'||riskLevel==='VERY_HIGH'?'6 months':'12 months') + (pepList.length>0&&riskLevel!=='HIGH'&&riskLevel!=='VERY_HIGH'?', with interim 6-month review triggered by PEP conditions':'') + '. Transaction monitoring: ' + (riskLevel!=='LOW'?'Quarterly':'Annual') + ' review of transaction patterns. Trigger events: (1) Change in beneficial ownership or directorship. (2) Adverse media alerts. (3) ' + (pepList.length>0?'Change in PEP status for ' + pepList.join(', ') + '.':'New PEP identification.') + ' (4) Transaction volumes exceeding 150% of stated expectations. (5) Regulatory action against entity or associated persons.' + (numDocs>verifiedDocs ? ' (6) Failure to provide outstanding documents within 14-day deadline.' : '')
-      },
-      audit_and_governance: {
-        title: 'Audit & Governance',
-        content: 'This compliance onboarding memo was generated by RegMind\'s deterministic memo builder and reviewed through the live memo validation and memo supervisor controls used in this environment. Separate AI or monitoring surfaces elsewhere in the platform are decision-support only unless explicitly stated otherwise. Document classification: CONFIDENTIAL. Retention period: 7 years from generation or termination of business relationship. Applicable frameworks: FATF 40 Recommendations, applicable AML/CFT legislation in ' + escapeHtml(app.country) + '. Generated: ' + new Date().toISOString() + '. Memo version: 1.0. Reviewed by: Information not provided — memo pending Senior Compliance Officer review.'
-      }
-    },
-    metadata: {
-      risk_rating: riskLevel,
-      risk_score: riskScore,
-      confidence_level: modelConf / 100,
-      approval_recommendation: decision,
-      key_findings: [
-        'Beneficial ownership ' + (primaryUbo ? 'traced to natural persons — ' + controlName + ' (' + controlPct + '%) exercises effective control' : 'could not be verified — critical data gap'),
-        (pepList.length>0 ? 'PEP identified: ' + pepList.join(', ') + '. Enhanced due diligence required.' : 'No PEP exposure identified'),
-        'Stored watchlist screening ' + (sanctionsHits===0?'recorded with no provider matches':'recorded with provider matches requiring officer review'),
-        verifiedDocs + ' of ' + numDocs + ' documents verified across 4 sections (' + numCorpDocs + ' corporate, ' + numPersonDocs + ' KYC/identity, ' + numBizDocs + ' business, ' + numOtherDocs + ' other) at ' + docConfidence + '% confidence',
-        escapeHtml(app.country) + ' jurisdiction presents ' + (isHighRiskCountry?'severe':isOffshore?'moderate':'low') + ' risk',
-        'Composite risk: ' + riskScore + '/100 (' + riskLevel + ') at ' + modelConf + '% model confidence'
-      ]
+  if (app.latestMemo && app.latestMemo.sections) {
+    window._currentMemoData = app.latestMemo;
+    memoEl.innerHTML = renderMemoSections(app.latestMemo);
+    showValidationPanelIfMemoExists();
+    if ((app.latestMemo.review_status || '').toLowerCase() === 'approved') {
+      setMemoStatusBadge('Approved', 'approved');
+    } else if ((app.latestMemo.validation_status || '').toLowerCase() === 'pass') {
+      setMemoStatusBadge('Validated', 'approved');
+    } else if ((app.latestMemo.validation_status || '').toLowerCase() === 'pass_with_fixes') {
+      setMemoStatusBadge('Validated With Fixes', 'pending');
+    } else {
+      setMemoStatusBadge('Generated', 'pending');
     }
-  };
-  window._currentMemoData = memoData;
+  } else {
+    window._currentMemoData = null;
+    document.getElementById('memo-validation-panel').style.display = 'none';
+    setMemoStatusBadge('Not Generated', 'pending');
+    memoEl.innerHTML = '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No compliance memo has been generated for this application yet.</div>';
+  }
 
-  // Render the 11-section memo
-  var memoHtml = renderMemoSections(memoData);
-  memoEl.innerHTML = memoHtml;
+  function findDocumentOwnerLabel(doc) {
+    if (!doc.person_id) return 'Application-level document';
+    var people = app.directors.concat(app.ubos).concat(app.intermediaries);
+    var person = people.find(function(item) { return item.id === doc.person_id || item.person_key === doc.person_id; });
+    return person ? buildPartyDisplayName(person) : doc.person_id;
+  }
 
-  // Show validation panel and fetch existing results
-  showValidationPanelIfMemoExists();
-
-  // Documents with review actions
-  if (!app.docReviews) app.docReviews = {};
-  var docsHtml = '';
-  app.docs.forEach(function(d, idx) {
-    var review = app.docReviews[d] || {};
-    var statusHtml = '';
-    if (review.status === 'accepted') statusHtml = '<div class="doc-status-accepted">✅ Accepted' + (review.by ? ' by ' + review.by : '') + '</div>';
-    else if (review.status === 'rejected') statusHtml = '<div class="doc-status-rejected">❌ Rejected' + (review.by ? ' by ' + review.by : '') + (review.comment ? ' — ' + review.comment : '') + '</div>';
-    else if (review.status === 'info_requested') statusHtml = '<div class="doc-status-info">📋 Further info requested' + (review.comment ? ' — ' + review.comment : '') + '</div>';
-
-    var isBoUpload = review.uploadSource === 'backoffice';
-    var uploadDate = review.reviewedAt || app.date;
-    var fileInfo = review.fileName ? ' (' + review.fileName + (review.fileSize ? ', ' + review.fileSize : '') + ')' : '';
-
-    docsHtml += '<div class="doc-item" style="flex-wrap:wrap;' + (isBoUpload ? 'border-left:3px solid var(--brand);' : '') + '">' +
-      '<div class="doc-icon uploaded">' + (isBoUpload ? '📤' : '📄') + '</div>' +
+  var docsHtml = app._documents.length ? app._documents.map(function(doc) {
+    var officerReview = normalizeDetailValue(doc.review_status || 'pending');
+    var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
+    var reviewMeta = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—'
+      ? '<div class="doc-meta">Reviewed By: ' + escapeHtml(reviewerLabel) + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + escapeHtml(normalizeDetailValue(doc.reviewed_at)) : '') + '</div>'
+      : '';
+    var reviewComment = doc.review_comment ? '<div class="doc-meta">Review Comment: ' + escapeHtml(doc.review_comment) + '</div>' : '';
+    return '<div class="doc-item" style="flex-wrap:wrap;">' +
+      '<div class="doc-icon uploaded">📄</div>' +
       '<div class="doc-info" style="flex:1;min-width:0;">' +
-        '<div class="doc-name">' + escapeHtml(d) + (isBoUpload ? ' <span style="font-size:9px;padding:1px 5px;background:var(--brand);color:white;border-radius:3px;font-weight:600;vertical-align:middle;">BO UPLOAD</span>' : '') + '</div>' +
-        '<div class="doc-meta">' + (isBoUpload ? 'Uploaded by ' + escapeHtml(review.reviewedBy || 'Officer') + ' on ' + escapeHtml(uploadDate) + escapeHtml(fileInfo) : 'Uploaded ' + escapeHtml(app.date)) + '</div>' +
-        (isBoUpload && review.comment ? '<div class="doc-meta" style="font-style:italic;color:var(--text2);">' + escapeHtml(review.comment) + '</div>' : '') +
-        statusHtml +
+        '<div class="doc-name">' + escapeHtml(doc.doc_name || doc.doc_type) + '</div>' +
+        '<div class="doc-meta">Type: ' + escapeHtml(normalizeDetailValue(doc.doc_type)) + '</div>' +
+        '<div class="doc-meta">Owner: ' + escapeHtml(findDocumentOwnerLabel(doc)) + '</div>' +
+        '<div class="doc-meta">Verification: ' + escapeHtml(normalizeDetailValue(doc.verification_status)) + '</div>' +
+        '<div class="doc-meta">Officer Review: ' + escapeHtml(officerReview) + '</div>' +
+        buildVerificationResultsHtml(doc.verification_results) +
+        reviewMeta +
+        reviewComment +
       '</div>' +
       '<div class="doc-actions">' +
-        '<button class="doc-action-btn accept' + (review.status==='accepted'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + d.replace(/'/g,"\\'") + '\',\'accepted\')">Accept</button>' +
-        '<button class="doc-action-btn reject' + (review.status==='rejected'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + d.replace(/'/g,"\\'") + '\',\'rejected\')">Reject</button>' +
-        '<button class="doc-action-btn info' + (review.status==='info_requested'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + d.replace(/'/g,"\\'") + '\',\'info_requested\')">Request Info</button>' +
+        '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">Download</button>' +
+        '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">Re-Verify</button>' +
+        '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">Accept</button>' +
+        '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">Reject</button>' +
+        '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'info_requested\')">Request Info</button>' +
       '</div>' +
-      (review.status === 'rejected' || review.status === 'info_requested' ? '<input class="doc-comment-input" placeholder="Add reason or details..." value="' + (review.comment||'').replace(/"/g,'&quot;') + '" onchange="updateDocComment(\'' + app.ref + '\',\'' + d.replace(/'/g,"\\'") + '\',this.value)" style="width:100%;margin-top:6px;" />' : '') +
     '</div>';
-  });
-  var allDocs = ['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart'];
-  allDocs.forEach(function(d) { if (app.docs.indexOf(d) === -1) docsHtml += '<div class="doc-item"><div class="doc-icon missing">❌</div><div class="doc-info"><div class="doc-name">' + d + '</div><div class="doc-meta" style="color:var(--red);">Missing</div></div></div>'; });
-  // Document review summary
-  var totalDocs = app.docs.length;
-  var acceptedCount = app.docs.filter(function(d){ return (app.docReviews[d]||{}).status === 'accepted'; }).length;
-  var rejectedCount = app.docs.filter(function(d){ return (app.docReviews[d]||{}).status === 'rejected'; }).length;
-  var infoCount = app.docs.filter(function(d){ return (app.docReviews[d]||{}).status === 'info_requested'; }).length;
-  var pendingCount = totalDocs - acceptedCount - rejectedCount - infoCount;
-  docsHtml = '<div style="display:flex;gap:10px;margin-bottom:10px;font-size:11px;">' +
-    '<span style="color:var(--green);font-weight:600;">' + acceptedCount + ' accepted</span>' +
-    '<span style="color:var(--red);font-weight:600;">' + rejectedCount + ' rejected</span>' +
-    '<span style="color:var(--amber);font-weight:600;">' + infoCount + ' info req.</span>' +
-    '<span style="color:var(--text3);">' + pendingCount + ' pending</span>' +
-  '</div>' + docsHtml;
+  }).join('') : '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No uploaded documents are stored for this application yet.</div>';
   document.getElementById('detail-documents').innerHTML = docsHtml;
+  document.getElementById('detail-docs-with-verification').innerHTML = docsHtml;
 
-  // ── Combined Documents + Inline Verification (new layout) ──
-  var combinedContainer = document.getElementById('detail-docs-with-verification');
-  if (combinedContainer && app.docs) {
-    function seedRandom(str) { var h = 0; for (var i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; } return Math.abs(h); }
+  var activityItems = [];
+  activityItems.push({ text: 'Application record created', time: app.createdAt || app.date });
+  if (app.submittedAt) activityItems.push({ text: 'Application submitted', time: app.submittedAt });
+  if (screeningSummary.screened_at) activityItems.push({ text: 'Screening run recorded', time: screeningSummary.screened_at });
+  if (app.latestMemoMeta && app.latestMemoMeta.created_at) activityItems.push({ text: 'Compliance memo generated', time: app.latestMemoMeta.created_at });
+  if (app.decidedAt) activityItems.push({ text: 'Application decision recorded', time: app.decidedAt });
+  document.getElementById('detail-activity').innerHTML = activityItems.map(function(item) {
+    return '<div class="activity-item"><div class="activity-dot system"></div><div class="activity-content"><div class="activity-text">' + escapeHtml(item.text) + '</div><div class="activity-time">' + escapeHtml(normalizeDetailValue(item.time)) + '</div></div></div>';
+  }).join('');
 
-    // Count all documents across all sections
-    var allPersonDocCount = 0;
-    (app.personDocs || []).forEach(function(p) { allPersonDocCount += p.docs.length; });
-    var totalAllDocs = app.docs.length + allPersonDocCount + (app.businessDocs || []).length + (app.otherDocs || []).length;
-
-    var combinedHtml = '<div style="display:flex;gap:10px;margin-bottom:14px;font-size:11px;">' +
-      '<span style="color:var(--green);font-weight:600;">' + acceptedCount + ' accepted</span>' +
-      '<span style="color:var(--red);font-weight:600;">' + rejectedCount + ' rejected</span>' +
-      '<span style="color:var(--amber);font-weight:600;">' + infoCount + ' info req.</span>' +
-      '<span style="color:var(--text3);">' + totalAllDocs + ' total documents</span>' +
-    '</div>';
-
-    // Helper: render a single document card with AI verification
-    function renderDocCard(docName, seedStr, reviewKey) {
-      var review = (app.docReviews || {})[reviewKey || docName] || {};
-      var backendDoc = null;
-      if (app._documents && app._documents.length) {
-        backendDoc = app._documents.find(function(doc) {
-          if ((doc.doc_type || '') === (reviewKey || docName)) return true;
-          if ((doc.doc_type || '') === docName) return true;
-          if ((doc.doc_name || '') === docName) return true;
-          return false;
-        }) || null;
-      }
-      var isBoUpload = review.uploadedBy === 'officer';
-      var uploadDate = backendDoc && backendDoc.verified_at ? backendDoc.verified_at : (review.reviewedAt || app.date);
-      var statusHtml = '';
-      if (review.status === 'accepted') statusHtml = '<div style="font-size:10px;color:var(--green);font-weight:600;margin-top:2px;">✅ Accepted</div>';
-      else if (review.status === 'rejected') statusHtml = '<div style="font-size:10px;color:var(--red);font-weight:600;margin-top:2px;">❌ Rejected</div>';
-      else if (review.status === 'info_requested') statusHtml = '<div style="font-size:10px;color:var(--amber);font-weight:600;margin-top:2px;">📋 Info Req.</div>';
-
-      var tests, overall, overallColor, avgConf;
-      if (backendDoc && backendDoc.verification_results && backendDoc.verification_results.checks) {
-        tests = backendDoc.verification_results.checks.map(function(check) {
-          var resultLabel = String(check.result || 'warn').toLowerCase();
-          return {
-            name: check.label || check.type || 'Verification check',
-            result: resultLabel === 'pass' ? 'Pass' : resultLabel === 'fail' ? 'Fail' : 'Warning',
-            confidence: check.confidence != null ? Math.round(check.confidence) : null,
-            message: check.message || ''
-          };
-        });
-        overall = backendDoc.verification_status === 'verified' ? 'Pass' : backendDoc.verification_status === 'flagged' ? 'Warning' : 'Pending';
-        overallColor = overall === 'Pass' ? 'var(--green)' : overall === 'Warning' ? 'var(--amber)' : 'var(--text3)';
-        var scoredTests = tests.filter(function(t) { return typeof t.confidence === 'number'; });
-        avgConf = scoredTests.length ? Math.round(scoredTests.reduce(function(s, t) { return s + t.confidence; }, 0) / scoredTests.length) : 0;
-      } else if (ARIE_ENV === 'demo') {
-        // Demo mode: fabricated verification display
-        var seed = seedRandom(seedStr || docName);
-        tests = [
-          { name: 'Format', result: 'Pass', confidence: 98 },
-          { name: 'Authenticity', result: (seed % 7 === 0) ? 'Warning' : 'Pass', confidence: 85 + (seed % 14) },
-          { name: 'Expiry', result: docName === 'Proof of Address' ? 'Warning' : 'Pass', confidence: docName === 'Proof of Address' ? 72 : 90 + (seed % 10) },
-          { name: 'Name Match', result: 'Pass', confidence: 90 + (seed % 10) },
-          { name: 'Tampering', result: (seed % 19 === 0) ? 'Fail' : 'Pass', confidence: 88 + (seed % 12) },
-        ];
-        var hasFail = tests.some(function(t) { return t.result === 'Fail'; });
-        var hasWarning = tests.some(function(t) { return t.result === 'Warning'; });
-        overall = hasFail ? 'Fail' : hasWarning ? 'Warning' : 'Pass';
-        overallColor = overall === 'Pass' ? 'var(--green)' : overall === 'Warning' ? 'var(--amber)' : 'var(--red)';
-        avgConf = Math.round(tests.reduce(function(s, t) { return s + t.confidence; }, 0) / tests.length);
-      } else {
-        // Non-demo: no fabricated data — show neutral state
-        tests = null;
-        overall = 'Pending';
-        overallColor = 'var(--text3)';
-        avgConf = 0;
-      }
-
-      var html = '<div style="border:1px solid var(--border1);border-radius:10px;overflow:hidden;' + (overall === 'Fail' ? 'border-color:var(--red);' : overall === 'Warning' ? 'border-color:var(--amber);' : '') + '">';
-      html += '<div style="padding:10px 12px;background:var(--surface2);border-bottom:1px solid var(--border1);">';
-      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
-      html += '<span style="font-size:16px;">' + (isBoUpload ? '📤' : '📄') + '</span>';
-      html += '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(docName) + '</div><div style="font-size:10px;color:var(--text3);">' + escapeHtml(uploadDate) + '</div>' + statusHtml + '</div>';
-      html += '</div>';
-      var safeKey = (reviewKey || docName).replace(/'/g,"\\'");
-      html += '<div style="display:flex;gap:3px;">';
-      if (backendDoc && backendDoc.id) {
-        html += '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + backendDoc.id + '\')" style="font-size:10px;padding:3px 8px;">Download</button>';
-        html += '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + backendDoc.id + '\',\'' + app.ref + '\')" style="font-size:10px;padding:3px 8px;">Re-Verify</button>';
-      } else {
-        html += '<button class="doc-action-btn accept' + (review.status==='accepted'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + safeKey + '\',\'accepted\')" style="font-size:10px;padding:3px 8px;">Accept</button>';
-        html += '<button class="doc-action-btn reject' + (review.status==='rejected'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + safeKey + '\',\'rejected\')" style="font-size:10px;padding:3px 8px;">Reject</button>';
-        html += '<button class="doc-action-btn info' + (review.status==='info_requested'?' active':'') + '" onclick="reviewDoc(\'' + app.ref + '\',\'' + safeKey + '\',\'info_requested\')" style="font-size:10px;padding:3px 8px;">Info</button>';
-      }
-      html += '</div></div>';
-
-      html += '<div style="padding:8px 12px;background:' + (overall === 'Fail' ? 'rgba(220,38,38,0.03)' : overall === 'Warning' ? 'rgba(217,119,6,0.03)' : overall === 'Pending' ? 'rgba(107,114,128,0.03)' : 'rgba(22,163,74,0.02)') + ';">';
-      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
-      html += '<span style="font-size:10px;font-weight:600;color:var(--text2);">AI Verification</span>';
-      if (tests) {
-        html += '<span style="font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;background:' + (overall === 'Pass' ? 'var(--green-bg)' : overall === 'Warning' ? 'var(--amber-bg)' : 'var(--red-bg)') + ';color:' + overallColor + ';">' + avgConf + '% ' + overall + '</span>';
-      } else {
-        html += '<span style="font-size:9px;font-weight:600;padding:2px 5px;border-radius:3px;background:var(--surface3);color:var(--text3);">Not verified</span>';
-      }
-      html += '</div>';
-      if (tests) {
-        tests.forEach(function(t) {
-          var tc = t.result === 'Pass' ? 'var(--green)' : t.result === 'Warning' ? 'var(--amber)' : 'var(--red)';
-          var icon = t.result === 'Pass' ? '✅' : t.result === 'Warning' ? '⚠️' : '❌';
-          html += '<div style="display:flex;justify-content:space-between;font-size:10px;padding:1px 0;color:var(--text2);"><span>' + escapeHtml(t.name) + '</span><span style="color:' + tc + ';font-weight:600;">' + icon + (typeof t.confidence === 'number' ? ' ' + t.confidence + '%' : '') + '</span></div>';
-          if (t.message) {
-            html += '<div style="font-size:10px;color:var(--text3);padding:0 0 3px 0;">' + escapeHtml(t.message) + '</div>';
-          }
-        });
-      } else {
-        html += '<div style="font-size:10px;color:var(--text3);padding:2px 0;">Verification results will appear after AI review.</div>';
-      }
-      html += '</div></div>';
-      return html;
-    }
-
-    // Helper: section header
-    function sectionHeader(icon, title, count, subtitle) {
-      return '<div style="grid-column:1/-1;margin-top:16px;margin-bottom:4px;padding:10px 14px;background:linear-gradient(135deg,rgba(43,47,143,0.06),rgba(43,47,143,0.02));border-radius:8px;border-left:3px solid var(--brand);">' +
-        '<div style="display:flex;align-items:center;gap:8px;">' +
-        '<span style="font-size:16px;">' + icon + '</span>' +
-        '<div><div style="font-weight:700;font-size:13px;color:var(--text1);">' + title + '</div>' +
-        (subtitle ? '<div style="font-size:10px;color:var(--text3);margin-top:1px;">' + subtitle + '</div>' : '') +
-        '</div>' +
-        '<span style="margin-left:auto;font-size:10px;font-weight:600;color:var(--brand);background:rgba(43,47,143,0.08);padding:2px 8px;border-radius:10px;">' + count + ' docs</span>' +
-        '</div></div>';
-    }
-
-    // Open 3-column grid
-    combinedHtml += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">';
-
-    // ── SECTION A: Corporate Entity Documents ──
-    combinedHtml += sectionHeader('📋', 'Section A — Corporate Entity Documents', app.docs.length, 'Company registration, financial statements, and governance documents');
-    app.docs.forEach(function(docName) {
-      combinedHtml += renderDocCard(docName);
-    });
-    // Missing corporate docs
-    var allCorpDocs = ['COI','M&A','Reg Cert','Shareholder Reg','Directors Reg','Financials','Proof of Address','Board Res','Structure Chart'];
-    allCorpDocs.forEach(function(d) {
-      if (app.docs.indexOf(d) === -1) {
-        combinedHtml += '<div style="border:1px solid var(--border1);border-radius:10px;padding:10px 12px;display:flex;align-items:center;gap:8px;opacity:0.5;">' +
-          '<span style="font-size:16px;">❌</span>' +
-          '<div><div style="font-weight:600;font-size:11px;">' + escapeHtml(d) + '</div><div style="font-size:10px;color:var(--red);">Missing</div></div></div>';
-      }
-    });
-
-    // ── SECTION B: Directors, UBOs & Intermediary Shareholder Documents ──
-    if (app.personDocs && app.personDocs.length > 0) {
-      combinedHtml += sectionHeader('👤', 'Section B — Directors, UBOs & Intermediary Documents', allPersonDocCount, 'Identity verification, proof of address, and KYC documents per individual');
-
-      app.personDocs.forEach(function(person) {
-        // Person sub-header
-        var pepBadge = person.pep === 'Yes' ? ' <span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;margin-left:4px;">⚠ PEP</span>' : '';
-        combinedHtml += '<div style="grid-column:1/-1;margin-top:8px;padding:6px 12px;background:var(--surface2);border-radius:6px;border-left:2px solid var(--accent);">' +
-          '<span style="font-weight:600;font-size:11px;color:var(--text1);">' + escapeHtml(person.name) + '</span>' +
-          '<span style="font-size:10px;color:var(--text3);margin-left:8px;">' + escapeHtml(person.role) + '</span>' +
-          pepBadge + '</div>';
-
-        person.docs.forEach(function(doc) {
-          var uniqueKey = person.name + ' — ' + doc.type;
-          combinedHtml += renderDocCard(doc.type, uniqueKey, uniqueKey);
-        });
-
-        // Missing KYC docs for this person
-        var expectedPersonDocs = ['Passport / ID', 'Proof of Address'];
-        if (person.pep === 'Yes') { expectedPersonDocs.push('Bank Reference Letter'); expectedPersonDocs.push('Source of Wealth Declaration'); }
-        var personDocTypes = person.docs.map(function(d){ return d.type; });
-        expectedPersonDocs.forEach(function(d) {
-          if (personDocTypes.indexOf(d) === -1) {
-            combinedHtml += '<div style="border:1px solid var(--border1);border-radius:10px;padding:10px 12px;display:flex;align-items:center;gap:8px;opacity:0.5;">' +
-              '<span style="font-size:16px;">❌</span>' +
-              '<div><div style="font-weight:600;font-size:11px;">' + escapeHtml(d) + '</div><div style="font-size:10px;color:var(--red);">Missing — ' + escapeHtml(person.name) + '</div></div></div>';
-          }
-        });
-      });
-    }
-
-    // ── SECTION C: Business Operating Documents ──
-    if (app.businessDocs && app.businessDocs.length > 0) {
-      combinedHtml += sectionHeader('🏢', 'Section C — Business Operating Documents', app.businessDocs.length, 'Optional supporting business documentation');
-      app.businessDocs.forEach(function(docName) {
-        combinedHtml += renderDocCard(docName, app.company + docName);
-      });
-    }
-
-    // ── SECTION D: Other Documents ──
-    if (app.otherDocs && app.otherDocs.length > 0) {
-      combinedHtml += sectionHeader('📂', 'Section D — Other Documents', app.otherDocs.length, 'Additional supporting documentation');
-      app.otherDocs.forEach(function(docName) {
-        combinedHtml += renderDocCard(docName, app.ref + docName);
-      });
-    }
-
-    // Close grid
-    combinedHtml += '</div>';
-
-    combinedContainer.innerHTML = combinedHtml;
-  }
-
-  // Activity
-  var actHtml = '';
-  actHtml += '<div class="activity-item"><div class="activity-dot system"></div><div class="activity-content"><div class="activity-text">Application submitted by client</div><div class="activity-time">' + app.date + ' 10:00</div></div></div>';
-  actHtml += '<div class="activity-item"><div class="activity-dot system"></div><div class="activity-content"><div class="activity-text">AI risk scoring completed — ' + app.risk.replace('_',' ') + ' (' + app.score + ')</div><div class="activity-time">' + app.date + ' 10:01</div></div></div>';
-  if (app.assigned !== 'Unassigned') actHtml += '<div class="activity-item"><div class="activity-dot action"></div><div class="activity-content"><div class="activity-text">Assigned to ' + app.assigned + '</div><div class="activity-time">' + app.date + ' 10:05</div></div></div>';
-  if (app.status === 'Approved') actHtml += '<div class="activity-item"><div class="activity-dot system"></div><div class="activity-content"><div class="activity-text" style="color:var(--green);font-weight:600;">Application approved</div><div class="activity-time">' + app.date + ' 14:30</div></div></div>';
-  if (app.status === 'Rejected') actHtml += '<div class="activity-item"><div class="activity-dot warning"></div><div class="activity-content"><div class="activity-text" style="color:var(--red);font-weight:600;">Application rejected</div><div class="activity-time">' + app.date + ' 15:00</div></div></div>';
-  document.getElementById('detail-activity').innerHTML = actHtml;
-
-  // Toggle pre-approval vs standard action panels based on status
-  var isPreApproval = (app.status === 'Pre-Approval Review' || app.status === 'pre_approval_review');
+  var isPreApproval = (app.statusRaw === 'pre_approval_review' || app.status === 'Pre-Approval Review');
   var preApprovalCard = document.getElementById('pre-approval-actions-topbar');
   var standardCard = document.getElementById('standard-actions-topbar');
   if (preApprovalCard) preApprovalCard.style.display = isPreApproval ? 'flex' : 'none';
   if (standardCard) standardCard.style.display = isPreApproval ? 'none' : 'flex';
 
-  renderScreeningReviewPanel(app, currentScreeningReviewFocus);
-
-  // Open the requested detail surface when entering from a scoped workflow.
   switchDetailTab(options.initialTab || 'overview');
-
   showView('app-detail');
   document.getElementById('topbar-title').textContent = 'Application Review — ' + app.ref;
+}
+
+async function openAppDetail(ref, options) {
+  options = options || {};
+  try {
+    var detailApp = await fetchApplicationDetail(ref);
+    return renderAuthoritativeAppDetail(detailApp, options);
+  } catch (err) {
+    console.error('Failed to load application detail:', err);
+    showToast('error', 'Detail Load Failed', err.message || 'Could not load the authoritative application detail.');
+    return;
+  }
 }
 
 function renderUsers() {
@@ -5125,14 +4754,16 @@ function reassignCase() { document.getElementById('modal-reassign').classList.ad
 async function confirmReassign() {
   if (!currentApp) return;
   var to = document.getElementById('reassign-to').value;
-  currentApp.assigned = to;
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Assign', target:currentApp.ref, detail:'Reassigned to ' + to, ip:'196.192.44.12' });
+  var assignUser = USERS.find(function(u) { return u.id === to; });
+  var assigneeLabel = assignUser ? assignUser.name : 'Unassigned';
+  currentApp.assignedId = assignUser ? assignUser.id : '';
+  currentApp.assigned = assigneeLabel;
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Assign', target:currentApp.ref, detail:'Reassigned to ' + assigneeLabel, ip:'196.192.44.12' });
   if (BO_AUTH_TOKEN && currentApp.id) {
-    var assignUser = USERS.find(function(u) { return u.name === to; });
     try { await boApiCall('PATCH', '/applications/' + currentApp.id, { assigned_to: assignUser ? assignUser.id : '' }); } catch(e) {}
   }
   closeModal('modal-reassign');
-  showToast('Case reassigned to ' + to);
+  showToast('Case reassigned to ' + assigneeLabel);
   openAppDetail(currentApp.ref);
 }
 
@@ -5463,7 +5094,7 @@ function renderKPIDashboard() {
           if (USERS.length === 0) return '<tr><td colspan="6" style="text-align:center;color:var(--text3);">No officer data available</td></tr>';
           var rows = '';
           USERS.forEach(function(u) {
-            var assignedApps = appsInPeriod.filter(function(a) { return a.assigned === u.name; });
+            var assignedApps = appsInPeriod.filter(function(a) { return a.assignedId === u.id; });
             var active = assignedApps.filter(function(a) { var s = statusKey(a); return s !== 'approved' && s !== 'rejected' && s !== 'declined' && s !== 'withdrawn'; }).length;
             var completed = assignedApps.filter(function(a) { var s = statusKey(a); return s === 'approved' || s === 'rejected' || s === 'declined'; }).length;
             var approvedU = assignedApps.filter(function(a) { return statusKey(a) === 'approved'; }).length;
@@ -7609,36 +7240,6 @@ async function handleResourceUpload(input) {
 // ═══════════════════════════════════════════════════════════
 // DOCUMENT REVIEW ACTIONS
 // ═══════════════════════════════════════════════════════════
-function reviewDoc(appRef, docName, status) {
-  var app = APPLICATIONS.find(function(a) { return a.ref === appRef; });
-  if (!app) return;
-  if (!app.docReviews) app.docReviews = {};
-
-  // Toggle off if clicking the same status
-  if (app.docReviews[docName] && app.docReviews[docName].status === status) {
-    delete app.docReviews[docName];
-  } else {
-    app.docReviews[docName] = { status: status, by: currentUser.name, date: new Date().toISOString().slice(0,10), comment: '' };
-  }
-
-  var actionLabel = status === 'accepted' ? 'Accepted' : status === 'rejected' ? 'Rejected' : 'Requested info on';
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Doc Review', target:appRef, detail:actionLabel + ' document: ' + docName, ip:'196.192.44.12' });
-
-  // Sync to API if available
-  if (BO_AUTH_TOKEN && app.id) {
-    boApiCall('PATCH', '/applications/' + app.id, { notes: actionLabel + ' document: ' + docName }).catch(function(){});
-  }
-
-  openAppDetail(appRef);
-  showToast(actionLabel + ' "' + docName + '"');
-}
-
-function updateDocComment(appRef, docName, comment) {
-  var app = APPLICATIONS.find(function(a) { return a.ref === appRef; });
-  if (!app || !app.docReviews || !app.docReviews[docName]) return;
-  app.docReviews[docName].comment = comment;
-}
-
 // ── Back-office Document Upload ──
 function toggleBoDocUpload() {
   var panel = document.getElementById('bo-doc-upload-panel');
@@ -7727,6 +7328,23 @@ async function verifyBackofficeDocument(docId, appRef) {
     openAppDetail(appRef || (currentApp && currentApp.ref));
   } catch (e) {
     showToast(e.message || 'Document verification failed');
+  }
+}
+
+async function reviewBackofficeDocument(docId, appRef, status) {
+  if (!docId) { showToast('Document record is missing a review identifier'); return; }
+  var promptLabel = status === 'accepted' ? 'acceptance note' : status === 'rejected' ? 'rejection reason' : 'information request';
+  var comment = window.prompt('Optional ' + promptLabel + ':', '') || '';
+  try {
+    await boApiCall('POST', '/documents/' + docId + '/review', {
+      status: status,
+      comment: comment
+    });
+    showToast('Document review saved: ' + status.replace(/_/g, ' '));
+    await loadFromAPI();
+    openAppDetail(appRef || (currentApp && currentApp.ref));
+  } catch (e) {
+    showToast(e.message || 'Document review could not be saved');
   }
 }
 
@@ -8779,14 +8397,15 @@ function _buildRiskReportData(app) {
   dimKeys.forEach(function(k, i) {
     var val = app.dims[k];
     var w = weights[i] || 20;
-    var weighted = val * w;
+    var weighted = val * (w / 100);
     totalWeighted += weighted;
     totalW += w;
     var level = val <= 1.5 ? 'LOW' : val <= 2.5 ? 'MEDIUM' : val <= 3.2 ? 'HIGH' : 'VERY HIGH';
     rows.push({ dimension: dimNames[i], weight: w, score: val, weighted: weighted, level: level });
   });
-  var composite = totalW > 0 ? (totalWeighted / totalW) * 25 : 0;
-  return { rows: rows, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW, app: app };
+  var weightedAverage = totalW > 0 ? totalWeighted / (totalW / 100) : 0;
+  var composite = totalW > 0 ? (((weightedAverage - 1) / 3) * 100) : 0;
+  return { rows: rows, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW, weightedAverage: weightedAverage, app: app };
 }
 
 function downloadRiskCSV() {
@@ -8838,9 +8457,9 @@ function downloadRiskCSV() {
 
   // Composite calculation
   lines.push('COMPOSITE CALCULATION');
-  lines.push('Total Weighted Sum,' + breakdown.totalWeighted.toFixed(1));
+  lines.push('Weighted Average,' + breakdown.weightedAverage.toFixed(3));
   lines.push('Total Weight,' + breakdown.totalWeight);
-  lines.push('Formula,"(' + breakdown.totalWeighted.toFixed(1) + ' / ' + breakdown.totalWeight + ') x 25"');
+  lines.push('Formula,"((' + breakdown.weightedAverage.toFixed(3) + ' - 1) / 3) x 100"');
   lines.push('Composite Score,' + breakdown.composite.toFixed(1));
   lines.push('');
 
@@ -8944,9 +8563,9 @@ function downloadRiskPDF() {
   html += '<div class="composite-box">';
   html += '<div><div class="label">Composite Risk Score</div><div class="formula">';
   var fParts = [];
-  breakdown.dimensions.forEach(function(dim) { fParts.push('(' + dim.dimScore.toFixed(2) + ' x ' + dim.weight + ')'); });
-  html += fParts.join(' + ') + ' = ' + breakdown.totalWeighted.toFixed(1);
-  html += '<br>(' + breakdown.totalWeighted.toFixed(1) + ' / ' + breakdown.totalWeight + ') x 25</div></div>';
+  breakdown.dimensions.forEach(function(dim) { fParts.push('(' + dim.dimScore.toFixed(2) + ' x ' + (dim.weight / 100).toFixed(2) + ')'); });
+  html += fParts.join(' + ') + ' = ' + breakdown.weightedAverage.toFixed(3);
+  html += '<br>((' + breakdown.weightedAverage.toFixed(3) + ' - 1) / 3) x 100</div></div>';
   html += '<div class="value">' + breakdown.composite.toFixed(1) + ' <span style="font-size:14px;opacity:0.7;">/ 100</span></div>';
   html += '</div>';
 
@@ -8954,7 +8573,7 @@ function downloadRiskPDF() {
   html += '<div class="section-title">Dimension Summary</div>';
   html += '<table><thead><tr><th>Dimension</th><th style="text-align:center;">Weight</th><th style="text-align:center;">Score (1-4)</th><th style="text-align:center;">Weighted</th><th style="text-align:center;">Sub-Criteria</th></tr></thead><tbody>';
   breakdown.dimensions.forEach(function(dim) {
-    var weighted = dim.dimScore * dim.weight;
+    var weighted = dim.dimScore * (dim.weight / 100);
     var cls = dim.dimScore <= 1.5 ? 'score-low' : dim.dimScore <= 2.5 ? 'score-med' : dim.dimScore <= 3.2 ? 'score-high' : 'score-vhigh';
     html += '<tr><td style="font-weight:600;">' + dim.id + ': ' + dim.name + '</td>';
     html += '<td style="text-align:center;">' + dim.weight + '%</td>';
@@ -9015,8 +8634,8 @@ function downloadRiskPDF() {
   // Final formula
   html += '<div style="margin-top:16px;padding:14px 18px;background:#0f3460;color:white;border-radius:8px;">';
   html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.8;margin-bottom:6px;">Final Composite Calculation</div>';
-  html += '<div style="font-family:monospace;font-size:12px;margin-bottom:4px;">' + fParts.join(' + ') + ' = ' + breakdown.totalWeighted.toFixed(1) + '</div>';
-  html += '<div style="font-family:monospace;font-size:12px;">(' + breakdown.totalWeighted.toFixed(1) + ' / ' + breakdown.totalWeight + ') x 25 = <span style="font-size:20px;font-weight:800;">' + breakdown.composite.toFixed(1) + '</span> / 100</div>';
+  html += '<div style="font-family:monospace;font-size:12px;margin-bottom:4px;">' + fParts.join(' + ') + ' = ' + breakdown.weightedAverage.toFixed(3) + '</div>';
+  html += '<div style="font-family:monospace;font-size:12px;">((' + breakdown.weightedAverage.toFixed(3) + ' - 1) / 3) x 100 = <span style="font-size:20px;font-weight:800;">' + breakdown.composite.toFixed(1) + '</span> / 100</div>';
   html += '</div>';
 
   // Directors & UBOs
@@ -9037,7 +8656,7 @@ function downloadRiskPDF() {
   html += '<table><tbody>';
   html += '<tr><td style="font-weight:600;width:200px;">Model Version</td><td>RegMind Risk Scoring Model v1.4</td></tr>';
   html += '<tr><td style="font-weight:600;">Methodology</td><td>Rule-Based Weighted Average (Deterministic) — no AI influence on score computation</td></tr>';
-  html += '<tr><td style="font-weight:600;">Formula</td><td style="font-family:monospace;font-size:10px;">Composite = (D1 x w1 + D2 x w2 + D3 x w3 + D4 x w4 + D5 x w5) / (w1 + w2 + w3 + w4 + w5) x 25</td></tr>';
+  html += '<tr><td style="font-weight:600;">Formula</td><td style="font-family:monospace;font-size:10px;">Composite = ((weighted average - 1) / 3) x 100</td></tr>';
   html += '<tr><td style="font-weight:600;">Score Range</td><td>0 (Lowest Risk) to 100 (Highest Risk)</td></tr>';
   html += '<tr><td style="font-weight:600;">Thresholds</td><td>LOW: 0-39.9 | MEDIUM: 40-54.9 | HIGH: 55-69.9 | VERY HIGH: 70-100</td></tr>';
   html += '<tr><td style="font-weight:600;">Sub-Criteria Scoring</td><td>Each sub-criterion scored 1-4 per rule-based lookup tables. Dimension score = weighted avg of sub-criteria.</td></tr>';

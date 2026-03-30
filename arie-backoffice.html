@@ -2301,10 +2301,11 @@ function computeSubCriteriaBreakdown(app) {
 
   // Final composite
   var totalWeighted = 0, totalW = 0;
-  dimensions.forEach(function(d) { totalWeighted += d.dimScore * d.weight; totalW += d.weight; });
-  var composite = totalW > 0 ? (totalWeighted / totalW) * 25 : 0;
+  dimensions.forEach(function(d) { totalWeighted += d.dimScore * (d.weight / 100); totalW += d.weight; });
+  var weightedAverage = totalW > 0 ? totalWeighted / (totalW / 100) : 0;
+  var composite = totalW > 0 ? (((weightedAverage - 1) / 3) * 100) : 0;
 
-  return { dimensions: dimensions, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW };
+  return { dimensions: dimensions, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW, weightedAverage: weightedAverage };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3145,6 +3146,260 @@ function normalizeDetailValue(value) {
   return String(value);
 }
 
+function firstMeaningfulDetailValue() {
+  for (var i = 0; i < arguments.length; i++) {
+    var value = arguments[i];
+    if (value == null) continue;
+    if (Array.isArray(value) && value.length) return value;
+    if (typeof value === 'string' && value.trim() === '') continue;
+    if (value !== '') return value;
+  }
+  return '';
+}
+
+function detailValueFromAliases(record, keys) {
+  if (!record) return '';
+  for (var i = 0; i < keys.length; i++) {
+    var value = record[keys[i]];
+    if (Array.isArray(value) && value.length) return value;
+    if (value != null && String(value).trim() !== '') return value;
+  }
+  return '';
+}
+
+function normalizePepDisplay(value) {
+  return String(value).toLowerCase() === 'yes' || value === true || value === 1 || value === '1' ? 'Yes' : 'No';
+}
+
+function buildPartyDisplayName(person) {
+  if (!person) return 'Unnamed party';
+  var combined = [person.first_name || '', person.last_name || ''].join(' ').trim();
+  return firstMeaningfulDetailValue(person.name, person.full_name, combined, person.entity_name, person.id, 'Unnamed party');
+}
+
+function buildVerificationResultsHtml(results) {
+  if (!results || (typeof results === 'object' && !Array.isArray(results) && Object.keys(results).length === 0)) {
+    return '<div class="doc-meta">AI Verification Detail: No detailed verification payload stored.</div>';
+  }
+
+  var items = [];
+  function pushItem(label, value) {
+    var normalized = normalizeDetailValue(value);
+    if (normalized === '—') return;
+    items.push('<div class="doc-meta"><strong>' + escapeHtml(label) + ':</strong> ' + escapeHtml(normalized) + '</div>');
+  }
+
+  if (Array.isArray(results)) {
+    results.forEach(function(entry, idx) {
+      if (typeof entry === 'object') {
+        var entryParts = [];
+        Object.keys(entry).forEach(function(key) {
+          if (entry[key] == null || entry[key] === '') return;
+          entryParts.push(key.replace(/_/g, ' ') + ': ' + normalizeDetailValue(entry[key]));
+        });
+        if (entryParts.length) items.push('<div class="doc-meta"><strong>Check ' + (idx + 1) + ':</strong> ' + escapeHtml(entryParts.join(' | ')) + '</div>');
+      } else if (entry != null && entry !== '') {
+        items.push('<div class="doc-meta"><strong>Check ' + (idx + 1) + ':</strong> ' + escapeHtml(String(entry)) + '</div>');
+      }
+    });
+    return items.length ? items.join('') : '<div class="doc-meta">AI Verification Detail: No detailed verification payload stored.</div>';
+  }
+
+  if (typeof results === 'object') {
+    pushItem('Overall Result', firstMeaningfulDetailValue(results.overall_result, results.result, results.status));
+    pushItem('Summary', firstMeaningfulDetailValue(results.summary, results.reason, results.message));
+    pushItem('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
+    pushItem('Extracted Fields', Array.isArray(results.extracted_fields) ? results.extracted_fields.join(', ') : '');
+    pushItem('Flags', Array.isArray(results.flags) ? results.flags.join(', ') : '');
+    pushItem('Issues', Array.isArray(results.issues) ? results.issues.join(', ') : '');
+    pushItem('Checks Run', Array.isArray(results.checks_run) ? results.checks_run.join(', ') : '');
+    if (Array.isArray(results.checks)) {
+      results.checks.forEach(function(check, idx) {
+        if (!check || typeof check !== 'object') return;
+        var parts = [];
+        if (check.label || check.name) parts.push(firstMeaningfulDetailValue(check.label, check.name));
+        if (check.result || check.status) parts.push('result: ' + firstMeaningfulDetailValue(check.result, check.status));
+        if (check.details) parts.push('details: ' + check.details);
+        if (check.confidence != null) parts.push('confidence: ' + Math.round(Number(check.confidence) * 100) + '%');
+        if (parts.length) items.push('<div class="doc-meta"><strong>AI Check ' + (idx + 1) + ':</strong> ' + escapeHtml(parts.join(' | ')) + '</div>');
+      });
+    }
+    if (!items.length) {
+      Object.keys(results).forEach(function(key) {
+        var value = results[key];
+        if (value == null || value === '' || typeof value === 'object') return;
+        items.push('<div class="doc-meta"><strong>' + escapeHtml(key.replace(/_/g, ' ')) + ':</strong> ' + escapeHtml(String(value)) + '</div>');
+      });
+    }
+    return items.length ? items.join('') : '<div class="doc-meta">AI Verification Detail: No detailed verification payload stored.</div>';
+  }
+
+  return '<div class="doc-meta"><strong>AI Verification Detail:</strong> ' + escapeHtml(String(results)) + '</div>';
+}
+
+function buildStoredRiskComputation(app) {
+  if (!app || !app.dims || !Object.keys(app.dims).length) return null;
+  var dimMeta = [
+    { key: 'd1', id: 'D1', name: 'Customer / Entity Risk' },
+    { key: 'd2', id: 'D2', name: 'Geographic Risk' },
+    { key: 'd3', id: 'D3', name: 'Product / Service Risk' },
+    { key: 'd4', id: 'D4', name: 'Industry / Sector Risk' },
+    { key: 'd5', id: 'D5', name: 'Delivery Channel Risk' }
+  ];
+  var defaultWeights = { d1: 30, d2: 25, d3: 20, d4: 15, d5: 10 };
+  var uiWeights = {};
+  if (Array.isArray(RISK_DIMENSIONS)) {
+    RISK_DIMENSIONS.forEach(function(dim, idx) {
+      uiWeights['d' + (idx + 1)] = Number(dim.weight || 0);
+    });
+  }
+
+  var rows = [];
+  var totalWeight = 0;
+  var weightedAverage = 0;
+  dimMeta.forEach(function(meta) {
+    var value = Number(app.dims[meta.key]);
+    if (isNaN(value)) return;
+    var weight = uiWeights[meta.key] || defaultWeights[meta.key];
+    totalWeight += weight;
+    weightedAverage += value * (weight / 100);
+    rows.push({
+      id: meta.id,
+      name: meta.name,
+      weight: weight,
+      dimScore: value,
+      weightedContribution: value * (weight / 100)
+    });
+  });
+
+  if (!rows.length || !totalWeight) return null;
+  var normalizedAverage = weightedAverage / (totalWeight / 100);
+  var recomputed = Math.round((((normalizedAverage - 1) / 3) * 100) * 10) / 10;
+  return {
+    rows: rows,
+    totalWeight: totalWeight,
+    weightedAverage: normalizedAverage,
+    recomputedScore: recomputed,
+    storedScore: Number(app.score || 0),
+    drift: Math.round(Math.abs((Number(app.score || 0) - recomputed)) * 10) / 10
+  };
+}
+
+function renderStoredRiskComputationHtml(app) {
+  var computation = buildStoredRiskComputation(app);
+  if (!computation) {
+    return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No persisted risk breakdown is available for this application.</div>';
+  }
+
+  var rowsHtml = computation.rows.map(function(row) {
+    return '<tr>' +
+      '<td style="padding:8px 10px;font-weight:600;">' + escapeHtml(row.id + ': ' + row.name) + '</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(String(row.weight)) + '%</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(row.dimScore.toFixed(2)) + '</td>' +
+      '<td style="padding:8px 10px;text-align:center;">' + escapeHtml(row.weightedContribution.toFixed(3)) + '</td>' +
+    '</tr>';
+  }).join('');
+
+  var driftHtml = computation.drift > 0.2
+    ? '<div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(217,119,6,0.25);border-radius:8px;background:rgba(217,119,6,0.06);font-size:11px;color:var(--text2);">Stored application score (' + escapeHtml(computation.storedScore.toFixed(1)) + ') differs from the current config recomputation (' + escapeHtml(computation.recomputedScore.toFixed(1)) + '). This usually means the live risk weights changed after the application was scored. The stored application score remains the authoritative value for this case.</div>'
+    : '';
+
+  return '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);">' +
+    '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+      '<thead><tr><th style="text-align:left;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Dimension</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Weight</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Stored Score</th><th style="text-align:center;padding:8px 10px;color:var(--text3);font-size:10px;text-transform:uppercase;">Weighted Contribution</th></tr></thead>' +
+      '<tbody>' + rowsHtml + '</tbody>' +
+    '</table>' +
+    '<div style="margin-top:10px;font-size:12px;color:var(--text2);">Formula: <code style="font-size:11px;background:var(--surface3);padding:2px 6px;border-radius:4px;">((weighted average - 1) / 3) × 100</code></div>' +
+    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Weighted average from stored dimensions: <strong>' + escapeHtml(computation.weightedAverage.toFixed(3)) + '</strong></div>' +
+    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Authoritative stored application score: <strong>' + escapeHtml(computation.storedScore.toFixed(1)) + '</strong></div>' +
+    driftHtml +
+  '</div>';
+}
+
+function renderExplainabilityPanel(app, screeningSummary) {
+  var modelSource = document.getElementById('explain-model-source');
+  var trailEl = document.getElementById('explain-decision-trail');
+  var dimsEl = document.getElementById('explain-dimensions');
+  var summaryEl = document.getElementById('explain-confidence-summary');
+  if (!modelSource || !trailEl || !dimsEl || !summaryEl) return;
+
+  modelSource.textContent = 'Model: Persisted Rule-Based Risk + Stored Screening Evidence';
+
+  var trailSteps = [
+    { name: 'Application intake persisted', detail: 'Core profile, pre-screening, and ownership records loaded from the authoritative application record.', confidence: 'Authoritative DB' },
+    { name: 'Rule-based risk score loaded', detail: 'Composite score ' + normalizeDetailValue(app.score) + ' and risk level ' + normalizeDetailValue(app.risk) + ' were loaded from stored application risk fields.', confidence: 'Stored score' },
+    { name: 'Screening evidence reviewed', detail: screeningSummary.screening_run_recorded ? ('Screening recorded with ' + (screeningSummary.total_hits || 0) + ' hit(s) and mode ' + normalizeDetailValue(screeningSummary.screening_mode) + '.') : 'No persisted screening report is attached to this application yet.', confidence: screeningSummary.screening_run_recorded ? 'Stored screening' : 'No screening record' },
+    { name: 'Document verification reviewed', detail: app._documents.length ? (app._documents.filter(function(doc) { return normalizeDetailValue(doc.verification_status) === 'verified'; }).length + ' verified document(s) out of ' + app._documents.length + ' stored upload(s).') : 'No stored documents are attached to this application.', confidence: 'Stored documents' }
+  ];
+
+  trailEl.innerHTML = trailSteps.map(function(step, idx) {
+    return '<div class="trail-step">' +
+      '<div class="trail-step-header"><div class="trail-step-name">' + escapeHtml((idx + 1) + '. ' + step.name) + '</div></div>' +
+      '<div>' +
+        '<div class="trail-step-detail">' + escapeHtml(step.detail) + '</div>' +
+        '<div class="trail-step-confidence medium">' + escapeHtml(step.confidence) + '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  var dimensionLabels = {
+    d1: 'Customer / Entity',
+    d2: 'Geographic',
+    d3: 'Product / Service',
+    d4: 'Industry / Sector',
+    d5: 'Delivery Channel'
+  };
+  var dimensionFactors = {
+    d1: [
+      'Entity type: ' + normalizeDetailValue(app.entityType),
+      'Ownership structure: ' + normalizeDetailValue(app.ownershipStructure),
+      'PEP-linked parties: ' + normalizeDetailValue(app.pepCount)
+    ],
+    d2: [
+      'Country of incorporation: ' + normalizeDetailValue(app.country),
+      'Countries of operation: ' + normalizeDetailValue((app.prescreeningData || {}).countries_of_operation)
+    ],
+    d3: [
+      'Services required: ' + normalizeDetailValue((app.prescreeningData || {}).services_required),
+      'Transaction complexity: ' + normalizeDetailValue((app.prescreeningData || {}).transaction_complexity),
+      'Currencies: ' + normalizeDetailValue((app.prescreeningData || {}).currencies)
+    ],
+    d4: [
+      'Sector: ' + normalizeDetailValue(app.sector),
+      'Business overview: ' + normalizeDetailValue((app.prescreeningData || {}).business_overview || (app.prescreeningData || {}).business_description)
+    ],
+    d5: [
+      'Introduction method: ' + normalizeDetailValue((app.prescreeningData || {}).introduction_method),
+      'Existing bank relationship: ' + normalizeDetailValue((app.prescreeningData || {}).existing_bank_account)
+    ]
+  };
+
+  dimsEl.innerHTML = Object.keys(dimensionLabels).map(function(key, idx) {
+    var value = app.dims && app.dims[key] != null ? Number(app.dims[key]) : null;
+    if (value == null || isNaN(value)) return '';
+    var pct = Math.max(0, Math.min(100, ((value - 1) / 3) * 100));
+    var color = value <= 1.5 ? '#16a34a' : value <= 2.5 ? '#2563eb' : value <= 3.2 ? '#d97706' : '#dc2626';
+    var factorsHtml = (dimensionFactors[key] || []).filter(function(text) {
+      return normalizeDetailValue(text) !== '—';
+    }).map(function(text) {
+      return '<div class="dim-explain-factor"><span class="factor-icon">•</span><span class="factor-text">' + escapeHtml(text) + '</span><span class="factor-impact">' + escapeHtml(value.toFixed(2)) + '</span></div>';
+    }).join('');
+    return '<div class="dim-explain-card" id="dim-explain-' + idx + '" onclick="toggleDimExplain(' + idx + ')">' +
+      '<div class="dim-explain-name">' + escapeHtml(dimensionLabels[key]) + '</div>' +
+      '<div class="dim-explain-score" style="color:' + color + ';">' + escapeHtml(value.toFixed(2)) + '</div>' +
+      '<div class="dim-explain-bar"><div class="dim-explain-bar-fill" style="width:' + pct + '%;background:' + color + ';"></div></div>' +
+      '<div style="font-size:11px;color:var(--text3);">Persisted dimension score from the application record.</div>' +
+      '<div class="dim-explain-factors" id="dim-factors-' + idx + '" style="display:none;">' + factorsHtml + '</div>' +
+    '</div>';
+  }).join('') || '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No persisted dimension explainability is available for this application.</div>';
+
+  var summaryClass = String(app.risk || '').toLowerCase() === 'very_high' ? 'vhigh' : String(app.risk || '').toLowerCase();
+  summaryEl.innerHTML = '<div class="explain-summary-box ' + escapeHtml(summaryClass || 'medium') + '">' +
+    '<div class="explain-summary-title">Explainability Summary</div>' +
+    '<div class="explain-summary-text">This panel shows only persisted application evidence: stored risk dimensions, stored screening output, stored documents, and stored ownership data. It does not fabricate AI reasoning when no authoritative explainability payload exists.</div>' +
+  '</div>';
+}
+
 async function fetchApplicationDetail(ref) {
   var detail = await boApiCall('GET', '/applications/' + encodeURIComponent(ref));
   var dims = {};
@@ -3161,17 +3416,48 @@ async function fetchApplicationDetail(ref) {
       verification_status: doc.verification_status || 'pending',
       verification_results: doc.verification_results || {},
       verified_at: doc.verified_at || '',
-      uploaded_at: doc.uploaded_at || ''
+      uploaded_at: doc.uploaded_at || '',
+      review_status: doc.review_status || 'pending',
+      review_comment: doc.review_comment || '',
+      reviewed_by: doc.reviewed_by || '',
+      reviewed_by_name: doc.reviewed_by_name || '',
+      reviewed_at: doc.reviewed_at || ''
     };
   });
   var directors = (detail.directors || []).map(function(d) {
-    return { id: d.person_key || d.id, name: d.full_name || '', nat: d.nationality || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} };
+    return {
+      id: d.id || '',
+      person_key: d.person_key || '',
+      name: d.full_name || '',
+      first_name: d.first_name || '',
+      last_name: d.last_name || '',
+      nat: d.nationality || '',
+      pep: normalizePepDisplay(d.is_pep),
+      pep_declaration: d.pep_declaration || {}
+    };
   });
   var ubos = (detail.ubos || []).map(function(u) {
-    return { id: u.person_key || u.id, name: u.full_name || '', nat: u.nationality || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} };
+    return {
+      id: u.id || '',
+      person_key: u.person_key || '',
+      name: u.full_name || '',
+      first_name: u.first_name || '',
+      last_name: u.last_name || '',
+      nat: u.nationality || '',
+      pct: u.ownership_pct || 0,
+      pep: normalizePepDisplay(u.is_pep),
+      pep_declaration: u.pep_declaration || {}
+    };
   });
   var intermediaries = (detail.intermediaries || []).map(function(i) {
-    return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 };
+    return {
+      id: i.id || '',
+      person_key: i.person_key || '',
+      name: i.entity_name || i.full_name || '',
+      entity_name: i.entity_name || '',
+      jurisdiction: i.jurisdiction || '',
+      pct: i.ownership_pct || 0
+    };
   });
 
   return {
@@ -3230,28 +3516,36 @@ function renderAuthoritativeAppDetail(app, options) {
     '<div class="detail-row"><span class="label">Created</span><span class="value">' + escapeHtml(app.date) + '</span></div>';
 
   var prescreenFields = [
-    { label: 'Trading Name', value: psData.trading_name },
-    { label: 'Registered Address', value: psData.registered_address },
-    { label: 'Head Office Address', value: psData.headquarters_address },
-    { label: 'Contact Name', value: ((psData.entity_contact_first || '') + ' ' + (psData.entity_contact_last || '')).trim() },
-    { label: 'Contact Email', value: psData.entity_contact_email },
-    { label: 'Contact Mobile', value: [psData.entity_contact_phone_code, psData.entity_contact_mobile].filter(Boolean).join(' ') },
-    { label: 'Website', value: psData.website },
-    { label: 'Licences', value: psData.regulatory_licences },
-    { label: 'Services Required', value: normalizeDetailValue(psData.services_required) },
-    { label: 'Countries of Operation', value: normalizeDetailValue(psData.countries_of_operation) },
-    { label: 'Target Markets', value: normalizeDetailValue(psData.target_markets) },
-    { label: 'Account Purposes', value: normalizeDetailValue(psData.account_purposes) },
-    { label: 'Business Overview', value: psData.business_overview },
-    { label: 'Monthly Volume', value: psData.monthly_volume },
-    { label: 'Transaction Complexity', value: psData.transaction_complexity },
-    { label: 'Currencies', value: normalizeDetailValue(psData.currencies) },
-    { label: 'Source of Wealth', value: psData.source_of_wealth_type },
-    { label: 'Source of Wealth Detail', value: psData.source_of_wealth_detail },
-    { label: 'Source of Funds', value: psData.source_of_funds },
-    { label: 'Introduction Method', value: psData.introduction_method },
-    { label: 'Referrer', value: psData.referrer_name },
-    { label: 'Management Overview', value: psData.management_overview }
+    { label: 'Trading Name', value: detailValueFromAliases(psData, ['trading_name', 'trade_name']) },
+    { label: 'Registered Address', value: detailValueFromAliases(psData, ['registered_address', 'reg_address']) },
+    { label: 'Head Office Address', value: detailValueFromAliases(psData, ['headquarters_address', 'hq_address']) },
+    { label: 'Contact Name', value: firstMeaningfulDetailValue(
+        [detailValueFromAliases(psData, ['entity_contact_first', 'contact_first']), detailValueFromAliases(psData, ['entity_contact_last', 'contact_last'])].filter(Boolean).join(' '),
+        detailValueFromAliases(psData, ['contact_name'])
+      )
+    },
+    { label: 'Contact Email', value: detailValueFromAliases(psData, ['entity_contact_email', 'contact_email', 'email']) },
+    { label: 'Contact Mobile', value: firstMeaningfulDetailValue(
+        [detailValueFromAliases(psData, ['entity_contact_phone_code']), detailValueFromAliases(psData, ['entity_contact_mobile', 'contact_phone', 'mobile'])].filter(Boolean).join(' '),
+        detailValueFromAliases(psData, ['contact_phone'])
+      )
+    },
+    { label: 'Website', value: detailValueFromAliases(psData, ['website']) },
+    { label: 'Licences', value: detailValueFromAliases(psData, ['regulatory_licences', 'licenses', 'licences']) },
+    { label: 'Services Required', value: detailValueFromAliases(psData, ['services_required']) },
+    { label: 'Countries of Operation', value: detailValueFromAliases(psData, ['countries_of_operation']) },
+    { label: 'Target Markets', value: detailValueFromAliases(psData, ['target_markets']) },
+    { label: 'Account Purposes', value: detailValueFromAliases(psData, ['account_purposes']) },
+    { label: 'Business Overview', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['business_overview', 'business_description']), detailValueFromAliases(psData, ['management_overview'])) },
+    { label: 'Monthly Volume', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['monthly_volume', 'expected_monthly_volume']), detailValueFromAliases(psData, ['expected_volume'])) },
+    { label: 'Transaction Complexity', value: detailValueFromAliases(psData, ['transaction_complexity']) },
+    { label: 'Currencies', value: detailValueFromAliases(psData, ['currencies', 'currency']) },
+    { label: 'Source of Wealth', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_type']), detailValueFromAliases(psData, ['source_of_wealth'])) },
+    { label: 'Source of Wealth Detail', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_detail']), detailValueFromAliases(psData, ['source_of_wealth'])) },
+    { label: 'Source of Funds', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_funds']), detailValueFromAliases(psData, ['source_of_funds_initial_detail'])) },
+    { label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']) },
+    { label: 'Referrer', value: detailValueFromAliases(psData, ['referrer_name', 'referrer']) },
+    { label: 'Management Overview', value: detailValueFromAliases(psData, ['management_overview']) }
   ];
   document.getElementById('detail-prescreen-summary').innerHTML =
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
@@ -3267,15 +3561,34 @@ function renderAuthoritativeAppDetail(app, options) {
 
   var personsHtml = '<div style="font-size:12px;font-weight:600;margin-bottom:6px;">Directors</div>';
   personsHtml += app.directors.length ? app.directors.map(function(d) {
-    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;"><span>' + escapeHtml(d.name) + '</span><span style="font-size:11px;color:var(--text3);">(' + escapeHtml(normalizeDetailValue(d.nat)) + ')</span>' + (d.pep === 'Yes' ? '<span class="badge high" style="font-size:10px;">PEP</span>' : '') + '</div>';
+    var displayName = buildPartyDisplayName(d);
+    var nationality = normalizeDetailValue(d.nat);
+    var labels = [];
+    if (nationality !== '—') labels.push(nationality);
+    labels.push('PEP: ' + normalizePepDisplay(d.pep));
+    return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(labels.join(' | ')) + '</div>' +
+    '</div>';
   }).join('') : '<div style="font-size:12px;color:var(--text3);">No directors persisted.</div>';
   personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">UBOs</div>';
   personsHtml += app.ubos.length ? app.ubos.map(function(u) {
-    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;"><span>' + escapeHtml(u.name) + '</span><span style="font-size:11px;color:var(--text3);">(' + escapeHtml(String(u.pct)) + '%)</span>' + (u.pep === 'Yes' ? '<span class="badge high" style="font-size:10px;">PEP</span>' : '') + '</div>';
+    var displayName = buildPartyDisplayName(u);
+    var meta = ['Ownership: ' + escapeHtml(normalizeDetailValue(u.pct)) + '%'];
+    var nationality = normalizeDetailValue(u.nat);
+    if (nationality !== '—') meta.push('Nationality: ' + escapeHtml(nationality));
+    meta.push('PEP: ' + escapeHtml(normalizePepDisplay(u.pep)));
+    return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + meta.join(' | ') + '</div>' +
+    '</div>';
   }).join('') : '<div style="font-size:12px;color:var(--text3);">No UBOs persisted.</div>';
   personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">Intermediary Shareholders</div>';
   personsHtml += app.intermediaries.length ? app.intermediaries.map(function(i) {
-    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;"><span>' + escapeHtml(i.name) + '</span><span style="font-size:11px;color:var(--text3);">(' + escapeHtml(normalizeDetailValue(i.jurisdiction)) + ', ' + escapeHtml(String(i.pct)) + '%)</span></div>';
+    return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(buildPartyDisplayName(i)) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Jurisdiction: ' + escapeHtml(normalizeDetailValue(i.jurisdiction)) + ' | Ownership: ' + escapeHtml(normalizeDetailValue(i.pct)) + '%</div>' +
+    '</div>';
   }).join('') : '<div style="font-size:12px;color:var(--text3);">No intermediary shareholders persisted.</div>';
   document.getElementById('detail-persons').innerHTML = personsHtml;
 
@@ -3297,9 +3610,7 @@ function renderAuthoritativeAppDetail(app, options) {
   document.getElementById('detail-risk-bars').innerHTML = riskBarsHtml || '<div style="font-size:12px;color:var(--text3);">No persisted risk dimension breakdown is available for this application.</div>';
   document.getElementById('detail-composite-score').textContent = app.score;
   document.getElementById('detail-risk-badge').innerHTML = riskBadge(app.risk);
-  document.getElementById('detail-score-breakdown').innerHTML = app.dims && Object.keys(app.dims).length
-    ? '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Displaying stored risk dimensions only. Line-by-line sub-criteria were previously browser-generated and are intentionally hidden until an authoritative server-backed breakdown exists.</div>'
-    : '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No persisted risk breakdown is available for this application.</div>';
+  document.getElementById('detail-score-breakdown').innerHTML = renderStoredRiskComputationHtml(app);
 
   var screeningSummary = getApplicationScreeningSummary(app);
   var screeningMeta = '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:12px;">' +
@@ -3310,6 +3621,7 @@ function renderAuthoritativeAppDetail(app, options) {
     '</div>';
   document.getElementById('detail-screening-review').innerHTML = screeningMeta;
   renderScreeningReviewPanel(app, currentScreeningReviewFocus);
+  renderExplainabilityPanel(app, screeningSummary);
 
   var memoEl = document.getElementById('detail-memo');
   if (app.latestMemo && app.latestMemo.sections) {
@@ -3335,8 +3647,8 @@ function renderAuthoritativeAppDetail(app, options) {
   function findDocumentOwnerLabel(doc) {
     if (!doc.person_id) return 'Application-level document';
     var people = app.directors.concat(app.ubos).concat(app.intermediaries);
-    var person = people.find(function(item) { return item.id === doc.person_id; });
-    return person ? person.name : doc.person_id;
+    var person = people.find(function(item) { return item.id === doc.person_id || item.person_key === doc.person_id; });
+    return person ? buildPartyDisplayName(person) : doc.person_id;
   }
 
   var docsHtml = app._documents.length ? app._documents.map(function(doc) {
@@ -3354,6 +3666,7 @@ function renderAuthoritativeAppDetail(app, options) {
         '<div class="doc-meta">Owner: ' + escapeHtml(findDocumentOwnerLabel(doc)) + '</div>' +
         '<div class="doc-meta">Verification: ' + escapeHtml(normalizeDetailValue(doc.verification_status)) + '</div>' +
         '<div class="doc-meta">Officer Review: ' + escapeHtml(officerReview) + '</div>' +
+        buildVerificationResultsHtml(doc.verification_results) +
         reviewMeta +
         reviewComment +
       '</div>' +
@@ -8084,14 +8397,15 @@ function _buildRiskReportData(app) {
   dimKeys.forEach(function(k, i) {
     var val = app.dims[k];
     var w = weights[i] || 20;
-    var weighted = val * w;
+    var weighted = val * (w / 100);
     totalWeighted += weighted;
     totalW += w;
     var level = val <= 1.5 ? 'LOW' : val <= 2.5 ? 'MEDIUM' : val <= 3.2 ? 'HIGH' : 'VERY HIGH';
     rows.push({ dimension: dimNames[i], weight: w, score: val, weighted: weighted, level: level });
   });
-  var composite = totalW > 0 ? (totalWeighted / totalW) * 25 : 0;
-  return { rows: rows, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW, app: app };
+  var weightedAverage = totalW > 0 ? totalWeighted / (totalW / 100) : 0;
+  var composite = totalW > 0 ? (((weightedAverage - 1) / 3) * 100) : 0;
+  return { rows: rows, composite: composite, totalWeighted: totalWeighted, totalWeight: totalW, weightedAverage: weightedAverage, app: app };
 }
 
 function downloadRiskCSV() {
@@ -8143,9 +8457,9 @@ function downloadRiskCSV() {
 
   // Composite calculation
   lines.push('COMPOSITE CALCULATION');
-  lines.push('Total Weighted Sum,' + breakdown.totalWeighted.toFixed(1));
+  lines.push('Weighted Average,' + breakdown.weightedAverage.toFixed(3));
   lines.push('Total Weight,' + breakdown.totalWeight);
-  lines.push('Formula,"(' + breakdown.totalWeighted.toFixed(1) + ' / ' + breakdown.totalWeight + ') x 25"');
+  lines.push('Formula,"((' + breakdown.weightedAverage.toFixed(3) + ' - 1) / 3) x 100"');
   lines.push('Composite Score,' + breakdown.composite.toFixed(1));
   lines.push('');
 
@@ -8249,9 +8563,9 @@ function downloadRiskPDF() {
   html += '<div class="composite-box">';
   html += '<div><div class="label">Composite Risk Score</div><div class="formula">';
   var fParts = [];
-  breakdown.dimensions.forEach(function(dim) { fParts.push('(' + dim.dimScore.toFixed(2) + ' x ' + dim.weight + ')'); });
-  html += fParts.join(' + ') + ' = ' + breakdown.totalWeighted.toFixed(1);
-  html += '<br>(' + breakdown.totalWeighted.toFixed(1) + ' / ' + breakdown.totalWeight + ') x 25</div></div>';
+  breakdown.dimensions.forEach(function(dim) { fParts.push('(' + dim.dimScore.toFixed(2) + ' x ' + (dim.weight / 100).toFixed(2) + ')'); });
+  html += fParts.join(' + ') + ' = ' + breakdown.weightedAverage.toFixed(3);
+  html += '<br>((' + breakdown.weightedAverage.toFixed(3) + ' - 1) / 3) x 100</div></div>';
   html += '<div class="value">' + breakdown.composite.toFixed(1) + ' <span style="font-size:14px;opacity:0.7;">/ 100</span></div>';
   html += '</div>';
 
@@ -8259,7 +8573,7 @@ function downloadRiskPDF() {
   html += '<div class="section-title">Dimension Summary</div>';
   html += '<table><thead><tr><th>Dimension</th><th style="text-align:center;">Weight</th><th style="text-align:center;">Score (1-4)</th><th style="text-align:center;">Weighted</th><th style="text-align:center;">Sub-Criteria</th></tr></thead><tbody>';
   breakdown.dimensions.forEach(function(dim) {
-    var weighted = dim.dimScore * dim.weight;
+    var weighted = dim.dimScore * (dim.weight / 100);
     var cls = dim.dimScore <= 1.5 ? 'score-low' : dim.dimScore <= 2.5 ? 'score-med' : dim.dimScore <= 3.2 ? 'score-high' : 'score-vhigh';
     html += '<tr><td style="font-weight:600;">' + dim.id + ': ' + dim.name + '</td>';
     html += '<td style="text-align:center;">' + dim.weight + '%</td>';
@@ -8320,8 +8634,8 @@ function downloadRiskPDF() {
   // Final formula
   html += '<div style="margin-top:16px;padding:14px 18px;background:#0f3460;color:white;border-radius:8px;">';
   html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;opacity:0.8;margin-bottom:6px;">Final Composite Calculation</div>';
-  html += '<div style="font-family:monospace;font-size:12px;margin-bottom:4px;">' + fParts.join(' + ') + ' = ' + breakdown.totalWeighted.toFixed(1) + '</div>';
-  html += '<div style="font-family:monospace;font-size:12px;">(' + breakdown.totalWeighted.toFixed(1) + ' / ' + breakdown.totalWeight + ') x 25 = <span style="font-size:20px;font-weight:800;">' + breakdown.composite.toFixed(1) + '</span> / 100</div>';
+  html += '<div style="font-family:monospace;font-size:12px;margin-bottom:4px;">' + fParts.join(' + ') + ' = ' + breakdown.weightedAverage.toFixed(3) + '</div>';
+  html += '<div style="font-family:monospace;font-size:12px;">((' + breakdown.weightedAverage.toFixed(3) + ' - 1) / 3) x 100 = <span style="font-size:20px;font-weight:800;">' + breakdown.composite.toFixed(1) + '</span> / 100</div>';
   html += '</div>';
 
   // Directors & UBOs
@@ -8342,7 +8656,7 @@ function downloadRiskPDF() {
   html += '<table><tbody>';
   html += '<tr><td style="font-weight:600;width:200px;">Model Version</td><td>RegMind Risk Scoring Model v1.4</td></tr>';
   html += '<tr><td style="font-weight:600;">Methodology</td><td>Rule-Based Weighted Average (Deterministic) — no AI influence on score computation</td></tr>';
-  html += '<tr><td style="font-weight:600;">Formula</td><td style="font-family:monospace;font-size:10px;">Composite = (D1 x w1 + D2 x w2 + D3 x w3 + D4 x w4 + D5 x w5) / (w1 + w2 + w3 + w4 + w5) x 25</td></tr>';
+  html += '<tr><td style="font-weight:600;">Formula</td><td style="font-family:monospace;font-size:10px;">Composite = ((weighted average - 1) / 3) x 100</td></tr>';
   html += '<tr><td style="font-weight:600;">Score Range</td><td>0 (Lowest Risk) to 100 (Highest Risk)</td></tr>';
   html += '<tr><td style="font-weight:600;">Thresholds</td><td>LOW: 0-39.9 | MEDIUM: 40-54.9 | HIGH: 55-69.9 | VERY HIGH: 70-100</td></tr>';
   html += '<tr><td style="font-weight:600;">Sub-Criteria Scoring</td><td>Each sub-criterion scored 1-4 per rule-based lookup tables. Dimension score = weighted avg of sub-criteria.</td></tr>';
