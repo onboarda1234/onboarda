@@ -481,6 +481,247 @@ def safe_json_loads(val):
     return {}
 
 
+def first_non_empty(*values):
+    """Return the first non-empty string-like value, preserving non-string scalars."""
+    for value in values:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+        elif value not in (None, "", [], {}):
+            return value
+    return ""
+
+
+def compose_source_of_funds_summary(prescreening: dict) -> str:
+    parts = []
+    initial_type = first_non_empty(prescreening.get("source_of_funds_initial_type"))
+    initial_detail = first_non_empty(prescreening.get("source_of_funds_initial_detail"))
+    ongoing_type = first_non_empty(prescreening.get("source_of_funds_ongoing_type"))
+    ongoing_detail = first_non_empty(prescreening.get("source_of_funds_ongoing_detail"))
+    if initial_type:
+        parts.append(f"Initial: {initial_type}")
+    if initial_detail:
+        parts.append(initial_detail)
+    if ongoing_type:
+        parts.append(f"Ongoing: {ongoing_type}")
+    if ongoing_detail:
+        parts.append(ongoing_detail)
+    return "; ".join(parts)
+
+
+def normalize_prescreening_data(data: dict, existing=None) -> dict:
+    """Merge incoming prescreening data with existing state and normalize core aliases."""
+    merged = {}
+    current = safe_json_loads(existing)
+    incoming = safe_json_loads(data.get("prescreening_data", {}))
+    if isinstance(current, dict):
+        merged.update(current)
+    if isinstance(incoming, dict):
+        merged.update(incoming)
+
+    company_name = first_non_empty(
+        data.get("company_name"),
+        data.get("entity_name"),
+        data.get("registered_entity_name"),
+        merged.get("registered_entity_name"),
+        merged.get("company_name")
+    )
+    if company_name:
+        merged["registered_entity_name"] = company_name
+        merged["company_name"] = company_name
+
+    country = first_non_empty(data.get("country"), merged.get("country_of_incorporation"))
+    if country:
+        merged["country_of_incorporation"] = country
+
+    if data.get("entity_type"):
+        merged["entity_type"] = data.get("entity_type")
+    if data.get("ownership_structure"):
+        merged["ownership_structure"] = data.get("ownership_structure")
+    if data.get("sector"):
+        merged["sector"] = data.get("sector")
+    if data.get("brn"):
+        merged["brn"] = data.get("brn")
+
+    if merged.get("monthly_volume") and not merged.get("expected_volume"):
+        merged["expected_volume"] = merged.get("monthly_volume")
+    if not merged.get("source_of_funds"):
+        merged["source_of_funds"] = compose_source_of_funds_summary(merged)
+
+    return merged
+
+
+def resolve_application_company_name(data: dict, prescreening_data: dict, fallback="") -> str:
+    """Resolve the authoritative legal entity name for application persistence."""
+    return first_non_empty(
+        data.get("company_name"),
+        data.get("entity_name"),
+        data.get("registered_entity_name"),
+        prescreening_data.get("registered_entity_name") if isinstance(prescreening_data, dict) else "",
+        prescreening_data.get("company_name") if isinstance(prescreening_data, dict) else "",
+        fallback
+    )
+
+
+def build_full_name(record: dict) -> str:
+    first_name = first_non_empty(record.get("first_name"))
+    last_name = first_non_empty(record.get("last_name"))
+    if first_name or last_name:
+        return f"{first_name} {last_name}".strip()
+    return first_non_empty(record.get("full_name"))
+
+
+def normalize_is_pep(value, default="No") -> str:
+    normalized = first_non_empty(value, default)
+    return "Yes" if str(normalized).strip().lower() in ("yes", "true", "1") else "No"
+
+
+def parse_json_field(value, fallback):
+    parsed = safe_json_loads(value)
+    return parsed if isinstance(parsed, type(fallback)) else fallback
+
+
+def hydrate_party_record(record: dict, pii_fields=None, name_key="full_name") -> dict:
+    result = dict(record)
+    if pii_fields:
+        result = decrypt_pii_fields(result, pii_fields)
+    result["pep_declaration"] = parse_json_field(result.get("pep_declaration"), {})
+    result["full_name"] = result.get(name_key) or result.get("full_name") or ""
+    return result
+
+
+def get_application_parties(db, application_id):
+    directors = [
+        hydrate_party_record(d, PII_FIELDS_DIRECTORS)
+        for d in db.execute("SELECT * FROM directors WHERE application_id = ?", (application_id,)).fetchall()
+    ]
+    ubos = [
+        hydrate_party_record(u, PII_FIELDS_UBOS)
+        for u in db.execute("SELECT * FROM ubos WHERE application_id = ?", (application_id,)).fetchall()
+    ]
+    intermediaries = []
+    for row in db.execute("SELECT * FROM intermediaries WHERE application_id = ?", (application_id,)).fetchall():
+        item = dict(row)
+        item["full_name"] = item.get("entity_name", "")
+        intermediaries.append(item)
+    return directors, ubos, intermediaries
+
+
+def store_application_parties(db, application_id, directors=None, ubos=None, intermediaries=None):
+    if directors is not None:
+        db.execute("DELETE FROM directors WHERE application_id = ?", (application_id,))
+        for director in directors:
+            full_name = build_full_name(director)
+            if not full_name:
+                continue
+            encrypted = encrypt_pii_fields(director, PII_FIELDS_DIRECTORS)
+            db.execute("""
+                INSERT INTO directors (
+                    application_id, person_key, first_name, last_name, full_name,
+                    nationality, is_pep, pep_declaration
+                ) VALUES (?,?,?,?,?,?,?,?)
+            """, (
+                application_id,
+                director.get("person_key"),
+                director.get("first_name", ""),
+                director.get("last_name", ""),
+                full_name,
+                encrypted.get("nationality", ""),
+                normalize_is_pep(director.get("is_pep", "No")),
+                json.dumps(parse_json_field(director.get("pep_declaration"), {}))
+            ))
+    if ubos is not None:
+        db.execute("DELETE FROM ubos WHERE application_id = ?", (application_id,))
+        for ubo in ubos:
+            full_name = build_full_name(ubo)
+            if not full_name:
+                continue
+            encrypted = encrypt_pii_fields(ubo, PII_FIELDS_UBOS)
+            db.execute("""
+                INSERT INTO ubos (
+                    application_id, person_key, first_name, last_name, full_name,
+                    nationality, ownership_pct, is_pep, pep_declaration
+                ) VALUES (?,?,?,?,?,?,?,?,?)
+            """, (
+                application_id,
+                ubo.get("person_key"),
+                ubo.get("first_name", ""),
+                ubo.get("last_name", ""),
+                full_name,
+                encrypted.get("nationality", ""),
+                encrypted.get("ownership_pct", 0),
+                normalize_is_pep(ubo.get("is_pep", "No")),
+                json.dumps(parse_json_field(ubo.get("pep_declaration"), {}))
+            ))
+    if intermediaries is not None:
+        db.execute("DELETE FROM intermediaries WHERE application_id = ?", (application_id,))
+        for intermediary in intermediaries:
+            entity_name = first_non_empty(intermediary.get("entity_name"), intermediary.get("full_name"))
+            if not entity_name:
+                continue
+            db.execute("""
+                INSERT INTO intermediaries (application_id, person_key, entity_name, jurisdiction, ownership_pct)
+                VALUES (?,?,?,?,?)
+            """, (
+                application_id,
+                intermediary.get("person_key"),
+                entity_name,
+                intermediary.get("jurisdiction", ""),
+                intermediary.get("ownership_pct", 0),
+            ))
+
+
+def resolve_application_person(db, application_id, person_ref):
+    if not application_id or not person_ref:
+        return None
+
+    director = db.execute("""
+        SELECT id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration
+        FROM directors WHERE application_id = ? AND (id = ? OR person_key = ?)
+        LIMIT 1
+    """, (application_id, person_ref, person_ref)).fetchone()
+    if director:
+        result = hydrate_party_record(director, PII_FIELDS_DIRECTORS)
+        result["person_type"] = "director"
+        result["entity_type"] = "Person"
+        return result
+
+    ubo = db.execute("""
+        SELECT id, person_key, first_name, last_name, full_name, nationality, ownership_pct, is_pep, pep_declaration
+        FROM ubos WHERE application_id = ? AND (id = ? OR person_key = ?)
+        LIMIT 1
+    """, (application_id, person_ref, person_ref)).fetchone()
+    if ubo:
+        result = hydrate_party_record(ubo, PII_FIELDS_UBOS)
+        result["person_type"] = "ubo"
+        result["entity_type"] = "Person"
+        return result
+
+    intermediary = db.execute("""
+        SELECT id, person_key, entity_name, jurisdiction, ownership_pct
+        FROM intermediaries WHERE application_id = ? AND (id = ? OR person_key = ?)
+        LIMIT 1
+    """, (application_id, person_ref, person_ref)).fetchone()
+    if intermediary:
+        result = dict(intermediary)
+        result["full_name"] = result.get("entity_name", "")
+        result["person_type"] = "intermediary"
+        result["entity_type"] = "Company"
+        return result
+
+    return None
+
+
+def resolve_user_display_name(db, user_id):
+    if not user_id:
+        return ""
+    row = db.execute("SELECT full_name, email FROM users WHERE id = ? LIMIT 1", (user_id,)).fetchone()
+    if not row:
+        return str(user_id)
+    return row.get("full_name") or row.get("email") or str(user_id)
+
+
 def encrypt_pii_fields(record: dict, field_names: list) -> dict:
     """Encrypt specified PII fields in a record before database write."""
     if not _pii_encryptor:
@@ -1128,25 +1369,30 @@ class ApplicationsHandler(BaseHandler):
         risk = self.get_argument("risk", None)
         assigned = self.get_argument("assigned", None)
 
-        query = "SELECT * FROM applications WHERE 1=1"
+        query = """
+            SELECT a.*, u.full_name AS assigned_name
+            FROM applications a
+            LEFT JOIN users u ON a.assigned_to = u.id
+            WHERE 1=1
+        """
         params = []
 
         # Clients can only see their own
         if user["type"] == "client":
-            query += " AND client_id = ?"
+            query += " AND a.client_id = ?"
             params.append(user["sub"])
 
         if status:
-            query += " AND status = ?"
+            query += " AND a.status = ?"
             params.append(status)
         if risk:
-            query += " AND risk_level = ?"
+            query += " AND a.risk_level = ?"
             params.append(risk)
         if assigned:
-            query += " AND assigned_to = ?"
+            query += " AND a.assigned_to = ?"
             params.append(assigned)
 
-        query += " ORDER BY created_at DESC LIMIT 200"
+        query += " ORDER BY a.created_at DESC LIMIT 200"
         rows = db.execute(query, params).fetchall()
         db.close()
 
@@ -1154,12 +1400,9 @@ class ApplicationsHandler(BaseHandler):
         # Attach directors, UBOs, and documents for each — C-02: decrypt PII on read
         db = get_db()
         for app in apps:
-            app["directors"] = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
-                "SELECT * FROM directors WHERE application_id = ?", (app["id"],)).fetchall()]
-            app["ubos"] = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
-                "SELECT * FROM ubos WHERE application_id = ?", (app["id"],)).fetchall()]
+            app["directors"], app["ubos"], app["intermediaries"] = get_application_parties(db, app["id"])
             app["documents"] = [dict(d) for d in db.execute(
-                "SELECT id, doc_type, doc_name, file_size, verification_status, verification_results, verified_at, person_id FROM documents WHERE application_id = ?",
+                "SELECT id, doc_type, doc_name, file_size, verification_status, verification_results, verified_at, person_id, review_status, review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?",
                 (app["id"],)).fetchall()]
             # Bug #4: Parse risk_dimensions from JSON string for API consumers
             if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
@@ -1176,6 +1419,10 @@ class ApplicationsHandler(BaseHandler):
         data = self.get_json()
         app_id = uuid.uuid4().hex[:16]
         ref = generate_ref()
+        prescreening_data = normalize_prescreening_data(data)
+        company_name = resolve_application_company_name(data, prescreening_data)
+        if not company_name:
+            return self.error("Registered entity name is required.", 400)
 
         db = get_db()
         db.execute("""
@@ -1185,32 +1432,28 @@ class ApplicationsHandler(BaseHandler):
         """, (
             app_id, ref,
             user["sub"] if user["type"] == "client" else data.get("client_id"),
-            data.get("company_name") or data.get("entity_name", ""),
-            data.get("brn", ""),
-            data.get("country", ""),
-            data.get("sector", ""),
-            data.get("entity_type", ""),
-            data.get("ownership_structure", ""),
-            json.dumps(data.get("prescreening_data", {})),
+            company_name,
+            first_non_empty(data.get("brn"), prescreening_data.get("brn")),
+            first_non_empty(data.get("country"), prescreening_data.get("country_of_incorporation")),
+            first_non_empty(data.get("sector"), prescreening_data.get("sector")),
+            first_non_empty(data.get("entity_type"), prescreening_data.get("entity_type")),
+            first_non_empty(data.get("ownership_structure"), prescreening_data.get("ownership_structure")),
+            json.dumps(prescreening_data),
             "draft"
         ))
 
-        # Add directors — C-02: encrypt PII fields before write
-        for d in data.get("directors", []):
-            d_encrypted = encrypt_pii_fields(d, PII_FIELDS_DIRECTORS)
-            db.execute("INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?,?,?,?)",
-                        (app_id, d.get("full_name",""), d_encrypted.get("nationality",""), d.get("is_pep","No")))
-
-        # Add UBOs — C-02: encrypt PII fields before write
-        for u in data.get("ubos", []):
-            u_encrypted = encrypt_pii_fields(u, PII_FIELDS_UBOS)
-            db.execute("INSERT INTO ubos (application_id, full_name, nationality, ownership_pct, is_pep) VALUES (?,?,?,?,?)",
-                        (app_id, u.get("full_name",""), u_encrypted.get("nationality",""), u_encrypted.get("ownership_pct",0), u.get("is_pep","No")))
+        store_application_parties(
+            db,
+            app_id,
+            directors=data.get("directors"),
+            ubos=data.get("ubos"),
+            intermediaries=data.get("intermediaries")
+        )
 
         db.commit()
         db.close()
 
-        self.log_audit(user, "Create", ref, f"New application created: {data.get('company_name','')}")
+        self.log_audit(user, "Create", ref, f"New application created: {company_name}")
         self.success({"id": app_id, "ref": ref, "status": "draft"}, 201)
 
 
@@ -1232,16 +1475,46 @@ class ApplicationDetailHandler(BaseHandler):
             return
 
         result = dict(app)
-        # C-02: Decrypt PII fields on read
-        result["directors"] = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
-            "SELECT * FROM directors WHERE application_id = ?", (result["id"],)).fetchall()]
-        result["ubos"] = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
-            "SELECT * FROM ubos WHERE application_id = ?", (result["id"],)).fetchall()]
+        result["assigned_name"] = resolve_user_display_name(db, result.get("assigned_to"))
+        result["directors"], result["ubos"], result["intermediaries"] = get_application_parties(db, result["id"])
         result["documents"] = [dict(d) for d in db.execute(
             "SELECT * FROM documents WHERE application_id = ?", (result["id"],)).fetchall()]
+        for doc in result["documents"]:
+            doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
+            doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+        result["prescreening_data"] = parse_json_field(result.get("prescreening_data"), {})
         # Bug #4: Parse risk_dimensions from JSON string for API consumers
         if result.get("risk_dimensions") and isinstance(result["risk_dimensions"], str):
             result["risk_dimensions"] = safe_json_loads(result["risk_dimensions"])
+        latest_memo = db.execute("""
+            SELECT id, version, memo_data, review_status, validation_status, blocked, block_reason,
+                   quality_score, memo_version, approved_by, approved_at, created_at
+            FROM compliance_memos
+            WHERE application_id = ?
+            ORDER BY version DESC, id DESC
+            LIMIT 1
+        """, (result["id"],)).fetchone()
+        if latest_memo:
+            latest_memo_dict = dict(latest_memo)
+            latest_memo_data = parse_json_field(latest_memo_dict.get("memo_data"), {})
+            latest_memo_data.setdefault("metadata", {})
+            latest_memo_data["review_status"] = latest_memo_dict.get("review_status")
+            latest_memo_data["validation_status"] = latest_memo_dict.get("validation_status")
+            latest_memo_data["approved_by"] = latest_memo_dict.get("approved_by")
+            latest_memo_data["approved_at"] = latest_memo_dict.get("approved_at")
+            latest_memo_data["memo_version"] = latest_memo_dict.get("memo_version") or latest_memo_dict.get("version")
+            latest_memo_data["memo_generated"] = latest_memo_dict.get("created_at")
+            latest_memo_data["application_ref"] = result.get("ref")
+            latest_memo_data["metadata"]["blocked"] = bool(latest_memo_dict.get("blocked"))
+            latest_memo_data["metadata"]["block_reason"] = latest_memo_dict.get("block_reason")
+            latest_memo_data["metadata"]["quality_score"] = latest_memo_dict.get("quality_score")
+
+            latest_memo_dict.pop("memo_data", None)
+            result["latest_memo"] = latest_memo_dict
+            result["latest_memo_data"] = latest_memo_data
+        else:
+            result["latest_memo"] = None
+            result["latest_memo_data"] = None
         db.close()
 
         self.success(result)
@@ -1265,6 +1538,9 @@ class ApplicationDetailHandler(BaseHandler):
             return
 
         real_id = app["id"]
+        existing_prescreening = safe_json_loads(app["prescreening_data"])
+        normalized_prescreening = normalize_prescreening_data(data, existing_prescreening)
+        resolved_company_name = resolve_application_company_name(data, normalized_prescreening, app["company_name"])
 
         # ── C-04/C-07 FIX: Block modification of screening data and immutable fields after submission ──
         non_draft_statuses = ("submitted", "pricing_review", "under_review", "edd_required", "approved", "rejected", "kyc_documents")
@@ -1292,13 +1568,13 @@ class ApplicationDetailHandler(BaseHandler):
                     ownership_structure=?, prescreening_data=?, updated_at=datetime('now')
                 WHERE id=?
             """, (
-                data.get("company_name", app["company_name"]),
-                data.get("brn", app["brn"]),
-                data.get("country", app["country"]),
-                data.get("sector", app["sector"]),
-                data.get("entity_type", app["entity_type"]),
-                data.get("ownership_structure", app["ownership_structure"]),
-                json.dumps(data.get("prescreening_data", safe_json_loads(app["prescreening_data"]))),
+                resolved_company_name,
+                first_non_empty(data.get("brn"), normalized_prescreening.get("brn"), app["brn"]),
+                first_non_empty(data.get("country"), normalized_prescreening.get("country_of_incorporation"), app["country"]),
+                first_non_empty(data.get("sector"), normalized_prescreening.get("sector"), app["sector"]),
+                first_non_empty(data.get("entity_type"), normalized_prescreening.get("entity_type"), app["entity_type"]),
+                first_non_empty(data.get("ownership_structure"), normalized_prescreening.get("ownership_structure"), app["ownership_structure"]),
+                json.dumps(normalized_prescreening),
                 real_id
             ))
         else:
@@ -1309,29 +1585,23 @@ class ApplicationDetailHandler(BaseHandler):
                     ownership_structure=?, updated_at=datetime('now')
                 WHERE id=?
             """, (
-                data.get("company_name", app["company_name"]),
-                data.get("brn", app["brn"]),
-                data.get("country", app["country"]),
-                data.get("sector", app["sector"]),
-                data.get("entity_type", app["entity_type"]),
-                data.get("ownership_structure", app["ownership_structure"]),
+                resolved_company_name,
+                first_non_empty(data.get("brn"), normalized_prescreening.get("brn"), app["brn"]),
+                first_non_empty(data.get("country"), normalized_prescreening.get("country_of_incorporation"), app["country"]),
+                first_non_empty(data.get("sector"), normalized_prescreening.get("sector"), app["sector"]),
+                first_non_empty(data.get("entity_type"), normalized_prescreening.get("entity_type"), app["entity_type"]),
+                first_non_empty(data.get("ownership_structure"), normalized_prescreening.get("ownership_structure"), app["ownership_structure"]),
                 real_id
             ))
 
-        # Rebuild directors and UBOs if provided — C-02: encrypt PII fields
-        if "directors" in data:
-            db.execute("DELETE FROM directors WHERE application_id = ?", (real_id,))
-            for d in data["directors"]:
-                d_encrypted = encrypt_pii_fields(d, PII_FIELDS_DIRECTORS)
-                db.execute("INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?,?,?,?)",
-                            (real_id, d.get("full_name",""), d_encrypted.get("nationality",""), d.get("is_pep","No")))
-
-        if "ubos" in data:
-            db.execute("DELETE FROM ubos WHERE application_id = ?", (real_id,))
-            for u in data["ubos"]:
-                u_encrypted = encrypt_pii_fields(u, PII_FIELDS_UBOS)
-                db.execute("INSERT INTO ubos (application_id, full_name, nationality, ownership_pct, is_pep) VALUES (?,?,?,?,?)",
-                            (real_id, u.get("full_name",""), u_encrypted.get("nationality",""), u_encrypted.get("ownership_pct",0), u.get("is_pep","No")))
+        if any(key in data for key in ("directors", "ubos", "intermediaries")):
+            store_application_parties(
+                db,
+                real_id,
+                directors=data["directors"] if "directors" in data else None,
+                ubos=data["ubos"] if "ubos" in data else None,
+                intermediaries=data["intermediaries"] if "intermediaries" in data else None
+            )
 
         db.commit()
         db.close()
@@ -1518,9 +1788,7 @@ class SubmitApplicationHandler(BaseHandler):
             db.close()
             return self.error(f"Currency '{currency}' not supported. Allowed: {', '.join(ALLOWED_CURRENCIES)}", 400)
 
-        # Build scoring input — C-02: decrypt PII fields on read
-        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
-        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+        directors, ubos, intermediaries = get_application_parties(db, real_id)
 
         prescreening = safe_json_loads(app["prescreening_data"])
         scoring_input = {
@@ -1531,7 +1799,8 @@ class SubmitApplicationHandler(BaseHandler):
             "sector": app["sector"],
             "company_name": app["company_name"],
             "directors": directors,
-            "ubos": ubos
+            "ubos": ubos,
+            "intermediaries": intermediaries
         }
 
         # ── Run real screening (Agents 1, 2, 3, 5) ──
@@ -1721,8 +1990,7 @@ class KYCSubmitHandler(BaseHandler):
         if risk_score == 0:
             try:
                 prescreening = safe_json_loads(app["prescreening_data"])
-                directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
-                ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
+                directors, ubos, intermediaries = get_application_parties(db, real_id)
                 scoring_input = {
                     **prescreening,
                     "entity_type": app["entity_type"],
@@ -1731,7 +1999,8 @@ class KYCSubmitHandler(BaseHandler):
                     "sector": app["sector"],
                     "company_name": app["company_name"],
                     "directors": directors,
-                    "ubos": ubos
+                    "ubos": ubos,
+                    "intermediaries": intermediaries
                 }
                 score_result = compute_risk_score(scoring_input)
                 risk_score = score_result["score"]
@@ -1956,9 +2225,8 @@ class DocumentUploadHandler(BaseHandler):
             return
 
         docs = [dict(d) for d in db.execute(
-            "SELECT id, application_id, person_id, doc_type, doc_name, file_size, mime_type, verification_status, verification_results, verified_at FROM documents WHERE application_id = ?",
+            "SELECT id, application_id, person_id, doc_type, doc_name, file_size, mime_type, verification_status, verification_results, verified_at, review_status, review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?",
             (app["id"],)).fetchall()]
-        db.close()
 
         # Parse verification_results JSON strings
         for doc in docs:
@@ -1967,6 +2235,9 @@ class DocumentUploadHandler(BaseHandler):
                     doc["verification_results"] = safe_json_loads(doc["verification_results"])
                 except (json.JSONDecodeError, TypeError):
                     pass
+            doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+
+        db.close()
 
         self.success(docs)
 
@@ -2116,15 +2387,14 @@ class DocumentVerifyHandler(BaseHandler):
         if file_path and not os.path.isabs(file_path):
             file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
 
-        # Get person name and entity name for verification cross-checks
+        # Get person / entity names for verification cross-checks
         person_name = ""
+        person_record = None
         entity_name = app.get("company_name", "") if app else ""
         if doc.get("person_id"):
-            person = db.execute("SELECT full_name FROM directors WHERE id=?", (doc["person_id"],)).fetchone()
-            if not person:
-                person = db.execute("SELECT full_name FROM ubos WHERE id=?", (doc["person_id"],)).fetchone()
-            if person:
-                person_name = person.get("full_name", "")
+            person_record = resolve_application_person(db, app["id"], doc["person_id"]) if app else None
+            if person_record:
+                person_name = person_record.get("full_name", "")
 
         # If no person_id, try to resolve person from doc_type suffix (e.g., intermediary_passport_dir1 → 1st director)
         if not person_name and app:
@@ -2132,6 +2402,7 @@ class DocumentVerifyHandler(BaseHandler):
             doc_type_raw = doc.get("doc_type", "")
             dir_match = _re2.search(r'_dir(\d+)$', doc_type_raw)
             ubo_match = _re2.search(r'_ubo(\d+)$', doc_type_raw)
+            int_match = _re2.search(r'_int(\d+)$', doc_type_raw)
             if dir_match:
                 idx = int(dir_match.group(1)) - 1  # dir1 = index 0
                 directors = db.execute("SELECT full_name FROM directors WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
@@ -2142,13 +2413,23 @@ class DocumentVerifyHandler(BaseHandler):
                 ubos = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
                 if 0 <= idx < len(ubos):
                     person_name = ubos[idx].get("full_name", "")
+            elif int_match:
+                idx = int(int_match.group(1)) - 1
+                intermediaries = db.execute("SELECT entity_name FROM intermediaries WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
+                if 0 <= idx < len(intermediaries):
+                    person_name = intermediaries[idx].get("entity_name", "")
 
         # Determine doc_category based on doc_type
         company_doc_types = ["cert_inc", "memarts", "cert_reg", "reg_sh", "reg_dir", "fin_stmt",
                              "board_res", "structure_chart", "poa", "bankref", "licence",
                              "contracts", "source_wealth", "source_funds", "bank_statements", "aml_policy"]
         raw_doc_type = doc.get("doc_type", "general")
-        doc_category = "company" if raw_doc_type in company_doc_types else "kyc"
+        if person_record and person_record.get("person_type") == "intermediary":
+            doc_category = "company"
+        elif person_record and person_record.get("person_type") in ("director", "ubo"):
+            doc_category = "kyc"
+        else:
+            doc_category = "company" if raw_doc_type in company_doc_types else "kyc"
 
         # Extract base doc_type (strip intermediary_ prefix and person suffix)
         base_doc_type = raw_doc_type
@@ -2167,8 +2448,8 @@ class DocumentVerifyHandler(BaseHandler):
             ubo_rows = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
             ubos_list = [r["full_name"] for r in ubo_rows if r.get("full_name")]
 
-        # For company docs, pass entity name; for KYC docs, pass person name
-        verify_name = entity_name if doc_category == "company" else person_name
+        # For company docs, pass the relevant company entity; for KYC docs, pass person name
+        verify_name = (person_name if person_record and person_record.get("person_type") == "intermediary" else entity_name) if doc_category == "company" else person_name
 
         # Load check overrides from ai_checks table
         check_overrides = None
@@ -2232,14 +2513,7 @@ class DocumentVerifyHandler(BaseHandler):
         sanctions_result = None
         id_doc_types = ["passport", "national_id", "id_card", "drivers_license", "director_id", "ubo_id"]
         if doc["doc_type"] in id_doc_types and doc["person_id"]:
-            # Try to find the person's name — C-02: decrypt PII fields on read
-            person = db.execute("SELECT full_name, nationality FROM directors WHERE id=?", (doc["person_id"],)).fetchone()
-            if person:
-                person = decrypt_pii_fields(dict(person), PII_FIELDS_DIRECTORS)
-            else:
-                person = db.execute("SELECT full_name, nationality FROM ubos WHERE id=?", (doc["person_id"],)).fetchone()
-                if person:
-                    person = decrypt_pii_fields(dict(person), PII_FIELDS_UBOS)
+            person = resolve_application_person(db, doc["application_id"], doc["person_id"])
             if person:
                 sanctions_result = screen_sumsub_aml(
                     person["full_name"],
@@ -2297,6 +2571,59 @@ class DocumentVerifyHandler(BaseHandler):
             logger.debug(f"Agent execution logging failed: {e}")
 
         self.success({"doc_id": doc_id, "status": status, "checks": checks})
+
+
+class DocumentReviewHandler(BaseHandler):
+    """POST /api/documents/:id/review — persist officer document review outcome"""
+    def post(self, doc_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        data = self.get_json() or {}
+        review_status = str(data.get("status", "pending")).strip().lower()
+        review_comment = str(data.get("comment", "") or "").strip()
+        allowed_statuses = {"pending", "accepted", "rejected", "info_requested"}
+        if review_status not in allowed_statuses:
+            return self.error("Invalid document review status", 400)
+
+        db = get_db()
+        doc = db.execute("SELECT id, application_id, doc_name FROM documents WHERE id=?", (doc_id,)).fetchone()
+        if not doc:
+            db.close()
+            return self.error("Document not found", 404)
+
+        app = db.execute("SELECT id, ref, client_id FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        db.execute("""
+            UPDATE documents
+            SET review_status = ?, review_comment = ?, reviewed_by = ?, reviewed_at = datetime('now')
+            WHERE id = ?
+        """, (review_status, review_comment, user.get("sub", ""), doc_id))
+        db.commit()
+
+        reviewed_doc = db.execute("""
+            SELECT id, review_status, review_comment, reviewed_by, reviewed_at
+            FROM documents WHERE id = ?
+        """, (doc_id,)).fetchone()
+        result = dict(reviewed_doc)
+        result["reviewed_by_name"] = resolve_user_display_name(db, result.get("reviewed_by"))
+        db.close()
+
+        self.log_audit(
+            user,
+            "Document Review",
+            app["ref"],
+            f"Document {doc['doc_name']} marked {review_status}" + (f" — {review_comment}" if review_comment else "")
+        )
+        self.success(result)
 
 
 class DocumentAIVerifyHandler(BaseHandler):
@@ -5971,6 +6298,7 @@ def make_app():
         # Documents
         (r"/api/documents/([^/]+)/download", DocumentDownloadHandler),
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
+        (r"/api/documents/([^/]+)/review", DocumentReviewHandler),
         (r"/api/documents/ai-verify", DocumentAIVerifyHandler),
         (r"/api/resources/([^/]+)/download", ComplianceResourceDownloadHandler),
         (r"/api/resources", ComplianceResourcesHandler),

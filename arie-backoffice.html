@@ -2457,7 +2457,8 @@ async function loadFromAPI() {
           score: a.risk_score || 0,
           lane: a.onboarding_lane || 'Standard Review',
           status: formatStatus(a.status),
-          assigned: a.assigned_to || 'Unassigned',
+          assignedId: a.assigned_to || '',
+          assigned: a.assigned_name || a.assigned_to || 'Unassigned',
           date: (a.created_at || '').split('T')[0].split(' ')[0],
           country: a.country || '',
           brn: a.brn || '',
@@ -2843,7 +2844,7 @@ function populateOfficerDropdowns() {
     var unassignedOpt = filterAssigned.querySelector('option[value="Unassigned"]');
     USERS.forEach(function(u) {
       var opt = document.createElement('option');
-      opt.value = u.name;
+      opt.value = u.id;
       opt.textContent = u.name;
       opt.setAttribute('data-dynamic', 'true');
       filterAssigned.insertBefore(opt, unassignedOpt);
@@ -2856,7 +2857,7 @@ function populateOfficerDropdowns() {
     reassignTo.innerHTML = '';
     USERS.forEach(function(u) {
       var opt = document.createElement('option');
-      opt.value = u.name;
+      opt.value = u.id;
       opt.textContent = u.name + ' (' + (ROLE_LABELS[u.role] || u.role) + ')';
       reassignTo.appendChild(opt);
     });
@@ -3122,7 +3123,10 @@ function renderApplications() {
   APPLICATIONS.forEach(function(app) {
     if (riskFilter && app.risk !== riskFilter) return;
     if (statusFilter && app.status !== statusFilter) return;
-    if (assignedFilter && app.assigned !== assignedFilter) return;
+    if (assignedFilter) {
+      var normalizedAssigned = app.assignedId || 'Unassigned';
+      if (normalizedAssigned !== assignedFilter) return;
+    }
     var tr = document.createElement('tr');
     tr.onclick = function() { openAppDetail(app.ref); };
     tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-weight:700;">' + escapeHtml(String(app.score)) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
@@ -3131,8 +3135,271 @@ function renderApplications() {
 }
 function filterApplications() { renderApplications(); }
 
-function openAppDetail(ref, options) {
+function formatDetailDate(value) {
+  return ((value || '').split('T')[0].split(' ')[0]) || '—';
+}
+
+function normalizeDetailValue(value) {
+  if (Array.isArray(value)) return value.length ? value.join(', ') : '—';
+  if (value == null || value === '') return '—';
+  return String(value);
+}
+
+async function fetchApplicationDetail(ref) {
+  var detail = await boApiCall('GET', '/applications/' + encodeURIComponent(ref));
+  var dims = {};
+  try { dims = typeof detail.risk_dimensions === 'string' ? JSON.parse(detail.risk_dimensions) : (detail.risk_dimensions || {}); } catch(e) {}
+  var psData = detail.prescreening_data || {};
+  var documents = (detail.documents || []).map(function(doc) {
+    return {
+      id: doc.id,
+      person_id: doc.person_id || '',
+      doc_type: doc.doc_type || '',
+      doc_name: doc.doc_name || '',
+      file_size: doc.file_size,
+      mime_type: doc.mime_type || '',
+      verification_status: doc.verification_status || 'pending',
+      verification_results: doc.verification_results || {},
+      verified_at: doc.verified_at || '',
+      uploaded_at: doc.uploaded_at || ''
+    };
+  });
+  var directors = (detail.directors || []).map(function(d) {
+    return { id: d.person_key || d.id, name: d.full_name || '', nat: d.nationality || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} };
+  });
+  var ubos = (detail.ubos || []).map(function(u) {
+    return { id: u.person_key || u.id, name: u.full_name || '', nat: u.nationality || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} };
+  });
+  var intermediaries = (detail.intermediaries || []).map(function(i) {
+    return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 };
+  });
+
+  return {
+    id: detail.id,
+    ref: detail.ref,
+    company: detail.company_name || psData.registered_entity_name || '—',
+    sector: detail.sector || psData.sector || 'Unknown',
+    risk: detail.risk_level || 'LOW',
+    score: detail.risk_score || 0,
+    lane: detail.onboarding_lane || 'Standard Review',
+    status: formatStatus(detail.status),
+    statusRaw: detail.status || '',
+    assignedId: detail.assigned_to || '',
+    assigned: detail.assigned_name || detail.assigned_to || 'Unassigned',
+    date: formatDetailDate(detail.created_at || detail.submitted_at),
+    createdAt: detail.created_at || '',
+    submittedAt: detail.submitted_at || '',
+    decidedAt: detail.decided_at || '',
+    country: detail.country || psData.country_of_incorporation || '',
+    brn: detail.brn || psData.brn || '',
+    entityType: detail.entity_type || psData.entity_type || '',
+    ownershipStructure: detail.ownership_structure || psData.ownership_structure || '',
+    directors: directors,
+    ubos: ubos,
+    intermediaries: intermediaries,
+    pepCount: directors.filter(function(d) { return d.pep === 'Yes'; }).length + ubos.filter(function(u) { return u.pep === 'Yes'; }).length,
+    dims: dims,
+    _documents: documents,
+    docs: documents.map(function(doc) { return doc.doc_type; }),
+    _raw_prescreening: psData,
+    prescreeningData: psData,
+    latestMemoMeta: detail.latest_memo || null,
+    latestMemo: detail.latest_memo_data || null
+  };
+}
+
+function renderAuthoritativeAppDetail(app, options) {
+  var psData = app.prescreeningData || {};
+  currentApp = app;
+  window._currentDetailApp = app;
+  currentScreeningReviewFocus = options.screeningFocus || null;
+
+  document.getElementById('detail-company-name').textContent = app.company;
+  document.getElementById('detail-badges').innerHTML = riskBadge(app.risk) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>';
+
+  document.getElementById('detail-entity-info').innerHTML =
+    '<div class="detail-row"><span class="label">Reference</span><span class="value" style="font-family:monospace;">' + escapeHtml(app.ref) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Legal Entity</span><span class="value">' + escapeHtml(app.company) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Entity Type</span><span class="value">' + escapeHtml(normalizeDetailValue(app.entityType)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Ownership Structure</span><span class="value">' + escapeHtml(normalizeDetailValue(app.ownershipStructure)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">BRN</span><span class="value">' + escapeHtml(normalizeDetailValue(app.brn)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Country</span><span class="value">' + escapeHtml(normalizeDetailValue(app.country)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(normalizeDetailValue(app.sector)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Status</span><span class="value">' + escapeHtml(app.status) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Assigned To</span><span class="value">' + escapeHtml(app.assigned) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Created</span><span class="value">' + escapeHtml(app.date) + '</span></div>';
+
+  var prescreenFields = [
+    { label: 'Trading Name', value: psData.trading_name },
+    { label: 'Registered Address', value: psData.registered_address },
+    { label: 'Head Office Address', value: psData.headquarters_address },
+    { label: 'Contact Name', value: ((psData.entity_contact_first || '') + ' ' + (psData.entity_contact_last || '')).trim() },
+    { label: 'Contact Email', value: psData.entity_contact_email },
+    { label: 'Contact Mobile', value: [psData.entity_contact_phone_code, psData.entity_contact_mobile].filter(Boolean).join(' ') },
+    { label: 'Website', value: psData.website },
+    { label: 'Licences', value: psData.regulatory_licences },
+    { label: 'Services Required', value: normalizeDetailValue(psData.services_required) },
+    { label: 'Countries of Operation', value: normalizeDetailValue(psData.countries_of_operation) },
+    { label: 'Target Markets', value: normalizeDetailValue(psData.target_markets) },
+    { label: 'Account Purposes', value: normalizeDetailValue(psData.account_purposes) },
+    { label: 'Business Overview', value: psData.business_overview },
+    { label: 'Monthly Volume', value: psData.monthly_volume },
+    { label: 'Transaction Complexity', value: psData.transaction_complexity },
+    { label: 'Currencies', value: normalizeDetailValue(psData.currencies) },
+    { label: 'Source of Wealth', value: psData.source_of_wealth_type },
+    { label: 'Source of Wealth Detail', value: psData.source_of_wealth_detail },
+    { label: 'Source of Funds', value: psData.source_of_funds },
+    { label: 'Introduction Method', value: psData.introduction_method },
+    { label: 'Referrer', value: psData.referrer_name },
+    { label: 'Management Overview', value: psData.management_overview }
+  ];
+  document.getElementById('detail-prescreen-summary').innerHTML =
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+    prescreenFields.map(function(field) {
+      var value = normalizeDetailValue(field.value);
+      var isLong = value.length > 60;
+      return '<div style="' + (isLong ? 'grid-column:span 2;' : '') + 'padding:8px 12px;background:var(--surface2);border-radius:8px;border:1px solid var(--border1);">' +
+        '<div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">' + escapeHtml(field.label) + '</div>' +
+        '<div style="font-size:13px;color:var(--text1);font-weight:500;word-break:break-word;">' + escapeHtml(value) + '</div>' +
+      '</div>';
+    }).join('') +
+    '</div>';
+
+  var personsHtml = '<div style="font-size:12px;font-weight:600;margin-bottom:6px;">Directors</div>';
+  personsHtml += app.directors.length ? app.directors.map(function(d) {
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;"><span>' + escapeHtml(d.name) + '</span><span style="font-size:11px;color:var(--text3);">(' + escapeHtml(normalizeDetailValue(d.nat)) + ')</span>' + (d.pep === 'Yes' ? '<span class="badge high" style="font-size:10px;">PEP</span>' : '') + '</div>';
+  }).join('') : '<div style="font-size:12px;color:var(--text3);">No directors persisted.</div>';
+  personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">UBOs</div>';
+  personsHtml += app.ubos.length ? app.ubos.map(function(u) {
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;"><span>' + escapeHtml(u.name) + '</span><span style="font-size:11px;color:var(--text3);">(' + escapeHtml(String(u.pct)) + '%)</span>' + (u.pep === 'Yes' ? '<span class="badge high" style="font-size:10px;">PEP</span>' : '') + '</div>';
+  }).join('') : '<div style="font-size:12px;color:var(--text3);">No UBOs persisted.</div>';
+  personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">Intermediary Shareholders</div>';
+  personsHtml += app.intermediaries.length ? app.intermediaries.map(function(i) {
+    return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;"><span>' + escapeHtml(i.name) + '</span><span style="font-size:11px;color:var(--text3);">(' + escapeHtml(normalizeDetailValue(i.jurisdiction)) + ', ' + escapeHtml(String(i.pct)) + '%)</span></div>';
+  }).join('') : '<div style="font-size:12px;color:var(--text3);">No intermediary shareholders persisted.</div>';
+  document.getElementById('detail-persons').innerHTML = personsHtml;
+
+  document.getElementById('detail-business').innerHTML =
+    '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(normalizeDetailValue(app.sector)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">PEPs Identified</span><span class="value">' + escapeHtml(String(app.pepCount)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Existing Bank</span><span class="value">' + escapeHtml(normalizeDetailValue(psData.existing_bank_account)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Bank Details</span><span class="value">' + escapeHtml(normalizeDetailValue(psData.existing_bank_name)) + '</span></div>';
+
+  var dimLabels = { d1: 'Customer / Entity', d2: 'Geographic', d3: 'Product / Service', d4: 'Industry / Sector', d5: 'Delivery Channel' };
+  var riskBarsHtml = '';
+  Object.keys(dimLabels).forEach(function(key) {
+    var value = app.dims && app.dims[key] != null ? Number(app.dims[key]) : null;
+    if (value == null || isNaN(value)) return;
+    var pct = Math.max(0, Math.min(100, (value / 4) * 100));
+    var cls = value <= 1.5 ? 'low' : value <= 2.5 ? 'medium' : value <= 3.2 ? 'high' : 'vhigh';
+    riskBarsHtml += '<div class="risk-bar-row"><div class="risk-bar-label">' + dimLabels[key] + '</div><div class="risk-bar-track"><div class="risk-bar-fill ' + cls + '" style="width:' + pct + '%;"></div></div><div class="risk-bar-value">' + value.toFixed(2) + '</div></div>';
+  });
+  document.getElementById('detail-risk-bars').innerHTML = riskBarsHtml || '<div style="font-size:12px;color:var(--text3);">No persisted risk dimension breakdown is available for this application.</div>';
+  document.getElementById('detail-composite-score').textContent = app.score;
+  document.getElementById('detail-risk-badge').innerHTML = riskBadge(app.risk);
+  document.getElementById('detail-score-breakdown').innerHTML = app.dims && Object.keys(app.dims).length
+    ? '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Displaying stored risk dimensions only. Line-by-line sub-criteria were previously browser-generated and are intentionally hidden until an authoritative server-backed breakdown exists.</div>'
+    : '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No persisted risk breakdown is available for this application.</div>';
+
+  var screeningSummary = getApplicationScreeningSummary(app);
+  var screeningMeta = '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:12px;">' +
+    '<div><strong>Screening Run:</strong> ' + (screeningSummary.screening_run_recorded ? 'Recorded' : 'Not recorded') + '</div>' +
+    '<div><strong>Total Hits:</strong> ' + escapeHtml(String(screeningSummary.total_hits || 0)) + '</div>' +
+    '<div><strong>Mode:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screening_mode)) + '</div>' +
+    '<div><strong>Screened At:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screened_at)) + '</div>' +
+    '</div>';
+  document.getElementById('detail-screening-review').innerHTML = screeningMeta;
+  renderScreeningReviewPanel(app, currentScreeningReviewFocus);
+
+  var memoEl = document.getElementById('detail-memo');
+  if (app.latestMemo && app.latestMemo.sections) {
+    window._currentMemoData = app.latestMemo;
+    memoEl.innerHTML = renderMemoSections(app.latestMemo);
+    showValidationPanelIfMemoExists();
+    if ((app.latestMemo.review_status || '').toLowerCase() === 'approved') {
+      setMemoStatusBadge('Approved', 'approved');
+    } else if ((app.latestMemo.validation_status || '').toLowerCase() === 'pass') {
+      setMemoStatusBadge('Validated', 'approved');
+    } else if ((app.latestMemo.validation_status || '').toLowerCase() === 'pass_with_fixes') {
+      setMemoStatusBadge('Validated With Fixes', 'pending');
+    } else {
+      setMemoStatusBadge('Generated', 'pending');
+    }
+  } else {
+    window._currentMemoData = null;
+    document.getElementById('memo-validation-panel').style.display = 'none';
+    setMemoStatusBadge('Not Generated', 'pending');
+    memoEl.innerHTML = '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No compliance memo has been generated for this application yet.</div>';
+  }
+
+  function findDocumentOwnerLabel(doc) {
+    if (!doc.person_id) return 'Application-level document';
+    var people = app.directors.concat(app.ubos).concat(app.intermediaries);
+    var person = people.find(function(item) { return item.id === doc.person_id; });
+    return person ? person.name : doc.person_id;
+  }
+
+  var docsHtml = app._documents.length ? app._documents.map(function(doc) {
+    var officerReview = normalizeDetailValue(doc.review_status || 'pending');
+    var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
+    var reviewMeta = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—'
+      ? '<div class="doc-meta">Reviewed By: ' + escapeHtml(reviewerLabel) + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + escapeHtml(normalizeDetailValue(doc.reviewed_at)) : '') + '</div>'
+      : '';
+    var reviewComment = doc.review_comment ? '<div class="doc-meta">Review Comment: ' + escapeHtml(doc.review_comment) + '</div>' : '';
+    return '<div class="doc-item" style="flex-wrap:wrap;">' +
+      '<div class="doc-icon uploaded">📄</div>' +
+      '<div class="doc-info" style="flex:1;min-width:0;">' +
+        '<div class="doc-name">' + escapeHtml(doc.doc_name || doc.doc_type) + '</div>' +
+        '<div class="doc-meta">Type: ' + escapeHtml(normalizeDetailValue(doc.doc_type)) + '</div>' +
+        '<div class="doc-meta">Owner: ' + escapeHtml(findDocumentOwnerLabel(doc)) + '</div>' +
+        '<div class="doc-meta">Verification: ' + escapeHtml(normalizeDetailValue(doc.verification_status)) + '</div>' +
+        '<div class="doc-meta">Officer Review: ' + escapeHtml(officerReview) + '</div>' +
+        reviewMeta +
+        reviewComment +
+      '</div>' +
+      '<div class="doc-actions">' +
+        '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">Download</button>' +
+        '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">Re-Verify</button>' +
+        '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">Accept</button>' +
+        '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">Reject</button>' +
+        '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'info_requested\')">Request Info</button>' +
+      '</div>' +
+    '</div>';
+  }).join('') : '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No uploaded documents are stored for this application yet.</div>';
+  document.getElementById('detail-documents').innerHTML = docsHtml;
+  document.getElementById('detail-docs-with-verification').innerHTML = docsHtml;
+
+  var activityItems = [];
+  activityItems.push({ text: 'Application record created', time: app.createdAt || app.date });
+  if (app.submittedAt) activityItems.push({ text: 'Application submitted', time: app.submittedAt });
+  if (screeningSummary.screened_at) activityItems.push({ text: 'Screening run recorded', time: screeningSummary.screened_at });
+  if (app.latestMemoMeta && app.latestMemoMeta.created_at) activityItems.push({ text: 'Compliance memo generated', time: app.latestMemoMeta.created_at });
+  if (app.decidedAt) activityItems.push({ text: 'Application decision recorded', time: app.decidedAt });
+  document.getElementById('detail-activity').innerHTML = activityItems.map(function(item) {
+    return '<div class="activity-item"><div class="activity-dot system"></div><div class="activity-content"><div class="activity-text">' + escapeHtml(item.text) + '</div><div class="activity-time">' + escapeHtml(normalizeDetailValue(item.time)) + '</div></div></div>';
+  }).join('');
+
+  var isPreApproval = (app.statusRaw === 'pre_approval_review' || app.status === 'Pre-Approval Review');
+  var preApprovalCard = document.getElementById('pre-approval-actions-topbar');
+  var standardCard = document.getElementById('standard-actions-topbar');
+  if (preApprovalCard) preApprovalCard.style.display = isPreApproval ? 'flex' : 'none';
+  if (standardCard) standardCard.style.display = isPreApproval ? 'none' : 'flex';
+
+  switchDetailTab(options.initialTab || 'overview');
+  showView('app-detail');
+  document.getElementById('topbar-title').textContent = 'Application Review — ' + app.ref;
+}
+
+async function openAppDetail(ref, options) {
   options = options || {};
+  try {
+    var detailApp = await fetchApplicationDetail(ref);
+    return renderAuthoritativeAppDetail(detailApp, options);
+  } catch (err) {
+    console.error('Failed to load application detail:', err);
+    showToast('error', 'Detail Load Failed', err.message || 'Could not load the authoritative application detail.');
+    return;
+  }
   var app = APPLICATIONS.find(function(a) { return a.ref === ref; });
   if (!app) return;
   currentApp = app;
@@ -5126,14 +5393,16 @@ function reassignCase() { document.getElementById('modal-reassign').classList.ad
 async function confirmReassign() {
   if (!currentApp) return;
   var to = document.getElementById('reassign-to').value;
-  currentApp.assigned = to;
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Assign', target:currentApp.ref, detail:'Reassigned to ' + to, ip:'196.192.44.12' });
+  var assignUser = USERS.find(function(u) { return u.id === to; });
+  var assigneeLabel = assignUser ? assignUser.name : 'Unassigned';
+  currentApp.assignedId = assignUser ? assignUser.id : '';
+  currentApp.assigned = assigneeLabel;
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Assign', target:currentApp.ref, detail:'Reassigned to ' + assigneeLabel, ip:'196.192.44.12' });
   if (BO_AUTH_TOKEN && currentApp.id) {
-    var assignUser = USERS.find(function(u) { return u.name === to; });
     try { await boApiCall('PATCH', '/applications/' + currentApp.id, { assigned_to: assignUser ? assignUser.id : '' }); } catch(e) {}
   }
   closeModal('modal-reassign');
-  showToast('Case reassigned to ' + to);
+  showToast('Case reassigned to ' + assigneeLabel);
   openAppDetail(currentApp.ref);
 }
 
@@ -5464,7 +5733,7 @@ function renderKPIDashboard() {
           if (USERS.length === 0) return '<tr><td colspan="6" style="text-align:center;color:var(--text3);">No officer data available</td></tr>';
           var rows = '';
           USERS.forEach(function(u) {
-            var assignedApps = appsInPeriod.filter(function(a) { return a.assigned === u.name; });
+            var assignedApps = appsInPeriod.filter(function(a) { return a.assignedId === u.id; });
             var active = assignedApps.filter(function(a) { var s = statusKey(a); return s !== 'approved' && s !== 'rejected' && s !== 'declined' && s !== 'withdrawn'; }).length;
             var completed = assignedApps.filter(function(a) { var s = statusKey(a); return s === 'approved' || s === 'rejected' || s === 'declined'; }).length;
             var approvedU = assignedApps.filter(function(a) { return statusKey(a) === 'approved'; }).length;
@@ -7728,6 +7997,23 @@ async function verifyBackofficeDocument(docId, appRef) {
     openAppDetail(appRef || (currentApp && currentApp.ref));
   } catch (e) {
     showToast(e.message || 'Document verification failed');
+  }
+}
+
+async function reviewBackofficeDocument(docId, appRef, status) {
+  if (!docId) { showToast('Document record is missing a review identifier'); return; }
+  var promptLabel = status === 'accepted' ? 'acceptance note' : status === 'rejected' ? 'rejection reason' : 'information request';
+  var comment = window.prompt('Optional ' + promptLabel + ':', '') || '';
+  try {
+    await boApiCall('POST', '/documents/' + docId + '/review', {
+      status: status,
+      comment: comment
+    });
+    showToast('Document review saved: ' + status.replace(/_/g, ' '));
+    await loadFromAPI();
+    openAppDetail(appRef || (currentApp && currentApp.ref));
+  } catch (e) {
+    showToast(e.message || 'Document review could not be saved');
   }
 }
 

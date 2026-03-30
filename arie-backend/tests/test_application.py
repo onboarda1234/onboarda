@@ -73,6 +73,215 @@ class TestApplicationWorkflow:
         assert len(logs) == 1
         assert logs[0]["user_name"] == "Test Admin"
 
+    def test_batch_a_material_prescreening_persists_authoritatively(self, db):
+        """Material intake fields should resolve to an authoritative application record."""
+        from server import normalize_prescreening_data, resolve_application_company_name
+
+        payload = {
+            "company_name": "",
+            "entity_name": "Acme Holdings Ltd",
+            "brn": "C123456",
+            "country": "Mauritius",
+            "sector": "Technology",
+            "entity_type": "SME / Private Company",
+            "ownership_structure": "Simple — direct identifiable UBOs",
+            "prescreening_data": {
+                "registered_entity_name": "Acme Holdings Ltd",
+                "trading_name": "Acme Pay",
+                "registered_address": "10 Harbour Front, Port Louis",
+                "headquarters_address": "10 Harbour Front, Port Louis",
+                "entity_contact_first": "Jane",
+                "entity_contact_last": "Doe",
+                "entity_contact_email": "jane@acme.test",
+                "entity_contact_phone_code": "+230",
+                "entity_contact_mobile": "57550000",
+                "website": "https://acme.test",
+                "regulatory_licences": "None",
+                "services_required": ["Multi-currency corporate accounts"],
+                "monthly_volume": "USD 50,000 to USD 500,000 per month",
+                "transaction_complexity": "Standard — multi-currency, low-risk corridors",
+                "countries_of_operation": ["Mauritius", "United Kingdom"],
+                "business_overview": "B2B treasury platform for export merchants.",
+                "target_markets": ["United Kingdom", "United Arab Emirates"],
+                "account_purposes": ["Receiving payments from clients", "International transfers / FX"],
+                "existing_bank_account": "Yes",
+                "existing_bank_name": "Barclays, UK",
+                "currencies": ["USD", "EUR"],
+                "source_of_wealth_type": "Business revenue / trading profits",
+                "source_of_wealth_detail": "Bootstrapped from software revenues.",
+                "source_of_funds_initial_type": "Transfer from company bank account",
+                "source_of_funds_initial_detail": "Initial treasury transfer from Barclays.",
+                "source_of_funds_ongoing_type": "Client payments / receivables",
+                "source_of_funds_ongoing_detail": "Export merchant settlements.",
+                "management_overview": "Founder-led management team with in-house engineering.",
+                "introduction_method": "Direct application — client initiated",
+                "consent_declaration": True
+            }
+        }
+
+        prescreening = normalize_prescreening_data(payload)
+        company_name = resolve_application_company_name(payload, prescreening)
+
+        db.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, brn, country, sector,
+                entity_type, ownership_structure, prescreening_data, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "app_batch_a",
+            "ARF-2026-BA1",
+            "testclient001",
+            company_name,
+            payload["brn"],
+            payload["country"],
+            payload["sector"],
+            payload["entity_type"],
+            payload["ownership_structure"],
+            json.dumps(prescreening),
+            "draft"
+        ))
+        db.commit()
+
+        row = db.execute("SELECT company_name, prescreening_data FROM applications WHERE id='app_batch_a'").fetchone()
+        stored = json.loads(row["prescreening_data"])
+
+        assert row["company_name"] == "Acme Holdings Ltd"
+        assert stored["registered_entity_name"] == "Acme Holdings Ltd"
+        assert stored["trading_name"] == "Acme Pay"
+        assert stored["registered_address"] == "10 Harbour Front, Port Louis"
+        assert stored["services_required"] == ["Multi-currency corporate accounts"]
+        assert stored["countries_of_operation"] == ["Mauritius", "United Kingdom"]
+        assert stored["business_overview"] == "B2B treasury platform for export merchants."
+        assert stored["target_markets"] == ["United Kingdom", "United Arab Emirates"]
+        assert stored["account_purposes"] == ["Receiving payments from clients", "International transfers / FX"]
+        assert stored["expected_volume"] == "USD 50,000 to USD 500,000 per month"
+        assert stored["source_of_funds"] == (
+            "Initial: Transfer from company bank account; Initial treasury transfer from Barclays.; "
+            "Ongoing: Client payments / receivables; Export merchant settlements."
+        )
+        assert stored["consent_declaration"] is True
+
+    def test_batch_a_blank_legal_entity_name_is_not_resolved(self):
+        """Helper should not resolve an authoritative company name from empty input."""
+        from server import normalize_prescreening_data, resolve_application_company_name
+
+        payload = {
+            "country": "Mauritius",
+            "prescreening_data": {"monthly_volume": "Under USD 50,000 per month"}
+        }
+        prescreening = normalize_prescreening_data(payload)
+        assert resolve_application_company_name(payload, prescreening) == ""
+
+    def test_batch_b_stores_directors_ubos_and_intermediaries_with_stable_keys(self, db, sample_application):
+        """Ownership parties should persist stable person keys and declaration data."""
+        from server import store_application_parties
+
+        store_application_parties(
+            db,
+            sample_application,
+            directors=[{
+                "person_key": "dir7",
+                "first_name": "John",
+                "last_name": "Smith",
+                "nationality": "Mauritius",
+                "is_pep": "Yes",
+                "pep_declaration": {
+                    "public_function": "Former minister",
+                    "source_of_wealth_categories": ["Business operations / profits"]
+                }
+            }],
+            ubos=[{
+                "person_key": "ubo4",
+                "first_name": "Jane",
+                "last_name": "Doe",
+                "nationality": "United Kingdom",
+                "ownership_pct": 62.5,
+                "is_pep": "No",
+                "pep_declaration": {}
+            }],
+            intermediaries=[{
+                "person_key": "int2",
+                "entity_name": "North HoldCo Ltd",
+                "jurisdiction": "BVI",
+                "ownership_pct": 100
+            }]
+        )
+        db.commit()
+
+        director = db.execute(
+            "SELECT person_key, first_name, last_name, full_name, is_pep, pep_declaration FROM directors WHERE application_id=?",
+            (sample_application,)
+        ).fetchone()
+        ubo = db.execute(
+            "SELECT person_key, first_name, last_name, full_name, ownership_pct FROM ubos WHERE application_id=?",
+            (sample_application,)
+        ).fetchone()
+        intermediary = db.execute(
+            "SELECT person_key, entity_name, jurisdiction, ownership_pct FROM intermediaries WHERE application_id=?",
+            (sample_application,)
+        ).fetchone()
+
+        assert director["person_key"] == "dir7"
+        assert director["first_name"] == "John"
+        assert director["last_name"] == "Smith"
+        assert director["full_name"] == "John Smith"
+        assert director["is_pep"] == "Yes"
+        assert json.loads(director["pep_declaration"])["public_function"] == "Former minister"
+
+        assert ubo["person_key"] == "ubo4"
+        assert ubo["full_name"] == "Jane Doe"
+        assert ubo["ownership_pct"] == 62.5
+
+        assert intermediary["person_key"] == "int2"
+        assert intermediary["entity_name"] == "North HoldCo Ltd"
+        assert intermediary["jurisdiction"] == "BVI"
+        assert intermediary["ownership_pct"] == 100
+
+    def test_batch_b_resolves_person_references_by_person_key(self, db, sample_application):
+        """Document linkage helpers should resolve stored person keys without row-order fallbacks."""
+        from server import resolve_application_person, store_application_parties
+
+        store_application_parties(
+            db,
+            sample_application,
+            directors=[{
+                "person_key": "dir11",
+                "first_name": "Amina",
+                "last_name": "Khan",
+                "nationality": "UAE",
+                "is_pep": "No",
+                "pep_declaration": {}
+            }],
+            ubos=[{
+                "person_key": "ubo12",
+                "first_name": "Omar",
+                "last_name": "Ali",
+                "nationality": "Mauritius",
+                "ownership_pct": 40,
+                "is_pep": "Yes",
+                "pep_declaration": {"public_function": "MP"}
+            }],
+            intermediaries=[{
+                "person_key": "int13",
+                "entity_name": "Layered SPV Ltd",
+                "jurisdiction": "Cayman Islands",
+                "ownership_pct": 40
+            }]
+        )
+        db.commit()
+
+        director = resolve_application_person(db, sample_application, "dir11")
+        ubo = resolve_application_person(db, sample_application, "ubo12")
+        intermediary = resolve_application_person(db, sample_application, "int13")
+
+        assert director["full_name"] == "Amina Khan"
+        assert director["person_type"] == "director"
+        assert ubo["full_name"] == "Omar Ali"
+        assert ubo["person_type"] == "ubo"
+        assert ubo["pep_declaration"]["public_function"] == "MP"
+        assert intermediary["full_name"] == "Layered SPV Ltd"
+        assert intermediary["person_type"] == "intermediary"
+
 
 class TestDocuments:
     def test_document_record_creation(self, db, sample_application):

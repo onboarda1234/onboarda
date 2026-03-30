@@ -139,6 +139,162 @@ class TestAuthenticatedAccess:
                                   json={}, timeout=3)
         assert resp.status_code in (400, 401)
 
+    def test_application_detail_returns_authoritative_payload(self, api_server):
+        """GET /api/applications/:ref should return parsed persisted detail data for back office review."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                ownership_structure, prescreening_data, risk_level, risk_score,
+                risk_dimensions, status, assigned_to
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "app_detail_api",
+            "ARF-2026-DETAIL",
+            "testclient001",
+            "Detail Corp Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "Layered ownership",
+            json.dumps({
+                "registered_entity_name": "Detail Corp Ltd",
+                "trading_name": "Detail Portal",
+                "services_required": ["Multi-currency corporate accounts"],
+                "source_of_funds": "Initial treasury transfer",
+                "business_overview": "Cross-border payments software."
+            }),
+            "MEDIUM",
+            58,
+            json.dumps({"d1": 2.0, "d2": 2.5}),
+            "in_review",
+            "admin001"
+        ))
+        conn.execute("""
+            INSERT INTO directors (id, application_id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "dir_detail_1", "app_detail_api", "dir101", "Jane", "Doe", "Jane Doe",
+            "Mauritius", "No", json.dumps({})
+        ))
+        conn.execute("""
+            INSERT INTO ubos (id, application_id, person_key, first_name, last_name, full_name, nationality, ownership_pct, is_pep, pep_declaration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "ubo_detail_1", "app_detail_api", "ubo202", "Ali", "Khan", "Ali Khan",
+            "United Kingdom", 55.0, "Yes", json.dumps({"public_function": "MP"})
+        ))
+        conn.execute("""
+            INSERT INTO intermediaries (id, application_id, person_key, entity_name, jurisdiction, ownership_pct)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            "int_detail_1", "app_detail_api", "int303", "North HoldCo Ltd", "BVI", 100.0
+        ))
+        conn.execute("""
+            INSERT INTO documents (
+                id, application_id, person_id, doc_type, doc_name, file_path,
+                verification_status, verification_results
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_detail_1", "app_detail_api", "ubo202", "passport", "ubo-passport.pdf",
+            "/tmp/ubo-passport.pdf", "verified",
+            json.dumps({"document_type": "passport", "quality_score": 0.99})
+        ))
+        conn.execute("""
+            INSERT INTO compliance_memos (
+                application_id, version, memo_data, review_status, validation_status,
+                blocked, block_reason, quality_score, memo_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "app_detail_api", 3, json.dumps({"sections": {"executive_summary": {"content": "Stored memo"}}}),
+            "reviewed", "pass", 0, None, 0.93, "v3"
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications/ARF-2026-DETAIL",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["company_name"] == "Detail Corp Ltd"
+        assert data["assigned_name"]
+        assert data["prescreening_data"]["trading_name"] == "Detail Portal"
+        assert data["risk_dimensions"]["d2"] == 2.5
+        assert data["directors"][0]["person_key"] == "dir101"
+        assert data["ubos"][0]["pep_declaration"]["public_function"] == "MP"
+        assert data["intermediaries"][0]["entity_name"] == "North HoldCo Ltd"
+        assert data["documents"][0]["verification_results"]["document_type"] == "passport"
+        assert data["latest_memo"]["version"] == 3
+        assert data["latest_memo"]["review_status"] == "reviewed"
+        assert data["latest_memo_data"]["sections"]["executive_summary"]["content"] == "Stored memo"
+        assert data["latest_memo_data"]["memo_version"] == "v3"
+        assert data["latest_memo_data"]["application_ref"] == "ARF-2026-DETAIL"
+
+    def test_document_review_persists_and_survives_detail_reload(self, api_server):
+        """POST /api/documents/:id/review should persist officer review truth on the document record."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            "app_doc_review",
+            "ARF-2026-DOCREV",
+            "testclient001",
+            "Docs Review Ltd",
+            "Mauritius",
+            "in_review"
+        ))
+        conn.execute("""
+            INSERT INTO documents (
+                id, application_id, person_id, doc_type, doc_name, file_path, verification_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_review_1",
+            "app_doc_review",
+            "dir99",
+            "passport",
+            "director-passport.pdf",
+            "/tmp/director-passport.pdf",
+            "verified"
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        review_resp = http_requests.post(
+            f"{api_server}/api/documents/doc_review_1/review",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "info_requested", "comment": "Need clearer scan of the passport MRZ."},
+            timeout=3
+        )
+        assert review_resp.status_code == 200
+        review_data = review_resp.json()
+        assert review_data["review_status"] == "info_requested"
+        assert review_data["review_comment"] == "Need clearer scan of the passport MRZ."
+
+        detail_resp = http_requests.get(
+            f"{api_server}/api/applications/ARF-2026-DOCREV",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3
+        )
+        assert detail_resp.status_code == 200
+        detail_data = detail_resp.json()
+        assert detail_data["documents"][0]["review_status"] == "info_requested"
+        assert detail_data["documents"][0]["review_comment"] == "Need clearer scan of the passport MRZ."
+        assert detail_data["documents"][0]["reviewed_by"] == "admin001"
+        assert detail_data["documents"][0]["reviewed_by_name"]
+
 
 # ═══════════════════════════════════════════════════════════
 # 4. Security Headers — must be present on every response

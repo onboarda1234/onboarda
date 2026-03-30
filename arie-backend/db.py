@@ -307,6 +307,9 @@ def _get_postgres_schema() -> str:
     CREATE TABLE IF NOT EXISTS directors (
         id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        person_key TEXT,
+        first_name TEXT,
+        last_name TEXT,
         full_name TEXT NOT NULL,
         nationality TEXT,
         is_pep BOOLEAN DEFAULT false,
@@ -318,11 +321,25 @@ def _get_postgres_schema() -> str:
     CREATE TABLE IF NOT EXISTS ubos (
         id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        person_key TEXT,
+        first_name TEXT,
+        last_name TEXT,
         full_name TEXT NOT NULL,
         nationality TEXT,
         ownership_pct REAL,
         is_pep BOOLEAN DEFAULT false,
         pep_declaration JSONB DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Intermediary shareholders
+    CREATE TABLE IF NOT EXISTS intermediaries (
+        id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        person_key TEXT,
+        entity_name TEXT NOT NULL,
+        jurisdiction TEXT,
+        ownership_pct REAL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -339,8 +356,12 @@ def _get_postgres_schema() -> str:
         mime_type TEXT,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
         verification_results JSONB DEFAULT '{}',
+        review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
+        review_comment TEXT,
+        reviewed_by TEXT REFERENCES users(id),
         uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        verified_at TIMESTAMP
+        verified_at TIMESTAMP,
+        reviewed_at TIMESTAMP
     );
 
     -- Compliance Resources
@@ -761,6 +782,9 @@ def _get_sqlite_schema() -> str:
     CREATE TABLE IF NOT EXISTS directors (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        person_key TEXT,
+        first_name TEXT,
+        last_name TEXT,
         full_name TEXT NOT NULL,
         nationality TEXT,
         is_pep TEXT DEFAULT 'No',
@@ -772,11 +796,25 @@ def _get_sqlite_schema() -> str:
     CREATE TABLE IF NOT EXISTS ubos (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        person_key TEXT,
+        first_name TEXT,
+        last_name TEXT,
         full_name TEXT NOT NULL,
         nationality TEXT,
         ownership_pct REAL,
         is_pep TEXT DEFAULT 'No',
         pep_declaration TEXT DEFAULT '{}',
+        created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Intermediary shareholders
+    CREATE TABLE IF NOT EXISTS intermediaries (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        person_key TEXT,
+        entity_name TEXT NOT NULL,
+        jurisdiction TEXT,
+        ownership_pct REAL,
         created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -793,8 +831,12 @@ def _get_sqlite_schema() -> str:
         mime_type TEXT,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
         verification_results TEXT DEFAULT '{}',
+        review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
+        review_comment TEXT,
+        reviewed_by TEXT REFERENCES users(id),
         uploaded_at TEXT DEFAULT (datetime('now')),
-        verified_at TEXT
+        verified_at TEXT,
+        reviewed_at TEXT
     );
 
     -- Compliance Resources
@@ -1372,6 +1414,76 @@ def _run_migrations(db: DBConnection):
         except Exception as e:
             logger.debug(f"Migration s3_key column may already exist: {e}")
         logger.info("Migration v2.3: s3_key column added")
+
+    # Migration v2.5: Add stable ownership columns and intermediary table
+    ownership_column_checks = {
+        "directors": [
+            ("person_key", "TEXT"),
+            ("first_name", "TEXT"),
+            ("last_name", "TEXT"),
+        ],
+        "ubos": [
+            ("person_key", "TEXT"),
+            ("first_name", "TEXT"),
+            ("last_name", "TEXT"),
+        ],
+    }
+    for table_name, columns in ownership_column_checks.items():
+        for column_name, column_type in columns:
+            try:
+                db.execute(f"SELECT {column_name} FROM {table_name} LIMIT 1")
+            except Exception:
+                logger.info("Migration v2.5: Adding %s.%s", table_name, column_name)
+                try:
+                    db.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+                except Exception as e:
+                    logger.debug("Migration column %s.%s may already exist: %s", table_name, column_name, e)
+
+    try:
+        db.execute("SELECT person_key FROM intermediaries LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.5: Creating intermediaries table")
+        if USE_POSTGRESQL:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS intermediaries (
+                id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                person_key TEXT,
+                entity_name TEXT NOT NULL,
+                jurisdiction TEXT,
+                ownership_pct REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+        else:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS intermediaries (
+                id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                person_key TEXT,
+                entity_name TEXT NOT NULL,
+                jurisdiction TEXT,
+                ownership_pct REAL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            """)
+
+    # Migration v2.7: Add durable officer review fields to documents
+    document_review_columns = [
+        ("review_status", "TEXT DEFAULT 'pending'"),
+        ("review_comment", "TEXT"),
+        ("reviewed_by", "TEXT"),
+        ("reviewed_at", "TEXT" if not USE_POSTGRESQL else "TIMESTAMP"),
+    ]
+    for column_name, column_type in document_review_columns:
+        try:
+            db.execute(f"SELECT {column_name} FROM documents LIMIT 1")
+        except Exception:
+            logger.info("Migration v2.7: Adding documents.%s", column_name)
+            try:
+                db.execute(f"ALTER TABLE documents ADD COLUMN {column_name} {column_type}")
+            except Exception as e:
+                logger.debug("Migration documents.%s may already exist: %s", column_name, e)
 
     # Migration v2.4: Add compliance_resources table for back-office reference materials
     try:

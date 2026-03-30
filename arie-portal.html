@@ -4964,9 +4964,35 @@ async function runRealtimeDocumentIntegrityCheck(docId, fileName) {
 }
 
 // ─── Director / UBO rows ──────────────────────────────────
+var PERSON_KEY_COUNTERS = { dir: 1, ubo: 1, int: 1 };
+
+function nextOwnershipPersonKey(prefix, selector) {
+  var maxSeen = 0;
+  document.querySelectorAll(selector).forEach(function(row) {
+    var key = (row.dataset && row.dataset.personKey) || '';
+    var match = key.match(new RegExp('^' + prefix + '(\\d+)$'));
+    if (match) maxSeen = Math.max(maxSeen, parseInt(match[1], 10));
+  });
+  if (PERSON_KEY_COUNTERS[prefix] <= maxSeen) {
+    PERSON_KEY_COUNTERS[prefix] = maxSeen + 1;
+  }
+  return prefix + (PERSON_KEY_COUNTERS[prefix]++);
+}
+
+function getOrAssignOwnershipPersonKey(row, prefix, selector) {
+  if (!row.dataset.personKey) {
+    row.dataset.personKey = nextOwnershipPersonKey(prefix, selector);
+  }
+  return row.dataset.personKey;
+}
+
 function addDirectorRow() {
   const tbody = document.getElementById('directors-body');
+  tbody.querySelectorAll('tr').forEach(function(row) {
+    getOrAssignOwnershipPersonKey(row, 'dir', '#directors-body tr');
+  });
   const tr = document.createElement('tr');
+  tr.dataset.personKey = nextOwnershipPersonKey('dir', '#directors-body tr');
   tr.innerHTML = `
     <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
     <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
@@ -4980,7 +5006,11 @@ function addDirectorRow() {
 }
 function addUBORow() {
   const tbody = document.getElementById('ubos-body');
+  tbody.querySelectorAll('tr').forEach(function(row) {
+    getOrAssignOwnershipPersonKey(row, 'ubo', '#ubos-body tr');
+  });
   const tr = document.createElement('tr');
+  tr.dataset.personKey = nextOwnershipPersonKey('ubo', '#ubos-body tr');
   tr.innerHTML = `
     <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
     <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
@@ -4996,7 +5026,11 @@ function addUBORow() {
 
 function addIntermediaryRow() {
   const tbody = document.getElementById('intermediaries-body');
+  tbody.querySelectorAll('tr').forEach(function(row) {
+    getOrAssignOwnershipPersonKey(row, 'int', '#intermediaries-body tr');
+  });
   const tr = document.createElement('tr');
+  tr.dataset.personKey = nextOwnershipPersonKey('int', '#intermediaries-body tr');
   tr.innerHTML = `
     <td><input type="text" placeholder="Entity name" /></td>
     <td><select class="nat-select"><option value="">Country</option></select></td>
@@ -5080,17 +5114,19 @@ function syncDirectorsUBOsToKYC() {
   // Collect current persons from directors table
   var persons = [];
   var dirRows = document.querySelectorAll('#directors-body tr');
-  dirRows.forEach(function(row, i) {
+  dirRows.forEach(function(row) {
+    var personKey = getOrAssignOwnershipPersonKey(row, 'dir', '#directors-body tr');
     var inputs = row.querySelectorAll('input[type="text"]');
     var first = inputs[0] ? inputs[0].value.trim() : '';
     var last = inputs[1] ? inputs[1].value.trim() : '';
     var pepSel = row.querySelector('.pep-select');
     var isPEP = pepSel ? pepSel.value === 'Yes' : false;
-    persons.push({ id: 'dir' + (i + 1), type: 'director', first: first, last: last, isPEP: isPEP, pct: '' });
+    persons.push({ id: personKey, type: 'director', first: first, last: last, isPEP: isPEP, pct: '' });
   });
 
   var uboRows = document.querySelectorAll('#ubos-body tr');
-  uboRows.forEach(function(row, i) {
+  uboRows.forEach(function(row) {
+    var personKey = getOrAssignOwnershipPersonKey(row, 'ubo', '#ubos-body tr');
     var inputs = row.querySelectorAll('input[type="text"]');
     var first = inputs[0] ? inputs[0].value.trim() : '';
     var last = inputs[1] ? inputs[1].value.trim() : '';
@@ -5098,12 +5134,13 @@ function syncDirectorsUBOsToKYC() {
     var pct = pctInput ? pctInput.value : '';
     var pepSel = row.querySelector('.pep-select');
     var isPEP = pepSel ? pepSel.value === 'Yes' : false;
-    persons.push({ id: 'ubo' + (i + 1), type: 'ubo', first: first, last: last, isPEP: isPEP, pct: pct });
+    persons.push({ id: personKey, type: 'ubo', first: first, last: last, isPEP: isPEP, pct: pct });
   });
 
   // Collect intermediary shareholders
   var intRows = document.querySelectorAll('#intermediaries-body tr');
-  intRows.forEach(function(row, i) {
+  intRows.forEach(function(row) {
+    var personKey = getOrAssignOwnershipPersonKey(row, 'int', '#intermediaries-body tr');
     var nameInput = row.querySelector('input[type="text"]');
     var name = nameInput ? nameInput.value.trim() : '';
     var countrySelect = row.querySelector('.nat-select');
@@ -5111,7 +5148,7 @@ function syncDirectorsUBOsToKYC() {
     var pctInput = row.querySelector('input[type="number"]');
     var pct = pctInput ? pctInput.value : '';
     if (name) {
-      persons.push({ id: 'int' + (i + 1), type: 'intermediary', first: name, last: '(' + (country || 'Country N/A') + ')', isPEP: false, pct: pct });
+      persons.push({ id: personKey, type: 'intermediary', first: name, last: '(' + (country || 'Country N/A') + ')', isPEP: false, pct: pct });
     }
   });
 
@@ -5207,6 +5244,52 @@ async function submitPrescreening(e) {
   btn.disabled = true;
   btn.textContent = '⏳ Submitting…';
 
+  function getFieldValue(id) {
+    var el = document.getElementById(id);
+    if (!el) return '';
+    return typeof el.value === 'string' ? el.value.trim() : (el.value || '');
+  }
+
+  function getCheckboxValues(containerId) {
+    var container = document.getElementById(containerId);
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(function(c) {
+      return c.value;
+    });
+  }
+
+  function getOptionalNumber(id) {
+    var value = getFieldValue(id);
+    if (value === '') return null;
+    var parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function isChecked(id) {
+    var el = document.getElementById(id);
+    return !!(el && el.checked);
+  }
+
+  function collectPepDeclaration(personId, isPEP) {
+    if (!isPEP) return {};
+    var panel = document.getElementById('pep-panel-' + personId);
+    var pepDocs = document.getElementById('pep-docs-' + personId);
+    var sourceOfWealth = [];
+    if (panel) {
+      panel.querySelectorAll('.pep-sow-checklist input:checked').forEach(function(cb) {
+        sourceOfWealth.push((cb.parentElement.textContent || '').trim());
+      });
+    }
+    return {
+      public_function: getFieldValue('pep-function-' + personId),
+      estimated_assets_usd: getFieldValue('pep-assets-' + personId),
+      estimated_liabilities_usd: getFieldValue('pep-liabilities-' + personId),
+      source_of_wealth_categories: sourceOfWealth,
+      source_of_wealth_detail: getFieldValue('pep-sow-detail-' + personId),
+      supporting_document_names: pepDocs && pepDocs.files ? Array.from(pepDocs.files).map(function(file) { return file.name; }) : []
+    };
+  }
+
   // Sanctions check
   var incCountry = document.getElementById('f-inc-country');
   if (incCountry && !checkSanctionedCountry(incCountry)) {
@@ -5286,61 +5369,163 @@ async function submitPrescreening(e) {
     return;
   }
 
-  // Collect form data for the API
-  var form = document.getElementById('prescreening-form');
   var dirRows = document.querySelectorAll('#directors-body tr');
   var directors = [];
   dirRows.forEach(function(row) {
-    var inputs = row.querySelectorAll('input, select');
-    var d = {};
-    inputs.forEach(function(c) {
-      if (c.className.includes('dir-name') || c.placeholder === 'Full Name') d.full_name = c.value;
-      if (c.className.includes('dir-nat') || c.placeholder === 'Nationality') d.nationality = c.value;
-      if (c.className.includes('pep-select') || c.id && c.id.includes('pep')) d.is_pep = c.value || 'No';
-    });
-    if (d.full_name) directors.push(d);
+    var personKey = getOrAssignOwnershipPersonKey(row, 'dir', '#directors-body tr');
+    var names = row.querySelectorAll('input[type="text"]');
+    var firstName = names[0] ? names[0].value.trim() : '';
+    var lastName = names[1] ? names[1].value.trim() : '';
+    var fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+    var pepSelect = row.querySelector('.pep-select');
+    var isPep = pepSelect ? (pepSelect.value || 'No') : 'No';
+    if (fullName) {
+      directors.push({
+        person_key: personKey,
+        first_name: firstName,
+        last_name: lastName,
+        full_name: fullName,
+        nationality: (row.querySelector('.nat-select') || {}).value || '',
+        is_pep: isPep,
+        pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes')
+      });
+    }
   });
 
   var uboRows = document.querySelectorAll('#ubos-body tr');
   var ubos = [];
   uboRows.forEach(function(row) {
-    var inputs = row.querySelectorAll('input, select');
-    var u = {};
-    inputs.forEach(function(c) {
-      if (c.className.includes('ubo-name') || c.placeholder === 'Full Name') u.full_name = c.value;
-      if (c.className.includes('ubo-nat') || c.placeholder === 'Nationality') u.nationality = c.value;
-      if (c.className.includes('ubo-pct') || c.placeholder === '%') u.ownership_pct = parseFloat(c.value) || 0;
-      if (c.className.includes('pep-select') || c.id && c.id.includes('pep')) u.is_pep = c.value || 'No';
-    });
-    if (u.full_name) ubos.push(u);
+    var personKey = getOrAssignOwnershipPersonKey(row, 'ubo', '#ubos-body tr');
+    var names = row.querySelectorAll('input[type="text"]');
+    var firstName = names[0] ? names[0].value.trim() : '';
+    var lastName = names[1] ? names[1].value.trim() : '';
+    var fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+    var ownershipInput = row.querySelector('input[type="number"]');
+    var pepSelect = row.querySelector('.pep-select');
+    var isPep = pepSelect ? (pepSelect.value || 'No') : 'No';
+    if (fullName) {
+      ubos.push({
+        person_key: personKey,
+        first_name: firstName,
+        last_name: lastName,
+        full_name: fullName,
+        nationality: (row.querySelector('.nat-select') || {}).value || '',
+        ownership_pct: ownershipInput ? (parseFloat(ownershipInput.value) || 0) : 0,
+        is_pep: isPep,
+        pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes')
+      });
+    }
   });
 
+  var intermediaryRows = document.querySelectorAll('#intermediaries-body tr');
+  var intermediaries = [];
+  intermediaryRows.forEach(function(row) {
+    var personKey = getOrAssignOwnershipPersonKey(row, 'int', '#intermediaries-body tr');
+    var entityInput = row.querySelector('input[type="text"]');
+    var jurisdictionSelect = row.querySelector('.nat-select');
+    var ownershipInput = row.querySelector('input[type="number"]');
+    var entityName = entityInput ? entityInput.value.trim() : '';
+    if (entityName) {
+      intermediaries.push({
+        person_key: personKey,
+        entity_name: entityName,
+        jurisdiction: jurisdictionSelect ? jurisdictionSelect.value : '',
+        ownership_pct: ownershipInput ? (parseFloat(ownershipInput.value) || 0) : 0
+      });
+    }
+  });
+
+  var sourceOfFundsSummary = [
+    getFieldValue('f-source-init-type') ? 'Initial: ' + getFieldValue('f-source-init-type') : '',
+    getFieldValue('f-source-init'),
+    getFieldValue('f-source-ongoing-type') ? 'Ongoing: ' + getFieldValue('f-source-ongoing-type') : '',
+    getFieldValue('f-source-ongoing')
+  ].filter(Boolean).join('; ');
+
   var payload = {
-    company_name: (document.getElementById('f-company-name') || {}).value || '',
-    brn: (document.getElementById('f-brn') || {}).value || '',
-    country: (document.getElementById('f-inc-country') || {}).value || '',
-    sector: (document.getElementById('f-sector') || {}).value || '',
-    entity_type: (document.getElementById('f-entity-type') || {}).value || '',
-    ownership_structure: (document.getElementById('f-ownership-structure') || {}).value || '',
+    company_name: getFieldValue('f-reg-name'),
+    entity_name: getFieldValue('f-reg-name'),
+    brn: getFieldValue('f-brn'),
+    country: getFieldValue('f-inc-country'),
+    sector: getFieldValue('f-sector'),
+    entity_type: getFieldValue('f-entity-type'),
+    ownership_structure: getFieldValue('f-ownership-structure'),
     prescreening_data: {
-      monthly_volume: (document.getElementById('f-monthly-volume') || {}).value || '',
-      introduction_method: (document.getElementById('f-intro-method') || document.getElementById('f-introduction') || {}).value || '',
-      cross_border: (document.getElementById('f-cross-border') || {}).checked || false,
-      source_of_wealth_type: (document.getElementById('f-source-wealth-type') || {}).value || '',
-      source_of_wealth_detail: (document.getElementById('f-source-wealth') || {}).value || '',
-      source_of_funds_initial_type: (document.getElementById('f-source-init-type') || {}).value || '',
-      source_of_funds_initial_detail: (document.getElementById('f-source-init') || {}).value || '',
-      source_of_funds_ongoing_type: (document.getElementById('f-source-ongoing-type') || {}).value || '',
-      source_of_funds_ongoing_detail: (document.getElementById('f-source-ongoing') || {}).value || '',
+      registered_entity_name: getFieldValue('f-reg-name'),
+      trading_name: getFieldValue('f-trade-name'),
+      incorporation_date: getFieldValue('f-inc-date'),
+      country_of_incorporation: getFieldValue('f-inc-country'),
+      registered_address: getFieldValue('f-reg-address'),
+      headquarters_address: getFieldValue('f-hq-address'),
+      entity_contact_first: getFieldValue('f-contact-first'),
+      entity_contact_last: getFieldValue('f-contact-last'),
+      entity_contact_email: getFieldValue('f-email'),
+      entity_contact_phone_code: getFieldValue('f-phone-code'),
+      entity_contact_mobile: getFieldValue('f-mobile'),
+      website: getFieldValue('f-website'),
+      regulatory_licences: getFieldValue('f-licences'),
+      services_required: getCheckboxValues('service-grid'),
+      monthly_volume: getFieldValue('f-monthly-volume'),
+      expected_volume: getFieldValue('f-monthly-volume'),
+      transaction_complexity: getFieldValue('f-txn-complexity'),
+      countries_of_operation: (msState['ms-op-countries'] || []).slice(),
+      business_overview: getFieldValue('f-biz-overview'),
+      target_markets: (msState['ms-target-markets'] || []).slice(),
+      account_purposes: getCheckboxValues('purpose-grid'),
+      existing_bank_account: getFieldValue('f-has-bank'),
+      existing_bank_name: getFieldValue('f-bank-name'),
       currencies: Array.from(document.querySelectorAll('input[name="currencies"]:checked')).map(function(c) { return c.value; }),
-      incorporation_date: (document.getElementById('f-inc-date') || {}).value || '',
-      transaction_complexity: (document.getElementById('f-txn-complexity') || {}).value || '',
-      entity_contact_first: (document.getElementById('f-contact-first') || {}).value || '',
-      entity_contact_last: (document.getElementById('f-contact-last') || {}).value || '',
-      entity_contact_email: (document.getElementById('f-email') || {}).value || '',
+      source_of_wealth_type: getFieldValue('f-source-wealth-type'),
+      source_of_wealth_detail: getFieldValue('f-source-wealth'),
+      source_of_funds_initial_type: getFieldValue('f-source-init-type'),
+      source_of_funds_initial_detail: getFieldValue('f-source-init'),
+      source_of_funds_ongoing_type: getFieldValue('f-source-ongoing-type'),
+      source_of_funds_ongoing_detail: getFieldValue('f-source-ongoing'),
+      source_of_funds: sourceOfFundsSummary,
+      estimated_monthly_activity: {
+        inflows: {
+          transactions: getOptionalNumber('f-in-txn'),
+          min_amount_usd: getOptionalNumber('f-in-min'),
+          max_amount_usd: getOptionalNumber('f-in-max'),
+          fx_amount_usd: getOptionalNumber('f-in-fx')
+        },
+        outflows: {
+          transactions: getOptionalNumber('f-out-txn'),
+          min_amount_usd: getOptionalNumber('f-out-min'),
+          max_amount_usd: getOptionalNumber('f-out-max'),
+          fx_amount_usd: getOptionalNumber('f-out-fx')
+        }
+      },
+      financial_forecast: {
+        revenue: {
+          year_1: getOptionalNumber('f-rev1'),
+          year_2: getOptionalNumber('f-rev2'),
+          year_3: getOptionalNumber('f-rev3')
+        },
+        cost_of_sales: {
+          year_1: getOptionalNumber('f-cos1'),
+          year_2: getOptionalNumber('f-cos2'),
+          year_3: getOptionalNumber('f-cos3')
+        },
+        profit: {
+          year_1: getOptionalNumber('f-profit1'),
+          year_2: getOptionalNumber('f-profit2'),
+          year_3: getOptionalNumber('f-profit3')
+        }
+      },
+      management_overview: getFieldValue('f-mgmt'),
+      introduction_method: getFieldValue('f-intro-method'),
+      referrer_name: getFieldValue('f-referrer-name'),
+      consent_data_processing: isChecked('f-consent-dpa'),
+      consent_information_sharing: isChecked('f-consent-sharing'),
+      consent_data_retention: isChecked('f-consent-retention'),
+      consent_ongoing_monitoring: isChecked('f-consent-monitoring'),
+      consent_marketing: isChecked('f-consent-marketing'),
+      consent_declaration: isChecked('f-consent-declaration')
     },
     directors: directors,
-    ubos: ubos
+    ubos: ubos,
+    intermediaries: intermediaries
   };
 
   try {
@@ -6745,6 +6930,7 @@ function renderClientNotifications(notifications) {
     approved: { bg: 'var(--green-dim)', border: 'var(--green)', color: 'var(--green)', icon: '✓' },
     rejected: { bg: 'var(--red-dim)', border: 'var(--red)', color: 'var(--red)', icon: '✗' },
     request_documents: { bg: 'var(--amber-dim)', border: 'var(--amber)', color: 'var(--amber)', icon: '⚠️' },
+    pre_approval: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: '📋' },
     pre_approved: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: '📋' },
     default: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: 'ℹ️' }
   };
@@ -6786,6 +6972,7 @@ async function loadClientNotifications() {
       if (latest.notification_type === 'approved') inferredStatus = 'approved';
       else if (latest.notification_type === 'rejected') inferredStatus = 'rejected';
       else if (latest.notification_type === 'request_documents') inferredStatus = 'kyc_documents';
+      else if (latest.notification_type === 'pre_approval' || latest.notification_type === 'pre_approved') inferredStatus = 'pre_approved';
       else inferredStatus = 'in_review';
       updateClientStatusTracker(inferredStatus);
     } else {
@@ -7570,7 +7757,9 @@ function handleKYCUpload(personId, docType, input) {
   if (AUTH_TOKEN && currentApplicationId && input.files[0]) {
     var formData = new FormData();
     formData.append('file', input.files[0]);
-    fetch(API_BASE + '/applications/' + currentApplicationId + '/documents?doc_type=intermediary_' + docType + '_' + personId, {
+    var uploadUrl = API_BASE + '/applications/' + currentApplicationId + '/documents?doc_type=' +
+      encodeURIComponent(docType) + '&person_id=' + encodeURIComponent(personId);
+    fetch(uploadUrl, {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN },
       body: formData
@@ -7886,15 +8075,15 @@ function setKYCType(personId, type, btn) {
   // Show / hide % holding row
   const holdingRow = document.getElementById('kyc-holding-row-' + personId);
   if (holdingRow) {
-    holdingRow.classList.toggle('visible', type === 'ubo');
-    if (type !== 'ubo') {
+    holdingRow.classList.toggle('visible', type === 'ubo' || type === 'intermediary');
+    if (type !== 'ubo' && type !== 'intermediary') {
       const inp = document.getElementById('kyc-holding-' + personId);
       if (inp) inp.value = '';
     }
   }
   // Update role badge label
   const nameBadge = btn.closest('.kyc-person-card').querySelector('.kyc-person-role');
-  if (nameBadge) nameBadge.textContent = type === 'ubo' ? 'UBO' : 'Director';
+  if (nameBadge) nameBadge.textContent = type === 'ubo' ? 'UBO' : (type === 'intermediary' ? 'Intermediary Shareholder' : 'Director');
 }
 
 // ─── My Applications: resume ────────────────────────────────────────────
