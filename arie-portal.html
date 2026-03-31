@@ -5861,46 +5861,58 @@ var DOC_RULES = {
     checks: [
       { id: 'date-check', label: 'Document Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
       { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name on document must match application', type: 'name' },
+      { id: 'address-match', label: 'Address Match', rule: 'Address must match registered office address on application', type: 'content' },
       { id: 'clarity', label: 'Document Clarity', rule: 'Document must be legible and unredacted', type: 'quality' },
-      { id: 'address-match', label: 'Address Match', rule: 'Address must match registered office address on application', type: 'content' }
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-coi': {
     name: 'Certificate of Incorporation',
     checks: [
       { id: 'name-match', label: 'Entity Name Match', rule: 'Company name must match application', type: 'name' },
-      { id: 'reg-number', label: 'Registration Number', rule: 'Registration number must be present and legible', type: 'content' },
-      { id: 'clarity', label: 'Document Clarity', rule: 'Document must be legible, certified copy if applicable', type: 'quality' }
+      { id: 'reg-number', label: 'Registration Number Match', rule: 'Registration number must match the number declared in pre-screening', type: 'content' },
+      { id: 'inc-date', label: 'Date of Incorporation Match', rule: 'Date of incorporation must match pre-screening declaration', type: 'age' },
+      { id: 'jurisdiction', label: 'Jurisdiction Match', rule: 'Jurisdiction/country of incorporation must match pre-screening', type: 'content' },
+      { id: 'clarity', label: 'Document Clarity', rule: 'Document must be legible, certified copy if applicable', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-memarts': {
     name: 'Memorandum of Association',
     checks: [
       { id: 'name-match', label: 'Entity Name Match', rule: 'Company name must match application', type: 'name' },
+      { id: 'share-capital', label: 'Authorised Share Capital', rule: 'Authorised share capital must match the amount declared in pre-screening', type: 'content' },
       { id: 'completeness', label: 'Completeness', rule: 'All pages must be present and legible', type: 'quality' },
-      { id: 'certification', label: 'Certification', rule: 'Must be certified or signed copy', type: 'quality' }
+      { id: 'objects', label: 'Business Objects / Activities', rule: 'Declared business activities must fall within the objects clause of the MoA', type: 'ai' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-shareholders': {
     name: 'Shareholder Register',
     checks: [
-      { id: 'consistency', label: 'Ownership Consistency', rule: 'Shareholdings must match UBOs declared in pre-screening', type: 'content' },
-      { id: 'completeness', label: 'Completeness', rule: 'Total ownership must add up to 100%', type: 'content' }
+      { id: 'name-match', label: 'Shareholder Name Match', rule: 'Shareholder names must match those declared in pre-screening', type: 'name' },
+      { id: 'percentages', label: 'Shareholding Percentages Match', rule: 'Shareholding percentages must match those declared in pre-screening', type: 'content' },
+      { id: 'total-shares', label: 'Total Shares Sum to 100%', rule: 'Total shareholdings must sum to 100%', type: 'content' },
+      { id: 'ubo-id', label: 'UBO Identification (\u226525%)', rule: 'Any shareholder holding \u2265 25% must be identified as a declared UBO', type: 'content' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-directors-reg': {
     name: 'Register of Directors',
     checks: [
-      { id: 'consistency', label: 'Director Consistency', rule: 'Directors must match those declared in pre-screening', type: 'content' },
+      { id: 'name-match', label: 'Director Name Match', rule: 'Directors must match those declared in pre-screening', type: 'name' },
       { id: 'completeness', label: 'Completeness', rule: 'All current directors must be listed', type: 'content' },
-      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible', type: 'quality' }
+      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-financials': {
     name: 'Financial Statements / Management Accounts',
     checks: [
       { id: 'date-check', label: 'Financial Period', rule: 'Must be for most recent financial year (or forecast if < 1 year old)', type: 'age', maxMonths: 18 },
-      { id: 'name-match', label: 'Entity Name Match', rule: 'Company name on statements must match application', type: 'name' }
+      { id: 'name-match', label: 'Entity Name Match', rule: 'Company name on statements must match application', type: 'name' },
+      { id: 'turnover', label: 'Revenue / Turnover Consistency', rule: 'Revenue or turnover figures must be broadly consistent with the annual turnover declared in pre-screening', type: 'content' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-board-res': {
@@ -5908,7 +5920,8 @@ var DOC_RULES = {
     checks: [
       { id: 'signatory', label: 'Signatory Match', rule: 'Authorised signatory must be a declared director', type: 'name' },
       { id: 'date-check', label: 'Resolution Date', rule: 'Must be dated and reasonably current', type: 'age', maxMonths: 12 },
-      { id: 'scope', label: 'Scope of Authority', rule: 'Must authorise the signatory to open the account', type: 'content' }
+      { id: 'scope', label: 'Scope of Authority', rule: 'Resolution must explicitly authorise the signatory to open a bank/payment account or engage the relevant service provider', type: 'ai' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-structure-chart': {
@@ -5916,7 +5929,8 @@ var DOC_RULES = {
     checks: [
       { id: 'ubo-chain', label: 'UBO Chain', rule: 'Must trace ownership to ultimate beneficial owners', type: 'content' },
       { id: 'consistency', label: 'Ownership Match', rule: 'Shareholdings must match shareholder register', type: 'content' },
-      { id: 'clarity', label: 'Legibility', rule: 'Diagram must be clear and readable', type: 'quality' }
+      { id: 'clarity', label: 'Legibility', rule: 'Diagram must be clear and readable', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-bank-ref': {
@@ -5924,15 +5938,17 @@ var DOC_RULES = {
     checks: [
       { id: 'letterhead', label: 'Bank Letterhead', rule: 'Must be on official bank letterhead', type: 'quality' },
       { id: 'date-check', label: 'Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
-      { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name must match application', type: 'name' }
+      { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name must match application', type: 'name' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-license-cert': {
     name: 'Regulatory Licence',
     checks: [
-      { id: 'validity', label: 'Licence Validity', rule: 'Licence must not be expired', type: 'expiry' },
-      { id: 'name-match', label: 'Entity Name Match', rule: 'Licensee name must match application', type: 'name' },
-      { id: 'scope', label: 'Licence Scope', rule: 'Licence must cover the activities described in the application', type: 'content' }
+      { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name must match application', type: 'name' },
+      { id: 'validity', label: 'Licence Validity', rule: 'Licence must be current and not expired', type: 'expiry' },
+      { id: 'scope', label: 'Licence Scope', rule: 'Licence must cover the business activities declared in the application', type: 'ai' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-contracts': {
@@ -5979,26 +5995,30 @@ var KYC_PERSON_DOC_RULES = {
   'passport': {
     name: 'Passport / Government ID',
     checks: [
-      { id: 'expiry', label: 'Document Expiry', rule: 'Must not be expired; at least 6 months validity remaining recommended', type: 'expiry' },
-      { id: 'photo-match', label: 'Photo Quality', rule: 'Photo must be clear and identifiable', type: 'quality' },
+      { id: 'expiry', label: 'Document Expiry', rule: 'Passport must not be expired. PASS if > 6 months validity remaining', type: 'expiry' },
       { id: 'name-match', label: 'Name Match', rule: 'Name must match the person declared in the application', type: 'name' },
-      { id: 'nationality', label: 'Nationality Match', rule: 'Nationality must match the nationality declared in pre-screening', type: 'content' }
+      { id: 'dob-match', label: 'Date of Birth Match', rule: 'Date of birth must match the date declared in pre-screening', type: 'content' },
+      { id: 'nationality', label: 'Nationality Match', rule: 'Nationality must match declared nationality', type: 'content' },
+      { id: 'photo-match', label: 'Photo Quality', rule: 'Photo must be clear and identifiable', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'poa': {
     name: 'Proof of Address (Personal)',
     checks: [
       { id: 'date-check', label: 'Document Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
-      { id: 'name-match', label: 'Name Match', rule: 'Name on document must match the person', type: 'name' },
-      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible and show full address', type: 'quality' },
-      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or bank officer', type: 'quality' }
+      { id: 'name-match', label: 'Name Match', rule: 'Name must match the person declared in the application', type: 'name' },
+      { id: 'address-match', label: 'Address Match', rule: "Address on document must match the person's declared residential address", type: 'content' },
+      { id: 'clarity', label: 'Document Clarity', rule: 'Document must be legible', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'cv': {
     name: 'CV / LinkedIn Profile',
     checks: [
       { id: 'name-match', label: 'Name Match', rule: 'Name on CV/profile must match declared identity', type: 'name' },
-      { id: 'completeness', label: 'Employment History', rule: 'Should include relevant professional background', type: 'content' }
+      { id: 'emp-presence', label: 'Employment History \u2014 Presence', rule: 'CV must include employment history section', type: 'content' },
+      { id: 'emp-relevance', label: 'Employment History \u2014 Relevance', rule: 'Employment background must be relevant to the declared role and business activity', type: 'ai' }
     ]
   },
   'bankref': {
@@ -6006,9 +6026,17 @@ var KYC_PERSON_DOC_RULES = {
     checks: [
       { id: 'date-check', label: 'Document Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
       { id: 'name-match', label: 'Name Match', rule: 'Account holder name must match the declared person', type: 'name' },
-      { id: 'bank-details', label: 'Bank Identification', rule: 'Must be on official bank letterhead with branch/SWIFT details', type: 'content' },
-      { id: 'account-standing', label: 'Account Standing', rule: 'Must confirm account in good standing for at least 12 months', type: 'content' },
-      { id: 'signatory', label: 'Authorised Signatory', rule: 'Must be signed by an authorised bank officer with name and title', type: 'quality' }
+      { id: 'bank-details', label: 'Bank Identification', rule: 'Must be on official bank letterhead with bank name clearly identifiable', type: 'content' },
+      { id: 'account-standing', label: 'Account Standing', rule: 'Must confirm account in good standing for at least 12 months', type: 'ai' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
+    ]
+  },
+  'pep-declaration': {
+    name: 'PEP / Source of Wealth Declaration',
+    checks: [
+      { id: 'name-match', label: 'Name Match', rule: 'Name must match the declared person', type: 'name' },
+      { id: 'sow-evidence', label: 'Source of Wealth Evidence', rule: 'Document must contain credible evidence supporting the declared source of wealth', type: 'ai' },
+      { id: 'consistency', label: 'Consistency / Plausibility', rule: 'Declared wealth, function, and source of funds must be internally consistent and plausible', type: 'ai' }
     ]
   },
   // Intermediary shareholder corporate documents
