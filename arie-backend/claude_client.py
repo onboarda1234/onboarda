@@ -1590,9 +1590,9 @@ CRITICAL REQUIREMENTS:
             {"id": "DOC-45", "type": "quality", "label": "Clarity", "rule": "Document must be legible and credible. PASS if legible and credible. WARN if partially legible. FAIL if illegible or not credible."},
         ],
         "bank_statements": [
-            {"id": "DOC-46", "type": "age", "label": "Period", "rule": "Must cover a recent period (within last 6 months). PASS if within 6 months. WARN if 6-12 months. FAIL if older than 12 months."},
-            {"id": "DOC-47", "type": "name", "label": "Name Match", "rule": "Account holder name must match the declared entity or person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-48", "type": "quality", "label": "Completeness", "rule": "All pages must be present. PASS if complete. WARN if minor pages missing. FAIL if key pages missing."},
+            {"id": "DOC-71", "type": "age", "label": "Period", "rule": "Must cover a recent period (within last 6 months). PASS if within 6 months. WARN if 6-12 months. FAIL if older than 12 months."},
+            {"id": "DOC-72", "type": "name", "label": "Name Match", "rule": "Account holder name must match the declared entity or person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-73", "type": "quality", "label": "Completeness", "rule": "All pages must be present. PASS if complete. WARN if minor pages missing. FAIL if key pages missing."},
         ],
         # ── KYC Person Documents (aligned with PERSON_DOC_CHECKS in backoffice) ──
         "passport": [

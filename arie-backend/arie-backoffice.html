@@ -720,7 +720,7 @@ body.role-admin .role-admin-only-block { display:block; }
   <div class="topbar-title" id="topbar-title">Dashboard</div>
   <div class="topbar-actions">
     <input type="text" class="topbar-search" placeholder="Search applications, clients..." id="global-search" oninput="handleGlobalSearch(this.value)" />
-    <button class="topbar-btn" onclick="showNotifications()">🔔 <span id="notif-count" style="background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;">3</span></button>
+    <button class="topbar-btn" onclick="showNotifications()">🔔 <span id="notif-count" style="background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:none;align-items:center;justify-content:center;font-size:10px;font-weight:700;">0</span></button>
     <select class="form-select" style="width:auto;padding:6px 10px;font-size:12px;" id="login-as-select" onchange="switchUser(this.value)">
       <option value="admin">Login as: Admin</option>
       <option value="sco">Login as: Senior CO</option>
@@ -790,7 +790,7 @@ body.role-admin .role-admin-only-block { display:block; }
       <div class="card-header"><div class="card-title">Onboarding Lanes</div></div>
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Fast Lane (Low Risk)</span><span id="lane-fast-count" style="font-weight:700;color:var(--green);">0</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Standard Review (Low Risk)</span><span id="lane-fast-count" style="font-weight:700;color:var(--green);">0</span></div>
           <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div id="lane-fast-bar" style="width:0%;height:100%;background:var(--green);border-radius:5px;transition:width 0.5s;"></div></div>
         </div>
         <div>
@@ -1166,8 +1166,9 @@ body.role-admin .role-admin-only-block { display:block; }
       <div class="card-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span style="font-size:18px;">🛡️</span>
         <span style="font-weight:700;">AI Supervisor Pipeline</span>
+        <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;">Decision Support</span>
         <span class="badge" id="sv-pipeline-status" style="background:var(--bg2);color:var(--text3);">Not Run</span>
-        <button class="btn btn-primary btn-sm" id="btn-run-supervisor" onclick="runSupervisorPipeline()" style="margin-left:auto;">▶️ Run Supervisor Pipeline</button>
+        <button class="btn btn-primary btn-sm" id="btn-run-supervisor" onclick="runSupervisorPipeline()" style="margin-left:auto;">▶️ Run Analysis</button>
       </div>
     </div>
 
@@ -1202,31 +1203,9 @@ body.role-admin .role-admin-only-block { display:block; }
         <div class="card-header"><div class="card-title">Officer Review</div></div>
         <div id="sv-review-panel" style="padding:14px;">
           <div id="sv-review-reasons"></div>
-          <div id="sv-review-form" style="display:none;margin-top:14px;border-top:1px solid var(--border1);padding-top:14px;">
-            <div style="font-size:12px;font-weight:700;margin-bottom:8px;">Submit Review Decision</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-              <select class="form-select" id="sv-review-decision" style="font-size:12px;padding:6px 10px;min-width:180px;">
-                <option value="approve">Approve</option>
-                <option value="reject">Reject</option>
-                <option value="request_information">Request Information</option>
-                <option value="escalate">Escalate Further</option>
-                <option value="enhanced_monitoring">Enhanced Monitoring</option>
-                <option value="defer">Defer</option>
-              </select>
-              <select class="form-select" id="sv-review-risk" style="font-size:12px;padding:6px 10px;min-width:140px;">
-                <option value="">Risk Level (optional)</option>
-                <option value="LOW">Low</option>
-                <option value="MEDIUM">Medium</option>
-                <option value="HIGH">High</option>
-                <option value="VERY_HIGH">Very High</option>
-              </select>
-            </div>
-            <textarea id="sv-review-reason" rows="3" placeholder="Decision reason (mandatory)..." style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border1);border-radius:6px;margin-bottom:8px;resize:vertical;"></textarea>
-            <div style="display:flex;gap:8px;">
-              <label style="font-size:11px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="sv-review-override" /> Override AI Recommendation</label>
-            </div>
-            <textarea id="sv-override-reason" rows="2" placeholder="Override reason (required if overriding AI)..." style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border1);border-radius:6px;margin-top:6px;display:none;resize:vertical;"></textarea>
-            <button class="btn btn-primary" onclick="submitSupervisorReview()" style="margin-top:10px;">Submit Review</button>
+          <!-- Supervisor review actions are performed via the memo approval workflow (Generate Memo → Validate → Approve) -->
+          <div style="margin-top:14px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:11px;color:var(--text3);">
+            To act on supervisor findings, use the compliance memo workflow: Generate Memo → Validate → Supervisor Run → Approve/Reject via the Memo tab.
           </div>
         </div>
       </div>
@@ -1625,8 +1604,8 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="form-group"><div class="form-label">Company Name</div><input class="form-input" id="setting-company-name" value="Onboarda Ltd" /></div>
     <div class="form-group"><div class="form-label">FSC Licence Number</div><input class="form-input" id="setting-fsc-licence" value="FSC-PIS-2024-001" /></div>
     <div class="form-group"><div class="form-label">Default Data Retention (years)</div><input class="form-input" type="number" id="setting-retention" value="7" /></div>
-    <div class="form-group"><div class="form-label">Risk Appetite — Max Score for Auto-Approval</div><input class="form-input" type="number" id="setting-auto-approve" value="40" /></div>
-    <div class="form-group"><div class="form-label">EDD Threshold Score</div><input class="form-input" type="number" id="setting-edd-threshold" value="55" /></div>
+    <div class="form-group"><div class="form-label">Risk Appetite — Low Risk Ceiling (reference only, not auto-enforced)</div><input class="form-input" type="number" id="setting-auto-approve" value="40" /></div>
+    <div class="form-group"><div class="form-label">EDD Threshold Score (reference only, not auto-enforced)</div><input class="form-input" type="number" id="setting-edd-threshold" value="55" /></div>
     <button class="btn btn-primary" onclick="saveSystemSettings()">Save Settings</button>
   </div>
 </div>
@@ -1823,20 +1802,20 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="card">
       <div class="card-title" style="margin-bottom:12px;">Risk Classification Thresholds</div>
       <div style="display:flex;flex-direction:column;gap:8px;">
-        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--green);"></div><span style="font-size:13px;"><strong>Low Risk:</strong> 0 — 39.9</span></div>
-        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--blue);"></div><span style="font-size:13px;"><strong>Medium Risk:</strong> 40 — 54.9</span></div>
-        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--amber);"></div><span style="font-size:13px;"><strong>High Risk:</strong> 55 — 69.9</span></div>
+        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--green);"></div><span style="font-size:13px;"><strong>Low Risk:</strong> 0 — 29.9</span></div>
+        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--blue);"></div><span style="font-size:13px;"><strong>Medium Risk:</strong> 30 — 49.9</span></div>
+        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--amber);"></div><span style="font-size:13px;"><strong>High Risk:</strong> 50 — 69.9</span></div>
         <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--red);"></div><span style="font-size:13px;"><strong>Very High Risk:</strong> 70 — 100</span></div>
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:12px;">Approval Authority Matrix</div>
+      <div class="card-title" style="margin-bottom:12px;">Approval Requirements</div>
       <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;">
-        <div><strong>Low Risk:</strong> Compliance Officer (auto-approve if score ≤ 40)</div>
-        <div><strong>Medium Risk:</strong> Senior Compliance Officer</div>
-        <div><strong>High Risk:</strong> Head of Compliance + Senior CO</div>
-        <div><strong>Very High Risk:</strong> Board Approval required + EDD</div>
+        <div><strong>All applications:</strong> Require compliance memo (generated, validated, supervisor-approved), live screening, and no flagged documents</div>
+        <div><strong>Low / Medium Risk:</strong> Single officer approval (Admin, SCO, or CO)</div>
+        <div><strong>High / Very High Risk:</strong> Dual approval by two different officers + pre-approval before KYC</div>
       </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:8px;">All approvals are human-initiated. No auto-approval exists regardless of risk score.</div>
     </div>
   </div>
 
@@ -1858,8 +1837,8 @@ body.role-admin .role-admin-only-block { display:block; }
 <div class="view" id="view-supervisor">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
     <div>
-      <h3 style="font-size:16px;font-weight:700;">AI Supervisor Dashboard</h3>
-      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Multi-agent pipeline orchestrator — validation, confidence routing, contradiction detection, and compliance rules.</p>
+      <h3 style="font-size:16px;font-weight:700;">AI Supervisor Dashboard <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;vertical-align:middle;">Decision Support</span></h3>
+      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Multi-agent analysis pipeline — contradiction detection, confidence evaluation, and compliance rule checks. Results inform officer review but do not directly gate approval. Approval gating is enforced by the memo supervisor (Generate Memo → Validate → Approve).</p>
     </div>
     <button class="btn btn-primary" onclick="refreshSupervisorDashboard()">🔄 Refresh</button>
   </div>
@@ -2075,10 +2054,10 @@ body.role-admin .role-admin-only-block { display:block; }
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
-<!-- AI Chat Sidebar -->
+<!-- Quick Reference Sidebar -->
 <div class="ai-chat-sidebar" id="ai-chat-sidebar">
   <div class="ai-chat-header">
-    <h3>AI Assistant</h3>
+    <h3>Quick Reference</h3>
     <button class="ai-chat-header-close" onclick="toggleAIChat()">✕</button>
   </div>
   <div class="ai-chat-messages" id="ai-chat-messages"></div>
@@ -2089,13 +2068,13 @@ body.role-admin .role-admin-only-block { display:block; }
     <button class="ai-quick-btn" onclick="sendQuickQuestion('Regulatory updates')">Regulatory updates</button>
   </div>
   <div class="ai-chat-input-box">
-    <input class="ai-chat-input" type="text" id="ai-chat-input" placeholder="Ask about compliance..." onkeypress="if(event.key==='Enter'){sendAIMessage();}" />
+    <input class="ai-chat-input" type="text" id="ai-chat-input" placeholder="Search topics..." onkeypress="if(event.key==='Enter'){sendAIMessage();}" />
     <button class="ai-chat-send" onclick="sendAIMessage()">Send</button>
   </div>
 </div>
 
-<!-- AI Chat Toggle Button -->
-<button class="ai-chat-toggle" onclick="toggleAIChat()">🤖</button>
+<!-- Quick Reference Toggle Button -->
+<button class="ai-chat-toggle" onclick="toggleAIChat()">📋</button>
 
 <script>
 // ═══════════════════════════════════════════════════════════
@@ -2318,14 +2297,14 @@ var BO_AUTH_TOKEN = '';
 var BO_AUTH_USER = null;
 
 // ─── Environment Detection ────────────────────────────────────
-var ARIE_ENV = 'demo';
+var ARIE_ENV = 'production';
 var FEATURE_FLAGS = {};
 
 async function loadEnvironment() {
   try {
     const res = await fetch((BO_API_BASE || '/api') + '/config/environment');
     const data = await res.json();
-    ARIE_ENV = data.environment || 'demo';
+    ARIE_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
     applyEnvironmentUI();
   } catch (e) {
@@ -2420,9 +2399,7 @@ async function boApiCall(method, path, body) {
 function setBoAuth(token, user) {
   BO_AUTH_TOKEN = token;
   BO_AUTH_USER = user;
-  // Secure: token stored in httpOnly cookie by server, not in localStorage
-  // Only keep non-sensitive user display info in memory
-  document.cookie = 'arie_bo_token=' + encodeURIComponent(token) + '; path=/; SameSite=Strict; Secure';
+  // Auth token kept in memory only; httpOnly session cookie set by server
 }
 
 // Try to load data from API, fall back to mock data
@@ -2754,37 +2731,41 @@ var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:nul
 function generateAppDocs(app) {
   var personDocs = [];
   (app.directors || []).forEach(function(d) {
+    var dName = d.name || 'Unknown';
     var pDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
     if (d.pep === 'Yes') {
       pDocs.push({type:'Bank Reference Letter', status:'uploaded'});
       pDocs.push({type:'Source of Wealth Declaration', status:'uploaded'});
     }
-    var seed = 0; for (var i=0;i<d.name.length;i++) seed = ((seed<<5)-seed)+d.name.charCodeAt(i);
+    var seed = 0; for (var i=0;i<dName.length;i++) seed = ((seed<<5)-seed)+dName.charCodeAt(i);
     if (Math.abs(seed) % 3 !== 0) pDocs.push({type:'CV / Resume', status:'uploaded'});
-    personDocs.push({ name: d.name, role: 'Director', pep: d.pep, docs: pDocs });
+    personDocs.push({ name: dName, role: 'Director', pep: d.pep, docs: pDocs });
   });
   (app.ubos || []).forEach(function(u) {
-    if (personDocs.some(function(p){ return p.name === u.name; })) return;
+    var uName = u.name || 'Unknown';
+    if (personDocs.some(function(p){ return p.name === uName; })) return;
     var uDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
     if (u.pep === 'Yes') {
       uDocs.push({type:'Bank Reference Letter', status:'uploaded'});
       uDocs.push({type:'Source of Wealth Declaration', status:'uploaded'});
     }
-    var seed = 0; for (var i=0;i<u.name.length;i++) seed = ((seed<<5)-seed)+u.name.charCodeAt(i);
+    var seed = 0; for (var i=0;i<uName.length;i++) seed = ((seed<<5)-seed)+uName.charCodeAt(i);
     if (Math.abs(seed) % 3 !== 0) uDocs.push({type:'CV / Resume', status:'uploaded'});
-    personDocs.push({ name: u.name, role: 'UBO (' + u.pct + '%)', pep: u.pep, docs: uDocs });
+    personDocs.push({ name: uName, role: 'UBO (' + (u.pct || '?') + '%)', pep: u.pep, docs: uDocs });
   });
   (app.intermediaries || []).forEach(function(inter) {
+    var interName = inter.name || 'Unknown';
     var iDocs = [{type:'Certificate of Incorporation', status:'uploaded'}, {type:'Register of Directors', status:'uploaded'}, {type:'Register of Shareholders', status:'uploaded'}];
-    var seed = 0; for (var i=0;i<inter.name.length;i++) seed = ((seed<<5)-seed)+inter.name.charCodeAt(i);
+    var seed = 0; for (var i=0;i<interName.length;i++) seed = ((seed<<5)-seed)+interName.charCodeAt(i);
     if (Math.abs(seed) % 2 === 0) iDocs.push({type:'Certificate of Good Standing', status:'uploaded'});
     if (Math.abs(seed) % 3 === 0) iDocs.push({type:'Financial Statements', status:'uploaded'});
-    personDocs.push({ name: inter.name, role: 'Intermediary (' + inter.jurisdiction + ')', pep: 'N/A', docs: iDocs });
+    personDocs.push({ name: interName, role: 'Intermediary (' + (inter.jurisdiction || 'N/A') + ')', pep: 'N/A', docs: iDocs });
   });
   app.personDocs = personDocs;
 
   var bizDocs = [];
-  var seed2 = 0; for (var i=0;i<app.company.length;i++) seed2 = ((seed2<<5)-seed2)+app.company.charCodeAt(i);
+  var companyName = app.company || 'Unknown';
+  var seed2 = 0; for (var i=0;i<companyName.length;i++) seed2 = ((seed2<<5)-seed2)+companyName.charCodeAt(i);
   seed2 = Math.abs(seed2);
   if (seed2 % 2 === 0) bizDocs.push('Business Plan');
   if (seed2 % 3 !== 2) bizDocs.push('Tax Clearance Certificate');
@@ -3214,14 +3195,35 @@ function buildVerificationResultsHtml(results) {
     pushItem('Issues', Array.isArray(results.issues) ? results.issues.join(', ') : '');
     pushItem('Checks Run', Array.isArray(results.checks_run) ? results.checks_run.join(', ') : '');
     if (Array.isArray(results.checks)) {
+      var classColors = { rule: '#16a34a', hybrid: '#d97706', ai: '#7c3aed' };
       results.checks.forEach(function(check, idx) {
         if (!check || typeof check !== 'object') return;
-        var parts = [];
-        if (check.label || check.name) parts.push(firstMeaningfulDetailValue(check.label, check.name));
-        if (check.result || check.status) parts.push('result: ' + firstMeaningfulDetailValue(check.result, check.status));
-        if (check.details) parts.push('details: ' + check.details);
-        if (check.confidence != null) parts.push('confidence: ' + Math.round(Number(check.confidence) * 100) + '%');
-        if (parts.length) items.push('<div class="doc-meta"><strong>AI Check ' + (idx + 1) + ':</strong> ' + escapeHtml(parts.join(' | ')) + '</div>');
+        var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
+        var result = (firstMeaningfulDetailValue(check.result, check.status) || '').toLowerCase();
+        var resultColor = result === 'pass' ? '#16a34a' : result === 'fail' ? '#dc2626' : result === 'warn' ? '#d97706' : '#6b7280';
+        var resultBadge = result ? '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + resultColor + ';color:#fff;margin-left:4px;">' + result.toUpperCase() + '</span>' : '';
+
+        // Classification badge (new layered format)
+        var classTag = '';
+        if (check.classification) {
+          var cc = check.classification.toLowerCase();
+          classTag = '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + (classColors[cc] || '#6b7280') + '22;color:' + (classColors[cc] || '#6b7280') + ';border:1px solid ' + (classColors[cc] || '#6b7280') + ';margin-left:4px;">' + cc + '</span>';
+        }
+
+        var meta = '';
+        // Pre-screening comparison (new layered format)
+        if (check.ps_field && (check.ps_value != null || check.extracted_value != null)) {
+          meta += '<div style="font-size:11px;color:#6b7280;margin-top:2px;">Pre-screening <em>' + escapeHtml(check.ps_field) + '</em>: <strong>' + escapeHtml(String(check.ps_value ?? '—')) + '</strong>';
+          if (check.extracted_value != null) meta += ' → extracted: <strong>' + escapeHtml(String(check.extracted_value)) + '</strong>';
+          meta += '</div>';
+        }
+        // Message / details
+        var msg = firstMeaningfulDetailValue(check.message, check.details);
+        if (msg) meta += '<div style="font-size:11px;color:#374151;margin-top:2px;">' + escapeHtml(msg) + '</div>';
+        // Confidence (for AI/hybrid checks)
+        if (check.confidence != null) meta += '<div style="font-size:11px;color:#6b7280;">Confidence: ' + Math.round(Number(check.confidence) * 100) + '%</div>';
+
+        items.push('<div class="doc-meta" style="padding:4px 0;border-bottom:1px solid var(--border2,#e5e7eb);"><strong>' + label + '</strong>' + resultBadge + classTag + meta + '</div>');
       });
     }
     if (!items.length) {
@@ -3328,7 +3330,7 @@ function renderExplainabilityPanel(app, screeningSummary) {
   var trailSteps = [
     { name: 'Application intake persisted', detail: 'Core profile, pre-screening, and ownership records loaded from the authoritative application record.', confidence: 'Authoritative DB' },
     { name: 'Rule-based risk score loaded', detail: 'Composite score ' + normalizeDetailValue(app.score) + ' and risk level ' + normalizeDetailValue(app.risk) + ' were loaded from stored application risk fields.', confidence: 'Stored score' },
-    { name: 'Screening evidence reviewed', detail: screeningSummary.screening_run_recorded ? ('Screening recorded with ' + (screeningSummary.total_hits || 0) + ' hit(s) and mode ' + normalizeDetailValue(screeningSummary.screening_mode) + '.') : 'No persisted screening report is attached to this application yet.', confidence: screeningSummary.screening_run_recorded ? 'Stored screening' : 'No screening record' },
+    { name: 'Screening evidence reviewed', detail: screeningSummary.screening_run_recorded ? ('Screening recorded with ' + (screeningSummary.total_hits || 0) + ' hit(s). Mode: ' + normalizeDetailValue(screeningSummary.screening_mode) + (screeningSummary.screening_mode === 'live' ? ' (provider-verified).' : ' — non-live screening blocks approval in production.')) : 'No persisted screening report is attached to this application yet.', confidence: screeningSummary.screening_run_recorded ? 'Stored screening' : 'No screening record' },
     { name: 'Document verification reviewed', detail: app._documents.length ? (app._documents.filter(function(doc) { return normalizeDetailValue(doc.verification_status) === 'verified'; }).length + ' verified document(s) out of ' + app._documents.length + ' stored upload(s).') : 'No stored documents are attached to this application.', confidence: 'Stored documents' }
   ];
 
@@ -3616,7 +3618,7 @@ function renderAuthoritativeAppDetail(app, options) {
   var screeningMeta = '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:12px;">' +
     '<div><strong>Screening Run:</strong> ' + (screeningSummary.screening_run_recorded ? 'Recorded' : 'Not recorded') + '</div>' +
     '<div><strong>Total Hits:</strong> ' + escapeHtml(String(screeningSummary.total_hits || 0)) + '</div>' +
-    '<div><strong>Mode:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screening_mode)) + '</div>' +
+    '<div style="display:flex;align-items:center;gap:6px;"><strong>Mode:</strong> ' + screeningModeBadge(screeningSummary.screening_mode) + '</div>' +
     '<div><strong>Screened At:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screened_at)) + '</div>' +
     '</div>';
   document.getElementById('detail-screening-review').innerHTML = screeningMeta;
@@ -3880,10 +3882,10 @@ function screeningQueueStatusBadge(statusKey, statusLabel) {
 
 function screeningQueueContextCell(row) {
   var parts = (row.entity_context || []).slice();
-  if (row.screening_mode) parts.push('Mode: ' + row.screening_mode);
   if (row.screened_at) parts.push('Screened: ' + String(row.screened_at).substring(0, 19).replace('T', ' '));
-  if (!parts.length) return '<span style="font-size:12px;color:var(--text3);">—</span>';
-  return '<div style="display:flex;flex-wrap:wrap;gap:4px;">' + parts.map(function(part) {
+  var modeBadge = row.screening_mode ? screeningModeBadge(row.screening_mode) : '';
+  if (!parts.length && !modeBadge) return '<span style="font-size:12px;color:var(--text3);">—</span>';
+  return '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">' + modeBadge + parts.map(function(part) {
     return '<span class="explain-data-source" style="margin:0;">' + escapeHtml(part) + '</span>';
   }).join('') + '</div>';
 }
@@ -3905,10 +3907,10 @@ function screeningReviewBadge(row) {
 }
 
 function screeningModeBadge(mode) {
-  if (!mode) return '<span class="badge pending">Mode Unknown</span>';
-  var cls = mode === 'live' ? 'approved' : mode === 'simulated' ? 'high' : 'pending';
-  var label = mode === 'live' ? 'Live Screening' : mode === 'simulated' ? 'Simulated Screening' : mode;
-  return '<span class="badge ' + cls + '">' + escapeHtml(label) + '</span>';
+  if (!mode || mode === 'unknown') return '<span class="badge high" title="Screening provenance could not be verified. This will block approval in production.">⚠ Unverified — Blocks Approval</span>';
+  if (mode === 'live') return '<span class="badge approved">✓ Live Screening</span>';
+  if (mode === 'simulated') return '<span class="badge high" title="Simulated screening data cannot be used for production approval.">⚠ Simulated — Blocks Approval</span>';
+  return '<span class="badge pending">' + escapeHtml(mode) + '</span>';
 }
 
 function screeningResultFacts(screeningRecord) {
@@ -4465,24 +4467,40 @@ function viewAlert(date, client) {
   }
 }
 
-function escalateAlertFromModal() {
-  if (currentAlertRef) {
+async function escalateAlertFromModal() {
+  if (!currentAlertRef || !currentAlertRef.id) { closeModal('modal-alert-detail'); return; }
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, {
+      status: 'escalated',
+      reviewed_by: currentUser.name,
+      review_notes: 'Escalated to Senior Compliance Officer'
+    });
     currentAlertRef.status = 'Escalated';
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Escalate Alert', target:currentAlertRef.client, detail:'Escalated ' + currentAlertRef.type + ' alert to SCO', ip:'196.192.44.12' });
     renderMonitoringAlerts();
+    closeModal('modal-alert-detail');
+    showToast('Alert escalated to Senior Compliance Officer');
+  } catch(err) {
+    showToast('Failed to escalate alert: ' + (err.message || 'Unknown error'), 'error');
+    closeModal('modal-alert-detail');
   }
-  closeModal('modal-alert-detail');
-  showToast('Alert escalated to Senior Compliance Officer');
 }
 
-function dismissAlertFromModal() {
-  if (currentAlertRef) {
+async function dismissAlertFromModal() {
+  if (!currentAlertRef || !currentAlertRef.id) { closeModal('modal-alert-detail'); return; }
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, {
+      status: 'reviewed',
+      reviewed_by: currentUser.name,
+      review_notes: 'Reviewed and closed'
+    });
     currentAlertRef.status = 'Reviewed';
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Review Alert', target:currentAlertRef.client, detail:'Reviewed and closed ' + currentAlertRef.type + ' alert', ip:'196.192.44.12' });
     renderMonitoringAlerts();
+    closeModal('modal-alert-detail');
+    showToast('Alert marked as reviewed');
+  } catch(err) {
+    showToast('Failed to update alert: ' + (err.message || 'Unknown error'), 'error');
+    closeModal('modal-alert-detail');
   }
-  closeModal('modal-alert-detail');
-  showToast('Alert marked as reviewed');
 }
 
 function openPeriodicReview(ref) {
@@ -4682,21 +4700,26 @@ async function sendClientNotification() {
     showToast('Please enter a notification message');
     return;
   }
-
-  // Log notification in audit trail
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Client Notification', target:currentApp.ref, detail:'Client notification sent on ' + new Date().toLocaleDateString(), ip:'196.192.44.12' });
-
-  closeModal('modal-client-notification');
-  showToast('Client notification sent for ' + currentApp.ref);
-  openAppDetail(currentApp.ref);
+  try {
+    await boApiCall('POST', '/applications/' + currentApp.id + '/notify', {
+      message: message,
+      notification_type: 'officer_message'
+    });
+    closeModal('modal-client-notification');
+    showToast('Client notification sent for ' + currentApp.ref);
+    openAppDetail(currentApp.ref);
+  } catch(err) {
+    showToast('Failed to send notification: ' + (err.message || 'Unknown error'), 'error');
+  }
 }
 
 function openOverrideModal() {
   if (!currentApp) return;
   // Extract the current recommendation from the memo
-  var recommendation = 'Standard Due Diligence';
-  if (currentApp.risk === 'LOW') recommendation = 'Fast Lane';
+  var recommendation = 'Standard Review';
+  if (currentApp.risk === 'LOW') recommendation = 'Standard Review (Low Risk)';
   else if (currentApp.risk === 'HIGH') recommendation = 'Enhanced Due Diligence';
+  else if (currentApp.risk === 'VERY_HIGH') recommendation = 'Enhanced Due Diligence (Dual Approval Required)';
 
   document.getElementById('current-recommendation').textContent = recommendation;
   document.getElementById('override-decision').value = 'Approve';
@@ -4777,12 +4800,7 @@ async function escalateCase() {
 }
 
 function addNote() {
-  var note = document.getElementById('internal-note').value.trim();
-  if (!note) return;
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Note', target:currentApp ? currentApp.ref : '', detail:note, ip:'196.192.44.12' });
-  document.getElementById('internal-note').value = '';
-  showToast('Note added');
-  if (currentApp) openAppDetail(currentApp.ref);
+  showToast('Internal notes are not yet persisted to the backend. This feature will be available in a future release.', 'warn');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4849,17 +4867,24 @@ async function preApprovalRequestInfo() {
 function openAddUserModal() { document.getElementById('modal-add-user').classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
-function addUser() {
+async function addUser() {
   var name = document.getElementById('new-user-name').value.trim();
   var email = document.getElementById('new-user-email').value.trim();
   var role = document.getElementById('new-user-role').value;
   if (!name || !email) { showToast('Please fill in all fields'); return; }
-  var initials = name.split(' ').map(function(w) { return w[0]; }).join('').toUpperCase().slice(0,2);
-  USERS.push({ id:USERS.length+1, name:name, email:email, role:role, initials:initials, status:'active' });
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Create User', target:name, detail:'Added as ' + ROLE_LABELS[role], ip:'196.192.44.12' });
-  closeModal('modal-add-user');
-  renderUsers();
-  showToast('User ' + name + ' added successfully');
+  try {
+    var resp = await boApiCall('POST', '/users', { full_name: name, email: email, role: role });
+    // Reload users from API to get authoritative state
+    var usersResp = await boApiCall('GET', '/users');
+    if (usersResp && Array.isArray(usersResp)) {
+      USERS = usersResp.map(function(u) { return { id: u.id, name: u.full_name || u.name, email: u.email, role: u.role, initials: (u.full_name || u.name || '').split(' ').map(function(w){return w[0];}).join('').toUpperCase().slice(0,2), status: u.status || 'active' }; });
+    }
+    closeModal('modal-add-user');
+    renderUsers();
+    showToast('User ' + name + ' created successfully');
+  } catch(err) {
+    showToast('Failed to create user: ' + (err.message || 'Unknown error'), 'error');
+  }
 }
 
 function editUser(id) {
@@ -4873,7 +4898,7 @@ function editUser(id) {
   newRole = newRole.trim().toLowerCase();
   // Call API to update user role
   boApiCall('PUT', '/users/' + u.id, { full_name: u.name, role: newRole, status: u.status || 'active' }).then(function(resp) {
-    USERS[idx].role = newRole;
+    u.role = newRole;
     renderUsers();
     showToast('Role updated: ' + u.name + ' → ' + newRole, 'success');
   }).catch(function(err) {
@@ -4902,7 +4927,7 @@ function showToast(msg) {
   setTimeout(function() { t.classList.remove('show'); }, 3000);
 }
 
-function showNotifications() { showToast('3 new notifications — 2 pending reviews, 1 EDD escalation'); }
+function showNotifications() { showToast('No new notifications.'); }
 
 function handleGlobalSearch(q) {
   if (!q) return;
@@ -5171,9 +5196,9 @@ function exportKPIReport() {
 // RISK SCORING MODEL CONFIGURATION
 // ═══════════════════════════════════════════════════════════
 var RISK_THRESHOLDS = [
-  { level:'LOW', label:'Low Risk', color:'var(--green)', min:0, max:39.9 },
-  { level:'MEDIUM', label:'Medium Risk', color:'var(--blue)', min:40, max:54.9 },
-  { level:'HIGH', label:'High Risk', color:'var(--amber)', min:55, max:69.9 },
+  { level:'LOW', label:'Low Risk', color:'var(--green)', min:0, max:29.9 },
+  { level:'MEDIUM', label:'Medium Risk', color:'var(--blue)', min:30, max:49.9 },
+  { level:'HIGH', label:'High Risk', color:'var(--amber)', min:50, max:69.9 },
   { level:'VERY_HIGH', label:'Very High Risk', color:'var(--red)', min:70, max:100 }
 ];
 
@@ -5457,8 +5482,14 @@ function toggleCountryEdit() {
   document.getElementById('btn-edit-countries').innerHTML = countryEditMode ? '💾 Save' : '✏️ Edit';
   renderCountryLists();
   if (!countryEditMode) {
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated country risk lists', ip:'196.192.44.12' });
-    showToast('Country risk lists saved');
+    boApiCall('PUT', '/config/risk-model', { country_risk_scores: COUNTRY_RISK_LISTS })
+      .then(function() {
+        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated country risk lists', ip:'196.192.44.12' });
+        showToast('Country risk lists saved');
+      })
+      .catch(function(e) {
+        showToast('Failed to save country risk lists: ' + (e.message || e), 'error');
+      });
   }
 }
 
@@ -5469,8 +5500,14 @@ function toggleSectorEdit() {
       var idx = parseInt(el.dataset.idx);
       SECTOR_RISK_CONFIG[idx].score = parseInt(el.value) || 2;
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated sector risk scores', ip:'196.192.44.12' });
-    showToast('Sector risk scores saved');
+    boApiCall('PUT', '/config/risk-model', { sector_risk_scores: SECTOR_RISK_CONFIG })
+      .then(function() {
+        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated sector risk scores', ip:'196.192.44.12' });
+        showToast('Sector risk scores saved');
+      })
+      .catch(function(e) {
+        showToast('Failed to save sector risk scores: ' + (e.message || e), 'error');
+      });
   }
   sectorEditMode = !sectorEditMode;
   document.getElementById('btn-edit-sectors').innerHTML = sectorEditMode ? '💾 Save' : '✏️ Edit';
@@ -5483,8 +5520,14 @@ function toggleEntityEdit() {
       var idx = parseInt(el.dataset.idx);
       ENTITY_TYPE_SCORES[idx].score = parseInt(el.value) || 2;
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated entity type risk scores', ip:'196.192.44.12' });
-    showToast('Entity type risk scores saved');
+    boApiCall('PUT', '/config/risk-model', { entity_type_scores: ENTITY_TYPE_SCORES })
+      .then(function() {
+        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated entity type risk scores', ip:'196.192.44.12' });
+        showToast('Entity type risk scores saved');
+      })
+      .catch(function(e) {
+        showToast('Failed to save entity type risk scores: ' + (e.message || e), 'error');
+      });
   }
   entityEditMode = !entityEditMode;
   document.getElementById('btn-edit-entities').innerHTML = entityEditMode ? '💾 Save' : '✏️ Edit';
@@ -5695,19 +5738,16 @@ function saveRiskModel() {
     return;
   }
   AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Risk scoring model updated', ip:'196.192.44.12' });
-  // Sync to API
-  if (BO_AUTH_TOKEN) {
-    boApiCall('PUT', '/config/risk-model', { dimensions: RISK_DIMENSIONS, thresholds: RISK_THRESHOLDS })
-      .then(function() { console.log('Risk model synced to API'); })
-      .catch(function(e) { console.warn('API sync failed:', e); });
-  }
   // Exit edit mode
   riskEditMode = false;
   document.getElementById('btn-edit-risk').style.display = '';
   document.getElementById('btn-save-risk').style.display = 'none';
   document.getElementById('btn-cancel-risk').style.display = 'none';
   renderRiskModel();
-  showToast('✅ Risk scoring model saved successfully');
+  // Sync to API — toast only on confirmed persistence
+  boApiCall('PUT', '/config/risk-model', { dimensions: RISK_DIMENSIONS, thresholds: RISK_THRESHOLDS })
+    .then(function() { showToast('Risk scoring model saved successfully'); })
+    .catch(function(e) { showToast('Failed to save risk model: ' + (e.message || e), 'error'); });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -5717,90 +5757,102 @@ var ENTITY_DOC_CHECKS = [
   { docId:'doc-proof-address', name:'Proof of Registered Address', checks:[
     { label:'Document Date', rule:'Must be dated within the last 3 months', type:'age' },
     { label:'Entity Name Match', rule:'Entity name on document must match application', type:'name' },
+    { label:'Address Match', rule:'Address must match registered office address on application', type:'content' },
     { label:'Document Clarity', rule:'Document must be legible and unredacted', type:'quality' },
-    { label:'Address Match', rule:'Address must match registered office address on application', type:'content' }
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'doc-coi', name:'Certificate of Incorporation', checks:[
     { label:'Entity Name Match', rule:'Company name must match application', type:'name' },
-    { label:'Registration Number', rule:'Registration number must be present and legible', type:'content' },
-    { label:'Document Clarity', rule:'Document must be legible, certified copy if applicable', type:'quality' }
+    { label:'Registration Number Match', rule:'Registration number must match the number declared in pre-screening', type:'content' },
+    { label:'Date of Incorporation Match', rule:'Date of incorporation must match pre-screening declaration', type:'age' },
+    { label:'Jurisdiction Match', rule:'Jurisdiction/country of incorporation must match pre-screening', type:'content' },
+    { label:'Document Clarity', rule:'Document must be legible, certified copy if applicable', type:'quality' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
-  { docId:'doc-memarts', name:'Memorandum & Articles', checks:[
+  { docId:'doc-memarts', name:'Memorandum of Association', checks:[
     { label:'Entity Name Match', rule:'Company name must match application', type:'name' },
+    { label:'Authorised Share Capital', rule:'Authorised share capital must match the amount declared in pre-screening', type:'content' },
     { label:'Completeness', rule:'All pages must be present and legible', type:'quality' },
-    { label:'Certification', rule:'Must be certified or signed copy', type:'quality' }
-  ]},
-  { docId:'doc-reg', name:'Certificate of Registration', checks:[
-    { label:'Entity Name Match', rule:'Company name must match', type:'name' },
-    { label:'Current Validity', rule:'Must be current / not expired', type:'expiry' },
-    { label:'Document Clarity', rule:'Must be legible and complete', type:'quality' }
+    { label:'Business Objects / Activities', rule:'Declared business activities must fall within the objects clause of the MoA', type:'ai' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'doc-shareholders', name:'Shareholder Register', checks:[
-    { label:'Ownership Consistency', rule:'Shareholdings must match UBOs declared in pre-screening', type:'content' },
-    { label:'Completeness', rule:'Total ownership must add up to 100%', type:'content' },
-    { label:'Currency', rule:'Register must reflect current shareholding structure', type:'age' }
+    { label:'Shareholder Name Match', rule:'Shareholder names must match those declared in pre-screening', type:'name' },
+    { label:'Shareholding Percentages Match', rule:'Shareholding percentages must match those declared in pre-screening', type:'content' },
+    { label:'Total Shares Sum to 100%', rule:'Total shareholdings must sum to 100%', type:'content' },
+    { label:'UBO Identification (\u226525%)', rule:'Any shareholder holding \u2265 25% must be identified as a declared UBO', type:'content' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'doc-directors-reg', name:'Register of Directors', checks:[
-    { label:'Director Consistency', rule:'Directors must match those declared in pre-screening', type:'content' },
+    { label:'Director Name Match', rule:'Directors must match those declared in pre-screening', type:'name' },
     { label:'Completeness', rule:'All current directors must be listed', type:'content' },
-    { label:'Document Clarity', rule:'Must be legible', type:'quality' }
+    { label:'Document Clarity', rule:'Must be legible', type:'quality' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'doc-financials', name:'Financial Statements / Management Accounts', checks:[
     { label:'Financial Period', rule:'Must be for most recent financial year (or forecast if < 1 year old)', type:'age' },
     { label:'Entity Name Match', rule:'Company name on statements must match application', type:'name' },
-    { label:'Audit Status', rule:'Preferably audited; management accounts acceptable for new entities', type:'content' },
-    { label:'Completeness', rule:'Balance sheet, P&L, and notes must be present', type:'quality' }
+    { label:'Revenue / Turnover Consistency', rule:'Revenue or turnover figures must be broadly consistent with the annual turnover declared in pre-screening', type:'content' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'doc-board-res', name:'Board Resolution', checks:[
     { label:'Signatory Match', rule:'Authorised signatory must be a declared director', type:'name' },
     { label:'Resolution Date', rule:'Must be dated and reasonably current', type:'age' },
-    { label:'Scope of Authority', rule:'Must authorise the signatory to open the account', type:'content' }
+    { label:'Scope of Authority', rule:'Resolution must explicitly authorise the signatory to open a bank/payment account or engage the relevant service provider', type:'ai' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'doc-structure-chart', name:'Company Structure Chart', checks:[
     { label:'UBO Chain', rule:'Must trace ownership to ultimate beneficial owners', type:'content' },
     { label:'Ownership Match', rule:'Shareholdings must match shareholder register', type:'content' },
-    { label:'Legibility', rule:'Diagram must be clear and readable', type:'quality' }
+    { label:'Legibility', rule:'Diagram must be clear and readable', type:'quality' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'doc-bank-ref', name:'Bank Reference Letter (Entity)', checks:[
     { label:'Bank Letterhead', rule:'Must be on official bank letterhead', type:'quality' },
     { label:'Date', rule:'Must be dated within the last 3 months', type:'age' },
-    { label:'Entity Name Match', rule:'Entity name must match application', type:'name' }
+    { label:'Entity Name Match', rule:'Entity name must match application', type:'name' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'doc-licence', name:'Licence / Regulatory Approval', checks:[
     { label:'Entity Name Match', rule:'Entity name must match', type:'name' },
-    { label:'Validity', rule:'Licence must be current and not expired', type:'expiry' },
-    { label:'Issuing Authority', rule:'Issuing regulator must be identifiable', type:'content' }
+    { label:'Licence Validity', rule:'Licence must be current and not expired', type:'expiry' },
+    { label:'Licence Scope', rule:'Licence must cover the business activities declared in the application', type:'ai' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]}
 ];
 
 var PERSON_DOC_CHECKS = [
   { docId:'passport', name:'Passport / Government ID', checks:[
-    { label:'Document Expiry', rule:'Must not be expired; at least 6 months validity remaining recommended', type:'expiry' },
-    { label:'Photo Quality', rule:'Photo must be clear and identifiable', type:'quality' },
+    { label:'Document Expiry', rule:'Passport must not be expired. PASS if > 6 months validity remaining', type:'expiry' },
     { label:'Name Match', rule:'Name must match the person declared in the application', type:'name' },
-    { label:'Nationality Match', rule:'Nationality must match the nationality declared in pre-screening', type:'content' }
+    { label:'Date of Birth Match', rule:'Date of birth must match the date declared in pre-screening', type:'content' },
+    { label:'Nationality Match', rule:'Nationality must match declared nationality', type:'content' },
+    { label:'Photo Quality', rule:'Photo must be clear and identifiable', type:'quality' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'poa', name:'Proof of Address (Personal)', checks:[
     { label:'Document Date', rule:'Must be dated within the last 3 months', type:'age' },
-    { label:'Name Match', rule:'Name on document must match the person', type:'name' },
-    { label:'Document Clarity', rule:'Must be legible and show full address', type:'quality' },
-    { label:'Certification', rule:'Must be certified by a notary, lawyer, or bank officer', type:'quality' }
+    { label:'Name Match', rule:'Name must match the person declared in the application', type:'name' },
+    { label:'Address Match', rule:'Address on document must match the person\'s declared residential address', type:'content' },
+    { label:'Document Clarity', rule:'Document must be legible', type:'quality' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'cv', name:'CV / LinkedIn Profile', checks:[
     { label:'Name Match', rule:'Name on CV/profile must match declared identity', type:'name' },
-    { label:'Employment History', rule:'Should include relevant professional background', type:'content' }
+    { label:'Employment History \u2014 Presence', rule:'CV must include employment history section', type:'content' },
+    { label:'Employment History \u2014 Relevance', rule:'Employment background must be relevant to the declared role and business activity', type:'ai' }
   ]},
   { docId:'bankref', name:'Bank Reference Letter (PEP)', checks:[
     { label:'Document Date', rule:'Must be dated within the last 3 months', type:'age' },
     { label:'Name Match', rule:'Account holder name must match the declared person', type:'name' },
-    { label:'Bank Identification', rule:'Must be on official bank letterhead with branch/SWIFT details', type:'content' },
-    { label:'Account Standing', rule:'Must confirm account in good standing for at least 12 months', type:'content' },
-    { label:'Authorised Signatory', rule:'Must be signed by an authorised bank officer with name and title', type:'quality' }
+    { label:'Bank Identification', rule:'Must be on official bank letterhead with bank name clearly identifiable', type:'content' },
+    { label:'Account Standing', rule:'Must confirm account in good standing for at least 12 months', type:'ai' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
-  { docId:'pep-declaration', name:'PEP Declaration Form', checks:[
-    { label:'Completeness', rule:'All sections must be filled including source of wealth and net worth', type:'content' },
-    { label:'Signature', rule:'Must be signed and dated by the declared PEP', type:'quality' },
-    { label:'Consistency', rule:'Declared positions must match screening results', type:'content' }
+  { docId:'sow', name:'Source of Wealth Declaration', checks:[
+    { label:'Name Match', rule:'Name must match the declared person', type:'name' },
+    { label:'Source of Wealth Evidence', rule:'Document must contain credible evidence supporting the declared source of wealth', type:'ai' },
+    { label:'Consistency / Plausibility', rule:'Declared wealth, function, and source of funds must be internally consistent and plausible', type:'ai' }
   ]}
 ];
 
@@ -6086,13 +6138,19 @@ function saveAgents() {
   AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'AI agent pipeline configuration updated', ip:'196.192.44.12' });
   // Sync each agent to API
   if (BO_AUTH_TOKEN) {
-    AI_AGENTS.forEach(function(agent) {
+    var savePromises = AI_AGENTS.map(function(agent) {
       var agentData = { agent_number: agent.id, name: agent.name, icon: agent.icon, stage: agent.stage, description: agent.description, enabled: agent.enabled, checks: agent.checks };
-      // Note: For simplicity, we don't try to match existing API records here. Future: proper CRUD sync.
+      return boApiCall('PUT', '/config/ai-agents/' + agent.id, agentData);
     });
+    Promise.all(savePromises).then(function() {
+      renderAgentsPipeline();
+      showToast('✅ AI agent pipeline saved — ' + AI_AGENTS.filter(function(a){return a.enabled;}).length + ' agents active');
+    }).catch(function(err) {
+      showToast('Failed to save agent config: ' + (err.message || 'Unknown error'), 'error');
+    });
+  } else {
+    showToast('Authentication required to save agent config', 'error');
   }
-  renderAgentsPipeline();
-  showToast('✅ AI agent pipeline saved — ' + AI_AGENTS.filter(function(a){return a.enabled;}).length + ' agents active');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -6396,7 +6454,7 @@ function exportAgentHealthReport() {
 // SIGN OUT
 // ═══════════════════════════════════════════════════════════
 function signOut() {
-  document.cookie = 'arie_bo_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict; Secure';
+  // httpOnly session cookie cleared by server on logout; no JS cookie to expire
   BO_AUTH_TOKEN = '';
   BO_AUTH_USER = null;
   AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Logout', target:'System', detail:'Signed out', ip:'196.192.44.12' });
@@ -6477,7 +6535,7 @@ async function handleLogin(e) {
     hideLoginScreen();
     showToast(isOffline ? 'Demo Mode — Welcome, ' + currentUser.name : 'Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
-    errText.textContent = ARIE_ENV === 'demo' ? 'Invalid email or password. Try: Onboarda2026!' : 'Invalid email or password.';
+    errText.textContent = 'Invalid email or password.';
     errEl.classList.add('show');
   } finally {
     submitBtn.disabled = false;
@@ -7120,7 +7178,7 @@ function generateAIResponse(question) {
   if (q.includes('regulatory')) return responses['regulatory updates'];
   if (q.includes('kyc') || q.includes('compliance')) return 'KYC compliance in this environment uses a mix of live provider integrations, deterministic controls, and decision-support tooling. The authoritative approval path relies on screening data, deterministic memo generation, memo validation, and memo supervisor checks before human approval.';
   if (q.includes('screening')) return 'Screening covers sanctions, PEP, adverse media, and registry checks where configured. Some screening and interpretation surfaces are live, while others are deterministic or decision-support only depending on the workflow.';
-  return 'I can help with questions about: review checklists, risk assessment, agent status, regulatory updates, KYC processes, screening procedures, and compliance operations. What would you like to know?';
+  return 'Quick reference topics available: review checklists, risk assessment, agent status, regulatory updates, KYC processes, screening procedures. Select a topic or use the quick buttons above.';
 }
 
 // Live update labels as user types
@@ -8071,21 +8129,11 @@ function renderSupervisorResults(result) {
       rrHtml += '<div style="font-size:11px;font-weight:700;color:var(--amber);margin:8px 0 6px;">Review Reasons:</div>';
       reviewReasons.forEach(function(r) { rrHtml += '<div style="font-size:11px;color:var(--text2);padding:2px 0;">• ' + r + '</div>'; });
     }
-    rrHtml += '<div style="margin-top:12px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:12px;color:var(--text3);">Supervisor review submission is not yet wired to a backend endpoint in this environment. Use the pipeline output as decision support only.</div>';
-    document.getElementById('sv-review-form').style.display = 'none';
+    rrHtml += '<div style="margin-top:12px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:12px;color:var(--text3);">This analysis is for decision support. To act on these findings, use the compliance memo workflow: Generate Memo → Validate → Supervisor Run → Approve/Reject via the Memo tab.</div>';
   } else {
-    rrHtml = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">✅ No human review required — pipeline completed successfully.</div>';
-    document.getElementById('sv-review-form').style.display = 'none';
+    rrHtml = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">✅ No blocking issues detected by the analysis pipeline.</div>';
   }
   document.getElementById('sv-review-reasons').innerHTML = rrHtml;
-
-  // Toggle override reason field
-  var overrideCheckbox = document.getElementById('sv-review-override');
-  if (overrideCheckbox) {
-    overrideCheckbox.onchange = function() {
-      document.getElementById('sv-override-reason').style.display = this.checked ? '' : 'none';
-    };
-  }
 }
 
 function svStatCard(label, value, color) {
@@ -8095,9 +8143,7 @@ function svStatCard(label, value, color) {
     + '</div>';
 }
 
-async function submitSupervisorReview() {
-  showToast('Supervisor review submission is not available in this environment');
-}
+// submitSupervisorReview() removed — supervisor actions are performed via the memo approval workflow
 
 // ── Supervisor Dashboard (global view) ──
 async function refreshSupervisorDashboard() {
@@ -8350,7 +8396,6 @@ document.addEventListener('DOMContentLoaded', async function() {
       return;
     } catch(e) {
       console.warn('Token expired, clearing auth');
-      localStorage.removeItem('arie_bo_token');
       BO_AUTH_TOKEN = '';
     }
   }

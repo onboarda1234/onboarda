@@ -1808,9 +1808,9 @@
 
         <!-- Idle state: input form -->
         <div id="lookup-idle">
-          <div class="lookup-badge">🤖 AI-Powered Company Search</div>
+          <div class="lookup-badge">🏢 Company Details</div>
           <div class="lookup-title">Tell us about your company</div>
-          <div class="lookup-sub">Enter your company's basic details and our AI agent will automatically retrieve and pre-fill your application using live data from global company registries — saving you time and reducing errors.</div>
+          <div class="lookup-sub">Enter your company's basic details below. These will be used to pre-fill your application form. You can review and edit all fields before submission.</div>
 
           <div class="form-group mb-2">
             <label>Company Name <span class="req">*</span></label>
@@ -1832,26 +1832,20 @@
           </div>
           <!-- Real-time Registry Verification Results -->
           <div id="registry-verification-panel" style="display:none;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:20px;">
-            <div style="font-size:12px;font-weight:600;margin-bottom:10px;color:var(--text2);">🔍 Real-time Registry Verification</div>
+            <div style="font-size:12px;font-weight:600;margin-bottom:10px;color:var(--text2);">🔍 Input Validation</div>
             <div id="registry-results" style="display:flex;flex-direction:column;gap:8px;"></div>
           </div>
 
           <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:20px;">
-            <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">🔗 Databases we'll search</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;">
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">OpenCorporates</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">UK Companies House</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">Mauritius CBRIS</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">ACRA Singapore</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">SEC EDGAR (US)</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">CIPC South Africa</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">EU BRIS Network</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">Dun & Bradstreet</span>
+            <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">ℹ️ What happens next</div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.5;">
+              Your company details will pre-fill the application form. You'll be able to review and edit all fields before submitting.
+              Company registry verification will be performed by the compliance team during the review process.
             </div>
           </div>
 
           <button class="btn-submit" onclick="startCompanyLookup()">
-            🔍 Search &amp; Pre-fill My Application
+            ➡️ Continue to Application
           </button>
         </div>
 
@@ -1976,8 +1970,8 @@
         <div id="prefill-notice" class="hidden" style="background:rgba(43,47,143,0.08);border:1px solid rgba(43,47,143,0.3);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;display:flex;align-items:flex-start;gap:12px;">
             <div style="font-size:22px;flex-shrink:0;">📋</div>
             <div>
-              <div style="font-size:13px;font-weight:700;margin-bottom:3px;color:#8A9FE8;">Registry Data Loaded</div>
-              <div style="font-size:12px;color:var(--text2);">Some fields were populated from public company registries. Please review and update any details that may have changed.</div>
+              <div style="font-size:13px;font-weight:700;margin-bottom:3px;color:#8A9FE8;">Company Details Pre-filled</div>
+              <div style="font-size:12px;color:var(--text2);">Some fields were pre-filled from your earlier input. Please review and update any details before submitting.</div>
             </div>
           </div>
           <form id="prescreening-form" onsubmit="submitPrescreening(event)">
@@ -3223,7 +3217,7 @@
             <div class="doc-item-top">
               <span class="doc-item-icon">📜</span>
               <div>
-                <div class="doc-item-name">Memorandum & Articles of Association</div>
+                <div class="doc-item-name">Memorandum of Association</div>
                 <div class="doc-item-desc">Constitution / M&A of the entity</div>
               </div>
             </div>
@@ -3232,21 +3226,6 @@
               <span>📎</span> <span id="doc-memarts-label">Click to upload</span>
             </div>
             <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-memarts', this)" />
-          </div>
-
-          <div class="doc-item" id="doc-reg">
-            <div class="doc-item-top">
-              <span class="doc-item-icon">📑</span>
-              <div>
-                <div class="doc-item-name">Certificate of Registration</div>
-                <div class="doc-item-desc">Company registration certificate / BRN proof</div>
-              </div>
-            </div>
-            <span class="doc-required">Required</span>
-            <div class="doc-upload-area" onclick="triggerUpload('doc-reg')">
-              <span>📎</span> <span id="doc-reg-label">Click to upload</span>
-            </div>
-            <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-reg', this)" />
           </div>
 
           <div class="doc-item" id="doc-shareholders">
@@ -3354,7 +3333,7 @@
             <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-bank-ref', this)" />
           </div>
 
-          <div class="doc-item" id="doc-license-cert">
+          <div class="doc-item" id="doc-license-cert" style="display:none">
             <div class="doc-item-top">
               <span class="doc-item-icon">🪪</span>
               <div>
@@ -4072,14 +4051,13 @@
           <div class="card-icon gold">🔍</div>
           <div>
             <div class="card-title">Track Your Application</div>
-            <div class="card-sub">Enter your reference number or email</div>
+            <div class="card-sub">Enter your reference number and email address</div>
           </div>
         </div>
         <div class="form-group mb-2">
           <label>Reference Number</label>
           <input type="text" id="lookup-ref" placeholder="e.g. ARF-2024-000001" />
         </div>
-        <div class="section-title">or</div>
         <div class="form-group mb-3">
           <label>Email Address</label>
           <input type="email" id="lookup-email" placeholder="your@email.com" />
@@ -4112,8 +4090,13 @@
       <button type="button" onclick="toggleBackOffice()" style="font-size:12px;padding:7px 14px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--bg2);color:var(--text2);cursor:pointer;font-family:inherit;font-weight:600;">✕ Close</button>
     </div>
 
+    <!-- ── Illustrative preview disclaimer ── -->
+    <div style="margin-top:56px;padding:10px 28px;background:var(--amber-dim,#fef3c7);border-bottom:1px solid var(--amber,#f59e0b);font-size:12px;color:var(--text2,#555);text-align:center;">
+      Illustrative preview — All application data, screening results, and registry lookups shown below are sample data for demonstration purposes only. They do not represent live results.
+    </div>
+
     <!-- ── Pipeline view ── -->
-    <div id="bo-pipeline-view" style="padding-top:56px;">
+    <div id="bo-pipeline-view" style="padding-top:0;">
       <div class="bo-pipeline-wrap">
         <div class="bo-pipeline-header">
           <div>
@@ -4265,7 +4248,7 @@
               <span class="ai-status passed" style="font-size:12px;">✓ Verified</span>
             </div>
             <div class="ai-check-detail-body">
-              <div class="ai-detail-row"><span class="ai-detail-label">Registry</span><span class="ai-detail-val">UK Companies House API (live lookup)</span></div>
+              <div class="ai-detail-row"><span class="ai-detail-label">Registry</span><span class="ai-detail-val">UK Companies House (illustrative example)</span></div>
               <div class="ai-detail-row"><span class="ai-detail-label">Status</span><span class="ai-detail-val" style="color:var(--green);">Active — Incorporated 14 Apr 2019</span></div>
               <div class="ai-detail-row"><span class="ai-detail-label">Registered Name</span><span class="ai-detail-val">TECHPAY SOLUTIONS LIMITED · Matches application ✓</span></div>
               <div class="ai-detail-row"><span class="ai-detail-label">Reg. Number</span><span class="ai-detail-val">11924857 · Matches application ✓</span></div>
@@ -4510,13 +4493,13 @@ let AUTH_USER = null;
 let currentApplicationId = '';
 
 // ─── Environment Detection ────────────────────────────────
-var ARIE_ENV = 'demo';
+var ARIE_ENV = 'production';
 var FEATURE_FLAGS = {};
 
 async function loadEnvironment() {
   try {
     const data = await apiCall('GET', '/config/environment');
-    ARIE_ENV = data.environment || 'demo';
+    ARIE_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
     applyEnvironmentUI();
   } catch (e) {
@@ -4564,7 +4547,7 @@ async function apiCall(method, path, body, isFormData) {
 function setAuth(token, user) {
   AUTH_TOKEN = token;
   AUTH_USER = user;
-  document.cookie = 'arie_token=' + encodeURIComponent(token) + '; path=/; SameSite=Strict; Secure';
+  // Auth token kept in memory only; httpOnly session cookie set by server
   updateUserDisplay();
 }
 
@@ -4586,17 +4569,32 @@ function clearAuth() {
   AUTH_TOKEN = '';
   AUTH_USER = null;
   currentApplicationId = '';
-  document.cookie = 'arie_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict; Secure';
+  // httpOnly session cookie cleared by server on logout; no JS cookie to expire
 }
 
 // ─── State ───────────────────────────────────────────────
 let appRef = '';
 let uploadedDocs = new Set();
-var TOTAL_REQUIRED_DOCS = 12;
+var TOTAL_REQUIRED_DOCS = 11;
+
+function _licenceApplicable() {
+  // Mirrors backend is_licence_applicable(): false if field is 'None', 'none', 'n/a', 'no', or empty
+  var val = (document.getElementById('f-licences') || {}).value || '';
+  val = val.trim().toLowerCase();
+  return val && val !== 'none' && val !== 'n/a' && val !== 'no' && val !== 'na';
+}
 
 function updateTotalRequiredDocs() {
   var isHighRisk = (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH');
-  TOTAL_REQUIRED_DOCS = isHighRisk ? 16 : 12;
+  var hasLicence = _licenceApplicable();
+  TOTAL_REQUIRED_DOCS = (isHighRisk ? 15 : 11) + (hasLicence ? 1 : 0);
+}
+
+function showLicenceDocs() {
+  var hasLicence = _licenceApplicable();
+  var licenceEl = document.getElementById('doc-license-cert');
+  if (licenceEl) licenceEl.style.display = hasLicence ? '' : 'none';
+  updateTotalRequiredDocs();
 }
 
 // ─── View switching ───────────────────────────────────────
@@ -5773,7 +5771,7 @@ async function acceptPricing() {
   } else {
     // LOW/MEDIUM → proceed directly to KYC & Documents
     showHighRiskDocs();
-    updateTotalRequiredDocs();
+    showLicenceDocs();
     syncDirectorsUBOsToKYC();
     checkPEPAndShowDeclaration();
     showView('onboarding');
@@ -5863,48 +5861,49 @@ var DOC_RULES = {
     checks: [
       { id: 'date-check', label: 'Document Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
       { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name on document must match application', type: 'name' },
+      { id: 'address-match', label: 'Address Match', rule: 'Address must match registered office address on application', type: 'content' },
       { id: 'clarity', label: 'Document Clarity', rule: 'Document must be legible and unredacted', type: 'quality' },
-      { id: 'address-match', label: 'Address Match', rule: 'Address must match registered office address on application', type: 'content' }
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-coi': {
     name: 'Certificate of Incorporation',
     checks: [
       { id: 'name-match', label: 'Entity Name Match', rule: 'Company name must match application', type: 'name' },
-      { id: 'reg-number', label: 'Registration Number', rule: 'Registration number must be present and legible', type: 'content' },
-      { id: 'clarity', label: 'Document Clarity', rule: 'Document must be legible, certified copy if applicable', type: 'quality' }
+      { id: 'reg-number', label: 'Registration Number Match', rule: 'Registration number must match the number declared in pre-screening', type: 'content' },
+      { id: 'inc-date', label: 'Date of Incorporation Match', rule: 'Date of incorporation must match pre-screening declaration', type: 'age' },
+      { id: 'jurisdiction', label: 'Jurisdiction Match', rule: 'Jurisdiction/country of incorporation must match pre-screening', type: 'content' },
+      { id: 'clarity', label: 'Document Clarity', rule: 'Document must be legible, certified copy if applicable', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-memarts': {
-    name: 'Memorandum & Articles',
+    name: 'Memorandum of Association',
     checks: [
       { id: 'name-match', label: 'Entity Name Match', rule: 'Company name must match application', type: 'name' },
+      { id: 'share-capital', label: 'Authorised Share Capital', rule: 'Authorised share capital must match the amount declared in pre-screening', type: 'content' },
       { id: 'completeness', label: 'Completeness', rule: 'All pages must be present and legible', type: 'quality' },
-      { id: 'certification', label: 'Certification', rule: 'Must be certified or signed copy', type: 'quality' }
-    ]
-  },
-  'doc-reg': {
-    name: 'Certificate of Registration',
-    checks: [
-      { id: 'name-match', label: 'Entity Name Match', rule: 'Company name must match', type: 'name' },
-      { id: 'validity', label: 'Current Validity', rule: 'Must be current / not expired', type: 'expiry' },
-      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible and complete', type: 'quality' }
+      { id: 'objects', label: 'Business Objects / Activities', rule: 'Declared business activities must fall within the objects clause of the MoA', type: 'ai' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-shareholders': {
     name: 'Shareholder Register',
     checks: [
-      { id: 'consistency', label: 'Ownership Consistency', rule: 'Shareholdings must match UBOs declared in pre-screening', type: 'content' },
-      { id: 'completeness', label: 'Completeness', rule: 'Total ownership must add up to 100%', type: 'content' },
-      { id: 'date-check', label: 'Currency', rule: 'Register must reflect current shareholding structure', type: 'age', maxMonths: 12 }
+      { id: 'name-match', label: 'Shareholder Name Match', rule: 'Shareholder names must match those declared in pre-screening', type: 'name' },
+      { id: 'percentages', label: 'Shareholding Percentages Match', rule: 'Shareholding percentages must match those declared in pre-screening', type: 'content' },
+      { id: 'total-shares', label: 'Total Shares Sum to 100%', rule: 'Total shareholdings must sum to 100%', type: 'content' },
+      { id: 'ubo-id', label: 'UBO Identification (\u226525%)', rule: 'Any shareholder holding \u2265 25% must be identified as a declared UBO', type: 'content' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-directors-reg': {
     name: 'Register of Directors',
     checks: [
-      { id: 'consistency', label: 'Director Consistency', rule: 'Directors must match those declared in pre-screening', type: 'content' },
+      { id: 'name-match', label: 'Director Name Match', rule: 'Directors must match those declared in pre-screening', type: 'name' },
       { id: 'completeness', label: 'Completeness', rule: 'All current directors must be listed', type: 'content' },
-      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible', type: 'quality' }
+      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-financials': {
@@ -5912,8 +5911,8 @@ var DOC_RULES = {
     checks: [
       { id: 'date-check', label: 'Financial Period', rule: 'Must be for most recent financial year (or forecast if < 1 year old)', type: 'age', maxMonths: 18 },
       { id: 'name-match', label: 'Entity Name Match', rule: 'Company name on statements must match application', type: 'name' },
-      { id: 'audit', label: 'Audit Status', rule: 'Preferably audited; management accounts acceptable for new entities', type: 'content' },
-      { id: 'completeness', label: 'Completeness', rule: 'Balance sheet, P&L, and notes must be present', type: 'quality' }
+      { id: 'turnover', label: 'Revenue / Turnover Consistency', rule: 'Revenue or turnover figures must be broadly consistent with the annual turnover declared in pre-screening', type: 'content' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-board-res': {
@@ -5921,7 +5920,8 @@ var DOC_RULES = {
     checks: [
       { id: 'signatory', label: 'Signatory Match', rule: 'Authorised signatory must be a declared director', type: 'name' },
       { id: 'date-check', label: 'Resolution Date', rule: 'Must be dated and reasonably current', type: 'age', maxMonths: 12 },
-      { id: 'scope', label: 'Scope of Authority', rule: 'Must authorise the signatory to open the account', type: 'content' }
+      { id: 'scope', label: 'Scope of Authority', rule: 'Resolution must explicitly authorise the signatory to open a bank/payment account or engage the relevant service provider', type: 'ai' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-structure-chart': {
@@ -5929,7 +5929,8 @@ var DOC_RULES = {
     checks: [
       { id: 'ubo-chain', label: 'UBO Chain', rule: 'Must trace ownership to ultimate beneficial owners', type: 'content' },
       { id: 'consistency', label: 'Ownership Match', rule: 'Shareholdings must match shareholder register', type: 'content' },
-      { id: 'clarity', label: 'Legibility', rule: 'Diagram must be clear and readable', type: 'quality' }
+      { id: 'clarity', label: 'Legibility', rule: 'Diagram must be clear and readable', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-bank-ref': {
@@ -5937,15 +5938,17 @@ var DOC_RULES = {
     checks: [
       { id: 'letterhead', label: 'Bank Letterhead', rule: 'Must be on official bank letterhead', type: 'quality' },
       { id: 'date-check', label: 'Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
-      { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name must match application', type: 'name' }
+      { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name must match application', type: 'name' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-license-cert': {
     name: 'Regulatory Licence',
     checks: [
-      { id: 'validity', label: 'Licence Validity', rule: 'Licence must not be expired', type: 'expiry' },
-      { id: 'name-match', label: 'Entity Name Match', rule: 'Licensee name must match application', type: 'name' },
-      { id: 'scope', label: 'Licence Scope', rule: 'Licence must cover the activities described in the application', type: 'content' }
+      { id: 'name-match', label: 'Entity Name Match', rule: 'Entity name must match application', type: 'name' },
+      { id: 'validity', label: 'Licence Validity', rule: 'Licence must be current and not expired', type: 'expiry' },
+      { id: 'scope', label: 'Licence Scope', rule: 'Licence must cover the business activities declared in the application', type: 'ai' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'doc-contracts': {
@@ -5992,26 +5995,30 @@ var KYC_PERSON_DOC_RULES = {
   'passport': {
     name: 'Passport / Government ID',
     checks: [
-      { id: 'expiry', label: 'Document Expiry', rule: 'Must not be expired; at least 6 months validity remaining recommended', type: 'expiry' },
-      { id: 'photo-match', label: 'Photo Quality', rule: 'Photo must be clear and identifiable', type: 'quality' },
+      { id: 'expiry', label: 'Document Expiry', rule: 'Passport must not be expired. PASS if > 6 months validity remaining', type: 'expiry' },
       { id: 'name-match', label: 'Name Match', rule: 'Name must match the person declared in the application', type: 'name' },
-      { id: 'nationality', label: 'Nationality Match', rule: 'Nationality must match the nationality declared in pre-screening', type: 'content' }
+      { id: 'dob-match', label: 'Date of Birth Match', rule: 'Date of birth must match the date declared in pre-screening', type: 'content' },
+      { id: 'nationality', label: 'Nationality Match', rule: 'Nationality must match declared nationality', type: 'content' },
+      { id: 'photo-match', label: 'Photo Quality', rule: 'Photo must be clear and identifiable', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'poa': {
     name: 'Proof of Address (Personal)',
     checks: [
       { id: 'date-check', label: 'Document Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
-      { id: 'name-match', label: 'Name Match', rule: 'Name on document must match the person', type: 'name' },
-      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible and show full address', type: 'quality' },
-      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or bank officer', type: 'quality' }
+      { id: 'name-match', label: 'Name Match', rule: 'Name must match the person declared in the application', type: 'name' },
+      { id: 'address-match', label: 'Address Match', rule: "Address on document must match the person's declared residential address", type: 'content' },
+      { id: 'clarity', label: 'Document Clarity', rule: 'Document must be legible', type: 'quality' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
     ]
   },
   'cv': {
     name: 'CV / LinkedIn Profile',
     checks: [
       { id: 'name-match', label: 'Name Match', rule: 'Name on CV/profile must match declared identity', type: 'name' },
-      { id: 'completeness', label: 'Employment History', rule: 'Should include relevant professional background', type: 'content' }
+      { id: 'emp-presence', label: 'Employment History \u2014 Presence', rule: 'CV must include employment history section', type: 'content' },
+      { id: 'emp-relevance', label: 'Employment History \u2014 Relevance', rule: 'Employment background must be relevant to the declared role and business activity', type: 'ai' }
     ]
   },
   'bankref': {
@@ -6019,9 +6026,17 @@ var KYC_PERSON_DOC_RULES = {
     checks: [
       { id: 'date-check', label: 'Document Date', rule: 'Must be dated within the last 3 months', type: 'age', maxMonths: 3 },
       { id: 'name-match', label: 'Name Match', rule: 'Account holder name must match the declared person', type: 'name' },
-      { id: 'bank-details', label: 'Bank Identification', rule: 'Must be on official bank letterhead with branch/SWIFT details', type: 'content' },
-      { id: 'account-standing', label: 'Account Standing', rule: 'Must confirm account in good standing for at least 12 months', type: 'content' },
-      { id: 'signatory', label: 'Authorised Signatory', rule: 'Must be signed by an authorised bank officer with name and title', type: 'quality' }
+      { id: 'bank-details', label: 'Bank Identification', rule: 'Must be on official bank letterhead with bank name clearly identifiable', type: 'content' },
+      { id: 'account-standing', label: 'Account Standing', rule: 'Must confirm account in good standing for at least 12 months', type: 'ai' },
+      { id: 'certification', label: 'Certification', rule: 'Must be certified by a notary, lawyer, or accountant', type: 'quality' }
+    ]
+  },
+  'pep-declaration': {
+    name: 'PEP / Source of Wealth Declaration',
+    checks: [
+      { id: 'name-match', label: 'Name Match', rule: 'Name must match the declared person', type: 'name' },
+      { id: 'sow-evidence', label: 'Source of Wealth Evidence', rule: 'Document must contain credible evidence supporting the declared source of wealth', type: 'ai' },
+      { id: 'consistency', label: 'Consistency / Plausibility', rule: 'Declared wealth, function, and source of funds must be internally consistent and plausible', type: 'ai' }
     ]
   },
   // Intermediary shareholder corporate documents
@@ -6459,8 +6474,7 @@ showView = function(name) {
 // ─── Pre-Submission Review ────────────────────────────────
 var SECTION_A_DOCS = [
   { id: 'doc-coi', name: 'Certificate of Incorporation', required: true, conditional: false },
-  { id: 'doc-memarts', name: 'Memorandum & Articles of Association', required: true, conditional: false },
-  { id: 'doc-reg', name: 'Certificate of Registration', required: true, conditional: false },
+  { id: 'doc-memarts', name: 'Memorandum of Association', required: true, conditional: false },
   { id: 'doc-shareholders', name: 'Shareholder Register', required: true, conditional: false },
   { id: 'doc-directors-reg', name: 'Register of Directors', required: true, conditional: false },
   { id: 'doc-financials', name: 'Financial Statements / Management Accounts', required: true, conditional: false },
@@ -6468,7 +6482,7 @@ var SECTION_A_DOCS = [
   { id: 'doc-board-res', name: 'Board Resolution', required: true, conditional: false },
   { id: 'doc-structure-chart', name: 'Company Structure Chart', required: true, conditional: false },
   { id: 'doc-bank-ref', name: 'Bank Reference Letter', required: true, conditional: 'high-risk' },
-  { id: 'doc-license-cert', name: 'Regulatory Licence(s)', required: true, conditional: false }
+  { id: 'doc-license-cert', name: 'Regulatory Licence(s)', required: false, conditional: 'has-licence' }
 ];
 
 var SECTION_C_DOCS = [
@@ -6682,11 +6696,11 @@ async function finalSubmitFromReview() {
 // Deterministic compliance memo summary panel
 // ═══════════════════════════════════════════════════════════
 function generateComplianceMemo() {
-  var d = MOCK_COMPANY_DATA;
+  // Read from authoritative DOM form fields, not synthetic lookup data
   var level = computedRiskLevel || 'LOW';
-  var companyName = d.regName || 'N/A';
-  var country = d.incCountry || 'N/A';
-  var brn = d.brn || 'N/A';
+  var companyName = (document.getElementById('f-reg-name') || {}).value || 'N/A';
+  var country = (document.getElementById('f-inc-country') || {}).value || 'N/A';
+  var brn = (document.getElementById('f-brn') || {}).value || 'N/A';
 
   // Client Overview
   var overview = document.getElementById('memo-client-overview');
@@ -6836,32 +6850,30 @@ async function lookupApplication() {
   const ref = document.getElementById('lookup-ref').value.trim();
   const email = document.getElementById('lookup-email').value.trim();
   const resultEl = document.getElementById('status-lookup-result');
-  if (!ref && !email) {
-    showToast('warn', 'Input Required', 'Please enter a reference number or email address.');
+  if (!ref || !email) {
+    showToast('warn', 'Input Required', 'Please enter both your reference number and email address.');
     return;
   }
 
   if (resultEl) {
     resultEl.style.display = 'block';
-    resultEl.innerHTML = '<div style="font-size:12px;color:var(--text3);">Looking up live application status...</div>';
+    resultEl.innerHTML = '<div style="font-size:12px;color:var(--text3);">Verifying your reference number and email address...</div>';
   }
 
   try {
     const query = new URLSearchParams();
-    if (ref) query.set('ref', ref);
-    if (email) query.set('email', email);
+    query.set('ref', ref);
+    query.set('email', email);
     const resp = await apiCall('GET', '/status-lookup?' + query.toString());
     const app = resp.application || {};
     const statusLabel = String(app.status || 'unknown').replace(/_/g, ' ');
-    const riskLabel = app.risk_level ? String(app.risk_level).replace(/_/g, ' ') : 'Not scored';
     const updatedAt = app.updated_at ? new Date(app.updated_at).toLocaleString() : 'Unknown';
     if (resultEl) {
       resultEl.innerHTML =
-        '<div style="font-weight:700;font-size:13px;margin-bottom:8px;">' + escapeHtml(app.company_name || 'Application') + '</div>' +
         '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Reference:</strong> ' + escapeHtml(app.ref || 'N/A') + '</div>' +
         '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Status:</strong> ' + escapeHtml(statusLabel) + '</div>' +
-        '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Risk Level:</strong> ' + escapeHtml(riskLabel) + '</div>' +
-        '<div style="font-size:11px;color:var(--text3);"><strong>Last Updated:</strong> ' + escapeHtml(updatedAt) + '</div>';
+        '<div style="font-size:11px;color:var(--text3);margin-bottom:8px;"><strong>Last Updated:</strong> ' + escapeHtml(updatedAt) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);">For privacy and security, this tracker shows only the current application stage.</div>';
     }
     showToast('success', 'Status Found', 'Reference ' + (app.ref || ref) + ' is currently ' + statusLabel + '.');
   } catch (err) {
@@ -7279,7 +7291,7 @@ function checkSanctionedCountry(selectEl) {
   return true;
 }
 
-// ─── Simulated company data from "registry lookup" ───────────
+// ─── Demo-only: company data for demo prefill (not used in production) ───────────
 const MOCK_COMPANY_DATA = {
   regName:     '',   // populated from form input
   tradeName:   '',
@@ -7410,7 +7422,7 @@ async function submitLogin(e) {
     showToast('success', isOffline ? 'Demo Mode' : 'Welcome back!', isOffline ? 'Signed in offline — explore the portal demo.' : 'Pick up where you left off.');
   } catch (err) {
     btn.disabled = false; btn.textContent = '🔒 Sign In';
-    showToast('error', 'Login Failed', ARIE_ENV === 'demo' ? 'Invalid credentials. Try password: Arie2026!' : 'Invalid credentials. Please check your email and password.');
+    showToast('error', 'Login Failed', 'Invalid credentials. Please check your email and password.');
   }
 }
 
@@ -7542,6 +7554,14 @@ function checkPasswordStrength(val) {
 
 // ─── Company Lookup ───────────────────────────────────────────
 function startCompanyLookup() {
+  // In non-demo environments, no registry integration exists — redirect to manual entry
+  if (ARIE_ENV !== 'demo') {
+    showToast('info', 'Manual Entry', 'Company details can be entered directly in the application form.');
+    showView('prescreening');
+    return;
+  }
+
+  // Demo-only: simulated lookup for demonstration purposes
   const name = document.getElementById('lu-name').value.trim();
   const reg  = document.getElementById('lu-reg').value.trim();
   const country = document.getElementById('lu-country').value;
@@ -7549,9 +7569,9 @@ function startCompanyLookup() {
     showToast('warn', 'Missing fields', 'Please enter company name and country of incorporation.');
     return;
   }
-  // Store for prefill
+  // Store for demo prefill only
   MOCK_COMPANY_DATA.regName    = name;
-  MOCK_COMPANY_DATA.brn        = reg || 'C' + Math.floor(Math.random()*9000000+1000000);
+  MOCK_COMPANY_DATA.brn        = reg || 'DEMO-' + Math.floor(Math.random()*9000000+1000000);
   MOCK_COMPANY_DATA.incCountry = country;
   const now = new Date(); now.setFullYear(now.getFullYear()-5);
   MOCK_COMPANY_DATA.incDate    = now.toISOString().split('T')[0];
@@ -7563,7 +7583,7 @@ function startCompanyLookup() {
   document.getElementById('lookup-loading').style.display = 'block';
   document.getElementById('lookup-result').style.display  = 'none';
 
-  // Animate steps
+  // Animate steps (demo only)
   const steps = ['ls1','ls2','ls3','ls4','ls5','ls6'];
   let i = 0;
   function nextStep() {
@@ -7578,11 +7598,9 @@ function startCompanyLookup() {
       i++;
       setTimeout(nextStep, 600 + Math.random()*300);
     } else {
-      // Show result (pass false to test not-found state)
       setTimeout(() => showLookupResult(true), 400);
     }
   }
-  // Activate step icons on done
   document.querySelectorAll('#lookup-steps li').forEach(li => {
     li.classList.remove('done','active'); li.classList.add('waiting');
   });
@@ -8051,18 +8069,26 @@ function toggleKYCPepPanel(personId, value) {
   if (bankRefRow) { bankRefRow.style.display = isPEP ? '' : 'none'; }
 }
 
-// ─── KYC: update person names from prefill ─────────────────────────────
+// ─── KYC: update person names from form fields ─────────────────────────────
 function updateKYCPersonNames() {
-  const d = MOCK_COMPANY_DATA;
-  if (d.directors && d.directors[0]) {
-    const n = d.directors[0].first + ' ' + d.directors[0].last;
-    const el = document.getElementById('kyc-name-dir1');
-    if (el) el.textContent = n;
+  // Read from DOM director/UBO table rows, not synthetic lookup data
+  var dirRow = document.querySelector('#directors-body tr');
+  if (dirRow) {
+    var inputs = dirRow.querySelectorAll('input[type="text"]');
+    if (inputs.length >= 2 && (inputs[0].value || inputs[1].value)) {
+      var n = (inputs[0].value + ' ' + inputs[1].value).trim();
+      var el = document.getElementById('kyc-name-dir1');
+      if (el && n) el.textContent = n;
+    }
   }
-  if (d.ubos && d.ubos[0]) {
-    const n = d.ubos[0].first + ' ' + d.ubos[0].last;
-    const el = document.getElementById('kyc-name-ubo1');
-    if (el) el.textContent = n;
+  var uboRow = document.querySelector('#ubos-body tr');
+  if (uboRow) {
+    var inputs = uboRow.querySelectorAll('input[type="text"]');
+    if (inputs.length >= 2 && (inputs[0].value || inputs[1].value)) {
+      var n = (inputs[0].value + ' ' + inputs[1].value).trim();
+      var el = document.getElementById('kyc-name-ubo1');
+      if (el && n) el.textContent = n;
+    }
   }
 }
 

@@ -25,25 +25,30 @@ class TestControlIDs:
         for doc_type, checks in ClaudeClient._DOC_CHECK_DEFINITIONS.items():
             for check in checks:
                 assert "id" in check, f"Check '{check.get('label')}' in doc_type '{doc_type}' missing 'id'"
-                assert check["id"].startswith("DOC-"), f"Check ID '{check['id']}' must start with 'DOC-'"
+                assert check["id"].startswith("DOC-") or check["id"].startswith("CERT-"), \
+                    f"Check ID '{check['id']}' must start with 'DOC-' or 'CERT-'"
 
     def test_control_ids_are_unique(self):
-        """All control IDs across all doc types must be unique."""
+        """All control IDs across all doc types must be unique (CERT-01 is an allowed cross-cutting exception)."""
         from claude_client import ClaudeClient
+        # CERT-01 is intentionally shared across all document types as the cross-cutting
+        # Certification check — exclude it from the uniqueness check.
+        ALLOWED_CROSS_CUTTING = {"CERT-01"}
         all_ids = []
         for doc_type, checks in ClaudeClient._DOC_CHECK_DEFINITIONS.items():
             for check in checks:
-                all_ids.append(check["id"])
+                if check["id"] not in ALLOWED_CROSS_CUTTING:
+                    all_ids.append(check["id"])
         assert len(all_ids) == len(set(all_ids)), f"Duplicate control IDs found: {[x for x in all_ids if all_ids.count(x) > 1]}"
 
     def test_control_id_format(self):
-        """Control IDs must follow DOC-XX format."""
+        """Control IDs must follow DOC-XX or CERT-XX format."""
         from claude_client import ClaudeClient
         import re
         for doc_type, checks in ClaudeClient._DOC_CHECK_DEFINITIONS.items():
             for check in checks:
-                assert re.match(r'^DOC-\d{2}$', check["id"]), \
-                    f"Control ID '{check['id']}' doesn't match DOC-XX format"
+                assert re.match(r'^(DOC|CERT)-\d{2}$', check["id"]), \
+                    f"Control ID '{check['id']}' doesn't match DOC-XX or CERT-XX format"
 
     def test_mock_verify_document_has_ids(self):
         """Mock verify_document response must include control IDs."""

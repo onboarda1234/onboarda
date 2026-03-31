@@ -92,10 +92,26 @@ class BaseHandler(tornado.web.RequestHandler):
         if ENVIRONMENT == "production":
             self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
         # Content Security Policy
-        # Note: 'unsafe-inline' kept for script-src/style-src because the frontend
-        # is single-file HTML with inline scripts/styles served statically.
-        # 'unsafe-eval' REMOVED — it is the critical XSS amplification vector
-        # (eval/Function/setTimeout-string). No production code requires eval().
+        #
+        # 'unsafe-eval' REMOVED (prior batch) — closes XSS amplification vector.
+        #
+        # 'unsafe-inline' REMAINS in script-src and style-src — INTENTIONALLY DEFERRED.
+        # Reason: the frontend is single-file HTML with:
+        #   - 219/173 inline event handlers (onclick, onchange, etc.) across portal/backoffice
+        #   - 519/847 inline style= attributes
+        #   - 1-2 large <script> blocks per file
+        # Removing unsafe-inline from script-src would require converting ALL inline
+        # event handlers to addEventListener — a full frontend rewrite (out of scope).
+        # Removing it from style-src is not possible for inline style= attributes
+        # (CSP nonce/hash only covers <style> blocks, not attributes).
+        #
+        # Mitigations applied:
+        #   - object-src 'none' blocks plugin-based attacks (Flash/Java)
+        #   - base-uri 'self' blocks <base> tag hijacking
+        #   - frame-ancestors 'none' blocks clickjacking
+        #   - unsafe-eval removed blocks eval()/Function() XSS escalation
+        #   - connect-src 'self' blocks exfiltration to third-party endpoints
+        #
         csp = (
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
@@ -103,6 +119,8 @@ class BaseHandler(tornado.web.RequestHandler):
             "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
             "img-src 'self' data: blob:; "
             "connect-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
             "frame-ancestors 'none'"
         )
         self.set_header("Content-Security-Policy", csp)
