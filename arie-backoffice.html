@@ -5457,8 +5457,14 @@ function toggleCountryEdit() {
   document.getElementById('btn-edit-countries').innerHTML = countryEditMode ? '💾 Save' : '✏️ Edit';
   renderCountryLists();
   if (!countryEditMode) {
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated country risk lists', ip:'196.192.44.12' });
-    showToast('Country risk lists saved');
+    boApiCall('PUT', '/config/risk-model', { country_risk_scores: COUNTRY_RISK_LISTS })
+      .then(function() {
+        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated country risk lists', ip:'196.192.44.12' });
+        showToast('Country risk lists saved');
+      })
+      .catch(function(e) {
+        showToast('Failed to save country risk lists: ' + (e.message || e), 'error');
+      });
   }
 }
 
@@ -5469,8 +5475,14 @@ function toggleSectorEdit() {
       var idx = parseInt(el.dataset.idx);
       SECTOR_RISK_CONFIG[idx].score = parseInt(el.value) || 2;
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated sector risk scores', ip:'196.192.44.12' });
-    showToast('Sector risk scores saved');
+    boApiCall('PUT', '/config/risk-model', { sector_risk_scores: SECTOR_RISK_CONFIG })
+      .then(function() {
+        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated sector risk scores', ip:'196.192.44.12' });
+        showToast('Sector risk scores saved');
+      })
+      .catch(function(e) {
+        showToast('Failed to save sector risk scores: ' + (e.message || e), 'error');
+      });
   }
   sectorEditMode = !sectorEditMode;
   document.getElementById('btn-edit-sectors').innerHTML = sectorEditMode ? '💾 Save' : '✏️ Edit';
@@ -5483,8 +5495,14 @@ function toggleEntityEdit() {
       var idx = parseInt(el.dataset.idx);
       ENTITY_TYPE_SCORES[idx].score = parseInt(el.value) || 2;
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated entity type risk scores', ip:'196.192.44.12' });
-    showToast('Entity type risk scores saved');
+    boApiCall('PUT', '/config/risk-model', { entity_type_scores: ENTITY_TYPE_SCORES })
+      .then(function() {
+        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated entity type risk scores', ip:'196.192.44.12' });
+        showToast('Entity type risk scores saved');
+      })
+      .catch(function(e) {
+        showToast('Failed to save entity type risk scores: ' + (e.message || e), 'error');
+      });
   }
   entityEditMode = !entityEditMode;
   document.getElementById('btn-edit-entities').innerHTML = entityEditMode ? '💾 Save' : '✏️ Edit';
@@ -5695,19 +5713,16 @@ function saveRiskModel() {
     return;
   }
   AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Risk scoring model updated', ip:'196.192.44.12' });
-  // Sync to API
-  if (BO_AUTH_TOKEN) {
-    boApiCall('PUT', '/config/risk-model', { dimensions: RISK_DIMENSIONS, thresholds: RISK_THRESHOLDS })
-      .then(function() { console.log('Risk model synced to API'); })
-      .catch(function(e) { console.warn('API sync failed:', e); });
-  }
   // Exit edit mode
   riskEditMode = false;
   document.getElementById('btn-edit-risk').style.display = '';
   document.getElementById('btn-save-risk').style.display = 'none';
   document.getElementById('btn-cancel-risk').style.display = 'none';
   renderRiskModel();
-  showToast('✅ Risk scoring model saved successfully');
+  // Sync to API — toast only on confirmed persistence
+  boApiCall('PUT', '/config/risk-model', { dimensions: RISK_DIMENSIONS, thresholds: RISK_THRESHOLDS })
+    .then(function() { showToast('Risk scoring model saved successfully'); })
+    .catch(function(e) { showToast('Failed to save risk model: ' + (e.message || e), 'error'); });
 }
 
 // ═══════════════════════════════════════════════════════════
