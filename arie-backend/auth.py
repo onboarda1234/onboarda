@@ -116,21 +116,105 @@ def sanitize_dict(data, keys=None):
 # ══════════════════════════════════════════════════════════
 
 class RateLimiter:
-    """In-memory sliding window rate limiter. Keyed by IP + endpoint."""
+    """
+    Sliding window rate limiter with DB persistence for auth-critical keys.
+
+    General API rate limits use fast in-memory tracking. Auth-critical keys
+    (login endpoints) are additionally persisted to the database so that
+    brute-force counters survive server restarts.
+    """
+
+    # Keys containing these substrings get DB persistence
+    _PERSIST_PATTERNS = ("login", "register", "auth")
+
     def __init__(self):
-        self._attempts = {}  # key → list of timestamps
+        self._attempts = {}  # key → list of timestamps (in-memory hot path)
+
+    def _should_persist(self, key):
+        """Returns True if this key should be persisted to DB."""
+        key_lower = key.lower()
+        return any(p in key_lower for p in self._PERSIST_PATTERNS)
+
+    def _db_load(self, key, cutoff):
+        """Load persisted attempts from DB for a key."""
+        try:
+            from db import get_db as _db_get
+            db = _db_get()
+            rows = db.execute(
+                "SELECT attempted_at FROM rate_limits WHERE key = ? AND attempted_at > ?",
+                (key, cutoff)
+            ).fetchall()
+            db.close()
+            return [r[0] if isinstance(r, (tuple, list)) else r["attempted_at"] for r in rows]
+        except Exception:
+            # Table may not exist yet or DB unavailable — fall back to in-memory
+            return []
+
+    def _db_record(self, key, ts):
+        """Persist an attempt timestamp to DB."""
+        try:
+            from db import get_db as _db_get
+            db = _db_get()
+            db.execute(
+                "INSERT INTO rate_limits (key, attempted_at) VALUES (?, ?)",
+                (key, ts)
+            )
+            db.commit()
+            db.close()
+        except Exception:
+            pass  # Best-effort — in-memory still protects us
+
+    def _db_cleanup(self, key, cutoff):
+        """Remove expired entries from DB."""
+        try:
+            from db import get_db as _db_get
+            db = _db_get()
+            db.execute("DELETE FROM rate_limits WHERE key = ? AND attempted_at <= ?", (key, cutoff))
+            db.commit()
+            db.close()
+        except Exception:
+            pass
+
+    def _db_delete(self, key):
+        """Remove all entries for a key from DB."""
+        try:
+            from db import get_db as _db_get
+            db = _db_get()
+            db.execute("DELETE FROM rate_limits WHERE key = ?", (key,))
+            db.commit()
+            db.close()
+        except Exception:
+            pass
 
     def is_limited(self, key, max_attempts=10, window_seconds=900):
         """Returns True if the key has exceeded max_attempts in the window."""
         now = time.time()
         cutoff = now - window_seconds
+        persist = self._should_persist(key)
+
         if key not in self._attempts:
             self._attempts[key] = []
-        # Prune old entries
+
+        # Prune old in-memory entries
         self._attempts[key] = [t for t in self._attempts[key] if t > cutoff]
+
+        # For auth-critical keys, merge DB-persisted attempts
+        if persist:
+            db_times = self._db_load(key, cutoff)
+            # Merge: use union of in-memory and DB timestamps (dedup)
+            mem_set = set(self._attempts[key])
+            for t in db_times:
+                if t not in mem_set:
+                    self._attempts[key].append(t)
+                    mem_set.add(t)
+            self._db_cleanup(key, cutoff)
+
         if len(self._attempts[key]) >= max_attempts:
             return True
+
         self._attempts[key].append(now)
+        if persist:
+            self._db_record(key, now)
         return False
 
     def remaining(self, key, max_attempts=10, window_seconds=900):
@@ -143,3 +227,5 @@ class RateLimiter:
     def reset(self, key):
         """Reset rate limit for a key (e.g., after successful login)."""
         self._attempts.pop(key, None)
+        if self._should_persist(key):
+            self._db_delete(key)

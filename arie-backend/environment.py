@@ -305,15 +305,26 @@ def get_sumsub_base_url() -> str:
 
 def get_jwt_secret() -> str:
     """Get JWT secret — must be unique per environment."""
+    import logging as _logging
+    _jwt_logger = _logging.getLogger("arie.security")
+
     if is_production():
         secret = os.environ.get("JWT_SECRET")
         if not secret or len(secret) < 32:
             raise RuntimeError("JWT_SECRET must be set and >= 32 chars in production")
         return secret
     elif is_staging():
-        return os.environ.get("JWT_SECRET_STAGING", os.environ.get("JWT_SECRET", "staging-dev-secret-change-me"))
+        secret = os.environ.get("JWT_SECRET_STAGING", os.environ.get("JWT_SECRET", ""))
+        if not secret:
+            _jwt_logger.warning("JWT_SECRET not set for staging — using generated fallback. Set JWT_SECRET env var.")
+            secret = "staging-fallback-" + os.urandom(16).hex()
+        return secret
     else:
-        return os.environ.get("JWT_SECRET_DEMO", os.environ.get("JWT_SECRET", "demo-dev-secret-not-for-production"))
+        secret = os.environ.get("JWT_SECRET_DEMO", os.environ.get("JWT_SECRET", ""))
+        if not secret:
+            _jwt_logger.warning("JWT_SECRET not set for demo — using generated fallback. Set JWT_SECRET env var.")
+            secret = "demo-fallback-" + os.urandom(16).hex()
+        return secret
 
 
 # ── API Credentials (Sprint 2.5: single access point) ──

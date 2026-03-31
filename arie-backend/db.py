@@ -712,6 +712,23 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_dsr_status ON data_subject_requests(status);
     CREATE INDEX IF NOT EXISTS idx_dsr_client ON data_subject_requests(client_id);
     CREATE INDEX IF NOT EXISTS idx_purge_log_category ON data_purge_log(data_category);
+
+    -- Rate limiting persistence (survives restarts for auth-critical keys)
+    CREATE TABLE IF NOT EXISTS rate_limits (
+        id SERIAL PRIMARY KEY,
+        key TEXT NOT NULL,
+        attempted_at DOUBLE PRECISION NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_rate_limits_key ON rate_limits(key);
+    CREATE INDEX IF NOT EXISTS idx_rate_limits_attempted ON rate_limits(attempted_at);
+
+    -- Token revocation persistence (survives restarts)
+    CREATE TABLE IF NOT EXISTS revoked_tokens (
+        jti TEXT PRIMARY KEY,
+        expires_at DOUBLE PRECISION NOT NULL,
+        revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);
     """
 
 
@@ -1183,6 +1200,23 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_dsr_status ON data_subject_requests(status);
     CREATE INDEX IF NOT EXISTS idx_dsr_client ON data_subject_requests(client_id);
     CREATE INDEX IF NOT EXISTS idx_purge_log_category ON data_purge_log(data_category);
+
+    -- Rate limiting persistence (survives restarts for auth-critical keys)
+    CREATE TABLE IF NOT EXISTS rate_limits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL,
+        attempted_at REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_rate_limits_key ON rate_limits(key);
+    CREATE INDEX IF NOT EXISTS idx_rate_limits_attempted ON rate_limits(attempted_at);
+
+    -- Token revocation persistence (survives restarts)
+    CREATE TABLE IF NOT EXISTS revoked_tokens (
+        jti TEXT PRIMARY KEY,
+        expires_at REAL NOT NULL,
+        revoked_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);
     """
 
 

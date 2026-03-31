@@ -105,7 +105,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: JWT_SECRET
-        value: demo-dev-secret-not-for-production
+        generateValue: true    # No hardcoded secrets — even for demo
       - key: DB_PATH
         value: /data/arie_demo.db
       - key: UPLOAD_DIR

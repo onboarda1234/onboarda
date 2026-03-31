@@ -1072,10 +1072,12 @@ class ApplicationSchema:
 
 class TokenRevocationList:
     """
-    In-memory JWT token revocation list with automatic expiry cleanup.
+    JWT token revocation list with DB persistence.
 
     Prevents token reuse after logout or role changes.
-    Periodically removes expired entries to prevent memory exhaustion.
+    Uses in-memory cache for fast lookups with DB persistence so
+    revocations survive server restarts.
+    Periodically removes expired entries to prevent memory/DB exhaustion.
     """
 
     def __init__(self, cleanup_interval: int = 3600):
@@ -1085,9 +1087,60 @@ class TokenRevocationList:
         Args:
             cleanup_interval: Seconds between automatic cleanups (default 1 hour)
         """
-        self._revoked = {}  # jti -> expiry_timestamp
+        self._revoked = {}  # jti -> expiry_timestamp (in-memory cache)
         self._cleanup_interval = cleanup_interval
         self._last_cleanup = time.time()
+        self._db_loaded = False
+
+    def _db_load_all(self) -> None:
+        """Load all non-expired revoked tokens from DB into memory (called once)."""
+        if self._db_loaded:
+            return
+        try:
+            from db import get_db as _db_get
+            db = _db_get()
+            now = time.time()
+            rows = db.execute(
+                "SELECT jti, expires_at FROM revoked_tokens WHERE expires_at > ?",
+                (now,)
+            ).fetchall()
+            for r in rows:
+                jti = r[0] if isinstance(r, (tuple, list)) else r["jti"]
+                exp = r[1] if isinstance(r, (tuple, list)) else r["expires_at"]
+                self._revoked[jti] = exp
+            db.close()
+            if rows:
+                logger.info(f"Loaded {len(rows)} revoked tokens from database")
+            self._db_loaded = True
+        except Exception as e:
+            logger.debug(f"Could not load revoked tokens from DB: {e}")
+
+    def _db_persist(self, jti: str, expires_at: float) -> None:
+        """Persist a revocation to DB."""
+        try:
+            from db import get_db as _db_get
+            db = _db_get()
+            # Use INSERT OR REPLACE for SQLite / ON CONFLICT for Postgres
+            db.execute(
+                "INSERT INTO revoked_tokens (jti, expires_at) VALUES (?, ?) "
+                "ON CONFLICT (jti) DO UPDATE SET expires_at = EXCLUDED.expires_at",
+                (jti, expires_at)
+            )
+            db.commit()
+            db.close()
+        except Exception as e:
+            logger.debug(f"Could not persist revoked token to DB: {e}")
+
+    def _db_remove_expired(self) -> None:
+        """Remove expired entries from DB."""
+        try:
+            from db import get_db as _db_get
+            db = _db_get()
+            db.execute("DELETE FROM revoked_tokens WHERE expires_at <= ?", (time.time(),))
+            db.commit()
+            db.close()
+        except Exception:
+            pass
 
     def revoke(self, jti: str, expires_at: float) -> None:
         """
@@ -1098,6 +1151,7 @@ class TokenRevocationList:
             expires_at: Token expiry timestamp (Unix time)
         """
         self._revoked[jti] = expires_at
+        self._db_persist(jti, expires_at)
         logger.debug(f"Token {jti[:8]}... revoked (expires at {expires_at})")
 
         # Cleanup if interval exceeded
@@ -1114,6 +1168,9 @@ class TokenRevocationList:
         Returns:
             True if token is revoked, False otherwise
         """
+        # Lazy-load from DB on first access
+        self._db_load_all()
+
         if jti not in self._revoked:
             return False
 
@@ -1127,7 +1184,7 @@ class TokenRevocationList:
 
     def cleanup(self) -> None:
         """
-        Remove expired entries from the revocation list.
+        Remove expired entries from the revocation list (memory + DB).
 
         Called automatically after cleanup_interval has passed.
         """
@@ -1140,6 +1197,7 @@ class TokenRevocationList:
         if expired:
             logger.debug(f"Token revocation cleanup: removed {len(expired)} expired entries")
 
+        self._db_remove_expired()
         self._last_cleanup = time.time()
 
     def stats(self) -> Dict:

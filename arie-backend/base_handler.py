@@ -92,9 +92,13 @@ class BaseHandler(tornado.web.RequestHandler):
         if ENVIRONMENT == "production":
             self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
         # Content Security Policy
+        # Note: 'unsafe-inline' kept for script-src/style-src because the frontend
+        # is single-file HTML with inline scripts/styles served statically.
+        # 'unsafe-eval' REMOVED — it is the critical XSS amplification vector
+        # (eval/Function/setTimeout-string). No production code requires eval().
         csp = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; "
+            "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
             "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
             "img-src 'self' data: blob:; "

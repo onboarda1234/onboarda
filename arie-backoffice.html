@@ -2731,37 +2731,41 @@ var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:nul
 function generateAppDocs(app) {
   var personDocs = [];
   (app.directors || []).forEach(function(d) {
+    var dName = d.name || 'Unknown';
     var pDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
     if (d.pep === 'Yes') {
       pDocs.push({type:'Bank Reference Letter', status:'uploaded'});
       pDocs.push({type:'Source of Wealth Declaration', status:'uploaded'});
     }
-    var seed = 0; for (var i=0;i<d.name.length;i++) seed = ((seed<<5)-seed)+d.name.charCodeAt(i);
+    var seed = 0; for (var i=0;i<dName.length;i++) seed = ((seed<<5)-seed)+dName.charCodeAt(i);
     if (Math.abs(seed) % 3 !== 0) pDocs.push({type:'CV / Resume', status:'uploaded'});
-    personDocs.push({ name: d.name, role: 'Director', pep: d.pep, docs: pDocs });
+    personDocs.push({ name: dName, role: 'Director', pep: d.pep, docs: pDocs });
   });
   (app.ubos || []).forEach(function(u) {
-    if (personDocs.some(function(p){ return p.name === u.name; })) return;
+    var uName = u.name || 'Unknown';
+    if (personDocs.some(function(p){ return p.name === uName; })) return;
     var uDocs = [{type:'Passport / ID', status:'uploaded'}, {type:'Proof of Address', status:'uploaded'}];
     if (u.pep === 'Yes') {
       uDocs.push({type:'Bank Reference Letter', status:'uploaded'});
       uDocs.push({type:'Source of Wealth Declaration', status:'uploaded'});
     }
-    var seed = 0; for (var i=0;i<u.name.length;i++) seed = ((seed<<5)-seed)+u.name.charCodeAt(i);
+    var seed = 0; for (var i=0;i<uName.length;i++) seed = ((seed<<5)-seed)+uName.charCodeAt(i);
     if (Math.abs(seed) % 3 !== 0) uDocs.push({type:'CV / Resume', status:'uploaded'});
-    personDocs.push({ name: u.name, role: 'UBO (' + u.pct + '%)', pep: u.pep, docs: uDocs });
+    personDocs.push({ name: uName, role: 'UBO (' + (u.pct || '?') + '%)', pep: u.pep, docs: uDocs });
   });
   (app.intermediaries || []).forEach(function(inter) {
+    var interName = inter.name || 'Unknown';
     var iDocs = [{type:'Certificate of Incorporation', status:'uploaded'}, {type:'Register of Directors', status:'uploaded'}, {type:'Register of Shareholders', status:'uploaded'}];
-    var seed = 0; for (var i=0;i<inter.name.length;i++) seed = ((seed<<5)-seed)+inter.name.charCodeAt(i);
+    var seed = 0; for (var i=0;i<interName.length;i++) seed = ((seed<<5)-seed)+interName.charCodeAt(i);
     if (Math.abs(seed) % 2 === 0) iDocs.push({type:'Certificate of Good Standing', status:'uploaded'});
     if (Math.abs(seed) % 3 === 0) iDocs.push({type:'Financial Statements', status:'uploaded'});
-    personDocs.push({ name: inter.name, role: 'Intermediary (' + inter.jurisdiction + ')', pep: 'N/A', docs: iDocs });
+    personDocs.push({ name: interName, role: 'Intermediary (' + (inter.jurisdiction || 'N/A') + ')', pep: 'N/A', docs: iDocs });
   });
   app.personDocs = personDocs;
 
   var bizDocs = [];
-  var seed2 = 0; for (var i=0;i<app.company.length;i++) seed2 = ((seed2<<5)-seed2)+app.company.charCodeAt(i);
+  var companyName = app.company || 'Unknown';
+  var seed2 = 0; for (var i=0;i<companyName.length;i++) seed2 = ((seed2<<5)-seed2)+companyName.charCodeAt(i);
   seed2 = Math.abs(seed2);
   if (seed2 % 2 === 0) bizDocs.push('Business Plan');
   if (seed2 % 3 !== 2) bizDocs.push('Tax Clearance Certificate');
