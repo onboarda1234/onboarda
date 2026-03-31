@@ -2507,7 +2507,7 @@ class DocumentUploadHandler(BaseHandler):
             db.close()
             return self.error(f"File rejected: {upload_error}", 400)
 
-        # Save file locally
+        # Save file locally (as cache; S3 is the durable store in production)
         doc_id = uuid.uuid4().hex[:16]
         ext = os.path.splitext(filename)[1]
         safe_name = f"{app['id']}_{doc_id}{ext}"
@@ -2516,7 +2516,7 @@ class DocumentUploadHandler(BaseHandler):
         with open(file_path, "wb") as f:
             f.write(body)
 
-        # Upload to S3 if available
+        # Upload to S3 — required in production/staging, best-effort in demo
         s3_key = None
         if HAS_S3:
             try:
@@ -2532,10 +2532,21 @@ class DocumentUploadHandler(BaseHandler):
                     s3_key = key_or_error
                     logger.info(f"Document {doc_id} uploaded to S3: {s3_key}")
                 else:
-                    logger.warning(f"S3 upload failed for {doc_id}: {key_or_error}. Falling back to local storage.")
+                    logger.error(f"S3 upload failed for {doc_id}: {key_or_error}")
+                    if is_production() or is_staging():
+                        db.close()
+                        return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+                    logger.warning(f"S3 upload failed in demo — using local storage only for {doc_id}")
             except Exception as e:
-                logger.warning(f"S3 upload failed for {doc_id}: {e}. Falling back to local storage.")
+                logger.error(f"S3 upload exception for {doc_id}: {e}")
+                if is_production() or is_staging():
+                    db.close()
+                    return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+                logger.warning(f"S3 upload exception in demo — using local storage only for {doc_id}")
                 s3_key = None
+        elif is_production() or is_staging():
+            db.close()
+            return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
 
         if ENVIRONMENT == "production" and not s3_key:
             db.close()
@@ -5331,9 +5342,16 @@ class MemoApproveHandler(BaseHandler):
         except (json.JSONDecodeError, TypeError):
             memo_data = {}
         metadata = memo_data.get("metadata", {})
+        # Gate 3a: Reject fallback memos — AI pipeline must have succeeded
+        if metadata.get("is_fallback") is True:
+            db.close()
+            return self.error(
+                "Cannot approve a fallback memo. AI pipeline was unavailable when this memo was generated. "
+                "Re-generate the memo with a working AI pipeline before approval.", 400)
+
         supervisor_result = memo_data.get("supervisor") or metadata.get("supervisor", {})
         supervisor_verdict = supervisor_result.get("verdict", "")
-        can_approve = supervisor_result.get("can_approve", True)
+        can_approve = supervisor_result.get("can_approve", False)  # Default to False (fail-closed)
         requires_sco = supervisor_result.get("requires_sco_review", False)
 
         if supervisor_verdict != "CONSISTENT" or not can_approve:
@@ -5814,6 +5832,64 @@ class MarkNotificationReadHandler(BaseHandler):
         self.success({"status": "marked_read"})
 
 
+STATUS_LOOKUP_PUBLIC_FIELDS = ("ref", "status", "updated_at")
+
+
+def lookup_application_status_record(db, ref="", email="", current_user=None):
+    """
+    Resolve a status-lookup request with a public-safe contract.
+
+    Anonymous lookup requires both reference number and email so that the endpoint
+    does not become an enumeration surface. Authenticated client lookups are
+    restricted to the caller's own applications.
+    """
+    ref = (ref or "").strip()
+    email = (email or "").strip().lower()
+
+    if current_user and current_user.get("type") == "client":
+        query = """
+            SELECT a.ref, a.status, a.updated_at
+            FROM applications a
+            LEFT JOIN clients c ON c.id = a.client_id
+            WHERE a.client_id = ?
+        """
+        params = [current_user["sub"]]
+
+        if ref:
+            query += " AND a.ref = ?"
+            params.append(ref)
+        elif email:
+            query += " AND LOWER(c.email) = ?"
+            params.append(email)
+        else:
+            raise ValueError("Reference number or email is required.")
+    else:
+        if not ref or not email:
+            raise ValueError("Reference number and email are required for public status lookup.")
+
+        query = """
+            SELECT a.ref, a.status, a.updated_at
+            FROM applications a
+            LEFT JOIN clients c ON c.id = a.client_id
+            WHERE a.ref = ? AND LOWER(c.email) = ?
+        """
+        params = [ref, email]
+
+    query += " ORDER BY a.updated_at DESC, a.created_at DESC LIMIT 1"
+    return db.execute(query, params).fetchone()
+
+
+def build_status_lookup_payload(app_row):
+    """Return the minimal public-safe status payload."""
+    if not app_row:
+        return None
+    return {
+        field: app_row[field]
+        for field in STATUS_LOOKUP_PUBLIC_FIELDS
+        if field in app_row.keys()
+    }
+
+
 class ClientStatusLookupHandler(BaseHandler):
     """GET /api/status-lookup — Look up latest application status by reference and/or email"""
     def get(self):
@@ -5823,43 +5899,19 @@ class ClientStatusLookupHandler(BaseHandler):
         if not ref and not email:
             return self.error("ref or email is required", 400)
 
+        current_user = self.get_current_user_token()
         db = get_db()
-        query = """
-            SELECT a.id, a.ref, a.company_name, a.status, a.risk_level, a.risk_score, a.created_at, a.updated_at,
-                   c.email AS client_email
-            FROM applications a
-            LEFT JOIN clients c ON c.id = a.client_id
-            WHERE 1=1
-        """
-        params = []
-
-        if ref:
-            query += " AND a.ref = ?"
-            params.append(ref)
-        if email:
-            query += " AND LOWER(c.email) = ?"
-            params.append(email)
-
-        query += " ORDER BY a.updated_at DESC, a.created_at DESC LIMIT 1"
-        app = db.execute(query, params).fetchone()
+        try:
+            app = lookup_application_status_record(db, ref=ref, email=email, current_user=current_user)
+        except ValueError as exc:
+            db.close()
+            return self.error(str(exc), 400)
         db.close()
 
         if not app:
             return self.error("Application not found", 404)
 
-        self.success({
-            "application": {
-                "id": app["id"],
-                "ref": app["ref"],
-                "company_name": app["company_name"],
-                "status": app["status"],
-                "risk_level": app["risk_level"],
-                "risk_score": app["risk_score"],
-                "created_at": app["created_at"],
-                "updated_at": app["updated_at"],
-                "client_email": app["client_email"],
-            }
-        })
+        self.success({"application": build_status_lookup_payload(app)})
 
 
 # ══════════════════════════════════════════════════════════
