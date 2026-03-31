@@ -2459,20 +2459,34 @@ def sync_ai_checks_from_seed(db: DBConnection):
             )
             inserted += 1
 
-    # Rebuild Agent 1 checks list from updated ai_checks
-    all_rows = db.execute("SELECT doc_name, checks FROM ai_checks ORDER BY category, id").fetchall()
-    all_check_labels = []
-    for row in all_rows:
-        checks_list = json.loads(row["checks"]) if row["checks"] else []
-        for ch in checks_list:
-            all_check_labels.append(f"{row['doc_name']}: {ch['label']}")
-    db.execute(
-        "UPDATE ai_agents SET checks=? WHERE agent_number=1",
-        (json.dumps(all_check_labels),)
-    )
-
+    # Commit check updates BEFORE agent rebuild so they are saved even if rebuild fails.
+    # (PostgreSQL JSONB columns return already-parsed Python objects, not JSON strings —
+    # committing here prevents the agent-rebuild step from rolling back the check updates.)
     db.commit()
     logger.info(f"ai_checks sync complete: {updated} updated, {inserted} inserted")
+
+    # Rebuild Agent 1 checks list from updated ai_checks
+    try:
+        all_rows = db.execute("SELECT doc_name, checks FROM ai_checks ORDER BY category, id").fetchall()
+        all_check_labels = []
+        for row in all_rows:
+            raw = row["checks"]
+            # PostgreSQL JSONB returns a Python list/dict; SQLite TEXT returns a JSON string.
+            if isinstance(raw, (list, dict)):
+                checks_list = raw if isinstance(raw, list) else []
+            else:
+                checks_list = json.loads(raw) if raw else []
+            for ch in checks_list:
+                if isinstance(ch, dict) and ch.get("label"):
+                    all_check_labels.append(f"{row['doc_name']}: {ch['label']}")
+        db.execute(
+            "UPDATE ai_agents SET checks=? WHERE agent_number=1",
+            (json.dumps(all_check_labels),)
+        )
+        db.commit()
+        logger.info(f"Agent 1 checks list rebuilt: {len(all_check_labels)} checks")
+    except Exception as e:
+        logger.error(f"Agent 1 checks rebuild failed (check data already committed): {e}", exc_info=True)
 
 
 # ============================================================================
