@@ -1808,9 +1808,9 @@
 
         <!-- Idle state: input form -->
         <div id="lookup-idle">
-          <div class="lookup-badge">🤖 AI-Powered Company Search</div>
+          <div class="lookup-badge">🏢 Company Details</div>
           <div class="lookup-title">Tell us about your company</div>
-          <div class="lookup-sub">Enter your company's basic details and our AI agent will automatically retrieve and pre-fill your application using live data from global company registries — saving you time and reducing errors.</div>
+          <div class="lookup-sub">Enter your company's basic details below. These will be used to pre-fill your application form. You can review and edit all fields before submission.</div>
 
           <div class="form-group mb-2">
             <label>Company Name <span class="req">*</span></label>
@@ -1832,26 +1832,20 @@
           </div>
           <!-- Real-time Registry Verification Results -->
           <div id="registry-verification-panel" style="display:none;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:20px;">
-            <div style="font-size:12px;font-weight:600;margin-bottom:10px;color:var(--text2);">🔍 Real-time Registry Verification</div>
+            <div style="font-size:12px;font-weight:600;margin-bottom:10px;color:var(--text2);">🔍 Input Validation</div>
             <div id="registry-results" style="display:flex;flex-direction:column;gap:8px;"></div>
           </div>
 
           <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:20px;">
-            <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">🔗 Databases we'll search</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;">
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">OpenCorporates</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">UK Companies House</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">Mauritius CBRIS</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">ACRA Singapore</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">SEC EDGAR (US)</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">CIPC South Africa</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">EU BRIS Network</span>
-              <span style="font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg2);border:1px solid var(--border2);color:var(--text2);">Dun & Bradstreet</span>
+            <div style="font-size:11px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">ℹ️ What happens next</div>
+            <div style="font-size:12px;color:var(--text2);line-height:1.5;">
+              Your company details will pre-fill the application form. You'll be able to review and edit all fields before submitting.
+              Company registry verification will be performed by the compliance team during the review process.
             </div>
           </div>
 
           <button class="btn-submit" onclick="startCompanyLookup()">
-            🔍 Search &amp; Pre-fill My Application
+            ➡️ Continue to Application
           </button>
         </div>
 
@@ -1976,8 +1970,8 @@
         <div id="prefill-notice" class="hidden" style="background:rgba(43,47,143,0.08);border:1px solid rgba(43,47,143,0.3);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:20px;display:flex;align-items:flex-start;gap:12px;">
             <div style="font-size:22px;flex-shrink:0;">📋</div>
             <div>
-              <div style="font-size:13px;font-weight:700;margin-bottom:3px;color:#8A9FE8;">Registry Data Loaded</div>
-              <div style="font-size:12px;color:var(--text2);">Some fields were populated from public company registries. Please review and update any details that may have changed.</div>
+              <div style="font-size:13px;font-weight:700;margin-bottom:3px;color:#8A9FE8;">Company Details Pre-filled</div>
+              <div style="font-size:12px;color:var(--text2);">Some fields were pre-filled from your earlier input. Please review and update any details before submitting.</div>
             </div>
           </div>
           <form id="prescreening-form" onsubmit="submitPrescreening(event)">
@@ -4510,13 +4504,13 @@ let AUTH_USER = null;
 let currentApplicationId = '';
 
 // ─── Environment Detection ────────────────────────────────
-var ARIE_ENV = 'demo';
+var ARIE_ENV = 'production';
 var FEATURE_FLAGS = {};
 
 async function loadEnvironment() {
   try {
     const data = await apiCall('GET', '/config/environment');
-    ARIE_ENV = data.environment || 'demo';
+    ARIE_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
     applyEnvironmentUI();
   } catch (e) {
@@ -4564,7 +4558,7 @@ async function apiCall(method, path, body, isFormData) {
 function setAuth(token, user) {
   AUTH_TOKEN = token;
   AUTH_USER = user;
-  document.cookie = 'arie_token=' + encodeURIComponent(token) + '; path=/; SameSite=Strict; Secure';
+  // Auth token kept in memory only; httpOnly session cookie set by server
   updateUserDisplay();
 }
 
@@ -4586,7 +4580,7 @@ function clearAuth() {
   AUTH_TOKEN = '';
   AUTH_USER = null;
   currentApplicationId = '';
-  document.cookie = 'arie_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict; Secure';
+  // httpOnly session cookie cleared by server on logout; no JS cookie to expire
 }
 
 // ─── State ───────────────────────────────────────────────
@@ -6682,11 +6676,11 @@ async function finalSubmitFromReview() {
 // Deterministic compliance memo summary panel
 // ═══════════════════════════════════════════════════════════
 function generateComplianceMemo() {
-  var d = MOCK_COMPANY_DATA;
+  // Read from authoritative DOM form fields, not synthetic lookup data
   var level = computedRiskLevel || 'LOW';
-  var companyName = d.regName || 'N/A';
-  var country = d.incCountry || 'N/A';
-  var brn = d.brn || 'N/A';
+  var companyName = (document.getElementById('f-reg-name') || {}).value || 'N/A';
+  var country = (document.getElementById('f-inc-country') || {}).value || 'N/A';
+  var brn = (document.getElementById('f-brn') || {}).value || 'N/A';
 
   // Client Overview
   var overview = document.getElementById('memo-client-overview');
@@ -7279,7 +7273,7 @@ function checkSanctionedCountry(selectEl) {
   return true;
 }
 
-// ─── Simulated company data from "registry lookup" ───────────
+// ─── Demo-only: company data for demo prefill (not used in production) ───────────
 const MOCK_COMPANY_DATA = {
   regName:     '',   // populated from form input
   tradeName:   '',
@@ -7410,7 +7404,7 @@ async function submitLogin(e) {
     showToast('success', isOffline ? 'Demo Mode' : 'Welcome back!', isOffline ? 'Signed in offline — explore the portal demo.' : 'Pick up where you left off.');
   } catch (err) {
     btn.disabled = false; btn.textContent = '🔒 Sign In';
-    showToast('error', 'Login Failed', ARIE_ENV === 'demo' ? 'Invalid credentials. Try password: Arie2026!' : 'Invalid credentials. Please check your email and password.');
+    showToast('error', 'Login Failed', 'Invalid credentials. Please check your email and password.');
   }
 }
 
@@ -7542,6 +7536,14 @@ function checkPasswordStrength(val) {
 
 // ─── Company Lookup ───────────────────────────────────────────
 function startCompanyLookup() {
+  // In non-demo environments, no registry integration exists — redirect to manual entry
+  if (ARIE_ENV !== 'demo') {
+    showToast('info', 'Manual Entry', 'Company details can be entered directly in the application form.');
+    showView('prescreening');
+    return;
+  }
+
+  // Demo-only: simulated lookup for demonstration purposes
   const name = document.getElementById('lu-name').value.trim();
   const reg  = document.getElementById('lu-reg').value.trim();
   const country = document.getElementById('lu-country').value;
@@ -7549,9 +7551,9 @@ function startCompanyLookup() {
     showToast('warn', 'Missing fields', 'Please enter company name and country of incorporation.');
     return;
   }
-  // Store for prefill
+  // Store for demo prefill only
   MOCK_COMPANY_DATA.regName    = name;
-  MOCK_COMPANY_DATA.brn        = reg || 'C' + Math.floor(Math.random()*9000000+1000000);
+  MOCK_COMPANY_DATA.brn        = reg || 'DEMO-' + Math.floor(Math.random()*9000000+1000000);
   MOCK_COMPANY_DATA.incCountry = country;
   const now = new Date(); now.setFullYear(now.getFullYear()-5);
   MOCK_COMPANY_DATA.incDate    = now.toISOString().split('T')[0];
@@ -7563,7 +7565,7 @@ function startCompanyLookup() {
   document.getElementById('lookup-loading').style.display = 'block';
   document.getElementById('lookup-result').style.display  = 'none';
 
-  // Animate steps
+  // Animate steps (demo only)
   const steps = ['ls1','ls2','ls3','ls4','ls5','ls6'];
   let i = 0;
   function nextStep() {
@@ -7578,11 +7580,9 @@ function startCompanyLookup() {
       i++;
       setTimeout(nextStep, 600 + Math.random()*300);
     } else {
-      // Show result (pass false to test not-found state)
       setTimeout(() => showLookupResult(true), 400);
     }
   }
-  // Activate step icons on done
   document.querySelectorAll('#lookup-steps li').forEach(li => {
     li.classList.remove('done','active'); li.classList.add('waiting');
   });
@@ -8051,18 +8051,26 @@ function toggleKYCPepPanel(personId, value) {
   if (bankRefRow) { bankRefRow.style.display = isPEP ? '' : 'none'; }
 }
 
-// ─── KYC: update person names from prefill ─────────────────────────────
+// ─── KYC: update person names from form fields ─────────────────────────────
 function updateKYCPersonNames() {
-  const d = MOCK_COMPANY_DATA;
-  if (d.directors && d.directors[0]) {
-    const n = d.directors[0].first + ' ' + d.directors[0].last;
-    const el = document.getElementById('kyc-name-dir1');
-    if (el) el.textContent = n;
+  // Read from DOM director/UBO table rows, not synthetic lookup data
+  var dirRow = document.querySelector('#directors-body tr');
+  if (dirRow) {
+    var inputs = dirRow.querySelectorAll('input[type="text"]');
+    if (inputs.length >= 2 && (inputs[0].value || inputs[1].value)) {
+      var n = (inputs[0].value + ' ' + inputs[1].value).trim();
+      var el = document.getElementById('kyc-name-dir1');
+      if (el && n) el.textContent = n;
+    }
   }
-  if (d.ubos && d.ubos[0]) {
-    const n = d.ubos[0].first + ' ' + d.ubos[0].last;
-    const el = document.getElementById('kyc-name-ubo1');
-    if (el) el.textContent = n;
+  var uboRow = document.querySelector('#ubos-body tr');
+  if (uboRow) {
+    var inputs = uboRow.querySelectorAll('input[type="text"]');
+    if (inputs.length >= 2 && (inputs[0].value || inputs[1].value)) {
+      var n = (inputs[0].value + ' ' + inputs[1].value).trim();
+      var el = document.getElementById('kyc-name-ubo1');
+      if (el && n) el.textContent = n;
+    }
   }
 }
 
