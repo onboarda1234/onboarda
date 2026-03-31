@@ -125,6 +125,17 @@ from validation_engine import (
 from supervisor_engine import run_memo_supervisor
 from memo_handler import build_compliance_memo
 from branding import BRAND
+from prescreening.normalize import (
+    compose_source_of_funds_summary as _compose_source_of_funds_summary,
+    first_non_empty as _first_non_empty,
+    is_meaningful_value as _is_meaningful_value,
+    merge_prescreening_sources as _merge_prescreening_sources,
+    normalize_prescreening_data as _normalize_prescreening_data,
+    normalize_saved_session_prescreening as _normalize_saved_session_prescreening,
+    resolve_application_company_name as _resolve_application_company_name,
+    safe_json_loads as _safe_json_loads,
+)
+from prescreening.risk_inputs import build_prescreening_risk_input
 
 # Sprint 3: Server-side PDF generation
 try:
@@ -469,248 +480,35 @@ except (RuntimeError, ValueError) as e:
 
 def safe_json_loads(val):
     """Safely parse JSON — handles PostgreSQL JSONB (already dict) and SQLite TEXT (string)."""
-    if val is None:
-        return {}
-    if isinstance(val, (dict, list)):
-        return val  # PostgreSQL JSONB returns Python objects directly
-    if isinstance(val, str):
-        try:
-            return json.loads(val)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-    return {}
+    return _safe_json_loads(val)
 
 
 def first_non_empty(*values):
     """Return the first non-empty string-like value, preserving non-string scalars."""
-    for value in values:
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped:
-                return stripped
-        elif value not in (None, "", [], {}):
-            return value
-    return ""
+    return _first_non_empty(*values)
 
 
 def compose_source_of_funds_summary(prescreening: dict) -> str:
-    parts = []
-    initial_type = first_non_empty(prescreening.get("source_of_funds_initial_type"))
-    initial_detail = first_non_empty(prescreening.get("source_of_funds_initial_detail"))
-    ongoing_type = first_non_empty(prescreening.get("source_of_funds_ongoing_type"))
-    ongoing_detail = first_non_empty(prescreening.get("source_of_funds_ongoing_detail"))
-    if initial_type:
-        parts.append(f"Initial: {initial_type}")
-    if initial_detail:
-        parts.append(initial_detail)
-    if ongoing_type:
-        parts.append(f"Ongoing: {ongoing_type}")
-    if ongoing_detail:
-        parts.append(ongoing_detail)
-    return "; ".join(parts)
+    return _compose_source_of_funds_summary(prescreening)
 
 
 def normalize_prescreening_data(data: dict, existing=None) -> dict:
     """Merge incoming prescreening data with existing state and normalize core aliases."""
-    merged = {}
-    current = safe_json_loads(existing)
-    incoming = safe_json_loads(data.get("prescreening_data", {}))
-    if isinstance(current, dict):
-        merged.update(current)
-    if isinstance(incoming, dict):
-        merged.update(incoming)
-
-    company_name = first_non_empty(
-        data.get("company_name"),
-        data.get("entity_name"),
-        data.get("registered_entity_name"),
-        merged.get("registered_entity_name"),
-        merged.get("company_name")
-    )
-    if company_name:
-        merged["registered_entity_name"] = company_name
-        merged["company_name"] = company_name
-
-    country = first_non_empty(data.get("country"), merged.get("country_of_incorporation"))
-    if country:
-        merged["country_of_incorporation"] = country
-
-    if data.get("entity_type"):
-        merged["entity_type"] = data.get("entity_type")
-    if data.get("ownership_structure"):
-        merged["ownership_structure"] = data.get("ownership_structure")
-    if data.get("sector"):
-        merged["sector"] = data.get("sector")
-    if data.get("brn"):
-        merged["brn"] = data.get("brn")
-
-    if merged.get("monthly_volume") and not merged.get("expected_volume"):
-        merged["expected_volume"] = merged.get("monthly_volume")
-    if not merged.get("source_of_funds"):
-        merged["source_of_funds"] = compose_source_of_funds_summary(merged)
-
-    return merged
-
-
-SESSION_PRESCREENING_FIELD_MAP = {
-    "f-reg-name": "registered_entity_name",
-    "f-trade-name": "trading_name",
-    "f-reg-address": "registered_address",
-    "f-hq-address": "headquarters_address",
-    "f-contact-first": "entity_contact_first",
-    "f-contact-last": "entity_contact_last",
-    "f-email": "entity_contact_email",
-    "f-phone-code": "entity_contact_phone_code",
-    "f-mobile": "entity_contact_mobile",
-    "f-website": "website",
-    "f-licences": "regulatory_licences",
-    "f-inc-country": "country_of_incorporation",
-    "f-inc-date": "incorporation_date",
-    "f-brn": "brn",
-    "f-sector": "sector",
-    "f-entity-type": "entity_type",
-    "f-ownership-structure": "ownership_structure",
-    "f-monthly-volume": "monthly_volume",
-    "f-txn-complexity": "transaction_complexity",
-    "f-biz-overview": "business_overview",
-    "f-source-wealth-type": "source_of_wealth_type",
-    "f-source-wealth": "source_of_wealth_detail",
-    "f-source-init-type": "source_of_funds_initial_type",
-    "f-source-init": "source_of_funds_initial_detail",
-    "f-source-ongoing-type": "source_of_funds_ongoing_type",
-    "f-source-ongoing": "source_of_funds_ongoing_detail",
-    "f-mgmt": "management_overview",
-    "f-intro-method": "introduction_method",
-    "f-referrer-name": "referrer_name",
-}
-
-LEGACY_SESSION_PRESCREENING_FIELD_MAP = {
-    "regName": "registered_entity_name",
-    "tradeName": "trading_name",
-    "regAddress": "registered_address",
-    "hqAddress": "headquarters_address",
-    "contactFirst": "entity_contact_first",
-    "contactLast": "entity_contact_last",
-    "contactEmail": "entity_contact_email",
-    "phoneCode": "entity_contact_phone_code",
-    "mobile": "entity_contact_mobile",
-    "website": "website",
-    "licences": "regulatory_licences",
-    "incCountry": "country_of_incorporation",
-    "incDate": "incorporation_date",
-    "brn": "brn",
-    "sector": "sector",
-    "entityType": "entity_type",
-    "ownershipStructure": "ownership_structure",
-    "monthlyVolume": "monthly_volume",
-    "expectedVolume": "expected_volume",
-    "txnComplexity": "transaction_complexity",
-    "bizOverview": "business_overview",
-    "businessOverview": "business_overview",
-    "servicesRequired": "services_required",
-    "countriesOfOperation": "countries_of_operation",
-    "targetMarkets": "target_markets",
-    "accountPurposes": "account_purposes",
-    "hasBank": "existing_bank_account",
-    "bankName": "existing_bank_name",
-    "currencies": "currencies",
-    "sourceWealthType": "source_of_wealth_type",
-    "sourceWealth": "source_of_wealth_detail",
-    "sourceInitType": "source_of_funds_initial_type",
-    "sourceInit": "source_of_funds_initial_detail",
-    "sourceOngoingType": "source_of_funds_ongoing_type",
-    "sourceOngoing": "source_of_funds_ongoing_detail",
-    "mgmt": "management_overview",
-    "managementOverview": "management_overview",
-    "introMethod": "introduction_method",
-    "referrerName": "referrer_name",
-}
+    return _normalize_prescreening_data(data, existing=existing)
 
 
 def is_meaningful_value(value) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return value.strip() != ""
-    if isinstance(value, (list, tuple, set, dict)):
-        return len(value) > 0
-    return True
+    return _is_meaningful_value(value)
 
 
 def normalize_saved_session_prescreening(form_data) -> dict:
     """Backfill authoritative prescreening aliases from save/resume session payloads."""
-    normalized = {}
-    raw_form = safe_json_loads(form_data)
-    if not isinstance(raw_form, dict):
-        return normalized
-
-    sources = []
-    prescreening = raw_form.get("prescreening")
-    if isinstance(prescreening, dict):
-        sources.append(prescreening)
-    sources.append(raw_form)
-
-    for source in sources:
-        if not isinstance(source, dict):
-            continue
-        for raw_key, normalized_key in SESSION_PRESCREENING_FIELD_MAP.items():
-            raw_value = source.get(raw_key)
-            if is_meaningful_value(raw_value):
-                normalized[normalized_key] = raw_value
-        for raw_key, normalized_key in LEGACY_SESSION_PRESCREENING_FIELD_MAP.items():
-            raw_value = source.get(raw_key)
-            if is_meaningful_value(raw_value):
-                normalized[normalized_key] = raw_value
-
-    if isinstance(raw_form.get("servicesRequired"), list):
-        normalized["services_required"] = raw_form.get("servicesRequired")
-    if isinstance(raw_form.get("countriesOfOperation"), list):
-        normalized["countries_of_operation"] = raw_form.get("countriesOfOperation")
-    if isinstance(raw_form.get("targetMarkets"), list):
-        normalized["target_markets"] = raw_form.get("targetMarkets")
-    if isinstance(raw_form.get("accountPurposes"), list):
-        normalized["account_purposes"] = raw_form.get("accountPurposes")
-
-    consent_map = {
-        "f-consent-declaration": "consent_declaration",
-        "f-consent-pricing": "consent_pricing",
-        "f-consent-terms": "consent_terms",
-    }
-    for source in sources:
-        if not isinstance(source, dict):
-            continue
-        for raw_key, normalized_key in consent_map.items():
-            if raw_key in source:
-                normalized[normalized_key] = bool(source.get(raw_key))
-
-    legacy_consent_map = {
-        "consentDeclaration": "consent_declaration",
-        "consentPricing": "consent_pricing",
-        "consentTerms": "consent_terms",
-    }
-    for source in sources:
-        if not isinstance(source, dict):
-            continue
-        for raw_key, normalized_key in legacy_consent_map.items():
-            if raw_key in source:
-                normalized[normalized_key] = bool(source.get(raw_key))
-
-    normalized = normalize_prescreening_data({"prescreening_data": normalized})
-    return normalized
+    return _normalize_saved_session_prescreening(form_data)
 
 
 def merge_prescreening_sources(primary, fallback) -> dict:
     """Merge prescreening sources while preserving authoritative stored values over backfill."""
-    merged = {}
-    fallback_data = safe_json_loads(fallback)
-    primary_data = safe_json_loads(primary)
-    if isinstance(fallback_data, dict):
-        merged.update(fallback_data)
-    if isinstance(primary_data, dict):
-        for key, value in primary_data.items():
-            if is_meaningful_value(value):
-                merged[key] = value
-    return normalize_prescreening_data({"prescreening_data": merged})
+    return _merge_prescreening_sources(primary, fallback)
 
 
 def load_saved_session_prescreening(db, app_record) -> dict:
@@ -735,14 +533,7 @@ def load_saved_session_prescreening(db, app_record) -> dict:
 
 def resolve_application_company_name(data: dict, prescreening_data: dict, fallback="") -> str:
     """Resolve the authoritative legal entity name for application persistence."""
-    return first_non_empty(
-        data.get("company_name"),
-        data.get("entity_name"),
-        data.get("registered_entity_name"),
-        prescreening_data.get("registered_entity_name") if isinstance(prescreening_data, dict) else "",
-        prescreening_data.get("company_name") if isinstance(prescreening_data, dict) else "",
-        fallback
-    )
+    return _resolve_application_company_name(data, prescreening_data, fallback=fallback)
 
 
 def build_full_name(record: dict) -> str:
@@ -2006,17 +1797,13 @@ class SubmitApplicationHandler(BaseHandler):
         directors, ubos, intermediaries = get_application_parties(db, real_id)
 
         prescreening = safe_json_loads(app["prescreening_data"])
-        scoring_input = {
-            **prescreening,
-            "entity_type": app["entity_type"],
-            "ownership_structure": app["ownership_structure"],
-            "country": app["country"],
-            "sector": app["sector"],
-            "company_name": app["company_name"],
-            "directors": directors,
-            "ubos": ubos,
-            "intermediaries": intermediaries
-        }
+        scoring_input = build_prescreening_risk_input(
+            application=app,
+            prescreening_data=prescreening,
+            directors=directors,
+            ubos=ubos,
+            intermediaries=intermediaries,
+        )
 
         # ── Run real screening (Agents 1, 2, 3, 5) ──
         client_ip = self.get_client_ip()
@@ -2206,17 +1993,13 @@ class KYCSubmitHandler(BaseHandler):
             try:
                 prescreening = safe_json_loads(app["prescreening_data"])
                 directors, ubos, intermediaries = get_application_parties(db, real_id)
-                scoring_input = {
-                    **prescreening,
-                    "entity_type": app["entity_type"],
-                    "ownership_structure": app["ownership_structure"],
-                    "country": app["country"],
-                    "sector": app["sector"],
-                    "company_name": app["company_name"],
-                    "directors": directors,
-                    "ubos": ubos,
-                    "intermediaries": intermediaries
-                }
+                scoring_input = build_prescreening_risk_input(
+                    application=app,
+                    prescreening_data=prescreening,
+                    directors=directors,
+                    ubos=ubos,
+                    intermediaries=intermediaries,
+                )
                 score_result = compute_risk_score(scoring_input)
                 risk_score = score_result["score"]
                 risk_level = score_result["level"]

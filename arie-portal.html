@@ -4066,14 +4066,13 @@
           <div class="card-icon gold">🔍</div>
           <div>
             <div class="card-title">Track Your Application</div>
-            <div class="card-sub">Enter your reference number or email</div>
+            <div class="card-sub">Enter your reference number and email address</div>
           </div>
         </div>
         <div class="form-group mb-2">
           <label>Reference Number</label>
           <input type="text" id="lookup-ref" placeholder="e.g. ARF-2024-000001" />
         </div>
-        <div class="section-title">or</div>
         <div class="form-group mb-3">
           <label>Email Address</label>
           <input type="email" id="lookup-email" placeholder="your@email.com" />
@@ -6835,32 +6834,30 @@ async function lookupApplication() {
   const ref = document.getElementById('lookup-ref').value.trim();
   const email = document.getElementById('lookup-email').value.trim();
   const resultEl = document.getElementById('status-lookup-result');
-  if (!ref && !email) {
-    showToast('warn', 'Input Required', 'Please enter a reference number or email address.');
+  if (!ref || !email) {
+    showToast('warn', 'Input Required', 'Please enter both your reference number and email address.');
     return;
   }
 
   if (resultEl) {
     resultEl.style.display = 'block';
-    resultEl.innerHTML = '<div style="font-size:12px;color:var(--text3);">Looking up live application status...</div>';
+    resultEl.innerHTML = '<div style="font-size:12px;color:var(--text3);">Verifying your reference number and email address...</div>';
   }
 
   try {
     const query = new URLSearchParams();
-    if (ref) query.set('ref', ref);
-    if (email) query.set('email', email);
+    query.set('ref', ref);
+    query.set('email', email);
     const resp = await apiCall('GET', '/status-lookup?' + query.toString());
     const app = resp.application || {};
     const statusLabel = String(app.status || 'unknown').replace(/_/g, ' ');
-    const riskLabel = app.risk_level ? String(app.risk_level).replace(/_/g, ' ') : 'Not scored';
     const updatedAt = app.updated_at ? new Date(app.updated_at).toLocaleString() : 'Unknown';
     if (resultEl) {
       resultEl.innerHTML =
-        '<div style="font-weight:700;font-size:13px;margin-bottom:8px;">' + escapeHtml(app.company_name || 'Application') + '</div>' +
         '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Reference:</strong> ' + escapeHtml(app.ref || 'N/A') + '</div>' +
         '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Status:</strong> ' + escapeHtml(statusLabel) + '</div>' +
-        '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Risk Level:</strong> ' + escapeHtml(riskLabel) + '</div>' +
-        '<div style="font-size:11px;color:var(--text3);"><strong>Last Updated:</strong> ' + escapeHtml(updatedAt) + '</div>';
+        '<div style="font-size:11px;color:var(--text3);margin-bottom:8px;"><strong>Last Updated:</strong> ' + escapeHtml(updatedAt) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);">For privacy and security, this tracker shows only the current application stage.</div>';
     }
     showToast('success', 'Status Found', 'Reference ' + (app.ref || ref) + ' is currently ' + statusLabel + '.');
   } catch (err) {
