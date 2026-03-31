@@ -720,7 +720,7 @@ body.role-admin .role-admin-only-block { display:block; }
   <div class="topbar-title" id="topbar-title">Dashboard</div>
   <div class="topbar-actions">
     <input type="text" class="topbar-search" placeholder="Search applications, clients..." id="global-search" oninput="handleGlobalSearch(this.value)" />
-    <button class="topbar-btn" onclick="showNotifications()">🔔 <span id="notif-count" style="background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;">3</span></button>
+    <button class="topbar-btn" onclick="showNotifications()">🔔 <span id="notif-count" style="background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:none;align-items:center;justify-content:center;font-size:10px;font-weight:700;">0</span></button>
     <select class="form-select" style="width:auto;padding:6px 10px;font-size:12px;" id="login-as-select" onchange="switchUser(this.value)">
       <option value="admin">Login as: Admin</option>
       <option value="sco">Login as: Senior CO</option>
@@ -790,7 +790,7 @@ body.role-admin .role-admin-only-block { display:block; }
       <div class="card-header"><div class="card-title">Onboarding Lanes</div></div>
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Fast Lane (Low Risk)</span><span id="lane-fast-count" style="font-weight:700;color:var(--green);">0</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span>Standard Review (Low Risk)</span><span id="lane-fast-count" style="font-weight:700;color:var(--green);">0</span></div>
           <div style="height:10px;background:var(--surface3);border-radius:5px;overflow:hidden;"><div id="lane-fast-bar" style="width:0%;height:100%;background:var(--green);border-radius:5px;transition:width 0.5s;"></div></div>
         </div>
         <div>
@@ -1166,8 +1166,9 @@ body.role-admin .role-admin-only-block { display:block; }
       <div class="card-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span style="font-size:18px;">🛡️</span>
         <span style="font-weight:700;">AI Supervisor Pipeline</span>
+        <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;">Decision Support</span>
         <span class="badge" id="sv-pipeline-status" style="background:var(--bg2);color:var(--text3);">Not Run</span>
-        <button class="btn btn-primary btn-sm" id="btn-run-supervisor" onclick="runSupervisorPipeline()" style="margin-left:auto;">▶️ Run Supervisor Pipeline</button>
+        <button class="btn btn-primary btn-sm" id="btn-run-supervisor" onclick="runSupervisorPipeline()" style="margin-left:auto;">▶️ Run Analysis</button>
       </div>
     </div>
 
@@ -1202,31 +1203,9 @@ body.role-admin .role-admin-only-block { display:block; }
         <div class="card-header"><div class="card-title">Officer Review</div></div>
         <div id="sv-review-panel" style="padding:14px;">
           <div id="sv-review-reasons"></div>
-          <div id="sv-review-form" style="display:none;margin-top:14px;border-top:1px solid var(--border1);padding-top:14px;">
-            <div style="font-size:12px;font-weight:700;margin-bottom:8px;">Submit Review Decision</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-              <select class="form-select" id="sv-review-decision" style="font-size:12px;padding:6px 10px;min-width:180px;">
-                <option value="approve">Approve</option>
-                <option value="reject">Reject</option>
-                <option value="request_information">Request Information</option>
-                <option value="escalate">Escalate Further</option>
-                <option value="enhanced_monitoring">Enhanced Monitoring</option>
-                <option value="defer">Defer</option>
-              </select>
-              <select class="form-select" id="sv-review-risk" style="font-size:12px;padding:6px 10px;min-width:140px;">
-                <option value="">Risk Level (optional)</option>
-                <option value="LOW">Low</option>
-                <option value="MEDIUM">Medium</option>
-                <option value="HIGH">High</option>
-                <option value="VERY_HIGH">Very High</option>
-              </select>
-            </div>
-            <textarea id="sv-review-reason" rows="3" placeholder="Decision reason (mandatory)..." style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border1);border-radius:6px;margin-bottom:8px;resize:vertical;"></textarea>
-            <div style="display:flex;gap:8px;">
-              <label style="font-size:11px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="sv-review-override" /> Override AI Recommendation</label>
-            </div>
-            <textarea id="sv-override-reason" rows="2" placeholder="Override reason (required if overriding AI)..." style="width:100%;font-size:12px;padding:8px;border:1px solid var(--border1);border-radius:6px;margin-top:6px;display:none;resize:vertical;"></textarea>
-            <button class="btn btn-primary" onclick="submitSupervisorReview()" style="margin-top:10px;">Submit Review</button>
+          <!-- Supervisor review actions are performed via the memo approval workflow (Generate Memo → Validate → Approve) -->
+          <div style="margin-top:14px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:11px;color:var(--text3);">
+            To act on supervisor findings, use the compliance memo workflow: Generate Memo → Validate → Supervisor Run → Approve/Reject via the Memo tab.
           </div>
         </div>
       </div>
@@ -1625,8 +1604,8 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="form-group"><div class="form-label">Company Name</div><input class="form-input" id="setting-company-name" value="Onboarda Ltd" /></div>
     <div class="form-group"><div class="form-label">FSC Licence Number</div><input class="form-input" id="setting-fsc-licence" value="FSC-PIS-2024-001" /></div>
     <div class="form-group"><div class="form-label">Default Data Retention (years)</div><input class="form-input" type="number" id="setting-retention" value="7" /></div>
-    <div class="form-group"><div class="form-label">Risk Appetite — Max Score for Auto-Approval</div><input class="form-input" type="number" id="setting-auto-approve" value="40" /></div>
-    <div class="form-group"><div class="form-label">EDD Threshold Score</div><input class="form-input" type="number" id="setting-edd-threshold" value="55" /></div>
+    <div class="form-group"><div class="form-label">Risk Appetite — Low Risk Ceiling (reference only, not auto-enforced)</div><input class="form-input" type="number" id="setting-auto-approve" value="40" /></div>
+    <div class="form-group"><div class="form-label">EDD Threshold Score (reference only, not auto-enforced)</div><input class="form-input" type="number" id="setting-edd-threshold" value="55" /></div>
     <button class="btn btn-primary" onclick="saveSystemSettings()">Save Settings</button>
   </div>
 </div>
@@ -1823,20 +1802,20 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="card">
       <div class="card-title" style="margin-bottom:12px;">Risk Classification Thresholds</div>
       <div style="display:flex;flex-direction:column;gap:8px;">
-        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--green);"></div><span style="font-size:13px;"><strong>Low Risk:</strong> 0 — 39.9</span></div>
-        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--blue);"></div><span style="font-size:13px;"><strong>Medium Risk:</strong> 40 — 54.9</span></div>
-        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--amber);"></div><span style="font-size:13px;"><strong>High Risk:</strong> 55 — 69.9</span></div>
+        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--green);"></div><span style="font-size:13px;"><strong>Low Risk:</strong> 0 — 29.9</span></div>
+        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--blue);"></div><span style="font-size:13px;"><strong>Medium Risk:</strong> 30 — 49.9</span></div>
+        <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--amber);"></div><span style="font-size:13px;"><strong>High Risk:</strong> 50 — 69.9</span></div>
         <div style="display:flex;align-items:center;gap:10px;"><div style="width:12px;height:12px;border-radius:50%;background:var(--red);"></div><span style="font-size:13px;"><strong>Very High Risk:</strong> 70 — 100</span></div>
       </div>
     </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:12px;">Approval Authority Matrix</div>
+      <div class="card-title" style="margin-bottom:12px;">Approval Requirements</div>
       <div style="display:flex;flex-direction:column;gap:8px;font-size:13px;">
-        <div><strong>Low Risk:</strong> Compliance Officer (auto-approve if score ≤ 40)</div>
-        <div><strong>Medium Risk:</strong> Senior Compliance Officer</div>
-        <div><strong>High Risk:</strong> Head of Compliance + Senior CO</div>
-        <div><strong>Very High Risk:</strong> Board Approval required + EDD</div>
+        <div><strong>All applications:</strong> Require compliance memo (generated, validated, supervisor-approved), live screening, and no flagged documents</div>
+        <div><strong>Low / Medium Risk:</strong> Single officer approval (Admin, SCO, or CO)</div>
+        <div><strong>High / Very High Risk:</strong> Dual approval by two different officers + pre-approval before KYC</div>
       </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:8px;">All approvals are human-initiated. No auto-approval exists regardless of risk score.</div>
     </div>
   </div>
 
@@ -1858,8 +1837,8 @@ body.role-admin .role-admin-only-block { display:block; }
 <div class="view" id="view-supervisor">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
     <div>
-      <h3 style="font-size:16px;font-weight:700;">AI Supervisor Dashboard</h3>
-      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Multi-agent pipeline orchestrator — validation, confidence routing, contradiction detection, and compliance rules.</p>
+      <h3 style="font-size:16px;font-weight:700;">AI Supervisor Dashboard <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;vertical-align:middle;">Decision Support</span></h3>
+      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Multi-agent analysis pipeline — contradiction detection, confidence evaluation, and compliance rule checks. Results inform officer review but do not directly gate approval. Approval gating is enforced by the memo supervisor (Generate Memo → Validate → Approve).</p>
     </div>
     <button class="btn btn-primary" onclick="refreshSupervisorDashboard()">🔄 Refresh</button>
   </div>
@@ -2075,10 +2054,10 @@ body.role-admin .role-admin-only-block { display:block; }
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
-<!-- AI Chat Sidebar -->
+<!-- Quick Reference Sidebar -->
 <div class="ai-chat-sidebar" id="ai-chat-sidebar">
   <div class="ai-chat-header">
-    <h3>AI Assistant</h3>
+    <h3>Quick Reference</h3>
     <button class="ai-chat-header-close" onclick="toggleAIChat()">✕</button>
   </div>
   <div class="ai-chat-messages" id="ai-chat-messages"></div>
@@ -2089,13 +2068,13 @@ body.role-admin .role-admin-only-block { display:block; }
     <button class="ai-quick-btn" onclick="sendQuickQuestion('Regulatory updates')">Regulatory updates</button>
   </div>
   <div class="ai-chat-input-box">
-    <input class="ai-chat-input" type="text" id="ai-chat-input" placeholder="Ask about compliance..." onkeypress="if(event.key==='Enter'){sendAIMessage();}" />
+    <input class="ai-chat-input" type="text" id="ai-chat-input" placeholder="Search topics..." onkeypress="if(event.key==='Enter'){sendAIMessage();}" />
     <button class="ai-chat-send" onclick="sendAIMessage()">Send</button>
   </div>
 </div>
 
-<!-- AI Chat Toggle Button -->
-<button class="ai-chat-toggle" onclick="toggleAIChat()">🤖</button>
+<!-- Quick Reference Toggle Button -->
+<button class="ai-chat-toggle" onclick="toggleAIChat()">📋</button>
 
 <script>
 // ═══════════════════════════════════════════════════════════
@@ -2318,14 +2297,14 @@ var BO_AUTH_TOKEN = '';
 var BO_AUTH_USER = null;
 
 // ─── Environment Detection ────────────────────────────────────
-var ARIE_ENV = 'demo';
+var ARIE_ENV = 'production';
 var FEATURE_FLAGS = {};
 
 async function loadEnvironment() {
   try {
     const res = await fetch((BO_API_BASE || '/api') + '/config/environment');
     const data = await res.json();
-    ARIE_ENV = data.environment || 'demo';
+    ARIE_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
     applyEnvironmentUI();
   } catch (e) {
@@ -2420,9 +2399,7 @@ async function boApiCall(method, path, body) {
 function setBoAuth(token, user) {
   BO_AUTH_TOKEN = token;
   BO_AUTH_USER = user;
-  // Secure: token stored in httpOnly cookie by server, not in localStorage
-  // Only keep non-sensitive user display info in memory
-  document.cookie = 'arie_bo_token=' + encodeURIComponent(token) + '; path=/; SameSite=Strict; Secure';
+  // Auth token kept in memory only; httpOnly session cookie set by server
 }
 
 // Try to load data from API, fall back to mock data
@@ -3328,7 +3305,7 @@ function renderExplainabilityPanel(app, screeningSummary) {
   var trailSteps = [
     { name: 'Application intake persisted', detail: 'Core profile, pre-screening, and ownership records loaded from the authoritative application record.', confidence: 'Authoritative DB' },
     { name: 'Rule-based risk score loaded', detail: 'Composite score ' + normalizeDetailValue(app.score) + ' and risk level ' + normalizeDetailValue(app.risk) + ' were loaded from stored application risk fields.', confidence: 'Stored score' },
-    { name: 'Screening evidence reviewed', detail: screeningSummary.screening_run_recorded ? ('Screening recorded with ' + (screeningSummary.total_hits || 0) + ' hit(s) and mode ' + normalizeDetailValue(screeningSummary.screening_mode) + '.') : 'No persisted screening report is attached to this application yet.', confidence: screeningSummary.screening_run_recorded ? 'Stored screening' : 'No screening record' },
+    { name: 'Screening evidence reviewed', detail: screeningSummary.screening_run_recorded ? ('Screening recorded with ' + (screeningSummary.total_hits || 0) + ' hit(s). Mode: ' + normalizeDetailValue(screeningSummary.screening_mode) + (screeningSummary.screening_mode === 'live' ? ' (provider-verified).' : ' — non-live screening blocks approval in production.')) : 'No persisted screening report is attached to this application yet.', confidence: screeningSummary.screening_run_recorded ? 'Stored screening' : 'No screening record' },
     { name: 'Document verification reviewed', detail: app._documents.length ? (app._documents.filter(function(doc) { return normalizeDetailValue(doc.verification_status) === 'verified'; }).length + ' verified document(s) out of ' + app._documents.length + ' stored upload(s).') : 'No stored documents are attached to this application.', confidence: 'Stored documents' }
   ];
 
@@ -3616,7 +3593,7 @@ function renderAuthoritativeAppDetail(app, options) {
   var screeningMeta = '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:12px;">' +
     '<div><strong>Screening Run:</strong> ' + (screeningSummary.screening_run_recorded ? 'Recorded' : 'Not recorded') + '</div>' +
     '<div><strong>Total Hits:</strong> ' + escapeHtml(String(screeningSummary.total_hits || 0)) + '</div>' +
-    '<div><strong>Mode:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screening_mode)) + '</div>' +
+    '<div style="display:flex;align-items:center;gap:6px;"><strong>Mode:</strong> ' + screeningModeBadge(screeningSummary.screening_mode) + '</div>' +
     '<div><strong>Screened At:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screened_at)) + '</div>' +
     '</div>';
   document.getElementById('detail-screening-review').innerHTML = screeningMeta;
@@ -3880,10 +3857,10 @@ function screeningQueueStatusBadge(statusKey, statusLabel) {
 
 function screeningQueueContextCell(row) {
   var parts = (row.entity_context || []).slice();
-  if (row.screening_mode) parts.push('Mode: ' + row.screening_mode);
   if (row.screened_at) parts.push('Screened: ' + String(row.screened_at).substring(0, 19).replace('T', ' '));
-  if (!parts.length) return '<span style="font-size:12px;color:var(--text3);">—</span>';
-  return '<div style="display:flex;flex-wrap:wrap;gap:4px;">' + parts.map(function(part) {
+  var modeBadge = row.screening_mode ? screeningModeBadge(row.screening_mode) : '';
+  if (!parts.length && !modeBadge) return '<span style="font-size:12px;color:var(--text3);">—</span>';
+  return '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">' + modeBadge + parts.map(function(part) {
     return '<span class="explain-data-source" style="margin:0;">' + escapeHtml(part) + '</span>';
   }).join('') + '</div>';
 }
@@ -3905,10 +3882,10 @@ function screeningReviewBadge(row) {
 }
 
 function screeningModeBadge(mode) {
-  if (!mode) return '<span class="badge pending">Mode Unknown</span>';
-  var cls = mode === 'live' ? 'approved' : mode === 'simulated' ? 'high' : 'pending';
-  var label = mode === 'live' ? 'Live Screening' : mode === 'simulated' ? 'Simulated Screening' : mode;
-  return '<span class="badge ' + cls + '">' + escapeHtml(label) + '</span>';
+  if (!mode || mode === 'unknown') return '<span class="badge high" title="Screening provenance could not be verified. This will block approval in production.">⚠ Unverified — Blocks Approval</span>';
+  if (mode === 'live') return '<span class="badge approved">✓ Live Screening</span>';
+  if (mode === 'simulated') return '<span class="badge high" title="Simulated screening data cannot be used for production approval.">⚠ Simulated — Blocks Approval</span>';
+  return '<span class="badge pending">' + escapeHtml(mode) + '</span>';
 }
 
 function screeningResultFacts(screeningRecord) {
@@ -4465,24 +4442,40 @@ function viewAlert(date, client) {
   }
 }
 
-function escalateAlertFromModal() {
-  if (currentAlertRef) {
+async function escalateAlertFromModal() {
+  if (!currentAlertRef || !currentAlertRef.id) { closeModal('modal-alert-detail'); return; }
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, {
+      status: 'escalated',
+      reviewed_by: currentUser.name,
+      review_notes: 'Escalated to Senior Compliance Officer'
+    });
     currentAlertRef.status = 'Escalated';
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Escalate Alert', target:currentAlertRef.client, detail:'Escalated ' + currentAlertRef.type + ' alert to SCO', ip:'196.192.44.12' });
     renderMonitoringAlerts();
+    closeModal('modal-alert-detail');
+    showToast('Alert escalated to Senior Compliance Officer');
+  } catch(err) {
+    showToast('Failed to escalate alert: ' + (err.message || 'Unknown error'), 'error');
+    closeModal('modal-alert-detail');
   }
-  closeModal('modal-alert-detail');
-  showToast('Alert escalated to Senior Compliance Officer');
 }
 
-function dismissAlertFromModal() {
-  if (currentAlertRef) {
+async function dismissAlertFromModal() {
+  if (!currentAlertRef || !currentAlertRef.id) { closeModal('modal-alert-detail'); return; }
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, {
+      status: 'reviewed',
+      reviewed_by: currentUser.name,
+      review_notes: 'Reviewed and closed'
+    });
     currentAlertRef.status = 'Reviewed';
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Review Alert', target:currentAlertRef.client, detail:'Reviewed and closed ' + currentAlertRef.type + ' alert', ip:'196.192.44.12' });
     renderMonitoringAlerts();
+    closeModal('modal-alert-detail');
+    showToast('Alert marked as reviewed');
+  } catch(err) {
+    showToast('Failed to update alert: ' + (err.message || 'Unknown error'), 'error');
+    closeModal('modal-alert-detail');
   }
-  closeModal('modal-alert-detail');
-  showToast('Alert marked as reviewed');
 }
 
 function openPeriodicReview(ref) {
@@ -4682,21 +4675,26 @@ async function sendClientNotification() {
     showToast('Please enter a notification message');
     return;
   }
-
-  // Log notification in audit trail
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Client Notification', target:currentApp.ref, detail:'Client notification sent on ' + new Date().toLocaleDateString(), ip:'196.192.44.12' });
-
-  closeModal('modal-client-notification');
-  showToast('Client notification sent for ' + currentApp.ref);
-  openAppDetail(currentApp.ref);
+  try {
+    await boApiCall('POST', '/applications/' + currentApp.id + '/notify', {
+      message: message,
+      notification_type: 'officer_message'
+    });
+    closeModal('modal-client-notification');
+    showToast('Client notification sent for ' + currentApp.ref);
+    openAppDetail(currentApp.ref);
+  } catch(err) {
+    showToast('Failed to send notification: ' + (err.message || 'Unknown error'), 'error');
+  }
 }
 
 function openOverrideModal() {
   if (!currentApp) return;
   // Extract the current recommendation from the memo
-  var recommendation = 'Standard Due Diligence';
-  if (currentApp.risk === 'LOW') recommendation = 'Fast Lane';
+  var recommendation = 'Standard Review';
+  if (currentApp.risk === 'LOW') recommendation = 'Standard Review (Low Risk)';
   else if (currentApp.risk === 'HIGH') recommendation = 'Enhanced Due Diligence';
+  else if (currentApp.risk === 'VERY_HIGH') recommendation = 'Enhanced Due Diligence (Dual Approval Required)';
 
   document.getElementById('current-recommendation').textContent = recommendation;
   document.getElementById('override-decision').value = 'Approve';
@@ -4777,12 +4775,7 @@ async function escalateCase() {
 }
 
 function addNote() {
-  var note = document.getElementById('internal-note').value.trim();
-  if (!note) return;
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Note', target:currentApp ? currentApp.ref : '', detail:note, ip:'196.192.44.12' });
-  document.getElementById('internal-note').value = '';
-  showToast('Note added');
-  if (currentApp) openAppDetail(currentApp.ref);
+  showToast('Internal notes are not yet persisted to the backend. This feature will be available in a future release.', 'warn');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4849,17 +4842,24 @@ async function preApprovalRequestInfo() {
 function openAddUserModal() { document.getElementById('modal-add-user').classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 
-function addUser() {
+async function addUser() {
   var name = document.getElementById('new-user-name').value.trim();
   var email = document.getElementById('new-user-email').value.trim();
   var role = document.getElementById('new-user-role').value;
   if (!name || !email) { showToast('Please fill in all fields'); return; }
-  var initials = name.split(' ').map(function(w) { return w[0]; }).join('').toUpperCase().slice(0,2);
-  USERS.push({ id:USERS.length+1, name:name, email:email, role:role, initials:initials, status:'active' });
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Create User', target:name, detail:'Added as ' + ROLE_LABELS[role], ip:'196.192.44.12' });
-  closeModal('modal-add-user');
-  renderUsers();
-  showToast('User ' + name + ' added successfully');
+  try {
+    var resp = await boApiCall('POST', '/users', { full_name: name, email: email, role: role });
+    // Reload users from API to get authoritative state
+    var usersResp = await boApiCall('GET', '/users');
+    if (usersResp && Array.isArray(usersResp)) {
+      USERS = usersResp.map(function(u) { return { id: u.id, name: u.full_name || u.name, email: u.email, role: u.role, initials: (u.full_name || u.name || '').split(' ').map(function(w){return w[0];}).join('').toUpperCase().slice(0,2), status: u.status || 'active' }; });
+    }
+    closeModal('modal-add-user');
+    renderUsers();
+    showToast('User ' + name + ' created successfully');
+  } catch(err) {
+    showToast('Failed to create user: ' + (err.message || 'Unknown error'), 'error');
+  }
 }
 
 function editUser(id) {
@@ -4873,7 +4873,7 @@ function editUser(id) {
   newRole = newRole.trim().toLowerCase();
   // Call API to update user role
   boApiCall('PUT', '/users/' + u.id, { full_name: u.name, role: newRole, status: u.status || 'active' }).then(function(resp) {
-    USERS[idx].role = newRole;
+    u.role = newRole;
     renderUsers();
     showToast('Role updated: ' + u.name + ' → ' + newRole, 'success');
   }).catch(function(err) {
@@ -4902,7 +4902,7 @@ function showToast(msg) {
   setTimeout(function() { t.classList.remove('show'); }, 3000);
 }
 
-function showNotifications() { showToast('3 new notifications — 2 pending reviews, 1 EDD escalation'); }
+function showNotifications() { showToast('No new notifications.'); }
 
 function handleGlobalSearch(q) {
   if (!q) return;
@@ -5171,9 +5171,9 @@ function exportKPIReport() {
 // RISK SCORING MODEL CONFIGURATION
 // ═══════════════════════════════════════════════════════════
 var RISK_THRESHOLDS = [
-  { level:'LOW', label:'Low Risk', color:'var(--green)', min:0, max:39.9 },
-  { level:'MEDIUM', label:'Medium Risk', color:'var(--blue)', min:40, max:54.9 },
-  { level:'HIGH', label:'High Risk', color:'var(--amber)', min:55, max:69.9 },
+  { level:'LOW', label:'Low Risk', color:'var(--green)', min:0, max:29.9 },
+  { level:'MEDIUM', label:'Medium Risk', color:'var(--blue)', min:30, max:49.9 },
+  { level:'HIGH', label:'High Risk', color:'var(--amber)', min:50, max:69.9 },
   { level:'VERY_HIGH', label:'Very High Risk', color:'var(--red)', min:70, max:100 }
 ];
 
@@ -6086,13 +6086,19 @@ function saveAgents() {
   AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'AI agent pipeline configuration updated', ip:'196.192.44.12' });
   // Sync each agent to API
   if (BO_AUTH_TOKEN) {
-    AI_AGENTS.forEach(function(agent) {
+    var savePromises = AI_AGENTS.map(function(agent) {
       var agentData = { agent_number: agent.id, name: agent.name, icon: agent.icon, stage: agent.stage, description: agent.description, enabled: agent.enabled, checks: agent.checks };
-      // Note: For simplicity, we don't try to match existing API records here. Future: proper CRUD sync.
+      return boApiCall('PUT', '/config/ai-agents/' + agent.id, agentData);
     });
+    Promise.all(savePromises).then(function() {
+      renderAgentsPipeline();
+      showToast('✅ AI agent pipeline saved — ' + AI_AGENTS.filter(function(a){return a.enabled;}).length + ' agents active');
+    }).catch(function(err) {
+      showToast('Failed to save agent config: ' + (err.message || 'Unknown error'), 'error');
+    });
+  } else {
+    showToast('Authentication required to save agent config', 'error');
   }
-  renderAgentsPipeline();
-  showToast('✅ AI agent pipeline saved — ' + AI_AGENTS.filter(function(a){return a.enabled;}).length + ' agents active');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -6396,7 +6402,7 @@ function exportAgentHealthReport() {
 // SIGN OUT
 // ═══════════════════════════════════════════════════════════
 function signOut() {
-  document.cookie = 'arie_bo_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Strict; Secure';
+  // httpOnly session cookie cleared by server on logout; no JS cookie to expire
   BO_AUTH_TOKEN = '';
   BO_AUTH_USER = null;
   AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Logout', target:'System', detail:'Signed out', ip:'196.192.44.12' });
@@ -6477,7 +6483,7 @@ async function handleLogin(e) {
     hideLoginScreen();
     showToast(isOffline ? 'Demo Mode — Welcome, ' + currentUser.name : 'Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
-    errText.textContent = ARIE_ENV === 'demo' ? 'Invalid email or password. Try: Onboarda2026!' : 'Invalid email or password.';
+    errText.textContent = 'Invalid email or password.';
     errEl.classList.add('show');
   } finally {
     submitBtn.disabled = false;
@@ -7120,7 +7126,7 @@ function generateAIResponse(question) {
   if (q.includes('regulatory')) return responses['regulatory updates'];
   if (q.includes('kyc') || q.includes('compliance')) return 'KYC compliance in this environment uses a mix of live provider integrations, deterministic controls, and decision-support tooling. The authoritative approval path relies on screening data, deterministic memo generation, memo validation, and memo supervisor checks before human approval.';
   if (q.includes('screening')) return 'Screening covers sanctions, PEP, adverse media, and registry checks where configured. Some screening and interpretation surfaces are live, while others are deterministic or decision-support only depending on the workflow.';
-  return 'I can help with questions about: review checklists, risk assessment, agent status, regulatory updates, KYC processes, screening procedures, and compliance operations. What would you like to know?';
+  return 'Quick reference topics available: review checklists, risk assessment, agent status, regulatory updates, KYC processes, screening procedures. Select a topic or use the quick buttons above.';
 }
 
 // Live update labels as user types
@@ -8071,21 +8077,11 @@ function renderSupervisorResults(result) {
       rrHtml += '<div style="font-size:11px;font-weight:700;color:var(--amber);margin:8px 0 6px;">Review Reasons:</div>';
       reviewReasons.forEach(function(r) { rrHtml += '<div style="font-size:11px;color:var(--text2);padding:2px 0;">• ' + r + '</div>'; });
     }
-    rrHtml += '<div style="margin-top:12px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:12px;color:var(--text3);">Supervisor review submission is not yet wired to a backend endpoint in this environment. Use the pipeline output as decision support only.</div>';
-    document.getElementById('sv-review-form').style.display = 'none';
+    rrHtml += '<div style="margin-top:12px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:12px;color:var(--text3);">This analysis is for decision support. To act on these findings, use the compliance memo workflow: Generate Memo → Validate → Supervisor Run → Approve/Reject via the Memo tab.</div>';
   } else {
-    rrHtml = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">✅ No human review required — pipeline completed successfully.</div>';
-    document.getElementById('sv-review-form').style.display = 'none';
+    rrHtml = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">✅ No blocking issues detected by the analysis pipeline.</div>';
   }
   document.getElementById('sv-review-reasons').innerHTML = rrHtml;
-
-  // Toggle override reason field
-  var overrideCheckbox = document.getElementById('sv-review-override');
-  if (overrideCheckbox) {
-    overrideCheckbox.onchange = function() {
-      document.getElementById('sv-override-reason').style.display = this.checked ? '' : 'none';
-    };
-  }
 }
 
 function svStatCard(label, value, color) {
@@ -8095,9 +8091,7 @@ function svStatCard(label, value, color) {
     + '</div>';
 }
 
-async function submitSupervisorReview() {
-  showToast('Supervisor review submission is not available in this environment');
-}
+// submitSupervisorReview() removed — supervisor actions are performed via the memo approval workflow
 
 // ── Supervisor Dashboard (global view) ──
 async function refreshSupervisorDashboard() {
@@ -8350,7 +8344,6 @@ document.addEventListener('DOMContentLoaded', async function() {
       return;
     } catch(e) {
       console.warn('Token expired, clearing auth');
-      localStorage.removeItem('arie_bo_token');
       BO_AUTH_TOKEN = '';
     }
   }
