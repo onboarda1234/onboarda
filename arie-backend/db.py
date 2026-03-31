@@ -2273,6 +2273,153 @@ def seed_initial_data(db: DBConnection):
     logger.info("Database seeded with initial data")
 
 
+def sync_ai_checks_from_seed(db: DBConnection):
+    """
+    Upsert the canonical ai_checks seed on every startup.
+
+    Runs unconditionally so that stale rows on existing databases (staging, prod)
+    are always brought in line with the current source of truth.  Back-office
+    manual edits to individual checks are intentionally overwritten here because
+    the verification_matrix.py / db.py seed IS the source of truth; any
+    operator customisation should be re-applied via the UI after a deploy.
+    """
+    ai_checks_seed = [
+        # ── Entity documents ──
+        ("entity", "poa", "Proof of Registered Address", json.dumps([
+            {"id": "DOC-01", "label": "Document Date", "rule": "Must be dated within the last 3 months. PASS if dated within 3 months. WARN if dated 3-6 months ago. FAIL if older than 6 months or undated.", "type": "age"},
+            {"id": "DOC-02", "label": "Entity Name Match", "rule": "Entity name on document must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-03", "label": "Document Clarity", "rule": "Document must be legible and unredacted. PASS if fully legible. WARN if partially legible. FAIL if illegible or blank.", "type": "quality"},
+            {"id": "DOC-04", "label": "Address Match", "rule": "Address must match registered office address on application. PASS if address matches. WARN if partial match. FAIL if mismatch or missing.", "type": "content"}
+        ])),
+        ("entity", "cert_inc", "Certificate of Incorporation", json.dumps([
+            {"id": "DOC-05", "label": "Entity Name Match", "rule": "Company name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-06", "label": "Registration Number", "rule": "Registration number must be present and legible. PASS if present and legible. WARN if partially legible. FAIL if missing or illegible.", "type": "content"},
+            {"id": "DOC-07", "label": "Document Clarity", "rule": "Document must be legible, certified copy if applicable. PASS if legible. WARN if partially legible. FAIL if illegible or blank.", "type": "quality"}
+        ])),
+        ("entity", "memarts", "Memorandum of Association", json.dumps([
+            {"id": "DOC-08", "label": "Entity Name Match", "rule": "Company name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-09", "label": "Completeness", "rule": "All pages must be present and legible. PASS if complete and legible. WARN if minor pages missing. FAIL if key pages missing or illegible.", "type": "quality"},
+            {"id": "DOC-10", "label": "Certification", "rule": "Must be certified or signed copy. PASS if certified/signed. WARN if unsigned but appears authentic. FAIL if no certification and authenticity questionable.", "type": "quality"}
+        ])),
+        # cert_reg retired — no AI checks. Preserved in table for historical records only.
+        ("entity", "cert_reg", "Certificate of Registration (Retired)", json.dumps([])),
+        ("entity", "reg_sh", "Shareholder Register", json.dumps([
+            {"id": "DOC-14", "label": "Ownership Consistency", "rule": "Shareholdings must match UBOs declared in pre-screening. PASS if all percentages match. WARN if minor discrepancies (< 5%). FAIL if major discrepancies or missing.", "type": "content"},
+            {"id": "DOC-15", "label": "Completeness", "rule": "Total ownership must add up to 100%. PASS if totals 100%. WARN if totals 95-100% (rounding). FAIL if < 95% or > 100%.", "type": "content"}
+        ])),
+        ("entity", "reg_dir", "Register of Directors", json.dumps([
+            {"id": "DOC-17", "label": "Director Consistency", "rule": "Directors must match those declared in pre-screening. PASS if all directors match. WARN if minor name variations. FAIL if directors missing or extra undeclared directors.", "type": "content"},
+            {"id": "DOC-18", "label": "Completeness", "rule": "All current directors must be listed. PASS if all listed. WARN if count uncertain. FAIL if directors clearly missing.", "type": "content"},
+            {"id": "DOC-19", "label": "Document Clarity", "rule": "Must be legible. PASS if legible. WARN if partially legible. FAIL if illegible.", "type": "quality"}
+        ])),
+        ("entity", "fin_stmt", "Financial Statements / Management Accounts", json.dumps([
+            {"id": "DOC-20", "label": "Financial Period", "rule": "Must be for most recent financial year (or forecast if < 1 year old). PASS if within last 18 months. WARN if 18-24 months old. FAIL if older than 24 months.", "type": "age"},
+            {"id": "DOC-21", "label": "Entity Name Match", "rule": "Company name on statements must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"}
+        ])),
+        ("entity", "board_res", "Board Resolution", json.dumps([
+            {"id": "DOC-24", "label": "Signatory Match", "rule": "Authorised signatory must be a declared director. PASS if signatory is a declared director. WARN if name variation. FAIL if signatory not a director.", "type": "name"},
+            {"id": "DOC-25", "label": "Resolution Date", "rule": "Must be dated and reasonably current. PASS if dated within 12 months. WARN if 12-24 months old. FAIL if undated or older than 24 months.", "type": "age"},
+            {"id": "DOC-26", "label": "Scope of Authority", "rule": "Must authorise the signatory to open the account. PASS if explicit authorisation present. WARN if implicit only. FAIL if no authorisation found.", "type": "content"}
+        ])),
+        ("entity", "structure_chart", "Company Structure Chart", json.dumps([
+            {"id": "DOC-27", "label": "UBO Chain", "rule": "Must trace ownership to ultimate beneficial owners. PASS if UBO chain complete. WARN if chain incomplete but UBOs identifiable. FAIL if UBOs not identifiable.", "type": "content"},
+            {"id": "DOC-28", "label": "Ownership Match", "rule": "Shareholdings must match shareholder register. PASS if percentages match. WARN if minor discrepancies. FAIL if major discrepancies.", "type": "content"},
+            {"id": "DOC-29", "label": "Legibility", "rule": "Diagram must be clear and readable. PASS if legible. WARN if partially legible. FAIL if illegible.", "type": "quality"}
+        ])),
+        ("entity", "bankref", "Bank Reference Letter (Entity)", json.dumps([
+            {"id": "DOC-30", "label": "Bank Letterhead", "rule": "Must be on official bank letterhead. PASS if on letterhead. WARN if letterhead unclear. FAIL if no letterhead.", "type": "quality"},
+            {"id": "DOC-31", "label": "Date", "rule": "Must be dated within the last 3 months. PASS if within 3 months. WARN if 3-6 months. FAIL if older than 6 months or undated.", "type": "age"},
+            {"id": "DOC-32", "label": "Entity Name Match", "rule": "Entity name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"}
+        ])),
+        ("entity", "licence", "Licence / Regulatory Approval", json.dumps([
+            {"id": "DOC-33", "label": "Entity Name Match", "rule": "Entity name must match. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-34", "label": "Validity", "rule": "Licence must be current and not expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired.", "type": "expiry"},
+            {"id": "DOC-35", "label": "Issuing Authority", "rule": "Issuing regulator must be identifiable. PASS if authority clearly identified. WARN if partially identifiable. FAIL if not identifiable.", "type": "content"}
+        ])),
+        ("entity", "contracts", "Client/Supplier Contracts", json.dumps([
+            {"id": "DOC-36", "label": "Name Match", "rule": "Entity name must appear in the contract. PASS if name present and matches. WARN if partial match. FAIL if not present.", "type": "name"},
+            {"id": "DOC-37", "label": "Relevance", "rule": "Contract must be relevant to the declared business activity. PASS if relevant. WARN if tangentially related. FAIL if unrelated.", "type": "content"},
+            {"id": "DOC-38", "label": "Clarity", "rule": "Document must be legible. PASS if legible. WARN if partially legible. FAIL if illegible.", "type": "quality"}
+        ])),
+        ("entity", "aml_policy", "AML/CFT Policy", json.dumps([
+            {"id": "DOC-39", "label": "Completeness", "rule": "Must cover key AML areas (CDD, sanctions screening, reporting). PASS if all key areas covered. WARN if minor gaps. FAIL if major areas missing.", "type": "content"},
+            {"id": "DOC-40", "label": "Date", "rule": "Policy must be dated and reviewed within last 12 months. PASS if within 12 months. WARN if 12-24 months. FAIL if older or undated.", "type": "age"},
+            {"id": "DOC-41", "label": "Entity Name Match", "rule": "Policy must reference the entity. PASS if entity referenced. WARN if generic policy. FAIL if different entity named.", "type": "name"}
+        ])),
+        ("entity", "business_plan", "Business Plan", json.dumps([
+            {"id": "DOC-42", "label": "Entity Name Match", "rule": "Business plan must reference the entity. PASS if entity named. WARN if generic. FAIL if different entity.", "type": "name"},
+            {"id": "DOC-43", "label": "Date/Version", "rule": "Must be dated or versioned within last 24 months. PASS if within 24 months. WARN if 24-36 months. FAIL if older or undated.", "type": "age"},
+            {"id": "DOC-44", "label": "Business Description", "rule": "Must describe the business activities. PASS if activities described. WARN if vague. FAIL if no description.", "type": "content"}
+        ])),
+        ("entity", "tax_clearance", "Tax Clearance Certificate", json.dumps([
+            {"id": "DOC-45", "label": "Entity Name Match", "rule": "Entity name must match. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-46", "label": "Validity", "rule": "Must be current and not expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired.", "type": "expiry"},
+            {"id": "DOC-47", "label": "Issuing Authority", "rule": "Must be issued by the relevant tax authority. PASS if authority clearly identified. WARN if partially identifiable. FAIL if not identifiable.", "type": "content"}
+        ])),
+        # ── Person documents ──
+        ("person", "passport", "Passport", json.dumps([
+            {"id": "DOC-48", "label": "Document Expiry", "rule": "Passport must not be expired. PASS if valid. WARN if expiring within 3 months. FAIL if expired.", "type": "expiry"},
+            {"id": "DOC-49", "label": "Photo Quality", "rule": "Photo must be clear and identifiable. PASS if clear. WARN if partially obscured. FAIL if unidentifiable.", "type": "quality"},
+            {"id": "DOC-50", "label": "Name Match", "rule": "Name must match the person declared in the application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-51", "label": "MRZ Consistency", "rule": "MRZ must be readable and consistent with data page. PASS if MRZ readable and consistent. WARN if MRZ partially readable. FAIL if MRZ missing or inconsistent.", "type": "content"}
+        ])),
+        ("person", "poa", "Proof of Address (Person)", json.dumps([
+            {"id": "DOC-01", "label": "Document Date", "rule": "Must be dated within the last 3 months. PASS if dated within 3 months. WARN if dated 3-6 months ago. FAIL if older than 6 months or undated.", "type": "age"},
+            {"id": "DOC-52", "label": "Name Match", "rule": "Name must match the person declared in the application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-03", "label": "Document Clarity", "rule": "Document must be legible. PASS if legible. WARN if partially legible. FAIL if illegible.", "type": "quality"}
+        ])),
+        ("person", "national_id", "National ID Card", json.dumps([
+            {"id": "DOC-53", "label": "Document Expiry", "rule": "Must not be expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired.", "type": "expiry"},
+            {"id": "DOC-54", "label": "Photo Quality", "rule": "Photo must be clear and identifiable. PASS if clear. WARN if partially obscured. FAIL if unidentifiable.", "type": "quality"},
+            {"id": "DOC-55", "label": "Name Match", "rule": "Name must match the person declared in the application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-56", "label": "Nationality Match", "rule": "Nationality must match declared nationality. PASS if matches. WARN if not clearly visible. FAIL if mismatch.", "type": "content"}
+        ])),
+        ("person", "cv", "CV / Resume", json.dumps([
+            {"id": "DOC-57", "label": "Name Match", "rule": "Name must match the declared person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-58", "label": "Relevance", "rule": "CV must show relevant experience for the declared role. PASS if relevant experience present. WARN if limited experience. FAIL if no relevant experience.", "type": "content"}
+        ])),
+        ("person", "sow", "Source of Wealth Declaration", json.dumps([
+            {"id": "DOC-59", "label": "Name Match", "rule": "Name must match the declared person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
+            {"id": "DOC-60", "label": "Supporting Evidence", "rule": "Must contain credible evidence of wealth origin. PASS if credible evidence present. WARN if evidence weak. FAIL if no evidence.", "type": "content"}
+        ])),
+    ]
+
+    updated = 0
+    inserted = 0
+    for category, doc_type, doc_name, checks_json in ai_checks_seed:
+        existing = db.execute(
+            "SELECT id FROM ai_checks WHERE doc_type=? AND category=?",
+            (doc_type, category)
+        ).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE ai_checks SET doc_name=?, checks=?, updated_at=datetime('now') WHERE doc_type=? AND category=?",
+                (doc_name, checks_json, doc_type, category)
+            )
+            updated += 1
+        else:
+            db.execute(
+                "INSERT INTO ai_checks (category, doc_type, doc_name, checks) VALUES (?,?,?,?)",
+                (category, doc_type, doc_name, checks_json)
+            )
+            inserted += 1
+
+    # Rebuild Agent 1 checks list from updated ai_checks
+    all_rows = db.execute("SELECT doc_name, checks FROM ai_checks ORDER BY category, id").fetchall()
+    all_check_labels = []
+    for row in all_rows:
+        checks_list = json.loads(row["checks"]) if row["checks"] else []
+        for ch in checks_list:
+            all_check_labels.append(f"{row['doc_name']}: {ch['label']}")
+    db.execute(
+        "UPDATE ai_agents SET checks=? WHERE agent_number=1",
+        (json.dumps(all_check_labels),)
+    )
+
+    db.commit()
+    logger.info(f"ai_checks sync complete: {updated} updated, {inserted} inserted")
+
+
 # ============================================================================
 # Migration Function
 # ============================================================================

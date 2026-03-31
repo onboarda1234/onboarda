@@ -871,12 +871,15 @@ def get_db():
 
 def init_db():
     """Initialize database schema and seed initial data."""
-    from db import seed_initial_data
+    from db import seed_initial_data, sync_ai_checks_from_seed
     db_init_db()
     db = get_db()
     try:
         seed_initial_data(db)
         db.commit()
+        # Upsert canonical ai_checks on every startup so stale rows on
+        # existing databases (staging/prod) are always brought up to date.
+        sync_ai_checks_from_seed(db)
     except Exception as e:
         logging.error(f"Seed error: {e}", exc_info=True)
     finally:
