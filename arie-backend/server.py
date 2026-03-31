@@ -126,6 +126,15 @@ from supervisor_engine import run_memo_supervisor
 from memo_handler import build_compliance_memo
 from branding import BRAND
 
+# Layered document verification engine (Agent 1)
+try:
+    from document_verification import verify_document_layered, to_legacy_result
+    HAS_DOC_VERIFICATION = True
+except ImportError:
+    HAS_DOC_VERIFICATION = False
+    verify_document_layered = None
+    to_legacy_result = None
+
 # Sprint 3: Server-side PDF generation
 try:
     from pdf_generator import generate_memo_pdf
@@ -2646,7 +2655,8 @@ class DocumentVerifyHandler(BaseHandler):
                     person_name = intermediaries[idx].get("entity_name", "")
 
         # Determine doc_category based on doc_type
-        company_doc_types = ["cert_inc", "memarts", "cert_reg", "reg_sh", "reg_dir", "fin_stmt",
+        # cert_reg retired — removed from company_doc_types (historical records preserved)
+        company_doc_types = ["cert_inc", "memarts", "reg_sh", "reg_dir", "fin_stmt",
                              "board_res", "structure_chart", "poa", "bankref", "licence",
                              "contracts", "source_wealth", "source_funds", "bank_statements", "aml_policy"]
         raw_doc_type = doc.get("doc_type", "general")
@@ -2677,7 +2687,7 @@ class DocumentVerifyHandler(BaseHandler):
         # For company docs, pass the relevant company entity; for KYC docs, pass person name
         verify_name = (person_name if person_record and person_record.get("person_type") == "intermediary" else entity_name) if doc_category == "company" else person_name
 
-        # Load check overrides from ai_checks table
+        # Load check overrides from ai_checks table (hybrid/AI checks only)
         check_overrides = None
         try:
             check_category = "entity" if doc_category == "company" else "person"
@@ -2690,16 +2700,82 @@ class DocumentVerifyHandler(BaseHandler):
                 if loaded_checks:
                     check_overrides = loaded_checks
             if not check_overrides:
-                logger.warning(f"No DB checks found for doc_type={base_doc_type}, category={check_category}. Using hardcoded fallback.")
+                logger.warning(f"No DB checks found for doc_type={base_doc_type}, category={check_category}. Using matrix fallback.")
         except Exception as e:
-            logger.warning(f"Could not load ai_checks for {base_doc_type}: {e}. Using hardcoded fallback.")
+            logger.warning(f"Could not load ai_checks for {base_doc_type}: {e}. Using matrix fallback.")
+
+        # Build prescreening_data and risk_level from application record
+        prescreening_data = safe_json_loads(app.get("prescreening_data") if app else None) or {}
+        risk_level = (app.get("risk_level") or "MEDIUM") if app else "MEDIUM"
+
+        # Compute SHA-256 hashes of other documents already uploaded for this application
+        # Used by GATE-03 duplicate detection
+        existing_hashes = []
+        if app:
+            try:
+                other_docs = db.execute(
+                    "SELECT file_path FROM documents WHERE application_id=? AND id!=?",
+                    (app["id"], doc_id)
+                ).fetchall()
+                for od in other_docs:
+                    fp = od.get("file_path", "")
+                    if fp and not os.path.isabs(fp):
+                        fp = os.path.join(UPLOAD_DIR, os.path.basename(fp))
+                    if fp and os.path.isfile(fp):
+                        try:
+                            h = hashlib.sha256(open(fp, "rb").read()).hexdigest()
+                            existing_hashes.append(h)
+                        except OSError:
+                            pass
+            except Exception as e:
+                logger.debug(f"Could not compute existing hashes: {e}")
 
         try:
-            if HAS_CLAUDE_CLIENT:
+            if HAS_DOC_VERIFICATION:
+                _claude = ClaudeClient(
+                    api_key=_CFG_ANTHROPIC_API_KEY,
+                    monthly_budget_usd=_CFG_CLAUDE_BUDGET_USD,
+                    mock_mode=_CFG_CLAUDE_MOCK_MODE,
+                ) if HAS_CLAUDE_CLIENT else None
+
+                ai_result = verify_document_layered(
+                    doc_type=base_doc_type,
+                    category="entity" if doc_category == "company" else "person",
+                    file_path=file_path,
+                    file_size=doc.get("file_size") or 0,
+                    mime_type=doc.get("mime_type") or "",
+                    prescreening_data=prescreening_data,
+                    risk_level=risk_level,
+                    existing_hashes=existing_hashes,
+                    claude_client=_claude,
+                    entity_name=entity_name,
+                    person_name=verify_name,
+                    directors=directors_list,
+                    ubos=ubos_list,
+                    check_overrides=check_overrides,
+                    file_name=doc.get("doc_name", ""),
+                )
+
+                # P0-2: Guard against rejected/invalid AI responses
+                if ai_result.get("_rejected") or ai_result.get("_validated") is False:
+                    logger.warning(f"Layered verification rejected for doc {doc_id}: {ai_result.get('error', 'validation failed')}")
+                    checks = [{"label": "AI Verification", "type": "validity", "result": "fail",
+                               "message": "Verification output failed validation — manual review required"}]
+                    all_passed = False
+                else:
+                    checks = ai_result.get("checks", [])
+                    # P0-5: No pass without evidence
+                    if not checks:
+                        all_passed = False
+                    else:
+                        all_passed = ai_result.get("overall") == "verified"
+
+            elif HAS_CLAUDE_CLIENT:
+                # Fallback: legacy single-Claude-call path if layered engine unavailable
                 claude_client = ClaudeClient(
                     api_key=_CFG_ANTHROPIC_API_KEY,
                     monthly_budget_usd=_CFG_CLAUDE_BUDGET_USD,
-                    mock_mode=_CFG_CLAUDE_MOCK_MODE
+                    mock_mode=_CFG_CLAUDE_MOCK_MODE,
                 )
                 ai_result = claude_client.verify_document(
                     doc_type=base_doc_type,
@@ -2712,8 +2788,6 @@ class DocumentVerifyHandler(BaseHandler):
                     directors=directors_list,
                     ubos=ubos_list,
                 )
-
-                # P0-2: Guard against rejected/invalid AI responses
                 if ai_result.get("_rejected") or ai_result.get("_validated") is False:
                     logger.warning(f"AI verification rejected for doc {doc_id}: {ai_result.get('error', 'schema validation failed')}")
                     checks = [{"label": "AI Verification", "type": "validity", "result": "fail",
@@ -2721,18 +2795,19 @@ class DocumentVerifyHandler(BaseHandler):
                     all_passed = False
                 else:
                     checks = ai_result.get("checks", [])
-                    # P0-5: No pass without evidence — empty checks cannot be "verified"
                     if not checks:
                         all_passed = False
                     else:
                         all_passed = ai_result.get("overall") == "verified"
             else:
-                logger.warning("Claude client not available — flagging document for manual review")
-                checks = [{"label": "AI Verification", "type": "validity", "result": "warn", "message": "AI unavailable — manual review required"}]
+                logger.warning("Document verification engine not available — flagging for manual review")
+                checks = [{"label": "AI Verification", "type": "validity", "result": "warn",
+                           "message": "Verification engine unavailable — manual review required"}]
                 all_passed = False
         except Exception as e:
-            logger.error(f"AI document verification failed: {e}")
-            checks = [{"label": "AI Verification", "type": "validity", "result": "warn", "message": f"AI error: {str(e)[:100]}. Manual review required."}]
+            logger.error(f"Document verification failed: {e}")
+            checks = [{"label": "AI Verification", "type": "validity", "result": "warn",
+                       "message": f"Verification error: {str(e)[:100]}. Manual review required."}]
             all_passed = False
 
         # If it's an identity document, run sanctions/PEP screening

@@ -3217,7 +3217,7 @@
             <div class="doc-item-top">
               <span class="doc-item-icon">📜</span>
               <div>
-                <div class="doc-item-name">Memorandum & Articles of Association</div>
+                <div class="doc-item-name">Memorandum of Association</div>
                 <div class="doc-item-desc">Constitution / M&A of the entity</div>
               </div>
             </div>
@@ -3226,21 +3226,6 @@
               <span>📎</span> <span id="doc-memarts-label">Click to upload</span>
             </div>
             <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-memarts', this)" />
-          </div>
-
-          <div class="doc-item" id="doc-reg">
-            <div class="doc-item-top">
-              <span class="doc-item-icon">📑</span>
-              <div>
-                <div class="doc-item-name">Certificate of Registration</div>
-                <div class="doc-item-desc">Company registration certificate / BRN proof</div>
-              </div>
-            </div>
-            <span class="doc-required">Required</span>
-            <div class="doc-upload-area" onclick="triggerUpload('doc-reg')">
-              <span>📎</span> <span id="doc-reg-label">Click to upload</span>
-            </div>
-            <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-reg', this)" />
           </div>
 
           <div class="doc-item" id="doc-shareholders">
@@ -3348,7 +3333,7 @@
             <input type="file" class="file-input" accept=".pdf,.jpg,.jpeg,.png" onchange="handleUpload('doc-bank-ref', this)" />
           </div>
 
-          <div class="doc-item" id="doc-license-cert">
+          <div class="doc-item" id="doc-license-cert" style="display:none">
             <div class="doc-item-top">
               <span class="doc-item-icon">🪪</span>
               <div>
@@ -4591,11 +4576,26 @@ function clearAuth() {
 // ─── State ───────────────────────────────────────────────
 let appRef = '';
 let uploadedDocs = new Set();
-var TOTAL_REQUIRED_DOCS = 12;
+var TOTAL_REQUIRED_DOCS = 11;
+
+function _licenceApplicable() {
+  // Mirrors backend is_licence_applicable(): false if field is 'None', 'none', 'n/a', 'no', or empty
+  var val = (document.getElementById('f-licences') || {}).value || '';
+  val = val.trim().toLowerCase();
+  return val && val !== 'none' && val !== 'n/a' && val !== 'no' && val !== 'na';
+}
 
 function updateTotalRequiredDocs() {
   var isHighRisk = (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH');
-  TOTAL_REQUIRED_DOCS = isHighRisk ? 16 : 12;
+  var hasLicence = _licenceApplicable();
+  TOTAL_REQUIRED_DOCS = (isHighRisk ? 15 : 11) + (hasLicence ? 1 : 0);
+}
+
+function showLicenceDocs() {
+  var hasLicence = _licenceApplicable();
+  var licenceEl = document.getElementById('doc-license-cert');
+  if (licenceEl) licenceEl.style.display = hasLicence ? '' : 'none';
+  updateTotalRequiredDocs();
 }
 
 // ─── View switching ───────────────────────────────────────
@@ -5772,7 +5772,7 @@ async function acceptPricing() {
   } else {
     // LOW/MEDIUM → proceed directly to KYC & Documents
     showHighRiskDocs();
-    updateTotalRequiredDocs();
+    showLicenceDocs();
     syncDirectorsUBOsToKYC();
     checkPEPAndShowDeclaration();
     showView('onboarding');
@@ -5875,27 +5875,18 @@ var DOC_RULES = {
     ]
   },
   'doc-memarts': {
-    name: 'Memorandum & Articles',
+    name: 'Memorandum of Association',
     checks: [
       { id: 'name-match', label: 'Entity Name Match', rule: 'Company name must match application', type: 'name' },
       { id: 'completeness', label: 'Completeness', rule: 'All pages must be present and legible', type: 'quality' },
       { id: 'certification', label: 'Certification', rule: 'Must be certified or signed copy', type: 'quality' }
     ]
   },
-  'doc-reg': {
-    name: 'Certificate of Registration',
-    checks: [
-      { id: 'name-match', label: 'Entity Name Match', rule: 'Company name must match', type: 'name' },
-      { id: 'validity', label: 'Current Validity', rule: 'Must be current / not expired', type: 'expiry' },
-      { id: 'clarity', label: 'Document Clarity', rule: 'Must be legible and complete', type: 'quality' }
-    ]
-  },
   'doc-shareholders': {
     name: 'Shareholder Register',
     checks: [
       { id: 'consistency', label: 'Ownership Consistency', rule: 'Shareholdings must match UBOs declared in pre-screening', type: 'content' },
-      { id: 'completeness', label: 'Completeness', rule: 'Total ownership must add up to 100%', type: 'content' },
-      { id: 'date-check', label: 'Currency', rule: 'Register must reflect current shareholding structure', type: 'age', maxMonths: 12 }
+      { id: 'completeness', label: 'Completeness', rule: 'Total ownership must add up to 100%', type: 'content' }
     ]
   },
   'doc-directors-reg': {
@@ -5910,9 +5901,7 @@ var DOC_RULES = {
     name: 'Financial Statements / Management Accounts',
     checks: [
       { id: 'date-check', label: 'Financial Period', rule: 'Must be for most recent financial year (or forecast if < 1 year old)', type: 'age', maxMonths: 18 },
-      { id: 'name-match', label: 'Entity Name Match', rule: 'Company name on statements must match application', type: 'name' },
-      { id: 'audit', label: 'Audit Status', rule: 'Preferably audited; management accounts acceptable for new entities', type: 'content' },
-      { id: 'completeness', label: 'Completeness', rule: 'Balance sheet, P&L, and notes must be present', type: 'quality' }
+      { id: 'name-match', label: 'Entity Name Match', rule: 'Company name on statements must match application', type: 'name' }
     ]
   },
   'doc-board-res': {
@@ -6458,8 +6447,7 @@ showView = function(name) {
 // ─── Pre-Submission Review ────────────────────────────────
 var SECTION_A_DOCS = [
   { id: 'doc-coi', name: 'Certificate of Incorporation', required: true, conditional: false },
-  { id: 'doc-memarts', name: 'Memorandum & Articles of Association', required: true, conditional: false },
-  { id: 'doc-reg', name: 'Certificate of Registration', required: true, conditional: false },
+  { id: 'doc-memarts', name: 'Memorandum of Association', required: true, conditional: false },
   { id: 'doc-shareholders', name: 'Shareholder Register', required: true, conditional: false },
   { id: 'doc-directors-reg', name: 'Register of Directors', required: true, conditional: false },
   { id: 'doc-financials', name: 'Financial Statements / Management Accounts', required: true, conditional: false },
@@ -6467,7 +6455,7 @@ var SECTION_A_DOCS = [
   { id: 'doc-board-res', name: 'Board Resolution', required: true, conditional: false },
   { id: 'doc-structure-chart', name: 'Company Structure Chart', required: true, conditional: false },
   { id: 'doc-bank-ref', name: 'Bank Reference Letter', required: true, conditional: 'high-risk' },
-  { id: 'doc-license-cert', name: 'Regulatory Licence(s)', required: true, conditional: false }
+  { id: 'doc-license-cert', name: 'Regulatory Licence(s)', required: false, conditional: 'has-licence' }
 ];
 
 var SECTION_C_DOCS = [

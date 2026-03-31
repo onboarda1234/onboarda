@@ -1519,15 +1519,11 @@ CRITICAL REQUIREMENTS:
             {"id": "DOC-09", "type": "quality", "label": "Completeness", "rule": "All pages must be present and legible. PASS if complete and legible. WARN if minor pages missing. FAIL if key pages missing or illegible."},
             {"id": "DOC-10", "type": "quality2", "label": "Certification", "rule": "Must be certified or signed copy. PASS if certified/signed. WARN if unsigned but appears authentic. FAIL if no certification and authenticity questionable."},
         ],
-        "cert_reg": [
-            {"id": "DOC-11", "type": "name", "label": "Entity Name Match", "rule": "Company name must match. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-12", "type": "expiry", "label": "Current Validity", "rule": "Must be current / not expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired."},
-            {"id": "DOC-13", "type": "quality", "label": "Document Clarity", "rule": "Must be legible and complete. PASS if legible. WARN if partially legible. FAIL if illegible or blank."},
-        ],
+        # cert_reg retired — no checks. Doc type preserved for historical records only.
+        "cert_reg": [],
         "reg_sh": [
             {"id": "DOC-14", "type": "content", "label": "Ownership Consistency", "rule": "Shareholdings must match UBOs declared in pre-screening. PASS if all percentages match. WARN if minor discrepancies (< 5%). FAIL if major discrepancies or missing."},
             {"id": "DOC-15", "type": "content2", "label": "Completeness", "rule": "Total ownership must add up to 100%. PASS if totals 100%. WARN if totals 95-100% (rounding). FAIL if < 95% or > 100%."},
-            {"id": "DOC-16", "type": "age", "label": "Currency", "rule": "Register must reflect current shareholding structure. PASS if current. WARN if potentially outdated. FAIL if clearly outdated."},
         ],
         "reg_dir": [
             {"id": "DOC-17", "type": "content", "label": "Director Consistency", "rule": "Directors must match those declared in pre-screening. PASS if all directors match. WARN if minor name variations. FAIL if directors missing or extra undeclared directors."},
@@ -1537,8 +1533,7 @@ CRITICAL REQUIREMENTS:
         "fin_stmt": [
             {"id": "DOC-20", "type": "age", "label": "Financial Period", "rule": "Must be for most recent financial year (or forecast if < 1 year old). PASS if within last 18 months. WARN if 18-24 months old. FAIL if older than 24 months."},
             {"id": "DOC-21", "type": "name", "label": "Entity Name Match", "rule": "Company name on statements must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-22", "type": "content", "label": "Audit Status", "rule": "Preferably audited; management accounts acceptable for new entities. PASS if audited. WARN if management accounts only. FAIL if no financial data present."},
-            {"id": "DOC-23", "type": "quality", "label": "Completeness", "rule": "Balance sheet, P&L, and notes must be present. PASS if all present. WARN if notes missing. FAIL if balance sheet or P&L missing."},
+            # DOC-22 (Audit Status) and DOC-23 (Completeness) retired — not deterministic AI checks
         ],
         "board_res": [
             {"id": "DOC-24", "type": "name", "label": "Signatory Match", "rule": "Authorised signatory must be a declared director. PASS if signatory is a declared director. WARN if name variation. FAIL if signatory not a director."},
@@ -1609,6 +1604,86 @@ CRITICAL REQUIREMENTS:
 
     # Legacy text rules (kept for backward compatibility)
     _DOC_VERIFICATION_RULES = {k: " ".join(f"({i+1}) {c['rule']}" for i, c in enumerate(v)) for k, v in _DOC_CHECK_DEFINITIONS.items()}
+
+    # Field extraction schemas: doc_type → fields Claude should extract
+    _EXTRACTION_SCHEMAS = {
+        "cert_inc":      ["entity_name", "registration_number", "incorporation_date", "country_of_incorporation"],
+        "memarts":       ["entity_name", "registration_number", "objects_clause_present", "certification_present"],
+        "reg_sh":        ["entity_name", "shareholders", "total_percentage", "register_date"],
+        "reg_dir":       ["entity_name", "directors", "register_date"],
+        "fin_stmt":      ["entity_name", "period_start", "period_end", "balance_sheet_present", "pnl_present"],
+        "board_res":     ["entity_name", "resolution_date", "authorised_signatory", "purpose"],
+        "structure_chart": ["entity_name", "ubo_names", "ownership_percentages", "chart_date"],
+        "bankref":       ["entity_name", "bank_name", "letter_date", "account_holder"],
+        "licence":       ["entity_name", "licence_number", "issuing_authority", "issue_date", "expiry_date", "licence_type"],
+        "poa":           ["entity_name", "document_date", "address"],
+        "passport":      ["full_name", "date_of_birth", "nationality", "expiry_date", "document_number"],
+        "national_id":   ["full_name", "date_of_birth", "nationality", "expiry_date", "document_number"],
+        "cv":            ["full_name", "employment_history_summary"],
+        "sow":           ["full_name", "wealth_source_description"],
+        "poa_person":    ["full_name", "document_date", "address"],
+    }
+
+    def extract_document_fields(
+        self,
+        doc_type: str,
+        file_path: str,
+        file_name: str = "",
+        entity_name: str = "",
+        person_name: str = "",
+    ) -> dict:
+        """
+        Use Claude vision to extract structured fields from a document.
+        Called by verify_document_layered() before rule evaluation.
+        Returns a flat dict of field_name → extracted_value (strings/lists).
+        On failure, returns {} — caller must handle gracefully.
+        """
+        fail_closed = self._check_fail_closed("extract_document_fields")
+        if fail_closed is not None:
+            return {}
+
+        schema = self._EXTRACTION_SCHEMAS.get(doc_type, [])
+        if not schema or not file_path:
+            return {}
+
+        if self.mock_mode:
+            return {}  # No mock extraction — rule engine uses pre-screening data
+
+        schema_list = "\n".join(f"- {f}" for f in schema)
+        context_hint = ""
+        if entity_name:
+            context_hint += f" The expected entity name is '{entity_name}'."
+        if person_name:
+            context_hint += f" The expected person name is '{person_name}'."
+
+        system_prompt = (
+            "You are a document field extraction assistant. Extract the specified fields "
+            "from the provided document image or PDF. Return ONLY a JSON object with the "
+            "field names as keys and extracted values as strings (or arrays for list fields). "
+            "Use null for fields that cannot be found. Do not add commentary."
+        )
+        user_prompt = (
+            f"Document type: {doc_type}\nFile: {file_name}{context_hint}\n\n"
+            f"Extract these fields:\n{schema_list}\n\n"
+            "Return JSON only."
+        )
+
+        try:
+            file_blocks = self._read_file_for_vision(file_path)
+            content_blocks = file_blocks + [{"type": "text", "text": user_prompt}]
+            raw = self._call_claude(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                model="claude-sonnet-4-6",
+                content_blocks=content_blocks if file_blocks else None,
+            )
+            parsed = self._parse_json_response(raw, "extract_document_fields")
+            if isinstance(parsed, dict):
+                return {k: v for k, v in parsed.items() if v is not None}
+            return {}
+        except Exception as e:
+            logger.warning(f"extract_document_fields failed for {doc_type}: {e}")
+            return {}
 
     def verify_document(
         self,
