@@ -2056,20 +2056,17 @@ def seed_initial_data(db: DBConnection):
             {"id": "DOC-06", "label": "Registration Number", "rule": "Registration number must be present and legible. PASS if present and legible. WARN if partially legible. FAIL if missing or illegible.", "type": "content"},
             {"id": "DOC-07", "label": "Document Clarity", "rule": "Document must be legible, certified copy if applicable. PASS if legible. WARN if partially legible. FAIL if illegible or blank.", "type": "quality"}
         ])),
-        ("entity", "memarts", "Memorandum & Articles", json.dumps([
+        ("entity", "memarts", "Memorandum of Association", json.dumps([
             {"id": "DOC-08", "label": "Entity Name Match", "rule": "Company name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
             {"id": "DOC-09", "label": "Completeness", "rule": "All pages must be present and legible. PASS if complete and legible. WARN if minor pages missing. FAIL if key pages missing or illegible.", "type": "quality"},
             {"id": "DOC-10", "label": "Certification", "rule": "Must be certified or signed copy. PASS if certified/signed. WARN if unsigned but appears authentic. FAIL if no certification and authenticity questionable.", "type": "quality"}
         ])),
-        ("entity", "cert_reg", "Certificate of Registration", json.dumps([
-            {"id": "DOC-11", "label": "Entity Name Match", "rule": "Company name must match. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
-            {"id": "DOC-12", "label": "Current Validity", "rule": "Must be current / not expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired.", "type": "expiry"},
-            {"id": "DOC-13", "label": "Document Clarity", "rule": "Must be legible and complete. PASS if legible. WARN if partially legible. FAIL if illegible or blank.", "type": "quality"}
-        ])),
+        # cert_reg retired — no AI checks. Preserved in table for historical records only.
+        ("entity", "cert_reg", "Certificate of Registration (Retired)", json.dumps([])),
         ("entity", "reg_sh", "Shareholder Register", json.dumps([
             {"id": "DOC-14", "label": "Ownership Consistency", "rule": "Shareholdings must match UBOs declared in pre-screening. PASS if all percentages match. WARN if minor discrepancies (< 5%). FAIL if major discrepancies or missing.", "type": "content"},
-            {"id": "DOC-15", "label": "Completeness", "rule": "Total ownership must add up to 100%. PASS if totals 100%. WARN if totals 95-100% (rounding). FAIL if < 95% or > 100%.", "type": "content"},
-            {"id": "DOC-16", "label": "Currency", "rule": "Register must reflect current shareholding structure. PASS if current. WARN if potentially outdated. FAIL if clearly outdated.", "type": "age"}
+            {"id": "DOC-15", "label": "Completeness", "rule": "Total ownership must add up to 100%. PASS if totals 100%. WARN if totals 95-100% (rounding). FAIL if < 95% or > 100%.", "type": "content"}
+            # DOC-16 Currency check retired — deterministic date rules now in rule engine
         ])),
         ("entity", "reg_dir", "Register of Directors", json.dumps([
             {"id": "DOC-17", "label": "Director Consistency", "rule": "Directors must match those declared in pre-screening. PASS if all directors match. WARN if minor name variations. FAIL if directors missing or extra undeclared directors.", "type": "content"},
@@ -2078,9 +2075,8 @@ def seed_initial_data(db: DBConnection):
         ])),
         ("entity", "fin_stmt", "Financial Statements / Management Accounts", json.dumps([
             {"id": "DOC-20", "label": "Financial Period", "rule": "Must be for most recent financial year (or forecast if < 1 year old). PASS if within last 18 months. WARN if 18-24 months old. FAIL if older than 24 months.", "type": "age"},
-            {"id": "DOC-21", "label": "Entity Name Match", "rule": "Company name on statements must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"},
-            {"id": "DOC-22", "label": "Audit Status", "rule": "Preferably audited; management accounts acceptable for new entities. PASS if audited. WARN if management accounts only. FAIL if no financial data present.", "type": "content"},
-            {"id": "DOC-23", "label": "Completeness", "rule": "Balance sheet, P&L, and notes must be present. PASS if all present. WARN if notes missing. FAIL if balance sheet or P&L missing.", "type": "quality"}
+            {"id": "DOC-21", "label": "Entity Name Match", "rule": "Company name on statements must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing.", "type": "name"}
+            # DOC-22 (Audit Status) and DOC-23 (Completeness) retired — not deterministic AI checks
         ])),
         ("entity", "board_res", "Board Resolution", json.dumps([
             {"id": "DOC-24", "label": "Signatory Match", "rule": "Authorised signatory must be a declared director. PASS if signatory is a declared director. WARN if name variation. FAIL if signatory not a director.", "type": "name"},

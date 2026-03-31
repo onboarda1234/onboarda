@@ -3191,14 +3191,35 @@ function buildVerificationResultsHtml(results) {
     pushItem('Issues', Array.isArray(results.issues) ? results.issues.join(', ') : '');
     pushItem('Checks Run', Array.isArray(results.checks_run) ? results.checks_run.join(', ') : '');
     if (Array.isArray(results.checks)) {
+      var classColors = { rule: '#16a34a', hybrid: '#d97706', ai: '#7c3aed' };
       results.checks.forEach(function(check, idx) {
         if (!check || typeof check !== 'object') return;
-        var parts = [];
-        if (check.label || check.name) parts.push(firstMeaningfulDetailValue(check.label, check.name));
-        if (check.result || check.status) parts.push('result: ' + firstMeaningfulDetailValue(check.result, check.status));
-        if (check.details) parts.push('details: ' + check.details);
-        if (check.confidence != null) parts.push('confidence: ' + Math.round(Number(check.confidence) * 100) + '%');
-        if (parts.length) items.push('<div class="doc-meta"><strong>AI Check ' + (idx + 1) + ':</strong> ' + escapeHtml(parts.join(' | ')) + '</div>');
+        var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
+        var result = (firstMeaningfulDetailValue(check.result, check.status) || '').toLowerCase();
+        var resultColor = result === 'pass' ? '#16a34a' : result === 'fail' ? '#dc2626' : result === 'warn' ? '#d97706' : '#6b7280';
+        var resultBadge = result ? '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + resultColor + ';color:#fff;margin-left:4px;">' + result.toUpperCase() + '</span>' : '';
+
+        // Classification badge (new layered format)
+        var classTag = '';
+        if (check.classification) {
+          var cc = check.classification.toLowerCase();
+          classTag = '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + (classColors[cc] || '#6b7280') + '22;color:' + (classColors[cc] || '#6b7280') + ';border:1px solid ' + (classColors[cc] || '#6b7280') + ';margin-left:4px;">' + cc + '</span>';
+        }
+
+        var meta = '';
+        // Pre-screening comparison (new layered format)
+        if (check.ps_field && (check.ps_value != null || check.extracted_value != null)) {
+          meta += '<div style="font-size:11px;color:#6b7280;margin-top:2px;">Pre-screening <em>' + escapeHtml(check.ps_field) + '</em>: <strong>' + escapeHtml(String(check.ps_value ?? '—')) + '</strong>';
+          if (check.extracted_value != null) meta += ' → extracted: <strong>' + escapeHtml(String(check.extracted_value)) + '</strong>';
+          meta += '</div>';
+        }
+        // Message / details
+        var msg = firstMeaningfulDetailValue(check.message, check.details);
+        if (msg) meta += '<div style="font-size:11px;color:#374151;margin-top:2px;">' + escapeHtml(msg) + '</div>';
+        // Confidence (for AI/hybrid checks)
+        if (check.confidence != null) meta += '<div style="font-size:11px;color:#6b7280;">Confidence: ' + Math.round(Number(check.confidence) * 100) + '%</div>';
+
+        items.push('<div class="doc-meta" style="padding:4px 0;border-bottom:1px solid var(--border2,#e5e7eb);"><strong>' + label + '</strong>' + resultBadge + classTag + meta + '</div>');
       });
     }
     if (!items.length) {
@@ -5740,20 +5761,14 @@ var ENTITY_DOC_CHECKS = [
     { label:'Registration Number', rule:'Registration number must be present and legible', type:'content' },
     { label:'Document Clarity', rule:'Document must be legible, certified copy if applicable', type:'quality' }
   ]},
-  { docId:'doc-memarts', name:'Memorandum & Articles', checks:[
+  { docId:'doc-memarts', name:'Memorandum of Association', checks:[
     { label:'Entity Name Match', rule:'Company name must match application', type:'name' },
     { label:'Completeness', rule:'All pages must be present and legible', type:'quality' },
     { label:'Certification', rule:'Must be certified or signed copy', type:'quality' }
   ]},
-  { docId:'doc-reg', name:'Certificate of Registration', checks:[
-    { label:'Entity Name Match', rule:'Company name must match', type:'name' },
-    { label:'Current Validity', rule:'Must be current / not expired', type:'expiry' },
-    { label:'Document Clarity', rule:'Must be legible and complete', type:'quality' }
-  ]},
   { docId:'doc-shareholders', name:'Shareholder Register', checks:[
     { label:'Ownership Consistency', rule:'Shareholdings must match UBOs declared in pre-screening', type:'content' },
-    { label:'Completeness', rule:'Total ownership must add up to 100%', type:'content' },
-    { label:'Currency', rule:'Register must reflect current shareholding structure', type:'age' }
+    { label:'Completeness', rule:'Total ownership must add up to 100%', type:'content' }
   ]},
   { docId:'doc-directors-reg', name:'Register of Directors', checks:[
     { label:'Director Consistency', rule:'Directors must match those declared in pre-screening', type:'content' },
@@ -5762,9 +5777,7 @@ var ENTITY_DOC_CHECKS = [
   ]},
   { docId:'doc-financials', name:'Financial Statements / Management Accounts', checks:[
     { label:'Financial Period', rule:'Must be for most recent financial year (or forecast if < 1 year old)', type:'age' },
-    { label:'Entity Name Match', rule:'Company name on statements must match application', type:'name' },
-    { label:'Audit Status', rule:'Preferably audited; management accounts acceptable for new entities', type:'content' },
-    { label:'Completeness', rule:'Balance sheet, P&L, and notes must be present', type:'quality' }
+    { label:'Entity Name Match', rule:'Company name on statements must match application', type:'name' }
   ]},
   { docId:'doc-board-res', name:'Board Resolution', checks:[
     { label:'Signatory Match', rule:'Authorised signatory must be a declared director', type:'name' },
