@@ -1506,54 +1506,69 @@ CRITICAL REQUIREMENTS:
         "poa": [
             {"id": "DOC-01", "type": "age", "label": "Document Date", "rule": "Must be dated within the last 3 months. PASS if dated within 3 months. WARN if dated 3-6 months ago. FAIL if older than 6 months or undated."},
             {"id": "DOC-02", "type": "name", "label": "Entity Name Match", "rule": "Entity name on document must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-03", "type": "quality", "label": "Document Clarity", "rule": "Document must be legible and unredacted. PASS if fully legible. WARN if partially legible. FAIL if illegible or blank."},
             {"id": "DOC-04", "type": "content", "label": "Address Match", "rule": "Address must match registered office address on application. PASS if address matches. WARN if partial match. FAIL if mismatch or missing."},
+            {"id": "DOC-03", "type": "quality", "label": "Document Clarity", "rule": "Document must be legible and unredacted. PASS if fully legible. WARN if partially legible. FAIL if illegible or blank."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         "cert_inc": [
             {"id": "DOC-05", "type": "name", "label": "Entity Name Match", "rule": "Company name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-06", "type": "content", "label": "Registration Number", "rule": "Registration number must be present and legible. PASS if present and legible. WARN if partially legible. FAIL if missing or illegible."},
+            {"id": "DOC-06", "type": "content", "label": "Registration Number Match", "rule": "Registration number must match the number declared in pre-screening. PASS if present and matches. WARN if partially legible. FAIL if missing or mismatch."},
+            {"id": "DOC-11", "type": "age", "label": "Date of Incorporation Match", "rule": "Date of incorporation must match pre-screening declaration. PASS if date matches. WARN if date differs by less than 6 months. FAIL if mismatch or missing."},
+            {"id": "DOC-12", "type": "content", "label": "Jurisdiction Match", "rule": "Jurisdiction/country of incorporation must match pre-screening. PASS if jurisdiction matches. WARN if abbreviation/variant used. FAIL if mismatch or missing."},
             {"id": "DOC-07", "type": "quality", "label": "Document Clarity", "rule": "Document must be legible, certified copy if applicable. PASS if legible. WARN if partially legible. FAIL if illegible or blank."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         "memarts": [
             {"id": "DOC-08", "type": "name", "label": "Entity Name Match", "rule": "Company name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-16", "type": "content", "label": "Authorised Share Capital", "rule": "Authorised share capital must match the amount declared in pre-screening. PASS if capital matches. WARN if minor discrepancy. FAIL if mismatch or missing."},
             {"id": "DOC-09", "type": "quality", "label": "Completeness", "rule": "All pages must be present and legible. PASS if complete and legible. WARN if minor pages missing. FAIL if key pages missing or illegible."},
-            {"id": "DOC-10", "type": "quality2", "label": "Certification", "rule": "Must be certified or signed copy. PASS if certified/signed. WARN if unsigned but appears authentic. FAIL if no certification and authenticity questionable."},
+            {"id": "DOC-13", "type": "ai", "label": "Business Objects / Activities", "rule": "Declared business activities must fall within the objects clause of the MoA. PASS if activities within objects. WARN if partial overlap. FAIL if activities clearly outside objects. ESCALATE if uncertain."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         # cert_reg retired — no checks. Doc type preserved for historical records only.
         "cert_reg": [],
         "reg_sh": [
-            {"id": "DOC-14", "type": "content", "label": "Ownership Consistency", "rule": "Shareholdings must match UBOs declared in pre-screening. PASS if all percentages match. WARN if minor discrepancies (< 5%). FAIL if major discrepancies or missing."},
-            {"id": "DOC-15", "type": "content2", "label": "Completeness", "rule": "Total ownership must add up to 100%. PASS if totals 100%. WARN if totals 95-100% (rounding). FAIL if < 95% or > 100%."},
+            {"id": "DOC-14", "type": "name", "label": "Shareholder Name Match", "rule": "Shareholder names must match those declared in pre-screening. PASS if all names match (fuzzy > 90%). WARN if minor name variations. FAIL if names cannot be matched or are missing."},
+            {"id": "DOC-15", "type": "content", "label": "Shareholding Percentages Match", "rule": "Shareholding percentages must match those declared in pre-screening. PASS if all percentages match. WARN if minor discrepancies (< 5%). FAIL if major discrepancies or missing."},
+            {"id": "DOC-22", "type": "content", "label": "Total Shares Sum to 100%", "rule": "Total shareholdings must sum to 100%. PASS if totals 100%. WARN if totals 95-100% (rounding). FAIL if < 95% or > 100%."},
+            {"id": "DOC-23", "type": "content", "label": "UBO Identification (\u226525%)", "rule": "Any shareholder holding \u2265 25% must be identified as a declared UBO. PASS if all \u226525% shareholders are declared UBOs. WARN if borderline (24-26%). FAIL if \u226525% shareholder not declared as UBO."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         "reg_dir": [
-            {"id": "DOC-17", "type": "content", "label": "Director Consistency", "rule": "Directors must match those declared in pre-screening. PASS if all directors match. WARN if minor name variations. FAIL if directors missing or extra undeclared directors."},
-            {"id": "DOC-18", "type": "content2", "label": "Completeness", "rule": "All current directors must be listed. PASS if all listed. WARN if count uncertain. FAIL if directors clearly missing."},
+            {"id": "DOC-17", "type": "name", "label": "Director Name Match", "rule": "Directors must match those declared in pre-screening. PASS if all directors match (fuzzy > 90%). WARN if minor name variations. FAIL if directors missing or undeclared directors present."},
+            {"id": "DOC-18", "type": "content", "label": "Completeness", "rule": "All current directors must be listed. PASS if all listed. WARN if count uncertain. FAIL if directors clearly missing."},
             {"id": "DOC-19", "type": "quality", "label": "Document Clarity", "rule": "Must be legible. PASS if legible. WARN if partially legible. FAIL if illegible."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         "fin_stmt": [
             {"id": "DOC-20", "type": "age", "label": "Financial Period", "rule": "Must be for most recent financial year (or forecast if < 1 year old). PASS if within last 18 months. WARN if 18-24 months old. FAIL if older than 24 months."},
             {"id": "DOC-21", "type": "name", "label": "Entity Name Match", "rule": "Company name on statements must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            # DOC-22 (Audit Status) and DOC-23 (Completeness) retired — not deterministic AI checks
+            {"id": "DOC-61", "type": "content", "label": "Revenue / Turnover Consistency", "rule": "Revenue or turnover figures must be broadly consistent with the annual turnover declared in pre-screening. PASS if within 20%. WARN if 20-50% variance. FAIL if > 50% variance or figures missing."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         "board_res": [
             {"id": "DOC-24", "type": "name", "label": "Signatory Match", "rule": "Authorised signatory must be a declared director. PASS if signatory is a declared director. WARN if name variation. FAIL if signatory not a director."},
             {"id": "DOC-25", "type": "age", "label": "Resolution Date", "rule": "Must be dated and reasonably current. PASS if dated within 12 months. WARN if 12-24 months old. FAIL if undated or older than 24 months."},
-            {"id": "DOC-26", "type": "content", "label": "Scope of Authority", "rule": "Must authorise the signatory to open the account. PASS if explicit authorisation present. WARN if implicit only. FAIL if no authorisation found."},
+            {"id": "DOC-26", "type": "ai", "label": "Scope of Authority", "rule": "Resolution must explicitly authorise the signatory to open a bank/payment account or engage the relevant service provider. PASS if explicit authorisation present. WARN if implicit only. FAIL if authorisation not found. ESCALATE if legal language is ambiguous."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         "structure_chart": [
             {"id": "DOC-27", "type": "content", "label": "UBO Chain", "rule": "Must trace ownership to ultimate beneficial owners. PASS if UBO chain complete. WARN if chain incomplete but UBOs identifiable. FAIL if UBOs not identifiable."},
-            {"id": "DOC-28", "type": "content2", "label": "Ownership Match", "rule": "Shareholdings must match shareholder register. PASS if percentages match. WARN if minor discrepancies. FAIL if major discrepancies."},
+            {"id": "DOC-28", "type": "content", "label": "Ownership Match", "rule": "Shareholdings must match shareholder register. PASS if percentages match. WARN if minor discrepancies. FAIL if major discrepancies."},
             {"id": "DOC-29", "type": "quality", "label": "Legibility", "rule": "Diagram must be clear and readable. PASS if legible. WARN if partially legible. FAIL if illegible."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         "bankref": [
             {"id": "DOC-30", "type": "quality", "label": "Bank Letterhead", "rule": "Must be on official bank letterhead. PASS if on letterhead. WARN if letterhead unclear. FAIL if no letterhead."},
             {"id": "DOC-31", "type": "age", "label": "Date", "rule": "Must be dated within the last 3 months. PASS if within 3 months. WARN if 3-6 months. FAIL if older than 6 months or undated."},
             {"id": "DOC-32", "type": "name", "label": "Entity Name Match", "rule": "Entity name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         "licence": [
             {"id": "DOC-33", "type": "name", "label": "Entity Name Match", "rule": "Entity name must match. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-34", "type": "expiry", "label": "Validity", "rule": "Licence must be current and not expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired."},
-            {"id": "DOC-35", "type": "content", "label": "Issuing Authority", "rule": "Issuing regulator must be identifiable. PASS if authority clearly identified. WARN if partially identifiable. FAIL if not identifiable."},
+            {"id": "DOC-34", "type": "expiry", "label": "Licence Validity", "rule": "Licence must be current and not expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired."},
+            {"id": "DOC-35", "type": "ai", "label": "Licence Scope", "rule": "Licence must cover the business activities declared in the application. PASS if scope covers activities. WARN if partial coverage. FAIL if activities fall outside licence scope. ESCALATE if scope is ambiguous."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         # ── Additional entity docs (portal-only, no backoffice config yet) ──
         "contracts": [
@@ -1581,10 +1596,12 @@ CRITICAL REQUIREMENTS:
         ],
         # ── KYC Person Documents (aligned with PERSON_DOC_CHECKS in backoffice) ──
         "passport": [
-            {"id": "DOC-49", "type": "expiry", "label": "Document Expiry", "rule": "Must not be expired; at least 6 months validity remaining recommended. PASS if > 6 months validity. WARN if 1-6 months validity. FAIL if expired."},
-            {"id": "DOC-50", "type": "quality", "label": "Photo Quality", "rule": "Photo must be clear and identifiable. PASS if clear. WARN if partially obscured. FAIL if unidentifiable."},
-            {"id": "DOC-51", "type": "name", "label": "Name Match", "rule": "Name must match the person declared in the application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-52", "type": "content", "label": "Nationality Match", "rule": "Nationality must match the nationality declared in pre-screening. PASS if matches. WARN if not clearly visible. FAIL if mismatch."},
+            {"id": "DOC-48", "type": "expiry", "label": "Document Expiry", "rule": "Passport must not be expired. PASS if > 6 months validity remaining. WARN if 1-6 months remaining. FAIL if expired."},
+            {"id": "DOC-50", "type": "name", "label": "Name Match", "rule": "Name must match the person declared in the application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
+            {"id": "DOC-62", "type": "content", "label": "Date of Birth Match", "rule": "Date of birth must match the date declared in pre-screening. PASS if date matches. WARN if format variation only. FAIL if mismatch or missing."},
+            {"id": "DOC-63", "type": "content", "label": "Nationality Match", "rule": "Nationality must match declared nationality. PASS if matches. WARN if not clearly visible. FAIL if mismatch."},
+            {"id": "DOC-49", "type": "quality", "label": "Photo Quality", "rule": "Photo must be clear and identifiable. PASS if clear. WARN if partially obscured. FAIL if unidentifiable."},
+            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
         ],
         "national_id": [
             {"id": "DOC-53", "type": "expiry", "label": "Document Expiry", "rule": "Must not be expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired."},
@@ -1594,11 +1611,13 @@ CRITICAL REQUIREMENTS:
         ],
         "cv": [
             {"id": "DOC-57", "type": "name", "label": "Name Match", "rule": "Name on CV/profile must match declared identity. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-58", "type": "content", "label": "Employment History", "rule": "Should include relevant professional background. PASS if relevant history present. WARN if limited history. FAIL if no history."},
+            {"id": "DOC-58", "type": "content", "label": "Employment History \u2014 Presence", "rule": "CV must include employment history section. PASS if history present. WARN if limited entries. FAIL if no employment history."},
+            {"id": "DOC-65", "type": "ai", "label": "Employment History \u2014 Relevance", "rule": "Employment background must be relevant to the declared role and business activity. PASS if background is relevant. WARN if tangentially related. FAIL if no relevant experience. ESCALATE if background appears inconsistent with declared role."},
         ],
         "sow": [
             {"id": "DOC-59", "type": "name", "label": "Name Match", "rule": "Name must match the declared person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-60", "type": "content", "label": "Supporting Evidence", "rule": "Must contain credible evidence of wealth origin. PASS if credible evidence present. WARN if evidence weak. FAIL if no evidence."},
+            {"id": "DOC-60", "type": "ai", "label": "Source of Wealth Evidence", "rule": "Document must contain credible evidence supporting the declared source of wealth. PASS if credible evidence present. WARN if evidence weak or indirect. FAIL if no evidence. ESCALATE if declared source appears implausible."},
+            {"id": "DOC-66", "type": "ai", "label": "Consistency / Plausibility", "rule": "Declared wealth, function, and source of funds must be internally consistent and plausible. PASS if consistent and plausible. WARN if minor inconsistencies. FAIL if major inconsistencies. ESCALATE for compliance officer review."},
         ],
     }
 
