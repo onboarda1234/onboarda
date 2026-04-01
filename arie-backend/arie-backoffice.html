@@ -5998,20 +5998,20 @@ var AI_AGENTS = [
     description:'Unified compliance memo agent. Bridges to authoritative memo path enforcing Rules 4A-4E, computing 7 risk dimensions, and generating an 11-section memo. Classification-tagged output (rule/hybrid/ai). Includes risk-model divergence cross-check.',
     checks:['Document completeness score (rule)', 'Jurisdiction risk score (rule)', 'Industry/sector risk score (rule)', 'Product/service risk score (rule)', 'Channel/delivery risk score (rule)', 'Ownership complexity ingestion (rule)', 'Screening severity ingestion (rule)', 'Weighted total risk score (rule)', 'Risk tier bucket (rule)', 'Mandatory escalation triggers (rule)', 'Business description vs sector alignment (hybrid)', 'Transaction profile vs business scale (hybrid)', 'Recommendation narrative (hybrid)', 'Revenue model plausibility (ai)', 'Business model plausibility (ai)', 'Compliance memo drafting (ai)'] },
   { id:6, name:'Periodic Review Preparation Agent', icon:'📅', stage:'Monitoring', enabled:true,
-    description:'Prepares client files for periodic reviews and identifies expired documents.',
-    checks:['Review schedule assessment', 'Expired document identification', 'Updated verification requirement flags', 'Client file compilation', 'Review checklist generation'] },
+    description:'Rule-based review preparation with hybrid priority scoring. Scans document expiry, ownership changes, screening staleness, outstanding alerts; assembles review package with priority score. Degraded mode when no prior review history exists.',
+    checks:['Review schedule compliance check (rule)', 'Risk level change detection (rule)', 'Document expiry scan (rule)', 'Ownership structure change detection (rule)', 'Screening data staleness check (rule)', 'Activity volume comparison (rule)', 'Outstanding alert aggregation (rule)', 'Regulatory requirement completeness (rule)', 'Review priority scoring (hybrid)', 'Review package assembly (hybrid)'] },
   { id:7, name:'Adverse Media & PEP Monitoring Agent', icon:'📡', stage:'Monitoring', enabled:true,
-    description:'Continuous media monitoring, PEP status changes, and new sanctions.',
-    checks:['Continuous adverse media monitoring', 'PEP status change detection', 'New sanctions list screening', 'News relevance filtering', 'Alert threshold configuration'] },
+    description:'Monitoring interpreter with AI narrative. Retrieves new media/PEP/sanctions signals, deduplicates, scores severity, resolves entities; AI generates narrative summary and disposition. Degraded mode when no screening baseline exists.',
+    checks:['New adverse media retrieval (rule)', 'PEP status change detection (rule)', 'Sanctions list update check (rule)', 'Media source credibility scoring (rule)', 'Alert deduplication (rule)', 'Historical media comparison (rule)', 'Media severity assessment (hybrid)', 'PEP proximity scoring (hybrid)', 'Entity resolution for media hits (hybrid)', 'Combined risk signal aggregation (hybrid)', 'Media narrative summarisation (ai)', 'Monitoring alert disposition (ai)'] },
   { id:8, name:'Behaviour & Risk Drift Agent', icon:'📈', stage:'Monitoring', enabled:true,
-    description:'Detects changes in client behavior vs onboarding profile.',
-    checks:['Transaction pattern analysis', 'Behavior change detection', 'Risk drift quantification', 'Deviation from expected profile', 'Escalation trigger determination'] },
+    description:'Rule-based drift detection with hybrid scoring. Compares transaction volume, geographic activity, counterparty concentration, product usage against onboarding baseline; scores velocity anomalies and peer deviation. Degraded mode when no transaction data available.',
+    checks:['Transaction volume baseline comparison (rule)', 'Geographic activity deviation (rule)', 'Counterparty concentration check (rule)', 'Product usage deviation (rule)', 'Dormancy/reactivation detection (rule)', 'Threshold breach detection (rule)', 'Velocity anomaly scoring (hybrid)', 'Peer group deviation analysis (hybrid)', 'Temporal pattern drift detection (hybrid)', 'Multi-dimensional risk drift scoring (hybrid)', 'Drift narrative and recommendation (hybrid)'] },
   { id:9, name:'Regulatory Impact Agent', icon:'⚖️', stage:'Monitoring', enabled:true,
     description:'Detects when regulatory changes affect existing clients.',
     checks:['Regulatory change monitoring', 'Impact assessment on client portfolio', 'Jurisdiction-specific regulation tracking', 'Compliance requirement updates', 'Client-specific regulatory alerts'] },
   { id:10, name:'Ongoing Compliance Review Agent', icon:'📋', stage:'Monitoring', enabled:true,
-    description:'Prepares periodic review reports and recommends actions.',
-    checks:['Periodic review report preparation', 'Compliance status assessment', 'Risk re-rating recommendation', 'Document refresh recommendations', 'Continuation or escalation decision'] }
+    description:'Consolidation agent with AI narrative. Verifies document currency, screening recency, policy applicability, condition compliance, filing deadlines; consolidates inter-agent findings; AI generates compliance narrative and escalation/closure recommendation. Degraded mode when upstream agents have not run.',
+    checks:['Document currency verification (rule)', 'Screening recency check (rule)', 'Policy change applicability check (rule)', 'Condition compliance tracking (rule)', 'Filing deadline monitoring (rule)', 'Inter-agent finding consolidation (rule)', 'Remediation tracker status (rule)', 'Compliance risk re-scoring (hybrid)', 'Review frequency recommendation (hybrid)', 'Compliance narrative generation (ai)', 'Escalation/closure recommendation (ai)'] }
 ];
 
 function renderAgentsPipeline() {

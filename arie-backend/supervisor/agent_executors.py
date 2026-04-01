@@ -2144,127 +2144,1569 @@ def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dic
 # MONITORING AGENTS (6, 7, 8, 9, 10)
 # ═══════════════════════════════════════════════════════════
 
+# ── Monitoring data helper ──────────────────────────────────
+
+def _get_monitoring_data(db_path: str, application_id: str) -> Dict[str, Any]:
+    """Fetch monitoring-specific data (alerts, reviews) for an application.
+
+    Returns empty lists when tables don't exist (test/minimal DB).
+    """
+    db = None
+    try:
+        import os
+        has_postgres = bool(os.environ.get("DATABASE_URL"))
+        use_explicit_path = not has_postgres and db_path and os.path.isfile(db_path)
+
+        if use_explicit_path:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            db = _SqliteFallback(conn)
+        else:
+            global _get_db_connection, _get_db_loaded
+            if not _get_db_loaded:
+                import sys as _sys
+                db_mod = _sys.modules.get("db")
+                if db_mod and hasattr(db_mod, "get_db"):
+                    _get_db_connection = db_mod.get_db
+                else:
+                    try:
+                        from db import get_db as _gdb
+                        _get_db_connection = _gdb
+                    except ImportError:
+                        _get_db_connection = None
+                _get_db_loaded = True
+
+            if _get_db_connection is not None:
+                db = _get_db_connection()
+            elif db_path:
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row
+                db = _SqliteFallback(conn)
+            else:
+                return {"alerts": [], "reviews": [], "agent_runs": []}
+
+        alerts = []
+        try:
+            alerts = [dict(r) for r in db.execute(
+                "SELECT * FROM monitoring_alerts WHERE application_id=? ORDER BY created_at DESC",
+                (application_id,)
+            ).fetchall()]
+        except Exception:
+            pass
+
+        reviews = []
+        try:
+            reviews = [dict(r) for r in db.execute(
+                "SELECT * FROM periodic_reviews WHERE application_id=? ORDER BY created_at DESC",
+                (application_id,)
+            ).fetchall()]
+        except Exception:
+            pass
+
+        agent_runs = []
+        try:
+            agent_runs = [dict(r) for r in db.execute(
+                "SELECT * FROM monitoring_agent_status ORDER BY last_run DESC"
+            ).fetchall()]
+        except Exception:
+            pass
+
+        return {"alerts": alerts, "reviews": reviews, "agent_runs": agent_runs}
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+
+# ── Review schedule thresholds ──────────────────────────────
+
+_REVIEW_FREQUENCY_MAP = {
+    "LOW": 365,        # annual
+    "MEDIUM": 180,     # semi-annual
+    "HIGH": 90,        # quarterly
+    "VERY_HIGH": 30,   # monthly
+}
+
+_SCREENING_STALENESS_DAYS = 180  # screening older than 6 months = stale
+
+_DOCUMENT_EXPIRY_WARN_DAYS = 90   # warn when doc expires within 90 days
+
+# ── Priority scoring weights ────────────────────────────────
+
+_PRIORITY_WEIGHTS = {
+    "overdue_review": 25,
+    "risk_level_change": 20,
+    "expired_documents": 15,
+    "ownership_change": 15,
+    "stale_screening": 10,
+    "outstanding_alerts": 10,
+    "regulatory_gaps": 5,
+}
+
+
+# ═══════════════════════════════════════════════════════════
+# AGENT 6: Periodic Review Preparation (10 checks: 8R + 2H)
+# ═══════════════════════════════════════════════════════════
+
+def _check_review_schedule(app: Dict, reviews: List[Dict]) -> Dict[str, Any]:
+    """Check #1 (rule): Review schedule compliance check."""
+    risk_level = app.get("risk_level", "MEDIUM")
+    freq_days = _REVIEW_FREQUENCY_MAP.get(risk_level, 365)
+
+    if not reviews:
+        return {
+            "check": "Review schedule compliance check",
+            "classification": "rule",
+            "status": "no_prior_review",
+            "review_frequency_days": freq_days,
+            "days_since_last_review": None,
+            "schedule_status": "no_history",
+        }
+
+    last_review = reviews[0]
+    last_date_str = last_review.get("completed_at") or last_review.get("created_at")
+    if not last_date_str:
+        return {
+            "check": "Review schedule compliance check",
+            "classification": "rule",
+            "status": "unknown",
+            "review_frequency_days": freq_days,
+            "days_since_last_review": None,
+            "schedule_status": "no_date_available",
+        }
+
+    try:
+        last_date = datetime.fromisoformat(str(last_date_str).replace("Z", "+00:00").replace("+00:00", ""))
+        days_since = (datetime.utcnow() - last_date).days
+    except (ValueError, TypeError):
+        days_since = None
+
+    if days_since is None:
+        schedule_status = "unknown"
+    elif days_since > freq_days:
+        schedule_status = "overdue"
+    elif days_since > freq_days - 30:
+        schedule_status = "upcoming"
+    else:
+        schedule_status = "on_schedule"
+
+    return {
+        "check": "Review schedule compliance check",
+        "classification": "rule",
+        "status": "completed",
+        "review_frequency_days": freq_days,
+        "days_since_last_review": days_since,
+        "schedule_status": schedule_status,
+    }
+
+
+def _check_risk_level_change(app: Dict, reviews: List[Dict]) -> Dict[str, Any]:
+    """Check #2 (rule): Risk level change detection."""
+    current_risk = app.get("risk_level")
+    if not reviews:
+        return {
+            "check": "Risk level change detection",
+            "classification": "rule",
+            "status": "no_prior_review",
+            "current_risk_level": current_risk,
+            "previous_risk_level": None,
+            "changed": False,
+        }
+    previous_risk = reviews[0].get("risk_level") or reviews[0].get("previous_risk_level")
+    changed = bool(current_risk and previous_risk and current_risk != previous_risk)
+    return {
+        "check": "Risk level change detection",
+        "classification": "rule",
+        "status": "completed",
+        "current_risk_level": current_risk,
+        "previous_risk_level": previous_risk,
+        "changed": changed,
+    }
+
+
+def _check_document_expiry(documents: List[Dict]) -> Dict[str, Any]:
+    """Check #3 (rule): Document expiry scan."""
+    expired = []
+    expiring_soon = []
+    now = datetime.utcnow()
+
+    for doc in documents:
+        expiry_str = doc.get("expiry_date") or doc.get("valid_until")
+        if not expiry_str:
+            continue
+        try:
+            expiry = datetime.fromisoformat(str(expiry_str).replace("Z", "+00:00").replace("+00:00", ""))
+            days_to_expiry = (expiry - now).days
+            entry = {
+                "document_id": doc.get("id"),
+                "document_type": doc.get("document_type"),
+                "filename": doc.get("filename"),
+                "expiry_date": str(expiry_str),
+                "days_to_expiry": days_to_expiry,
+            }
+            if days_to_expiry < 0:
+                expired.append(entry)
+            elif days_to_expiry <= _DOCUMENT_EXPIRY_WARN_DAYS:
+                expiring_soon.append(entry)
+        except (ValueError, TypeError):
+            continue
+
+    return {
+        "check": "Document expiry scan",
+        "classification": "rule",
+        "status": "completed",
+        "expired_count": len(expired),
+        "expiring_soon_count": len(expiring_soon),
+        "expired_documents": expired,
+        "expiring_soon_documents": expiring_soon,
+    }
+
+
+def _check_ownership_changes(app: Dict, ubos: List[Dict], intermediaries: List[Dict]) -> Dict[str, Any]:
+    """Check #4 (rule): Ownership structure change detection.
+
+    Compares stored ownership_structure JSON against current UBOs/intermediaries.
+    Without historical snapshots, flags structural indicators.
+    """
+    changes = []
+    ownership_str = app.get("ownership_structure") or "{}"
+    try:
+        ownership = json.loads(ownership_str) if isinstance(ownership_str, str) else (ownership_str or {})
+    except (json.JSONDecodeError, TypeError):
+        ownership = {}
+
+    # Flag if intermediaries exist (possible layered structure)
+    if intermediaries:
+        changes.append({
+            "type": "intermediary_presence",
+            "detail": f"{len(intermediaries)} intermediary shareholder(s) in structure",
+        })
+
+    # Flag if any UBO has borderline ownership (near 25% threshold)
+    for ubo in ubos:
+        pct = ubo.get("ownership_pct") or 0
+        try:
+            pct = float(pct)
+        except (ValueError, TypeError):
+            pct = 0
+        if 20 <= pct <= 30:
+            changes.append({
+                "type": "borderline_ubo_threshold",
+                "detail": f"UBO {ubo.get('full_name', 'Unknown')} at {pct}% (near 25% threshold)",
+            })
+
+    return {
+        "check": "Ownership structure change detection",
+        "classification": "rule",
+        "status": "completed",
+        "changes_detected": len(changes),
+        "changes": changes,
+    }
+
+
+def _check_screening_staleness(app: Dict) -> Dict[str, Any]:
+    """Check #5 (rule): Screening data staleness check."""
+    prescreening_raw = app.get("prescreening_data") or "{}"
+    try:
+        prescreening = json.loads(prescreening_raw) if isinstance(prescreening_raw, str) else (prescreening_raw or {})
+    except (json.JSONDecodeError, TypeError):
+        prescreening = {}
+
+    screening_report = prescreening.get("screening_report", {})
+    if not screening_report:
+        return {
+            "check": "Screening data staleness check",
+            "classification": "rule",
+            "status": "no_screening_data",
+            "staleness_days": None,
+            "is_stale": True,
+        }
+
+    screened_at = screening_report.get("screened_at") or screening_report.get("timestamp")
+    if not screened_at:
+        return {
+            "check": "Screening data staleness check",
+            "classification": "rule",
+            "status": "no_timestamp",
+            "staleness_days": None,
+            "is_stale": True,
+        }
+
+    try:
+        screening_date = datetime.fromisoformat(str(screened_at).replace("Z", "+00:00").replace("+00:00", ""))
+        days = (datetime.utcnow() - screening_date).days
+    except (ValueError, TypeError):
+        days = None
+
+    is_stale = days is None or days > _SCREENING_STALENESS_DAYS
+
+    return {
+        "check": "Screening data staleness check",
+        "classification": "rule",
+        "status": "completed",
+        "staleness_days": days,
+        "is_stale": is_stale,
+    }
+
+
+def _check_activity_volume(app: Dict) -> Dict[str, Any]:
+    """Check #6 (rule): Activity volume comparison.
+
+    Compares declared expected_volume against any stored actual metrics.
+    Degraded mode: reports declared volume only (no actuals available).
+    """
+    expected = app.get("expected_volume") or app.get("monthly_volume")
+    return {
+        "check": "Activity volume comparison",
+        "classification": "rule",
+        "status": "degraded" if not expected else "completed",
+        "expected_volume": expected,
+        "actual_volume": None,  # No transaction table yet — degraded mode
+        "deviation_pct": None,
+        "data_available": False,
+    }
+
+
+def _check_outstanding_alerts(alerts: List[Dict]) -> Dict[str, Any]:
+    """Check #7 (rule): Outstanding alert aggregation."""
+    open_alerts = [a for a in alerts if a.get("status") in ("open", "pending", None)]
+    by_severity = {}
+    for a in open_alerts:
+        sev = a.get("severity", "unknown")
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+
+    return {
+        "check": "Outstanding alert aggregation",
+        "classification": "rule",
+        "status": "completed",
+        "total_open_alerts": len(open_alerts),
+        "by_severity": by_severity,
+        "alerts": [{
+            "alert_id": a.get("id"),
+            "alert_type": a.get("alert_type"),
+            "severity": a.get("severity"),
+            "summary": a.get("summary"),
+        } for a in open_alerts[:10]],  # cap at 10 for output size
+    }
+
+
+def _check_regulatory_completeness(app: Dict, documents: List[Dict]) -> Dict[str, Any]:
+    """Check #8 (rule): Regulatory requirement completeness.
+
+    Checks that minimum document set is present for the entity's jurisdiction/type.
+    """
+    required_types = {"passport", "poa", "cert_inc"}  # minimum universal set
+    entity_type = (app.get("entity_type") or "").lower()
+    if "company" in entity_type or "ltd" in entity_type or "corp" in entity_type:
+        required_types.update({"reg_sh", "reg_dir", "board_res"})
+
+    present_types = {d.get("document_type") for d in documents if d.get("document_type")}
+    missing = required_types - present_types
+    completeness_pct = ((len(required_types) - len(missing)) / max(len(required_types), 1)) * 100
+
+    return {
+        "check": "Regulatory requirement completeness",
+        "classification": "rule",
+        "status": "completed",
+        "required_document_types": sorted(required_types),
+        "present_document_types": sorted(present_types),
+        "missing_document_types": sorted(missing),
+        "completeness_pct": round(completeness_pct, 1),
+    }
+
+
+def _compute_review_priority(check_results: List[Dict]) -> Dict[str, Any]:
+    """Check #9 (hybrid): Review priority scoring.
+
+    Weighted scoring across all rule-check outputs to produce a 0-100 priority.
+    """
+    score = 0.0
+
+    for cr in check_results:
+        check_name = cr.get("check", "")
+        if "schedule" in check_name.lower():
+            if cr.get("schedule_status") == "overdue":
+                score += _PRIORITY_WEIGHTS["overdue_review"]
+            elif cr.get("schedule_status") == "upcoming":
+                score += _PRIORITY_WEIGHTS["overdue_review"] * 0.5
+        elif "risk level" in check_name.lower():
+            if cr.get("changed"):
+                score += _PRIORITY_WEIGHTS["risk_level_change"]
+        elif "expiry" in check_name.lower():
+            expired_ct = cr.get("expired_count", 0)
+            if expired_ct > 0:
+                score += min(expired_ct * 5, _PRIORITY_WEIGHTS["expired_documents"])
+        elif "ownership" in check_name.lower():
+            if cr.get("changes_detected", 0) > 0:
+                score += _PRIORITY_WEIGHTS["ownership_change"]
+        elif "staleness" in check_name.lower():
+            if cr.get("is_stale"):
+                score += _PRIORITY_WEIGHTS["stale_screening"]
+        elif "alert" in check_name.lower():
+            open_ct = cr.get("total_open_alerts", 0)
+            if open_ct > 0:
+                score += min(open_ct * 3, _PRIORITY_WEIGHTS["outstanding_alerts"])
+        elif "regulatory" in check_name.lower():
+            completeness = cr.get("completeness_pct", 100)
+            if completeness < 100:
+                score += _PRIORITY_WEIGHTS["regulatory_gaps"]
+
+    score = min(score, 100.0)
+    if score >= 70:
+        priority_label = "high"
+    elif score >= 40:
+        priority_label = "medium"
+    else:
+        priority_label = "low"
+
+    return {
+        "check": "Review priority scoring",
+        "classification": "hybrid",
+        "status": "completed",
+        "priority_score": round(score, 1),
+        "priority_label": priority_label,
+    }
+
+
+def _assemble_review_package(app: Dict, check_results: List[Dict], priority_result: Dict) -> Dict[str, Any]:
+    """Check #10 (hybrid): Review package assembly."""
+    issues = []
+    for cr in check_results:
+        if cr.get("schedule_status") == "overdue":
+            issues.append("Review is overdue")
+        if cr.get("changed"):
+            issues.append(f"Risk level changed: {cr.get('previous_risk_level')} → {cr.get('current_risk_level')}")
+        if cr.get("expired_count", 0) > 0:
+            issues.append(f"{cr['expired_count']} expired document(s)")
+        if cr.get("changes_detected", 0) > 0:
+            issues.append(f"{cr['changes_detected']} ownership structure change(s)")
+        if cr.get("is_stale"):
+            issues.append("Screening data is stale")
+        if cr.get("total_open_alerts", 0) > 0:
+            issues.append(f"{cr['total_open_alerts']} outstanding alert(s)")
+        missing = cr.get("missing_document_types", [])
+        if missing:
+            issues.append(f"Missing documents: {', '.join(missing)}")
+
+    return {
+        "check": "Review package assembly",
+        "classification": "hybrid",
+        "status": "completed",
+        "company_name": app.get("company_name"),
+        "risk_level": app.get("risk_level"),
+        "priority_score": priority_result.get("priority_score"),
+        "priority_label": priority_result.get("priority_label"),
+        "issues_requiring_attention": issues,
+        "total_issues": len(issues),
+    }
+
+
 def execute_periodic_review(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 6: Synthetic periodic review preparation summary."""
+    """Agent 6: Periodic Review Preparation — 10 checks (8 rule + 2 hybrid).
+
+    Scans document expiry, ownership changes, screening staleness, outstanding
+    alerts; assembles review package with priority score.
+    """
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
+    documents = data["documents"]
+    ubos = data["ubos"]
+    intermediaries = data.get("intermediaries", [])
+    monitoring = _get_monitoring_data(db_path, application_id)
+    alerts = monitoring["alerts"]
+    reviews = monitoring["reviews"]
     run_id = str(uuid4())
+
+    # Run 8 rule checks
+    c1 = _check_review_schedule(app, reviews)
+    c2 = _check_risk_level_change(app, reviews)
+    c3 = _check_document_expiry(documents)
+    c4 = _check_ownership_changes(app, ubos, intermediaries)
+    c5 = _check_screening_staleness(app)
+    c6 = _check_activity_volume(app)
+    c7 = _check_outstanding_alerts(alerts)
+    c8 = _check_regulatory_completeness(app, documents)
+    rule_checks = [c1, c2, c3, c4, c5, c6, c7, c8]
+
+    # 2 hybrid checks
+    c9 = _compute_review_priority(rule_checks)
+    c10 = _assemble_review_package(app, rule_checks, c9)
+    all_checks = rule_checks + [c9, c10]
+
+    # Determine overall status and risk trend
+    priority_score = c9.get("priority_score", 0)
+    risk_changed = c2.get("changed", False)
+    previous_risk = c2.get("previous_risk_level")
+    current_risk = app.get("risk_level")
+
+    if risk_changed and previous_risk and current_risk:
+        risk_order = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
+        prev_val = risk_order.get(previous_risk, 2)
+        curr_val = risk_order.get(current_risk, 2)
+        risk_trend = "increasing" if curr_val > prev_val else ("decreasing" if curr_val < prev_val else "stable")
+    else:
+        risk_trend = "stable"
+
+    if priority_score >= 70:
+        overall_status = AgentStatus.ISSUES_FOUND.value
+    elif priority_score >= 40:
+        overall_status = AgentStatus.INCONCLUSIVE.value
+    else:
+        overall_status = AgentStatus.CLEAN.value
+
+    escalation_flag = priority_score >= 70
+    findings = []
+    detected_issues = []
+    for issue in c10.get("issues_requiring_attention", []):
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "periodic_review",
+            "title": issue,
+            "description": issue,
+            "severity": Severity.HIGH.value if priority_score >= 70 else Severity.MEDIUM.value,
+            "confidence": 0.85,
+            "source": "rule_check",
+            "evidence_refs": [],
+        })
+        detected_issues.append(issue)
+
+    if not findings:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "periodic_review",
+            "title": "Review preparation complete — no issues detected",
+            "description": f"Review preparation for {app.get('company_name', 'entity')}. No urgent issues found.",
+            "severity": Severity.INFO.value,
+            "confidence": 0.90,
+            "source": "rule_check",
+            "evidence_refs": [],
+        })
 
     output = _base_output(AgentType.PERIODIC_REVIEW_PREPARATION, "Agent 6: Periodic Review Preparation", application_id, run_id)
     output.update({
-        "status": AgentStatus.CLEAN.value,
+        "status": overall_status,
         "confidence_score": 0.85,
-        "findings": [{
-            "finding_id": str(uuid4())[:12],
-            "category": "periodic_review",
-            "title": "Periodic review data compiled",
-            "description": f"Review preparation for {app.get('company_name', 'entity')}. Current risk: {app.get('risk_level', 'N/A')}.",
-            "severity": Severity.INFO.value,
-            "confidence": 0.85,
-            "source": "synthetic_review_summary",
-            "evidence_refs": [],
-        }],
+        "findings": findings,
         "evidence": [{
             "evidence_id": str(uuid4())[:12],
             "evidence_type": "review_data",
             "source": "stored_application_data",
-            "content_summary": f"Review data for {app.get('company_name', '')}",
+            "content_summary": f"Review data for {app.get('company_name', '')} — {len(all_checks)} checks performed",
             "reference": app.get("ref", application_id),
             "verified": True,
         }],
-        "detected_issues": [],
+        "detected_issues": detected_issues,
         "risk_indicators": [],
-        "recommendation": "Standard periodic review",
-        "escalation_flag": False,
-        "escalation_reason": None,
+        "recommendation": c9.get("priority_label", "low") + " priority review",
+        "escalation_flag": escalation_flag,
+        "escalation_reason": "High priority review — multiple issues detected" if escalation_flag else None,
         "review_trigger": "scheduled",
-        "previous_risk_level": app.get("risk_level"),
-        "current_risk_assessment": app.get("risk_level"),
-        "recommended_risk_level": app.get("risk_level"),
-        "risk_trend": "stable",
+        "previous_risk_level": previous_risk,
+        "current_risk_assessment": current_risk,
+        "recommended_risk_level": current_risk,
+        "risk_trend": risk_trend,
+        "checks_performed": all_checks,
+        "review_schedule_status": c1.get("schedule_status"),
+        "risk_level_changed": risk_changed,
+        "expired_documents": c3.get("expired_documents", []),
+        "ownership_changes_detected": c4.get("changes", []),
+        "screening_staleness_days": c5.get("staleness_days"),
+        "activity_volume_comparison": c6,
+        "outstanding_alerts": c7.get("alerts", []),
+        "regulatory_completeness": c8,
+        "priority_score": priority_score,
+        "review_package": c10,
     })
     return output
 
 
-def execute_adverse_media_pep(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 7: Synthetic adverse media and PEP monitoring summary."""
-    db_path = context.get("db_path", "")
-    data = _get_app_data(db_path, application_id)
-    app = data["application"]
-    run_id = str(uuid4())
+# ═══════════════════════════════════════════════════════════
+# AGENT 8: Behaviour & Risk Drift (11 checks: 6R + 5H)
+# ═══════════════════════════════════════════════════════════
 
-    output = _base_output(AgentType.ADVERSE_MEDIA_PEP_MONITORING, "Agent 7: Adverse Media & PEP Monitoring", application_id, run_id)
-    output.update({
-        "status": AgentStatus.CLEAN.value,
-        "confidence_score": 0.88,
-        "findings": [{
-            "finding_id": str(uuid4())[:12],
-            "category": "media_monitoring",
-            "title": "No new adverse media detected",
-            "description": f"Monitoring scan for {app.get('company_name', 'entity')}: no new hits.",
-            "severity": Severity.INFO.value,
-            "confidence": 0.88,
-            "source": "synthetic_monitoring_summary",
-            "evidence_refs": [],
-        }],
-        "evidence": [{
-            "evidence_id": str(uuid4())[:12],
-            "evidence_type": "monitoring_scan",
-            "source": "synthetic_monitoring_summary",
-            "content_summary": "Clean monitoring scan",
-            "reference": f"MON-{str(uuid4())[:8]}",
-            "verified": True,
-        }],
-        "detected_issues": [],
-        "risk_indicators": [],
-        "recommendation": "No action required",
-        "escalation_flag": False,
-        "escalation_reason": None,
-        "new_media_hits": [],
-        "pep_status_changes": [],
-        "alert_generated": False,
-    })
-    return output
+# Thresholds
+_VOLUME_DEVIATION_WARN = 0.30   # 30% deviation from baseline
+_VOLUME_DEVIATION_ALERT = 0.50  # 50% deviation
+_DORMANCY_DAYS = 180            # 6 months without activity = dormant
+_CONCENTRATION_THRESHOLD = 0.60 # 60% to single counterparty = concentrated
+
+
+def _check_volume_baseline(app: Dict) -> Dict[str, Any]:
+    """Check #1 (rule): Transaction volume baseline comparison.
+
+    Degraded mode: no transaction table exists yet. Reports declared volume only.
+    """
+    expected = app.get("expected_volume") or app.get("monthly_volume")
+    return {
+        "check": "Transaction volume baseline comparison",
+        "classification": "rule",
+        "status": "degraded",
+        "mode": "no_transaction_data",
+        "declared_volume": expected,
+        "actual_volume": None,
+        "deviation_pct": None,
+        "breach": False,
+    }
+
+
+def _check_geographic_deviation(app: Dict) -> Dict[str, Any]:
+    """Check #2 (rule): Geographic activity deviation.
+
+    Compares declared country/jurisdiction against any detected activity locations.
+    Degraded mode: reports declared geography only.
+    """
+    country = app.get("country")
+    return {
+        "check": "Geographic activity deviation",
+        "classification": "rule",
+        "status": "degraded",
+        "mode": "no_transaction_data",
+        "declared_country": country,
+        "detected_countries": [],
+        "unexpected_countries": [],
+        "deviation_detected": False,
+    }
+
+
+def _check_counterparty_concentration(app: Dict) -> Dict[str, Any]:
+    """Check #3 (rule): Counterparty concentration check. Degraded mode."""
+    return {
+        "check": "Counterparty concentration check",
+        "classification": "rule",
+        "status": "degraded",
+        "mode": "no_transaction_data",
+        "top_counterparties": [],
+        "concentration_ratio": None,
+        "concentrated": False,
+    }
+
+
+def _check_product_usage_deviation(app: Dict) -> Dict[str, Any]:
+    """Check #4 (rule): Product usage deviation. Degraded mode."""
+    sector = app.get("sector")
+    return {
+        "check": "Product usage deviation",
+        "classification": "rule",
+        "status": "degraded",
+        "mode": "no_transaction_data",
+        "declared_sector": sector,
+        "detected_product_mix": [],
+        "deviation_detected": False,
+    }
+
+
+def _check_dormancy(app: Dict) -> Dict[str, Any]:
+    """Check #5 (rule): Dormancy/reactivation detection.
+
+    Without transaction data, checks application status and last activity timestamp.
+    """
+    status = app.get("status", "")
+    created_at = app.get("created_at")
+    updated_at = app.get("updated_at")
+
+    last_activity = updated_at or created_at
+    days_inactive = None
+    if last_activity:
+        try:
+            last_dt = datetime.fromisoformat(str(last_activity).replace("Z", "+00:00").replace("+00:00", ""))
+            days_inactive = (datetime.utcnow() - last_dt).days
+        except (ValueError, TypeError):
+            pass
+
+    is_dormant = days_inactive is not None and days_inactive > _DORMANCY_DAYS
+
+    return {
+        "check": "Dormancy/reactivation detection",
+        "classification": "rule",
+        "status": "completed",
+        "application_status": status,
+        "days_since_last_activity": days_inactive,
+        "dormancy_threshold_days": _DORMANCY_DAYS,
+        "is_dormant": is_dormant,
+    }
+
+
+def _check_threshold_breach(app: Dict, alerts: List[Dict]) -> Dict[str, Any]:
+    """Check #6 (rule): Threshold breach detection.
+
+    Scans existing alerts for threshold-related types.
+    """
+    threshold_alerts = [
+        a for a in alerts
+        if (a.get("alert_type") or "").lower() in ("threshold_breach", "volume_alert", "limit_exceeded")
+    ]
+    return {
+        "check": "Threshold breach detection",
+        "classification": "rule",
+        "status": "completed",
+        "threshold_breaches_found": len(threshold_alerts),
+        "breaches": [{
+            "alert_id": a.get("id"),
+            "type": a.get("alert_type"),
+            "severity": a.get("severity"),
+            "summary": a.get("summary"),
+        } for a in threshold_alerts[:5]],
+    }
+
+
+def _score_velocity_anomaly(rule_checks: List[Dict]) -> Dict[str, Any]:
+    """Check #7 (hybrid): Velocity anomaly scoring.
+
+    Synthesises rule-check outputs into a velocity anomaly score.
+    In degraded mode, relies on dormancy and threshold breach signals.
+    """
+    score = 0.0
+    for cr in rule_checks:
+        if cr.get("is_dormant"):
+            score += 0.3
+        if cr.get("threshold_breaches_found", 0) > 0:
+            score += min(cr["threshold_breaches_found"] * 0.15, 0.4)
+        if cr.get("deviation_pct") is not None:
+            dev = abs(cr["deviation_pct"])
+            if dev > _VOLUME_DEVIATION_ALERT:
+                score += 0.3
+            elif dev > _VOLUME_DEVIATION_WARN:
+                score += 0.15
+
+    score = min(score, 1.0)
+    return {
+        "check": "Velocity anomaly scoring",
+        "classification": "hybrid",
+        "status": "completed",
+        "velocity_score": round(score, 3),
+        "anomaly_detected": score >= 0.4,
+    }
+
+
+def _score_peer_deviation(app: Dict) -> Dict[str, Any]:
+    """Check #8 (hybrid): Peer group deviation analysis.
+
+    Without a peer benchmark table, reports the entity's sector/risk as its peer group.
+    Degraded mode.
+    """
+    return {
+        "check": "Peer group deviation analysis",
+        "classification": "hybrid",
+        "status": "degraded",
+        "mode": "no_peer_data",
+        "sector": app.get("sector"),
+        "risk_level": app.get("risk_level"),
+        "peer_deviation_score": None,
+        "deviation_detected": False,
+    }
+
+
+def _detect_temporal_drift(app: Dict, rule_checks: List[Dict]) -> Dict[str, Any]:
+    """Check #9 (hybrid): Temporal pattern drift detection.
+
+    Checks for time-based patterns: dormancy, reactivation, seasonal anomalies.
+    """
+    dormancy_check = next((c for c in rule_checks if "ormancy" in c.get("check", "")), {})
+    is_dormant = dormancy_check.get("is_dormant", False)
+    days_inactive = dormancy_check.get("days_since_last_activity")
+
+    drift_signals = []
+    if is_dormant:
+        drift_signals.append("dormancy_detected")
+    if days_inactive and days_inactive > 365:
+        drift_signals.append("prolonged_inactivity")
+
+    return {
+        "check": "Temporal pattern drift detection",
+        "classification": "hybrid",
+        "status": "completed",
+        "drift_signals": drift_signals,
+        "temporal_drift_detected": len(drift_signals) > 0,
+    }
+
+
+def _compute_multi_dimensional_drift(rule_checks: List[Dict], hybrid_checks: List[Dict]) -> Dict[str, Any]:
+    """Check #10 (hybrid): Multi-dimensional risk drift scoring.
+
+    Weighted aggregation of all drift signals into a single 0-1 score.
+    """
+    score = 0.0
+    weights = {
+        "velocity": 0.25,
+        "dormancy": 0.20,
+        "threshold": 0.20,
+        "geographic": 0.15,
+        "temporal": 0.10,
+        "peer": 0.10,
+    }
+
+    for cr in rule_checks + hybrid_checks:
+        check = cr.get("check", "").lower()
+        if "velocity" in check:
+            score += weights["velocity"] * cr.get("velocity_score", 0)
+        if "dormancy" in check and cr.get("is_dormant"):
+            score += weights["dormancy"]
+        if "threshold" in check and cr.get("threshold_breaches_found", 0) > 0:
+            score += weights["threshold"] * min(cr["threshold_breaches_found"] / 3, 1.0)
+        if "geographic" in check and cr.get("deviation_detected"):
+            score += weights["geographic"]
+        if "temporal" in check and cr.get("temporal_drift_detected"):
+            score += weights["temporal"]
+        if "peer" in check and cr.get("deviation_detected"):
+            score += weights["peer"]
+
+    score = min(score, 1.0)
+    if score >= 0.5:
+        direction = "increasing"
+    elif score >= 0.2:
+        direction = "stable"
+    else:
+        direction = "stable"
+
+    return {
+        "check": "Multi-dimensional risk drift scoring",
+        "classification": "hybrid",
+        "status": "completed",
+        "drift_score": round(score, 3),
+        "drift_direction": direction,
+        "drift_detected": score >= 0.3,
+    }
+
+
+def _generate_drift_narrative(app: Dict, drift_score: Dict, all_checks: List[Dict]) -> Dict[str, Any]:
+    """Check #11 (hybrid): Drift narrative and recommendation.
+
+    Template-based narrative summarising drift findings.
+    """
+    company = app.get("company_name", "entity")
+    score = drift_score.get("drift_score", 0)
+    direction = drift_score.get("drift_direction", "stable")
+
+    issues = []
+    for cr in all_checks:
+        if cr.get("is_dormant"):
+            issues.append("account dormancy detected")
+        if cr.get("threshold_breaches_found", 0) > 0:
+            issues.append(f"{cr['threshold_breaches_found']} threshold breach(es)")
+        if cr.get("temporal_drift_detected"):
+            issues.append("temporal pattern drift")
+        if cr.get("anomaly_detected"):
+            issues.append("velocity anomaly")
+
+    if not issues:
+        narrative = f"No significant risk drift detected for {company}. Risk profile remains stable."
+        recommendation = "continue_monitoring"
+    elif score >= 0.5:
+        narrative = (
+            f"Elevated risk drift detected for {company} (score: {score:.2f}, direction: {direction}). "
+            f"Issues: {'; '.join(issues)}. Recommend enhanced due diligence."
+        )
+        recommendation = "enhanced_due_diligence"
+    else:
+        narrative = (
+            f"Minor risk drift signals for {company} (score: {score:.2f}). "
+            f"Issues: {'; '.join(issues)}. Recommend continued monitoring with attention."
+        )
+        recommendation = "continue_monitoring_with_attention"
+
+    return {
+        "check": "Drift narrative and recommendation",
+        "classification": "hybrid",
+        "status": "completed",
+        "narrative": narrative,
+        "recommendation": recommendation,
+        "issues_summarised": issues,
+    }
 
 
 def execute_behaviour_risk_drift(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 8: Synthetic behaviour and risk drift summary."""
+    """Agent 8: Behaviour & Risk Drift — 11 checks (6 rule + 5 hybrid).
+
+    Compares transaction volume, geographic activity, counterparty concentration,
+    product usage against onboarding baseline. Degraded mode where no transaction
+    data is available.
+    """
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
+    monitoring = _get_monitoring_data(db_path, application_id)
+    alerts = monitoring["alerts"]
     run_id = str(uuid4())
 
-    output = _base_output(AgentType.BEHAVIOUR_RISK_DRIFT, "Agent 8: Behaviour & Risk Drift", application_id, run_id)
-    output.update({
-        "status": AgentStatus.CLEAN.value,
-        "confidence_score": 0.85,
-        "findings": [{
+    # 6 rule checks
+    c1 = _check_volume_baseline(app)
+    c2 = _check_geographic_deviation(app)
+    c3 = _check_counterparty_concentration(app)
+    c4 = _check_product_usage_deviation(app)
+    c5 = _check_dormancy(app)
+    c6 = _check_threshold_breach(app, alerts)
+    rule_checks = [c1, c2, c3, c4, c5, c6]
+
+    # 5 hybrid checks
+    c7 = _score_velocity_anomaly(rule_checks)
+    c8 = _score_peer_deviation(app)
+    c9 = _detect_temporal_drift(app, rule_checks)
+    c10 = _compute_multi_dimensional_drift(rule_checks, [c7, c8, c9])
+    c11 = _generate_drift_narrative(app, c10, rule_checks + [c7, c8, c9])
+    hybrid_checks = [c7, c8, c9, c10, c11]
+    all_checks = rule_checks + hybrid_checks
+
+    drift_score = c10.get("drift_score", 0)
+    drift_detected = c10.get("drift_detected", False)
+    drift_direction = c10.get("drift_direction", "stable")
+
+    if drift_score >= 0.5:
+        overall_status = AgentStatus.ISSUES_FOUND.value
+    elif drift_score >= 0.3:
+        overall_status = AgentStatus.INCONCLUSIVE.value
+    else:
+        overall_status = AgentStatus.CLEAN.value
+
+    escalation_flag = drift_score >= 0.5
+    findings = []
+    if drift_detected:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "risk_drift",
+            "title": f"Risk drift detected (score: {drift_score:.2f})",
+            "description": c11.get("narrative", ""),
+            "severity": Severity.HIGH.value if drift_score >= 0.5 else Severity.MEDIUM.value,
+            "confidence": 0.80,
+            "source": "hybrid_drift_analysis",
+            "evidence_refs": [],
+        })
+    else:
+        findings.append({
             "finding_id": str(uuid4())[:12],
             "category": "risk_drift",
             "title": "No significant risk drift detected",
-            "description": f"Risk profile for {app.get('company_name', 'entity')} remains stable.",
+            "description": c11.get("narrative", f"Risk profile for {app.get('company_name', 'entity')} remains stable."),
             "severity": Severity.INFO.value,
             "confidence": 0.85,
-            "source": "synthetic_risk_drift_summary",
+            "source": "hybrid_drift_analysis",
             "evidence_refs": [],
-        }],
+        })
+
+    output = _base_output(AgentType.BEHAVIOUR_RISK_DRIFT, "Agent 8: Behaviour & Risk Drift", application_id, run_id)
+    output.update({
+        "status": overall_status,
+        "confidence_score": 0.80 if any(c.get("status") == "degraded" for c in all_checks) else 0.85,
+        "findings": findings,
         "evidence": [{
             "evidence_id": str(uuid4())[:12],
             "evidence_type": "behaviour_analysis",
-            "source": "synthetic_risk_drift_summary",
-            "content_summary": "Stable risk profile",
-            "reference": f"BRD-{str(uuid4())[:8]}",
+            "source": "drift_detection_pipeline",
+            "content_summary": f"Drift analysis for {app.get('company_name', '')} — {len(all_checks)} checks",
+            "reference": f"BRD-{run_id[:8]}",
             "verified": True,
         }],
-        "detected_issues": [],
+        "detected_issues": c11.get("issues_summarised", []),
         "risk_indicators": [],
-        "recommendation": "No action required",
-        "escalation_flag": False,
-        "escalation_reason": None,
-        "risk_drift_detected": False,
-        "drift_direction": "stable",
-        "drift_magnitude": 0.0,
+        "recommendation": c11.get("recommendation", "continue_monitoring"),
+        "escalation_flag": escalation_flag,
+        "escalation_reason": "Elevated risk drift score" if escalation_flag else None,
+        "checks_performed": all_checks,
+        "risk_drift_detected": drift_detected,
+        "drift_direction": drift_direction,
+        "drift_magnitude": drift_score,
+        "volume_baseline_comparison": c1,
+        "geographic_deviation": c2,
+        "counterparty_concentration": c3,
+        "product_usage_deviation": c4,
+        "dormancy_status": c5,
+        "threshold_breaches": c6.get("breaches", []),
+        "velocity_anomaly_score": c7.get("velocity_score"),
+        "peer_group_deviation": c8,
+        "temporal_pattern_drift": c9,
+        "multi_dimensional_drift_score": drift_score,
+        "drift_narrative": c11.get("narrative"),
+        "recommended_action": c11.get("recommendation"),
+    })
+    return output
+
+
+# ═══════════════════════════════════════════════════════════
+# AGENT 7: Adverse Media & PEP Monitoring (12 checks: 6R + 4H + 2AI)
+# ═══════════════════════════════════════════════════════════
+
+_MEDIA_SOURCE_CREDIBILITY = {
+    "government": 1.0,
+    "regulatory": 0.95,
+    "court_records": 0.90,
+    "major_news": 0.85,
+    "financial_press": 0.80,
+    "industry_publication": 0.70,
+    "blog": 0.40,
+    "social_media": 0.30,
+    "unknown": 0.50,
+}
+
+_MEDIA_SEVERITY_MATRIX = {
+    "sanctions": 4,
+    "money_laundering": 4,
+    "terrorism_financing": 4,
+    "fraud": 3,
+    "corruption": 3,
+    "tax_evasion": 3,
+    "regulatory_action": 2,
+    "litigation": 2,
+    "negative_press": 1,
+    "unknown": 1,
+}
+
+
+def _retrieve_new_media(app: Dict, alerts: List[Dict]) -> Dict[str, Any]:
+    """Check #1 (rule): New adverse media retrieval.
+
+    Scans monitoring_alerts for media-type alerts. Without a live media feed,
+    this reads stored alert data.
+    """
+    media_alerts = [
+        a for a in alerts
+        if (a.get("alert_type") or "").lower() in ("adverse_media", "media_alert", "news_alert")
+    ]
+    return {
+        "check": "New adverse media retrieval",
+        "classification": "rule",
+        "status": "completed",
+        "media_alerts_found": len(media_alerts),
+        "hits": [{
+            "alert_id": a.get("id"),
+            "summary": a.get("summary"),
+            "severity": a.get("severity"),
+            "source": a.get("source_reference"),
+            "status": a.get("status"),
+        } for a in media_alerts[:10]],
+    }
+
+
+def _detect_pep_changes(app: Dict, directors: List[Dict], ubos: List[Dict]) -> Dict[str, Any]:
+    """Check #2 (rule): PEP status change detection.
+
+    Compares current PEP flags on directors/UBOs against stored declarations.
+    """
+    pep_persons = []
+    for person_list, role in [(directors, "director"), (ubos, "ubo")]:
+        for p in person_list:
+            is_pep = str(p.get("is_pep", "No")).lower() in ("yes", "true", "1")
+            if is_pep:
+                pep_persons.append({
+                    "name": p.get("full_name") or f"{p.get('first_name', '')} {p.get('last_name', '')}".strip(),
+                    "role": role,
+                    "pep_status": "active",
+                })
+
+    return {
+        "check": "PEP status change detection",
+        "classification": "rule",
+        "status": "completed",
+        "current_pep_count": len(pep_persons),
+        "pep_persons": pep_persons,
+        "changes_detected": [],  # No historical PEP snapshots yet — report current state
+    }
+
+
+def _check_sanctions_updates(app: Dict, alerts: List[Dict]) -> Dict[str, Any]:
+    """Check #3 (rule): Sanctions list update check.
+
+    Scans alerts for sanctions-related entries.
+    """
+    sanctions_alerts = [
+        a for a in alerts
+        if (a.get("alert_type") or "").lower() in ("sanctions", "sanctions_hit", "sanctions_update")
+    ]
+    return {
+        "check": "Sanctions list update check",
+        "classification": "rule",
+        "status": "completed",
+        "sanctions_alerts_found": len(sanctions_alerts),
+        "hits": [{
+            "alert_id": a.get("id"),
+            "summary": a.get("summary"),
+            "severity": a.get("severity"),
+        } for a in sanctions_alerts[:5]],
+    }
+
+
+def _score_media_credibility(media_check: Dict) -> Dict[str, Any]:
+    """Check #4 (rule): Media source credibility scoring."""
+    scored_hits = []
+    for hit in media_check.get("hits", []):
+        source = (hit.get("source") or "unknown").lower()
+        credibility = _MEDIA_SOURCE_CREDIBILITY.get(source, _MEDIA_SOURCE_CREDIBILITY["unknown"])
+        scored_hits.append({**hit, "credibility_score": credibility, "source_category": source})
+
+    return {
+        "check": "Media source credibility scoring",
+        "classification": "rule",
+        "status": "completed",
+        "scored_hits": scored_hits,
+        "high_credibility_count": sum(1 for h in scored_hits if h["credibility_score"] >= 0.7),
+    }
+
+
+def _deduplicate_alerts(media_check: Dict, sanctions_check: Dict, pep_check: Dict) -> Dict[str, Any]:
+    """Check #5 (rule): Alert deduplication.
+
+    Removes duplicate alert IDs across media, sanctions, and PEP checks.
+    """
+    all_ids = set()
+    total_raw = 0
+    for check in [media_check, sanctions_check]:
+        for hit in check.get("hits", []):
+            aid = hit.get("alert_id")
+            if aid:
+                all_ids.add(str(aid))
+            total_raw += 1
+
+    deduplicated_count = len(all_ids)
+    duplicates_removed = max(0, total_raw - deduplicated_count)
+
+    return {
+        "check": "Alert deduplication",
+        "classification": "rule",
+        "status": "completed",
+        "total_raw_alerts": total_raw,
+        "deduplicated_count": deduplicated_count,
+        "duplicates_removed": duplicates_removed,
+    }
+
+
+def _compare_historical_media(app: Dict, media_check: Dict) -> Dict[str, Any]:
+    """Check #6 (rule): Historical media comparison.
+
+    Compares current media hits against prescreening baseline.
+    """
+    prescreening_raw = app.get("prescreening_data") or "{}"
+    try:
+        prescreening = json.loads(prescreening_raw) if isinstance(prescreening_raw, str) else (prescreening_raw or {})
+    except (json.JSONDecodeError, TypeError):
+        prescreening = {}
+
+    baseline_report = prescreening.get("screening_report", {})
+    baseline_media = baseline_report.get("adverse_media", {})
+    baseline_count = len(baseline_media.get("hits", [])) if isinstance(baseline_media, dict) else 0
+    current_count = media_check.get("media_alerts_found", 0)
+
+    return {
+        "check": "Historical media comparison",
+        "classification": "rule",
+        "status": "completed" if baseline_report else "no_baseline",
+        "baseline_media_count": baseline_count,
+        "current_media_count": current_count,
+        "new_since_baseline": max(0, current_count - baseline_count),
+        "has_baseline": bool(baseline_report),
+    }
+
+
+def _assess_media_severity(media_check: Dict, credibility_check: Dict) -> Dict[str, Any]:
+    """Check #7 (hybrid): Media severity assessment.
+
+    Combines hit type with source credibility for severity scoring.
+    """
+    scored = []
+    for hit in credibility_check.get("scored_hits", []):
+        summary = (hit.get("summary") or "").lower()
+        # Infer category from summary keywords
+        category = "unknown"
+        for key, _ in sorted(_MEDIA_SEVERITY_MATRIX.items(), key=lambda x: -x[1]):
+            if key.replace("_", " ") in summary:
+                category = key
+                break
+
+        base_severity = _MEDIA_SEVERITY_MATRIX.get(category, 1)
+        credibility = hit.get("credibility_score", 0.5)
+        adjusted_severity = round(base_severity * credibility, 2)
+
+        scored.append({
+            **hit,
+            "inferred_category": category,
+            "base_severity": base_severity,
+            "adjusted_severity": adjusted_severity,
+        })
+
+    max_sev = max((s["adjusted_severity"] for s in scored), default=0)
+    return {
+        "check": "Media severity assessment",
+        "classification": "hybrid",
+        "status": "completed",
+        "severity_scored_hits": scored,
+        "max_adjusted_severity": max_sev,
+    }
+
+
+def _score_pep_proximity(pep_check: Dict, ubos: List[Dict], directors: List[Dict]) -> Dict[str, Any]:
+    """Check #8 (hybrid): PEP proximity scoring.
+
+    Scores PEP exposure based on ownership percentage and role.
+    """
+    scores = []
+    for pep in pep_check.get("pep_persons", []):
+        name = pep.get("name", "")
+        role = pep.get("role", "")
+        ownership_pct = 0
+
+        if role == "ubo":
+            for u in ubos:
+                full_name = u.get("full_name", "")
+                if full_name and full_name.lower() == name.lower():
+                    try:
+                        ownership_pct = float(u.get("ownership_pct", 0) or 0)
+                    except (ValueError, TypeError):
+                        pass
+
+        # Proximity score: higher for UBOs with large ownership
+        base = 0.6 if role == "director" else 0.5
+        ownership_factor = min(ownership_pct / 100.0, 1.0) * 0.4 if role == "ubo" else 0
+        proximity = min(base + ownership_factor, 1.0)
+
+        scores.append({
+            "name": name,
+            "role": role,
+            "ownership_pct": ownership_pct,
+            "proximity_score": round(proximity, 3),
+        })
+
+    return {
+        "check": "PEP proximity scoring",
+        "classification": "hybrid",
+        "status": "completed",
+        "pep_proximity_scores": scores,
+        "max_proximity": max((s["proximity_score"] for s in scores), default=0),
+    }
+
+
+def _resolve_entities(media_check: Dict, pep_check: Dict, app: Dict) -> Dict[str, Any]:
+    """Check #9 (hybrid): Entity resolution for media hits.
+
+    Attempts to match media/alert subjects to known persons in the application.
+    """
+    known_names = set()
+    company_name = (app.get("company_name") or "").lower()
+    if company_name:
+        known_names.add(company_name)
+
+    resolved = []
+    unresolved = []
+    for hit in media_check.get("hits", []):
+        summary = (hit.get("summary") or "").lower()
+        matched = company_name and company_name in summary
+        entry = {"alert_id": hit.get("alert_id"), "summary": hit.get("summary"), "matched": matched}
+        if matched:
+            resolved.append(entry)
+        else:
+            unresolved.append(entry)
+
+    return {
+        "check": "Entity resolution for media hits",
+        "classification": "hybrid",
+        "status": "completed",
+        "resolved_count": len(resolved),
+        "unresolved_count": len(unresolved),
+        "resolved": resolved[:5],
+        "unresolved": unresolved[:5],
+    }
+
+
+def _aggregate_risk_signals(all_checks: List[Dict]) -> Dict[str, Any]:
+    """Check #10 (hybrid): Combined risk signal aggregation.
+
+    Produces a combined risk signal from all monitoring checks.
+    """
+    signals = {
+        "media_risk": 0,
+        "pep_risk": 0,
+        "sanctions_risk": 0,
+    }
+
+    for cr in all_checks:
+        check = cr.get("check", "").lower()
+        if "severity" in check:
+            signals["media_risk"] = max(signals["media_risk"], cr.get("max_adjusted_severity", 0))
+        if "pep proximity" in check:
+            signals["pep_risk"] = cr.get("max_proximity", 0) * 4  # scale to 0-4
+        if "sanctions" in check:
+            signals["sanctions_risk"] = 4.0 if cr.get("sanctions_alerts_found", 0) > 0 else 0
+
+    combined = max(signals.values())
+    if combined >= 3:
+        risk_level = "critical"
+    elif combined >= 2:
+        risk_level = "high"
+    elif combined >= 1:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    return {
+        "check": "Combined risk signal aggregation",
+        "classification": "hybrid",
+        "status": "completed",
+        "signals": signals,
+        "combined_score": round(combined, 2),
+        "risk_level": risk_level,
+    }
+
+
+def _generate_media_narrative(app: Dict, all_checks: List[Dict]) -> Dict[str, Any]:
+    """Check #11 (ai): Media narrative summarisation.
+
+    Uses ClaudeClient when available; falls back to template-based narrative.
+    """
+    company = app.get("company_name", "entity")
+
+    # Collect key facts for narrative
+    media_count = 0
+    pep_count = 0
+    sanctions_count = 0
+    risk_level = "low"
+    for cr in all_checks:
+        check = cr.get("check", "").lower()
+        if "media retrieval" in check:
+            media_count = cr.get("media_alerts_found", 0)
+        if "pep status" in check:
+            pep_count = cr.get("current_pep_count", 0)
+        if "sanctions" in check:
+            sanctions_count = cr.get("sanctions_alerts_found", 0)
+        if "signal aggregation" in check:
+            risk_level = cr.get("risk_level", "low")
+
+    # Try AI narrative
+    narrative = None
+    ai_used = False
+    if media_count > 0 or pep_count > 0 or sanctions_count > 0:
+        try:
+            from claude_client import ClaudeClient
+            client = ClaudeClient()
+            prompt = (
+                f"Write a concise monitoring narrative for {company}. "
+                f"Media alerts: {media_count}. PEP-exposed persons: {pep_count}. "
+                f"Sanctions alerts: {sanctions_count}. Overall risk: {risk_level}. "
+                f"Summarise the monitoring findings in 2-3 sentences for a compliance officer."
+            )
+            response = client.generate(prompt, max_tokens=300)
+            if response and isinstance(response, str) and len(response) > 10:
+                narrative = response.strip()
+                ai_used = True
+        except Exception:
+            pass
+
+    if not narrative:
+        if media_count == 0 and pep_count == 0 and sanctions_count == 0:
+            narrative = f"No new adverse media, PEP changes, or sanctions alerts detected for {company}. Monitoring scan is clean."
+        else:
+            parts = []
+            if media_count > 0:
+                parts.append(f"{media_count} adverse media alert(s)")
+            if pep_count > 0:
+                parts.append(f"{pep_count} PEP-exposed person(s)")
+            if sanctions_count > 0:
+                parts.append(f"{sanctions_count} sanctions alert(s)")
+            narrative = f"Monitoring scan for {company} detected: {'; '.join(parts)}. Risk level: {risk_level}. Review recommended."
+
+    return {
+        "check": "Media narrative summarisation",
+        "classification": "ai",
+        "status": "completed",
+        "narrative": narrative,
+        "ai_used": ai_used,
+    }
+
+
+def _determine_monitoring_disposition(app: Dict, risk_signal: Dict, all_checks: List[Dict]) -> Dict[str, Any]:
+    """Check #12 (ai): Monitoring alert disposition.
+
+    Uses ClaudeClient when available; falls back to rule-based disposition.
+    """
+    combined_score = risk_signal.get("combined_score", 0)
+    risk_level = risk_signal.get("risk_level", "low")
+
+    # Rule-based disposition (fallback and default)
+    if combined_score >= 3:
+        disposition = "ESCALATE"
+        reason = "Critical risk signals detected — immediate compliance review required"
+    elif combined_score >= 2:
+        disposition = "REVIEW"
+        reason = "Elevated risk signals — compliance officer review recommended"
+    elif combined_score >= 1:
+        disposition = "MONITOR"
+        reason = "Minor risk signals — continue enhanced monitoring"
+    else:
+        disposition = "CLEAR"
+        reason = "No significant risk signals — standard monitoring continues"
+
+    ai_used = False
+    # Try AI for nuanced disposition on elevated cases
+    if combined_score >= 2:
+        try:
+            from claude_client import ClaudeClient
+            client = ClaudeClient()
+            company = app.get("company_name", "entity")
+            prompt = (
+                f"As a compliance monitoring system, determine the disposition for {company}. "
+                f"Combined risk score: {combined_score:.1f}/4.0. Risk level: {risk_level}. "
+                f"Signals: {json.dumps(risk_signal.get('signals', {}))}. "
+                f"Respond with one of: ESCALATE, REVIEW, MONITOR, CLEAR. "
+                f"Then provide a one-sentence reason."
+            )
+            response = client.generate(prompt, max_tokens=150)
+            if response and isinstance(response, str):
+                resp_upper = response.strip().upper()
+                for d in ("ESCALATE", "REVIEW", "MONITOR", "CLEAR"):
+                    if resp_upper.startswith(d):
+                        disposition = d
+                        reason = response.strip()
+                        ai_used = True
+                        break
+        except Exception:
+            pass
+
+    return {
+        "check": "Monitoring alert disposition",
+        "classification": "ai",
+        "status": "completed",
+        "disposition": disposition,
+        "reason": reason,
+        "combined_risk_score": combined_score,
+        "ai_used": ai_used,
+    }
+
+
+def execute_adverse_media_pep(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Agent 7: Adverse Media & PEP Monitoring — 12 checks (6R + 4H + 2AI).
+
+    Retrieves new media/PEP/sanctions signals, deduplicates, scores severity,
+    resolves entities; AI generates narrative summary and disposition.
+    """
+    db_path = context.get("db_path", "")
+    data = _get_app_data(db_path, application_id)
+    app = data["application"]
+    directors = data["directors"]
+    ubos = data["ubos"]
+    monitoring = _get_monitoring_data(db_path, application_id)
+    alerts = monitoring["alerts"]
+    run_id = str(uuid4())
+
+    # 6 rule checks
+    c1 = _retrieve_new_media(app, alerts)
+    c2 = _detect_pep_changes(app, directors, ubos)
+    c3 = _check_sanctions_updates(app, alerts)
+    c4 = _score_media_credibility(c1)
+    c5 = _deduplicate_alerts(c1, c3, c2)
+    c6 = _compare_historical_media(app, c1)
+    rule_checks = [c1, c2, c3, c4, c5, c6]
+
+    # 4 hybrid checks
+    c7 = _assess_media_severity(c1, c4)
+    c8 = _score_pep_proximity(c2, ubos, directors)
+    c9 = _resolve_entities(c1, c2, app)
+    c10 = _aggregate_risk_signals(rule_checks + [c7, c8, c9])
+    hybrid_checks = [c7, c8, c9, c10]
+
+    # 2 AI checks
+    c11 = _generate_media_narrative(app, rule_checks + hybrid_checks)
+    c12 = _determine_monitoring_disposition(app, c10, rule_checks + hybrid_checks)
+    ai_checks = [c11, c12]
+
+    all_checks = rule_checks + hybrid_checks + ai_checks
+
+    combined_score = c10.get("combined_score", 0)
+    disposition = c12.get("disposition", "CLEAR")
+
+    if disposition == "ESCALATE":
+        overall_status = AgentStatus.ISSUES_FOUND.value
+        alert_generated = True
+        alert_severity = Severity.CRITICAL
+    elif disposition == "REVIEW":
+        overall_status = AgentStatus.INCONCLUSIVE.value
+        alert_generated = True
+        alert_severity = Severity.HIGH
+    elif disposition == "MONITOR":
+        overall_status = AgentStatus.INCONCLUSIVE.value
+        alert_generated = combined_score > 0
+        alert_severity = Severity.MEDIUM if combined_score > 0 else None
+    else:
+        overall_status = AgentStatus.CLEAN.value
+        alert_generated = False
+        alert_severity = None
+
+    findings = []
+    if c1.get("media_alerts_found", 0) > 0:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "adverse_media",
+            "title": f"{c1['media_alerts_found']} adverse media alert(s) found",
+            "description": c11.get("narrative", ""),
+            "severity": Severity.HIGH.value if combined_score >= 2 else Severity.MEDIUM.value,
+            "confidence": 0.85,
+            "source": "monitoring_pipeline",
+            "evidence_refs": [],
+        })
+    if c2.get("current_pep_count", 0) > 0:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "pep_monitoring",
+            "title": f"{c2['current_pep_count']} PEP-exposed person(s)",
+            "description": f"Max proximity score: {c8.get('max_proximity', 0):.2f}",
+            "severity": Severity.HIGH.value if c8.get("max_proximity", 0) >= 0.7 else Severity.MEDIUM.value,
+            "confidence": 0.85,
+            "source": "monitoring_pipeline",
+            "evidence_refs": [],
+        })
+    if c3.get("sanctions_alerts_found", 0) > 0:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "sanctions",
+            "title": f"{c3['sanctions_alerts_found']} sanctions alert(s)",
+            "description": "Sanctions list match detected — immediate review required",
+            "severity": Severity.CRITICAL.value,
+            "confidence": 0.90,
+            "source": "monitoring_pipeline",
+            "evidence_refs": [],
+        })
+    if not findings:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "media_monitoring",
+            "title": "No new adverse signals detected",
+            "description": c11.get("narrative", "Clean monitoring scan."),
+            "severity": Severity.INFO.value,
+            "confidence": 0.90,
+            "source": "monitoring_pipeline",
+            "evidence_refs": [],
+        })
+
+    output = _base_output(AgentType.ADVERSE_MEDIA_PEP_MONITORING, "Agent 7: Adverse Media & PEP Monitoring", application_id, run_id)
+    output.update({
+        "status": overall_status,
+        "confidence_score": 0.85,
+        "findings": findings,
+        "evidence": [{
+            "evidence_id": str(uuid4())[:12],
+            "evidence_type": "monitoring_scan",
+            "source": "monitoring_pipeline",
+            "content_summary": f"Monitoring scan for {app.get('company_name', '')} — {len(all_checks)} checks",
+            "reference": f"MON-{run_id[:8]}",
+            "verified": True,
+        }],
+        "detected_issues": [f.get("title") for f in findings if f.get("severity") != Severity.INFO.value],
+        "risk_indicators": [],
+        "recommendation": c12.get("reason", "No action required"),
+        "escalation_flag": disposition == "ESCALATE",
+        "escalation_reason": c12.get("reason") if disposition == "ESCALATE" else None,
+        "checks_performed": all_checks,
+        "new_media_hits": c1.get("hits", []),
+        "pep_status_changes": c2.get("changes_detected", []),
+        "sanctions_updates": c3.get("hits", []),
+        "source_credibility_scores": c4.get("scored_hits", []),
+        "deduplicated_alert_count": c5.get("deduplicated_count", 0),
+        "historical_comparison": c6,
+        "media_severity_scores": c7.get("severity_scored_hits", []),
+        "pep_proximity_scores": c8.get("pep_proximity_scores", []),
+        "entity_resolution_results": c9.get("resolved", []) + c9.get("unresolved", []),
+        "combined_risk_signal": c10,
+        "narrative": c11.get("narrative"),
+        "disposition": c12,
+        "alert_generated": alert_generated,
+        "alert_severity": alert_severity.value if alert_severity else None,
     })
     return output
 
@@ -2292,43 +3734,587 @@ def execute_regulatory_impact(application_id: str, context: Dict[str, Any]) -> D
     return output
 
 
+# ═══════════════════════════════════════════════════════════
+# AGENT 10: Ongoing Compliance Review (11 checks: 7R + 2H + 2AI)
+# ═══════════════════════════════════════════════════════════
+
+_SCREENING_RECENCY_WARN_DAYS = 180
+_FILING_DEADLINES_MONTHS = {"annual_return": 12, "financial_statements": 18, "licence_renewal": 12}
+
+
+def _check_document_currency(documents: List[Dict]) -> Dict[str, Any]:
+    """Check #1 (rule): Document currency verification."""
+    now = datetime.utcnow()
+    results = []
+    for doc in documents:
+        doc_type = doc.get("document_type", "unknown")
+        status = doc.get("verification_status", "pending")
+        expiry_str = doc.get("expiry_date") or doc.get("valid_until")
+        days_to_expiry = None
+        is_current = True
+        if expiry_str:
+            try:
+                expiry = datetime.fromisoformat(str(expiry_str).replace("Z", "+00:00").replace("+00:00", ""))
+                days_to_expiry = (expiry - now).days
+                is_current = days_to_expiry > 0
+            except (ValueError, TypeError):
+                pass
+
+        results.append({
+            "document_id": doc.get("id"),
+            "document_type": doc_type,
+            "verification_status": status,
+            "days_to_expiry": days_to_expiry,
+            "is_current": is_current,
+        })
+
+    expired_count = sum(1 for r in results if not r["is_current"] and r["days_to_expiry"] is not None)
+    return {
+        "check": "Document currency verification",
+        "classification": "rule",
+        "status": "completed",
+        "total_documents": len(results),
+        "expired_count": expired_count,
+        "documents": results[:20],
+    }
+
+
+def _check_screening_recency(app: Dict) -> Dict[str, Any]:
+    """Check #2 (rule): Screening recency check."""
+    prescreening_raw = app.get("prescreening_data") or "{}"
+    try:
+        prescreening = json.loads(prescreening_raw) if isinstance(prescreening_raw, str) else (prescreening_raw or {})
+    except (json.JSONDecodeError, TypeError):
+        prescreening = {}
+
+    screening_report = prescreening.get("screening_report", {})
+    screened_at = screening_report.get("screened_at") or screening_report.get("timestamp")
+    days = None
+    if screened_at:
+        try:
+            dt = datetime.fromisoformat(str(screened_at).replace("Z", "+00:00").replace("+00:00", ""))
+            days = (datetime.utcnow() - dt).days
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        "check": "Screening recency check",
+        "classification": "rule",
+        "status": "completed" if days is not None else "no_screening_data",
+        "days_since_screening": days,
+        "is_recent": days is not None and days <= _SCREENING_RECENCY_WARN_DAYS,
+        "threshold_days": _SCREENING_RECENCY_WARN_DAYS,
+    }
+
+
+def _check_policy_applicability(app: Dict) -> Dict[str, Any]:
+    """Check #3 (rule): Policy change applicability check.
+
+    Without a policy change feed, checks entity attributes against known
+    high-risk policy triggers.
+    """
+    triggers = []
+    country = (app.get("country") or "").lower()
+    sector = (app.get("sector") or "").lower()
+    risk_level = app.get("risk_level", "")
+
+    high_risk_jurisdictions = {"iran", "north korea", "myanmar", "syria", "cuba", "russia", "belarus"}
+    high_risk_sectors = {"cryptocurrency", "gambling", "cannabis", "weapons", "precious metals"}
+
+    if country in high_risk_jurisdictions:
+        triggers.append({"type": "jurisdiction", "detail": f"High-risk jurisdiction: {country}"})
+    if sector in high_risk_sectors:
+        triggers.append({"type": "sector", "detail": f"High-risk sector: {sector}"})
+    if risk_level in ("HIGH", "VERY_HIGH"):
+        triggers.append({"type": "risk_level", "detail": f"Elevated risk level: {risk_level}"})
+
+    return {
+        "check": "Policy change applicability check",
+        "classification": "rule",
+        "status": "completed",
+        "policy_triggers": triggers,
+        "trigger_count": len(triggers),
+    }
+
+
+def _check_condition_compliance(app: Dict, alerts: List[Dict]) -> Dict[str, Any]:
+    """Check #4 (rule): Condition compliance tracking.
+
+    Checks if any conditions were imposed during onboarding and whether they're met.
+    """
+    status = app.get("status", "")
+    conditions = []
+
+    # Check for conditional approval
+    if status == "conditionally_approved":
+        conditions.append({
+            "condition": "Conditional approval — outstanding conditions exist",
+            "met": False,
+        })
+
+    # Check for unresolved alerts that may represent conditions
+    condition_alerts = [
+        a for a in alerts
+        if (a.get("alert_type") or "").lower() in ("condition", "requirement", "action_required")
+        and a.get("status") in ("open", "pending", None)
+    ]
+    for a in condition_alerts:
+        conditions.append({
+            "condition": a.get("summary", "Unresolved condition"),
+            "met": False,
+            "alert_id": a.get("id"),
+        })
+
+    return {
+        "check": "Condition compliance tracking",
+        "classification": "rule",
+        "status": "completed",
+        "conditions_tracked": len(conditions),
+        "conditions_met": sum(1 for c in conditions if c.get("met")),
+        "conditions_unmet": sum(1 for c in conditions if not c.get("met")),
+        "conditions": conditions,
+    }
+
+
+def _check_filing_deadlines(app: Dict) -> Dict[str, Any]:
+    """Check #5 (rule): Filing deadline monitoring.
+
+    Estimates filing deadlines based on incorporation date.
+    """
+    deadlines = []
+    created_str = app.get("created_at") or app.get("submitted_at")
+    if created_str:
+        try:
+            created = datetime.fromisoformat(str(created_str).replace("Z", "+00:00").replace("+00:00", ""))
+            now = datetime.utcnow()
+            for filing_type, months in _FILING_DEADLINES_MONTHS.items():
+                # Estimate next deadline from creation
+                next_due = created.replace(year=created.year + (months // 12))
+                while next_due < now:
+                    next_due = next_due.replace(year=next_due.year + 1)
+                days_until = (next_due - now).days
+                deadlines.append({
+                    "filing_type": filing_type,
+                    "estimated_due": next_due.isoformat(),
+                    "days_until_due": days_until,
+                    "status": "overdue" if days_until < 0 else ("upcoming" if days_until < 30 else "ok"),
+                })
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        "check": "Filing deadline monitoring",
+        "classification": "rule",
+        "status": "completed" if deadlines else "no_date_available",
+        "deadlines": deadlines,
+        "overdue_count": sum(1 for d in deadlines if d["status"] == "overdue"),
+    }
+
+
+def _consolidate_inter_agent_findings(alerts: List[Dict], reviews: List[Dict]) -> Dict[str, Any]:
+    """Check #6 (rule): Inter-agent finding consolidation.
+
+    Aggregates findings from monitoring_alerts (populated by agents 6, 7, 8).
+    """
+    by_type = {}
+    for a in alerts:
+        atype = a.get("alert_type", "unknown")
+        by_type[atype] = by_type.get(atype, 0) + 1
+
+    open_count = sum(1 for a in alerts if a.get("status") in ("open", "pending", None))
+    reviewed_count = sum(1 for a in alerts if a.get("status") in ("reviewed", "resolved", "closed"))
+
+    return {
+        "check": "Inter-agent finding consolidation",
+        "classification": "rule",
+        "status": "completed",
+        "total_alerts": len(alerts),
+        "open_alerts": open_count,
+        "reviewed_alerts": reviewed_count,
+        "by_alert_type": by_type,
+        "total_reviews": len(reviews),
+        "pending_reviews": sum(1 for r in reviews if r.get("status") == "pending"),
+    }
+
+
+def _track_remediation(alerts: List[Dict]) -> Dict[str, Any]:
+    """Check #7 (rule): Remediation tracker status."""
+    remediation_items = []
+    for a in alerts:
+        if a.get("status") in ("open", "pending", None) and a.get("ai_recommendation"):
+            remediation_items.append({
+                "alert_id": a.get("id"),
+                "type": a.get("alert_type"),
+                "severity": a.get("severity"),
+                "recommendation": a.get("ai_recommendation"),
+                "status": "open",
+            })
+
+    return {
+        "check": "Remediation tracker status",
+        "classification": "rule",
+        "status": "completed",
+        "open_remediation_items": len(remediation_items),
+        "items": remediation_items[:10],
+    }
+
+
+def _rescore_compliance_risk(all_rule_checks: List[Dict], app: Dict) -> Dict[str, Any]:
+    """Check #8 (hybrid): Compliance risk re-scoring.
+
+    Weighted aggregation of all rule-check outputs into a compliance risk score.
+    """
+    score = 0.0
+    base_risk = {"LOW": 10, "MEDIUM": 30, "HIGH": 50, "VERY_HIGH": 70}
+    score += base_risk.get(app.get("risk_level", "MEDIUM"), 30)
+
+    for cr in all_rule_checks:
+        check = cr.get("check", "").lower()
+        if "document currency" in check:
+            expired = cr.get("expired_count", 0)
+            score += min(expired * 3, 10)
+        if "screening recency" in check:
+            if not cr.get("is_recent", True):
+                score += 10
+        if "policy" in check:
+            score += cr.get("trigger_count", 0) * 5
+        if "condition" in check:
+            score += cr.get("conditions_unmet", 0) * 5
+        if "filing" in check:
+            score += cr.get("overdue_count", 0) * 5
+        if "inter-agent" in check:
+            score += min(cr.get("open_alerts", 0) * 2, 10)
+        if "remediation" in check:
+            score += min(cr.get("open_remediation_items", 0) * 3, 10)
+
+    score = min(score, 100.0)
+    return {
+        "check": "Compliance risk re-scoring",
+        "classification": "hybrid",
+        "status": "completed",
+        "compliance_risk_score": round(score, 1),
+    }
+
+
+def _recommend_review_frequency(app: Dict, risk_score: Dict) -> Dict[str, Any]:
+    """Check #9 (hybrid): Review frequency recommendation."""
+    score = risk_score.get("compliance_risk_score", 30)
+
+    if score >= 70:
+        frequency = "monthly"
+        next_days = 30
+    elif score >= 50:
+        frequency = "quarterly"
+        next_days = 90
+    elif score >= 30:
+        frequency = "semi-annual"
+        next_days = 180
+    else:
+        frequency = "annual"
+        next_days = 365
+
+    next_review = (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0))
+    next_review = next_review.replace(day=1)  # Start of next period
+    from datetime import timedelta
+    next_review = next_review + timedelta(days=next_days)
+
+    return {
+        "check": "Review frequency recommendation",
+        "classification": "hybrid",
+        "status": "completed",
+        "recommended_frequency": frequency,
+        "next_review_due": next_review.isoformat() + "Z",
+        "compliance_risk_score": score,
+    }
+
+
+def _generate_compliance_narrative(app: Dict, all_checks: List[Dict]) -> Dict[str, Any]:
+    """Check #10 (ai): Compliance narrative generation.
+
+    Uses ClaudeClient when available; falls back to template narrative.
+    """
+    company = app.get("company_name", "entity")
+
+    # Gather key metrics
+    expired_docs = 0
+    open_alerts = 0
+    unmet_conditions = 0
+    risk_score = 30
+    for cr in all_checks:
+        check = cr.get("check", "").lower()
+        if "document currency" in check:
+            expired_docs = cr.get("expired_count", 0)
+        if "inter-agent" in check:
+            open_alerts = cr.get("open_alerts", 0)
+        if "condition" in check:
+            unmet_conditions = cr.get("conditions_unmet", 0)
+        if "compliance risk" in check:
+            risk_score = cr.get("compliance_risk_score", 30)
+
+    narrative = None
+    ai_used = False
+    if risk_score >= 50 or expired_docs > 0 or open_alerts > 0:
+        try:
+            from claude_client import ClaudeClient
+            client = ClaudeClient()
+            prompt = (
+                f"Write a compliance review narrative for {company}. "
+                f"Risk score: {risk_score}/100. Expired documents: {expired_docs}. "
+                f"Open alerts: {open_alerts}. Unmet conditions: {unmet_conditions}. "
+                f"Provide 2-3 sentences summarising compliance status for a compliance officer."
+            )
+            response = client.generate(prompt, max_tokens=300)
+            if response and isinstance(response, str) and len(response) > 10:
+                narrative = response.strip()
+                ai_used = True
+        except Exception:
+            pass
+
+    if not narrative:
+        if risk_score < 30 and expired_docs == 0 and open_alerts == 0:
+            narrative = f"{company} is in good compliance standing. No expired documents, no open alerts, and no outstanding conditions."
+        else:
+            issues = []
+            if expired_docs > 0:
+                issues.append(f"{expired_docs} expired document(s)")
+            if open_alerts > 0:
+                issues.append(f"{open_alerts} open alert(s)")
+            if unmet_conditions > 0:
+                issues.append(f"{unmet_conditions} unmet condition(s)")
+            narrative = (
+                f"Compliance review for {company} (risk score: {risk_score:.0f}/100). "
+                f"Issues: {'; '.join(issues) if issues else 'none'}. "
+                f"{'Review and remediation recommended.' if risk_score >= 50 else 'Continued monitoring recommended.'}"
+            )
+
+    return {
+        "check": "Compliance narrative generation",
+        "classification": "ai",
+        "status": "completed",
+        "narrative": narrative,
+        "ai_used": ai_used,
+    }
+
+
+def _recommend_escalation_closure(app: Dict, risk_score: Dict, all_checks: List[Dict]) -> Dict[str, Any]:
+    """Check #11 (ai): Escalation/closure recommendation.
+
+    Uses ClaudeClient for elevated cases; falls back to rule-based logic.
+    """
+    score = risk_score.get("compliance_risk_score", 30)
+
+    if score >= 70:
+        recommendation = "ESCALATE"
+        reason = "Compliance risk score exceeds threshold — senior review required"
+    elif score >= 50:
+        recommendation = "ENHANCED_MONITORING"
+        reason = "Elevated compliance risk — increase monitoring frequency"
+    elif score >= 30:
+        recommendation = "CONTINUE"
+        reason = "Moderate compliance status — standard monitoring continues"
+    else:
+        recommendation = "CLOSE_REVIEW"
+        reason = "Good compliance standing — review period can be closed"
+
+    ai_used = False
+    if score >= 50:
+        try:
+            from claude_client import ClaudeClient
+            client = ClaudeClient()
+            company = app.get("company_name", "entity")
+            prompt = (
+                f"As a compliance system, recommend an action for {company}. "
+                f"Compliance risk score: {score:.0f}/100. "
+                f"Choose: ESCALATE, ENHANCED_MONITORING, CONTINUE, or CLOSE_REVIEW. "
+                f"One sentence reason."
+            )
+            response = client.generate(prompt, max_tokens=150)
+            if response and isinstance(response, str):
+                resp_upper = response.strip().upper()
+                for r in ("ESCALATE", "ENHANCED_MONITORING", "CONTINUE", "CLOSE_REVIEW"):
+                    if resp_upper.startswith(r):
+                        recommendation = r
+                        reason = response.strip()
+                        ai_used = True
+                        break
+        except Exception:
+            pass
+
+    return {
+        "check": "Escalation/closure recommendation",
+        "classification": "ai",
+        "status": "completed",
+        "recommendation": recommendation,
+        "reason": reason,
+        "compliance_risk_score": score,
+        "ai_used": ai_used,
+    }
+
+
 def execute_ongoing_compliance(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 10: Synthetic ongoing compliance review summary."""
+    """Agent 10: Ongoing Compliance Review — 11 checks (7R + 2H + 2AI).
+
+    Verifies document currency, screening recency, policy applicability,
+    condition compliance, filing deadlines; consolidates inter-agent findings;
+    AI generates compliance narrative and escalation/closure recommendation.
+    """
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
+    documents = data["documents"]
+    monitoring = _get_monitoring_data(db_path, application_id)
+    alerts = monitoring["alerts"]
+    reviews = monitoring["reviews"]
     run_id = str(uuid4())
+
+    # 7 rule checks
+    c1 = _check_document_currency(documents)
+    c2 = _check_screening_recency(app)
+    c3 = _check_policy_applicability(app)
+    c4 = _check_condition_compliance(app, alerts)
+    c5 = _check_filing_deadlines(app)
+    c6 = _consolidate_inter_agent_findings(alerts, reviews)
+    c7 = _track_remediation(alerts)
+    rule_checks = [c1, c2, c3, c4, c5, c6, c7]
+
+    # 2 hybrid checks
+    c8 = _rescore_compliance_risk(rule_checks, app)
+    c9 = _recommend_review_frequency(app, c8)
+    hybrid_checks = [c8, c9]
+
+    # 2 AI checks
+    c10 = _generate_compliance_narrative(app, rule_checks + hybrid_checks)
+    c11 = _recommend_escalation_closure(app, c8, rule_checks + hybrid_checks)
+    ai_checks = [c10, c11]
+
+    all_checks = rule_checks + hybrid_checks + ai_checks
+
+    compliance_score = c8.get("compliance_risk_score", 30)
+    recommendation = c11.get("recommendation", "CONTINUE")
+
+    if recommendation == "ESCALATE":
+        overall_status = AgentStatus.ISSUES_FOUND.value
+        compliance_status = "non_compliant"
+    elif recommendation == "ENHANCED_MONITORING":
+        overall_status = AgentStatus.INCONCLUSIVE.value
+        compliance_status = "at_risk"
+    elif recommendation == "CONTINUE":
+        overall_status = AgentStatus.INCONCLUSIVE.value
+        compliance_status = "needs_attention"
+    else:
+        overall_status = AgentStatus.CLEAN.value
+        compliance_status = "compliant"
+
+    escalation_flag = recommendation == "ESCALATE"
+    findings = []
+    detected_issues = []
+
+    if c1.get("expired_count", 0) > 0:
+        issue = f"{c1['expired_count']} expired document(s)"
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "document_currency",
+            "title": issue,
+            "description": issue,
+            "severity": Severity.HIGH.value,
+            "confidence": 0.90,
+            "source": "compliance_review",
+            "evidence_refs": [],
+        })
+        detected_issues.append(issue)
+
+    if not c2.get("is_recent", True):
+        issue = f"Screening data is {c2.get('days_since_screening', '?')} days old (threshold: {_SCREENING_RECENCY_WARN_DAYS})"
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "screening_recency",
+            "title": "Screening data is stale",
+            "description": issue,
+            "severity": Severity.MEDIUM.value,
+            "confidence": 0.85,
+            "source": "compliance_review",
+            "evidence_refs": [],
+        })
+        detected_issues.append(issue)
+
+    if c4.get("conditions_unmet", 0) > 0:
+        issue = f"{c4['conditions_unmet']} unmet condition(s)"
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "condition_compliance",
+            "title": issue,
+            "description": issue,
+            "severity": Severity.HIGH.value,
+            "confidence": 0.85,
+            "source": "compliance_review",
+            "evidence_refs": [],
+        })
+        detected_issues.append(issue)
+
+    if c6.get("open_alerts", 0) > 0:
+        issue = f"{c6['open_alerts']} open alert(s) from monitoring agents"
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "inter_agent",
+            "title": issue,
+            "description": issue,
+            "severity": Severity.MEDIUM.value,
+            "confidence": 0.85,
+            "source": "compliance_review",
+            "evidence_refs": [],
+        })
+        detected_issues.append(issue)
+
+    if not findings:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "compliance_review",
+            "title": "Good compliance standing",
+            "description": c10.get("narrative", f"Compliance review for {app.get('company_name', 'entity')}: compliant."),
+            "severity": Severity.INFO.value,
+            "confidence": 0.90,
+            "source": "compliance_review",
+            "evidence_refs": [],
+        })
+
+    review_freq = c9.get("recommended_frequency", "annual")
+    next_review = c9.get("next_review_due")
 
     output = _base_output(AgentType.ONGOING_COMPLIANCE_REVIEW, "Agent 10: Ongoing Compliance Review", application_id, run_id)
     output.update({
-        "status": AgentStatus.CLEAN.value,
-        "confidence_score": 0.87,
-        "findings": [{
-            "finding_id": str(uuid4())[:12],
-            "category": "compliance_review",
-            "title": "Ongoing compliance status",
-            "description": f"Compliance review for {app.get('company_name', 'entity')}: compliant.",
-            "severity": Severity.INFO.value,
-            "confidence": 0.87,
-            "source": "synthetic_compliance_review",
-            "evidence_refs": [],
-        }],
+        "status": overall_status,
+        "confidence_score": 0.85,
+        "findings": findings,
         "evidence": [{
             "evidence_id": str(uuid4())[:12],
             "evidence_type": "compliance_check",
-            "source": "synthetic_compliance_review",
-            "content_summary": "Compliant status",
-            "reference": f"OCR-{str(uuid4())[:8]}",
+            "source": "compliance_review_pipeline",
+            "content_summary": f"Compliance review for {app.get('company_name', '')} — {len(all_checks)} checks",
+            "reference": f"OCR-{run_id[:8]}",
             "verified": True,
         }],
-        "detected_issues": [],
+        "detected_issues": detected_issues,
         "risk_indicators": [],
-        "recommendation": "Maintain current monitoring",
-        "escalation_flag": False,
-        "escalation_reason": None,
-        "compliance_status": "compliant",
-        "next_review_due": None,
-        "recommended_review_frequency": "annual" if app.get("risk_level") in ("LOW", None) else "semi-annual",
+        "recommendation": c11.get("reason", "Maintain current monitoring"),
+        "escalation_flag": escalation_flag,
+        "escalation_reason": c11.get("reason") if escalation_flag else None,
+        "checks_performed": all_checks,
+        "compliance_status": compliance_status,
+        "document_currency_results": c1.get("documents", []),
+        "screening_recency_days": c2.get("days_since_screening"),
+        "policy_applicability": c3.get("policy_triggers", []),
+        "condition_compliance": c4.get("conditions", []),
+        "filing_deadline_status": c5.get("deadlines", []),
+        "inter_agent_findings": [{
+            "alert_type": k,
+            "count": v,
+        } for k, v in c6.get("by_alert_type", {}).items()],
+        "remediation_items": c7.get("items", []),
+        "compliance_risk_score": compliance_score,
+        "next_review_due": next_review,
+        "recommended_review_frequency": review_freq,
+        "compliance_narrative": c10.get("narrative"),
+        "escalation_recommendation": c11,
     })
     return output
 

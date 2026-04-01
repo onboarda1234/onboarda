@@ -436,47 +436,86 @@ class ComplianceMemoOutput(AgentOutputBase):
 
 
 class PeriodicReviewOutput(AgentOutputBase):
-    """Agent 6: Periodic Review Preparation Agent"""
+    """Agent 6: Periodic Review Preparation Agent
+
+    Rule-based review preparation with hybrid priority scoring. 10 checks
+    (8 rule + 2 hybrid). Scans document expiry, ownership changes, screening
+    staleness, outstanding alerts; assembles review package with priority score.
+    """
     agent_type: AgentType = AgentType.PERIODIC_REVIEW_PREPARATION
 
     review_trigger: Optional[str] = None
     previous_risk_level: Optional[str] = None
     current_risk_assessment: Optional[str] = None
-    changes_since_last_review: List[Dict[str, Any]] = Field(default_factory=list)
-    updated_screening_results: Optional[Dict[str, Any]] = None
-    transaction_analysis: Optional[Dict[str, Any]] = None
-    document_currency_status: Optional[Dict[str, Any]] = None
     recommended_risk_level: Optional[str] = None
-    review_memo_sections: List[Dict[str, Any]] = Field(default_factory=list)
     risk_trend: Optional[str] = Field(None, description="increasing / stable / decreasing")
+
+    # Check-level fields (Wave 4)
+    checks_performed: List[Dict[str, Any]] = Field(default_factory=list, description="Per-check results with classification tags")
+    review_schedule_status: Optional[str] = Field(None, description="on_schedule / overdue / upcoming")
+    risk_level_changed: bool = False
+    expired_documents: List[Dict[str, Any]] = Field(default_factory=list)
+    ownership_changes_detected: List[Dict[str, Any]] = Field(default_factory=list)
+    screening_staleness_days: Optional[int] = None
+    activity_volume_comparison: Optional[Dict[str, Any]] = None
+    outstanding_alerts: List[Dict[str, Any]] = Field(default_factory=list)
+    regulatory_completeness: Optional[Dict[str, Any]] = None
+    priority_score: Optional[float] = Field(None, ge=0.0, le=100.0, description="Hybrid review priority 0-100")
+    review_package: Optional[Dict[str, Any]] = Field(None, description="Assembled review package summary")
 
 
 class AdverseMediaPEPOutput(AgentOutputBase):
-    """Agent 7: Adverse Media & PEP Monitoring Agent"""
+    """Agent 7: Adverse Media & PEP Monitoring Agent
+
+    Monitoring interpreter with AI narrative. 12 checks (6 rule + 4 hybrid + 2 AI).
+    Retrieves new media/PEP/sanctions signals, deduplicates, scores severity,
+    resolves entities; AI generates narrative summary and disposition.
+    """
     agent_type: AgentType = AgentType.ADVERSE_MEDIA_PEP_MONITORING
 
+    # Check-level fields (Wave 4)
+    checks_performed: List[Dict[str, Any]] = Field(default_factory=list, description="Per-check results with classification tags")
     new_media_hits: List[Dict[str, Any]] = Field(default_factory=list)
     pep_status_changes: List[Dict[str, Any]] = Field(default_factory=list)
-    media_sentiment_score: Optional[float] = Field(None, ge=-1.0, le=1.0)
-    sources_checked: List[str] = Field(default_factory=list)
-    monitoring_period: Optional[Dict[str, Any]] = None
+    sanctions_updates: List[Dict[str, Any]] = Field(default_factory=list)
+    source_credibility_scores: List[Dict[str, Any]] = Field(default_factory=list)
+    deduplicated_alert_count: int = 0
+    historical_comparison: Optional[Dict[str, Any]] = None
+    media_severity_scores: List[Dict[str, Any]] = Field(default_factory=list)
+    pep_proximity_scores: List[Dict[str, Any]] = Field(default_factory=list)
+    entity_resolution_results: List[Dict[str, Any]] = Field(default_factory=list)
+    combined_risk_signal: Optional[Dict[str, Any]] = None
+    narrative: Optional[str] = Field(None, description="AI-generated monitoring narrative")
+    disposition: Optional[Dict[str, Any]] = Field(None, description="AI-generated alert disposition")
     alert_generated: bool = False
     alert_severity: Optional[Severity] = None
-    previous_screening_comparison: Optional[Dict[str, Any]] = None
 
 
 class BehaviourRiskDriftOutput(AgentOutputBase):
-    """Agent 8: Behaviour & Risk Drift Agent"""
+    """Agent 8: Behaviour & Risk Drift Agent
+
+    Rule-based drift detection with hybrid scoring. 11 checks (6 rule + 5 hybrid).
+    Compares transaction volume, geographic activity, counterparty concentration,
+    product usage against onboarding baseline; scores velocity anomalies and peer deviation.
+    """
     agent_type: AgentType = AgentType.BEHAVIOUR_RISK_DRIFT
 
+    # Check-level fields (Wave 4)
+    checks_performed: List[Dict[str, Any]] = Field(default_factory=list, description="Per-check results with classification tags")
     risk_drift_detected: bool = False
     drift_direction: Optional[str] = Field(None, description="increasing / stable / decreasing")
     drift_magnitude: Optional[float] = Field(None, ge=0.0, le=1.0)
-    behavioural_indicators: List[Dict[str, Any]] = Field(default_factory=list)
-    transaction_anomalies: List[Dict[str, Any]] = Field(default_factory=list)
-    velocity_changes: Optional[Dict[str, Any]] = None
-    geographic_pattern_changes: Optional[Dict[str, Any]] = None
-    peer_comparison: Optional[Dict[str, Any]] = None
+    volume_baseline_comparison: Optional[Dict[str, Any]] = None
+    geographic_deviation: Optional[Dict[str, Any]] = None
+    counterparty_concentration: Optional[Dict[str, Any]] = None
+    product_usage_deviation: Optional[Dict[str, Any]] = None
+    dormancy_status: Optional[Dict[str, Any]] = None
+    threshold_breaches: List[Dict[str, Any]] = Field(default_factory=list)
+    velocity_anomaly_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    peer_group_deviation: Optional[Dict[str, Any]] = None
+    temporal_pattern_drift: Optional[Dict[str, Any]] = None
+    multi_dimensional_drift_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    drift_narrative: Optional[str] = None
     recommended_action: Optional[str] = None
 
 
@@ -496,17 +535,30 @@ class RegulatoryImpactOutput(AgentOutputBase):
 
 
 class OngoingComplianceOutput(AgentOutputBase):
-    """Agent 10: Ongoing Compliance Review Agent"""
+    """Agent 10: Ongoing Compliance Review Agent
+
+    Consolidation agent with AI narrative. 11 checks (7 rule + 2 hybrid + 2 AI).
+    Verifies document currency, screening recency, policy applicability, condition
+    compliance, filing deadlines; consolidates inter-agent findings; AI generates
+    compliance narrative and escalation/closure recommendation.
+    """
     agent_type: AgentType = AgentType.ONGOING_COMPLIANCE_REVIEW
 
+    # Check-level fields (Wave 4)
+    checks_performed: List[Dict[str, Any]] = Field(default_factory=list, description="Per-check results with classification tags")
     compliance_status: Optional[str] = None
-    regulatory_changes_impact: List[Dict[str, Any]] = Field(default_factory=list)
-    document_expiry_alerts: List[Dict[str, Any]] = Field(default_factory=list)
-    outstanding_actions: List[Dict[str, Any]] = Field(default_factory=list)
+    document_currency_results: List[Dict[str, Any]] = Field(default_factory=list)
+    screening_recency_days: Optional[int] = None
+    policy_applicability: List[Dict[str, Any]] = Field(default_factory=list)
+    condition_compliance: List[Dict[str, Any]] = Field(default_factory=list)
+    filing_deadline_status: List[Dict[str, Any]] = Field(default_factory=list)
+    inter_agent_findings: List[Dict[str, Any]] = Field(default_factory=list)
+    remediation_items: List[Dict[str, Any]] = Field(default_factory=list)
+    compliance_risk_score: Optional[float] = Field(None, ge=0.0, le=100.0)
     next_review_due: Optional[str] = None
     recommended_review_frequency: Optional[str] = None
-    relationship_health_score: Optional[float] = Field(None, ge=0.0, le=1.0)
-    exit_indicators: List[str] = Field(default_factory=list)
+    compliance_narrative: Optional[str] = Field(None, description="AI-generated compliance narrative")
+    escalation_recommendation: Optional[Dict[str, Any]] = Field(None, description="AI-generated escalation/closure recommendation")
 
 
 # Map agent types to their specific output models
