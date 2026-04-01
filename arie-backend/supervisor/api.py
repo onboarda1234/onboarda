@@ -408,9 +408,16 @@ class DbTestHandler(SupervisorBaseHandler):
 
     def get(self, application_id: str):
         try:
-            from .agent_executors import _get_app_data
-            import os
+            from .agent_executors import _get_app_data, _get_db_connection, _get_db_loaded
+            import os, sys as _sys
             db_path = os.environ.get("DB_PATH", "arie.db")
+
+            # Debug info
+            db_in_modules = "db" in _sys.modules
+            db_mod = _sys.modules.get("db")
+            db_mod_has_get_db = hasattr(db_mod, "get_db") if db_mod else False
+            database_url = bool(os.environ.get("DATABASE_URL"))
+
             data = _get_app_data(db_path, application_id)
             self.write_json({
                 "status": "ok",
@@ -422,10 +429,24 @@ class DbTestHandler(SupervisorBaseHandler):
                 "intermediaries_count": len(data["intermediaries"]),
                 "db_path_used": db_path,
                 "db_path_is_file": os.path.isfile(db_path),
+                "debug": {
+                    "db_in_sys_modules": db_in_modules,
+                    "db_mod_has_get_db": db_mod_has_get_db,
+                    "get_db_connection_is_set": _get_db_connection is not None,
+                    "get_db_loaded": _get_db_loaded,
+                    "database_url_set": database_url,
+                },
             })
         except Exception as e:
-            import traceback
-            self.write_error_json(500, f"{type(e).__name__}: {e}", traceback.format_exc())
+            import traceback, sys as _sys2
+            from .agent_executors import _get_db_connection, _get_db_loaded
+            db_in_modules = "db" in _sys2.modules
+            self.write_error_json(500, f"{type(e).__name__}: {e}", {
+                "traceback": traceback.format_exc(),
+                "db_in_sys_modules": db_in_modules,
+                "get_db_loaded": _get_db_loaded,
+                "get_db_connection_set": _get_db_connection is not None,
+            })
 
 
 def get_supervisor_routes():
