@@ -121,12 +121,16 @@ class PipelineRunHandler(SupervisorBaseHandler):
             return self.write_error_json(400, f"Invalid trigger_type: {trigger_type}")
 
         supervisor = get_supervisor()
-        result = await supervisor.run_pipeline(
-            application_id=application_id,
-            trigger_type=tt,
-            context_data=body.get("context"),
-            trigger_source=trigger_source,
-        )
+        try:
+            result = await supervisor.run_pipeline(
+                application_id=application_id,
+                trigger_type=tt,
+                context_data=body.get("context"),
+                trigger_source=trigger_source,
+            )
+        except Exception as e:
+            logger.exception("Pipeline run failed for %s: %s", application_id, e)
+            return self.write_error_json(500, f"Pipeline execution error: {type(e).__name__}: {e}")
 
         # Cache for retrieval
         _pipeline_cache[result.pipeline_id] = result
