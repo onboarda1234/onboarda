@@ -28,12 +28,10 @@ from uuid import uuid4
 
 from .schemas import AgentType, AgentStatus, Severity
 
-# Database abstraction — use the production DBConnection layer which
-# handles both SQLite and PostgreSQL transparently.
-try:
-    from db import get_db as _get_db_connection
-except ImportError:
-    _get_db_connection = None  # Fallback: tests may not have db module on path
+# Database abstraction — lazy import to avoid polluting test DB state.
+# The actual import happens inside _get_app_data() at call time.
+_get_db_connection = None  # Populated lazily on first _get_app_data() call
+_get_db_loaded = False
 
 logger = logging.getLogger("arie.supervisor.executors")
 
@@ -70,15 +68,26 @@ def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             db = _SqliteFallback(conn)
-        elif _get_db_connection is not None:
-            db = _get_db_connection()
-        elif db_path:
-            # Last resort: try db_path as SQLite even if file doesn't exist yet
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            db = _SqliteFallback(conn)
         else:
-            raise RuntimeError("No database connection available: get_db() not importable and no db_path provided")
+            # Lazy import of get_db to avoid polluting DB state at module import time
+            global _get_db_connection, _get_db_loaded
+            if not _get_db_loaded:
+                try:
+                    from db import get_db as _gdb
+                    _get_db_connection = _gdb
+                except ImportError:
+                    _get_db_connection = None
+                _get_db_loaded = True
+
+            if _get_db_connection is not None:
+                db = _get_db_connection()
+            elif db_path:
+                # Last resort: try db_path as SQLite even if file doesn't exist yet
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row
+                db = _SqliteFallback(conn)
+            else:
+                raise RuntimeError("No database connection available: get_db() not importable and no db_path provided")
 
         app = db.execute(
             "SELECT * FROM applications WHERE id = ? OR ref = ?",
