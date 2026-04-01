@@ -1802,6 +1802,87 @@ _AGENT_DEFINITIONS_V2 = {
             "Compliance memo drafting (ai)",
         ],
     },
+    6: {
+        "description": (
+            "Rule-based review preparation with hybrid priority scoring. Scans document expiry, "
+            "ownership changes, screening staleness, outstanding alerts; assembles review package "
+            "with priority score. Degraded mode when no prior review history exists."
+        ),
+        "checks": [
+            "Review schedule compliance check (rule)",
+            "Risk level change detection (rule)",
+            "Document expiry scan (rule)",
+            "Ownership structure change detection (rule)",
+            "Screening data staleness check (rule)",
+            "Activity volume comparison (rule)",
+            "Outstanding alert aggregation (rule)",
+            "Regulatory requirement completeness (rule)",
+            "Review priority scoring (hybrid)",
+            "Review package assembly (hybrid)",
+        ],
+    },
+    7: {
+        "description": (
+            "Monitoring interpreter with AI narrative. Retrieves new media/PEP/sanctions signals, "
+            "deduplicates, scores severity, resolves entities; AI generates narrative summary and "
+            "disposition. Degraded mode when no screening baseline exists."
+        ),
+        "checks": [
+            "New adverse media retrieval (rule)",
+            "PEP status change detection (rule)",
+            "Sanctions list update check (rule)",
+            "Media source credibility scoring (rule)",
+            "Alert deduplication (rule)",
+            "Historical media comparison (rule)",
+            "Media severity assessment (hybrid)",
+            "PEP proximity scoring (hybrid)",
+            "Entity resolution for media hits (hybrid)",
+            "Combined risk signal aggregation (hybrid)",
+            "Media narrative summarisation (ai)",
+            "Monitoring alert disposition (ai)",
+        ],
+    },
+    8: {
+        "description": (
+            "Rule-based drift detection with hybrid scoring. Compares transaction volume, geographic "
+            "activity, counterparty concentration, product usage against onboarding baseline; scores "
+            "velocity anomalies and peer deviation. Degraded mode when no transaction data available."
+        ),
+        "checks": [
+            "Transaction volume baseline comparison (rule)",
+            "Geographic activity deviation (rule)",
+            "Counterparty concentration check (rule)",
+            "Product usage deviation (rule)",
+            "Dormancy/reactivation detection (rule)",
+            "Threshold breach detection (rule)",
+            "Velocity anomaly scoring (hybrid)",
+            "Peer group deviation analysis (hybrid)",
+            "Temporal pattern drift detection (hybrid)",
+            "Multi-dimensional risk drift scoring (hybrid)",
+            "Drift narrative and recommendation (hybrid)",
+        ],
+    },
+    10: {
+        "description": (
+            "Consolidation agent with AI narrative. Verifies document currency, screening recency, "
+            "policy applicability, condition compliance, filing deadlines; consolidates inter-agent "
+            "findings; AI generates compliance narrative and escalation/closure recommendation. "
+            "Degraded mode when upstream agents have not run."
+        ),
+        "checks": [
+            "Document currency verification (rule)",
+            "Screening recency check (rule)",
+            "Policy change applicability check (rule)",
+            "Condition compliance tracking (rule)",
+            "Filing deadline monitoring (rule)",
+            "Inter-agent finding consolidation (rule)",
+            "Remediation tracker status (rule)",
+            "Compliance risk re-scoring (hybrid)",
+            "Review frequency recommendation (hybrid)",
+            "Compliance narrative generation (ai)",
+            "Escalation/closure recommendation (ai)",
+        ],
+    },
 }
 
 
@@ -1813,7 +1894,7 @@ def _migrate_agent_definitions(db: DBConnection):
             (defn["description"], json.dumps(defn["checks"]), agent_num)
         )
     db.commit()
-    logger.info("Migrated agent 2/4/5 definitions to Wave 1+2 versions")
+    logger.info("Migrated agent definitions to Wave 1-4 versions")
 
 
 def seed_initial_data(db: DBConnection):
@@ -2085,32 +2166,59 @@ def seed_initial_data(db: DBConnection):
             ),
             (
                 6, "Periodic Review Preparation Agent", "📅", "Monitoring",
-                "Prepares client files for periodic reviews, identifies expired documents, "
-                "requests updated information, and summarises changes since onboarding.",
+                "Rule-based review preparation with hybrid priority scoring. Scans document expiry, "
+                "ownership changes, screening staleness, outstanding alerts; assembles review package "
+                "with priority score. Degraded mode when no prior review history exists.",
                 1, json.dumps([
-                    "Review schedule assessment", "Expired document identification",
-                    "Updated verification requirement flags", "Client file compilation",
-                    "Review checklist generation"
+                    "Review schedule compliance check (rule)",
+                    "Risk level change detection (rule)",
+                    "Document expiry scan (rule)",
+                    "Ownership structure change detection (rule)",
+                    "Screening data staleness check (rule)",
+                    "Activity volume comparison (rule)",
+                    "Outstanding alert aggregation (rule)",
+                    "Regulatory requirement completeness (rule)",
+                    "Review priority scoring (hybrid)",
+                    "Review package assembly (hybrid)",
                 ])
             ),
             (
                 7, "Adverse Media & PEP Monitoring Agent", "📡", "Monitoring",
-                "Continuous media monitoring, PEP status changes, new sanctions exposure, "
-                "and adverse media detection for existing clients.",
+                "Monitoring interpreter with AI narrative. Retrieves new media/PEP/sanctions signals, "
+                "deduplicates, scores severity, resolves entities; AI generates narrative summary and "
+                "disposition. Degraded mode when no screening baseline exists.",
                 1, json.dumps([
-                    "Continuous adverse media monitoring", "PEP status change detection",
-                    "New sanctions list screening", "News relevance filtering",
-                    "Alert threshold configuration"
+                    "New adverse media retrieval (rule)",
+                    "PEP status change detection (rule)",
+                    "Sanctions list update check (rule)",
+                    "Media source credibility scoring (rule)",
+                    "Alert deduplication (rule)",
+                    "Historical media comparison (rule)",
+                    "Media severity assessment (hybrid)",
+                    "PEP proximity scoring (hybrid)",
+                    "Entity resolution for media hits (hybrid)",
+                    "Combined risk signal aggregation (hybrid)",
+                    "Media narrative summarisation (ai)",
+                    "Monitoring alert disposition (ai)",
                 ])
             ),
             (
                 8, "Behaviour & Risk Drift Agent", "📈", "Monitoring",
-                "Detects changes in client behaviour vs onboarding profile, "
-                "flags unusual transaction patterns, and quantifies risk drift.",
+                "Rule-based drift detection with hybrid scoring. Compares transaction volume, geographic "
+                "activity, counterparty concentration, product usage against onboarding baseline; scores "
+                "velocity anomalies and peer deviation. Degraded mode when no transaction data available.",
                 1, json.dumps([
-                    "Transaction pattern analysis", "Behavior change detection",
-                    "Risk drift quantification", "Deviation from expected profile",
-                    "Escalation trigger determination"
+                    "Transaction volume baseline comparison (rule)",
+                    "Geographic activity deviation (rule)",
+                    "Counterparty concentration check (rule)",
+                    "Product usage deviation (rule)",
+                    "Dormancy/reactivation detection (rule)",
+                    "Threshold breach detection (rule)",
+                    "Velocity anomaly scoring (hybrid)",
+                    "Peer group deviation analysis (hybrid)",
+                    "Temporal pattern drift detection (hybrid)",
+                    "Multi-dimensional risk drift scoring (hybrid)",
+                    "Drift narrative and recommendation (hybrid)",
                 ])
             ),
             (
@@ -2125,12 +2233,22 @@ def seed_initial_data(db: DBConnection):
             ),
             (
                 10, "Ongoing Compliance Review Agent", "📋", "Monitoring",
-                "Prepares periodic review reports, assesses compliance status, "
-                "and recommends risk re-rating or escalation actions.",
+                "Consolidation agent with AI narrative. Verifies document currency, screening recency, "
+                "policy applicability, condition compliance, filing deadlines; consolidates inter-agent "
+                "findings; AI generates compliance narrative and escalation/closure recommendation. "
+                "Degraded mode when upstream agents have not run.",
                 1, json.dumps([
-                    "Periodic review report preparation", "Compliance status assessment",
-                    "Risk re-rating recommendation", "Document refresh recommendations",
-                    "Continuation or escalation decision"
+                    "Document currency verification (rule)",
+                    "Screening recency check (rule)",
+                    "Policy change applicability check (rule)",
+                    "Condition compliance tracking (rule)",
+                    "Filing deadline monitoring (rule)",
+                    "Inter-agent finding consolidation (rule)",
+                    "Remediation tracker status (rule)",
+                    "Compliance risk re-scoring (hybrid)",
+                    "Review frequency recommendation (hybrid)",
+                    "Compliance narrative generation (ai)",
+                    "Escalation/closure recommendation (ai)",
                 ])
             )
         ]
