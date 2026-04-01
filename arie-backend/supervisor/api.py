@@ -403,9 +403,35 @@ class AssistantReviewHandler(SupervisorBaseHandler):
 # URL PATTERNS — Register with Tornado app
 # ═══════════════════════════════════════════════════════════
 
+class DbTestHandler(SupervisorBaseHandler):
+    """GET /api/supervisor/db-test/:id — Diagnostic: test _get_app_data() DB access."""
+
+    def get(self, application_id: str):
+        try:
+            from .agent_executors import _get_app_data
+            import os
+            db_path = os.environ.get("DB_PATH", "arie.db")
+            data = _get_app_data(db_path, application_id)
+            self.write_json({
+                "status": "ok",
+                "application_id": data["application"].get("id"),
+                "company_name": data["application"].get("company_name"),
+                "directors_count": len(data["directors"]),
+                "ubos_count": len(data["ubos"]),
+                "documents_count": len(data["documents"]),
+                "intermediaries_count": len(data["intermediaries"]),
+                "db_path_used": db_path,
+                "db_path_is_file": os.path.isfile(db_path),
+            })
+        except Exception as e:
+            import traceback
+            self.write_error_json(500, f"{type(e).__name__}: {e}", traceback.format_exc())
+
+
 def get_supervisor_routes():
     """Return list of (pattern, handler) tuples for Tornado app."""
     return [
+        (r"/api/supervisor/db-test/([^/]+)", DbTestHandler),
         (r"/api/supervisor/pipeline/run", PipelineRunHandler),
         (r"/api/supervisor/pipeline/([^/]+)", PipelineDetailHandler),
         (r"/api/supervisor/pipeline/([^/]+)/review", PipelineReviewPackageHandler),
