@@ -49,7 +49,7 @@ AI_AGENT_CATALOG = [
         "implementation_mode": "deterministic",
         "authority": "authoritative",
         "supervisor_type": "compliance_memo_risk",
-        "notes": "Includes business model plausibility assessment as a sub-analysis rather than a standalone numbered agent.",
+        "notes": "Unified executor bridges to authoritative memo path (memo_handler.py). Enforces Rules 4A-4E, computes 7 risk dimensions, generates 11-section memo. Classification-tagged output (rule/hybrid/ai). Risk-model divergence cross-check between D1-D5 and memo aggregated risk.",
     },
     {
         "id": 6,
