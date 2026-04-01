@@ -1733,11 +1733,19 @@ _AGENT_DEFINITIONS_V2 = {
             "(OpenCorporates, Companies House, CBRD, ADGM, DIFC). Runs in degraded mode when no external API credentials are configured."
         ),
         "checks": [
-            "Registry source selection (rule)", "Company existence verification (rule)",
-            "Registration number format validation (rule)", "Entity type / legal form inference (rule)",
-            "Jurisdiction consistency check (rule)", "Director reconciliation (rule)",
-            "Discrepancy aggregation (rule)", "Degraded mode labelling (rule)",
-            "Escalation on missing data (rule)",
+            "Registry source selection (rule)",
+            "Company registration number lookup (rule)",
+            "Entity name match to registry (rule)",
+            "Incorporation date match (rule)",
+            "Company status check (rule)",
+            "Jurisdiction match (rule)",
+            "Company type / legal form (rule)",
+            "Registered address match (hybrid)",
+            "Director names cross-check (hybrid)",
+            "Shareholder names cross-check (hybrid)",
+            "UBO declarations vs registry shareholders (hybrid)",
+            "Registry filing recency / availability (rule)",
+            "Interpretation of unusual registry output (hybrid)",
         ],
     },
     4: {
@@ -1971,11 +1979,19 @@ def seed_initial_data(db: DBConnection):
         "Bank Reference (PEP): Date", "Bank Reference (PEP): Name Match", "Bank Reference (PEP): Bank ID", "Bank Reference (PEP): Account Standing", "Bank Reference (PEP): Signatory"
     ])
         agent2_checks = json.dumps([
-            "Registry source selection (rule)", "Company existence verification (rule)",
-            "Registration number format validation (rule)", "Entity type / legal form inference (rule)",
-            "Jurisdiction consistency check (rule)", "Director reconciliation (rule)",
-            "Discrepancy aggregation (rule)", "Degraded mode labelling (rule)",
-            "Escalation on missing data (rule)"
+            "Registry source selection (rule)",
+            "Company registration number lookup (rule)",
+            "Entity name match to registry (rule)",
+            "Incorporation date match (rule)",
+            "Company status check (rule)",
+            "Jurisdiction match (rule)",
+            "Company type / legal form (rule)",
+            "Registered address match (hybrid)",
+            "Director names cross-check (hybrid)",
+            "Shareholder names cross-check (hybrid)",
+            "UBO declarations vs registry shareholders (hybrid)",
+            "Registry filing recency / availability (rule)",
+            "Interpretation of unusual registry output (hybrid)"
         ])
         agent3_checks = json.dumps([
             "Sanctions list screening", "PEP database screening",
