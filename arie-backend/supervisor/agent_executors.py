@@ -28,6 +28,13 @@ from uuid import uuid4
 
 from .schemas import AgentType, AgentStatus, Severity
 
+# Database abstraction — use the production DBConnection layer which
+# handles both SQLite and PostgreSQL transparently.
+try:
+    from db import get_db as _get_db_connection
+except ImportError:
+    _get_db_connection = None  # Fallback: tests may not have db module on path
+
 logger = logging.getLogger("arie.supervisor.executors")
 
 # Current versions
@@ -38,60 +45,122 @@ MEMO_MODEL = "claude-opus-4-6"
 
 
 def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
-    """Fetch full application data bundle from DB."""
-    db = sqlite3.connect(db_path)
-    db.row_factory = sqlite3.Row
+    """Fetch full application data bundle from DB.
 
-    app = db.execute(
-        "SELECT * FROM applications WHERE id = ? OR ref = ?",
-        (application_id, application_id)
-    ).fetchone()
-    if not app:
-        db.close()
-        raise RuntimeError(f"Application not found: {application_id}")
+    Database-agnostic: uses the production DBConnection layer (get_db()) which
+    handles both SQLite and PostgreSQL transparently. Falls back to raw
+    sqlite3.connect(db_path) only when:
+      - get_db() is not importable (edge-case test environments), AND
+      - a valid db_path string pointing to a SQLite file is provided
 
-    app_dict = dict(app)
-    real_id = app_dict["id"]
-
-    # C-02: decrypt PII fields on read
+    This ensures supervisor pipeline execution works on PostgreSQL staging
+    while preserving backward compatibility for local SQLite dev/test.
+    """
+    db = None
     try:
-        from server import decrypt_pii_fields, PII_FIELDS_DIRECTORS, PII_FIELDS_UBOS
-        directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
-            "SELECT * FROM directors WHERE application_id=?", (real_id,)
-        ).fetchall()]
-        ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
-            "SELECT * FROM ubos WHERE application_id=?", (real_id,)
-        ).fetchall()]
-    except ImportError:
-        directors = [dict(d) for d in db.execute(
-            "SELECT * FROM directors WHERE application_id=?", (real_id,)
-        ).fetchall()]
-        ubos = [dict(u) for u in db.execute(
-            "SELECT * FROM ubos WHERE application_id=?", (real_id,)
+        # Determine connection strategy:
+        # 1. If db_path points to an existing SQLite file, use it directly
+        #    (supports test fixtures and local dev with explicit DB files)
+        # 2. Otherwise, use get_db() which auto-selects SQLite or PostgreSQL
+        #    based on DATABASE_URL (production/staging path)
+        import os
+        use_explicit_path = db_path and os.path.isfile(db_path)
+
+        if use_explicit_path:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            db = _SqliteFallback(conn)
+        elif _get_db_connection is not None:
+            db = _get_db_connection()
+        elif db_path:
+            # Last resort: try db_path as SQLite even if file doesn't exist yet
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            db = _SqliteFallback(conn)
+        else:
+            raise RuntimeError("No database connection available: get_db() not importable and no db_path provided")
+
+        app = db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ?",
+            (application_id, application_id)
+        ).fetchone()
+        if not app:
+            raise RuntimeError(f"Application not found: {application_id}")
+
+        app_dict = dict(app)
+        real_id = app_dict["id"]
+
+        # C-02: decrypt PII fields on read
+        try:
+            from server import decrypt_pii_fields, PII_FIELDS_DIRECTORS, PII_FIELDS_UBOS
+            directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
+                "SELECT * FROM directors WHERE application_id=?", (real_id,)
+            ).fetchall()]
+            ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
+                "SELECT * FROM ubos WHERE application_id=?", (real_id,)
+            ).fetchall()]
+        except ImportError:
+            directors = [dict(d) for d in db.execute(
+                "SELECT * FROM directors WHERE application_id=?", (real_id,)
+            ).fetchall()]
+            ubos = [dict(u) for u in db.execute(
+                "SELECT * FROM ubos WHERE application_id=?", (real_id,)
+            ).fetchall()]
+
+        documents = [dict(d) for d in db.execute(
+            "SELECT * FROM documents WHERE application_id=?", (real_id,)
         ).fetchall()]
 
-    documents = [dict(d) for d in db.execute(
-        "SELECT * FROM documents WHERE application_id=?", (real_id,)
-    ).fetchall()]
+        # Fetch intermediary shareholders for ownership chain analysis (Agent 4)
+        intermediaries = []
+        try:
+            intermediaries = [dict(i) for i in db.execute(
+                "SELECT * FROM intermediaries WHERE application_id=?", (real_id,)
+            ).fetchall()]
+        except Exception:
+            pass  # Table may not exist in older schemas
 
-    # Fetch intermediary shareholders for ownership chain analysis (Agent 4)
-    intermediaries = []
-    try:
-        intermediaries = [dict(i) for i in db.execute(
-            "SELECT * FROM intermediaries WHERE application_id=?", (real_id,)
-        ).fetchall()]
-    except Exception:
-        pass  # Table may not exist in older schemas
+        return {
+            "application": app_dict,
+            "directors": directors,
+            "ubos": ubos,
+            "documents": documents,
+            "intermediaries": intermediaries,
+        }
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
 
-    db.close()
 
-    return {
-        "application": app_dict,
-        "directors": directors,
-        "ubos": ubos,
-        "documents": documents,
-        "intermediaries": intermediaries,
-    }
+class _SqliteFallback:
+    """Minimal duck-type wrapper for raw sqlite3 connections.
+
+    Matches the DBConnection API surface used by _get_app_data():
+    execute(), fetchone(), fetchall(), close().
+    Used only when the db module's get_db() is not importable (test edge cases).
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._cursor = None
+
+    def execute(self, sql, params=()):
+        self._cursor = self._conn.execute(sql, params)
+        return self
+
+    def fetchone(self):
+        row = self._cursor.fetchone() if self._cursor else None
+        return dict(row) if row is not None else None
+
+    def fetchall(self):
+        rows = self._cursor.fetchall() if self._cursor else []
+        return [dict(r) for r in rows]
+
+    def close(self):
+        self._conn.close()
 
 
 def _base_output(agent_type: AgentType, agent_name: str, application_id: str, run_id: str) -> Dict[str, Any]:
