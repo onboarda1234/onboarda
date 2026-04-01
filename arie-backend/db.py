@@ -1726,6 +1726,68 @@ def _populate_default_scoring_config(db: 'DBConnection'):
 # Seed Data
 # ============================================================================
 
+_AGENT_DEFINITIONS_V2 = {
+    2: {
+        "description": (
+            "Rule-based registry verification with provider abstraction. Checks company identity data against external registries "
+            "(OpenCorporates, Companies House, CBRD, ADGM, DIFC). Runs in degraded mode when no external API credentials are configured."
+        ),
+        "checks": [
+            "Registry source selection (rule)", "Company existence verification (rule)",
+            "Registration number format validation (rule)", "Entity type / legal form inference (rule)",
+            "Jurisdiction consistency check (rule)", "Director reconciliation (rule)",
+            "Discrepancy aggregation (rule)", "Degraded mode labelling (rule)",
+            "Escalation on missing data (rule)",
+        ],
+    },
+    4: {
+        "description": (
+            "Rule-based ownership mapping with indirect path tracking, circular ownership detection, "
+            "nominee/trust/holding detection, and complexity scoring. All checks are deterministic — no AI calls."
+        ),
+        "checks": [
+            "Direct ownership calculation (rule)", "Indirect ownership via intermediaries (rule)",
+            "UBO threshold qualification ≥25% (rule)", "Total ownership completeness (rule)",
+            "Circular ownership detection (rule)", "Nominee arrangement detection (rule)",
+            "Trust/foundation structure detection (rule)", "Holding company/SPV detection (rule)",
+            "Opaque jurisdiction flagging (rule)", "Shell company indicator aggregation (rule)",
+            "Complexity scoring (rule)", "Ownership arithmetic validation (rule)",
+            "Escalation logic (rule)",
+        ],
+    },
+    5: {
+        "description": (
+            "Unified compliance memo agent. Bridges to authoritative memo path enforcing Rules 4A-4E, "
+            "computing 7 risk dimensions, and generating an 11-section memo. Classification-tagged output "
+            "(rule/hybrid/ai). Includes risk-model divergence cross-check."
+        ),
+        "checks": [
+            "Document completeness score (rule)", "Jurisdiction risk score (rule)",
+            "Industry/sector risk score (rule)", "Product/service risk score (rule)",
+            "Channel/delivery risk score (rule)", "Ownership complexity ingestion (rule)",
+            "Screening severity ingestion (rule)", "Weighted total risk score (rule)",
+            "Risk tier bucket (rule)", "Mandatory escalation triggers (rule)",
+            "Business description vs sector alignment (hybrid)",
+            "Transaction profile vs business scale (hybrid)",
+            "Recommendation narrative (hybrid)",
+            "Revenue model plausibility (ai)", "Business model plausibility (ai)",
+            "Compliance memo drafting (ai)",
+        ],
+    },
+}
+
+
+def _migrate_agent_definitions(db: DBConnection):
+    """Update agent 2/4/5 descriptions and checks to match Wave 1+2 implementations."""
+    for agent_num, defn in _AGENT_DEFINITIONS_V2.items():
+        db.execute(
+            "UPDATE ai_agents SET description=?, checks=? WHERE agent_number=?",
+            (defn["description"], json.dumps(defn["checks"]), agent_num)
+        )
+    db.commit()
+    logger.info("Migrated agent 2/4/5 definitions to Wave 1+2 versions")
+
+
 def seed_initial_data(db: DBConnection):
     """Seed database with initial admin users, risk config, and AI agents."""
     import bcrypt
@@ -1735,6 +1797,10 @@ def seed_initial_data(db: DBConnection):
     agents_count = db.execute("SELECT COUNT(*) as c FROM ai_agents").fetchone()["c"]
     checks_count = db.execute("SELECT COUNT(*) as c FROM ai_checks").fetchone()["c"]
     risk_count = db.execute("SELECT COUNT(*) as c FROM risk_config").fetchone()["c"]
+
+    # --- Migration: update agent 2/4/5 descriptions & checks (Wave 1+2 alignment) ---
+    if agents_count > 0:
+        _migrate_agent_definitions(db)
 
     if users_count > 0 and agents_count > 0 and checks_count > 0 and risk_count > 0:
         logger.info("Database already seeded, skipping initialization")
@@ -1905,12 +1971,11 @@ def seed_initial_data(db: DBConnection):
         "Bank Reference (PEP): Date", "Bank Reference (PEP): Name Match", "Bank Reference (PEP): Bank ID", "Bank Reference (PEP): Account Standing", "Bank Reference (PEP): Signatory"
     ])
         agent2_checks = json.dumps([
-            "Company registry verification", "Director name verification",
-            "Shareholder verification", "Jurisdiction validation",
-            "Company status check (active/dissolved)", "Registration number verification",
-            "Incorporation date verification", "Registered address verification",
-            "Company type verification", "Filed documents check",
-            "Cross-reference directors with passport data", "Cross-reference shareholders with UBO declarations"
+            "Registry source selection (rule)", "Company existence verification (rule)",
+            "Registration number format validation (rule)", "Entity type / legal form inference (rule)",
+            "Jurisdiction consistency check (rule)", "Director reconciliation (rule)",
+            "Discrepancy aggregation (rule)", "Degraded mode labelling (rule)",
+            "Escalation on missing data (rule)"
         ])
         agent3_checks = json.dumps([
             "Sanctions list screening", "PEP database screening",
@@ -1920,18 +1985,25 @@ def seed_initial_data(db: DBConnection):
             "Screening result interpretation", "Risk relevance assessment"
         ])
         agent4_checks = json.dumps([
-            "Map ownership layers", "Identify ultimate beneficial owners",
-            "Detect nominee structures", "Flag complex ownership chains",
-            "Calculate ownership percentages", "Identify high-risk jurisdiction links",
-            "Detect shell company indicators", "Verify UBO identity documents",
-            "Cross-reference UBOs with sanctions/PEP results", "Structure complexity scoring"
+            "Direct ownership calculation (rule)", "Indirect ownership via intermediaries (rule)",
+            "UBO threshold qualification ≥25% (rule)", "Total ownership completeness (rule)",
+            "Circular ownership detection (rule)", "Nominee arrangement detection (rule)",
+            "Trust/foundation structure detection (rule)", "Holding company/SPV detection (rule)",
+            "Opaque jurisdiction flagging (rule)", "Shell company indicator aggregation (rule)",
+            "Complexity scoring (rule)", "Ownership arithmetic validation (rule)",
+            "Escalation logic (rule)"
         ])
         agent5_checks = json.dumps([
-            "Compile all agent results", "Summarize key findings",
-            "Identify risk indicators", "Recommend risk rating",
-            "Generate onboarding memo", "Produce review checklist",
-            "Flag unresolved contradictions", "Calculate aggregate confidence",
-            "Determine approval/escalation recommendation", "Generate compliance narrative"
+            "Document completeness score (rule)", "Jurisdiction risk score (rule)",
+            "Industry/sector risk score (rule)", "Product/service risk score (rule)",
+            "Channel/delivery risk score (rule)", "Ownership complexity ingestion (rule)",
+            "Screening severity ingestion (rule)", "Weighted total risk score (rule)",
+            "Risk tier bucket (rule)", "Mandatory escalation triggers (rule)",
+            "Business description vs sector alignment (hybrid)",
+            "Transaction profile vs business scale (hybrid)",
+            "Recommendation narrative (hybrid)",
+            "Revenue model plausibility (ai)", "Business model plausibility (ai)",
+            "Compliance memo drafting (ai)"
         ])
     
         agents_seed = [
@@ -1945,8 +2017,8 @@ def seed_initial_data(db: DBConnection):
             ),
             (
                 2, "External Database Cross-Verification Agent", "🔎", "Onboarding",
-                "Secondary verification layer. Checks passport/company document data against external registries "
-                "(OpenCorporates, Companies House, ADGM, DIFC). Confirms persons exist in official records as declared directors/shareholders.",
+                "Rule-based registry verification with provider abstraction. Checks company identity data against external registries "
+                "(OpenCorporates, Companies House, CBRD, ADGM, DIFC). Runs in degraded mode when no external API credentials are configured.",
                 1, agent2_checks
             ),
             (
@@ -1959,17 +2031,15 @@ def seed_initial_data(db: DBConnection):
             ),
             (
                 4, "Corporate Structure & UBO Mapping Agent", "🏗️", "Onboarding",
-                "Maps ownership layers, identifies ultimate beneficial owners (natural persons), detects nominee structures, "
-                "flags complex ownership chains, calculates ownership percentages through layered structures, "
-                "cross-references UBOs with sanctions/PEP results from Agent 3.",
+                "Rule-based ownership mapping with indirect path tracking, circular ownership detection, "
+                "nominee/trust/holding detection, and complexity scoring. All checks are deterministic — no AI calls.",
                 1, agent4_checks
             ),
             (
                 5, "Compliance Memo & Risk Recommendation Agent", "📝", "Onboarding",
-                "Final synthesis agent. Compiles results from Agents 1-4, including business model plausibility assessment. "
-                "Summarizes findings, recommends risk rating, generates onboarding memo and review checklist. "
-                "Computes 5-dimension composite risk scoring (Entity 30%, Geographic 25%, Product/Service 20%, Sector 15%, Channel 10%), "
-                "flags any unresolved contradictions between agents, calculates aggregate confidence score.",
+                "Unified compliance memo agent. Bridges to authoritative memo path enforcing Rules 4A-4E, "
+                "computing 7 risk dimensions, and generating an 11-section memo. Classification-tagged output "
+                "(rule/hybrid/ai). Includes risk-model divergence cross-check.",
                 1, agent5_checks
             ),
             (
