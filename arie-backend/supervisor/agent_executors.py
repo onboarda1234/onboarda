@@ -74,6 +74,15 @@ def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
         "SELECT * FROM documents WHERE application_id=?", (real_id,)
     ).fetchall()]
 
+    # Fetch intermediary shareholders for ownership chain analysis (Agent 4)
+    intermediaries = []
+    try:
+        intermediaries = [dict(i) for i in db.execute(
+            "SELECT * FROM intermediaries WHERE application_id=?", (real_id,)
+        ).fetchall()]
+    except Exception:
+        pass  # Table may not exist in older schemas
+
     db.close()
 
     return {
@@ -81,6 +90,7 @@ def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
         "directors": directors,
         "ubos": ubos,
         "documents": documents,
+        "intermediaries": intermediaries,
     }
 
 
@@ -201,91 +211,172 @@ def execute_identity_document(application_id: str, context: Dict[str, Any]) -> D
 # AGENT 2: External Database Verification
 # ═══════════════════════════════════════════════════════════
 
-def execute_external_database(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 2: Heuristic registry cross-reference from stored application data."""
-    db_path = context.get("db_path", "")
-    data = _get_app_data(db_path, application_id)
-    app = data["application"]
-    directors = data["directors"]
-    run_id = str(uuid4())
+# --- Agent 2 constants (rule-based) ---
+# Registry source selection based on jurisdiction (rule)
+REGISTRY_SOURCES = {
+    "mauritius": {"name": "Companies & Business Registration Department (CBRD)", "url": "https://companies.govmu.org"},
+    "united kingdom": {"name": "Companies House", "url": "https://find-and-update.company-information.service.gov.uk"},
+    "uk": {"name": "Companies House", "url": "https://find-and-update.company-information.service.gov.uk"},
+    "uae": {"name": "ADGM / DIFC Registry", "url": "https://www.adgm.com"},
+    "abu dhabi": {"name": "ADGM Registry", "url": "https://www.adgm.com"},
+    "dubai": {"name": "DIFC Registry", "url": "https://www.difc.ae"},
+    "singapore": {"name": "ACRA (Accounting and Corporate Regulatory Authority)", "url": "https://www.acra.gov.sg"},
+    "hong kong": {"name": "Companies Registry", "url": "https://www.cr.gov.hk"},
+    "india": {"name": "Ministry of Corporate Affairs (MCA)", "url": "https://www.mca.gov.in"},
+    "south africa": {"name": "CIPC (Companies and Intellectual Property Commission)", "url": "https://www.cipc.co.za"},
+    "canada": {"name": "Corporations Canada", "url": "https://www.ic.gc.ca"},
+    "australia": {"name": "ASIC (Australian Securities & Investments Commission)", "url": "https://www.asic.gov.au"},
+    "france": {"name": "Registre du Commerce et des Sociétés (RCS)", "url": "https://www.infogreffe.fr"},
+    "germany": {"name": "Handelsregister", "url": "https://www.handelsregister.de"},
+}
 
-    # Simulate registry lookup based on application data.
-    # This executor is decision-support only until a real registry integration is wired here.
-    company_name = app.get("company_name", "")
-    country = app.get("country", "")
-    reg_number = app.get("registration_number", "")
+# Company legal form patterns for entity type matching (rule)
+ENTITY_TYPE_PATTERNS = {
+    "ltd": "Private Limited Company",
+    "limited": "Private Limited Company",
+    "plc": "Public Limited Company",
+    "inc": "Corporation",
+    "corp": "Corporation",
+    "llc": "Limited Liability Company",
+    "llp": "Limited Liability Partnership",
+    "gmbh": "Gesellschaft mit beschränkter Haftung",
+    "sa": "Société Anonyme",
+    "sarl": "Société à responsabilité limitée",
+    "bv": "Besloten Vennootschap",
+    "pte": "Private Limited (Singapore)",
+    "sdn bhd": "Sendirian Berhad",
+}
 
-    # In production this would call OpenCorporates / Companies House APIs
-    company_found = bool(company_name and country)
-    directors_match = {"match": len(directors) > 0, "checked": len(directors)}
 
-    findings = []
-    evidence = []
-    discrepancies = []
+def _select_registry_source(country: str) -> Dict[str, Any]:
+    """Rule-based registry source selection based on jurisdiction."""
+    country_lower = country.lower().strip()
+    source = REGISTRY_SOURCES.get(country_lower)
+    if source:
+        return {"source": source["name"], "url": source["url"], "matched": True, "classification": "rule"}
+    # Fallback: OpenCorporates covers 140+ jurisdictions
+    return {
+        "source": f"OpenCorporates ({country})",
+        "url": "https://opencorporates.com",
+        "matched": False,
+        "classification": "rule",
+    }
 
-    if company_found:
-        evidence.append({
-            "evidence_id": str(uuid4())[:12],
-            "evidence_type": "registry_record",
-            "source": "company_registry",
-            "content_summary": f"Company '{company_name}' found in {country} registry",
-            "reference": reg_number or f"REG-{country}-{company_name[:10]}",
-            "verified": True,
-        })
-        findings.append({
-            "finding_id": str(uuid4())[:12],
-            "category": "registry_verification",
-            "title": "Company registry verification",
-            "description": f"Entity '{company_name}' verified in {country} official registry.",
-            "severity": Severity.INFO.value,
-            "confidence": 0.90,
-            "source": "company_registry",
-            "evidence_refs": [],
-        })
+
+def _infer_entity_type(company_name: str) -> Optional[str]:
+    """Rule-based entity type inference from company name suffix."""
+    name_lower = company_name.lower().strip()
+    # Check longer patterns first to avoid false matches
+    for pattern in sorted(ENTITY_TYPE_PATTERNS.keys(), key=len, reverse=True):
+        if name_lower.endswith(pattern) or f" {pattern} " in name_lower or f" {pattern}." in name_lower:
+            return ENTITY_TYPE_PATTERNS[pattern]
+    return None
+
+
+def _check_registration_number_format(reg_number: str, country: str) -> Dict[str, Any]:
+    """Rule-based registration number format validation."""
+    if not reg_number:
+        return {"valid": False, "reason": "No registration number provided", "classification": "rule"}
+
+    reg_clean = reg_number.strip()
+    country_lower = country.lower()
+
+    # Basic format checks per jurisdiction
+    if country_lower in ("united kingdom", "uk"):
+        # UK companies: 8 digits or 2 letters + 6 digits
+        import re
+        if re.match(r'^[A-Z]{0,2}\d{6,8}$', reg_clean, re.IGNORECASE):
+            return {"valid": True, "format": "UK Companies House format", "classification": "rule"}
+        return {"valid": False, "reason": f"'{reg_clean}' does not match UK format (e.g. 12345678 or SC123456)", "classification": "rule"}
+    elif country_lower == "mauritius":
+        # Mauritius BRN format
+        if len(reg_clean) >= 4:
+            return {"valid": True, "format": "Mauritius BRN format", "classification": "rule"}
+        return {"valid": False, "reason": f"'{reg_clean}' too short for Mauritius BRN", "classification": "rule"}
     else:
-        findings.append({
-            "finding_id": str(uuid4())[:12],
-            "category": "company_not_found",
-            "title": "Company not found in registry",
-            "description": f"Unable to verify '{company_name}' in {country} registry. May indicate an unregistered entity.",
-            "severity": Severity.HIGH.value,
-            "confidence": 0.80,
-            "source": "company_registry",
-            "evidence_refs": [],
-            "regulatory_relevance": "Entity must be registered in declared jurisdiction per FATF R24"
-        })
-
-    confidence = 0.88 if company_found else 0.60
-    status = AgentStatus.CLEAN if company_found and not discrepancies else AgentStatus.ISSUES_FOUND
-
-    output = _base_output(AgentType.EXTERNAL_DATABASE_VERIFICATION, "Agent 2: External Database Cross-Verification", application_id, run_id)
-    output.update({
-        "status": status.value,
-        "confidence_score": round(confidence, 3),
-        "findings": findings,
-        "evidence": evidence,
-        "detected_issues": [],
-        "risk_indicators": [],
-        "recommendation": "Registry verification complete" if company_found else "Manual registry check required",
-        "escalation_flag": not company_found,
-        "escalation_reason": "Company not found in official registry" if not company_found else None,
-        "company_found": company_found,
-        "registry_source": f"{country} Companies Registry",
-        "registered_name": company_name if company_found else None,
-        "registration_number_match": bool(reg_number),
-        "directors_match": directors_match,
-        "discrepancies": discrepancies,
-        "company_status": "active" if company_found else "not_found",
-    })
-    return output
+        # Generic: must be non-empty alphanumeric
+        if len(reg_clean) >= 3:
+            return {"valid": True, "format": "Generic registration number", "classification": "rule"}
+        return {"valid": False, "reason": f"Registration number '{reg_clean}' too short", "classification": "rule"}
 
 
-# ═══════════════════════════════════════════════════════════
-# AGENT 2: Corporate Structure & UBO Mapping
-# ═══════════════════════════════════════════════════════════
+def _match_directors_to_registry(
+    declared_directors: List[Dict],
+    app: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Rule-based director reconciliation between declared and application data.
 
-def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 4: Deterministic UBO mapping from stored application data."""
+    In degraded mode (no external API), we verify internal consistency:
+    directors declared must have complete data (name, at least).
+    When API is available, this will compare against registry records.
+    """
+    total = len(declared_directors)
+    if total == 0:
+        return {
+            "match": False,
+            "checked": 0,
+            "matched": 0,
+            "unmatched": 0,
+            "issues": ["No directors declared"],
+            "classification": "rule",
+            "mode": "internal_consistency",
+        }
+
+    issues = []
+    valid_count = 0
+    for d in declared_directors:
+        name = d.get("full_name", "").strip()
+        if not name or name == "Unknown":
+            issues.append(f"Director missing name (id={d.get('id', '?')})")
+        else:
+            valid_count += 1
+
+    return {
+        "match": valid_count == total and not issues,
+        "checked": total,
+        "matched": valid_count,
+        "unmatched": total - valid_count,
+        "issues": issues,
+        "classification": "rule",
+        "mode": "internal_consistency",
+    }
+
+
+def _check_jurisdiction_match(app_country: str, app: Dict[str, Any]) -> Dict[str, Any]:
+    """Rule-based jurisdiction consistency check."""
+    country = (app_country or "").strip()
+    if not country:
+        return {
+            "match": False,
+            "declared": "",
+            "issue": "No jurisdiction declared",
+            "classification": "rule",
+        }
+    return {
+        "match": True,
+        "declared": country,
+        "issue": None,
+        "classification": "rule",
+    }
+
+
+def execute_external_database(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Agent 2: Rule-based external database cross-verification.
+
+    Design philosophy:
+      - Registry source selection → rule
+      - Company registration lookup → rule (degraded: internal data check)
+      - Registration number format → rule
+      - Company status → rule
+      - Entity type / legal form → rule
+      - Jurisdiction match → rule
+      - Director reconciliation → rule (internal consistency in degraded mode)
+      - Address match → deferred to hybrid (future enhancement)
+
+    All checks are classified. No AI calls are made.
+    In degraded mode (no external API credentials), all checks run against
+    internal application data and are clearly labelled as 'degraded'.
+    """
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
@@ -293,80 +384,714 @@ def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]
     ubos = data["ubos"]
     run_id = str(uuid4())
 
-    # Build UBO analysis from stored application data only.
-    # Do not make provider calls here unless the provider output becomes part of the
-    # authoritative returned payload and is clearly labelled as such.
-    ubo_list = []
-    total_ownership = 0
+    company_name = (app.get("company_name") or "").strip()
+    country = (app.get("country") or "").strip()
+    reg_number = (app.get("registration_number") or "").strip()
+    entity_type = (app.get("entity_type") or "").strip()
+
+    # Check for external API availability
+    import os
+    has_opencorporates = bool(os.environ.get("OPENCORPORATES_API_KEY"))
+    provider_mode = "live" if has_opencorporates else "degraded"
+
+    # --- Run all rule-based checks ---
+    checks = {}
+
+    # 1. Registry source selection (rule)
+    registry = _select_registry_source(country)
+    checks["registry_source"] = registry
+
+    # 2. Company existence check (rule / degraded)
+    has_required_fields = bool(company_name and country)
+    if provider_mode == "live":
+        # Future: call OpenCorporates API here
+        # For now, treat as degraded even if key exists (API integration not wired)
+        company_found = has_required_fields
+        lookup_mode = "degraded"
+    else:
+        company_found = has_required_fields
+        lookup_mode = "degraded"
+
+    checks["company_lookup"] = {
+        "found": company_found,
+        "mode": lookup_mode,
+        "company_name": company_name,
+        "country": country,
+        "classification": "rule",
+    }
+
+    # 3. Registration number format (rule)
+    reg_check = _check_registration_number_format(reg_number, country)
+    checks["registration_number"] = reg_check
+
+    # 4. Entity type inference and match (rule)
+    inferred_type = _infer_entity_type(company_name)
+    type_match = None
+    if entity_type and inferred_type:
+        type_match = entity_type.lower() in inferred_type.lower() or inferred_type.lower() in entity_type.lower()
+    checks["entity_type"] = {
+        "declared": entity_type or None,
+        "inferred": inferred_type,
+        "match": type_match,
+        "classification": "rule",
+    }
+
+    # 5. Jurisdiction check (rule)
+    jurisdiction_check = _check_jurisdiction_match(country, app)
+    checks["jurisdiction"] = jurisdiction_check
+
+    # 6. Director reconciliation (rule)
+    directors_match = _match_directors_to_registry(directors, app)
+    checks["directors"] = directors_match
+
+    # --- Aggregate results ---
+    findings = []
+    evidence = []
+    detected_issues = []
+    discrepancies = []
+
+    # Finding: company lookup result
+    if company_found:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "registry_verification",
+            "title": "Company data present for verification",
+            "description": (
+                f"Entity '{company_name}' has required identification data in {country}. "
+                f"Registry source: {registry['source']}. Mode: {lookup_mode}."
+            ),
+            "severity": Severity.INFO.value,
+            "confidence": 0.70 if lookup_mode == "degraded" else 0.90,
+            "source": registry["source"],
+            "evidence_refs": [],
+            "classification": "rule",
+            "verification_mode": lookup_mode,
+        })
+        evidence.append({
+            "evidence_id": str(uuid4())[:12],
+            "evidence_type": "registry_record",
+            "source": registry["source"],
+            "content_summary": f"Company '{company_name}' in {country} — {lookup_mode} verification",
+            "reference": reg_number or f"REG-{country[:3].upper()}-pending",
+            "verified": lookup_mode == "live",
+            "classification": "rule",
+        })
+    else:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "company_not_found",
+            "title": "Insufficient data for registry verification",
+            "description": (
+                f"Company name {'missing' if not company_name else repr(company_name)} "
+                f"and/or jurisdiction {'missing' if not country else repr(country)} — "
+                f"cannot perform registry lookup."
+            ),
+            "severity": Severity.HIGH.value,
+            "confidence": 0.90,
+            "source": "input_validation",
+            "evidence_refs": [],
+            "regulatory_relevance": "Entity must be identifiable in declared jurisdiction per FATF R24",
+            "classification": "rule",
+        })
+        detected_issues.append({
+            "issue_id": str(uuid4())[:12],
+            "issue_type": "company_not_verifiable",
+            "title": "Company cannot be verified",
+            "description": "Missing company name or jurisdiction prevents registry verification.",
+            "severity": Severity.HIGH.value,
+            "blocking": True,
+            "remediation": "Obtain complete company name and jurisdiction from applicant",
+            "related_findings": [],
+            "classification": "rule",
+        })
+
+    # Finding: registration number
+    if not reg_check["valid"]:
+        discrepancies.append({
+            "field": "registration_number",
+            "issue": reg_check["reason"],
+            "severity": "medium" if reg_number else "high",
+            "classification": "rule",
+        })
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "registration_number",
+            "title": "Registration number issue",
+            "description": reg_check["reason"],
+            "severity": Severity.MEDIUM.value if reg_number else Severity.HIGH.value,
+            "confidence": 0.90,
+            "source": "format_validation",
+            "evidence_refs": [],
+            "classification": "rule",
+        })
+
+    # Finding: director reconciliation
+    if not directors_match["match"]:
+        for issue in directors_match["issues"]:
+            discrepancies.append({
+                "field": "directors",
+                "issue": issue,
+                "severity": "medium",
+                "classification": "rule",
+            })
+        if directors_match["issues"]:
+            findings.append({
+                "finding_id": str(uuid4())[:12],
+                "category": "director_verification",
+                "title": "Director data issues",
+                "description": f"{len(directors_match['issues'])} issue(s): {'; '.join(directors_match['issues'][:3])}",
+                "severity": Severity.MEDIUM.value,
+                "confidence": 0.85,
+                "source": "director_reconciliation",
+                "evidence_refs": [],
+                "classification": "rule",
+            })
+
+    # Confidence: degraded mode caps confidence
+    if lookup_mode == "degraded":
+        base_confidence = 0.65 if company_found else 0.40
+    else:
+        base_confidence = 0.90 if company_found else 0.60
+
+    # Penalise for discrepancies
+    confidence = max(0.30, base_confidence - len(discrepancies) * 0.05)
+
+    # Status
+    has_blocking = any(i.get("blocking") for i in detected_issues)
+    status = AgentStatus.CLEAN if company_found and not discrepancies and not has_blocking else AgentStatus.ISSUES_FOUND
+
+    # Escalation
+    escalation_flag = not company_found or has_blocking or len(discrepancies) > 2
+    escalation_reasons = []
+    if not company_found:
+        escalation_reasons.append("Company cannot be verified against registry")
+    if has_blocking:
+        escalation_reasons.append("Blocking issues detected")
+    if len(discrepancies) > 2:
+        escalation_reasons.append(f"{len(discrepancies)} discrepancies found")
+
+    output = _base_output(AgentType.EXTERNAL_DATABASE_VERIFICATION, "Agent 2: External Database Cross-Verification", application_id, run_id)
+    output.update({
+        "status": status.value,
+        "confidence_score": round(confidence, 3),
+        "findings": findings,
+        "evidence": evidence,
+        "detected_issues": detected_issues,
+        "risk_indicators": [],
+        "recommendation": (
+            f"Registry verification complete ({lookup_mode} mode)" if status == AgentStatus.CLEAN
+            else f"Registry verification incomplete — {len(discrepancies)} discrepanc{'y' if len(discrepancies) == 1 else 'ies'} found"
+        ),
+        "escalation_flag": escalation_flag,
+        "escalation_reason": "; ".join(escalation_reasons) if escalation_reasons else None,
+        # Structured output fields
+        "provider_mode": provider_mode,
+        "lookup_mode": lookup_mode,
+        "company_found": company_found,
+        "registry_source": registry["source"],
+        "registry_url": registry["url"],
+        "registered_name": company_name if company_found else None,
+        "registration_number_match": reg_check["valid"],
+        "registration_number_format": reg_check,
+        "entity_type_check": checks["entity_type"],
+        "jurisdiction_check": checks["jurisdiction"],
+        "directors_match": directors_match,
+        "discrepancies": discrepancies,
+        "company_status": "data_present" if company_found else "not_verifiable",
+        "checks_performed": checks,
+    })
+    return output
+
+
+# ═══════════════════════════════════════════════════════════
+# AGENT 4: Corporate Structure & UBO Mapping
+# ═══════════════════════════════════════════════════════════
+
+# --- Agent 4 constants (rule-based thresholds) ---
+UBO_THRESHOLD_PCT = 25.0          # FATF R24/R25: beneficial owner = ≥25% ownership
+COMPLETENESS_GOOD = 0.75          # ownership ≥75% mapped → acceptable
+COMPLETENESS_PARTIAL = 0.50       # ownership ≥50% mapped → partial
+COMPLEXITY_UBO_COUNT = 3           # >3 UBOs → complex structure
+OWNERSHIP_OVERCOUNT_PCT = 105.0    # declared >105% → arithmetic error / suspect
+NOMINEE_KEYWORDS = frozenset([
+    "nominee", "custodian", "trustee", "fiduciary", "designated",
+    "registered holder", "on behalf of",
+])
+TRUST_KEYWORDS = frozenset([
+    "trust", "foundation", "stiftung", "waqf", "fideicomiso",
+    "settlement", "blind trust",
+])
+HOLDING_KEYWORDS = frozenset([
+    "holdings", "holding company", "spv", "special purpose",
+    "investment vehicle", "bvi", "offshore",
+])
+
+
+def _detect_keyword_match(text: str, keywords: frozenset) -> Optional[str]:
+    """Return the first matching keyword found in text, or None."""
+    text_lower = text.lower()
+    for kw in keywords:
+        if kw in text_lower:
+            return kw
+    return None
+
+
+def _build_ownership_graph(ubos: List[Dict], intermediaries: List[Dict]) -> Dict[str, Any]:
+    """Build a directed ownership graph and compute indirect paths.
+
+    Returns:
+        {
+            "direct_owners": [{name, pct, is_ubo, ...}],
+            "indirect_paths": [{path: [entity_chain], effective_pct, ...}],
+            "circular_detected": bool,
+            "total_direct_pct": float,
+            "total_effective_pct": float,
+            "layers": int,
+        }
+    """
+    direct_owners = []
+    total_direct = 0.0
     for u in ubos:
         pct = float(u.get("ownership_pct", 0) or 0)
-        total_ownership += pct
-        ubo_list.append({
+        total_direct += pct
+        direct_owners.append({
             "name": u.get("full_name", "Unknown"),
             "ownership_pct": pct,
             "nationality": u.get("nationality", "Unknown"),
-            "is_pep": u.get("is_pep") == "Yes",
+            "is_pep": str(u.get("is_pep", "")).lower() in ("yes", "true", "1"),
+            "person_key": u.get("person_key", ""),
+            "type": "direct",
         })
 
-    ubo_completeness = min(total_ownership / 100.0, 1.0) if ubos else 0.0
-    has_nominee = any("nominee" in str(u.get("full_name", "")).lower() or
-                      "nominee" in str(app.get("ownership_structure", "")).lower()
-                      for u in ubos)
-    complex_structure = len(ubos) > 3 or has_nominee
+    # Build indirect ownership paths through intermediaries
+    indirect_paths = []
+    if intermediaries:
+        # intermediaries each represent an entity in the ownership chain.
+        # An intermediary owns X% of the target company, and the UBOs own
+        # shares of the intermediary (not tracked in detail in current schema).
+        # We record the intermediary layer and flag it for review.
+        for inter in intermediaries:
+            inter_name = inter.get("entity_name", "Unknown")
+            inter_pct = float(inter.get("ownership_pct", 0) or 0)
+            inter_jurisdiction = inter.get("jurisdiction", "Unknown")
+            indirect_paths.append({
+                "intermediary": inter_name,
+                "intermediary_jurisdiction": inter_jurisdiction,
+                "intermediary_ownership_pct": inter_pct,
+                "effective_pct": inter_pct,  # without UBO-through-intermediary data, effective = declared
+                "path": [inter_name, "[Target Company]"],
+                "classification": "rule",
+            })
+
+    # Circular ownership detection (rule-based):
+    # Check if any UBO name appears as an intermediary entity name
+    ubo_names_lower = {o["name"].lower().strip() for o in direct_owners if o["name"] != "Unknown"}
+    inter_names_lower = {p["intermediary"].lower().strip() for p in indirect_paths}
+    circular = bool(ubo_names_lower & inter_names_lower)
+
+    layers = 1  # base: direct ownership
+    if intermediaries:
+        layers += 1  # at least one intermediary layer
+
+    total_effective = total_direct + sum(p["effective_pct"] for p in indirect_paths)
+
+    return {
+        "direct_owners": direct_owners,
+        "indirect_paths": indirect_paths,
+        "circular_detected": circular,
+        "total_direct_pct": round(total_direct, 2),
+        "total_effective_pct": round(total_effective, 2),
+        "layers": layers,
+    }
+
+
+def _detect_structure_indicators(
+    ubos: List[Dict],
+    intermediaries: List[Dict],
+    directors: List[Dict],
+    app: Dict[str, Any],
+    ownership_graph: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Detect nominee, trust, holding, and shell company indicators.
+
+    Returns dict with:
+        nominee_detected: bool
+        nominee_evidence: list of matched strings
+        trust_detected: bool
+        trust_evidence: list
+        holding_detected: bool
+        holding_evidence: list
+        shell_indicators: list of indicator codes
+    """
+    # Collect all text sources for keyword scanning
+    all_names = [u.get("full_name", "") for u in ubos]
+    all_names += [d.get("full_name", "") for d in directors]
+    all_names += [i.get("entity_name", "") for i in intermediaries]
+    ownership_text = str(app.get("ownership_structure", "") or "")
+
+    scannable_texts = all_names + [ownership_text]
+
+    # Nominee detection
+    nominee_evidence = []
+    for txt in scannable_texts:
+        match = _detect_keyword_match(txt, NOMINEE_KEYWORDS)
+        if match:
+            nominee_evidence.append(f"{match} in '{txt[:60]}'")
+
+    # Trust detection
+    trust_evidence = []
+    for txt in scannable_texts:
+        match = _detect_keyword_match(txt, TRUST_KEYWORDS)
+        if match:
+            trust_evidence.append(f"{match} in '{txt[:60]}'")
+
+    # Holding/SPV detection
+    holding_evidence = []
+    for txt in scannable_texts:
+        match = _detect_keyword_match(txt, HOLDING_KEYWORDS)
+        if match:
+            holding_evidence.append(f"{match} in '{txt[:60]}'")
+
+    # Shell company indicators (aggregated rule-based assessment)
     shell_indicators = []
-    if has_nominee:
+    if nominee_evidence:
         shell_indicators.append("nominee_arrangement_detected")
-    if len(directors) == 0 and len(ubos) == 0:
+    if not directors and not ubos:
         shell_indicators.append("no_officers_or_ubos")
+    if not directors and ubos:
+        shell_indicators.append("no_directors_declared")
+    if ownership_graph["total_direct_pct"] > OWNERSHIP_OVERCOUNT_PCT:
+        shell_indicators.append("ownership_exceeds_100_pct")
+    if holding_evidence:
+        shell_indicators.append("holding_or_spv_in_chain")
 
-    confidence = 0.85 if ubo_completeness > 0.75 else 0.65 if ubo_completeness > 0.5 else 0.45
-    status = AgentStatus.CLEAN if ubo_completeness > 0.75 and not shell_indicators else AgentStatus.ISSUES_FOUND
+    # Opaque jurisdiction check for intermediaries
+    OPAQUE_JURISDICTIONS = frozenset([
+        "bvi", "british virgin islands", "cayman islands", "panama",
+        "seychelles", "marshall islands", "vanuatu", "samoa",
+    ])
+    for inter in intermediaries:
+        j = str(inter.get("jurisdiction", "")).lower()
+        if any(oj in j for oj in OPAQUE_JURISDICTIONS):
+            shell_indicators.append("opaque_jurisdiction_intermediary")
+            break
 
-    findings = [{
+    return {
+        "nominee_detected": bool(nominee_evidence),
+        "nominee_evidence": nominee_evidence,
+        "trust_detected": bool(trust_evidence),
+        "trust_evidence": trust_evidence,
+        "holding_detected": bool(holding_evidence),
+        "holding_evidence": holding_evidence,
+        "shell_indicators": shell_indicators,
+    }
+
+
+def _compute_complexity_score(
+    ubos: List[Dict],
+    intermediaries: List[Dict],
+    indicators: Dict[str, Any],
+    ownership_graph: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Rule-based complexity scoring (0–100 scale).
+
+    Factors:
+      - UBO count (>3 adds complexity)
+      - Intermediary layers
+      - Nominee/trust/holding presence
+      - Circular ownership
+      - Ownership completeness gaps
+    """
+    score = 0
+    reasons = []
+
+    # UBO count
+    ubo_count = len(ubos)
+    if ubo_count > COMPLEXITY_UBO_COUNT:
+        score += 20
+        reasons.append(f"{ubo_count} UBOs declared (>{COMPLEXITY_UBO_COUNT})")
+    elif ubo_count == 0:
+        score += 15
+        reasons.append("No UBOs declared")
+
+    # Intermediary layers
+    inter_count = len(intermediaries)
+    if inter_count > 0:
+        score += min(inter_count * 10, 30)
+        reasons.append(f"{inter_count} intermediary entit{'y' if inter_count == 1 else 'ies'} in chain")
+
+    # Structure indicators
+    if indicators["nominee_detected"]:
+        score += 15
+        reasons.append("Nominee arrangement detected")
+    if indicators["trust_detected"]:
+        score += 10
+        reasons.append("Trust/foundation structure detected")
+    if indicators["holding_detected"]:
+        score += 10
+        reasons.append("Holding company/SPV in chain")
+    if "opaque_jurisdiction_intermediary" in indicators["shell_indicators"]:
+        score += 15
+        reasons.append("Opaque jurisdiction in intermediary chain")
+
+    # Circular ownership
+    if ownership_graph["circular_detected"]:
+        score += 25
+        reasons.append("Circular ownership detected")
+
+    # Ownership gap
+    total = ownership_graph["total_direct_pct"]
+    if total < 75:
+        score += 10
+        reasons.append(f"Only {total:.0f}% ownership mapped")
+
+    score = min(score, 100)
+
+    # Tier classification
+    if score >= 60:
+        tier = "HIGH"
+    elif score >= 30:
+        tier = "MEDIUM"
+    else:
+        tier = "LOW"
+
+    return {
+        "score": score,
+        "tier": tier,
+        "reasons": reasons,
+        "classification": "rule",
+    }
+
+
+def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Agent 4: Rule-based corporate structure and UBO mapping.
+
+    Design philosophy:
+      - Direct ownership calculation → rule
+      - Indirect ownership calculation → rule
+      - UBO threshold determination (≥25%) → rule
+      - Total ownership completeness → rule
+      - Circular ownership detection → rule
+      - Nominee/trust/holding detection → rule (keyword-based)
+      - Opaque structure assessment → rule (jurisdiction list)
+      - Complexity score → rule (weighted factors)
+
+    All checks are classified as 'rule'. No AI calls are made.
+    """
+    db_path = context.get("db_path", "")
+    data = _get_app_data(db_path, application_id)
+    app = data["application"]
+    directors = data["directors"]
+    ubos = data["ubos"]
+    intermediaries = data.get("intermediaries", [])
+    run_id = str(uuid4())
+
+    # 1. Build ownership graph (rule)
+    ownership_graph = _build_ownership_graph(ubos, intermediaries)
+
+    # 2. Detect structure indicators (rule)
+    indicators = _detect_structure_indicators(ubos, intermediaries, directors, app, ownership_graph)
+
+    # 3. Compute complexity score (rule)
+    complexity = _compute_complexity_score(ubos, intermediaries, indicators, ownership_graph)
+
+    # 4. UBO threshold analysis (rule): which declared owners qualify as UBOs
+    ubo_list = []
+    for owner in ownership_graph["direct_owners"]:
+        qualifies = owner["ownership_pct"] >= UBO_THRESHOLD_PCT
+        ubo_list.append({
+            "name": owner["name"],
+            "ownership_pct": owner["ownership_pct"],
+            "nationality": owner["nationality"],
+            "is_pep": owner["is_pep"],
+            "qualifies_as_ubo": qualifies,
+            "type": owner["type"],
+            "classification": "rule",
+        })
+
+    # 5. Completeness assessment (rule)
+    total_direct = ownership_graph["total_direct_pct"]
+    ubo_completeness = min(total_direct / 100.0, 1.0) if ubos else 0.0
+    qualified_ubo_count = sum(1 for u in ubo_list if u["qualifies_as_ubo"])
+
+    # 6. Confidence calculation (rule-based tiers)
+    is_complex = complexity["tier"] in ("HIGH", "MEDIUM")
+    has_shell = bool(indicators["shell_indicators"])
+    if ubo_completeness > COMPLETENESS_GOOD and not has_shell and not is_complex:
+        confidence = 0.90
+    elif ubo_completeness > COMPLETENESS_GOOD and not has_shell:
+        confidence = 0.80
+    elif ubo_completeness > COMPLETENESS_PARTIAL:
+        confidence = 0.65
+    else:
+        confidence = 0.45
+
+    # 7. Status determination (rule)
+    clean = (
+        ubo_completeness > COMPLETENESS_GOOD
+        and not has_shell
+        and not ownership_graph["circular_detected"]
+        and qualified_ubo_count > 0
+    )
+    status = AgentStatus.CLEAN if clean else AgentStatus.ISSUES_FOUND
+
+    # 8. Build findings
+    findings = []
+    findings.append({
         "finding_id": str(uuid4())[:12],
         "category": "ubo_mapping",
-        "title": "UBO Mapping Complete" if ubo_completeness > 0.75 else "UBO Mapping Incomplete",
-        "description": f"Mapped {len(ubos)} beneficial owner(s) covering {total_ownership:.0f}% ownership. "
-                       f"Structure complexity: {'Complex' if complex_structure else 'Simple'}.",
-        "severity": Severity.INFO.value if ubo_completeness > 0.75 else Severity.HIGH.value,
+        "title": "UBO Mapping Complete" if ubo_completeness > COMPLETENESS_GOOD else "UBO Mapping Incomplete",
+        "description": (
+            f"Mapped {len(ubos)} declared beneficial owner(s) covering {total_direct:.1f}% direct ownership. "
+            f"{qualified_ubo_count} meet the ≥{UBO_THRESHOLD_PCT:.0f}% UBO threshold. "
+            f"Complexity: {complexity['tier']} (score {complexity['score']}/100)."
+        ),
+        "severity": Severity.INFO.value if clean else Severity.HIGH.value,
         "confidence": confidence,
         "source": "deterministic_ubo_mapping",
         "evidence_refs": [],
-        "regulatory_relevance": "FATF R24/R25 require identification of all beneficial owners >25%"
-    }]
+        "regulatory_relevance": f"FATF R24/R25 require identification of all beneficial owners ≥{UBO_THRESHOLD_PCT:.0f}%",
+        "classification": "rule",
+    })
 
+    if ownership_graph["circular_detected"]:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "circular_ownership",
+            "title": "Circular ownership detected",
+            "description": "One or more UBOs appear in the intermediary chain, indicating potential circular ownership.",
+            "severity": Severity.CRITICAL.value,
+            "confidence": 0.95,
+            "source": "deterministic_ubo_mapping",
+            "evidence_refs": [],
+            "regulatory_relevance": "Circular ownership structures require enhanced due diligence",
+            "classification": "rule",
+        })
+
+    if indicators["nominee_detected"]:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "nominee_arrangement",
+            "title": "Nominee arrangement detected",
+            "description": f"Nominee indicators found: {'; '.join(indicators['nominee_evidence'][:3])}.",
+            "severity": Severity.HIGH.value,
+            "confidence": 0.85,
+            "source": "deterministic_ubo_mapping",
+            "evidence_refs": [],
+            "regulatory_relevance": "Nominee arrangements require identification of the underlying beneficial owner",
+            "classification": "rule",
+        })
+
+    if indicators["trust_detected"]:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "trust_structure",
+            "title": "Trust or foundation structure detected",
+            "description": f"Trust/foundation indicators found: {'; '.join(indicators['trust_evidence'][:3])}.",
+            "severity": Severity.MEDIUM.value,
+            "confidence": 0.80,
+            "source": "deterministic_ubo_mapping",
+            "evidence_refs": [],
+            "regulatory_relevance": "FATF R25 requires CDD on legal arrangements including trusts",
+            "classification": "rule",
+        })
+
+    if ownership_graph["total_direct_pct"] > OWNERSHIP_OVERCOUNT_PCT:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "ownership_arithmetic",
+            "title": "Declared ownership exceeds 100%",
+            "description": f"Total declared direct ownership is {ownership_graph['total_direct_pct']:.1f}%. This indicates data entry error or overlapping claims.",
+            "severity": Severity.HIGH.value,
+            "confidence": 0.95,
+            "source": "deterministic_ubo_mapping",
+            "evidence_refs": [],
+            "regulatory_relevance": "Ownership data must be arithmetically consistent",
+            "classification": "rule",
+        })
+
+    # 9. Evidence
     evidence = [{
         "evidence_id": str(uuid4())[:12],
         "evidence_type": "corporate_record",
         "source": "application_data",
-        "content_summary": f"Corporate structure with {len(directors)} directors, {len(ubos)} UBOs",
+        "content_summary": (
+            f"Corporate structure: {len(directors)} directors, {len(ubos)} UBOs, "
+            f"{len(intermediaries)} intermediaries. "
+            f"Complexity: {complexity['tier']} ({complexity['score']}/100)."
+        ),
         "reference": app.get("ref", application_id),
         "verified": True,
+        "classification": "rule",
     }]
 
+    # 10. Detected issues (blocking)
     detected_issues = []
-    if ubo_completeness < 0.75:
+    if ubo_completeness < COMPLETENESS_GOOD:
         detected_issues.append({
             "issue_id": str(uuid4())[:12],
             "issue_type": "incomplete_ownership",
             "title": "Ownership not fully mapped",
-            "description": f"Only {total_ownership:.0f}% of ownership has been identified.",
+            "description": f"Only {total_direct:.1f}% of direct ownership has been identified (threshold: {COMPLETENESS_GOOD * 100:.0f}%).",
             "severity": Severity.HIGH.value,
             "blocking": True,
-            "remediation": "Request additional ownership documentation",
+            "remediation": "Request additional ownership documentation or shareholder register",
             "related_findings": [],
+            "classification": "rule",
         })
     if not ubos:
         detected_issues.append({
             "issue_id": str(uuid4())[:12],
             "issue_type": "ubo_not_identified",
             "title": "No UBOs identified",
-            "description": "No beneficial owners have been identified for this entity.",
+            "description": "No beneficial owners have been declared for this entity.",
             "severity": Severity.CRITICAL.value,
             "blocking": True,
-            "remediation": "UBO identification is mandatory under AML regulations",
+            "remediation": "UBO identification is mandatory under FATF R24/R25",
             "related_findings": [],
+            "classification": "rule",
         })
+    if ownership_graph["circular_detected"]:
+        detected_issues.append({
+            "issue_id": str(uuid4())[:12],
+            "issue_type": "circular_ownership",
+            "title": "Circular ownership requires investigation",
+            "description": "A UBO appears in the intermediary chain — possible circular or self-referencing structure.",
+            "severity": Severity.CRITICAL.value,
+            "blocking": True,
+            "remediation": "Investigate ownership chain and obtain clarification from applicant",
+            "related_findings": [],
+            "classification": "rule",
+        })
+
+    # 11. Risk indicators
+    risk_indicators = []
+    for ind in indicators["shell_indicators"]:
+        risk_indicators.append({
+            "indicator_type": ind,
+            "description": ind.replace("_", " ").title(),
+            "risk_level": "high",
+            "source_agent": "corporate_structure_ubo",
+            "contributing_factors": [],
+            "classification": "rule",
+        })
+
+    # 12. Escalation logic (rule)
+    escalation_flag = (
+        not ubos
+        or has_shell
+        or ownership_graph["circular_detected"]
+        or complexity["tier"] == "HIGH"
+    )
+    escalation_reasons = []
+    if not ubos:
+        escalation_reasons.append("No UBOs identified")
+    if has_shell:
+        escalation_reasons.append(f"Shell indicators: {', '.join(indicators['shell_indicators'])}")
+    if ownership_graph["circular_detected"]:
+        escalation_reasons.append("Circular ownership detected")
+    if complexity["tier"] == "HIGH":
+        escalation_reasons.append(f"High complexity score ({complexity['score']}/100)")
 
     output = _base_output(AgentType.CORPORATE_STRUCTURE_UBO, "Agent 4: Corporate Structure & UBO Mapping", application_id, run_id)
     output.update({
@@ -375,19 +1100,29 @@ def execute_corporate_structure_ubo(application_id: str, context: Dict[str, Any]
         "findings": findings,
         "evidence": evidence,
         "detected_issues": detected_issues,
-        "risk_indicators": [{"indicator_type": i, "description": i.replace("_", " "), "risk_level": "high", "source_agent": "corporate_structure_ubo", "contributing_factors": []} for i in shell_indicators],
-        "recommendation": "Ownership structure verified" if status == AgentStatus.CLEAN else "UBO identification requires further investigation",
-        "escalation_flag": not ubos or bool(shell_indicators),
-        "escalation_reason": "Missing UBO identification or shell company indicators" if not ubos or shell_indicators else None,
-        "ownership_structure": {"layers": len(ubos), "complexity": "complex" if complex_structure else "simple"},
+        "risk_indicators": risk_indicators,
+        "recommendation": "Ownership structure verified" if clean else "UBO identification requires further investigation",
+        "escalation_flag": escalation_flag,
+        "escalation_reason": "; ".join(escalation_reasons) if escalation_reasons else None,
+        # Structured output fields
+        "ownership_structure": {
+            "layers": ownership_graph["layers"],
+            "complexity": complexity["tier"].lower(),
+            "complexity_score": complexity["score"],
+            "complexity_reasons": complexity["reasons"],
+        },
         "ubos_identified": ubo_list,
         "ubo_completeness": round(ubo_completeness, 3),
-        "complex_structure_flag": complex_structure,
-        "shell_company_indicators": shell_indicators,
-        "circular_ownership_detected": False,
-        "nominee_arrangements_detected": has_nominee,
-        "indirect_ownership_paths": [],
-        "total_ownership_mapped_pct": round(total_ownership, 1),
+        "complex_structure_flag": complexity["tier"] in ("HIGH", "MEDIUM"),
+        "shell_company_indicators": indicators["shell_indicators"],
+        "circular_ownership_detected": ownership_graph["circular_detected"],
+        "nominee_arrangements_detected": indicators["nominee_detected"],
+        "trust_structures_detected": indicators["trust_detected"],
+        "holding_structures_detected": indicators["holding_detected"],
+        "indirect_ownership_paths": ownership_graph["indirect_paths"],
+        "total_ownership_mapped_pct": round(total_direct, 1),
+        "qualified_ubo_count": qualified_ubo_count,
+        "ubo_threshold_pct": UBO_THRESHOLD_PCT,
     })
     return output
 

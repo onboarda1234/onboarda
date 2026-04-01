@@ -20,9 +20,10 @@ AI_AGENT_CATALOG = [
         "id": 2,
         "name": "External Database Cross-Verification Agent",
         "stage": "Onboarding",
-        "implementation_mode": "heuristic",
+        "implementation_mode": "deterministic",
         "authority": "decision_support",
         "supervisor_type": "external_database_verification",
+        "notes": "Rule-based registry verification with provider abstraction. Runs in degraded mode (internal data checks) when no external API credentials are configured.",
     },
     {
         "id": 3,
@@ -36,9 +37,10 @@ AI_AGENT_CATALOG = [
         "id": 4,
         "name": "Corporate Structure & UBO Mapping Agent",
         "stage": "Onboarding",
-        "implementation_mode": "heuristic",
+        "implementation_mode": "deterministic",
         "authority": "decision_support",
         "supervisor_type": "corporate_structure_ubo",
+        "notes": "Rule-based ownership mapping with indirect path tracking, circular ownership detection, nominee/trust/holding detection, and complexity scoring. No AI calls.",
     },
     {
         "id": 5,

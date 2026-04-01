@@ -321,46 +321,56 @@ class IdentityDocumentOutput(AgentOutputBase):
 
 
 class ExternalDatabaseOutput(AgentOutputBase):
-    """Agent 2 (sub-component): External Database Cross-Verification
+    """Agent 2: External Database Cross-Verification Agent
 
-    Part of Agent 2 (Corporate Structure & UBO Mapping Agent) per the official
-    AI Agent Registry. This sub-component handles registry cross-referencing:
-    checks passport/company document info against external databases
-    (OpenCorporates, Companies House, ADGM, DIFC).
-    Confirms persons exist in registry records as declared directors/shareholders.
+    Rule-based registry verification with provider abstraction.
+    Checks company identity data against external registries
+    (OpenCorporates, Companies House, ADGM, DIFC, CBRD).
+    Runs in degraded mode when no external API credentials are configured.
     """
     agent_type: AgentType = AgentType.EXTERNAL_DATABASE_VERIFICATION
 
+    provider_mode: Optional[str] = Field(None, description="'live' or 'degraded'")
+    lookup_mode: Optional[str] = Field(None, description="Actual mode used for this run")
     company_found: Optional[bool] = None
     registry_source: Optional[str] = None
+    registry_url: Optional[str] = None
     registered_name: Optional[str] = None
     registration_number_match: Optional[bool] = None
+    registration_number_format: Optional[Dict[str, Any]] = None
+    entity_type_check: Optional[Dict[str, Any]] = None
+    jurisdiction_check: Optional[Dict[str, Any]] = None
     directors_match: Optional[Dict[str, Any]] = None
     registered_address_match: Optional[bool] = None
     company_status: Optional[str] = None
     incorporation_date: Optional[str] = None
     last_filing_date: Optional[str] = None
     discrepancies: List[Dict[str, Any]] = Field(default_factory=list)
+    checks_performed: Optional[Dict[str, Any]] = Field(None, description="All individual checks and their results")
 
 
 class CorporateStructureUBOOutput(AgentOutputBase):
     """Agent 4: Corporate Structure & UBO Mapping Agent
 
-    Maps ownership chains, identifies UBOs, detects nominee structures,
-    flags complex chains, cross-references UBOs with screening results.
-    Runs AFTER Identity & Document Integrity (Agent 1) in the pipeline.
+    Rule-based ownership mapping with indirect path tracking, circular
+    ownership detection, nominee/trust/holding detection, and complexity
+    scoring. All checks are deterministic (no AI). Runs AFTER Agent 1.
     """
     agent_type: AgentType = AgentType.CORPORATE_STRUCTURE_UBO
 
-    ownership_structure: Optional[Dict[str, Any]] = None
+    ownership_structure: Optional[Dict[str, Any]] = Field(None, description="Layers, complexity tier, score, reasons")
     ubos_identified: List[Dict[str, Any]] = Field(default_factory=list)
     ubo_completeness: Optional[float] = Field(None, ge=0.0, le=1.0)
+    qualified_ubo_count: int = Field(0, description="Count of owners meeting UBO threshold")
+    ubo_threshold_pct: float = Field(25.0, description="Threshold percentage for UBO qualification")
     complex_structure_flag: bool = False
     shell_company_indicators: List[str] = Field(default_factory=list)
     circular_ownership_detected: bool = False
     nominee_arrangements_detected: bool = False
+    trust_structures_detected: bool = False
+    holding_structures_detected: bool = False
     indirect_ownership_paths: List[Dict[str, Any]] = Field(default_factory=list)
-    total_ownership_mapped_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+    total_ownership_mapped_pct: Optional[float] = Field(None, ge=0.0)
 
 
 class FinCrimeScreeningOutput(AgentOutputBase):
