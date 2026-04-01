@@ -943,12 +943,13 @@ body.role-admin .role-admin-only-block { display:block; }
     </div>
   </div>
 
-  <!-- Content tabs: Overview vs Activity Log -->
-  <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--border1);">
+  <!-- Content tabs -->
+  <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--border1);flex-wrap:wrap;">
     <button class="btn btn-outline btn-sm" id="tab-overview" onclick="switchDetailTab('overview')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Overview</button>
+    <button class="btn btn-outline btn-sm" id="tab-kyc-docs" onclick="switchDetailTab('kyc-docs')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">KYC Documents &amp; Verifications</button>
     <button class="btn btn-outline btn-sm" id="tab-screening" onclick="switchDetailTab('screening')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Screening Review</button>
-    <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
     <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ AI Supervisor</button>
+    <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
   </div>
 
   <!-- Tab: Overview (full width) -->
@@ -983,52 +984,7 @@ body.role-admin .role-admin-only-block { display:block; }
         </div>
       </div>
 
-      <!-- Documents & Verification (full-width, below entity info) -->
-      <div class="card" style="border-left:4px solid var(--brand);background:rgba(43,47,143,0.02);">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-          <div>
-            <div class="card-title">Uploaded Documents & Verification</div>
-            <div style="font-size:11px;color:var(--text3);">Each document with inline AI verification results</div>
-          </div>
-          <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()" id="btn-bo-upload-toggle-top" style="font-size:11px;">📤 Upload Document</button>
-        </div>
-        <div id="bo-doc-upload-panel" style="display:none;margin-bottom:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
-            <div class="form-group" style="margin:0;">
-              <div class="form-label">Document Type</div>
-              <select class="form-select" id="bo-upload-doc-type">
-                <option value="">Select document type</option>
-                <option value="cert_inc">Certificate of Incorporation</option>
-                <option value="memarts">Memorandum & Articles</option>
-                <option value="cert_reg">Regulatory Certificate</option>
-                <option value="reg_sh">Register of Shareholders</option>
-                <option value="reg_dir">Register of Directors</option>
-                <option value="fin_stmt">Financial Statements</option>
-                <option value="board_res">Board Resolution</option>
-                <option value="structure_chart">Structure Chart</option>
-                <option value="poa">Proof of Address</option>
-                <option value="bankref">Bank Reference Letter</option>
-                <option value="source_wealth">Source of Wealth</option>
-                <option value="source_funds">Source of Funds</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-            <div class="form-group" style="margin:0;">
-              <div class="form-label">File</div>
-              <input class="form-input" type="file" id="bo-upload-file" />
-            </div>
-          </div>
-          <div class="form-group" style="margin:10px 0 0;">
-            <div class="form-label">Notes</div>
-            <textarea class="form-input" id="bo-upload-notes" rows="2" placeholder="Optional upload notes for audit context" style="resize:vertical;"></textarea>
-          </div>
-          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
-            <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()">Cancel</button>
-            <button class="btn btn-primary btn-sm" onclick="submitBoDocUpload()">Upload to Record</button>
-          </div>
-        </div>
-        <div id="detail-docs-with-verification"></div>
-      </div>
+      <!-- Documents moved to KYC Documents & Verifications tab -->
 
       <!-- Risk Assessment -->
       <div class="card">
@@ -1146,6 +1102,55 @@ body.role-admin .role-admin-only-block { display:block; }
       </div>
 
   </div><!-- /detail-tab-overview -->
+
+  <!-- Tab: KYC Documents & Verifications (hidden by default) -->
+  <div id="detail-tab-kyc-docs" style="display:none;">
+    <div class="card" style="border-left:4px solid var(--brand);background:rgba(43,47,143,0.02);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div>
+          <div class="card-title">KYC Documents &amp; Verifications</div>
+          <div style="font-size:11px;color:var(--text3);">Each document with inline AI verification results</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()" id="btn-bo-upload-toggle-top" style="font-size:11px;">📤 Upload Document</button>
+      </div>
+      <div id="bo-doc-upload-panel" style="display:none;margin-bottom:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
+          <div class="form-group" style="margin:0;">
+            <div class="form-label">Document Type</div>
+            <select class="form-select" id="bo-upload-doc-type">
+              <option value="">Select document type</option>
+              <option value="cert_inc">Certificate of Incorporation</option>
+              <option value="memarts">Memorandum &amp; Articles</option>
+              <option value="cert_reg">Regulatory Certificate</option>
+              <option value="reg_sh">Register of Shareholders</option>
+              <option value="reg_dir">Register of Directors</option>
+              <option value="fin_stmt">Financial Statements</option>
+              <option value="board_res">Board Resolution</option>
+              <option value="structure_chart">Structure Chart</option>
+              <option value="poa">Proof of Address</option>
+              <option value="bankref">Bank Reference Letter</option>
+              <option value="source_wealth">Source of Wealth</option>
+              <option value="source_funds">Source of Funds</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0;">
+            <div class="form-label">File</div>
+            <input class="form-input" type="file" id="bo-upload-file" />
+          </div>
+        </div>
+        <div class="form-group" style="margin:10px 0 0;">
+          <div class="form-label">Notes</div>
+          <textarea class="form-input" id="bo-upload-notes" rows="2" placeholder="Optional upload notes for audit context" style="resize:vertical;"></textarea>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+          <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()">Cancel</button>
+          <button class="btn btn-primary btn-sm" onclick="submitBoDocUpload()">Upload to Record</button>
+        </div>
+      </div>
+      <div id="detail-docs-with-verification"></div>
+    </div>
+  </div>
 
   <!-- Tab: Screening Review (hidden by default) -->
   <div id="detail-tab-screening" style="display:none;">
@@ -3226,10 +3231,14 @@ function buildVerificationResultsHtml(results) {
         if (!check || typeof check !== 'object') return;
         var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
         var result = (firstMeaningfulDetailValue(check.result, check.status) || '').toLowerCase();
+        var icon = result === 'pass' ? '<span style="color:#16a34a;font-size:14px;margin-right:6px;">&#10003;</span>'
+                 : result === 'fail' ? '<span style="color:#dc2626;font-size:14px;margin-right:6px;">&#10007;</span>'
+                 : result === 'warn' ? '<span style="color:#d97706;font-size:14px;margin-right:6px;">&#9888;</span>'
+                 : '<span style="color:#6b7280;font-size:14px;margin-right:6px;">&#8212;</span>';
         var resultColor = result === 'pass' ? '#16a34a' : result === 'fail' ? '#dc2626' : result === 'warn' ? '#d97706' : '#6b7280';
         var resultBadge = result ? '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + resultColor + ';color:#fff;margin-left:4px;">' + result.toUpperCase() + '</span>' : '';
 
-        // Classification badge (new layered format)
+        // Classification badge
         var classTag = '';
         if (check.classification) {
           var cc = check.classification.toLowerCase();
@@ -3237,19 +3246,16 @@ function buildVerificationResultsHtml(results) {
         }
 
         var meta = '';
-        // Pre-screening comparison (new layered format)
         if (check.ps_field && (check.ps_value != null || check.extracted_value != null)) {
           meta += '<div style="font-size:11px;color:#6b7280;margin-top:2px;">Pre-screening <em>' + escapeHtml(check.ps_field) + '</em>: <strong>' + escapeHtml(String(check.ps_value ?? '—')) + '</strong>';
           if (check.extracted_value != null) meta += ' → extracted: <strong>' + escapeHtml(String(check.extracted_value)) + '</strong>';
           meta += '</div>';
         }
-        // Message / details
         var msg = firstMeaningfulDetailValue(check.message, check.details);
         if (msg) meta += '<div style="font-size:11px;color:#374151;margin-top:2px;">' + escapeHtml(msg) + '</div>';
-        // Confidence (for AI/hybrid checks)
         if (check.confidence != null) meta += '<div style="font-size:11px;color:#6b7280;">Confidence: ' + Math.round(Number(check.confidence) * 100) + '%</div>';
 
-        items.push('<div class="doc-meta" style="padding:4px 0;border-bottom:1px solid var(--border2,#e5e7eb);"><strong>' + label + '</strong>' + resultBadge + classTag + meta + '</div>');
+        items.push('<div style="display:flex;align-items:flex-start;padding:5px 0;border-bottom:1px solid var(--border2,#e5e7eb);">' + icon + '<div style="flex:1;"><strong>' + label + '</strong>' + resultBadge + classTag + meta + '</div></div>');
       });
     }
     if (!items.length) {
@@ -3533,14 +3539,8 @@ function renderAuthoritativeAppDetail(app, options) {
 
   document.getElementById('detail-entity-info').innerHTML =
     '<div class="detail-row"><span class="label">Reference</span><span class="value" style="font-family:monospace;">' + escapeHtml(app.ref) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Legal Entity</span><span class="value">' + escapeHtml(app.company) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Entity Type</span><span class="value">' + escapeHtml(normalizeDetailValue(app.entityType)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Ownership Structure</span><span class="value">' + escapeHtml(normalizeDetailValue(app.ownershipStructure)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">BRN</span><span class="value">' + escapeHtml(normalizeDetailValue(app.brn)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Country</span><span class="value">' + escapeHtml(normalizeDetailValue(app.country)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(normalizeDetailValue(app.sector)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Status</span><span class="value">' + escapeHtml(app.status) + '</span></div>' +
     '<div class="detail-row"><span class="label">Assigned To</span><span class="value">' + escapeHtml(app.assigned) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Status</span><span class="value">' + escapeHtml(app.status) + '</span></div>' +
     '<div class="detail-row"><span class="label">Created</span><span class="value">' + escapeHtml(app.date) + '</span></div>';
 
   var prescreenFields = [
@@ -3694,32 +3694,43 @@ function renderAuthoritativeAppDetail(app, options) {
 
   var docsHtml = app._documents.length ? app._documents.map(function(doc) {
     var officerReview = normalizeDetailValue(doc.review_status || 'pending');
+    var reviewBadgeColor = officerReview === 'accepted' ? '#16a34a' : officerReview === 'rejected' ? '#dc2626' : officerReview === 'info_requested' ? '#d97706' : '#6b7280';
+    var verStatus = normalizeDetailValue(doc.verification_status);
+    var verStatusColor = verStatus.toLowerCase() === 'verified' || verStatus.toLowerCase() === 'pass' ? '#16a34a' : verStatus.toLowerCase() === 'failed' || verStatus.toLowerCase() === 'fail' ? '#dc2626' : '#6b7280';
     var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
     var reviewMeta = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—'
-      ? '<div class="doc-meta">Reviewed By: ' + escapeHtml(reviewerLabel) + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + escapeHtml(normalizeDetailValue(doc.reviewed_at)) : '') + '</div>'
+      ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Reviewed by: ' + escapeHtml(reviewerLabel) + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + escapeHtml(normalizeDetailValue(doc.reviewed_at)) : '') + '</div>'
       : '';
-    var reviewComment = doc.review_comment ? '<div class="doc-meta">Review Comment: ' + escapeHtml(doc.review_comment) + '</div>' : '';
-    return '<div class="doc-item" style="flex-wrap:wrap;">' +
-      '<div class="doc-icon uploaded">📄</div>' +
-      '<div class="doc-info" style="flex:1;min-width:0;">' +
-        '<div class="doc-name">' + escapeHtml(doc.doc_name || doc.doc_type) + '</div>' +
-        '<div class="doc-meta">Type: ' + escapeHtml(normalizeDetailValue(doc.doc_type)) + '</div>' +
-        '<div class="doc-meta">Owner: ' + escapeHtml(findDocumentOwnerLabel(doc)) + '</div>' +
-        '<div class="doc-meta">Verification: ' + escapeHtml(normalizeDetailValue(doc.verification_status)) + '</div>' +
-        '<div class="doc-meta">Officer Review: ' + escapeHtml(officerReview) + '</div>' +
-        buildVerificationResultsHtml(doc.verification_results) +
-        reviewMeta +
-        reviewComment +
+    var reviewComment = doc.review_comment ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Comment: ' + escapeHtml(doc.review_comment) + '</div>' : '';
+    return '<div style="border:1px solid var(--border1);border-radius:10px;padding:16px;margin-bottom:12px;background:var(--surface);">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:8px;">' +
+        '<div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">' +
+          '<span style="font-size:22px;">📄</span>' +
+          '<div>' +
+            '<div style="font-weight:600;font-size:13px;color:var(--text1);">' + escapeHtml(doc.doc_name || doc.doc_type) + '</div>' +
+            '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Type: ' + escapeHtml(normalizeDetailValue(doc.doc_type)) + ' · Owner: ' + escapeHtml(findDocumentOwnerLabel(doc)) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:4px;align-items:center;flex-shrink:0;">' +
+          '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + verStatusColor + '18;color:' + verStatusColor + ';border:1px solid ' + verStatusColor + '44;font-weight:500;">' + escapeHtml(verStatus) + '</span>' +
+          '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + reviewBadgeColor + '18;color:' + reviewBadgeColor + ';border:1px solid ' + reviewBadgeColor + '44;font-weight:500;">Review: ' + escapeHtml(officerReview) + '</span>' +
+        '</div>' +
       '</div>' +
-      '<div class="doc-actions">' +
-        '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">Download</button>' +
-        '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">Re-Verify</button>' +
-        '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">Accept</button>' +
-        '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">Reject</button>' +
-        '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'info_requested\')">Request Info</button>' +
+      '<div style="background:var(--surface2);border:1px solid var(--border1);border-radius:8px;padding:10px 12px;margin-bottom:10px;">' +
+        '<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px;">Verification Checks</div>' +
+        buildVerificationResultsHtml(doc.verification_results) +
+      '</div>' +
+      reviewMeta +
+      reviewComment +
+      '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">' +
+        '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">📥 Download</button>' +
+        '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">🔄 Re-Verify</button>' +
+        '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">✓ Accept</button>' +
+        '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">✗ Reject</button>' +
+        '<button class="doc-action-btn info" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'info_requested\')">ℹ Request Info</button>' +
       '</div>' +
     '</div>';
-  }).join('') : '<div style="padding:14px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">No uploaded documents are stored for this application yet.</div>';
+  }).join('') : '<div style="padding:32px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);text-align:center;"><div style="font-size:24px;margin-bottom:8px;">📂</div><div style="font-size:13px;color:var(--text2);font-weight:500;">No documents uploaded yet</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">Documents uploaded by the client will appear here with their verification results.</div></div>';
   document.getElementById('detail-documents').innerHTML = docsHtml;
   document.getElementById('detail-docs-with-verification').innerHTML = docsHtml;
 
@@ -4606,7 +4617,7 @@ function switchCaseTab(tab, btn) {
 }
 
 function switchDetailTab(tab) {
-  var tabs = ['overview', 'screening', 'activity', 'supervisor'];
+  var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'activity'];
   tabs.forEach(function(t) {
     var tabEl = document.getElementById('tab-' + t);
     var panelEl = document.getElementById('detail-tab-' + t);
