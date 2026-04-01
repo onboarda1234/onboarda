@@ -3124,7 +3124,33 @@ function formatDetailDate(value) {
 function normalizeDetailValue(value) {
   if (Array.isArray(value)) return value.length ? value.join(', ') : '—';
   if (value == null || value === '') return '—';
+  if (typeof value === 'object') return formatNestedObject(value);
   return String(value);
+}
+
+function formatNestedObject(obj) {
+  // Flatten a nested object into a readable string for summary display
+  var parts = [];
+  Object.keys(obj).forEach(function(key) {
+    var val = obj[key];
+    if (val == null || val === '') return;
+    if (typeof val === 'object' && !Array.isArray(val)) {
+      // One level of nesting (e.g., inflows: {transactions: 10, min: 500})
+      var subParts = [];
+      Object.keys(val).forEach(function(subKey) {
+        var subVal = val[subKey];
+        if (subVal != null && subVal !== '' && subVal !== 0) {
+          subParts.push(subKey.replace(/_/g, ' ') + ': ' + subVal);
+        }
+      });
+      if (subParts.length) parts.push(key.replace(/_/g, ' ') + ' — ' + subParts.join(', '));
+    } else if (Array.isArray(val)) {
+      if (val.length) parts.push(key.replace(/_/g, ' ') + ': ' + val.join(', '));
+    } else {
+      parts.push(key.replace(/_/g, ' ') + ': ' + val);
+    }
+  });
+  return parts.length ? parts.join(' | ') : '—';
 }
 
 function firstMeaningfulDetailValue() {
@@ -3547,7 +3573,20 @@ function renderAuthoritativeAppDetail(app, options) {
     { label: 'Source of Funds', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_funds']), detailValueFromAliases(psData, ['source_of_funds_initial_detail'])) },
     { label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']) },
     { label: 'Referrer', value: detailValueFromAliases(psData, ['referrer_name', 'referrer']) },
-    { label: 'Management Overview', value: detailValueFromAliases(psData, ['management_overview']) }
+    { label: 'Management Overview', value: detailValueFromAliases(psData, ['management_overview']) },
+    { label: 'Incorporation Date', value: detailValueFromAliases(psData, ['incorporation_date']) },
+    { label: 'Source of Funds (Initial)', value: firstMeaningfulDetailValue(
+        [detailValueFromAliases(psData, ['source_of_funds_initial_type']), detailValueFromAliases(psData, ['source_of_funds_initial_detail'])].filter(Boolean).join(' — '),
+        ''
+      )
+    },
+    { label: 'Source of Funds (Ongoing)', value: firstMeaningfulDetailValue(
+        [detailValueFromAliases(psData, ['source_of_funds_ongoing_type']), detailValueFromAliases(psData, ['source_of_funds_ongoing_detail'])].filter(Boolean).join(' — '),
+        ''
+      )
+    },
+    { label: 'Estimated Monthly Activity', value: detailValueFromAliases(psData, ['estimated_monthly_activity']) },
+    { label: 'Financial Forecast', value: detailValueFromAliases(psData, ['financial_forecast']) }
   ];
   document.getElementById('detail-prescreen-summary').innerHTML =
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +

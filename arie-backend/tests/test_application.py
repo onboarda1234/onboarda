@@ -395,3 +395,158 @@ class TestLegacyNormalization:
         assert memo["metadata"]["document_count"] == 0
         assert memo["metadata"]["documentation_complete"] is False
         assert supervisor_result["can_approve"] is False
+
+    def test_save_resume_session_preserves_checkbox_and_multiselect_fields(self):
+        """Saved session data with list fields (services, countries, currencies)
+        should roundtrip through normalization and appear in merged prescreening."""
+        from server import normalize_saved_session_prescreening, merge_prescreening_sources
+
+        form_data = {
+            "prescreening": {
+                "f-reg-name": "Test Corp",
+                "f-trade-name": "Test Trade",
+                "f-inc-date": "2020-06-15",
+                "f-inc-country": "Mauritius",
+                "f-brn": "C12345",
+                "f-source-wealth-type": "Business revenue",
+                "f-source-init-type": "Bank transfer",
+                "f-source-init": "From main operating account",
+                "f-source-ongoing-type": "Revenue collection",
+                "f-source-ongoing": "Monthly client payments",
+            },
+            "servicesRequired": ["Multi-currency accounts", "FX services"],
+            "accountPurposes": ["Receive client payments", "Pay suppliers"],
+            "countriesOfOperation": ["Mauritius", "South Africa"],
+            "targetMarkets": ["Europe", "Asia"],
+            "currencies": ["USD", "EUR", "GBP"],
+        }
+        session_backfill = normalize_saved_session_prescreening(form_data)
+        merged = merge_prescreening_sources({}, session_backfill)
+
+        assert merged["registered_entity_name"] == "Test Corp"
+        assert merged["trading_name"] == "Test Trade"
+        assert merged["incorporation_date"] == "2020-06-15"
+        assert merged["country_of_incorporation"] == "Mauritius"
+        assert merged["brn"] == "C12345"
+        assert merged["services_required"] == ["Multi-currency accounts", "FX services"]
+        assert merged["account_purposes"] == ["Receive client payments", "Pay suppliers"]
+        assert merged["countries_of_operation"] == ["Mauritius", "South Africa"]
+        assert merged["target_markets"] == ["Europe", "Asia"]
+        assert merged["currencies"] == ["USD", "EUR", "GBP"]
+        assert merged["source_of_wealth_type"] == "Business revenue"
+        assert merged["source_of_funds_initial_type"] == "Bank transfer"
+        assert merged["source_of_funds_initial_detail"] == "From main operating account"
+        assert merged["source_of_funds_ongoing_type"] == "Revenue collection"
+        assert merged["source_of_funds_ongoing_detail"] == "Monthly client payments"
+        assert "source_of_funds" in merged
+        assert "Bank transfer" in merged["source_of_funds"]
+
+    def test_save_resume_director_ubo_intermediary_keys_are_stable(self):
+        """Director/UBO/intermediary rows saved with semantic keys should
+        persist and retrieve correctly via store_application_parties."""
+        from server import store_application_parties, get_application_parties
+
+        app_id = "app_save_resume_party_test"
+        db = self._make_db(app_id)
+
+        directors = [
+            {"person_key": "dir1", "first_name": "Alice", "last_name": "Doe",
+             "nationality": "Mauritius", "is_pep": "No"},
+            {"person_key": "dir2", "first_name": "Bob", "last_name": "Smith",
+             "nationality": "South Africa", "is_pep": "Yes",
+             "pep_declaration": {"public_function": "Member of Parliament"}},
+        ]
+        ubos = [
+            {"person_key": "ubo1", "first_name": "Charlie", "last_name": "Brown",
+             "nationality": "UK", "ownership_pct": 60, "is_pep": "No"},
+        ]
+        intermediaries = [
+            {"person_key": "int1", "entity_name": "HoldCo Ltd",
+             "jurisdiction": "BVI", "ownership_pct": 40},
+        ]
+        store_application_parties(db, app_id,
+                                 directors=directors, ubos=ubos,
+                                 intermediaries=intermediaries)
+        dirs_out, ubos_out, ints_out = get_application_parties(db, app_id)
+
+        assert len(dirs_out) == 2
+        assert dirs_out[0]["first_name"] == "Alice"
+        assert dirs_out[0]["last_name"] == "Doe"
+        assert dirs_out[0]["full_name"] == "Alice Doe"
+        assert dirs_out[1]["first_name"] == "Bob"
+        assert dirs_out[1]["pep_declaration"]["public_function"] == "Member of Parliament"
+
+        assert len(ubos_out) == 1
+        assert ubos_out[0]["first_name"] == "Charlie"
+        assert ubos_out[0]["ownership_pct"] == 60
+
+        assert len(ints_out) == 1
+        assert ints_out[0]["entity_name"] == "HoldCo Ltd"
+        assert ints_out[0]["jurisdiction"] == "BVI"
+        assert ints_out[0]["ownership_pct"] == 40
+
+        db.close()
+
+    def _make_db(self, app_id):
+        """Helper: create an in-memory DB with the application tables and a test row."""
+        import sqlite3, os, sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from db import init_db, get_db
+        import tempfile
+        db_path = os.path.join(tempfile.gettempdir(), f"onboarda_test_party_{os.getpid()}.db")
+        os.environ["DB_PATH"] = db_path
+        init_db()
+        db = get_db()
+        db.execute("""
+            INSERT OR IGNORE INTO applications (id, ref, client_id, company_name, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (app_id, "ARF-TEST-" + app_id, "testclient", "Test Corp", "draft"))
+        db.commit()
+        return db
+
+    def test_detail_api_returns_estimated_activity_and_forecast(self):
+        """The prescreening_data returned by detail API should include
+        estimated_monthly_activity and financial_forecast when stored."""
+        from server import normalize_prescreening_data
+
+        data = {
+            "company_name": "Forecast Corp",
+            "country": "Mauritius",
+            "prescreening_data": {
+                "registered_entity_name": "Forecast Corp",
+                "estimated_monthly_activity": {
+                    "inflows": {"transactions": 50, "min_amount_usd": 1000},
+                    "outflows": {"transactions": 30, "min_amount_usd": 500}
+                },
+                "financial_forecast": {
+                    "revenue": {"year_1": 100000, "year_2": 200000, "year_3": 300000},
+                    "cost_of_sales": {"year_1": 50000, "year_2": 80000, "year_3": 100000},
+                    "profit": {"year_1": 50000, "year_2": 120000, "year_3": 200000}
+                },
+                "incorporation_date": "2020-01-15",
+                "source_of_funds_initial_type": "Bank transfer",
+                "source_of_funds_initial_detail": "Seed investment",
+                "source_of_funds_ongoing_type": "Client revenue",
+                "source_of_funds_ongoing_detail": "Monthly SaaS subscriptions"
+            }
+        }
+        normalized = normalize_prescreening_data(data)
+
+        # estimated_monthly_activity should survive normalization
+        assert "estimated_monthly_activity" in normalized
+        activity = normalized["estimated_monthly_activity"]
+        assert isinstance(activity, dict)
+        assert "inflows" in activity
+
+        # financial_forecast should survive normalization
+        assert "financial_forecast" in normalized
+        forecast = normalized["financial_forecast"]
+        assert isinstance(forecast, dict)
+
+        # incorporation_date should survive
+        assert normalized.get("incorporation_date") == "2020-01-15"
+
+        # source_of_funds summary should be composed
+        assert "source_of_funds" in normalized
+        assert "Bank transfer" in normalized["source_of_funds"]
+        assert "Client revenue" in normalized["source_of_funds"]
