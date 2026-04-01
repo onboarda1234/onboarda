@@ -29,9 +29,10 @@ AI_AGENT_CATALOG = [
         "id": 3,
         "name": "FinCrime Screening Interpretation Agent",
         "stage": "Onboarding",
-        "implementation_mode": "heuristic",
+        "implementation_mode": "hybrid",
         "authority": "decision_support",
         "supervisor_type": "fincrime_screening",
+        "notes": "Policy-bounded screening interpreter. 4 rule (retrieval, disambiguation), 4 hybrid (FP reduction, severity, disposition), 3 AI (media assessment, narrative). Reads stored prescreening_data; degraded mode when no screening report.",
     },
     {
         "id": 4,

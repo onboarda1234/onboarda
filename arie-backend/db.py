@@ -1727,6 +1727,26 @@ def _populate_default_scoring_config(db: 'DBConnection'):
 # ============================================================================
 
 _AGENT_DEFINITIONS_V2 = {
+    3: {
+        "description": (
+            "Policy-bounded screening interpreter. Reads stored screening results from prescreening_data. "
+            "4 rule-based checks (retrieval, disambiguation), 4 hybrid (FP reduction, severity ranking, disposition), "
+            "3 AI (adverse media assessment, narrative). Degraded mode when no screening report available."
+        ),
+        "checks": [
+            "Sanctions hit retrieval (rule)",
+            "PEP hit retrieval (rule)",
+            "Adverse media hit retrieval (rule)",
+            "Exact identity disambiguation (rule)",
+            "Near-match identity disambiguation (hybrid)",
+            "False-positive reduction (hybrid)",
+            "Severity ranking of confirmed hits (hybrid)",
+            "Adverse media relevance assessment (ai)",
+            "Adverse media materiality / seriousness (ai)",
+            "Consolidated screening narrative (ai)",
+            "Recommended screening disposition (hybrid)",
+        ],
+    },
     2: {
         "description": (
             "Rule-based registry verification with provider abstraction. Checks company identity data against external registries "
@@ -1994,11 +2014,17 @@ def seed_initial_data(db: DBConnection):
             "Interpretation of unusual registry output (hybrid)"
         ])
         agent3_checks = json.dumps([
-            "Sanctions list screening", "PEP database screening",
-            "Watchlist screening", "Adverse media screening",
-            "False positive assessment", "Match confidence scoring",
-            "Material adverse media identification", "Political exposure classification",
-            "Screening result interpretation", "Risk relevance assessment"
+            "Sanctions hit retrieval (rule)",
+            "PEP hit retrieval (rule)",
+            "Adverse media hit retrieval (rule)",
+            "Exact identity disambiguation (rule)",
+            "Near-match identity disambiguation (hybrid)",
+            "False-positive reduction (hybrid)",
+            "Severity ranking of confirmed hits (hybrid)",
+            "Adverse media relevance assessment (ai)",
+            "Adverse media materiality / seriousness (ai)",
+            "Consolidated screening narrative (ai)",
+            "Recommended screening disposition (hybrid)"
         ])
         agent4_checks = json.dumps([
             "Direct ownership calculation (rule)", "Indirect ownership via intermediaries (rule)",
@@ -2039,10 +2065,9 @@ def seed_initial_data(db: DBConnection):
             ),
             (
                 3, "FinCrime Screening Interpretation Agent", "💼", "Onboarding",
-                "Screens individuals and entities against sanctions lists, PEP databases, watchlists, and adverse media sources "
-                "via Sumsub AML. Interprets raw screening hits using Claude AI to distinguish false positives from genuine matches, "
-                "assesses match confidence, consolidates duplicate hits, ranks severity, highlights material adverse media, "
-                "and classifies political exposure levels.",
+                "Policy-bounded screening interpreter. Reads stored screening results from prescreening_data. "
+                "4 rule-based checks (retrieval, disambiguation), 4 hybrid (FP reduction, severity ranking, disposition), "
+                "3 AI (adverse media assessment, narrative). Degraded mode when no screening report available.",
                 1, agent3_checks
             ),
             (
