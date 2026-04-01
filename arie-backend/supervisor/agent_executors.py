@@ -69,14 +69,21 @@ def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
             conn.row_factory = sqlite3.Row
             db = _SqliteFallback(conn)
         else:
-            # Lazy import of get_db to avoid polluting DB state at module import time
+            # Lazy import of get_db to avoid polluting DB state at module import time.
+            # Use sys.modules first (reliable when server.py already imported db),
+            # then try direct import as fallback.
             global _get_db_connection, _get_db_loaded
             if not _get_db_loaded:
-                try:
-                    from db import get_db as _gdb
-                    _get_db_connection = _gdb
-                except ImportError:
-                    _get_db_connection = None
+                import sys as _sys
+                db_mod = _sys.modules.get("db")
+                if db_mod and hasattr(db_mod, "get_db"):
+                    _get_db_connection = db_mod.get_db
+                else:
+                    try:
+                        from db import get_db as _gdb
+                        _get_db_connection = _gdb
+                    except ImportError:
+                        _get_db_connection = None
                 _get_db_loaded = True
 
             if _get_db_connection is not None:
