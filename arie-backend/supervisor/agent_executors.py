@@ -57,21 +57,29 @@ def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
     db = None
     try:
         # Determine connection strategy:
-        # 1. If db_path points to an existing SQLite file, use it directly
-        #    (supports test fixtures and local dev with explicit DB files)
-        # 2. Otherwise, use get_db() which auto-selects SQLite or PostgreSQL
-        #    based on DATABASE_URL (production/staging path)
+        # 1. If db_path points to an existing SQLite file AND we're NOT on
+        #    PostgreSQL (DATABASE_URL set), use it directly. This covers:
+        #    - Test fixtures (temp DB files)
+        #    - Local SQLite dev
+        # 2. If DATABASE_URL is set (staging/production), always use get_db()
+        #    which returns a PostgreSQL connection from the pool.
+        # 3. Fall back to get_db() even without DATABASE_URL (standard local dev).
         import os
-        use_explicit_path = db_path and os.path.isfile(db_path)
+
+        has_postgres = bool(os.environ.get("DATABASE_URL"))
+        use_explicit_path = (
+            not has_postgres
+            and db_path
+            and os.path.isfile(db_path)
+        )
 
         if use_explicit_path:
+            # Test/local path: use the provided SQLite file directly
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             db = _SqliteFallback(conn)
         else:
-            # Lazy import of get_db to avoid polluting DB state at module import time.
-            # Use sys.modules first (reliable when server.py already imported db),
-            # then try direct import as fallback.
+            # Production/staging path: use get_db() for PostgreSQL (or SQLite fallback)
             global _get_db_connection, _get_db_loaded
             if not _get_db_loaded:
                 import sys as _sys
@@ -89,12 +97,14 @@ def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
             if _get_db_connection is not None:
                 db = _get_db_connection()
             elif db_path:
-                # Last resort: try db_path as SQLite even if file doesn't exist yet
+                # Last resort: raw SQLite if get_db unavailable
                 conn = sqlite3.connect(db_path)
                 conn.row_factory = sqlite3.Row
                 db = _SqliteFallback(conn)
             else:
-                raise RuntimeError("No database connection available: get_db() not importable and no db_path provided")
+                raise RuntimeError(
+                    "No database connection available: get_db() not importable and no db_path provided"
+                )
 
         app = db.execute(
             "SELECT * FROM applications WHERE id = ? OR ref = ?",
