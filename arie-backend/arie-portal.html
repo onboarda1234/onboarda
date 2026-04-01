@@ -5466,9 +5466,9 @@ async function submitPrescreening(e) {
       monthly_volume: getFieldValue('f-monthly-volume'),
       expected_volume: getFieldValue('f-monthly-volume'),
       transaction_complexity: getFieldValue('f-txn-complexity'),
-      countries_of_operation: (msState['ms-op-countries'] || []).slice(),
+      countries_of_operation: msState['ms-op-countries'] ? Array.from(msState['ms-op-countries']) : [],
       business_overview: getFieldValue('f-biz-overview'),
-      target_markets: (msState['ms-target-markets'] || []).slice(),
+      target_markets: msState['ms-target-markets'] ? Array.from(msState['ms-target-markets']) : [],
       account_purposes: getCheckboxValues('purpose-grid'),
       existing_bank_account: getFieldValue('f-has-bank'),
       existing_bank_name: getFieldValue('f-bank-name'),
@@ -6326,7 +6326,7 @@ function collectFormData() {
     kycPersons: {}
   };
 
-  // Collect all form inputs from pre-screening
+  // Collect all form inputs from pre-screening (by ID)
   var form = document.getElementById('prescreening-form');
   if (form) {
     var inputs = form.querySelectorAll('input, select, textarea');
@@ -6338,23 +6338,59 @@ function collectFormData() {
     });
   }
 
-  // Collect director/UBO table data
-  var dirRows = document.querySelectorAll('#directors-body tr');
+  // Capture checkbox-grid arrays (these inputs lack IDs)
+  data.servicesRequired = getCheckboxValues('service-grid');
+  data.accountPurposes = getCheckboxValues('purpose-grid');
+  data.currencies = Array.from(document.querySelectorAll('input[name="currencies"]:checked')).map(function(c) { return c.value; });
+
+  // Capture custom multi-select widget state
+  data.countriesOfOperation = msState['ms-op-countries'] ? Array.from(msState['ms-op-countries']) : [];
+  data.targetMarkets = msState['ms-target-markets'] ? Array.from(msState['ms-target-markets']) : [];
+
+  // Collect directors with stable positional keys
   data.directors = [];
-  dirRows.forEach(function(row) {
-    var cells = row.querySelectorAll('input, select');
-    var rowData = {};
-    cells.forEach(function(c) { rowData[c.className || c.type] = c.value; });
-    data.directors.push(rowData);
+  document.querySelectorAll('#directors-body tr').forEach(function(row) {
+    var texts = row.querySelectorAll('input[type="text"]');
+    var natSel = row.querySelector('select.nat-select');
+    var pepSel = row.querySelector('select.pep-select');
+    data.directors.push({
+      first_name: texts[0] ? texts[0].value : '',
+      last_name: texts[1] ? texts[1].value : '',
+      nationality: natSel ? natSel.value : '',
+      is_pep: pepSel ? pepSel.value : 'No',
+      person_key: row.dataset.personkey || row.dataset.personKey || ''
+    });
   });
 
-  var uboRows = document.querySelectorAll('#ubos-body tr');
+  // Collect UBOs with stable positional keys
   data.ubos = [];
-  uboRows.forEach(function(row) {
-    var cells = row.querySelectorAll('input, select');
-    var rowData = {};
-    cells.forEach(function(c) { rowData[c.className || c.type] = c.value; });
-    data.ubos.push(rowData);
+  document.querySelectorAll('#ubos-body tr').forEach(function(row) {
+    var texts = row.querySelectorAll('input[type="text"]');
+    var natSel = row.querySelector('select.nat-select');
+    var pepSel = row.querySelector('select.pep-select');
+    var numInput = row.querySelector('input[type="number"]');
+    data.ubos.push({
+      first_name: texts[0] ? texts[0].value : '',
+      last_name: texts[1] ? texts[1].value : '',
+      nationality: natSel ? natSel.value : '',
+      ownership_pct: numInput ? numInput.value : '',
+      is_pep: pepSel ? pepSel.value : 'No',
+      person_key: row.dataset.personkey || row.dataset.personKey || ''
+    });
+  });
+
+  // Collect intermediaries with stable positional keys
+  data.intermediaries = [];
+  document.querySelectorAll('#intermediaries-body tr').forEach(function(row) {
+    var textInput = row.querySelector('input[type="text"]');
+    var natSel = row.querySelector('select.nat-select');
+    var numInput = row.querySelector('input[type="number"]');
+    data.intermediaries.push({
+      entity_name: textInput ? textInput.value : '',
+      jurisdiction: natSel ? natSel.value : '',
+      ownership_pct: numInput ? numInput.value : '',
+      person_key: row.dataset.personkey || row.dataset.personKey || ''
+    });
   });
 
   return data;
@@ -6393,30 +6429,78 @@ function getCurrentStep() {
   return 0;
 }
 
-function loadDraft(ref) {
-  // Security: PII no longer loaded from localStorage
-  // Draft data is loaded from API only (see apiCall for /save-resume)
+function restoreDraftFromData(data) {
+  // Restore form state from a collectFormData()-shaped object (loaded from API)
   try {
-    var key = DRAFT_STORAGE_KEY + ref;
-    // Skip localStorage, load from API instead
-    return false;
+    if (!data || typeof data !== 'object') return false;
 
-    // Restore state
-    appRef = data.appRef || ref;
-    computedRiskLevel = data.computedRiskLevel || 'LOW';
-    if (data.uploadedDocs) {
+    if (data.appRef) appRef = data.appRef;
+    if (data.computedRiskLevel) computedRiskLevel = data.computedRiskLevel;
+    if (data.uploadedDocs && Array.isArray(data.uploadedDocs)) {
       data.uploadedDocs.forEach(function(d) { uploadedDocs.add(d); });
     }
 
-    // Restore form fields
-    if (data.prescreening) {
+    // Restore simple form fields by element ID
+    if (data.prescreening && typeof data.prescreening === 'object') {
       Object.keys(data.prescreening).forEach(function(id) {
         var el = document.getElementById(id);
         if (el) {
-          if (el.type === 'checkbox') el.checked = data.prescreening[id];
-          else el.value = data.prescreening[id];
+          if (el.type === 'checkbox') el.checked = !!data.prescreening[id];
+          else el.value = data.prescreening[id] || '';
         }
       });
+    }
+
+    // Restore checkbox-grid: services required
+    if (Array.isArray(data.servicesRequired) && data.servicesRequired.length) {
+      var svcGrid = document.getElementById('service-grid');
+      if (svcGrid) {
+        svcGrid.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+          cb.checked = data.servicesRequired.indexOf(cb.value) !== -1;
+        });
+      }
+    }
+
+    // Restore checkbox-grid: account purposes
+    if (Array.isArray(data.accountPurposes) && data.accountPurposes.length) {
+      var purpGrid = document.getElementById('purpose-grid');
+      if (purpGrid) {
+        purpGrid.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+          cb.checked = data.accountPurposes.indexOf(cb.value) !== -1;
+        });
+      }
+    }
+
+    // Restore checkbox-grid: currencies
+    if (Array.isArray(data.currencies) && data.currencies.length) {
+      document.querySelectorAll('input[name="currencies"]').forEach(function(cb) {
+        cb.checked = data.currencies.indexOf(cb.value) !== -1;
+      });
+    }
+
+    // Restore multi-select: countries of operation
+    if (Array.isArray(data.countriesOfOperation) && data.countriesOfOperation.length) {
+      restoreMultiSelect('ms-op-countries', data.countriesOfOperation);
+    }
+
+    // Restore multi-select: target markets
+    if (Array.isArray(data.targetMarkets) && data.targetMarkets.length) {
+      restoreMultiSelect('ms-target-markets', data.targetMarkets);
+    }
+
+    // Restore director rows
+    if (Array.isArray(data.directors) && data.directors.length) {
+      restorePartyRows('directors-body', data.directors, 'director');
+    }
+
+    // Restore UBO rows
+    if (Array.isArray(data.ubos) && data.ubos.length) {
+      restorePartyRows('ubos-body', data.ubos, 'ubo');
+    }
+
+    // Restore intermediary rows
+    if (Array.isArray(data.intermediaries) && data.intermediaries.length) {
+      restorePartyRows('intermediaries-body', data.intermediaries, 'intermediary');
     }
 
     // Mark uploaded docs visually
@@ -6430,8 +6514,81 @@ function loadDraft(ref) {
     updateProgress();
     return true;
   } catch (e) {
+    console.warn('restoreDraftFromData failed:', e);
     return false;
   }
+}
+
+function restoreMultiSelect(msId, values) {
+  // Reset state and repopulate
+  if (!msState[msId]) msState[msId] = new Set();
+  msState[msId].clear();
+  values.forEach(function(v) { msState[msId].add(v); });
+  // Sync checkbox UI in the options panel
+  var opts = document.querySelectorAll('#' + msId + '-options .ms-option');
+  opts.forEach(function(opt) {
+    var cb = opt.querySelector('input[type="checkbox"]');
+    if (values.indexOf(opt.dataset.value) !== -1) {
+      if (cb) cb.checked = true;
+      opt.classList.add('selected');
+    } else {
+      if (cb) cb.checked = false;
+      opt.classList.remove('selected');
+    }
+  });
+  renderMSTags(msId);
+}
+
+function restorePartyRows(tbodyId, rows, partyType) {
+  var tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  // Clear existing rows
+  tbody.innerHTML = '';
+  rows.forEach(function(rowData, idx) {
+    // Use the appropriate add function to create a properly structured row
+    if (partyType === 'director') {
+      addDirectorRow();
+    } else if (partyType === 'ubo') {
+      addUBORow();
+    } else if (partyType === 'intermediary') {
+      addIntermediaryRow();
+    }
+    // Now fill the last row we just added
+    var lastRow = tbody.querySelector('tr:last-child');
+    if (!lastRow) return;
+
+    if (partyType === 'intermediary') {
+      var textInput = lastRow.querySelector('input[type="text"]');
+      var natSel = lastRow.querySelector('select.nat-select');
+      var numInput = lastRow.querySelector('input[type="number"]');
+      if (textInput) textInput.value = rowData.entity_name || '';
+      if (natSel) natSel.value = rowData.jurisdiction || '';
+      if (numInput) numInput.value = rowData.ownership_pct || '';
+    } else {
+      var texts = lastRow.querySelectorAll('input[type="text"]');
+      var natSel = lastRow.querySelector('select.nat-select');
+      var pepSel = lastRow.querySelector('select.pep-select');
+      if (texts[0]) texts[0].value = rowData.first_name || '';
+      if (texts[1]) texts[1].value = rowData.last_name || '';
+      if (natSel) natSel.value = rowData.nationality || '';
+      if (pepSel) pepSel.value = rowData.is_pep || 'No';
+      if (partyType === 'ubo') {
+        var numInput = lastRow.querySelector('input[type="number"]');
+        if (numInput) numInput.value = rowData.ownership_pct || '';
+      }
+    }
+
+    // Set person_key if present
+    if (rowData.person_key) {
+      lastRow.dataset.personkey = rowData.person_key;
+      lastRow.dataset.personKey = rowData.person_key;
+    }
+  });
+}
+
+function loadDraft(ref) {
+  // Legacy stub — draft restore is now handled via API in resumeApplication()
+  return false;
 }
 
 function startAutoSave() {
@@ -8146,6 +8303,16 @@ async function resumeApplication(ref, stage) {
       computedRiskScore = Number(app.risk_score || computedRiskScore || 0);
       if (app.risk_dimensions) dimScores = app.risk_dimensions;
       target = getApplicationView(app.status || stage);
+
+      // Restore saved form data from save-resume API
+      try {
+        var savedSession = await apiCall('GET', '/save-resume?application_id=' + encodeURIComponent(currentApplicationId));
+        if (savedSession && savedSession.form_data && typeof savedSession.form_data === 'object') {
+          restoreDraftFromData(savedSession.form_data);
+        }
+      } catch (resumeErr) {
+        console.warn('No saved session to restore or restore failed:', resumeErr);
+      }
     }
   } catch (err) {
     console.error('Failed to load application detail for resume:', err);
