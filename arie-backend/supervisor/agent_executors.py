@@ -1276,12 +1276,100 @@ def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> 
 # AGENT 5: Compliance Memo & Risk Recommendation
 # ═══════════════════════════════════════════════════════════
 
-def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 5: Deterministic risk summary and recommendation.
+# Risk tier mapping for divergence cross-check
+_RISK_TIER_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
 
-    This executor summarizes stored risk and screening fields for supervisor-side
-    decision support. It does not generate the authoritative compliance memo used
-    in the live approval path.
+
+def _classify_memo_sections(memo: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Tag each memo section with its classification (rule/hybrid/ai).
+
+    Based on the Onboarda Agent 2-10 Operating Model:
+    - Rule-based: completeness, scoring, thresholds, escalation triggers
+    - Hybrid: business-vs-sector alignment, transaction-vs-scale
+    - AI: plausibility, memo narrative drafting (currently template-based)
+    """
+    SECTION_CLASSIFICATIONS = {
+        "executive_summary": "hybrid",
+        "client_overview": "rule",
+        "ownership_and_control": "rule",
+        "risk_assessment": "rule",
+        "screening_results": "rule",
+        "document_verification": "rule",
+        "ai_explainability": "rule",
+        "red_flags_and_mitigants": "hybrid",
+        "compliance_decision": "rule",
+        "ongoing_monitoring": "rule",
+        "audit_and_governance": "rule",
+    }
+    sections = memo.get("sections", {})
+    tagged = []
+    for key, content in sections.items():
+        tagged.append({
+            "section_key": key,
+            "classification": SECTION_CLASSIFICATIONS.get(key, "rule"),
+            "content": content,
+        })
+    return tagged
+
+
+def _compute_risk_divergence(
+    stored_risk_level: str,
+    stored_risk_score: float,
+    memo_metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Cross-check stored D1-D5 risk vs memo-handler aggregated risk.
+
+    Flags divergence if the two models disagree by more than 1 tier.
+    """
+    memo_risk = memo_metadata.get("aggregated_risk") or memo_metadata.get("risk_rating", "")
+    stored_tier = _RISK_TIER_RANK.get(str(stored_risk_level).upper(), 0)
+    memo_tier = _RISK_TIER_RANK.get(str(memo_risk).upper(), 0)
+
+    if stored_tier == 0 or memo_tier == 0:
+        return {
+            "divergence_detected": False,
+            "stored_risk_level": stored_risk_level,
+            "memo_aggregated_risk": memo_risk,
+            "tier_gap": 0,
+            "note": "Unable to compare — one or both risk levels missing",
+            "classification": "rule",
+        }
+
+    gap = abs(stored_tier - memo_tier)
+    return {
+        "divergence_detected": gap > 1,
+        "stored_risk_level": stored_risk_level,
+        "stored_risk_score": stored_risk_score,
+        "memo_aggregated_risk": memo_risk,
+        "memo_weighted_score": memo_metadata.get("weighted_risk_score"),
+        "tier_gap": gap,
+        "note": (
+            f"Risk models diverge by {gap} tier(s): stored={stored_risk_level}, memo={memo_risk}"
+            if gap > 1 else "Risk models aligned (within 1 tier)"
+        ),
+        "classification": "rule",
+    }
+
+
+def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Agent 5: Unified compliance memo and risk recommendation.
+
+    Bridges the supervisor executor to the authoritative memo path
+    (build_compliance_memo in memo_handler.py), which enforces Rules 4A-4E,
+    computes 7 risk dimensions, and generates the full 11-section memo.
+
+    Design philosophy (per operating model):
+      Rule-based (10 tasks):
+        - document completeness, jurisdiction/sector/product/channel scoring,
+          ownership complexity ingestion, screening severity ingestion,
+          weighted total risk score, risk tier bucket, mandatory escalation triggers
+      Hybrid (3 tasks):
+        - business description vs sector alignment,
+          transaction profile vs scale, recommendation narrative (policy-led)
+      AI (3 tasks — currently template-based, tagged for future upgrade):
+        - revenue model plausibility, business model plausibility, memo drafting
+
+    All outputs include classification tags. No direct Claude API calls.
     """
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
@@ -1290,45 +1378,177 @@ def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dic
     ubos = data["ubos"]
     docs = data["documents"]
     run_id = str(uuid4())
-    business_model = _build_business_model_summary(app)
 
-    # Determine risk level and recommendation
-    risk_level = app.get("risk_level", "MEDIUM") or "MEDIUM"
-    risk_score = app.get("risk_score", 50) or 50
+    # Stored risk from D1-D5 model (computed at prescreening/KYC time)
+    stored_risk_level = app.get("risk_level", "MEDIUM") or "MEDIUM"
+    stored_risk_score = float(app.get("risk_score", 50) or 50)
 
+    # --- Bridge to authoritative memo path ---
+    memo = None
+    rule_engine_result = None
+    supervisor_result = None
+    validation_result = None
+    memo_source = "unified"
+
+    try:
+        from memo_handler import build_compliance_memo
+        memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(
+            app, directors, ubos, docs
+        )
+    except Exception as e:
+        logger.warning("Agent 5: build_compliance_memo failed (%s), falling back to summary mode", e)
+        memo = None
+        memo_source = "fallback"
+
+    # --- Extract from memo if available, else fall back to stored fields ---
+    if memo and memo.get("metadata"):
+        meta = memo["metadata"]
+        risk_level = meta.get("aggregated_risk") or meta.get("risk_rating") or stored_risk_level
+        risk_score_raw = meta.get("risk_score", stored_risk_score)
+        risk_score = float(risk_score_raw) if risk_score_raw else stored_risk_score
+        decision = meta.get("approval_recommendation", "REVIEW")
+        confidence_pct = meta.get("confidence_level", 70)
+        confidence = max(0.30, min(1.0, confidence_pct / 100.0))
+    else:
+        risk_level = stored_risk_level
+        risk_score = stored_risk_score
+        decision = "APPROVE" if risk_level == "LOW" else "APPROVE_WITH_CONDITIONS" if risk_level == "MEDIUM" else "REVIEW"
+        confidence = 0.88 if risk_level == "LOW" else 0.75 if risk_level == "MEDIUM" else 0.60
+
+    status = AgentStatus.CLEAN if risk_level in ("LOW", "MEDIUM") else AgentStatus.ISSUES_FOUND
+
+    # --- Build findings ---
     pep_directors = [d for d in directors if d.get("is_pep") == "Yes"]
     pep_ubos = [u for u in ubos if u.get("is_pep") == "Yes"]
     all_peps = pep_directors + pep_ubos
-
-    decision = "APPROVE" if risk_level == "LOW" else "APPROVE_WITH_CONDITIONS" if risk_level == "MEDIUM" else "REVIEW"
-
-    confidence = 0.88 if risk_level == "LOW" else 0.75 if risk_level == "MEDIUM" else 0.60
-    status = AgentStatus.CLEAN if risk_level in ("LOW", "MEDIUM") else AgentStatus.ISSUES_FOUND
+    business_model = _build_business_model_summary(app)
 
     findings = [{
         "finding_id": str(uuid4())[:12],
         "category": "risk_assessment",
         "title": f"Overall risk assessment: {risk_level}",
-        "description": f"Composite risk score: {risk_score}/100. Recommendation: {decision}. "
-                       f"PEP exposure: {len(all_peps)}. "
-                       f"Sector: {app.get('sector', 'N/A')}. "
-                       f"Jurisdiction: {app.get('country', 'N/A')}. "
-                       f"Business plausibility: {business_model['revenue_model_plausibility']}.",
+        "description": (
+            f"Composite risk score: {risk_score}/100. Recommendation: {decision}. "
+            f"PEP exposure: {len(all_peps)}. "
+            f"Sector: {app.get('sector', 'N/A')}. "
+            f"Jurisdiction: {app.get('country', 'N/A')}. "
+            f"Business plausibility: {business_model['revenue_model_plausibility']}."
+        ),
         "severity": Severity.INFO.value if risk_level == "LOW" else Severity.MEDIUM.value if risk_level == "MEDIUM" else Severity.HIGH.value,
         "confidence": confidence,
-        "source": "stored_risk_fields",
+        "source": "memo_handler" if memo else "stored_risk_fields",
         "evidence_refs": [],
-        "regulatory_relevance": "Risk-based approach per FATF R1"
+        "regulatory_relevance": "Risk-based approach per FATF R1",
+        "classification": "rule",
     }]
+
+    # Add rule enforcement findings from memo
+    if rule_engine_result:
+        enforcements = rule_engine_result.get("enforcements", [])
+        for enf in enforcements[:5]:
+            findings.append({
+                "finding_id": str(uuid4())[:12],
+                "category": "rule_enforcement",
+                "title": f"Rule enforced: {enf.get('rule', 'unknown')}",
+                "description": enf.get("detail", str(enf)),
+                "severity": Severity.HIGH.value,
+                "confidence": 0.95,
+                "source": "rule_engine",
+                "evidence_refs": [],
+                "classification": "rule",
+            })
+
+    # Add divergence finding if models disagree
+    divergence = _compute_risk_divergence(
+        stored_risk_level, stored_risk_score,
+        memo.get("metadata", {}) if memo else {},
+    )
+    if divergence["divergence_detected"]:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": "risk_model_divergence",
+            "title": "Risk model divergence detected",
+            "description": divergence["note"],
+            "severity": Severity.HIGH.value,
+            "confidence": 0.95,
+            "source": "cross_check",
+            "evidence_refs": [],
+            "classification": "rule",
+        })
 
     evidence = [{
         "evidence_id": str(uuid4())[:12],
         "evidence_type": "risk_model_output",
-        "source": "stored_application_data",
-        "content_summary": f"Risk model: score={risk_score}, level={risk_level}, peps={len(all_peps)}",
+        "source": "memo_handler" if memo else "stored_application_data",
+        "content_summary": f"Risk model: score={risk_score}, level={risk_level}, peps={len(all_peps)}, source={memo_source}",
         "reference": app.get("ref", application_id),
         "verified": True,
+        "classification": "rule",
     }]
+
+    # Detected issues from memo
+    detected_issues = []
+    if memo and memo.get("metadata"):
+        meta = memo["metadata"]
+        if meta.get("low_confidence_flag"):
+            detected_issues.append({
+                "issue_id": str(uuid4())[:12],
+                "issue_type": "low_confidence",
+                "title": "Low model confidence",
+                "description": f"Model confidence is {meta.get('confidence_level', 0)}% — below 70% threshold (Rule 4E)",
+                "severity": Severity.HIGH.value,
+                "blocking": False,
+                "remediation": "Review data quality and completeness",
+                "related_findings": [],
+                "classification": "rule",
+            })
+        if not meta.get("documentation_complete"):
+            detected_issues.append({
+                "issue_id": str(uuid4())[:12],
+                "issue_type": "incomplete_documentation",
+                "title": "Documentation incomplete",
+                "description": f"{meta.get('pending_document_count', 0)} document(s) pending verification",
+                "severity": Severity.MEDIUM.value,
+                "blocking": False,
+                "remediation": "Complete document verification before approval",
+                "related_findings": [],
+                "classification": "rule",
+            })
+
+    # --- Classify memo sections ---
+    memo_sections = _classify_memo_sections(memo) if memo else []
+
+    # --- Risk dimensions from memo ---
+    risk_dimensions = {}
+    if memo and memo.get("metadata", {}).get("risk_dimensions"):
+        risk_dimensions = memo["metadata"]["risk_dimensions"]
+
+    # --- Escalation ---
+    escalation_flag = risk_level in ("HIGH", "VERY_HIGH") or divergence["divergence_detected"]
+    escalation_reasons = []
+    if risk_level in ("HIGH", "VERY_HIGH"):
+        escalation_reasons.append(f"Risk level {risk_level} (score: {risk_score})")
+    if divergence["divergence_detected"]:
+        escalation_reasons.append(divergence["note"])
+
+    # --- Data quality ---
+    if memo and memo.get("metadata"):
+        meta = memo["metadata"]
+        dq_score = (meta.get("verified_document_count", 0) / max(meta.get("document_count", 1), 1))
+        data_quality = {
+            "complete": meta.get("documentation_complete", False),
+            "score": round(dq_score, 2),
+            "document_count": meta.get("document_count", 0),
+            "verified_count": meta.get("verified_document_count", 0),
+            "pending_count": meta.get("pending_document_count", 0),
+            "classification": "rule",
+        }
+    else:
+        data_quality = {
+            "complete": len(docs) >= 3 and len(ubos) > 0,
+            "score": 0.8 if len(docs) >= 3 else 0.5,
+            "classification": "rule",
+        }
 
     output = _base_output(AgentType.COMPLIANCE_MEMO_RISK, "Agent 5: Compliance Memo & Risk Recommendation", application_id, run_id)
     output["model_name"] = MEMO_MODEL
@@ -1337,11 +1557,12 @@ def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dic
         "confidence_score": round(confidence, 3),
         "findings": findings,
         "evidence": evidence,
-        "detected_issues": [],
+        "detected_issues": detected_issues,
         "risk_indicators": [],
         "recommendation": decision,
-        "escalation_flag": risk_level in ("HIGH", "VERY_HIGH"),
-        "escalation_reason": f"High-risk application (score: {risk_score})" if risk_level in ("HIGH", "VERY_HIGH") else None,
+        "escalation_flag": escalation_flag,
+        "escalation_reason": "; ".join(escalation_reasons) if escalation_reasons else None,
+        # Backward-compatible fields (consumed by contradictions detector, etc.)
         "client_overview": {
             "company_name": app.get("company_name"),
             "entity_type": app.get("entity_type"),
@@ -1353,18 +1574,29 @@ def execute_compliance_memo(application_id: str, context: Dict[str, Any]) -> Dic
         "screening_summary": f"PEP exposure: {len(all_peps)}",
         "recommended_risk_level": risk_level,
         "recommended_action": decision,
-        "overall_risk_score": risk_score / 100.0,
-        "memo_sections": [],
-        "data_quality_assessment": {
-            "complete": len(docs) >= 3 and len(ubos) > 0,
-            "score": 0.8 if len(docs) >= 3 else 0.5,
-        },
+        "overall_risk_score": min(risk_score / 100.0, 1.0),
+        "memo_sections": memo_sections,
+        "data_quality_assessment": data_quality,
         "risk_indicators_summary": [{
             "category": "business_plausibility",
             "summary": business_model["summary"],
             "plausibility_score": business_model["plausibility"],
             "red_flags": business_model["red_flags"],
+            "classification": "ai",  # tagged for future AI upgrade
         }],
+        # New unified fields
+        "memo_source": memo_source,
+        "risk_model_divergence": divergence,
+        "risk_dimensions": risk_dimensions,
+        "rule_enforcements": rule_engine_result if rule_engine_result else {},
+        "validation_result": {
+            "quality_score": validation_result.get("quality_score") if validation_result else None,
+            "validation_status": validation_result.get("validation_status") if validation_result else None,
+        } if validation_result else None,
+        "supervisor_verdict": {
+            "verdict": supervisor_result.get("verdict") if supervisor_result else None,
+            "supervisor_confidence": supervisor_result.get("supervisor_confidence") if supervisor_result else None,
+        } if supervisor_result else None,
     })
     return output
 

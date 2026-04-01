@@ -399,12 +399,14 @@ class FinCrimeScreeningOutput(AgentOutputBase):
 class ComplianceMemoOutput(AgentOutputBase):
     """Agent 5: Compliance Memo & Risk Recommendation Agent
 
-    Final synthesis agent. Compiles results from Agents 1-4,
-    computes 5-dimension composite risk scoring, recommends risk rating,
-    produces onboarding memo and review checklist for compliance officers.
+    Unified compliance memo agent. Bridges to the authoritative memo path
+    (build_compliance_memo in memo_handler.py) which enforces Rules 4A-4E,
+    computes 7 risk dimensions, and generates an 11-section compliance memo.
+    All sections are classification-tagged (rule/hybrid/ai).
     """
     agent_type: AgentType = AgentType.COMPLIANCE_MEMO_RISK
 
+    # Backward-compatible fields (consumed by contradictions detector, etc.)
     client_overview: Optional[Dict[str, Any]] = None
     business_activity_summary: Optional[str] = None
     ownership_summary: Optional[str] = None
@@ -413,9 +415,17 @@ class ComplianceMemoOutput(AgentOutputBase):
     risk_indicators_summary: List[Dict[str, Any]] = Field(default_factory=list)
     recommended_risk_level: Optional[str] = None
     recommended_action: Optional[str] = None
-    memo_sections: List[Dict[str, Any]] = Field(default_factory=list)
+    memo_sections: List[Dict[str, Any]] = Field(default_factory=list, description="Classification-tagged 11-section memo")
     overall_risk_score: Optional[float] = Field(None, ge=0.0, le=1.0)
     data_quality_assessment: Optional[Dict[str, Any]] = None
+
+    # New unified fields (Wave 2)
+    memo_source: Optional[str] = Field(None, description="'unified' (real memo) or 'fallback' (summary mode)")
+    risk_model_divergence: Optional[Dict[str, Any]] = Field(None, description="D1-D5 vs memo-handler risk cross-check")
+    risk_dimensions: Optional[Dict[str, Any]] = Field(None, description="7-dimension risk breakdown from memo-handler")
+    rule_enforcements: Optional[Dict[str, Any]] = Field(None, description="Rules 4A-4E enforcement results")
+    validation_result: Optional[Dict[str, Any]] = Field(None, description="15-rule memo quality audit result")
+    supervisor_verdict: Optional[Dict[str, Any]] = Field(None, description="Memo consistency verdict")
 
 
 class PeriodicReviewOutput(AgentOutputBase):
