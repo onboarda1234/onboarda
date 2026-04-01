@@ -116,7 +116,7 @@ def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
         app_dict = dict(app)
         real_id = app_dict["id"]
 
-        # C-02: decrypt PII fields on read
+        # C-02: decrypt PII fields on read (graceful — skip if server module unavailable)
         try:
             from server import decrypt_pii_fields, PII_FIELDS_DIRECTORS, PII_FIELDS_UBOS
             directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
@@ -125,7 +125,7 @@ def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
             ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
                 "SELECT * FROM ubos WHERE application_id=?", (real_id,)
             ).fetchall()]
-        except ImportError:
+        except (ImportError, ValueError, RuntimeError):
             directors = [dict(d) for d in db.execute(
                 "SELECT * FROM directors WHERE application_id=?", (real_id,)
             ).fetchall()]
