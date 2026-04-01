@@ -1267,9 +1267,384 @@ def _build_business_model_summary(app: Dict[str, Any]) -> Dict[str, Any]:
 # ═══════════════════════════════════════════════════════════
 # AGENT 3: FinCrime Screening Interpretation
 # ═══════════════════════════════════════════════════════════
+#
+# Workbook alignment: Onboarda_Agent_2_10_Operating_Model.xlsx
+# 11 checks: 4 rule-based, 4 hybrid, 3 AI
+#
+# This executor reads stored screening results from prescreening_data
+# (populated by run_full_screening() during prescreening). It does NOT
+# re-run live screening — it interprets already-captured results.
+#
+# If no screening report exists in prescreening_data, the executor runs
+# in degraded mode using only stored PEP flags from director/UBO records.
+
+
+# ── Severity policy matrix (deterministic) ──────────────────
+# Used for check #7: severity ranking of confirmed hits.
+_SEVERITY_MATRIX = {
+    "sanctions":      {"base": "CRITICAL", "rank": 4},
+    "pep":            {"base": "HIGH",     "rank": 3},
+    "adverse_media":  {"base": "MEDIUM",   "rank": 2},
+    "watchlist":      {"base": "MEDIUM",   "rank": 2},
+}
+
+# Confidence threshold for auto-clear vs gray-zone (check #4 & #5)
+_EXACT_MATCH_THRESHOLD = 85.0    # above → confirmed match
+_NEAR_MATCH_LOWER = 50.0         # below → auto-clear as likely FP
+_FP_CONFIDENCE_THRESHOLD = 60.0  # below this → classified as false positive
+
+
+def _extract_screening_report(app: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract the screening_report from prescreening_data JSON."""
+    raw = app.get("prescreening_data", "{}")
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    elif isinstance(raw, dict):
+        parsed = raw
+    else:
+        return None
+    return parsed.get("screening_report")
+
+
+def _retrieve_sanctions_hits(screening_report: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Check #1 (rule): Extract sanctions hits from screening report."""
+    hits = []
+    for section_key in ("director_screenings", "ubo_screenings"):
+        for person in screening_report.get(section_key, []):
+            scr = person.get("screening", {})
+            for result in scr.get("results", []):
+                if result.get("is_sanctioned"):
+                    hits.append({
+                        "person_name": person.get("person_name", ""),
+                        "person_type": person.get("person_type", "unknown"),
+                        "matched_name": result.get("matched_name", ""),
+                        "match_score": result.get("match_score", 0),
+                        "sanctions_list": result.get("sanctions_list", ""),
+                        "countries": result.get("countries", []),
+                        "source": "screening_report",
+                        "classification": "rule",
+                    })
+    company_scr = screening_report.get("company_screening", {}).get("sanctions", {})
+    for result in company_scr.get("results", []):
+        if result.get("is_sanctioned"):
+            hits.append({
+                "person_name": screening_report.get("company_screening", {}).get("name", "Company"),
+                "person_type": "company",
+                "matched_name": result.get("matched_name", ""),
+                "match_score": result.get("match_score", 0),
+                "sanctions_list": result.get("sanctions_list", ""),
+                "countries": result.get("countries", []),
+                "source": "screening_report",
+                "classification": "rule",
+            })
+    return hits
+
+
+def _retrieve_pep_hits(
+    screening_report: Optional[Dict[str, Any]],
+    directors: List[Dict[str, Any]],
+    ubos: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Check #2 (rule): Consolidate PEP hits from screening report + stored flags."""
+    hits = []
+    seen_names = set()
+
+    # From screening report
+    if screening_report:
+        for section_key in ("director_screenings", "ubo_screenings"):
+            for person in screening_report.get(section_key, []):
+                scr = person.get("screening", {})
+                for result in scr.get("results", []):
+                    if result.get("is_pep"):
+                        name = person.get("person_name", "")
+                        seen_names.add(name.lower())
+                        hits.append({
+                            "person_name": name,
+                            "person_type": person.get("person_type", "unknown"),
+                            "matched_name": result.get("matched_name", ""),
+                            "match_score": result.get("match_score", 0),
+                            "topics": result.get("topics", []),
+                            "countries": result.get("countries", []),
+                            "source": "screening_report",
+                            "undeclared": person.get("undeclared_pep", False),
+                            "classification": "rule",
+                        })
+
+    # From stored PEP flags (fallback / supplement)
+    for person_list, ptype in [(directors, "director"), (ubos, "ubo")]:
+        for p in person_list:
+            if p.get("is_pep") == "Yes":
+                name = p.get("full_name", "")
+                if name.lower() not in seen_names:
+                    seen_names.add(name.lower())
+                    hits.append({
+                        "person_name": name,
+                        "person_type": ptype,
+                        "matched_name": name,
+                        "match_score": 100.0,
+                        "topics": ["pep"],
+                        "countries": [],
+                        "source": "stored_pep_flag",
+                        "undeclared": False,
+                        "classification": "rule",
+                    })
+    return hits
+
+
+def _retrieve_adverse_media_hits(screening_report: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Check #3 (rule): Extract adverse media hits from screening report."""
+    hits = []
+    for section_key in ("director_screenings", "ubo_screenings"):
+        for person in screening_report.get(section_key, []):
+            scr = person.get("screening", {})
+            for result in scr.get("results", []):
+                topics = [t.lower() for t in result.get("topics", [])]
+                if not result.get("is_sanctioned") and not result.get("is_pep") and topics:
+                    hits.append({
+                        "person_name": person.get("person_name", ""),
+                        "person_type": person.get("person_type", "unknown"),
+                        "matched_name": result.get("matched_name", ""),
+                        "match_score": result.get("match_score", 0),
+                        "topics": result.get("topics", []),
+                        "countries": result.get("countries", []),
+                        "source": "screening_report",
+                        "classification": "rule",
+                    })
+    return hits
+
+
+def _exact_identity_disambiguation(all_hits: List[Dict[str, Any]], directors: List[Dict[str, Any]], ubos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Check #4 (rule): Auto-clear or confirm hits based on strong identifiers."""
+    known_names = set()
+    for p in directors + ubos:
+        name = (p.get("full_name") or "").strip().lower()
+        if name:
+            known_names.add(name)
+
+    disambiguated = []
+    for hit in all_hits:
+        score = hit.get("match_score", 0)
+        matched = (hit.get("matched_name") or "").strip().lower()
+        person = (hit.get("person_name") or "").strip().lower()
+
+        if score >= _EXACT_MATCH_THRESHOLD and matched and person and matched == person:
+            hit["disambiguation"] = "confirmed_exact"
+            hit["disambiguation_method"] = "rule"
+        elif score < _NEAR_MATCH_LOWER:
+            hit["disambiguation"] = "auto_cleared"
+            hit["disambiguation_method"] = "rule"
+        else:
+            hit["disambiguation"] = "requires_review"
+            hit["disambiguation_method"] = "pending"
+        disambiguated.append(hit)
+    return disambiguated
+
+
+def _near_match_identity_disambiguation(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Check #5 (hybrid): Score gray-zone matches using bounded interpretation."""
+    for hit in hits:
+        if hit.get("disambiguation") != "requires_review":
+            continue
+        score = hit.get("match_score", 0)
+        # Deterministic scoring first
+        name_match = (hit.get("matched_name") or "").lower() == (hit.get("person_name") or "").lower()
+        if name_match and score >= 70:
+            hit["disambiguation"] = "probable_match"
+            hit["near_match_confidence"] = round(score / 100, 2)
+        elif score >= 60:
+            hit["disambiguation"] = "gray_zone"
+            hit["near_match_confidence"] = round(score / 100, 2)
+        else:
+            hit["disambiguation"] = "probable_fp"
+            hit["near_match_confidence"] = round(score / 100, 2)
+        hit["disambiguation_method"] = "hybrid"
+    return hits
+
+
+def _false_positive_reduction(hits: List[Dict[str, Any]]) -> tuple:
+    """Check #6 (hybrid): Classify hits as confirmed, likely FP, or gray-zone."""
+    confirmed = []
+    false_positives = []
+    gray_zone = []
+    for hit in hits:
+        d = hit.get("disambiguation", "")
+        score = hit.get("match_score", 0)
+        if d in ("confirmed_exact", "probable_match"):
+            confirmed.append(hit)
+        elif d == "auto_cleared" or score < _FP_CONFIDENCE_THRESHOLD:
+            hit["fp_reason"] = "below_confidence_threshold" if score < _FP_CONFIDENCE_THRESHOLD else "auto_cleared_low_score"
+            false_positives.append(hit)
+        else:
+            gray_zone.append(hit)
+    return confirmed, false_positives, gray_zone
+
+
+def _severity_ranking(confirmed_hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Check #7 (hybrid): Rank confirmed hits by policy severity matrix."""
+    ranked = []
+    for hit in confirmed_hits:
+        if hit.get("is_sanctioned") or "sanctions" in str(hit.get("topics", [])).lower():
+            severity_info = _SEVERITY_MATRIX["sanctions"]
+        elif hit.get("is_pep") or "pep" in str(hit.get("topics", [])).lower():
+            severity_info = _SEVERITY_MATRIX["pep"]
+        else:
+            severity_info = _SEVERITY_MATRIX.get("adverse_media", {"base": "LOW", "rank": 1})
+        hit["severity"] = severity_info["base"]
+        hit["severity_rank"] = severity_info["rank"]
+        hit["classification"] = "hybrid"
+        ranked.append(hit)
+    ranked.sort(key=lambda h: h.get("severity_rank", 0), reverse=True)
+    return ranked
+
+
+def _adverse_media_ai_assessment(media_hits: List[Dict[str, Any]], app: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Checks #8 & #9 (AI): Assess relevance and materiality of adverse media.
+
+    Attempts to call interpret_fincrime_screening() for AI assessment.
+    Falls back to template output if Claude is unavailable or no hits.
+    """
+    if not media_hits:
+        return []
+
+    assessed = []
+    ai_available = False
+    try:
+        import os as _os
+        from claude_client import ClaudeClient
+        api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+        if api_key:
+            client = ClaudeClient(api_key=api_key)
+            ai_available = True
+    except (ImportError, ValueError, RuntimeError):
+        pass
+
+    for hit in media_hits:
+        if ai_available:
+            try:
+                screening_input = {
+                    "results": [hit],
+                    "total_hits": 1,
+                    "source": hit.get("source", "screening_report"),
+                }
+                ai_result = client.interpret_fincrime_screening(
+                    screening_results=screening_input,
+                    person_name=hit.get("person_name", ""),
+                    entity_type=hit.get("person_type", "individual"),
+                )
+                hit["relevance_assessment"] = ai_result.get("recommendation", "requires_manual_review")
+                hit["materiality_note"] = ai_result.get("reasoning", "")
+                hit["ai_confidence"] = ai_result.get("confirmed_hits", 0) > 0
+                hit["assessment_source"] = "ai"
+            except Exception:
+                hit["relevance_assessment"] = "requires_manual_review"
+                hit["materiality_note"] = "AI assessment unavailable — manual review required"
+                hit["assessment_source"] = "fallback"
+        else:
+            hit["relevance_assessment"] = "requires_manual_review"
+            hit["materiality_note"] = "AI assessment unavailable — manual review required"
+            hit["assessment_source"] = "fallback"
+        hit["classification"] = "ai"
+        assessed.append(hit)
+    return assessed
+
+
+def _consolidated_screening_narrative(
+    sanctions_hits: List[Dict[str, Any]],
+    pep_hits: List[Dict[str, Any]],
+    media_hits: List[Dict[str, Any]],
+    confirmed: List[Dict[str, Any]],
+    false_positives: List[Dict[str, Any]],
+    gray_zone: List[Dict[str, Any]],
+    screened_entities: List[str],
+    degraded: bool,
+) -> str:
+    """Check #10 (AI): Generate consolidated screening narrative."""
+    parts = []
+    parts.append(f"Screening interpretation completed for {len(screened_entities)} entities.")
+
+    if degraded:
+        parts.append("NOTE: Running in degraded mode — no screening report available. "
+                      "Results based on stored PEP declarations only.")
+
+    total_raw = len(sanctions_hits) + len(pep_hits) + len(media_hits)
+    parts.append(f"Total raw hits: {total_raw}. "
+                 f"Confirmed: {len(confirmed)}. "
+                 f"False positives: {len(false_positives)}. "
+                 f"Gray zone (requires review): {len(gray_zone)}.")
+
+    if sanctions_hits:
+        names = ", ".join(set(h.get("person_name", "") for h in sanctions_hits))
+        parts.append(f"SANCTIONS: {len(sanctions_hits)} hit(s) involving {names}. "
+                     "Immediate escalation required per AML/CFT policy.")
+    if pep_hits:
+        names = ", ".join(set(h.get("person_name", "") for h in pep_hits))
+        undeclared = [h for h in pep_hits if h.get("undeclared")]
+        parts.append(f"PEP: {len(pep_hits)} hit(s) involving {names}. "
+                     "Enhanced due diligence required per FATF R12.")
+        if undeclared:
+            parts.append(f"WARNING: {len(undeclared)} undeclared PEP(s) detected.")
+    if media_hits:
+        parts.append(f"ADVERSE MEDIA: {len(media_hits)} hit(s). Review for relevance and materiality.")
+
+    if not total_raw:
+        parts.append("No sanctions, PEP, or adverse media matches found. Screening clear.")
+
+    return " ".join(parts)
+
+
+def _screening_disposition(
+    sanctions_hits: List[Dict[str, Any]],
+    confirmed: List[Dict[str, Any]],
+    gray_zone: List[Dict[str, Any]],
+    pep_hits: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Check #11 (hybrid): Policy-led disposition routing."""
+    if sanctions_hits:
+        return {
+            "disposition": "REJECT",
+            "reason": "Sanctions match identified — automatic rejection per AML policy",
+            "requires_human_review": True,
+            "classification": "hybrid",
+        }
+    if any(h.get("severity") == "CRITICAL" for h in confirmed):
+        return {
+            "disposition": "ESCALATE",
+            "reason": "Critical severity hit confirmed — escalation to MLRO required",
+            "requires_human_review": True,
+            "classification": "hybrid",
+        }
+    if gray_zone:
+        return {
+            "disposition": "ESCALATE",
+            "reason": f"{len(gray_zone)} gray-zone hit(s) require manual review",
+            "requires_human_review": True,
+            "classification": "hybrid",
+        }
+    if pep_hits:
+        return {
+            "disposition": "EDD_REQUIRED",
+            "reason": f"{len(pep_hits)} PEP hit(s) — enhanced due diligence required",
+            "requires_human_review": True,
+            "classification": "hybrid",
+        }
+    return {
+        "disposition": "CLEAR",
+        "reason": "No confirmed adverse findings — proceed with standard onboarding",
+        "requires_human_review": False,
+        "classification": "hybrid",
+    }
+
 
 def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 3: Deterministic interpretation of stored screening-related fields."""
+    """Agent 3: FinCrime Screening Interpretation.
+
+    Workbook: 11 checks — 4 rule, 4 hybrid, 3 AI.
+    Reads stored screening results from prescreening_data. Does NOT re-run
+    live screening. Falls back to degraded mode if no screening report exists.
+    """
     db_path = context.get("db_path", "")
     data = _get_app_data(db_path, application_id)
     app = data["application"]
@@ -1277,70 +1652,123 @@ def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> 
     ubos = data["ubos"]
     run_id = str(uuid4())
 
-    # Aggregate screening-related fields from stored application data.
-    # This executor is not a live screening provider integration.
     all_persons = directors + ubos
     screened_entities = [app.get("company_name", "")] + [p.get("full_name", "") for p in all_persons]
     screened_entities = [e for e in screened_entities if e]
 
-    pep_directors = [d for d in directors if d.get("is_pep") == "Yes"]
-    pep_ubos = [u for u in ubos if u.get("is_pep") == "Yes"]
-    all_peps = pep_directors + pep_ubos
+    # ── Extract screening report from prescreening_data ──
+    screening_report = _extract_screening_report(app)
+    degraded = screening_report is None
 
-    sanctions_found = False  # Would come from real API in production
-    pep_found = len(all_peps) > 0
-    adverse_media = False  # Would come from real API in production
+    # ── Check #1 (rule): Sanctions hit retrieval ──
+    sanctions_hits = _retrieve_sanctions_hits(screening_report) if screening_report else []
 
-    pep_results = [{"name": p.get("full_name", ""), "pep_type": "politically_exposed_person", "confidence": 0.90} for p in all_peps]
+    # ── Check #2 (rule): PEP hit retrieval ──
+    pep_hits = _retrieve_pep_hits(screening_report, directors, ubos)
 
-    confidence = 0.90 if not sanctions_found and not pep_found else 0.80
-    status = AgentStatus.CLEAN if not sanctions_found and not pep_found else AgentStatus.ISSUES_FOUND
+    # ── Check #3 (rule): Adverse media hit retrieval ──
+    media_hits = _retrieve_adverse_media_hits(screening_report) if screening_report else []
+
+    # ── Check #4 (rule): Exact identity disambiguation ──
+    all_hits = sanctions_hits + pep_hits + media_hits
+    all_hits = _exact_identity_disambiguation(all_hits, directors, ubos)
+
+    # ── Check #5 (hybrid): Near-match identity disambiguation ──
+    all_hits = _near_match_identity_disambiguation(all_hits)
+
+    # ── Check #6 (hybrid): False-positive reduction ──
+    confirmed, false_positives, gray_zone = _false_positive_reduction(all_hits)
+
+    # ── Check #7 (hybrid): Severity ranking ──
+    ranked_confirmed = _severity_ranking(confirmed)
+
+    # ── Checks #8 & #9 (AI): Adverse media relevance & materiality ──
+    media_confirmed = [h for h in confirmed if not h.get("is_sanctioned") and not h.get("is_pep")
+                       and "pep" not in str(h.get("topics", [])).lower()]
+    assessed_media = _adverse_media_ai_assessment(media_confirmed, app)
+
+    # ── Check #10 (AI): Consolidated screening narrative ──
+    narrative = _consolidated_screening_narrative(
+        sanctions_hits, pep_hits, media_hits,
+        confirmed, false_positives, gray_zone,
+        screened_entities, degraded,
+    )
+
+    # ── Check #11 (hybrid): Recommended screening disposition ──
+    disposition = _screening_disposition(sanctions_hits, confirmed, gray_zone, pep_hits)
+
+    # ── Build output ──
+    sanctions_found = len(sanctions_hits) > 0
+    pep_found = len(pep_hits) > 0
+    adverse_media_found = len(media_hits) > 0
+    highest_score = max((h.get("match_score", 0) for h in all_hits), default=0.0)
+
+    if sanctions_found:
+        confidence = 0.70
+        status = AgentStatus.ISSUES_FOUND
+    elif pep_found or gray_zone:
+        confidence = 0.80
+        status = AgentStatus.ISSUES_FOUND
+    else:
+        confidence = 0.95
+        status = AgentStatus.CLEAN
 
     findings = []
     evidence = []
 
-    if pep_found:
-        for p in all_peps:
-            findings.append({
-                "finding_id": str(uuid4())[:12],
-                "category": "pep_confirmed",
-                "title": f"PEP identified: {p.get('full_name', 'Unknown')}",
-                "description": f"Confirmed Politically Exposed Person: {p.get('full_name', '')}. "
-                               f"Role: {p.get('position', 'N/A')}. Enhanced due diligence required per FATF R12.",
-                "severity": Severity.HIGH.value,
-                "confidence": 0.90,
-                "source": "stored_pep_flag",
-                "evidence_refs": [],
-                "regulatory_relevance": "FATF R12: Enhanced CDD required for PEPs"
-            })
-            evidence.append({
-                "evidence_id": str(uuid4())[:12],
-                "evidence_type": "screening_result",
-                "source": "stored_screening_record",
-                "content_summary": f"PEP match: {p.get('full_name', '')}",
-                "reference": f"PEP-{str(uuid4())[:8]}",
-                "verified": True,
-            })
+    for hit in ranked_confirmed:
+        findings.append({
+            "finding_id": str(uuid4())[:12],
+            "category": f"{hit.get('severity', 'MEDIUM').lower()}_match_confirmed",
+            "title": f"Confirmed: {hit.get('person_name', 'Unknown')} ({hit.get('severity', 'MEDIUM')})",
+            "description": f"Matched {hit.get('matched_name', '')} on {hit.get('sanctions_list', 'screening list')}. "
+                           f"Score: {hit.get('match_score', 0)}%. Disposition: {disposition.get('disposition', 'REVIEW')}.",
+            "severity": hit.get("severity", Severity.MEDIUM.value),
+            "confidence": round(hit.get("match_score", 0) / 100, 2),
+            "source": hit.get("source", "screening_report"),
+            "evidence_refs": [],
+            "regulatory_relevance": "FATF R12" if hit.get("is_pep") or "pep" in str(hit.get("topics", [])).lower() else "AML/CFT Act s.17",
+            "classification": hit.get("classification", "rule"),
+        })
+        evidence.append({
+            "evidence_id": str(uuid4())[:12],
+            "evidence_type": "screening_result",
+            "source": hit.get("source", "screening_report"),
+            "content_summary": f"Match: {hit.get('person_name', '')} → {hit.get('matched_name', '')} ({hit.get('match_score', 0)}%)",
+            "reference": f"SCR-{str(uuid4())[:8]}",
+            "verified": True,
+        })
 
     if not findings:
         findings.append({
             "finding_id": str(uuid4())[:12],
             "category": "screening_clear",
             "title": "Screening — no adverse findings",
-            "description": f"Screened {len(screened_entities)} entities. No sanctions, PEP, or adverse media matches.",
+            "description": f"Screened {len(screened_entities)} entities. {narrative}",
             "severity": Severity.INFO.value,
-            "confidence": 0.90,
-            "source": "heuristic_screening_summary",
+            "confidence": 0.95,
+            "source": "screening_interpretation",
             "evidence_refs": [],
+            "classification": "rule",
         })
-        evidence.append({
-            "evidence_id": str(uuid4())[:12],
-            "evidence_type": "screening_result",
-            "source": "stored_screening_record",
-            "content_summary": f"Clean screening for {len(screened_entities)} entities",
-            "reference": f"SCR-{str(uuid4())[:8]}",
-            "verified": True,
-        })
+
+    checks_performed = [
+        {"check": "Sanctions hit retrieval", "classification": "rule", "result": f"{len(sanctions_hits)} hit(s)"},
+        {"check": "PEP hit retrieval", "classification": "rule", "result": f"{len(pep_hits)} hit(s)"},
+        {"check": "Adverse media hit retrieval", "classification": "rule", "result": f"{len(media_hits)} hit(s)"},
+        {"check": "Exact identity disambiguation", "classification": "rule", "result": f"{len([h for h in all_hits if h.get('disambiguation_method') == 'rule'])} resolved"},
+        {"check": "Near-match identity disambiguation", "classification": "hybrid", "result": f"{len([h for h in all_hits if h.get('disambiguation_method') == 'hybrid'])} scored"},
+        {"check": "False-positive reduction", "classification": "hybrid", "result": f"{len(false_positives)} FP(s), {len(gray_zone)} gray-zone"},
+        {"check": "Severity ranking of confirmed hits", "classification": "hybrid", "result": f"{len(ranked_confirmed)} ranked"},
+        {"check": "Adverse media relevance assessment", "classification": "ai", "result": f"{len(assessed_media)} assessed"},
+        {"check": "Adverse media materiality / seriousness", "classification": "ai", "result": f"{len(assessed_media)} assessed"},
+        {"check": "Consolidated screening narrative", "classification": "ai", "result": "generated"},
+        {"check": "Recommended screening disposition", "classification": "hybrid", "result": disposition.get("disposition", "UNKNOWN")},
+    ]
+
+    pep_results = [{"name": h.get("person_name", ""), "pep_type": "politically_exposed_person",
+                     "confidence": round(h.get("match_score", 0) / 100, 2),
+                     "undeclared": h.get("undeclared", False)} for h in pep_hits]
 
     output = _base_output(AgentType.FINCRIME_SCREENING, "Agent 3: FinCrime Screening Interpretation", application_id, run_id)
     output.update({
@@ -1349,20 +1777,36 @@ def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> 
         "findings": findings,
         "evidence": evidence,
         "detected_issues": [],
-        "risk_indicators": [{"indicator_type": "pep_exposure", "description": f"{len(all_peps)} PEP(s) identified", "risk_level": "high", "source_agent": "fincrime_screening", "contributing_factors": [p.get("full_name", "") for p in all_peps]}] if pep_found else [],
-        "recommendation": "Clear screening — proceed" if not pep_found and not sanctions_found else "Enhanced due diligence required for PEP exposure",
-        "escalation_flag": sanctions_found,
-        "escalation_reason": "Sanctions match identified" if sanctions_found else None,
-        "sanctions_results": [],
+        "risk_indicators": [{"indicator_type": "pep_exposure", "description": f"{len(pep_hits)} PEP(s) identified",
+                             "risk_level": "high", "source_agent": "fincrime_screening",
+                             "contributing_factors": [h.get("person_name", "") for h in pep_hits]}] if pep_found else [],
+        "recommendation": disposition.get("reason", ""),
+        "escalation_flag": sanctions_found or disposition.get("disposition") in ("REJECT", "ESCALATE"),
+        "escalation_reason": disposition.get("reason") if disposition.get("disposition") in ("REJECT", "ESCALATE") else None,
+        "sanctions_results": sanctions_hits,
         "pep_results": pep_results,
-        "adverse_media_results": [],
+        "adverse_media_results": assessed_media or media_hits,
         "sanctions_match_found": sanctions_found,
         "pep_match_found": pep_found,
-        "adverse_media_found": adverse_media,
-        "highest_match_score": 0.90 if pep_found else 0.0,
+        "adverse_media_found": adverse_media_found,
+        "highest_match_score": round(highest_score, 2),
         "screened_entities": screened_entities,
-        "screening_provider": "stored_application_data",
+        "screening_provider": "prescreening_report" if not degraded else "stored_application_data",
         "screening_date": datetime.utcnow().isoformat(),
+        "screening_mode": "full" if not degraded else "degraded",
+        "checks_performed": checks_performed,
+        "confirmed_hits": ranked_confirmed,
+        "false_positives_cleared": len(false_positives),
+        "gray_zone_count": len(gray_zone),
+        "disposition": disposition,
+        "narrative": narrative,
+        "false_positive_assessment": {
+            "total_raw_hits": len(all_hits),
+            "confirmed": len(confirmed),
+            "cleared_as_fp": len(false_positives),
+            "gray_zone": len(gray_zone),
+            "classification": "hybrid",
+        },
     })
     return output
 

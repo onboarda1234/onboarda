@@ -376,10 +376,10 @@ class CorporateStructureUBOOutput(AgentOutputBase):
 class FinCrimeScreeningOutput(AgentOutputBase):
     """Agent 3: FinCrime Screening Interpretation Agent
 
-    Screens individuals/entities against sanctions lists, PEP databases,
-    watchlists, and adverse media. Distinguishes false positives,
-    assesses match confidence, classifies political exposure.
-    Runs AFTER Identity Agent (Agent 1) and can inform Agent 4 ownership review.
+    Workbook: 11 checks — 4 rule, 4 hybrid, 3 AI.
+    Interprets stored screening results from prescreening_data.
+    Policy-bounded: sanctions > PEP > adverse media severity matrix.
+    Runs in degraded mode when no screening report is available.
     """
     agent_type: AgentType = AgentType.FINCRIME_SCREENING
 
@@ -393,7 +393,14 @@ class FinCrimeScreeningOutput(AgentOutputBase):
     screened_entities: List[str] = Field(default_factory=list)
     screening_provider: Optional[str] = None
     screening_date: Optional[str] = None
+    screening_mode: Optional[str] = None  # "full" or "degraded"
     false_positive_assessment: Optional[Dict[str, Any]] = None
+    checks_performed: List[Dict[str, Any]] = Field(default_factory=list)
+    confirmed_hits: List[Dict[str, Any]] = Field(default_factory=list)
+    false_positives_cleared: int = 0
+    gray_zone_count: int = 0
+    disposition: Optional[Dict[str, Any]] = None
+    narrative: Optional[str] = None
 
 
 class ComplianceMemoOutput(AgentOutputBase):
