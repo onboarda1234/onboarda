@@ -2299,7 +2299,6 @@ var BO_AUTH_USER = null;
 // ─── Environment Detection ────────────────────────────────────
 var ARIE_ENV = 'production';
 var FEATURE_FLAGS = {};
-var DEMO_CREDENTIALS = {};
 
 async function loadEnvironment() {
   try {
@@ -2307,7 +2306,6 @@ async function loadEnvironment() {
     const data = await res.json();
     ARIE_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
-    DEMO_CREDENTIALS = data.demo_credentials || {};
     applyEnvironmentUI();
   } catch (e) {
     console.warn('Could not load environment config:', e);
@@ -5997,8 +5995,8 @@ var AI_AGENTS = [
     description:'Rule-based ownership mapping with indirect path tracking, circular ownership detection, nominee/trust/holding detection, and complexity scoring. All checks are deterministic — no AI calls.',
     checks:['Direct ownership calculation (rule)', 'Indirect ownership via intermediaries (rule)', 'UBO threshold qualification ≥25% (rule)', 'Total ownership completeness (rule)', 'Circular ownership detection (rule)', 'Nominee arrangement detection (rule)', 'Trust/foundation structure detection (rule)', 'Holding company/SPV detection (rule)', 'Opaque jurisdiction flagging (rule)', 'Shell company indicator aggregation (rule)', 'Complexity scoring (rule)', 'Ownership arithmetic validation (rule)', 'Escalation logic (rule)'] },
   { id:5, name:'Compliance Memo & Risk Recommendation Agent', icon:'📝', stage:'Onboarding', enabled:true,
-    description:'Final synthesis agent. Compiles results from Agents 1-4, summarizes findings, recommends risk rating, generates onboarding memo and review checklist.',
-    checks:['Compile all agent results', 'Summarize key findings', 'Identify risk indicators', 'Recommend risk rating', 'Generate onboarding memo', 'Produce review checklist', 'Flag unresolved contradictions', 'Calculate aggregate confidence', 'Determine approval/escalation recommendation', 'Generate compliance narrative'] },
+    description:'Unified compliance memo agent. Bridges to authoritative memo path enforcing Rules 4A-4E, computing 7 risk dimensions, and generating an 11-section memo. Classification-tagged output (rule/hybrid/ai). Includes risk-model divergence cross-check.',
+    checks:['Document completeness score (rule)', 'Jurisdiction risk score (rule)', 'Industry/sector risk score (rule)', 'Product/service risk score (rule)', 'Channel/delivery risk score (rule)', 'Ownership complexity ingestion (rule)', 'Screening severity ingestion (rule)', 'Weighted total risk score (rule)', 'Risk tier bucket (rule)', 'Mandatory escalation triggers (rule)', 'Business description vs sector alignment (hybrid)', 'Transaction profile vs business scale (hybrid)', 'Recommendation narrative (hybrid)', 'Revenue model plausibility (ai)', 'Business model plausibility (ai)', 'Compliance memo drafting (ai)'] },
   { id:6, name:'Periodic Review Preparation Agent', icon:'📅', stage:'Monitoring', enabled:true,
     description:'Prepares client files for periodic reviews and identifies expired documents.',
     checks:['Review schedule assessment', 'Expired document identification', 'Updated verification requirement flags', 'Client file compilation', 'Review checklist generation'] },
@@ -6494,6 +6492,9 @@ async function handleLogin(e) {
   submitBtn.textContent = 'Signing in...';
   errEl.classList.remove('show');
 
+  // Demo password for offline/demo mode
+  var DEMO_PASSWORD = 'Onboarda2026!';
+
   try {
     var resp;
     var demoUser = USERS.find(function(u) { return u.email === email; });
@@ -6503,8 +6504,7 @@ async function handleLogin(e) {
       resp = await boApiCall('POST', '/auth/officer/login', { email: email, password: password });
     } catch(apiErr) {
       // Backend not running — demo/offline mode (only allowed in demo environment)
-      var demoPw = (DEMO_CREDENTIALS || {}).backoffice_password || '';
-      if (ARIE_ENV === 'demo' && demoUser && demoPw && (password === demoPw || password === 'admin123')) {
+      if (ARIE_ENV === 'demo' && demoUser && (password === DEMO_PASSWORD || password === 'admin123')) {
         isOffline = true;
         resp = {
           token: 'demo_' + btoa(email + ':' + Date.now()),
