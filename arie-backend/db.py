@@ -1419,6 +1419,25 @@ def init_db():
         _ensure_default_system_settings(db)
         db.commit()
 
+        # ── H-2: Ensure demo application stubs exist (run in init_db for reliability) ──
+        if _CFG_IS_DEMO:
+            try:
+                for app_id, ref, company in [
+                    ("demo-scenario-01", "ARF-2026-DEMO01", "Meridian Software Ltd"),
+                    ("demo-scenario-02", "ARF-2026-DEMO02", "Coral Bay Holdings Ltd"),
+                    ("demo-scenario-03", "ARF-2026-DEMO03", "Atlas Digital Assets DMCC"),
+                    ("demo-scenario-04", "ARF-2026-DEMO04", "Sunshine Trading Co"),
+                    ("demo-scenario-05", "ARF-2026-DEMO05", "Levant Global Enterprises S.A.L."),
+                ]:
+                    db.execute(
+                        "INSERT OR IGNORE INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, 'submitted')",
+                        (app_id, ref, company)
+                    )
+                db.commit()
+                logger.info("Demo application stubs ensured in init_db")
+            except Exception as e:
+                logger.warning(f"Demo app stubs in init_db skipped: {e}")
+
         # ── Fix: Add 'submitted' to applications status CHECK constraint (PostgreSQL only) ──
         if USE_POSTGRESQL:
             try:
