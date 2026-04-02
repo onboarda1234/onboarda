@@ -17,7 +17,7 @@ Features:
   - Structured JSON data for every event
   - Severity classification
   - Actor tracking (system, agent, officer, admin)
-  - Integration with existing Tornado/SQLite audit_log table
+  - Uses the shared production DB layer (get_db) for PostgreSQL/SQLite
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import sqlite3
 from collections import deque
 from datetime import datetime
 from typing import Any, Deque, Dict, List, Optional
@@ -40,86 +39,63 @@ from .schemas import (
 logger = logging.getLogger("arie.supervisor.audit")
 
 
+def _get_db():
+    """Import get_db lazily to avoid circular imports at module load time."""
+    import sys
+    db_mod = sys.modules.get("db")
+    if db_mod and hasattr(db_mod, "get_db"):
+        return db_mod.get_db()
+    try:
+        from db import get_db
+        return get_db()
+    except ImportError:
+        return None
+
+
 class AuditLogger:
     """
     Append-only audit logger with hash chain integrity.
 
-    In production, this should write to an append-only database or
-    immutable storage (e.g., PostgreSQL with RLS + trigger-based
-    prevention of UPDATE/DELETE, or a dedicated audit DB).
+    Uses the shared production DB layer (get_db()) which transparently
+    handles both PostgreSQL (staging/production) and SQLite (dev/test).
+    Table creation is handled by db.py schema + migrations.
     """
 
     def __init__(self, db_path: Optional[str] = None):
         """
         Args:
-            db_path: Path to SQLite database. If None, logs to memory only.
+            db_path: Retained for backward compat but NOT used for connections.
+                     All DB access goes through get_db().
         """
-        self.db_path = db_path
+        self.db_path = db_path  # kept for API compat / stats reporting
         self._last_hash: Optional[str] = None
         self._buffer: Deque[AuditEntry] = deque(maxlen=10000)
         self._total_entries = 0
 
-        if db_path:
-            self._init_db()
-
-    def _init_db(self):
-        """Initialize the supervisor audit log table."""
-        db = sqlite3.connect(self.db_path)
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS supervisor_audit_log (
-                id TEXT PRIMARY KEY,
-                timestamp TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                severity TEXT DEFAULT 'info',
-                pipeline_id TEXT,
-                application_id TEXT,
-                run_id TEXT,
-                agent_type TEXT,
-                actor_type TEXT,
-                actor_id TEXT,
-                actor_name TEXT,
-                actor_role TEXT,
-                action TEXT NOT NULL,
-                detail TEXT,
-                data_json TEXT DEFAULT '{}',
-                ip_address TEXT,
-                session_id TEXT,
-                previous_hash TEXT,
-                entry_hash TEXT
-            )
-        """)
-        db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_sup_audit_ts
-            ON supervisor_audit_log(timestamp)
-        """)
-        db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_sup_audit_event
-            ON supervisor_audit_log(event_type)
-        """)
-        db.execute("""
-            CREATE INDEX IF NOT EXISTS idx_sup_audit_app
-            ON supervisor_audit_log(application_id)
-        """)
-        db.commit()
-        db.close()
-
         # Recover last hash from DB for chain continuity
-        self._recover_last_hash()
+        if db_path:
+            self._recover_last_hash()
 
     def _recover_last_hash(self):
-        """Recover the last entry hash from the database."""
-        if not self.db_path:
-            return
+        """Recover the last entry hash from the database for chain continuity."""
+        db = None
         try:
-            db = sqlite3.connect(self.db_path)
+            db = _get_db()
+            if db is None:
+                return
             row = db.execute(
                 "SELECT entry_hash FROM supervisor_audit_log ORDER BY timestamp DESC LIMIT 1"
             ).fetchone()
             if row:
-                self._last_hash = row[0]
-            db.close()
+                self._last_hash = row["entry_hash"] if isinstance(row, dict) else row[0]
         except Exception as e:
             logger.warning("Could not recover last audit hash: %s", e)
+        finally:
+            if db:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     def log(
         self,
@@ -173,7 +149,7 @@ class AuditLogger:
         self._buffer.append(entry)
         self._total_entries += 1
 
-        # Persist to DB
+        # Persist to DB via shared layer
         if self.db_path:
             self._persist(entry)
 
@@ -188,9 +164,13 @@ class AuditLogger:
         return entry
 
     def _persist(self, entry: AuditEntry):
-        """Write entry to SQLite database."""
+        """Write entry to database via the shared get_db() layer."""
+        db = None
         try:
-            db = sqlite3.connect(self.db_path)
+            db = _get_db()
+            if db is None:
+                logger.warning("Cannot persist audit entry: DB not available")
+                return
             db.execute("""
                 INSERT INTO supervisor_audit_log (
                     id, timestamp, event_type, severity,
@@ -213,9 +193,14 @@ class AuditLogger:
                 entry.previous_hash, entry.entry_hash,
             ))
             db.commit()
-            db.close()
         except Exception as e:
             logger.error("Failed to persist audit entry %s: %s", entry.audit_id, e)
+        finally:
+            if db:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     # ─── Convenience methods ──────────────────────────────
 
@@ -382,14 +367,16 @@ class AuditLogger:
         if not self.db_path:
             return {"verified": False, "reason": "No database configured"}
 
+        db = None
         try:
-            db = sqlite3.connect(self.db_path)
-            db.row_factory = sqlite3.Row
+            db = _get_db()
+            if db is None:
+                return {"verified": False, "reason": "DB connection not available"}
+
             rows = db.execute(
                 "SELECT * FROM supervisor_audit_log ORDER BY timestamp ASC LIMIT ?",
                 (limit,)
             ).fetchall()
-            db.close()
 
             if not rows:
                 return {"verified": True, "entries_checked": 0}
@@ -398,13 +385,25 @@ class AuditLogger:
             prev_hash = None
 
             for row in rows:
+                # v2 hash covers all material fields
                 entry_data = {
                     "audit_id": row["id"],
                     "timestamp": row["timestamp"],
                     "event_type": row["event_type"],
+                    "severity": row["severity"] or "info",
+                    "pipeline_id": row["pipeline_id"] or "",
+                    "application_id": row["application_id"] or "",
+                    "run_id": row["run_id"] or "",
+                    "agent_type": row["agent_type"] or "",
+                    "actor_type": row["actor_type"] or "system",
+                    "actor_id": row["actor_id"] or "",
+                    "actor_name": row["actor_name"] or "",
+                    "actor_role": row["actor_role"] or "",
                     "action": row["action"],
+                    "detail": row["detail"] or "",
                     "data": json.loads(row["data_json"] or "{}"),
                     "previous_hash": prev_hash or "",
+                    "hash_version": 2,
                 }
                 expected_hash = hashlib.sha256(
                     json.dumps(entry_data, sort_keys=True).encode()
@@ -437,6 +436,12 @@ class AuditLogger:
 
         except Exception as e:
             return {"verified": False, "reason": str(e)}
+        finally:
+            if db:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     def get_entries(
         self,
@@ -454,9 +459,11 @@ class AuditLogger:
                 entries = [e for e in entries if e.event_type.value == event_type]
             return [e.model_dump() for e in entries[-limit:]]
 
+        db = None
         try:
-            db = sqlite3.connect(self.db_path)
-            db.row_factory = sqlite3.Row
+            db = _get_db()
+            if db is None:
+                return []
 
             query = "SELECT * FROM supervisor_audit_log WHERE 1=1"
             params = []
@@ -471,13 +478,18 @@ class AuditLogger:
             query += " ORDER BY timestamp DESC LIMIT ?"
             params.append(limit)
 
-            rows = db.execute(query, params).fetchall()
-            db.close()
+            rows = db.execute(query, tuple(params)).fetchall()
 
             return [dict(row) for row in rows]
         except Exception as e:
             logger.error("Failed to query audit entries: %s", e)
             return []
+        finally:
+            if db:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     def get_stats(self) -> Dict[str, Any]:
         return {
