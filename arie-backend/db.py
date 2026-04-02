@@ -1424,7 +1424,14 @@ def init_db():
         db.commit()
 
         # ── H-2: Ensure demo application stubs exist (run in init_db for reliability) ──
-        if _CFG_IS_DEMO:
+        # Use both config.IS_DEMO and environment.is_demo() for robustness
+        _is_demo = _CFG_IS_DEMO
+        try:
+            from environment import is_demo as _env_is_demo
+            _is_demo = _is_demo or _env_is_demo()
+        except ImportError:
+            pass
+        if _is_demo:
             try:
                 for app_id, ref, company in [
                     ("demo-scenario-01", "ARF-2026-DEMO01", "Meridian Software Ltd"),
@@ -2192,7 +2199,13 @@ def _migrate_agent_definitions(db: DBConnection):
 
 def _seed_monitoring_demo_data(db: DBConnection):
     """Seed monitoring, periodic review, and EDD demo data (idempotent — checks for empty tables)."""
-    if not _CFG_IS_DEMO:
+    _is_demo = _CFG_IS_DEMO
+    try:
+        from environment import is_demo as _env_is_demo
+        _is_demo = _is_demo or _env_is_demo()
+    except ImportError:
+        pass
+    if not _is_demo:
         return
 
     now = datetime.now()
