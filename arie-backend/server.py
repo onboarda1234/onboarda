@@ -1851,6 +1851,20 @@ class SubmitApplicationHandler(BaseHandler):
         db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
 
+        # Sync undeclared PEP detections back to director/UBO records
+        for ds in screening_report.get("director_screenings", []):
+            if ds.get("undeclared_pep"):
+                db.execute(
+                    "UPDATE directors SET is_pep='Yes' WHERE application_id=? AND full_name=?",
+                    (real_id, ds.get("person_name", ""))
+                )
+        for us in screening_report.get("ubo_screenings", []):
+            if us.get("undeclared_pep"):
+                db.execute(
+                    "UPDATE ubos SET is_pep='Yes' WHERE application_id=? AND full_name=?",
+                    (real_id, us.get("person_name", ""))
+                )
+
         db.execute("""
             UPDATE applications SET
                 status='submitted', submitted_at=datetime('now'),

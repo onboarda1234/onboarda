@@ -2477,8 +2477,16 @@ async function loadFromAPI() {
           dims: dims,
           docs: backendDocuments.map(function(d) { return d.doc_type; }),
           _documents: backendDocuments,
-          pepCount: (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
-                    (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length,
+          pepCount: (function() {
+            var declared = (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
+                           (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length;
+            if (declared > 0) return declared;
+            // Fallback: count screening-detected undeclared PEPs
+            var sr = (a.prescreening_data || {}).screening_report || {};
+            var screeningPeps = (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
+                                (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
+            return screeningPeps;
+          })(),
           _raw_prescreening: a.prescreening_data
         };
       });
@@ -3546,7 +3554,14 @@ async function fetchApplicationDetail(ref) {
     directors: directors,
     ubos: ubos,
     intermediaries: intermediaries,
-    pepCount: directors.filter(function(d) { return d.pep === 'Yes'; }).length + ubos.filter(function(u) { return u.pep === 'Yes'; }).length,
+    pepCount: (function() {
+      var declared = directors.filter(function(d) { return d.pep === 'Yes'; }).length + ubos.filter(function(u) { return u.pep === 'Yes'; }).length;
+      if (declared > 0) return declared;
+      var sr = (psData || {}).screening_report || {};
+      var screeningPeps = (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
+                          (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
+      return screeningPeps;
+    })(),
     dims: dims,
     _documents: documents,
     docs: documents.map(function(doc) { return doc.doc_type; }),
