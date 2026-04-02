@@ -1942,6 +1942,131 @@ def _migrate_agent_definitions(db: DBConnection):
     logger.info("Migrated agent definitions to Wave 1-4 versions")
 
 
+def _seed_monitoring_demo_data(db: DBConnection):
+    """Seed monitoring, periodic review, and EDD demo data (idempotent — checks for empty tables)."""
+    if not _CFG_IS_DEMO:
+        return
+
+    now = datetime.now()
+
+    # Only seed each table if it's empty — prevents duplicates on restart
+    alerts_count = db.execute("SELECT COUNT(*) as c FROM monitoring_alerts").fetchone()["c"]
+    reviews_count = db.execute("SELECT COUNT(*) as c FROM periodic_reviews").fetchone()["c"]
+    agents_count = db.execute("SELECT COUNT(*) as c FROM monitoring_agent_status").fetchone()["c"]
+    try:
+        edd_count = db.execute("SELECT COUNT(*) as c FROM edd_cases").fetchone()["c"]
+    except Exception:
+        edd_count = 0  # table may not exist yet on older schemas
+
+    if agents_count == 0:
+        logger.info("Demo mode: seeding sample monitoring agent status")
+        now_iso = now.isoformat()
+        next_day = (now + timedelta(days=1)).isoformat()
+        next_week = (now + timedelta(days=7)).isoformat()
+        next_month = (now + timedelta(days=30)).isoformat()
+        agents_status = [
+            ("Sanctions/PEP Agent", "sanctions_pep", now_iso, next_day, "Daily", 45, 2, "active"),
+            ("Adverse Media Agent", "adverse_media", now_iso, (now + timedelta(hours=6)).isoformat(), "Every 6 hours", 45, 1, "active"),
+            ("Registry Monitoring Agent", "registry", (now - timedelta(days=7)).isoformat(), next_week, "Weekly", 45, 0, "active"),
+            ("Risk Drift Agent", "risk_drift", (now - timedelta(days=30)).isoformat(), next_month, "Monthly", 45, 3, "active"),
+            ("Regulatory Impact Agent", "regulatory", (now - timedelta(days=14)).isoformat(), next_month, "On circular publication", 45, 1, "active"),
+        ]
+        for agent_data in agents_status:
+            db.execute(
+                "INSERT INTO monitoring_agent_status (agent_name, agent_type, last_run, next_run, run_frequency, clients_monitored, alerts_generated, status) VALUES (?,?,?,?,?,?,?,?)",
+                agent_data
+            )
+
+    if alerts_count == 0:
+        logger.info("Demo mode: seeding sample monitoring alerts")
+        demo_alerts = [
+            ("demo-scenario-03", "Atlas Digital Assets DMCC", "Sanctions Match", "Critical",
+             "Sanctions/PEP Agent", "Potential sanctions match detected for director Hassan Osman — name appears on updated OFAC SDN list entry (similarity: 92%). Requires immediate review.",
+             "OFAC SDN List Update 2026-03-15", "Immediately escalate to MLRO. Suspend onboarding pending verification. Consider SAR filing if match confirmed.", "open"),
+            ("demo-scenario-03", "Atlas Digital Assets DMCC", "PEP Status Change", "High",
+             "Sanctions/PEP Agent", "PEP status change detected: Hassan Osman — new media reports indicate appointment as economic adviser to Nigerian federal government, effective March 2026.",
+             "Dow Jones PEP Database", "Review updated PEP declaration. Assess whether new role increases corruption/bribery risk. Update risk profile.", "open"),
+            ("demo-scenario-02", "Coral Bay Holdings Ltd", "Adverse Media", "High",
+             "Adverse Media Agent", "Adverse media detected: Pierre Leclerc named in French financial press regarding offshore tax avoidance investigation (Le Monde, 2026-03-20).",
+             "Adverse Media Scan — Le Monde", "Obtain details of investigation. Assess relevance to client relationship. Consider enhanced monitoring.", "open"),
+            ("demo-scenario-05", "Levant Global Enterprises S.A.L.", "Registry Change", "Medium",
+             "Registry Monitoring Agent", "Company registry update: Levant Global registered new branch office in Beirut, Lebanon. Expanded geographic footprint in high-risk jurisdictions.",
+             "Lebanon Commercial Registry", "Review expanded operations scope. Assess whether new branch triggers additional regulatory obligations.", "escalated"),
+            ("demo-scenario-01", "Meridian Software Ltd", "Risk Drift", "Low",
+             "Risk Drift Agent", "Minor risk drift detected: Meridian Software added new operating country (Germany). No material risk impact — EU jurisdiction, low incremental risk.",
+             "UK Companies House Filing", "No immediate action required. Update country list at next periodic review.", "dismissed"),
+            ("demo-scenario-04", "Sunshine Trading Co", "Regulatory Impact", "Medium",
+             "Regulatory Impact Agent", "New AML/CFT guideline from Bank of Mauritius (BOM Circular 2026/03) may affect Import/Export sector compliance requirements. Review applicability.",
+             "BOM Circular 2026/03", "Review circular for applicability. Assess whether current CDD measures are sufficient under new guidelines.", "open"),
+        ]
+        for alert_data in demo_alerts:
+            offset_days = demo_alerts.index(alert_data) * 3 + 1
+            created = (now - timedelta(days=offset_days)).isoformat()
+            db.execute("""
+                INSERT INTO monitoring_alerts
+                    (application_id, client_name, alert_type, severity, detected_by, summary, source_reference, ai_recommendation, status, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (*alert_data, created))
+
+    if reviews_count == 0:
+        logger.info("Demo mode: seeding sample periodic reviews")
+        demo_reviews = [
+            ("demo-scenario-03", "Atlas Digital Assets DMCC", "HIGH", "time_based",
+             "Quarterly review — HIGH risk client with PEP exposure", "pending",
+             (now - timedelta(days=5)).strftime("%Y-%m-%d")),
+            ("demo-scenario-02", "Coral Bay Holdings Ltd", "MEDIUM", "time_based",
+             "Semi-annual review — MEDIUM risk offshore holding", "pending",
+             (now + timedelta(days=10)).strftime("%Y-%m-%d")),
+            ("demo-scenario-05", "Levant Global Enterprises S.A.L.", "VERY_HIGH", "alert_triggered",
+             "Review triggered by sanctions screening alert", "pending",
+             (now - timedelta(days=12)).strftime("%Y-%m-%d")),
+            ("demo-scenario-01", "Meridian Software Ltd", "LOW", "time_based",
+             "Annual review — LOW risk technology company", "pending",
+             (now + timedelta(days=180)).strftime("%Y-%m-%d")),
+            ("demo-scenario-04", "Sunshine Trading Co", "MEDIUM", "time_based",
+             "Semi-annual review — incomplete documentation history", "completed",
+             (now - timedelta(days=30)).strftime("%Y-%m-%d")),
+        ]
+        for rev_data in demo_reviews:
+            completed_at = now.isoformat() if rev_data[5] == "completed" else None
+            decision = "continue" if rev_data[5] == "completed" else None
+            db.execute("""
+                INSERT INTO periodic_reviews
+                    (application_id, client_name, risk_level, trigger_type, trigger_reason, status, due_date, completed_at, decision)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (rev_data[0], rev_data[1], rev_data[2], rev_data[3], rev_data[4], rev_data[5], rev_data[6], completed_at, decision))
+
+    if edd_count == 0:
+        logger.info("Demo mode: seeding sample EDD cases")
+        demo_edd = [
+            ("demo-scenario-03", "Atlas Digital Assets DMCC", "HIGH", 72.5, "analysis",
+             "officer_decision", "PEP exposure + crypto sector. Escalated from compliance review.",
+             json.dumps([
+                 {"ts": (now - timedelta(days=8)).isoformat(), "author": "System", "note": "EDD triggered: risk score 72.5 exceeds threshold. PEP director detected."},
+                 {"ts": (now - timedelta(days=6)).isoformat(), "author": "Marie Dubois", "note": "Source of funds documentation requested from applicant."},
+                 {"ts": (now - timedelta(days=2)).isoformat(), "author": "Marie Dubois", "note": "SOF documentation received. Analysing trading revenue claims against bank statements."},
+             ]),
+             (now - timedelta(days=8)).isoformat()),
+            ("demo-scenario-05", "Levant Global Enterprises S.A.L.", "VERY_HIGH", 91.0, "pending_senior_review",
+             "officer_decision", "Sanctioned jurisdiction + shell structure. Immediate EDD required.",
+             json.dumps([
+                 {"ts": (now - timedelta(days=15)).isoformat(), "author": "System", "note": "EDD triggered: VERY_HIGH risk — Syria jurisdiction, shell entity, opaque ownership."},
+                 {"ts": (now - timedelta(days=12)).isoformat(), "author": "Aisha Sudally", "note": "Full enhanced screening completed. Multiple red flags confirmed."},
+                 {"ts": (now - timedelta(days=10)).isoformat(), "author": "Aisha Sudally", "note": "Analysis complete. Recommending REJECT. Submitted for senior review."},
+             ]),
+             (now - timedelta(days=15)).isoformat()),
+        ]
+        for edd_data in demo_edd:
+            db.execute("""
+                INSERT INTO edd_cases
+                    (application_id, client_name, risk_level, risk_score, stage, trigger_source, trigger_notes, edd_notes, triggered_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, edd_data)
+
+    db.commit()
+    logger.info("Demo mode: monitoring demo data seeding complete")
+
+
 def seed_initial_data(db: DBConnection):
     """Seed database with initial admin users, risk config, and AI agents."""
     import bcrypt
@@ -1957,7 +2082,9 @@ def seed_initial_data(db: DBConnection):
         _migrate_agent_definitions(db)
 
     if users_count > 0 and agents_count > 0 and checks_count > 0 and risk_count > 0:
-        logger.info("Database already seeded, skipping initialization")
+        logger.info("Database already seeded, skipping core initialization")
+        # Still check if monitoring demo data needs seeding (added post-initial-seed)
+        _seed_monitoring_demo_data(db)
         return
 
     logger.info(f"Seed status: users={users_count}, agents={agents_count}, checks={checks_count}, risk={risk_count}")
@@ -2512,121 +2639,7 @@ def seed_initial_data(db: DBConnection):
 
     db.commit()
 
-    # Seed monitoring agents status — demo data with synthetic timestamps and client counts
-    if _CFG_IS_DEMO:
-        logger.info("Demo mode: seeding sample monitoring agent status with synthetic data")
-        now = datetime.now().isoformat()
-        next_day = (datetime.now() + timedelta(days=1)).isoformat()
-        next_week = (datetime.now() + timedelta(days=7)).isoformat()
-        next_month = (datetime.now() + timedelta(days=30)).isoformat()
-
-        agents_status = [
-            ("Sanctions/PEP Agent", "sanctions_pep", now, next_day, "Daily", 45, 2, "active"),
-            ("Adverse Media Agent", "adverse_media", now, (datetime.now() + timedelta(hours=6)).isoformat(), "Every 6 hours", 45, 1, "active"),
-            ("Registry Monitoring Agent", "registry", (datetime.now() - timedelta(days=7)).isoformat(), next_week, "Weekly", 45, 0, "active"),
-            ("Risk Drift Agent", "risk_drift", (datetime.now() - timedelta(days=30)).isoformat(), next_month, "Monthly", 45, 3, "active"),
-            ("Regulatory Impact Agent", "regulatory", (datetime.now() - timedelta(days=14)).isoformat(), next_month, "On circular publication", 45, 1, "active"),
-        ]
-
-        for agent_data in agents_status:
-            db.execute(
-                "INSERT INTO monitoring_agent_status (agent_name, agent_type, last_run, next_run, run_frequency, clients_monitored, alerts_generated, status) VALUES (?,?,?,?,?,?,?,?)",
-                agent_data
-            )
-
-        # Seed demo monitoring alerts — realistic compliance alerts across demo scenarios
-        logger.info("Demo mode: seeding sample monitoring alerts")
-        now = datetime.now()
-        demo_alerts = [
-            ("demo-scenario-03", "Atlas Digital Assets DMCC", "Sanctions Match", "Critical",
-             "Sanctions/PEP Agent", "Potential sanctions match detected for director Hassan Osman — name appears on updated OFAC SDN list entry (similarity: 92%). Requires immediate review.",
-             "OFAC SDN List Update 2026-03-15", "Immediately escalate to MLRO. Suspend onboarding pending verification. Consider SAR filing if match confirmed.", "open"),
-            ("demo-scenario-03", "Atlas Digital Assets DMCC", "PEP Status Change", "High",
-             "Sanctions/PEP Agent", "PEP status change detected: Hassan Osman — new media reports indicate appointment as economic adviser to Nigerian federal government, effective March 2026.",
-             "Dow Jones PEP Database", "Review updated PEP declaration. Assess whether new role increases corruption/bribery risk. Update risk profile.", "open"),
-            ("demo-scenario-02", "Coral Bay Holdings Ltd", "Adverse Media", "High",
-             "Adverse Media Agent", "Adverse media detected: Pierre Leclerc named in French financial press regarding offshore tax avoidance investigation (Le Monde, 2026-03-20).",
-             "Adverse Media Scan — Le Monde", "Obtain details of investigation. Assess relevance to client relationship. Consider enhanced monitoring.", "open"),
-            ("demo-scenario-05", "Levant Global Enterprises S.A.L.", "Registry Change", "Medium",
-             "Registry Monitoring Agent", "Company registry update: Levant Global registered new branch office in Beirut, Lebanon. Expanded geographic footprint in high-risk jurisdictions.",
-             "Lebanon Commercial Registry", "Review expanded operations scope. Assess whether new branch triggers additional regulatory obligations.", "escalated"),
-            ("demo-scenario-01", "Meridian Software Ltd", "Risk Drift", "Low",
-             "Risk Drift Agent", "Minor risk drift detected: Meridian Software added new operating country (Germany). No material risk impact — EU jurisdiction, low incremental risk.",
-             "UK Companies House Filing", "No immediate action required. Update country list at next periodic review.", "dismissed"),
-            ("demo-scenario-04", "Sunshine Trading Co", "Regulatory Impact", "Medium",
-             "Regulatory Impact Agent", "New AML/CFT guideline from Bank of Mauritius (BOM Circular 2026/03) may affect Import/Export sector compliance requirements. Review applicability.",
-             "BOM Circular 2026/03", "Review circular for applicability. Assess whether current CDD measures are sufficient under new guidelines.", "open"),
-        ]
-        for alert_data in demo_alerts:
-            # Offset created_at dates for realism
-            offset_days = demo_alerts.index(alert_data) * 3 + 1
-            created = (now - timedelta(days=offset_days)).isoformat()
-            db.execute("""
-                INSERT INTO monitoring_alerts
-                    (application_id, client_name, alert_type, severity, detected_by, summary, source_reference, ai_recommendation, status, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-            """, (*alert_data, created))
-
-        # Seed demo periodic reviews — various due states
-        logger.info("Demo mode: seeding sample periodic reviews")
-        demo_reviews = [
-            ("demo-scenario-03", "Atlas Digital Assets DMCC", "HIGH", "time_based",
-             "Quarterly review — HIGH risk client with PEP exposure", "pending",
-             (now - timedelta(days=5)).strftime("%Y-%m-%d")),
-            ("demo-scenario-02", "Coral Bay Holdings Ltd", "MEDIUM", "time_based",
-             "Semi-annual review — MEDIUM risk offshore holding", "pending",
-             (now + timedelta(days=10)).strftime("%Y-%m-%d")),
-            ("demo-scenario-05", "Levant Global Enterprises S.A.L.", "VERY_HIGH", "alert_triggered",
-             "Review triggered by sanctions screening alert", "pending",
-             (now - timedelta(days=12)).strftime("%Y-%m-%d")),
-            ("demo-scenario-01", "Meridian Software Ltd", "LOW", "time_based",
-             "Annual review — LOW risk technology company", "pending",
-             (now + timedelta(days=180)).strftime("%Y-%m-%d")),
-            ("demo-scenario-04", "Sunshine Trading Co", "MEDIUM", "time_based",
-             "Semi-annual review — incomplete documentation history", "completed",
-             (now - timedelta(days=30)).strftime("%Y-%m-%d")),
-        ]
-        for rev_data in demo_reviews:
-            completed_at = now.isoformat() if rev_data[5] == "completed" else None
-            decision = "continue" if rev_data[5] == "completed" else None
-            db.execute("""
-                INSERT INTO periodic_reviews
-                    (application_id, client_name, risk_level, trigger_type, trigger_reason, status, due_date, completed_at, decision)
-                VALUES (?,?,?,?,?,?,?,?,?)
-            """, (rev_data[0], rev_data[1], rev_data[2], rev_data[3], rev_data[4], rev_data[5], rev_data[6], completed_at, decision))
-
-        # Seed demo EDD cases
-        logger.info("Demo mode: seeding sample EDD cases")
-        demo_edd = [
-            ("demo-scenario-03", "Atlas Digital Assets DMCC", "HIGH", 72.5, "analysis",
-             "officer_decision", "PEP exposure + crypto sector. Escalated from compliance review.",
-             json.dumps([
-                 {"ts": (now - timedelta(days=8)).isoformat(), "author": "System", "note": "EDD triggered: risk score 72.5 exceeds threshold. PEP director detected."},
-                 {"ts": (now - timedelta(days=6)).isoformat(), "author": "Marie Dubois", "note": "Source of funds documentation requested from applicant."},
-                 {"ts": (now - timedelta(days=2)).isoformat(), "author": "Marie Dubois", "note": "SOF documentation received. Analysing trading revenue claims against bank statements."},
-             ]),
-             (now - timedelta(days=8)).isoformat()),
-            ("demo-scenario-05", "Levant Global Enterprises S.A.L.", "VERY_HIGH", 91.0, "pending_senior_review",
-             "officer_decision", "Sanctioned jurisdiction + shell structure. Immediate EDD required.",
-             json.dumps([
-                 {"ts": (now - timedelta(days=15)).isoformat(), "author": "System", "note": "EDD triggered: VERY_HIGH risk — Syria jurisdiction, shell entity, opaque ownership."},
-                 {"ts": (now - timedelta(days=12)).isoformat(), "author": "Aisha Sudally", "note": "Full enhanced screening completed. Multiple red flags confirmed."},
-                 {"ts": (now - timedelta(days=10)).isoformat(), "author": "Aisha Sudally", "note": "Analysis complete. Recommending REJECT. Submitted for senior review."},
-             ]),
-             (now - timedelta(days=15)).isoformat()),
-        ]
-        for edd_data in demo_edd:
-            db.execute("""
-                INSERT INTO edd_cases
-                    (application_id, client_name, risk_level, risk_score, stage, trigger_source, trigger_notes, edd_notes, triggered_at)
-                VALUES (?,?,?,?,?,?,?,?,?)
-            """, edd_data)
-
-        db.commit()
-        logger.info("Demo mode: monitoring alerts, periodic reviews, and EDD cases seeded")
-
-    else:
-        logger.info(f"Environment: {_CFG_ENVIRONMENT} — skipping demo monitoring agent status seeding")
+    _seed_monitoring_demo_data(db)
 
     # Sprint 3: Seed default GDPR data retention policies
     # Based on Mauritius Data Protection Act 2017 + GDPR Article 5(1)(e)
