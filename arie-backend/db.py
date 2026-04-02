@@ -1128,6 +1128,27 @@ def _get_sqlite_schema() -> str:
         updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Enhanced Due Diligence (EDD) Cases
+    CREATE TABLE IF NOT EXISTS edd_cases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id),
+        client_name TEXT NOT NULL,
+        risk_level TEXT,
+        risk_score REAL,
+        stage TEXT DEFAULT 'triggered' CHECK(stage IN ('triggered','information_gathering','analysis','pending_senior_review','edd_approved','edd_rejected')),
+        assigned_officer TEXT REFERENCES users(id),
+        senior_reviewer TEXT REFERENCES users(id),
+        trigger_source TEXT DEFAULT 'officer_decision',
+        trigger_notes TEXT,
+        edd_notes TEXT DEFAULT '[]',
+        decision TEXT,
+        decision_reason TEXT,
+        decided_by TEXT REFERENCES users(id),
+        decided_at TEXT,
+        triggered_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     -- Compliance Memo Versions
     CREATE TABLE IF NOT EXISTS compliance_memos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
