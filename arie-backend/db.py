@@ -614,7 +614,7 @@ def _get_postgres_schema() -> str:
 
     -- Enhanced Due Diligence (EDD) Cases
     CREATE TABLE IF NOT EXISTS edd_cases (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         application_id TEXT NOT NULL REFERENCES applications(id),
         client_name TEXT NOT NULL,
         risk_level TEXT,
@@ -624,7 +624,7 @@ def _get_postgres_schema() -> str:
         senior_reviewer TEXT REFERENCES users(id),
         trigger_source TEXT DEFAULT 'officer_decision',
         trigger_notes TEXT,
-        edd_notes TEXT DEFAULT '[]',
+        edd_notes JSONB DEFAULT '[]',
         decision TEXT,
         decision_reason TEXT,
         decided_by TEXT REFERENCES users(id),
