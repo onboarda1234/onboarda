@@ -100,6 +100,10 @@ class DBConnection:
         sql = sql.replace("datetime('now')", "NOW()")
         # 2b. rowid -> id (rowid is SQLite-specific)
         sql = sql.replace("ORDER BY rowid", "ORDER BY id")
+        # 2c. AUTOINCREMENT -> SERIAL (SQLite vs PostgreSQL auto-increment)
+        if "AUTOINCREMENT" in sql.upper():
+            import re
+            sql = re.sub(r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT', 'SERIAL PRIMARY KEY', sql, flags=re.IGNORECASE)
         # 3. INSERT OR IGNORE -> INSERT ... ON CONFLICT DO NOTHING
         #    Pattern: INSERT OR IGNORE INTO table (...) VALUES (...)
         if "INSERT OR IGNORE" in sql.upper():
@@ -1817,18 +1821,32 @@ def _run_migrations(db: DBConnection):
         db.execute("SELECT applicant_id FROM sumsub_applicant_mappings LIMIT 1")
     except Exception:
         logger.info("Migration v2.8: Creating sumsub_applicant_mappings table")
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS sumsub_applicant_mappings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                application_id TEXT NOT NULL,
-                applicant_id TEXT NOT NULL,
-                external_user_id TEXT NOT NULL,
-                person_name TEXT DEFAULT '',
-                person_type TEXT DEFAULT '',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(applicant_id)
-            )
-        """)
+        if USE_POSTGRESQL:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS sumsub_applicant_mappings (
+                    id SERIAL PRIMARY KEY,
+                    application_id TEXT NOT NULL,
+                    applicant_id TEXT NOT NULL,
+                    external_user_id TEXT NOT NULL,
+                    person_name TEXT DEFAULT '',
+                    person_type TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(applicant_id)
+                )
+            """)
+        else:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS sumsub_applicant_mappings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    application_id TEXT NOT NULL,
+                    applicant_id TEXT NOT NULL,
+                    external_user_id TEXT NOT NULL,
+                    person_name TEXT DEFAULT '',
+                    person_type TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(applicant_id)
+                )
+            """)
         db.execute("CREATE INDEX IF NOT EXISTS idx_sam_applicant ON sumsub_applicant_mappings(applicant_id)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_sam_external ON sumsub_applicant_mappings(external_user_id)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_sam_app ON sumsub_applicant_mappings(application_id)")

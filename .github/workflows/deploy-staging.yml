@@ -93,7 +93,7 @@ jobs:
         run: |
           echo "Waiting for health check..."
           for i in $(seq 1 30); do
-            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" https://staging.regmind.co/api/health 2>/dev/null || echo "000")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging.regmind.co/api/health 2>/dev/null)
             if [ "$STATUS" = "200" ]; then
               echo "Health check PASSED after ${i}0s"
               HEALTH=$(curl -sf https://staging.regmind.co/api/health)
