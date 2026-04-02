@@ -1262,11 +1262,34 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="stat-card"><div class="stat-card-label">Awaiting Senior Review</div><div class="stat-card-value" style="color:var(--amber);" id="edd-stat-awaiting">0</div></div>
     <div class="stat-card"><div class="stat-card-label">Completed This Month</div><div class="stat-card-value" style="color:var(--green);" id="edd-stat-completed">0</div></div>
   </div>
+  <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;">
+    <select class="form-select" style="width:auto;" id="edd-stage-filter" onchange="renderEDD()">
+      <option value="">All Stages</option>
+      <option value="triggered">Triggered</option>
+      <option value="information_gathering">Information Gathering</option>
+      <option value="analysis">Analysis</option>
+      <option value="pending_senior_review">Pending Senior Review</option>
+      <option value="edd_approved">Approved</option>
+      <option value="edd_rejected">Rejected</option>
+    </select>
+    <input type="text" id="edd-search" placeholder="Search by client or reference..." style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;width:220px;" oninput="renderEDD()">
+  </div>
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
-      <thead><tr><th>Reference</th><th>Company</th><th>Risk Score</th><th>PEP</th><th>EDD Stage</th><th>Senior CO</th><th>Days Open</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Client</th><th>Risk</th><th>Score</th><th>EDD Stage</th><th>Assigned Officer</th><th>Days in EDD</th><th>Actions</th></tr></thead>
       <tbody id="edd-body"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- EDD Case Detail Modal -->
+<div class="modal-overlay" id="modal-edd-detail">
+  <div class="modal" style="width:750px;max-height:85vh;overflow-y:auto;">
+    <div class="modal-header"><h3 id="edd-modal-title">EDD Case Detail</h3><button class="modal-close" onclick="closeModal('modal-edd-detail')">&times;</button></div>
+    <div class="modal-body" id="edd-modal-body"></div>
+    <div class="modal-footer" id="edd-modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-edd-detail')">Close</button>
+    </div>
   </div>
 </div>
 
@@ -1333,12 +1356,13 @@ body.role-admin .role-admin-only-block { display:block; }
 
   <!-- Reviews Tab -->
   <div id="monitoring-reviews-tab" style="display:none;">
-    <div style="display:flex;gap:10px;margin-bottom:16px;">
+    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;">
       <select class="form-select" style="width:auto;" id="review-status-filter" onchange="renderPeriodicReviews()">
         <option value="">All Statuses</option>
         <option value="Overdue">Overdue</option>
         <option value="Due Soon">Due Soon</option>
         <option value="Upcoming">Upcoming</option>
+        <option value="Completed">Completed</option>
       </select>
       <select class="form-select" style="width:auto;" id="review-risk-filter" onchange="renderPeriodicReviews()">
         <option value="">All Risk Levels</option>
@@ -1347,6 +1371,7 @@ body.role-admin .role-admin-only-block { display:block; }
         <option value="High">High</option>
         <option value="Very High">Very High</option>
       </select>
+      <div style="margin-left:auto;"><button class="btn btn-outline btn-sm" id="schedule-reviews-btn" onclick="schedulePeriodicReviews()">Schedule Due Reviews</button></div>
     </div>
 
     <div class="card" style="padding:0;overflow:hidden;">
@@ -2038,6 +2063,7 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="modal-body" id="alert-modal-body"></div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-alert-detail')">Close</button>
+      <button class="btn btn-outline" style="background:#7c3aed;color:white;border-color:#7c3aed;" id="alert-modal-sar-btn" onclick="triggerSARFromAlert()">File SAR</button>
       <button class="btn btn-primary" id="alert-modal-escalate-btn" onclick="escalateAlertFromModal()">Escalate to SCO</button>
       <button class="btn btn-outline" style="background:var(--green);color:white;border-color:var(--green);" id="alert-modal-dismiss-btn" onclick="dismissAlertFromModal()">Mark as Reviewed</button>
     </div>
@@ -2049,9 +2075,9 @@ body.role-admin .role-admin-only-block { display:block; }
   <div class="modal" style="width:680px;max-height:80vh;overflow-y:auto;">
     <div class="modal-header"><h3 id="review-modal-title">Periodic Review</h3><button class="modal-close" onclick="closeModal('modal-periodic-review')">&times;</button></div>
     <div class="modal-body" id="review-modal-body"></div>
-    <div class="modal-footer">
+    <div class="modal-footer" id="review-modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-periodic-review')">Close</button>
-      <button class="btn btn-primary" onclick="closeModal('modal-periodic-review');showToast('Review initiated — assigned to current user');">Start Review</button>
+      <button class="btn btn-primary" id="review-modal-decide-btn" onclick="showReviewDecisionForm()">Record Decision</button>
     </div>
   </div>
 </div>
@@ -2638,6 +2664,9 @@ async function loadFromAPI() {
       console.warn('Could not load monitoring dashboard stats:', e);
     }
 
+    // Load EDD cases from backend
+    await loadEDDCases();
+
     // Load compliance resources library
     try {
       var resourcesResp = await boApiCall('GET', '/resources');
@@ -2959,7 +2988,7 @@ function updateDashboardStats() {
     return (a.status||'').toLowerCase() === 'approved' && (a.date || '').substring(0, 7) === currentMonth;
   }).length;
   var rejected = APPLICATIONS.filter(function(a) { var s = (a.status||'').toLowerCase(); return s === 'rejected' || s === 'declined'; }).length;
-  var edd = APPLICATIONS.filter(function(a) { return (a.status||'').toLowerCase() === 'edd required'; }).length;
+  var edd = EDD_CASES.filter(function(c) { return c.stage !== 'edd_approved' && c.stage !== 'edd_rejected'; }).length;
 
   var el;
   el = document.getElementById('dash-stat-total'); if (el) el.textContent = total;
@@ -4210,41 +4239,181 @@ async function renderScreening() {
   el = document.getElementById('screening-stat-hits'); if (el) el.textContent = SCREENING_QUEUE.metrics ? SCREENING_QUEUE.metrics.applications_requiring_review : 0;
 }
 
+var EDD_CASES = [];
+var currentEDDCase = null;
+
+async function loadEDDCases() {
+  try {
+    var resp = await boApiCall('GET', '/edd/cases');
+    if (resp.cases) EDD_CASES = resp.cases;
+  } catch(e) { console.warn('Could not load EDD cases:', e); }
+}
+
+function eddStageBadge(stage) {
+  var labels = { triggered: 'Triggered', information_gathering: 'Info Gathering', analysis: 'Analysis', pending_senior_review: 'Senior Review', edd_approved: 'Approved', edd_rejected: 'Rejected' };
+  var classes = { triggered: 'pending', information_gathering: 'in-review', analysis: 'in-review', pending_senior_review: 'high', edd_approved: 'approved', edd_rejected: 'rejected' };
+  return '<span class="badge ' + (classes[stage] || 'draft') + '">' + escapeHtml(labels[stage] || stage) + '</span>';
+}
+
 function renderEDD() {
   var tbody = document.getElementById('edd-body');
   tbody.innerHTML = '';
-  var eddApps = APPLICATIONS.filter(function(a) { return a.risk === 'HIGH' || a.risk === 'VERY_HIGH'; });
+
+  // Apply filters
+  var stageFilter = document.getElementById('edd-stage-filter') ? document.getElementById('edd-stage-filter').value : '';
+  var searchText = document.getElementById('edd-search') ? document.getElementById('edd-search').value.toLowerCase().trim() : '';
+
+  var filtered = EDD_CASES.filter(function(c) {
+    if (stageFilter && c.stage !== stageFilter) return false;
+    if (searchText && (c.client_name || '').toLowerCase().indexOf(searchText) < 0 && (c.application_id || '').toLowerCase().indexOf(searchText) < 0) return false;
+    return true;
+  });
+
   var now = new Date();
-  var currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
-
-  // Stat computations:
-  // Active: HIGH/VERY_HIGH apps not yet approved/rejected
-  var activeCount = eddApps.filter(function(a) {
-    var s = (a.status || '').toLowerCase();
-    return s !== 'approved' && s !== 'rejected' && s !== 'withdrawn' && s !== 'declined';
-  }).length;
-  // Awaiting Senior Review: HIGH/VERY_HIGH apps with EDD Required status
-  var awaitingCount = eddApps.filter(function(a) {
-    return normalizeStatusKey(a.status) === 'edd_required';
-  }).length;
-  // Completed This Month: HIGH/VERY_HIGH apps that are approved AND created in current month
-  var completedCount = eddApps.filter(function(a) {
-    var s = (a.status || '').toLowerCase();
-    return s === 'approved' && (a.date || '').substring(0, 7) === currentMonth;
-  }).length;
-
-  eddApps.forEach(function(app) {
+  filtered.forEach(function(c) {
+    var days = Math.floor((now - new Date(c.triggered_at)) / 86400000);
     var tr = document.createElement('tr');
-    var days = Math.floor((now - new Date(app.date)) / 86400000);
-    tr.innerHTML = '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-weight:700;">' + escapeHtml(String(app.score)) + '</td><td>' + (app.pepCount > 0 ? '<span class="badge high">Yes (' + escapeHtml(String(app.pepCount)) + ')</span>' : 'No') + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-weight:600;' + (days > 5 ? 'color:var(--red);' : '') + '">' + escapeHtml(String(days)) + 'd</td><td><button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + escapeHtml(app.ref) + '\')">Review</button></td>';
+    tr.style.cursor = 'pointer';
+    tr.onclick = function() { openEDDDetail(c.id); };
+    tr.innerHTML = '<td style="font-weight:600;">' + escapeHtml(c.client_name) + '</td>' +
+      '<td>' + riskBadge((c.risk_level || 'HIGH').toUpperCase().replace(' ','_')) + '</td>' +
+      '<td style="font-weight:700;">' + escapeHtml(String(c.risk_score || '—')) + '</td>' +
+      '<td>' + eddStageBadge(c.stage) + '</td>' +
+      '<td style="font-size:12px;">' + escapeHtml(c.assigned_officer || 'Unassigned') + '</td>' +
+      '<td style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + 'd</td>' +
+      '<td><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openEDDDetail(' + c.id + ')">Review</button></td>';
     tbody.appendChild(tr);
   });
 
-  // Update EDD stat cards
-  var el;
-  el = document.getElementById('edd-stat-active'); if (el) el.textContent = activeCount;
-  el = document.getElementById('edd-stat-awaiting'); if (el) el.textContent = awaitingCount;
-  el = document.getElementById('edd-stat-completed'); if (el) el.textContent = completedCount;
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:18px;">No EDD cases match the current filters.</td></tr>';
+  }
+
+  // Update stats from backend API
+  updateEDDStats();
+}
+
+async function updateEDDStats() {
+  try {
+    var stats = await boApiCall('GET', '/edd/stats');
+    var el;
+    el = document.getElementById('edd-stat-active'); if (el) el.textContent = stats.active || 0;
+    el = document.getElementById('edd-stat-awaiting'); if (el) el.textContent = stats.pending_senior_review || 0;
+    el = document.getElementById('edd-stat-completed'); if (el) el.textContent = stats.completed_this_month || 0;
+  } catch(e) {
+    // Fallback: compute from local data
+    var active = EDD_CASES.filter(function(c) { return c.stage !== 'edd_approved' && c.stage !== 'edd_rejected'; }).length;
+    var pending = EDD_CASES.filter(function(c) { return c.stage === 'pending_senior_review'; }).length;
+    var completed = EDD_CASES.filter(function(c) { return c.stage === 'edd_approved' || c.stage === 'edd_rejected'; }).length;
+    var el;
+    el = document.getElementById('edd-stat-active'); if (el) el.textContent = active;
+    el = document.getElementById('edd-stat-awaiting'); if (el) el.textContent = pending;
+    el = document.getElementById('edd-stat-completed'); if (el) el.textContent = completed;
+  }
+}
+
+function openEDDDetail(caseId) {
+  var c = EDD_CASES.find(function(x) { return x.id === caseId; });
+  if (!c) { showToast('EDD case not found'); return; }
+  currentEDDCase = c;
+
+  var days = Math.floor((new Date() - new Date(c.triggered_at)) / 86400000);
+  var stageLabels = { triggered: 'Triggered', information_gathering: 'Information Gathering', analysis: 'Analysis', pending_senior_review: 'Pending Senior Review', edd_approved: 'EDD Approved', edd_rejected: 'EDD Rejected' };
+
+  var html = '<div class="detail-section">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">EDD Case Summary</div>' +
+    '<div class="detail-row"><span class="label">Client</span><span class="value" style="font-weight:600;">' + escapeHtml(c.client_name) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Application</span><span class="value" style="font-family:monospace;">' + escapeHtml(c.application_id) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Risk Level</span><span class="value">' + riskBadge((c.risk_level || '').toUpperCase().replace(' ','_')) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Risk Score</span><span class="value" style="font-weight:700;">' + (c.risk_score || '—') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Current Stage</span><span class="value">' + eddStageBadge(c.stage) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Assigned Officer</span><span class="value">' + escapeHtml(c.assigned_officer || 'Unassigned') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + escapeHtml(c.trigger_notes || c.trigger_source || '') + '</span></div>' +
+    '<div class="detail-row"><span class="label">EDD Opened</span><span class="value">' + (c.triggered_at || '').split('T')[0] + '</span></div>' +
+    '<div class="detail-row"><span class="label">Days in EDD</span><span class="value" style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + ' days</span></div>' +
+    '</div>';
+
+  // Decision info if terminal
+  if (c.stage === 'edd_approved' || c.stage === 'edd_rejected') {
+    html += '<div class="detail-section" style="margin-top:16px;">' +
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Decision</div>' +
+      '<div class="detail-row"><span class="label">Decision</span><span class="value">' + eddStageBadge(c.stage) + '</span></div>' +
+      '<div class="detail-row"><span class="label">Reason</span><span class="value">' + escapeHtml(c.decision_reason || '—') + '</span></div>' +
+      '<div class="detail-row"><span class="label">Decided At</span><span class="value">' + (c.decided_at || '—').split('T')[0] + '</span></div>' +
+      '</div>';
+  }
+
+  // Notes / audit trail
+  var notes = c.edd_notes || [];
+  if (notes.length) {
+    html += '<div class="detail-section" style="margin-top:16px;">' +
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">EDD Notes &amp; Activity</div>';
+    notes.forEach(function(n) {
+      html += '<div style="padding:8px 12px;margin-bottom:6px;background:var(--bg2);border-radius:var(--radius-sm);font-size:13px;border-left:3px solid #7c3aed;">' +
+        '<div style="display:flex;justify-content:space-between;margin-bottom:4px;"><strong>' + escapeHtml(n.author || 'System') + '</strong><span style="color:var(--text3);font-size:11px;">' + (n.ts || '').split('T')[0] + '</span></div>' +
+        '<div>' + escapeHtml(n.note || '') + '</div></div>';
+    });
+    html += '</div>';
+  }
+
+  // Stage actions (only for non-terminal cases)
+  if (c.stage !== 'edd_approved' && c.stage !== 'edd_rejected') {
+    html += '<div class="detail-section" style="margin-top:16px;">' +
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Actions</div>' +
+      '<div style="margin-bottom:12px;">' +
+        '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Add Note</label>' +
+        '<textarea id="edd-action-note" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);resize:vertical;" placeholder="Add a note about this EDD case..."></textarea>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+
+    // Stage-appropriate action buttons
+    var transitions = { triggered: ['information_gathering', 'analysis'], information_gathering: ['analysis'], analysis: ['pending_senior_review'], pending_senior_review: ['edd_approved', 'edd_rejected', 'analysis'] };
+    var btnLabels = { information_gathering: 'Start Info Gathering', analysis: 'Begin Analysis', pending_senior_review: 'Submit for Senior Review', edd_approved: 'Approve EDD', edd_rejected: 'Reject EDD' };
+    var btnStyles = { edd_approved: 'background:var(--green);color:white;border-color:var(--green);', edd_rejected: 'background:var(--red);color:white;border-color:var(--red);' };
+
+    var allowed = transitions[c.stage] || [];
+    allowed.forEach(function(nextStage) {
+      html += '<button class="btn btn-outline btn-sm" style="' + (btnStyles[nextStage] || '') + '" onclick="advanceEDDStage(' + c.id + ',\'' + nextStage + '\')">' + (btnLabels[nextStage] || nextStage) + '</button>';
+    });
+    html += '</div></div>';
+  }
+
+  // Link to full application detail
+  var app = APPLICATIONS.find(function(a) { return a.id === c.application_id || a.ref === c.application_id; });
+  if (app) {
+    html += '<div style="margin-top:16px;text-align:center;">' +
+      '<button class="btn btn-outline btn-sm" onclick="closeModal(\'modal-edd-detail\');openAppDetail(\'' + escapeHtml(app.ref) + '\');">View Full Application Detail</button></div>';
+  }
+
+  document.getElementById('edd-modal-title').textContent = 'EDD Case — ' + c.client_name;
+  document.getElementById('edd-modal-body').innerHTML = html;
+  document.getElementById('modal-edd-detail').classList.add('open');
+}
+
+async function advanceEDDStage(caseId, newStage) {
+  var note = document.getElementById('edd-action-note') ? document.getElementById('edd-action-note').value.trim() : '';
+
+  // For terminal stages, require a reason
+  if ((newStage === 'edd_approved' || newStage === 'edd_rejected') && !note) {
+    showToast('Please provide a decision rationale in the notes field', 'error');
+    return;
+  }
+
+  var body = { stage: newStage };
+  if (note) body.note = note;
+  if (newStage === 'edd_approved' || newStage === 'edd_rejected') body.decision_reason = note;
+
+  try {
+    await boApiCall('PATCH', '/edd/cases/' + caseId, body);
+    var stageLabels = { information_gathering: 'Information Gathering', analysis: 'Analysis', pending_senior_review: 'Senior Review', edd_approved: 'Approved', edd_rejected: 'Rejected' };
+    showToast('EDD case advanced to: ' + (stageLabels[newStage] || newStage));
+    // Reload EDD data
+    await loadEDDCases();
+    renderEDD();
+    closeModal('modal-edd-detail');
+  } catch(err) {
+    showToast('Failed to update EDD case: ' + (err.message || 'Unknown error'), 'error');
+  }
 }
 
 var activeCaseTab = 'my-cases';
@@ -4398,13 +4567,48 @@ function renderMonitoringAgents() {
       '<span style="font-size:24px;">' + agent.icon + '</span>' +
       '<div><div style="font-weight:600;font-size:14px;">' + agent.name + '</div>' +
       '<div style="font-size:12px;color:var(--text3);">Monitoring ' + detail + '</div></div></div>' +
-      '<span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(statusLabel) + '</span></div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;">' +
+      '<span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(statusLabel) + '</span>' +
+      '<button class="btn btn-outline btn-sm" id="agent-run-btn-' + agent.id + '" onclick="triggerAgentRun(' + agent.id + ')" style="font-size:11px;padding:3px 8px;" title="Manually trigger this agent">Run Now</button>' +
+      '</div></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:12px;">' +
       '<div><span style="color:var(--text3);">Last run:</span><br/>' + agent.lastRun + '</div>' +
       '<div><span style="color:var(--text3);">Next run:</span><br/>' + agent.nextRun + '</div>' +
+      '<div><span style="color:var(--text3);">Alerts generated:</span><br/>' + (agent.alertsGenerated || 0) + '</div>' +
       '</div></div>';
   });
   document.getElementById('agents-status-list').innerHTML = html;
+}
+
+async function triggerAgentRun(agentId) {
+  var btn = document.getElementById('agent-run-btn-' + agentId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Running...'; }
+  try {
+    await boApiCall('POST', '/monitoring/agents/' + agentId + '/run', {});
+    showToast('Agent run triggered successfully');
+    // Refresh monitoring data
+    try {
+      var alertsResp = await boApiCall('GET', '/monitoring/alerts');
+      if (alertsResp.alerts) {
+        MONITORING_ALERTS = alertsResp.alerts.map(function(a) {
+          return { id: a.id, date: (a.created_at || '').split('T')[0].split(' ')[0], client: a.client_name || '', type: a.alert_type || '', severity: a.severity || 'Medium', agent: a.detected_by || '', status: (a.status || 'open').charAt(0).toUpperCase() + (a.status || 'open').slice(1), source: a.source_reference || '', detail: a.summary || '', recommendation: a.ai_recommendation || '' };
+        });
+      }
+    } catch(e) {}
+    try {
+      var agentsResp = await boApiCall('GET', '/monitoring/agents');
+      if (agentsResp.agents) {
+        var iconMap = { 'sanctions_screening':'🔍', 'sanctions_pep':'🔍', 'adverse_media':'📡', 'registry':'🏛️', 'pep_monitoring':'👤', 'regulatory':'⚖️', 'risk_drift':'📈', 'document_expiry':'📄' };
+        MONITORING_AGENTS = agentsResp.agents.map(function(ag) {
+          return { id: ag.id, icon: iconMap[ag.agent_type] || '🤖', name: ag.agent_name || ag.agent_type || 'Agent', clientsMonitored: ag.clients_monitored || 0, sourceScanned: null, registriesChecked: null, profilesAnalyzed: null, regulationsTracked: null, lastRun: ag.last_run ? ag.last_run.split('T')[0].split(' ')[0] : '—', nextRun: ag.next_run ? ag.next_run.split('T')[0].split(' ')[0] : '—', status: (ag.status || 'active').toLowerCase(), alertsGenerated: ag.alerts_generated || 0 };
+        });
+      }
+    } catch(e) {}
+    renderMonitoring();
+  } catch(err) {
+    showToast('Failed to trigger agent run: ' + (err.message || 'Unknown error'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Run Now'; }
+  }
 }
 
 function formatResourceFileSize(bytes) {
@@ -4498,10 +4702,16 @@ function showAlertDetail(alert) {
   // Show/hide buttons based on status
   var escBtn = document.getElementById('alert-modal-escalate-btn');
   var dimBtn = document.getElementById('alert-modal-dismiss-btn');
+  var sarBtn = document.getElementById('alert-modal-sar-btn');
   if (alert.status === 'Open') {
     escBtn.style.display = ''; dimBtn.style.display = '';
   } else {
     escBtn.style.display = 'none'; dimBtn.style.display = 'none';
+  }
+  // Show SAR button only for Critical/High severity alerts that are Open or Escalated
+  if (sarBtn) {
+    var showSar = (alert.severity === 'Critical' || alert.severity === 'High') && (alert.status === 'Open' || alert.status === 'Escalated');
+    sarBtn.style.display = showSar ? '' : 'none';
   }
 
   document.getElementById('modal-alert-detail').classList.add('open');
@@ -4521,9 +4731,8 @@ async function escalateAlertFromModal() {
   if (!currentAlertRef || !currentAlertRef.id) { closeModal('modal-alert-detail'); return; }
   try {
     await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, {
-      status: 'escalated',
-      reviewed_by: currentUser.name,
-      review_notes: 'Escalated to Senior Compliance Officer'
+      action: 'escalate',
+      reason: 'Escalated to Senior Compliance Officer'
     });
     currentAlertRef.status = 'Escalated';
     renderMonitoringAlerts();
@@ -4531,7 +4740,6 @@ async function escalateAlertFromModal() {
     showToast('Alert escalated to Senior Compliance Officer');
   } catch(err) {
     showToast('Failed to escalate alert: ' + (err.message || 'Unknown error'), 'error');
-    closeModal('modal-alert-detail');
   }
 }
 
@@ -4539,9 +4747,8 @@ async function dismissAlertFromModal() {
   if (!currentAlertRef || !currentAlertRef.id) { closeModal('modal-alert-detail'); return; }
   try {
     await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, {
-      status: 'reviewed',
-      reviewed_by: currentUser.name,
-      review_notes: 'Reviewed and closed'
+      action: 'dismiss',
+      reason: 'Reviewed and closed'
     });
     currentAlertRef.status = 'Reviewed';
     renderMonitoringAlerts();
@@ -4549,7 +4756,24 @@ async function dismissAlertFromModal() {
     showToast('Alert marked as reviewed');
   } catch(err) {
     showToast('Failed to update alert: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+async function triggerSARFromAlert() {
+  if (!currentAlertRef || !currentAlertRef.id) return;
+  var sarBtn = document.getElementById('alert-modal-sar-btn');
+  if (sarBtn) { sarBtn.disabled = true; sarBtn.textContent = 'Filing...'; }
+  try {
+    var resp = await boApiCall('POST', '/sar/auto-trigger', { alert_id: currentAlertRef.id });
+    if (resp.existing) {
+      showToast('SAR already exists for this alert: ' + resp.sar_reference);
+    } else {
+      showToast('SAR filed: ' + (resp.sar_reference || 'Reference pending'));
+    }
     closeModal('modal-alert-detail');
+  } catch(err) {
+    showToast('Failed to file SAR: ' + (err.message || 'Unknown error'), 'error');
+    if (sarBtn) { sarBtn.disabled = false; sarBtn.textContent = 'File SAR'; }
   }
 }
 
@@ -4602,11 +4826,96 @@ function openPeriodicReview(ref) {
 
     document.getElementById('review-modal-title').textContent = 'Periodic Review — ' + review.client;
     document.getElementById('review-modal-body').innerHTML = reviewHtml;
+    // Store current review for decision submission
+    currentReviewRef = review;
+    // Show/hide decision button based on status (completed reviews cannot be re-decided)
+    var decideBtn = document.getElementById('review-modal-decide-btn');
+    if (decideBtn) decideBtn.style.display = (review.status === 'Completed') ? 'none' : '';
     document.getElementById('modal-periodic-review').classList.add('open');
   } else if (app) {
     // Fall back to opening the full application detail
     openAppDetail(ref);
   }
+}
+
+var currentReviewRef = null;
+
+function showReviewDecisionForm() {
+  if (!currentReviewRef) return;
+  var body = document.getElementById('review-modal-body');
+  body.innerHTML += '<div id="review-decision-form" style="margin-top:20px;padding:16px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);">' +
+    '<div style="font-weight:700;font-size:14px;margin-bottom:12px;">Review Decision</div>' +
+    '<div style="margin-bottom:12px;">' +
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Decision <span style="color:var(--red);">*</span></label>' +
+      '<select id="review-decision-select" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);">' +
+        '<option value="">Select decision...</option>' +
+        '<option value="continue">Continue Relationship</option>' +
+        '<option value="enhanced_monitoring">Enhanced Monitoring</option>' +
+        '<option value="request_info">Request Additional Information</option>' +
+        '<option value="exit_relationship">Exit Relationship</option>' +
+      '</select>' +
+    '</div>' +
+    '<div style="margin-bottom:12px;">' +
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Rationale / Notes <span style="color:var(--red);">*</span></label>' +
+      '<textarea id="review-decision-reason" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);resize:vertical;" placeholder="Provide the rationale for your decision..."></textarea>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+      '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'review-decision-form\').remove();">Cancel</button>' +
+      '<button class="btn btn-primary btn-sm" onclick="submitReviewDecision()">Submit Decision</button>' +
+    '</div>' +
+  '</div>';
+  // Hide the footer decision button to avoid duplicate actions
+  var decideBtn = document.getElementById('review-modal-decide-btn');
+  if (decideBtn) decideBtn.style.display = 'none';
+}
+
+async function submitReviewDecision() {
+  if (!currentReviewRef || !currentReviewRef.id) return;
+  var decision = document.getElementById('review-decision-select').value;
+  var reason = document.getElementById('review-decision-reason').value.trim();
+  if (!decision) { showToast('Please select a decision', 'error'); return; }
+  if (!reason) { showToast('Please provide a rationale', 'error'); return; }
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + currentReviewRef.id + '/decision', {
+      decision: decision,
+      decision_reason: reason
+    });
+    currentReviewRef.status = 'Completed';
+    // Update local PERIODIC_REVIEWS array
+    var idx = PERIODIC_REVIEWS.findIndex(function(r) { return r.id === currentReviewRef.id; });
+    if (idx >= 0) PERIODIC_REVIEWS[idx].status = 'Completed';
+    renderPeriodicReviews();
+    renderMonitoring();
+    closeModal('modal-periodic-review');
+    var decisionLabels = { continue: 'Continue Relationship', enhanced_monitoring: 'Enhanced Monitoring', request_info: 'Request Information', exit_relationship: 'Exit Relationship' };
+    showToast('Review decision recorded: ' + (decisionLabels[decision] || decision));
+  } catch(err) {
+    showToast('Failed to submit decision: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+async function schedulePeriodicReviews() {
+  var btn = document.getElementById('schedule-reviews-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Scheduling...'; }
+  try {
+    var resp = await boApiCall('POST', '/monitoring/reviews/schedule', {});
+    var created = resp.created || 0;
+    showToast(created > 0 ? created + ' new review(s) scheduled based on risk levels' : 'No new reviews due — all clients are up to date');
+    // Reload reviews
+    try {
+      var reviewsResp = await boApiCall('GET', '/monitoring/reviews');
+      if (reviewsResp.reviews) {
+        PERIODIC_REVIEWS = reviewsResp.reviews.map(function(r) {
+          return { id: r.id, ref: r.application_id || '', client: r.client_name || '', risk: r.risk_level || 'Low', lastReview: r.completed_at ? r.completed_at.split('T')[0].split(' ')[0] : '—', nextDue: r.due_date || '—', trigger: r.trigger_reason || r.trigger_type || '', status: (function() { if (r.status === 'completed') return 'Completed'; if (!r.due_date) return 'Upcoming'; var due = new Date(r.due_date); var now = new Date(); var diff = (due - now) / 86400000; if (diff < 0) return 'Overdue'; if (diff <= 14) return 'Due Soon'; return 'Upcoming'; })() };
+        });
+      }
+    } catch(e) {}
+    renderPeriodicReviews();
+    renderMonitoring();
+  } catch(err) {
+    showToast('Failed to schedule reviews: ' + (err.message || 'Unknown error'), 'error');
+  }
+  if (btn) { btn.disabled = false; btn.textContent = 'Schedule Due Reviews'; }
 }
 
 function switchCaseTab(tab, btn) {

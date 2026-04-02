@@ -612,6 +612,27 @@ def _get_postgres_schema() -> str:
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Enhanced Due Diligence (EDD) Cases
+    CREATE TABLE IF NOT EXISTS edd_cases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id),
+        client_name TEXT NOT NULL,
+        risk_level TEXT,
+        risk_score REAL,
+        stage TEXT DEFAULT 'triggered' CHECK(stage IN ('triggered','information_gathering','analysis','pending_senior_review','edd_approved','edd_rejected')),
+        assigned_officer TEXT REFERENCES users(id),
+        senior_reviewer TEXT REFERENCES users(id),
+        trigger_source TEXT DEFAULT 'officer_decision',
+        trigger_notes TEXT,
+        edd_notes TEXT DEFAULT '[]',
+        decision TEXT,
+        decision_reason TEXT,
+        decided_by TEXT REFERENCES users(id),
+        decided_at TIMESTAMP,
+        triggered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- Compliance Memo Versions
     CREATE TABLE IF NOT EXISTS compliance_memos (
         id SERIAL PRIMARY KEY,
@@ -656,6 +677,9 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_application_id ON monitoring_alerts(application_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_application_id ON periodic_reviews(application_id);
     CREATE INDEX IF NOT EXISTS idx_sar_reports_application_id ON sar_reports(application_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_cases_application_id ON edd_cases(application_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_cases_stage ON edd_cases(stage);
+    CREATE INDEX IF NOT EXISTS idx_edd_cases_assigned_officer ON edd_cases(assigned_officer);
     CREATE INDEX IF NOT EXISTS idx_compliance_memos_application_id ON compliance_memos(application_id);
     CREATE INDEX IF NOT EXISTS idx_compliance_memos_review_status ON compliance_memos(review_status);
     CREATE INDEX IF NOT EXISTS idx_compliance_memos_validation_status ON compliance_memos(validation_status);
@@ -2489,7 +2513,97 @@ def seed_initial_data(db: DBConnection):
                 agent_data
             )
 
+        # Seed demo monitoring alerts — realistic compliance alerts across demo scenarios
+        logger.info("Demo mode: seeding sample monitoring alerts")
+        now = datetime.now()
+        demo_alerts = [
+            ("demo-scenario-03", "Atlas Digital Assets DMCC", "Sanctions Match", "Critical",
+             "Sanctions/PEP Agent", "Potential sanctions match detected for director Hassan Osman — name appears on updated OFAC SDN list entry (similarity: 92%). Requires immediate review.",
+             "OFAC SDN List Update 2026-03-15", "Immediately escalate to MLRO. Suspend onboarding pending verification. Consider SAR filing if match confirmed.", "open"),
+            ("demo-scenario-03", "Atlas Digital Assets DMCC", "PEP Status Change", "High",
+             "Sanctions/PEP Agent", "PEP status change detected: Hassan Osman — new media reports indicate appointment as economic adviser to Nigerian federal government, effective March 2026.",
+             "Dow Jones PEP Database", "Review updated PEP declaration. Assess whether new role increases corruption/bribery risk. Update risk profile.", "open"),
+            ("demo-scenario-02", "Coral Bay Holdings Ltd", "Adverse Media", "High",
+             "Adverse Media Agent", "Adverse media detected: Pierre Leclerc named in French financial press regarding offshore tax avoidance investigation (Le Monde, 2026-03-20).",
+             "Adverse Media Scan — Le Monde", "Obtain details of investigation. Assess relevance to client relationship. Consider enhanced monitoring.", "open"),
+            ("demo-scenario-05", "Levant Global Enterprises S.A.L.", "Registry Change", "Medium",
+             "Registry Monitoring Agent", "Company registry update: Levant Global registered new branch office in Beirut, Lebanon. Expanded geographic footprint in high-risk jurisdictions.",
+             "Lebanon Commercial Registry", "Review expanded operations scope. Assess whether new branch triggers additional regulatory obligations.", "escalated"),
+            ("demo-scenario-01", "Meridian Software Ltd", "Risk Drift", "Low",
+             "Risk Drift Agent", "Minor risk drift detected: Meridian Software added new operating country (Germany). No material risk impact — EU jurisdiction, low incremental risk.",
+             "UK Companies House Filing", "No immediate action required. Update country list at next periodic review.", "dismissed"),
+            ("demo-scenario-04", "Sunshine Trading Co", "Regulatory Impact", "Medium",
+             "Regulatory Impact Agent", "New AML/CFT guideline from Bank of Mauritius (BOM Circular 2026/03) may affect Import/Export sector compliance requirements. Review applicability.",
+             "BOM Circular 2026/03", "Review circular for applicability. Assess whether current CDD measures are sufficient under new guidelines.", "open"),
+        ]
+        for alert_data in demo_alerts:
+            # Offset created_at dates for realism
+            offset_days = demo_alerts.index(alert_data) * 3 + 1
+            created = (now - timedelta(days=offset_days)).isoformat()
+            db.execute("""
+                INSERT INTO monitoring_alerts
+                    (application_id, client_name, alert_type, severity, detected_by, summary, source_reference, ai_recommendation, status, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (*alert_data, created))
+
+        # Seed demo periodic reviews — various due states
+        logger.info("Demo mode: seeding sample periodic reviews")
+        demo_reviews = [
+            ("demo-scenario-03", "Atlas Digital Assets DMCC", "HIGH", "time_based",
+             "Quarterly review — HIGH risk client with PEP exposure", "pending",
+             (now - timedelta(days=5)).strftime("%Y-%m-%d")),
+            ("demo-scenario-02", "Coral Bay Holdings Ltd", "MEDIUM", "time_based",
+             "Semi-annual review — MEDIUM risk offshore holding", "pending",
+             (now + timedelta(days=10)).strftime("%Y-%m-%d")),
+            ("demo-scenario-05", "Levant Global Enterprises S.A.L.", "VERY_HIGH", "alert_triggered",
+             "Review triggered by sanctions screening alert", "pending",
+             (now - timedelta(days=12)).strftime("%Y-%m-%d")),
+            ("demo-scenario-01", "Meridian Software Ltd", "LOW", "time_based",
+             "Annual review — LOW risk technology company", "pending",
+             (now + timedelta(days=180)).strftime("%Y-%m-%d")),
+            ("demo-scenario-04", "Sunshine Trading Co", "MEDIUM", "time_based",
+             "Semi-annual review — incomplete documentation history", "completed",
+             (now - timedelta(days=30)).strftime("%Y-%m-%d")),
+        ]
+        for rev_data in demo_reviews:
+            completed_at = now.isoformat() if rev_data[5] == "completed" else None
+            decision = "continue" if rev_data[5] == "completed" else None
+            db.execute("""
+                INSERT INTO periodic_reviews
+                    (application_id, client_name, risk_level, trigger_type, trigger_reason, status, due_date, completed_at, decision)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (rev_data[0], rev_data[1], rev_data[2], rev_data[3], rev_data[4], rev_data[5], rev_data[6], completed_at, decision))
+
+        # Seed demo EDD cases
+        logger.info("Demo mode: seeding sample EDD cases")
+        demo_edd = [
+            ("demo-scenario-03", "Atlas Digital Assets DMCC", "HIGH", 72.5, "analysis",
+             "officer_decision", "PEP exposure + crypto sector. Escalated from compliance review.",
+             json.dumps([
+                 {"ts": (now - timedelta(days=8)).isoformat(), "author": "System", "note": "EDD triggered: risk score 72.5 exceeds threshold. PEP director detected."},
+                 {"ts": (now - timedelta(days=6)).isoformat(), "author": "Marie Dubois", "note": "Source of funds documentation requested from applicant."},
+                 {"ts": (now - timedelta(days=2)).isoformat(), "author": "Marie Dubois", "note": "SOF documentation received. Analysing trading revenue claims against bank statements."},
+             ]),
+             (now - timedelta(days=8)).isoformat()),
+            ("demo-scenario-05", "Levant Global Enterprises S.A.L.", "VERY_HIGH", 91.0, "pending_senior_review",
+             "officer_decision", "Sanctioned jurisdiction + shell structure. Immediate EDD required.",
+             json.dumps([
+                 {"ts": (now - timedelta(days=15)).isoformat(), "author": "System", "note": "EDD triggered: VERY_HIGH risk — Syria jurisdiction, shell entity, opaque ownership."},
+                 {"ts": (now - timedelta(days=12)).isoformat(), "author": "Aisha Sudally", "note": "Full enhanced screening completed. Multiple red flags confirmed."},
+                 {"ts": (now - timedelta(days=10)).isoformat(), "author": "Aisha Sudally", "note": "Analysis complete. Recommending REJECT. Submitted for senior review."},
+             ]),
+             (now - timedelta(days=15)).isoformat()),
+        ]
+        for edd_data in demo_edd:
+            db.execute("""
+                INSERT INTO edd_cases
+                    (application_id, client_name, risk_level, risk_score, stage, trigger_source, trigger_notes, edd_notes, triggered_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, edd_data)
+
         db.commit()
+        logger.info("Demo mode: monitoring alerts, periodic reviews, and EDD cases seeded")
+
     else:
         logger.info(f"Environment: {_CFG_ENVIRONMENT} — skipping demo monitoring agent status seeding")
 

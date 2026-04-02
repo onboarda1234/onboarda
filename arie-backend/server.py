@@ -4899,16 +4899,32 @@ class MonitoringAlertCreateHandler(BaseHandler):
         data = self.get_json()
         db = get_db()
 
+        # Insert the alert into monitoring_alerts
+        alert_type = data.get("alert_type", data.get("type", "Manual"))
+        severity = data.get("severity", "Medium")
+        client_name = data.get("client_name", "")
+        application_id = data.get("application_id")
+        summary = data.get("summary", data.get("message", ""))
+        detected_by = data.get("detected_by", user.get("name", "Officer"))
+        source_reference = data.get("source_reference", "Manual entry")
+        ai_recommendation = data.get("ai_recommendation", "")
+
+        db.execute("""
+            INSERT INTO monitoring_alerts
+                (application_id, client_name, alert_type, severity, detected_by, summary, source_reference, ai_recommendation, status)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (application_id, client_name, alert_type, severity, detected_by, summary, source_reference, ai_recommendation, "open"))
+
         # Create notification for relevant users
+        title = data.get("title", f"Monitoring Alert: {alert_type}")
         alert_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
         for u in alert_users:
             db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
-                      (u["id"], data.get("title", "Monitoring Alert"),
-                       data.get("message", "")))
+                      (u["id"], title, summary))
 
         db.commit()
         db.close()
-        self.log_audit(user, "Alert", "Monitoring", f"Alert created: {data.get('title','')}")
+        self.log_audit(user, "Alert", "Monitoring", f"Alert created: {alert_type} — {severity}")
         self.success({"status": "created"}, 201)
 
 
@@ -6328,6 +6344,220 @@ class SARAutoTriggerHandler(BaseHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# EDD (ENHANCED DUE DILIGENCE) PIPELINE ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+class EDDListHandler(BaseHandler):
+    """GET /api/edd/cases — List EDD cases; POST — Create a new EDD case"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        stage = self.get_argument("stage", None)
+        assigned = self.get_argument("assigned_officer", None)
+
+        db = get_db()
+        query = "SELECT * FROM edd_cases WHERE 1=1"
+        params = []
+
+        if stage:
+            query += " AND stage = ?"
+            params.append(stage)
+        if assigned:
+            query += " AND assigned_officer = ?"
+            params.append(assigned)
+
+        query += " ORDER BY triggered_at DESC"
+        cases = db.execute(query, params).fetchall()
+        result = []
+        for c in cases:
+            row = dict(c)
+            row["edd_notes"] = safe_json_loads(row.get("edd_notes", "[]"))
+            result.append(row)
+        db.close()
+        self.success({"cases": result, "total": len(result)})
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        application_id = data.get("application_id")
+        if not application_id:
+            return self.error("application_id is required", 400)
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ?", (application_id,)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        # Check if EDD case already exists for this application
+        existing = db.execute("SELECT id FROM edd_cases WHERE application_id = ? AND stage NOT IN ('edd_approved','edd_rejected')", (application_id,)).fetchone()
+        if existing:
+            db.close()
+            return self.success({"existing": True, "id": existing["id"]})
+
+        trigger_notes = data.get("trigger_notes", "EDD triggered by officer decision")
+        initial_note = json.dumps([{
+            "ts": datetime.now().isoformat(),
+            "author": user.get("name", "System"),
+            "note": trigger_notes
+        }])
+
+        db.execute("""
+            INSERT INTO edd_cases (application_id, client_name, risk_level, risk_score, stage, assigned_officer, trigger_source, trigger_notes, edd_notes)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (application_id, app["company_name"], app.get("risk_level", "HIGH"), app.get("risk_score", 0),
+              "triggered", user["sub"], data.get("trigger_source", "officer_decision"), trigger_notes, initial_note))
+
+        db.commit()
+        case_id = db.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+        db.close()
+
+        self.log_audit(user, "EDD Created", app["ref"], f"EDD case created for {app['company_name']}")
+        self.success({"id": case_id, "status": "created"}, 201)
+
+
+class EDDDetailHandler(BaseHandler):
+    """GET/PATCH /api/edd/cases/:id — Get or update EDD case"""
+    def get(self, case_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+        if not case:
+            db.close()
+            return self.error("EDD case not found", 404)
+
+        result = dict(case)
+        result["edd_notes"] = safe_json_loads(result.get("edd_notes", "[]"))
+        db.close()
+        self.success(result)
+
+    def patch(self, case_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        data = self.get_json()
+        db = get_db()
+
+        case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+        if not case:
+            db.close()
+            return self.error("EDD case not found", 404)
+
+        # Prevent updates on closed cases
+        if case["stage"] in ("edd_approved", "edd_rejected"):
+            db.close()
+            return self.error(f"EDD case is already {case['stage']}. Cannot modify.", 409)
+
+        new_stage = data.get("stage")
+        valid_stages = ["triggered", "information_gathering", "analysis", "pending_senior_review", "edd_approved", "edd_rejected"]
+
+        if new_stage and new_stage not in valid_stages:
+            db.close()
+            return self.error(f"Invalid stage. Must be one of: {', '.join(valid_stages)}", 400)
+
+        # Stage transition validation
+        valid_transitions = {
+            "triggered": ["information_gathering", "analysis", "edd_rejected"],
+            "information_gathering": ["analysis", "edd_rejected"],
+            "analysis": ["pending_senior_review", "edd_rejected"],
+            "pending_senior_review": ["edd_approved", "edd_rejected", "analysis"],
+        }
+
+        if new_stage and new_stage != case["stage"]:
+            allowed = valid_transitions.get(case["stage"], [])
+            if new_stage not in allowed:
+                db.close()
+                return self.error(f"Invalid transition: {case['stage']} → {new_stage}. Allowed: {', '.join(allowed)}", 400)
+
+        # Build update fields
+        updates = ["updated_at=datetime('now')"]
+        params = []
+
+        if new_stage:
+            updates.append("stage=?")
+            params.append(new_stage)
+
+        if data.get("assigned_officer"):
+            updates.append("assigned_officer=?")
+            params.append(data["assigned_officer"])
+
+        if data.get("senior_reviewer"):
+            updates.append("senior_reviewer=?")
+            params.append(data["senior_reviewer"])
+
+        # Handle decision for terminal stages
+        if new_stage in ("edd_approved", "edd_rejected"):
+            decision_reason = data.get("decision_reason", "")
+            if not decision_reason:
+                db.close()
+                return self.error("decision_reason is required for approval/rejection", 400)
+            updates.append("decision=?")
+            params.append(new_stage)
+            updates.append("decision_reason=?")
+            params.append(decision_reason)
+            updates.append("decided_by=?")
+            params.append(user["sub"])
+            updates.append("decided_at=datetime('now')")
+
+        params.append(case_id)
+        db.execute(f"UPDATE edd_cases SET {', '.join(updates)} WHERE id=?", params)
+
+        # Append note if provided
+        note_text = data.get("note")
+        if note_text:
+            existing_notes = safe_json_loads(case.get("edd_notes", "[]"))
+            existing_notes.append({
+                "ts": datetime.now().isoformat(),
+                "author": user.get("name", "System"),
+                "note": note_text
+            })
+            db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
+
+        # Audit trail
+        detail = f"Stage: {case['stage']} → {new_stage}" if new_stage else "EDD case updated"
+        if note_text:
+            detail += f" | Note: {note_text[:100]}"
+        self.log_audit(user, "EDD Update", f"EDD-{case_id}", detail, db=db)
+
+        db.commit()
+        db.close()
+
+        self.success({"status": "updated", "stage": new_stage or case["stage"]})
+
+
+class EDDStatsHandler(BaseHandler):
+    """GET /api/edd/stats — Get EDD pipeline statistics"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+        active = db.execute("SELECT COUNT(*) as c FROM edd_cases WHERE stage NOT IN ('edd_approved','edd_rejected')").fetchone()["c"]
+        pending_senior = db.execute("SELECT COUNT(*) as c FROM edd_cases WHERE stage = 'pending_senior_review'").fetchone()["c"]
+        completed_month = db.execute("""
+            SELECT COUNT(*) as c FROM edd_cases
+            WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date('now','start of month')
+        """).fetchone()["c"]
+        db.close()
+
+        self.success({
+            "active": active,
+            "pending_senior_review": pending_senior,
+            "completed_this_month": completed_month
+        })
+
+
+# ══════════════════════════════════════════════════════════
 # AI ASSISTANT ENDPOINT
 # ══════════════════════════════════════════════════════════
 
@@ -6500,6 +6730,11 @@ def make_app():
         (r"/api/sar/([^/]+)/workflow", SARWorkflowHandler),
         (r"/api/sar/([^/]+)", SARDetailHandler),
         (r"/api/sar", SARListHandler),
+
+        # EDD Pipeline
+        (r"/api/edd/stats", EDDStatsHandler),
+        (r"/api/edd/cases/([^/]+)", EDDDetailHandler),
+        (r"/api/edd/cases", EDDListHandler),
 
         # AI Assistant
         (r"/api/ai/assistant", AIAssistantHandler),
