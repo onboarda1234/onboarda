@@ -83,11 +83,14 @@ jobs:
             --force-new-deployment \
             --region $AWS_REGION > /dev/null
 
-          echo "Waiting for task to start..."
-          aws ecs wait services-stable \
+          echo "Waiting for task to start (up to 10 min)..."
+          if ! aws ecs wait services-stable \
             --cluster $ECS_CLUSTER \
             --services $ECS_SERVICE \
-            --region $AWS_REGION || true
+            --region $AWS_REGION; then
+            echo "WARNING: ECS service did not stabilize within timeout"
+            echo "Proceeding to health check to determine actual state..."
+          fi
 
       - name: Verify deployment health
         run: |

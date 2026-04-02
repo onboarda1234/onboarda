@@ -2401,19 +2401,19 @@ def seed_initial_data(db: DBConnection):
         pw_hash = bcrypt.hashpw(init_password.encode(), bcrypt.gensalt()).decode()
         db.execute(
             "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
-            ("admin001", "asudally@ariefinance.mu", pw_hash, "Aisha Sudally", "admin", "active")
+            ("admin001", "asudally@onboarda.com", pw_hash, "Aisha Sudally", "admin", "active")
         )
         db.execute(
             "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
-            ("sco001", "raj.patel@ariefinance.mu", pw_hash, "Raj Patel", "sco", "active")
+            ("sco001", "raj.patel@onboarda.com", pw_hash, "Raj Patel", "sco", "active")
         )
         db.execute(
             "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
-            ("co001", "m.dubois@ariefinance.mu", pw_hash, "Marie Dubois", "co", "active")
+            ("co001", "m.dubois@onboarda.com", pw_hash, "Marie Dubois", "co", "active")
         )
         db.execute(
             "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
-            ("analyst001", "l.wei@ariefinance.mu", pw_hash, "Li Wei", "analyst", "active")
+            ("analyst001", "l.wei@onboarda.com", pw_hash, "Li Wei", "analyst", "active")
         )
         db.commit()
         logger.info("Users seeded")
