@@ -1973,7 +1973,7 @@ def _seed_monitoring_demo_data(db: DBConnection):
 
     # --- H-1: Deduplicate monitoring agents (cleanup from prior double-seed) ---
     try:
-        if USE_POSTGRES:
+        if USE_POSTGRESQL:
             db.execute("""
                 DELETE FROM monitoring_agent_status
                 WHERE id NOT IN (
