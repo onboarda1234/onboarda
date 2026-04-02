@@ -6407,14 +6407,23 @@ class EDDListHandler(BaseHandler):
             "note": trigger_notes
         }])
 
-        db.execute("""
-            INSERT INTO edd_cases (application_id, client_name, risk_level, risk_score, stage, assigned_officer, trigger_source, trigger_notes, edd_notes)
-            VALUES (?,?,?,?,?,?,?,?,?)
-        """, (application_id, app["company_name"], app.get("risk_level", "HIGH"), app.get("risk_score", 0),
-              "triggered", user["sub"], data.get("trigger_source", "officer_decision"), trigger_notes, initial_note))
+        insert_params = (application_id, app["company_name"], app.get("risk_level", "HIGH"), app.get("risk_score", 0),
+              "triggered", user["sub"], data.get("trigger_source", "officer_decision"), trigger_notes, initial_note)
+
+        if USE_POSTGRES:
+            row = db.execute("""
+                INSERT INTO edd_cases (application_id, client_name, risk_level, risk_score, stage, assigned_officer, trigger_source, trigger_notes, edd_notes)
+                VALUES (?,?,?,?,?,?,?,?,?) RETURNING id
+            """, insert_params).fetchone()
+            case_id = row["id"]
+        else:
+            db.execute("""
+                INSERT INTO edd_cases (application_id, client_name, risk_level, risk_score, stage, assigned_officer, trigger_source, trigger_notes, edd_notes)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, insert_params)
+            case_id = db.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
 
         db.commit()
-        case_id = db.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
         db.close()
 
         self.log_audit(user, "EDD Created", app["ref"], f"EDD case created for {app['company_name']}")
