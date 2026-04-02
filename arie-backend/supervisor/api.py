@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import tornado.web
 
@@ -35,6 +35,15 @@ from .compliance_assistant import ComplianceAssistant
 from .human_review import HumanReviewService
 from .schemas import ReviewDecision, TriggerType
 from .supervisor import AgentSupervisor, SupervisorPipelineResult
+
+
+def _decode_token(token: str):
+    """Decode a JWT token — delegates to auth module."""
+    try:
+        from auth import decode_token
+        return decode_token(token)
+    except ImportError:
+        return None
 
 logger = logging.getLogger("arie.supervisor.api")
 
@@ -46,6 +55,101 @@ _supervisor: Optional[AgentSupervisor] = None
 _review_service: Optional[HumanReviewService] = None
 _assistant: Optional[ComplianceAssistant] = None
 _pipeline_cache: Dict[str, SupervisorPipelineResult] = {}
+
+
+# ═══════════════════════════════════════════════════════════
+# PIPELINE PERSISTENCE (database-backed)
+# ═══════════════════════════════════════════════════════════
+
+def _get_db():
+    """Import get_db lazily to avoid circular imports."""
+    import sys
+    db_mod = sys.modules.get("db")
+    if db_mod and hasattr(db_mod, "get_db"):
+        return db_mod.get_db()
+    try:
+        from db import get_db
+        return get_db()
+    except ImportError:
+        return None
+
+
+def persist_pipeline_result(result: SupervisorPipelineResult, trigger_type: str = None, trigger_source: str = None):
+    """Persist a pipeline result to the database."""
+    db = _get_db()
+    if db is None:
+        logger.warning("Cannot persist pipeline result: DB not available")
+        return
+    try:
+        result_dict = result.to_dict()
+        # Include agent_results in the persisted JSON for the detail tab
+        result_dict["agent_results"] = [
+            {
+                "agent_type": at.value,
+                "agent_name": out.agent_name,
+                "status": out.status.value,
+                "confidence": out.confidence_score,
+                "findings_count": len(out.findings),
+                "issues_count": len(out.detected_issues),
+                "escalation_flag": out.escalation_flag,
+                "recommendation": out.recommendation,
+            }
+            for at, out in result.agent_outputs.items()
+        ]
+        result_dict["failed_agent_details"] = result.failed_agents
+        result_json = json.dumps(result_dict, default=str)
+
+        db.execute(
+            """INSERT OR REPLACE INTO supervisor_pipeline_results
+               (id, pipeline_id, application_id, status, trigger_type, trigger_source,
+                started_at, completed_at, result_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                result.pipeline_id,
+                result.pipeline_id,
+                result.application_id,
+                result.status,
+                trigger_type,
+                trigger_source,
+                result.started_at,
+                result.completed_at,
+                result_json,
+            )
+        )
+        db.commit()
+        logger.info("Pipeline result %s persisted to DB for app %s", result.pipeline_id, result.application_id)
+    except Exception as e:
+        logger.error("Failed to persist pipeline result %s: %s", result.pipeline_id, e)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+def load_latest_pipeline_result(application_id: str) -> Optional[Dict[str, Any]]:
+    """Load the most recent pipeline result for an application from the database."""
+    db = _get_db()
+    if db is None:
+        return None
+    try:
+        row = db.execute(
+            """SELECT result_json, completed_at FROM supervisor_pipeline_results
+               WHERE application_id = ?
+               ORDER BY completed_at DESC LIMIT 1""",
+            (application_id,)
+        ).fetchone()
+        if row:
+            return json.loads(row["result_json"])
+        return None
+    except Exception as e:
+        logger.error("Failed to load pipeline result for app %s: %s", application_id, e)
+        return None
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 def setup_supervisor(db_path: str) -> AgentSupervisor:
@@ -69,7 +173,7 @@ def get_supervisor() -> AgentSupervisor:
 # ═══════════════════════════════════════════════════════════
 
 class SupervisorBaseHandler(tornado.web.RequestHandler):
-    """Base handler with common utilities."""
+    """Base handler with common utilities and JWT authentication."""
 
     def set_default_headers(self):
         self.set_header("Content-Type", "application/json")
@@ -80,6 +184,30 @@ class SupervisorBaseHandler(tornado.web.RequestHandler):
     def options(self, *args, **kwargs):
         self.set_status(204)
         self.finish()
+
+    def get_current_user_token(self):
+        """Decode JWT from Bearer header or session cookie."""
+        auth = self.request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            return _decode_token(auth[7:])
+        session_token = self.get_cookie("arie_session", None)
+        if session_token:
+            return _decode_token(session_token)
+        return None
+
+    def require_auth(self, roles: Optional[List[str]] = None):
+        """Require authentication; optionally restrict to specific roles.
+        Returns the decoded user dict, or None (after writing 401/403)."""
+        user = self.get_current_user_token()
+        if not user:
+            self.set_status(401)
+            self.write(json.dumps({"error": "Authentication required"}))
+            return None
+        if roles and user.get("role") not in roles:
+            self.set_status(403)
+            self.write(json.dumps({"error": "Insufficient permissions"}))
+            return None
+        return user
 
     def write_json(self, data: Any, status: int = 200):
         self.set_status(status)
@@ -107,6 +235,9 @@ class PipelineRunHandler(SupervisorBaseHandler):
     """POST /api/supervisor/pipeline/run — Run a supervisor pipeline."""
 
     async def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
         body = self.get_json_body()
         application_id = body.get("application_id")
         trigger_type = body.get("trigger_type", "onboarding")
@@ -120,20 +251,28 @@ class PipelineRunHandler(SupervisorBaseHandler):
         except ValueError:
             return self.write_error_json(400, f"Invalid trigger_type: {trigger_type}")
 
+        import asyncio
         supervisor = get_supervisor()
         try:
-            result = await supervisor.run_pipeline(
-                application_id=application_id,
-                trigger_type=tt,
-                context_data=body.get("context"),
-                trigger_source=trigger_source,
+            result = await asyncio.wait_for(
+                supervisor.run_pipeline(
+                    application_id=application_id,
+                    trigger_type=tt,
+                    context_data=body.get("context"),
+                    trigger_source=trigger_source,
+                ),
+                timeout=120.0,
             )
+        except asyncio.TimeoutError:
+            logger.error("Pipeline run timed out after 120s for %s", application_id)
+            return self.write_error_json(504, "Pipeline execution timed out after 120 seconds")
         except Exception as e:
             logger.exception("Pipeline run failed for %s: %s", application_id, e)
             return self.write_error_json(500, f"Pipeline execution error: {type(e).__name__}: {e}")
 
-        # Cache for retrieval
+        # Cache in memory + persist to database
         _pipeline_cache[result.pipeline_id] = result
+        persist_pipeline_result(result, trigger_type=trigger_type, trigger_source=trigger_source)
 
         self.write_json(result.to_dict())
 
@@ -142,6 +281,9 @@ class PipelineDetailHandler(SupervisorBaseHandler):
     """GET /api/supervisor/pipeline/:id — Get pipeline results."""
 
     def get(self, pipeline_id: str):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
         result = _pipeline_cache.get(pipeline_id)
         if not result:
             return self.write_error_json(404, "Pipeline not found")
@@ -152,6 +294,9 @@ class PipelineReviewPackageHandler(SupervisorBaseHandler):
     """GET /api/supervisor/pipeline/:id/review — Get review package for officer."""
 
     def get(self, pipeline_id: str):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
         result = _pipeline_cache.get(pipeline_id)
         if not result:
             return self.write_error_json(404, "Pipeline not found")
@@ -168,6 +313,9 @@ class ReviewSubmitHandler(SupervisorBaseHandler):
     """POST /api/supervisor/review — Submit officer review decision."""
 
     def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
         body = self.get_json_body()
 
         required = ["pipeline_id", "reviewer_id", "reviewer_name",
@@ -208,6 +356,9 @@ class ReviewListHandler(SupervisorBaseHandler):
     """GET /api/supervisor/reviews — List review history."""
 
     def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
         app_id = self.get_argument("application_id", None)
         reviewer_id = self.get_argument("reviewer_id", None)
         limit = int(self.get_argument("limit", "50"))
@@ -228,6 +379,9 @@ class EscalationHandler(SupervisorBaseHandler):
     """POST /api/supervisor/escalate — Manually escalate a case."""
 
     def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
         body = self.get_json_body()
         required = ["application_id", "pipeline_id", "escalation_level",
                      "reason", "escalated_by", "escalated_by_role"]
@@ -251,6 +405,9 @@ class EscalationListHandler(SupervisorBaseHandler):
     """GET /api/supervisor/escalations — List pending escalations."""
 
     def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
         level = self.get_argument("level", None)
         limit = int(self.get_argument("limit", "50"))
         escalations = _review_service.get_pending_escalations(
@@ -267,6 +424,9 @@ class OverrideListHandler(SupervisorBaseHandler):
     """GET /api/supervisor/overrides — List override history."""
 
     def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
         app_id = self.get_argument("application_id", None)
         limit = int(self.get_argument("limit", "50"))
         overrides = _review_service.get_overrides(
@@ -283,6 +443,9 @@ class AuditLogHandler(SupervisorBaseHandler):
     """GET /api/supervisor/audit — Query audit log."""
 
     def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
         app_id = self.get_argument("application_id", None)
         event_type = self.get_argument("event_type", None)
         limit = int(self.get_argument("limit", "100"))
@@ -300,6 +463,9 @@ class AuditVerifyHandler(SupervisorBaseHandler):
     """GET /api/supervisor/audit/verify — Verify audit chain integrity."""
 
     def get(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
         limit = int(self.get_argument("limit", "1000"))
         supervisor = get_supervisor()
         result = supervisor.audit.verify_chain_integrity(limit=limit)
@@ -314,6 +480,9 @@ class StatsHandler(SupervisorBaseHandler):
     """GET /api/supervisor/stats — System stats."""
 
     def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
         supervisor = get_supervisor()
         self.write_json(supervisor.get_stats())
 
@@ -322,6 +491,9 @@ class DashboardHandler(SupervisorBaseHandler):
     """GET /api/supervisor/dashboard — Governance dashboard data."""
 
     def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
         supervisor = get_supervisor()
         stats = supervisor.get_stats()
 
@@ -347,6 +519,9 @@ class RulesListHandler(SupervisorBaseHandler):
     """GET /api/supervisor/rules — List compliance rules."""
 
     def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
         supervisor = get_supervisor()
         rules = [
             {
@@ -373,6 +548,9 @@ class AssistantReviewHandler(SupervisorBaseHandler):
     """POST /api/supervisor/assistant/review — AI assistant review summary."""
 
     def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
         body = self.get_json_body()
         pipeline_id = body.get("pipeline_id")
 
@@ -403,56 +581,9 @@ class AssistantReviewHandler(SupervisorBaseHandler):
 # URL PATTERNS — Register with Tornado app
 # ═══════════════════════════════════════════════════════════
 
-class DbTestHandler(SupervisorBaseHandler):
-    """GET /api/supervisor/db-test/:id — Diagnostic: test _get_app_data() DB access."""
-
-    def get(self, application_id: str):
-        try:
-            from .agent_executors import _get_app_data, _get_db_connection, _get_db_loaded
-            import os, sys as _sys
-            db_path = os.environ.get("DB_PATH", "arie.db")
-
-            # Debug info
-            db_in_modules = "db" in _sys.modules
-            db_mod = _sys.modules.get("db")
-            db_mod_has_get_db = hasattr(db_mod, "get_db") if db_mod else False
-            database_url = bool(os.environ.get("DATABASE_URL"))
-
-            data = _get_app_data(db_path, application_id)
-            self.write_json({
-                "status": "ok",
-                "application_id": data["application"].get("id"),
-                "company_name": data["application"].get("company_name"),
-                "directors_count": len(data["directors"]),
-                "ubos_count": len(data["ubos"]),
-                "documents_count": len(data["documents"]),
-                "intermediaries_count": len(data["intermediaries"]),
-                "db_path_used": db_path,
-                "db_path_is_file": os.path.isfile(db_path),
-                "debug": {
-                    "db_in_sys_modules": db_in_modules,
-                    "db_mod_has_get_db": db_mod_has_get_db,
-                    "get_db_connection_is_set": _get_db_connection is not None,
-                    "get_db_loaded": _get_db_loaded,
-                    "database_url_set": database_url,
-                },
-            })
-        except Exception as e:
-            import traceback, sys as _sys2
-            from .agent_executors import _get_db_connection, _get_db_loaded
-            db_in_modules = "db" in _sys2.modules
-            self.write_error_json(500, f"{type(e).__name__}: {e}", {
-                "traceback": traceback.format_exc(),
-                "db_in_sys_modules": db_in_modules,
-                "get_db_loaded": _get_db_loaded,
-                "get_db_connection_set": _get_db_connection is not None,
-            })
-
-
 def get_supervisor_routes():
     """Return list of (pattern, handler) tuples for Tornado app."""
     return [
-        (r"/api/supervisor/db-test/([^/]+)", DbTestHandler),
         (r"/api/supervisor/pipeline/run", PipelineRunHandler),
         (r"/api/supervisor/pipeline/([^/]+)", PipelineDetailHandler),
         (r"/api/supervisor/pipeline/([^/]+)/review", PipelineReviewPackageHandler),

@@ -38,8 +38,14 @@ logger = logging.getLogger("arie.supervisor.executors")
 # Current versions
 AGENT_VERSION = "1.0.0"
 PROMPT_VERSION = "v1.0-2026Q1"
-MODEL_NAME = "claude-sonnet-4-6"
+# Agents 1-5 (onboarding) are deterministic/heuristic — no live AI calls.
+# Agents 7-10 (monitoring) make optional Claude calls with template fallback.
+# MODEL_NAME is used ONLY to tag agents that actually invoke the model.
+HEURISTIC_MODEL_NAME = "heuristic-v1.0"
+AI_MODEL_NAME = "claude-sonnet-4-6"
 MEMO_MODEL = "claude-opus-4-6"
+# Default for _base_output — overridden per agent when live AI is used
+MODEL_NAME = HEURISTIC_MODEL_NAME
 
 
 def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
@@ -189,14 +195,20 @@ class _SqliteFallback:
         self._conn.close()
 
 
-def _base_output(agent_type: AgentType, agent_name: str, application_id: str, run_id: str) -> Dict[str, Any]:
-    """Build base output fields required by AgentOutputBase."""
+def _base_output(agent_type: AgentType, agent_name: str, application_id: str, run_id: str, model_name: str = None) -> Dict[str, Any]:
+    """Build base output fields required by AgentOutputBase.
+
+    Args:
+        model_name: Override model name. Use AI_MODEL_NAME when the agent
+                    actually invoked Claude. Defaults to HEURISTIC_MODEL_NAME
+                    for deterministic agents.
+    """
     return {
         "agent_name": agent_name,
         "agent_type": agent_type.value,
         "agent_version": AGENT_VERSION,
         "prompt_version": PROMPT_VERSION,
-        "model_name": MODEL_NAME,
+        "model_name": model_name or MODEL_NAME,
         "run_id": run_id,
         "application_id": application_id,
         "processed_at": datetime.utcnow().isoformat() + "Z",

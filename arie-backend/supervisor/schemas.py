@@ -749,16 +749,28 @@ class AuditEntry(BaseModel):
     session_id: Optional[str] = None
     previous_hash: Optional[str] = None
     entry_hash: Optional[str] = None
+    hash_version: int = 2
 
     def compute_hash(self, previous_hash: Optional[str] = None) -> str:
-        """Compute SHA-256 hash for tamper detection."""
+        """Compute SHA-256 hash for tamper detection (v2: covers all material fields)."""
         content = json.dumps({
             "audit_id": self.audit_id,
             "timestamp": self.timestamp,
             "event_type": self.event_type.value,
+            "severity": self.severity.value,
+            "pipeline_id": self.pipeline_id or "",
+            "application_id": self.application_id or "",
+            "run_id": self.run_id or "",
+            "agent_type": self.agent_type or "",
+            "actor_type": self.actor_type,
+            "actor_id": self.actor_id or "",
+            "actor_name": self.actor_name or "",
+            "actor_role": self.actor_role or "",
             "action": self.action,
+            "detail": self.detail or "",
             "data": self.data,
-            "previous_hash": previous_hash or ""
+            "previous_hash": previous_hash or "",
+            "hash_version": 2,
         }, sort_keys=True)
         return hashlib.sha256(content.encode()).hexdigest()
 
