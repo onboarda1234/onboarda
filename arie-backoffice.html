@@ -8466,13 +8466,16 @@ async function loadSupervisorForApp() {
 
 function renderSupervisorResults(result) {
   var statusBadge = document.getElementById('sv-pipeline-status');
+  if (!statusBadge) return;
   var st = result.status || 'unknown';
   var stColors = { completed: ['#dcfce7','#166534'], awaiting_review: ['#fef3c7','#92400e'], completed_with_errors: ['#fee2e2','#991b1b'], failed: ['#991b1b','#fff'] };
   var sc = stColors[st] || ['#e0e7ff','#3730a3'];
   statusBadge.textContent = st.replace(/_/g,' ').toUpperCase();
   statusBadge.style.background = sc[0]; statusBadge.style.color = sc[1];
 
-  document.getElementById('sv-pipeline-results').style.display = '';
+  var svResultsPanel = document.getElementById('sv-pipeline-results');
+  if (!svResultsPanel) return;
+  svResultsPanel.style.display = '';
 
   // Provenance header — timestamps, pipeline ID, analysis type
   var provHtml = '<div class="card" style="margin-bottom:14px;padding:12px 16px;background:var(--surface);border:1px solid var(--border1);">';
@@ -8506,7 +8509,7 @@ function renderSupervisorResults(result) {
   }
   provHtml += '</div>';
   // Insert provenance before case aggregate
-  var svResults = document.getElementById('sv-pipeline-results');
+  var svResults = svResultsPanel;
   var existingProvenance = document.getElementById('sv-provenance-header');
   if (existingProvenance) existingProvenance.remove();
   var provDiv = document.createElement('div'); provDiv.id = 'sv-provenance-header'; provDiv.innerHTML = provHtml;
@@ -8522,7 +8525,8 @@ function renderSupervisorResults(result) {
   aggHtml += svStatCard('Rules Triggered', agg.total_rules_triggered || 0, agg.total_rules_triggered > 0 ? 'var(--red)' : 'var(--green)');
   aggHtml += svStatCard('Escalation', agg.escalation_required ? (agg.escalation_level || 'yes').replace(/_/g,' ') : 'None', agg.escalation_required ? 'var(--red)' : 'var(--green)');
   aggHtml += '</div>';
-  document.getElementById('sv-case-aggregate').innerHTML = aggHtml;
+  var svCaseAgg = document.getElementById('sv-case-aggregate');
+  if (svCaseAgg) svCaseAgg.innerHTML = aggHtml;
 
   // Agent results
   var agents = result.agent_results || [];
@@ -8539,7 +8543,8 @@ function renderSupervisorResults(result) {
     if (a.escalation_flag) agHtml += '<span style="font-size:10px;background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-weight:600;">ESCALATION</span>';
     agHtml += '</div>';
   });
-  document.getElementById('sv-agent-results').innerHTML = agHtml;
+  var svAgentRes = document.getElementById('sv-agent-results');
+  if (svAgentRes) svAgentRes.innerHTML = agHtml;
 
   // Contradictions
   var contras = result.contradictions_detail || result.contradictions || [];
@@ -8561,7 +8566,8 @@ function renderSupervisorResults(result) {
       cHtml += '</div>';
     });
   }
-  document.getElementById('sv-contradictions').innerHTML = cHtml;
+  var svContras = document.getElementById('sv-contradictions');
+  if (svContras) svContras.innerHTML = cHtml;
 
   // Rules triggered
   var rules = result.triggered_rules || [];
@@ -8579,7 +8585,8 @@ function renderSupervisorResults(result) {
       rHtml += '</div>';
     });
   }
-  document.getElementById('sv-rules-triggered').innerHTML = rHtml;
+  var svRules = document.getElementById('sv-rules-triggered');
+  if (svRules) svRules.innerHTML = rHtml;
 
   // Review panel
   var reviewReasons = result.review_reasons || [];
@@ -8606,7 +8613,8 @@ function renderSupervisorResults(result) {
     + 'It operates independently of the memo supervisor which gates approval decisions. Pipeline findings here do not automatically block or approve memos. '
     + 'Approval gating is enforced via: <strong>Generate Memo → Validate → Memo Supervisor Verdict → Approve/Reject</strong>.'
     + '</div>';
-  document.getElementById('sv-review-reasons').innerHTML = rrHtml;
+  var svReview = document.getElementById('sv-review-reasons');
+  if (svReview) svReview.innerHTML = rrHtml;
 }
 
 function svStatCard(label, value, color) {
