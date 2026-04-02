@@ -1949,6 +1949,41 @@ def _seed_monitoring_demo_data(db: DBConnection):
 
     now = datetime.now()
 
+    # --- H-1: Deduplicate monitoring agents (cleanup from prior double-seed) ---
+    try:
+        if USE_POSTGRES:
+            db.execute("""
+                DELETE FROM monitoring_agent_status
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM monitoring_agent_status GROUP BY agent_name
+                )
+            """)
+        else:
+            db.execute("""
+                DELETE FROM monitoring_agent_status
+                WHERE rowid NOT IN (
+                    SELECT MIN(rowid) FROM monitoring_agent_status GROUP BY agent_name
+                )
+            """)
+    except Exception as e:
+        logger.warning(f"Agent dedup cleanup skipped: {e}")
+
+    # --- H-2: Ensure demo application stubs exist (monitoring/EDD data references these) ---
+    demo_app_stubs = [
+        ("demo-scenario-01", "ARF-2026-DEMO01", "Meridian Software Ltd"),
+        ("demo-scenario-02", "ARF-2026-DEMO02", "Coral Bay Holdings Ltd"),
+        ("demo-scenario-03", "ARF-2026-DEMO03", "Atlas Digital Assets DMCC"),
+        ("demo-scenario-04", "ARF-2026-DEMO04", "Sunshine Trading Co"),
+        ("demo-scenario-05", "ARF-2026-DEMO05", "Levant Global Enterprises S.A.L."),
+    ]
+    for app_id, ref, company in demo_app_stubs:
+        existing = db.execute("SELECT id FROM applications WHERE id = ?", (app_id,)).fetchone()
+        if not existing:
+            db.execute(
+                "INSERT INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, 'submitted')",
+                (app_id, ref, company)
+            )
+
     # Only seed each table if it's empty — prevents duplicates on restart
     alerts_count = db.execute("SELECT COUNT(*) as c FROM monitoring_alerts").fetchone()["c"]
     reviews_count = db.execute("SELECT COUNT(*) as c FROM periodic_reviews").fetchone()["c"]

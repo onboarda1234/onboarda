@@ -4294,7 +4294,7 @@ function renderEDD() {
       '<td>' + riskBadge((c.risk_level || 'HIGH').toUpperCase().replace(' ','_')) + '</td>' +
       '<td style="font-weight:700;">' + escapeHtml(String(c.risk_score || '—')) + '</td>' +
       '<td>' + eddStageBadge(c.stage) + '</td>' +
-      '<td style="font-size:12px;">' + escapeHtml(c.assigned_officer || 'Unassigned') + '</td>' +
+      '<td style="font-size:12px;">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === c.assigned_officer; }); return u ? u.name : (c.assigned_officer || 'Unassigned'); })()) + '</td>' +
       '<td style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + 'd</td>' +
       '<td><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openEDDDetail(' + c.id + ')">Review</button></td>';
     tbody.appendChild(tr);
@@ -4342,7 +4342,7 @@ function openEDDDetail(caseId) {
     '<div class="detail-row"><span class="label">Risk Level</span><span class="value">' + riskBadge((c.risk_level || '').toUpperCase().replace(' ','_')) + '</span></div>' +
     '<div class="detail-row"><span class="label">Risk Score</span><span class="value" style="font-weight:700;">' + (c.risk_score || '—') + '</span></div>' +
     '<div class="detail-row"><span class="label">Current Stage</span><span class="value">' + eddStageBadge(c.stage) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Assigned Officer</span><span class="value">' + escapeHtml(c.assigned_officer || 'Unassigned') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Assigned Officer</span><span class="value">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === c.assigned_officer; }); return u ? u.name : (c.assigned_officer || 'Unassigned'); })()) + '</span></div>' +
     '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + escapeHtml(c.trigger_notes || c.trigger_source || '') + '</span></div>' +
     '<div class="detail-row"><span class="label">EDD Opened</span><span class="value">' + (c.triggered_at || '').split('T')[0] + '</span></div>' +
     '<div class="detail-row"><span class="label">Days in EDD</span><span class="value" style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + ' days</span></div>' +
@@ -4794,7 +4794,7 @@ async function triggerSARFromAlert() {
 
 function openPeriodicReview(ref) {
   var review = PERIODIC_REVIEWS.find(function(r) { return r.ref === ref; });
-  var app = APPLICATIONS.find(function(a) { return a.ref === ref; });
+  var app = APPLICATIONS.find(function(a) { return a.id === ref || a.ref === ref; });
 
   if (!app && !review) {
     showToast('Application not found');
