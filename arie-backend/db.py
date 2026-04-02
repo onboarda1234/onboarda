@@ -2190,18 +2190,13 @@ def _seed_monitoring_demo_data(db: DBConnection):
             ("demo-scenario-04", "ARF-2026-DEMO04", "Sunshine Trading Co"),
             ("demo-scenario-05", "ARF-2026-DEMO05", "Levant Global Enterprises S.A.L."),
         ]
-        inserted = 0
         for app_id, ref, company in demo_app_stubs:
-            existing = db.execute("SELECT id FROM applications WHERE id = ?", (app_id,)).fetchone()
-            if not existing:
-                db.execute(
-                    "INSERT INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, 'submitted')",
-                    (app_id, ref, company)
-                )
-                inserted += 1
-        if inserted:
-            db.commit()
-            logger.info(f"H-2: Inserted {inserted} demo application stubs")
+            db.execute(
+                "INSERT OR IGNORE INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, 'submitted')",
+                (app_id, ref, company)
+            )
+        db.commit()
+        logger.info("H-2: Demo application stubs ensured")
     except Exception as e:
         logger.warning(f"Demo application stub insertion skipped: {e}")
 
