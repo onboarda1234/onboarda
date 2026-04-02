@@ -6544,10 +6544,16 @@ class EDDStatsHandler(BaseHandler):
         db = get_db()
         active = db.execute("SELECT COUNT(*) as c FROM edd_cases WHERE stage NOT IN ('edd_approved','edd_rejected')").fetchone()["c"]
         pending_senior = db.execute("SELECT COUNT(*) as c FROM edd_cases WHERE stage = 'pending_senior_review'").fetchone()["c"]
-        completed_month = db.execute("""
-            SELECT COUNT(*) as c FROM edd_cases
-            WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date('now','start of month')
-        """).fetchone()["c"]
+        if USE_POSTGRES:
+            completed_month = db.execute("""
+                SELECT COUNT(*) as c FROM edd_cases
+                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date_trunc('month', CURRENT_DATE)
+            """).fetchone()["c"]
+        else:
+            completed_month = db.execute("""
+                SELECT COUNT(*) as c FROM edd_cases
+                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date('now','start of month')
+            """).fetchone()["c"]
         db.close()
 
         self.success({
