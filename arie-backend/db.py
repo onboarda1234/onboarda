@@ -1662,6 +1662,28 @@ def _run_migrations(db: DBConnection):
             """)
         logger.info("Migration v2.6: regulatory_documents table ready")
 
+    # Migration v2.8: Add sumsub_applicant_mappings table for deterministic webhook linking (Finding 12)
+    try:
+        db.execute("SELECT applicant_id FROM sumsub_applicant_mappings LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.8: Creating sumsub_applicant_mappings table")
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS sumsub_applicant_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                application_id TEXT NOT NULL,
+                applicant_id TEXT NOT NULL,
+                external_user_id TEXT NOT NULL,
+                person_name TEXT DEFAULT '',
+                person_type TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(applicant_id)
+            )
+        """)
+        db.execute("CREATE INDEX IF NOT EXISTS idx_sam_applicant ON sumsub_applicant_mappings(applicant_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_sam_external ON sumsub_applicant_mappings(external_user_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_sam_app ON sumsub_applicant_mappings(application_id)")
+        logger.info("Migration v2.8: sumsub_applicant_mappings table ready")
+
 
 def _populate_default_scoring_config(db: 'DBConnection'):
     """Populate default country/sector/entity scores for existing risk_config rows."""

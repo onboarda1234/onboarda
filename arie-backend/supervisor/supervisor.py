@@ -121,10 +121,25 @@ class SupervisorPipelineResult:
             "blocking_issues": self.blocking_issues,
             "case_aggregate": self.case_aggregate.model_dump() if self.case_aggregate else None,
             "contradictions": [c.model_dump() for c in self.contradictions],
+            "contradictions_detail": [c.model_dump() for c in self.contradictions],
             "triggered_rules": [
                 r.model_dump() for r in self.rule_evaluations if r.triggered
             ],
             "escalations": [e.model_dump() for e in self.escalations],
+            "agent_results": [
+                {
+                    "agent_type": at.value if hasattr(at, "value") else str(at),
+                    "agent_name": out.agent_name,
+                    "status": out.status.value if hasattr(out.status, "value") else str(out.status),
+                    "confidence": out.confidence_score,
+                    "findings_count": len(out.findings),
+                    "issues_count": len(out.detected_issues),
+                    "escalation_flag": out.escalation_flag,
+                    "recommendation": out.recommendation,
+                }
+                for at, out in self.agent_outputs.items()
+            ],
+            "failed_agent_details": self.failed_agents,
         }
 
 
