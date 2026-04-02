@@ -427,6 +427,9 @@ class SumsubClient:
                 return self.get_applicant_by_external_id(external_user_id)
             else:
                 logger.warning(f"Sumsub create applicant failed: {status} — {error_msg}")
+                if self.is_configured:
+                    return self._error_result("create_applicant", f"API returned {status}",
+                                              external_user_id=external_user_id)
                 return self._simulate_applicant(
                     external_user_id, first_name, last_name,
                     note=f"API returned {status}", info=info
@@ -434,6 +437,9 @@ class SumsubClient:
 
         except (SumsubRetryError, Timeout, RequestException) as e:
             logger.error(f"Sumsub create applicant error: {e}")
+            if self.is_configured:
+                return self._error_result("create_applicant", str(e)[:100],
+                                          external_user_id=external_user_id)
             return self._simulate_applicant(
                 external_user_id, first_name, last_name,
                 note=f"Exception: {str(e)[:100]}", info=info
@@ -471,10 +477,16 @@ class SumsubClient:
                 }
             else:
                 logger.warning(f"Sumsub get applicant failed: {status}")
+                if self.is_configured:
+                    return self._error_result("get_applicant", f"Lookup returned {status}",
+                                              external_user_id=external_user_id)
                 return self._simulate_applicant(external_user_id, note=f"Lookup returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
             logger.error(f"Sumsub get applicant error: {e}")
+            if self.is_configured:
+                return self._error_result("get_applicant", str(e)[:100],
+                                          external_user_id=external_user_id)
             return self._simulate_applicant(external_user_id, note=str(e)[:100])
 
     def get_applicant_status(self, applicant_id: str) -> Dict[str, Any]:
@@ -523,10 +535,16 @@ class SumsubClient:
                 return result
             else:
                 logger.warning(f"Sumsub status check failed: {status}")
+                if self.is_configured:
+                    return self._error_result("get_applicant_status", f"API returned {status}",
+                                              applicant_id=applicant_id)
                 return self._simulate_status(applicant_id, note=f"API returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
             logger.error(f"Sumsub status error: {e}")
+            if self.is_configured:
+                return self._error_result("get_applicant_status", str(e)[:100],
+                                          applicant_id=applicant_id)
             return self._simulate_status(applicant_id, note=str(e)[:100])
 
     def add_document(
@@ -628,10 +646,16 @@ class SumsubClient:
                 }
             else:
                 logger.warning(f"Sumsub get verification result failed: {status}")
+                if self.is_configured:
+                    return self._error_result("get_verification_result", f"API returned {status}",
+                                              applicant_id=applicant_id)
                 return self._simulate_verification_result(applicant_id, note=f"API returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
             logger.error(f"Sumsub get verification result error: {e}")
+            if self.is_configured:
+                return self._error_result("get_verification_result", str(e)[:100],
+                                          applicant_id=applicant_id)
             return self._simulate_verification_result(applicant_id, note=str(e)[:100])
 
     def get_aml_screening(self, applicant_id: str) -> Dict[str, Any]:
@@ -708,10 +732,16 @@ class SumsubClient:
                 }
             else:
                 logger.warning(f"Sumsub token gen failed: {status} — {error_msg}")
+                if self.is_configured:
+                    return self._error_result("generate_access_token", f"API returned {status}",
+                                              external_user_id=external_user_id, token="")
                 return self._simulate_token(external_user_id, note=f"API returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
             logger.error(f"Sumsub token error: {e}")
+            if self.is_configured:
+                return self._error_result("generate_access_token", str(e)[:100],
+                                          external_user_id=external_user_id, token="")
             return self._simulate_token(external_user_id, note=str(e)[:100])
 
     # ── Webhook Signature Verification ──
@@ -750,6 +780,27 @@ class SumsubClient:
             logger.warning("Invalid Sumsub webhook signature")
 
         return is_valid
+
+    # ── Safe Error Responses (returned when live API fails with credentials present) ──
+
+    @staticmethod
+    def _error_result(operation: str, reason: str, **extra) -> Dict[str, Any]:
+        """
+        Return a clearly-errored result instead of simulated data when live API fails.
+        This prevents fabricated KYC data from being stored as real.
+        """
+        result = {
+            "applicant_id": "",
+            "status": "error",
+            "review_answer": "",
+            "source": "sumsub",
+            "api_status": "error",
+            "error": f"{operation} failed: {reason}",
+            "note": reason,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        result.update(extra)
+        return result
 
     # ── Simulation Fallbacks (for when Sumsub is not configured) ──
 
