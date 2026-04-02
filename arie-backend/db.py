@@ -2176,24 +2176,34 @@ def _seed_monitoring_demo_data(db: DBConnection):
                     SELECT MIN(rowid) FROM monitoring_agent_status GROUP BY agent_name
                 )
             """)
+        db.commit()
+        logger.info("H-1: Agent dedup cleanup completed")
     except Exception as e:
         logger.warning(f"Agent dedup cleanup skipped: {e}")
 
     # --- H-2: Ensure demo application stubs exist (monitoring/EDD data references these) ---
-    demo_app_stubs = [
-        ("demo-scenario-01", "ARF-2026-DEMO01", "Meridian Software Ltd"),
-        ("demo-scenario-02", "ARF-2026-DEMO02", "Coral Bay Holdings Ltd"),
-        ("demo-scenario-03", "ARF-2026-DEMO03", "Atlas Digital Assets DMCC"),
-        ("demo-scenario-04", "ARF-2026-DEMO04", "Sunshine Trading Co"),
-        ("demo-scenario-05", "ARF-2026-DEMO05", "Levant Global Enterprises S.A.L."),
-    ]
-    for app_id, ref, company in demo_app_stubs:
-        existing = db.execute("SELECT id FROM applications WHERE id = ?", (app_id,)).fetchone()
-        if not existing:
-            db.execute(
-                "INSERT INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, 'submitted')",
-                (app_id, ref, company)
-            )
+    try:
+        demo_app_stubs = [
+            ("demo-scenario-01", "ARF-2026-DEMO01", "Meridian Software Ltd"),
+            ("demo-scenario-02", "ARF-2026-DEMO02", "Coral Bay Holdings Ltd"),
+            ("demo-scenario-03", "ARF-2026-DEMO03", "Atlas Digital Assets DMCC"),
+            ("demo-scenario-04", "ARF-2026-DEMO04", "Sunshine Trading Co"),
+            ("demo-scenario-05", "ARF-2026-DEMO05", "Levant Global Enterprises S.A.L."),
+        ]
+        inserted = 0
+        for app_id, ref, company in demo_app_stubs:
+            existing = db.execute("SELECT id FROM applications WHERE id = ?", (app_id,)).fetchone()
+            if not existing:
+                db.execute(
+                    "INSERT INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, 'submitted')",
+                    (app_id, ref, company)
+                )
+                inserted += 1
+        if inserted:
+            db.commit()
+            logger.info(f"H-2: Inserted {inserted} demo application stubs")
+    except Exception as e:
+        logger.warning(f"Demo application stub insertion skipped: {e}")
 
     # Only seed each table if it's empty — prevents duplicates on restart
     alerts_count = db.execute("SELECT COUNT(*) as c FROM monitoring_alerts").fetchone()["c"]
