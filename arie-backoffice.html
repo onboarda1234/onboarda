@@ -2330,6 +2330,7 @@ var BO_AUTH_USER = null;
 // ─── Environment Detection ────────────────────────────────────
 var ARIE_ENV = 'production';
 var FEATURE_FLAGS = {};
+var DEMO_CREDENTIALS = {};
 
 async function loadEnvironment() {
   try {
@@ -2337,6 +2338,7 @@ async function loadEnvironment() {
     const data = await res.json();
     ARIE_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
+    DEMO_CREDENTIALS = data.demo_credentials || {};
     applyEnvironmentUI();
   } catch (e) {
     console.warn('Could not load environment config:', e);
@@ -6897,9 +6899,6 @@ async function handleLogin(e) {
   submitBtn.textContent = 'Signing in...';
   errEl.classList.remove('show');
 
-  // Demo password for offline/demo mode
-  var DEMO_PASSWORD = 'Onboarda2026!';
-
   try {
     var resp;
     var demoUser = USERS.find(function(u) { return u.email === email; });
@@ -6909,7 +6908,8 @@ async function handleLogin(e) {
       resp = await boApiCall('POST', '/auth/officer/login', { email: email, password: password });
     } catch(apiErr) {
       // Backend not running — demo/offline mode (only allowed in demo environment)
-      if (ARIE_ENV === 'demo' && demoUser && (password === DEMO_PASSWORD || password === 'admin123')) {
+      var demoBoPw = (DEMO_CREDENTIALS || {}).backoffice_password || '';
+      if (ARIE_ENV === 'demo' && demoUser && demoBoPw && (password === demoBoPw || password === 'admin123')) {
         isOffline = true;
         resp = {
           token: 'demo_' + btoa(email + ':' + Date.now()),

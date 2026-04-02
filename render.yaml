@@ -153,3 +153,13 @@ services:
         value: "true"
       - key: ENABLE_SHORTCUT_LOGIN
         value: "true"
+      # Admin password for seeding officer accounts on first init
+      - key: ADMIN_INITIAL_PASSWORD
+        value: "Onboarda2026!"
+      # Demo credentials (read by environment.py, served to frontend)
+      - key: DEMO_PORTAL_PASSWORD
+        value: "Arie2026!"
+      - key: DEMO_BACKOFFICE_PASSWORD
+        value: "Onboarda2026!"
+      - key: DEMO_CLIENT_PASSWORD
+        value: "DemoPass2026!"

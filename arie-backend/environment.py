@@ -391,10 +391,17 @@ def get_environment_info() -> dict:
     Return environment info safe to send to frontend.
     Used by /api/config/environment endpoint.
     """
-    return {
+    info = {
         "environment": ENV,
         "is_demo": is_demo(),
         "is_production": is_production(),
         "features": flags.get_client_safe_flags(),
         "version": os.environ.get("APP_VERSION", "1.0.0-pilot"),
     }
+    # Demo credentials — only exposed in demo environments, read from env vars
+    if is_demo():
+        info["demo_credentials"] = {
+            "portal_password": os.environ.get("DEMO_PORTAL_PASSWORD", ""),
+            "backoffice_password": os.environ.get("DEMO_BACKOFFICE_PASSWORD", ""),
+        }
+    return info

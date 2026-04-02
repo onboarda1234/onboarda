@@ -279,13 +279,14 @@ DEMO_SCENARIOS = [
 def seed_demo_client(db):
     """Create a demo client account for pilot demonstrations."""
     import bcrypt
-    demo_pw = bcrypt.hashpw("DemoPass2026!".encode(), bcrypt.gensalt()).decode()
+    demo_client_pw = os.environ.get("DEMO_CLIENT_PASSWORD", "DemoPass2026!")
+    demo_pw = bcrypt.hashpw(demo_client_pw.encode(), bcrypt.gensalt()).decode()
     db.execute(
         "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name, status) VALUES (?,?,?,?,?)",
         ("demo-client-001", "demo@onboarda.com", demo_pw, f"{BRAND['portal_name']} Demo Client", "active")
     )
     db.commit()
-    logger.info(f"Demo client seeded: demo@onboarda.com / DemoPass2026!")
+    logger.info("Demo client seeded: demo@onboarda.com (password from DEMO_CLIENT_PASSWORD env var)")
 
 
 def seed_scenario(db, scenario):

@@ -4495,12 +4495,14 @@ let currentApplicationId = '';
 // ─── Environment Detection ────────────────────────────────
 var ARIE_ENV = 'production';
 var FEATURE_FLAGS = {};
+var DEMO_CREDENTIALS = {};
 
 async function loadEnvironment() {
   try {
     const data = await apiCall('GET', '/config/environment');
     ARIE_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
+    DEMO_CREDENTIALS = data.demo_credentials || {};
     applyEnvironmentUI();
   } catch (e) {
     console.warn('Could not load environment config:', e);
@@ -7537,7 +7539,6 @@ async function submitLogin(e) {
   const email = document.getElementById('l-email').value.trim();
   const password = document.getElementById('l-password').value;
   btn.disabled = true; btn.textContent = '⏳ Signing in…';
-  const DEMO_PORTAL_PASSWORD = 'Arie2026!';
   try {
     let resp;
     let isOffline = false;
@@ -7546,7 +7547,8 @@ async function submitLogin(e) {
       resp = await apiCall('POST', '/auth/client/login', { email, password });
     } catch(apiErr) {
       // Backend not running — demo/offline mode (only allowed in demo environment)
-      if (ARIE_ENV === 'demo' && (password === DEMO_PORTAL_PASSWORD || password === 'demo123')) {
+      var demoPw = (DEMO_CREDENTIALS || {}).portal_password || '';
+      if (ARIE_ENV === 'demo' && demoPw && (password === demoPw || password === 'demo123')) {
         isOffline = true;
         const demoName = email.split('@')[0].replace(/[._]/g,' ').replace(/\b\w/g, c => c.toUpperCase());
         resp = {
