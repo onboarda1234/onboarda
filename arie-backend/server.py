@@ -5041,17 +5041,31 @@ class SupervisorRunHandler(BaseHandler):
         data = self.get_json()
         trigger_type = data.get("trigger_type", "onboarding") if data else "onboarding"
 
+        trigger_source = f"backoffice:{user.get('sub', user.get('id', 'unknown'))}"
         try:
             supervisor = get_supervisor()
-            result = await supervisor.run_pipeline(
-                application_id=app["id"],
-                trigger_type=__import__("supervisor.schemas", fromlist=["TriggerType"]).TriggerType(trigger_type),
-                context_data={"app_ref": app["ref"], "company_name": app["company_name"]},
-                trigger_source=f"backoffice:{user.get('sub', user.get('id', 'unknown'))}",
+            result = await asyncio.wait_for(
+                supervisor.run_pipeline(
+                    application_id=app["id"],
+                    trigger_type=__import__("supervisor.schemas", fromlist=["TriggerType"]).TriggerType(trigger_type),
+                    context_data={"app_ref": app["ref"], "company_name": app["company_name"]},
+                    trigger_source=trigger_source,
+                ),
+                timeout=120.0,
             )
+
+            # Persist to database (survives restarts)
+            try:
+                from supervisor.api import persist_pipeline_result
+                persist_pipeline_result(result, trigger_type=trigger_type, trigger_source=trigger_source)
+            except Exception as persist_err:
+                logger.error("Failed to persist pipeline result: %s", persist_err)
+
             self.success({
                 "pipeline_id": result.pipeline_id,
                 "status": result.status,
+                "started_at": result.started_at,
+                "completed_at": result.completed_at,
                 "agent_count": len(result.agent_outputs),
                 "failed_agents": len(result.failed_agents),
                 "contradictions": len(result.contradictions),
@@ -5078,6 +5092,9 @@ class SupervisorRunHandler(BaseHandler):
                 ],
                 "failed_agent_details": result.failed_agents,
             })
+        except asyncio.TimeoutError:
+            logger.error("Supervisor pipeline timed out after 120s for app %s", app_id)
+            return self.error("Pipeline execution timed out after 120 seconds", 504)
         except Exception as e:
             logger.error("Supervisor pipeline failed: %s", e, exc_info=True)
             return self.error(f"Pipeline execution failed: {str(e)}", 500)
@@ -5100,10 +5117,10 @@ class SupervisorResultHandler(BaseHandler):
             return self.error("Application not found", 404)
         db.close()
 
-        # Return from the pipeline cache
+        # Return from memory cache first, then fall back to database
         try:
-            from supervisor.api import _pipeline_cache
-            # Find the most recent pipeline for this application
+            from supervisor.api import _pipeline_cache, load_latest_pipeline_result
+            # 1. Check in-memory cache (fast path)
             latest = None
             for pid, result in _pipeline_cache.items():
                 if result.application_id == app["id"]:
@@ -5111,6 +5128,12 @@ class SupervisorResultHandler(BaseHandler):
                         latest = result
             if latest:
                 self.success(latest.to_dict())
+                return
+
+            # 2. Fall back to database (survives restarts)
+            db_result = load_latest_pipeline_result(app["id"])
+            if db_result:
+                self.success(db_result)
             else:
                 self.success({"status": "no_pipeline_run", "message": "No supervisor pipeline has been run for this application."})
         except Exception as e:

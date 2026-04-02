@@ -729,6 +729,49 @@ def _get_postgres_schema() -> str:
         revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);
+
+    -- Supervisor pipeline results (persisted across restarts)
+    CREATE TABLE IF NOT EXISTS supervisor_pipeline_results (
+        id TEXT PRIMARY KEY,
+        pipeline_id TEXT NOT NULL UNIQUE,
+        application_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        trigger_type TEXT,
+        trigger_source TEXT,
+        started_at TIMESTAMP,
+        completed_at TIMESTAMP,
+        result_json TEXT NOT NULL DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_pipeline_app ON supervisor_pipeline_results(application_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_pipeline_status ON supervisor_pipeline_results(status);
+    CREATE INDEX IF NOT EXISTS idx_sup_pipeline_completed ON supervisor_pipeline_results(completed_at);
+
+    -- Supervisor audit log (production-grade, uses shared DB)
+    CREATE TABLE IF NOT EXISTS supervisor_audit_log (
+        id TEXT PRIMARY KEY,
+        timestamp TIMESTAMP NOT NULL,
+        event_type TEXT NOT NULL,
+        severity TEXT DEFAULT 'info',
+        pipeline_id TEXT,
+        application_id TEXT,
+        run_id TEXT,
+        agent_type TEXT,
+        actor_type TEXT,
+        actor_id TEXT,
+        actor_name TEXT,
+        actor_role TEXT,
+        action TEXT NOT NULL,
+        detail TEXT,
+        data_json TEXT DEFAULT '{}',
+        ip_address TEXT,
+        session_id TEXT,
+        previous_hash TEXT,
+        entry_hash TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_ts ON supervisor_audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_event ON supervisor_audit_log(event_type);
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_app ON supervisor_audit_log(application_id);
     """
 
 
@@ -1217,6 +1260,49 @@ def _get_sqlite_schema() -> str:
         revoked_at TEXT DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);
+
+    -- Supervisor pipeline results (persisted across restarts)
+    CREATE TABLE IF NOT EXISTS supervisor_pipeline_results (
+        id TEXT PRIMARY KEY,
+        pipeline_id TEXT NOT NULL UNIQUE,
+        application_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        trigger_type TEXT,
+        trigger_source TEXT,
+        started_at TEXT,
+        completed_at TEXT,
+        result_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_pipeline_app ON supervisor_pipeline_results(application_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_pipeline_status ON supervisor_pipeline_results(status);
+    CREATE INDEX IF NOT EXISTS idx_sup_pipeline_completed ON supervisor_pipeline_results(completed_at);
+
+    -- Supervisor audit log (production-grade, uses shared DB)
+    CREATE TABLE IF NOT EXISTS supervisor_audit_log (
+        id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        severity TEXT DEFAULT 'info',
+        pipeline_id TEXT,
+        application_id TEXT,
+        run_id TEXT,
+        agent_type TEXT,
+        actor_type TEXT,
+        actor_id TEXT,
+        actor_name TEXT,
+        actor_role TEXT,
+        action TEXT NOT NULL,
+        detail TEXT,
+        data_json TEXT DEFAULT '{}',
+        ip_address TEXT,
+        session_id TEXT,
+        previous_hash TEXT,
+        entry_hash TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_ts ON supervisor_audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_event ON supervisor_audit_log(event_type);
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_app ON supervisor_audit_log(application_id);
     """
 
 
@@ -1661,6 +1747,109 @@ def _run_migrations(db: DBConnection):
             CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
             """)
         logger.info("Migration v2.6: regulatory_documents table ready")
+
+    # Migration v2.8: Add supervisor pipeline results and audit log tables
+    try:
+        db.execute("SELECT pipeline_id FROM supervisor_pipeline_results LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.8: Creating supervisor_pipeline_results table")
+        if USE_POSTGRESQL:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS supervisor_pipeline_results (
+                id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
+                pipeline_id TEXT NOT NULL UNIQUE,
+                application_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                trigger_type TEXT,
+                trigger_source TEXT,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                result_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_sup_pipeline_app ON supervisor_pipeline_results(application_id);
+            CREATE INDEX IF NOT EXISTS idx_sup_pipeline_status ON supervisor_pipeline_results(status);
+            CREATE INDEX IF NOT EXISTS idx_sup_pipeline_completed ON supervisor_pipeline_results(completed_at);
+            """)
+        else:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS supervisor_pipeline_results (
+                id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
+                pipeline_id TEXT NOT NULL UNIQUE,
+                application_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                trigger_type TEXT,
+                trigger_source TEXT,
+                started_at TEXT,
+                completed_at TEXT,
+                result_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_sup_pipeline_app ON supervisor_pipeline_results(application_id);
+            CREATE INDEX IF NOT EXISTS idx_sup_pipeline_status ON supervisor_pipeline_results(status);
+            CREATE INDEX IF NOT EXISTS idx_sup_pipeline_completed ON supervisor_pipeline_results(completed_at);
+            """)
+        logger.info("Migration v2.8: supervisor_pipeline_results table ready")
+
+    try:
+        db.execute("SELECT entry_hash FROM supervisor_audit_log LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.8: Creating supervisor_audit_log table")
+        if USE_POSTGRESQL:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS supervisor_audit_log (
+                id TEXT PRIMARY KEY,
+                timestamp TIMESTAMP NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT DEFAULT 'info',
+                pipeline_id TEXT,
+                application_id TEXT,
+                run_id TEXT,
+                agent_type TEXT,
+                actor_type TEXT,
+                actor_id TEXT,
+                actor_name TEXT,
+                actor_role TEXT,
+                action TEXT NOT NULL,
+                detail TEXT,
+                data_json TEXT DEFAULT '{}',
+                ip_address TEXT,
+                session_id TEXT,
+                previous_hash TEXT,
+                entry_hash TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_sup_audit_ts ON supervisor_audit_log(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_sup_audit_event ON supervisor_audit_log(event_type);
+            CREATE INDEX IF NOT EXISTS idx_sup_audit_app ON supervisor_audit_log(application_id);
+            """)
+        else:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS supervisor_audit_log (
+                id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                severity TEXT DEFAULT 'info',
+                pipeline_id TEXT,
+                application_id TEXT,
+                run_id TEXT,
+                agent_type TEXT,
+                actor_type TEXT,
+                actor_id TEXT,
+                actor_name TEXT,
+                actor_role TEXT,
+                action TEXT NOT NULL,
+                detail TEXT,
+                data_json TEXT DEFAULT '{}',
+                ip_address TEXT,
+                session_id TEXT,
+                previous_hash TEXT,
+                entry_hash TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_sup_audit_ts ON supervisor_audit_log(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_sup_audit_event ON supervisor_audit_log(event_type);
+            CREATE INDEX IF NOT EXISTS idx_sup_audit_app ON supervisor_audit_log(application_id);
+            """)
+        logger.info("Migration v2.8: supervisor_audit_log table ready")
 
 
 def _populate_default_scoring_config(db: 'DBConnection'):

@@ -686,7 +686,7 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="snav-item" onclick="showView('edd',this)"><span class="snav-icon">⚠️</span> EDD Pipeline</div>
     <div class="snav-item" onclick="showView('reports',this)"><span class="snav-icon">📈</span> Reports</div>
     <div class="snav-item" onclick="showView('reg-intel',this)"><span class="snav-icon">🏛️</span> Regulatory Intelligence</div>
-    <div class="snav-section">AI Supervisor</div>
+    <div class="snav-section">Compliance Supervisor</div>
     <div class="snav-item" onclick="showView('supervisor',this)"><span class="snav-icon">🛡️</span> Supervisor Dashboard</div>
     <div class="snav-item" onclick="showView('supervisor-audit',this)"><span class="snav-icon">🔗</span> Audit Chain</div>
     <div class="snav-section">Administration</div>
@@ -948,7 +948,7 @@ body.role-admin .role-admin-only-block { display:block; }
     <button class="btn btn-outline btn-sm" id="tab-overview" onclick="switchDetailTab('overview')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Overview</button>
     <button class="btn btn-outline btn-sm" id="tab-kyc-docs" onclick="switchDetailTab('kyc-docs')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">KYC Documents &amp; Verifications</button>
     <button class="btn btn-outline btn-sm" id="tab-screening" onclick="switchDetailTab('screening')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Screening Review</button>
-    <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ AI Supervisor</button>
+    <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ Compliance Supervisor</button>
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
   </div>
 
@@ -1170,8 +1170,8 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="card" style="margin-bottom:16px;">
       <div class="card-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span style="font-size:18px;">🛡️</span>
-        <span style="font-weight:700;">AI Supervisor Pipeline</span>
-        <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;">Decision Support</span>
+        <span style="font-weight:700;">Compliance Supervisor Pipeline</span>
+        <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;">Decision Support — Rules-Based Analysis</span>
         <span class="badge" id="sv-pipeline-status" style="background:var(--bg2);color:var(--text3);">Not Run</span>
         <button class="btn btn-primary btn-sm" id="btn-run-supervisor" onclick="runSupervisorPipeline()" style="margin-left:auto;">▶️ Run Analysis</button>
       </div>
@@ -1842,8 +1842,8 @@ body.role-admin .role-admin-only-block { display:block; }
 <div class="view" id="view-supervisor">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
     <div>
-      <h3 style="font-size:16px;font-weight:700;">AI Supervisor Dashboard <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;vertical-align:middle;">Decision Support</span></h3>
-      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Multi-agent analysis pipeline — contradiction detection, confidence evaluation, and compliance rule checks. Results inform officer review but do not directly gate approval. Approval gating is enforced by the memo supervisor (Generate Memo → Validate → Approve).</p>
+      <h3 style="font-size:16px;font-weight:700;">Compliance Supervisor Dashboard <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;vertical-align:middle;">Decision Support — Rules-Based</span></h3>
+      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Multi-agent analysis pipeline — contradiction detection, confidence evaluation, and compliance rule checks. Agents use deterministic rules and heuristic scoring. Results inform officer review but do not directly gate approval. Approval gating is enforced by the memo supervisor (Generate Memo → Validate → Approve).</p>
     </div>
     <button class="btn btn-primary" onclick="refreshSupervisorDashboard()">🔄 Refresh</button>
   </div>
@@ -3524,7 +3524,10 @@ async function fetchApplicationDetail(ref) {
     _raw_prescreening: psData,
     prescreeningData: psData,
     latestMemoMeta: detail.latest_memo || null,
-    latestMemo: detail.latest_memo_data || null
+    latestMemo: detail.latest_memo_data || null,
+    updated_at: detail.updated_at || '',
+    last_document_upload: detail.last_document_upload || '',
+    screening_updated_at: detail.screening_updated_at || ''
   };
 }
 
@@ -8070,10 +8073,23 @@ async function runSupervisorPipeline() {
 async function loadSupervisorForApp() {
   var app = window._currentDetailApp;
   if (!app) return;
+  var statusBadge = document.getElementById('sv-pipeline-status');
+  var resultsPanel = document.getElementById('sv-pipeline-results');
+  if (!statusBadge || !resultsPanel) return;
   try {
     var res = await fetch(BO_API_BASE + '/applications/' + app.ref + '/supervisor/result', {
       headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
     });
+    if (!res.ok) {
+      if (res.status === 503) {
+        statusBadge.textContent = 'SERVICE UNAVAILABLE'; statusBadge.style.background = '#fee2e2'; statusBadge.style.color = '#991b1b';
+        resultsPanel.style.display = ''; resultsPanel.innerHTML = '<div class="card" style="padding:16px;color:#991b1b;font-size:12px;">Compliance supervisor service is not available. Contact system administrator.</div>';
+      } else {
+        statusBadge.textContent = 'LOAD ERROR'; statusBadge.style.background = '#fee2e2'; statusBadge.style.color = '#991b1b';
+        resultsPanel.style.display = ''; resultsPanel.innerHTML = '<div class="card" style="padding:16px;color:#991b1b;font-size:12px;">Failed to load supervisor results (HTTP ' + res.status + '). Try again or contact support.</div>';
+      }
+      return;
+    }
     var data = await res.json();
     if (data.success !== false && data.data && data.data.pipeline_id) {
       window._lastSupervisorResult = data.data;
@@ -8081,8 +8097,18 @@ async function loadSupervisorForApp() {
     } else if (data.pipeline_id) {
       window._lastSupervisorResult = data;
       renderSupervisorResults(data);
+    } else {
+      // No pipeline run yet — reset to clean state
+      window._lastSupervisorResult = null;
+      statusBadge.textContent = 'Not Run'; statusBadge.style.background = '#f3f4f6'; statusBadge.style.color = '#6b7280';
+      resultsPanel.style.display = ''; resultsPanel.innerHTML = '';
+      var existingProvenance = document.getElementById('sv-provenance-header');
+      if (existingProvenance) existingProvenance.remove();
     }
-  } catch (e) { /* no pipeline run yet */ }
+  } catch (e) {
+    statusBadge.textContent = 'CONNECTION ERROR'; statusBadge.style.background = '#fee2e2'; statusBadge.style.color = '#991b1b';
+    resultsPanel.style.display = ''; resultsPanel.innerHTML = '<div class="card" style="padding:16px;color:#991b1b;font-size:12px;">Network error loading supervisor results: ' + (e.message || 'unknown') + '</div>';
+  }
 }
 
 function renderSupervisorResults(result) {
@@ -8094,6 +8120,44 @@ function renderSupervisorResults(result) {
   statusBadge.style.background = sc[0]; statusBadge.style.color = sc[1];
 
   document.getElementById('sv-pipeline-results').style.display = '';
+
+  // Provenance header — timestamps, pipeline ID, analysis type
+  var provHtml = '<div class="card" style="margin-bottom:14px;padding:12px 16px;background:var(--surface);border:1px solid var(--border1);">';
+  provHtml += '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:11px;color:var(--text3);">';
+  if (result.started_at) {
+    provHtml += '<span><strong>Run started:</strong> ' + result.started_at.substring(0,19).replace('T',' ') + ' UTC</span>';
+  }
+  if (result.completed_at) {
+    provHtml += '<span><strong>Completed:</strong> ' + result.completed_at.substring(0,19).replace('T',' ') + ' UTC</span>';
+  }
+  if (result.pipeline_id) {
+    provHtml += '<span><strong>Pipeline ID:</strong> <code style="font-size:10px;background:var(--bg2);padding:1px 4px;border-radius:3px;">' + result.pipeline_id.substring(0,12) + '…</code></span>';
+  }
+  provHtml += '<span><strong>Analysis type:</strong> Rules-based / heuristic (deterministic agents)</span>';
+  provHtml += '</div>';
+
+  // Staleness check — compare pipeline completion against application updated_at
+  var app = window._currentDetailApp;
+  if (app && result.completed_at) {
+    var pipelineTime = new Date(result.completed_at).getTime();
+    var appUpdated = app.updated_at ? new Date(app.updated_at).getTime() : 0;
+    // Also check if documents, screening, or memo were updated more recently
+    var latestUpstream = appUpdated;
+    if (app.last_document_upload && new Date(app.last_document_upload).getTime() > latestUpstream) latestUpstream = new Date(app.last_document_upload).getTime();
+    if (app.screening_updated_at && new Date(app.screening_updated_at).getTime() > latestUpstream) latestUpstream = new Date(app.screening_updated_at).getTime();
+    if (latestUpstream > pipelineTime) {
+      provHtml += '<div style="margin-top:8px;padding:8px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;font-size:11px;color:#92400e;font-weight:600;">';
+      provHtml += '⚠️ These results may be outdated — application data has been updated since this analysis was run. Consider re-running the pipeline.';
+      provHtml += '</div>';
+    }
+  }
+  provHtml += '</div>';
+  // Insert provenance before case aggregate
+  var svResults = document.getElementById('sv-pipeline-results');
+  var existingProvenance = document.getElementById('sv-provenance-header');
+  if (existingProvenance) existingProvenance.remove();
+  var provDiv = document.createElement('div'); provDiv.id = 'sv-provenance-header'; provDiv.innerHTML = provHtml;
+  svResults.insertBefore(provDiv, svResults.firstChild);
 
   // Case aggregate
   var agg = result.case_aggregate || {};
@@ -8117,7 +8181,7 @@ function renderSupervisorResults(result) {
     agHtml += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border1);">';
     agHtml += '<div style="width:240px;font-size:12px;font-weight:600;">' + (a.agent_name || a.agent_type.replace(/_/g,' ')) + '</div>';
     agHtml += '<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:' + stColor + ';color:white;font-weight:600;">' + (a.status || '').toUpperCase() + '</span>';
-    agHtml += '<span style="font-size:11px;color:' + confColor + ';font-weight:700;">' + (a.confidence * 100).toFixed(0) + '%</span>';
+    agHtml += '<span style="font-size:11px;color:' + confColor + ';font-weight:700;">' + (a.confidence != null ? (a.confidence * 100).toFixed(0) + '%' : '—') + '</span>';
     agHtml += '<span style="font-size:11px;color:var(--text3);">' + (a.findings_count || 0) + ' findings, ' + (a.issues_count || 0) + ' issues</span>';
     if (a.escalation_flag) agHtml += '<span style="font-size:10px;background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-weight:600;">ESCALATION</span>';
     agHtml += '</div>';
@@ -8179,10 +8243,16 @@ function renderSupervisorResults(result) {
       rrHtml += '<div style="font-size:11px;font-weight:700;color:var(--amber);margin:8px 0 6px;">Review Reasons:</div>';
       reviewReasons.forEach(function(r) { rrHtml += '<div style="font-size:11px;color:var(--text2);padding:2px 0;">• ' + r + '</div>'; });
     }
-    rrHtml += '<div style="margin-top:12px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:12px;color:var(--text3);">This analysis is for decision support. To act on these findings, use the compliance memo workflow: Generate Memo → Validate → Supervisor Run → Approve/Reject via the Memo tab.</div>';
+    rrHtml += '<div style="margin-top:12px;padding:10px;background:var(--surface2);border:1px solid var(--border1);border-radius:6px;font-size:12px;color:var(--text3);">This analysis is for decision support only. To act on these findings, use the compliance memo workflow: Generate Memo → Validate → Approve/Reject via the Memo tab.</div>';
   } else {
     rrHtml = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">✅ No blocking issues detected by the analysis pipeline.</div>';
   }
+  // Supervisor boundary advisory (Phase 7: explicit linkage clarity)
+  rrHtml += '<div style="margin-top:12px;padding:10px;background:var(--bg2);border:1px solid var(--border1);border-radius:6px;font-size:11px;color:var(--text3);line-height:1.6;">'
+    + '<strong>Advisory:</strong> This pipeline supervisor provides rules-based decision support (contradiction detection, confidence scoring, compliance rule evaluation). '
+    + 'It operates independently of the memo supervisor which gates approval decisions. Pipeline findings here do not automatically block or approve memos. '
+    + 'Approval gating is enforced via: <strong>Generate Memo → Validate → Memo Supervisor Verdict → Approve/Reject</strong>.'
+    + '</div>';
   document.getElementById('sv-review-reasons').innerHTML = rrHtml;
 }
 
