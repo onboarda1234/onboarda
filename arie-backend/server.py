@@ -2530,6 +2530,7 @@ class DocumentVerifyHandler(BaseHandler):
             except Exception as e:
                 logger.debug(f"Could not compute existing hashes: {e}")
 
+        ai_result = None
         try:
             if HAS_DOC_VERIFICATION:
                 _claude = ClaudeClient(
@@ -2643,9 +2644,20 @@ class DocumentVerifyHandler(BaseHandler):
                     })
 
         status = "verified" if all_passed else "flagged"
+
+        # Finding 9: Propagate ai_source so mock/degraded results are explicit
+        ai_source = "live"
+        if ai_result:
+            ai_source = ai_result.get("ai_source", "live")
+        if not HAS_CLAUDE_CLIENT:
+            ai_source = "unavailable"
+        if _CFG_CLAUDE_MOCK_MODE:
+            ai_source = "mock"
+
         results = json.dumps({
             "checks": checks,
             "overall": status,
+            "ai_source": ai_source,
             "verified_at": datetime.utcnow().isoformat(),
             "sanctions_screening": sanctions_result
         }, default=str)
@@ -4640,8 +4652,27 @@ class SumsubApplicantHandler(BaseHandler):
             level_name=data.get("level_name"),
         )
 
+        # Finding 12: Store applicant→application mapping for deterministic webhook linking
+        applicant_id = result.get("applicant_id", "")
+        application_id = data.get("application_id", "")
+        if applicant_id and application_id:
+            db = get_db()
+            try:
+                db.execute("""
+                    INSERT OR IGNORE INTO sumsub_applicant_mappings
+                    (application_id, applicant_id, external_user_id, person_name, person_type)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (application_id, applicant_id, external_user_id,
+                      (data.get("first_name", "") + " " + data.get("last_name", "")).strip(),
+                      data.get("person_type", "")))
+                db.commit()
+            except Exception as e:
+                logger.debug(f"Applicant mapping insert: {e}")
+            finally:
+                db.close()
+
         self.log_audit(user, "KYC Applicant Created", external_user_id,
-                       f"Sumsub applicant created — ID: {result.get('applicant_id')} ({result['source']})")
+                       f"Sumsub applicant created — ID: {applicant_id} ({result.get('source', 'unknown')})")
         self.success(result)
 
 
@@ -4671,6 +4702,21 @@ class SumsubStatusHandler(BaseHandler):
         if not user:
             return
 
+        # Ownership check: officers can query any applicant; clients can only query their own.
+        user_role = user.get("role", "client")
+        if user_role == "client":
+            db = get_db()
+            try:
+                user_id = user.get("sub", user.get("id", ""))
+                app = db.execute(
+                    "SELECT id FROM applications WHERE client_id = ? AND prescreening_data LIKE ?",
+                    (user_id, f"%{applicant_id}%")
+                ).fetchone()
+                if not app:
+                    return self.error("Not authorised to view this applicant", 403)
+            finally:
+                db.close()
+
         result = sumsub_get_applicant_status(applicant_id)
         self.success(result)
 
@@ -4692,8 +4738,18 @@ class SumsubDocumentHandler(BaseHandler):
 
         # Support base64 file data or a reference to an uploaded file
         file_data = data.get("file_data")
-        file_path = data.get("file_path")
         file_name = data.get("file_name", "document.pdf")
+
+        # Security: restrict file_path to uploads directory only (Finding S-15)
+        file_path = data.get("file_path")
+        if file_path:
+            import pathlib
+            allowed_dir = pathlib.Path(os.path.join(os.path.dirname(__file__), "uploads")).resolve()
+            requested = pathlib.Path(file_path).resolve()
+            if not str(requested).startswith(str(allowed_dir)):
+                logger.warning(f"SumsubDocumentHandler: blocked path traversal attempt: {file_path}")
+                return self.error("file_path must be within the uploads directory", 400)
+            file_path = str(requested)
 
         result = sumsub_add_document(
             applicant_id=applicant_id,
@@ -4719,9 +4775,9 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
         body = self.request.body
         signature = self.request.headers.get("X-Payload-Digest", "")
 
-        # Verify webhook signature
-        if SUMSUB_WEBHOOK_SECRET and not sumsub_verify_webhook(body, signature):
-            logger.warning("Sumsub webhook: Invalid signature")
+        # Verify webhook signature — always verify, never skip (Finding S-16)
+        if not sumsub_verify_webhook(body, signature):
+            logger.warning("Sumsub webhook: Invalid or missing signature")
             self.set_status(401)
             self.write(json.dumps({"error": "Invalid signature"}))
             return
@@ -4763,30 +4819,55 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, ("system", "Sumsub Webhook", "system", f"KYC {event_type}: {review_answer}", applicant_id, kyc_data))
 
-                # Try to update application status if we can find it
-                # Look for applications where prescreening_data contains this applicant
-                apps = db.execute("SELECT id, prescreening_data FROM applications").fetchall()
-                for app in apps:
-                    pdata = app["prescreening_data"] or ""
-                    if applicant_id in pdata or external_user_id in pdata:
-                        # Update the prescreening data with new KYC result
-                        try:
-                            pdict = safe_json_loads(pdata)
-                            if "screening_report" not in pdict:
-                                pdict["screening_report"] = {}
-                            pdict["screening_report"]["sumsub_webhook"] = safe_json_loads(kyc_data)
+                # Finding 12: Deterministic applicant→application lookup via mapping table
+                matched_app_ids = set()
 
-                            # If verification failed, add a flag
-                            if review_answer == "RED":
-                                flags = pdict["screening_report"].get("overall_flags", [])
-                                flags.append(f"Sumsub KYC verification REJECTED for {external_user_id}")
-                                pdict["screening_report"]["overall_flags"] = flags
+                # Primary path: indexed lookup in sumsub_applicant_mappings
+                try:
+                    mappings = db.execute(
+                        "SELECT application_id FROM sumsub_applicant_mappings WHERE applicant_id = ? OR external_user_id = ?",
+                        (applicant_id, external_user_id)
+                    ).fetchall()
+                    for m in mappings:
+                        matched_app_ids.add(m["application_id"])
+                except Exception as e:
+                    logger.debug(f"Mapping table lookup failed (may not exist yet): {e}")
 
-                            db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
-                                      (json.dumps(pdict), app["id"]))
-                            logger.info(f"Sumsub webhook: Updated application {app['id']}")
-                        except Exception as e:
-                            logger.error(f"Failed to update application: {e}")
+                # Legacy fallback: substring scan for old records without mapping entries
+                if not matched_app_ids:
+                    logger.info("Sumsub webhook: No mapping found — falling back to legacy scan")
+                    apps = db.execute("SELECT id, prescreening_data FROM applications").fetchall()
+                    for app in apps:
+                        pdata = app["prescreening_data"] or ""
+                        if applicant_id and applicant_id in pdata:
+                            matched_app_ids.add(app["id"])
+                        elif external_user_id and external_user_id in pdata:
+                            matched_app_ids.add(app["id"])
+
+                # Update matched applications
+                for app_id in matched_app_ids:
+                    try:
+                        row = db.execute("SELECT prescreening_data FROM applications WHERE id = ?", (app_id,)).fetchone()
+                        if not row:
+                            continue
+                        pdict = safe_json_loads(row["prescreening_data"] or "{}")
+                        if "screening_report" not in pdict:
+                            pdict["screening_report"] = {}
+                        pdict["screening_report"]["sumsub_webhook"] = safe_json_loads(kyc_data)
+
+                        # If verification failed, add a flag
+                        if review_answer == "RED":
+                            flags = pdict["screening_report"].get("overall_flags", [])
+                            flag_msg = f"Sumsub KYC verification REJECTED for {external_user_id}"
+                            if flag_msg not in flags:
+                                flags.append(flag_msg)
+                            pdict["screening_report"]["overall_flags"] = flags
+
+                        db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
+                                  (json.dumps(pdict), app_id))
+                        logger.info(f"Sumsub webhook: Updated application {app_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to update application {app_id}: {e}")
 
                 db.commit()
             finally:
@@ -5012,10 +5093,11 @@ class ComplianceMemoHandler(BaseHandler):
         memo_json = json.dumps(memo)
         try:
             db.execute(
-                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
                  validation_result["quality_score"], validation_result["validation_status"],
-                 supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json)
+                 supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json,
+                 memo.get("metadata", {}).get("model_version", "v1.0"))
             )
         except Exception as e:
             # Fallback if rule_violations column doesn't exist yet

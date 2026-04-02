@@ -14,7 +14,7 @@ logger = logging.getLogger("arie.environment")
 # 1. ENVIRONMENT DETECTION
 # ══════════════════════════════════════════════════════════════
 
-VALID_ENVIRONMENTS = ("demo", "staging", "production")
+VALID_ENVIRONMENTS = ("development", "demo", "staging", "production")
 
 def get_environment() -> str:
     """Get current environment from ENV variable. Defaults to 'demo'."""
@@ -25,6 +25,9 @@ def get_environment() -> str:
     return env
 
 ENV = get_environment()
+
+def is_development() -> bool:
+    return ENV == "development"
 
 def is_demo() -> bool:
     return ENV == "demo"
@@ -42,6 +45,27 @@ def is_production() -> bool:
 
 # Default flags per environment
 _DEFAULT_FLAGS = {
+    "development": {
+        "ENABLE_DEMO_MODE": False,
+        "ENABLE_DEMO_BANNER": False,
+        "ENABLE_DEMO_DATA_SEEDING": False,
+        "ENABLE_MOCK_FALLBACKS": False,
+        "ENABLE_ROLE_SWITCHER": True,
+        "ENABLE_PHASE2_FEATURES": True,
+        "ENABLE_REGULATORY_INTELLIGENCE_FULL": True,
+        "ENABLE_MONITORING_DASHBOARD": True,
+        "ENABLE_SAR_WORKFLOW": True,
+        "ENABLE_AI_SUPERVISOR": True,
+        "ENABLE_KPI_DEMO_DATA": False,
+        "ENABLE_DOCUMENT_AI_ANALYSIS": True,
+        "ENABLE_SUMSUB_LIVE": False,
+        "ENABLE_SUMSUB_SANDBOX": True,
+        "ENABLE_REAL_SCREENING": False,
+        "ENABLE_SIMULATED_SCREENING": True,
+        "REQUIRE_REAL_API_KEYS": False,
+        "ENABLE_DEBUG_ENDPOINTS": True,
+        "ENABLE_SHORTCUT_LOGIN": True,
+    },
     "demo": {
         "ENABLE_DEMO_MODE": True,
         "ENABLE_DEMO_BANNER": True,

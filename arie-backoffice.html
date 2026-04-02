@@ -3255,6 +3255,13 @@ function buildVerificationResultsHtml(results) {
   }
 
   if (typeof results === 'object') {
+    // Finding 9: Show ai_source banner when not live
+    var aiSrc = results.ai_source || '';
+    if (aiSrc && aiSrc !== 'live') {
+      var srcColor = aiSrc === 'mock' ? '#d97706' : aiSrc === 'error' ? '#dc2626' : aiSrc === 'unavailable' ? '#6b7280' : '#2563eb';
+      var srcLabel = aiSrc === 'mock' ? '⚠️ Mock/Simulated AI Output' : aiSrc === 'error' ? '❌ AI Error — Manual Review Required' : aiSrc === 'unavailable' ? '⏸️ AI Unavailable' : '🔧 ' + aiSrc;
+      items.push('<div style="background:' + srcColor + '11;border:1px solid ' + srcColor + ';border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:' + srcColor + ';font-weight:600;">' + srcLabel + '</div>');
+    }
     pushItem('Overall Result', firstMeaningfulDetailValue(results.overall_result, results.result, results.status));
     pushItem('Summary', firstMeaningfulDetailValue(results.summary, results.reason, results.message));
     pushItem('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
@@ -3891,6 +3898,7 @@ function getApplicationScreeningSummary(app) {
     company_screening: report.company_screening || null,
     ip_geolocation: report.ip_geolocation || null,
     kyc_applicants: Array.isArray(report.kyc_applicants) ? report.kyc_applicants : [],
+    sumsub_webhook: report.sumsub_webhook || null,
     screening_mode: report.screening_mode || null,
     screened_at: report.screened_at || screeningData.meta.last_screened_at || null,
     screened_by: screeningData.meta.screened_by || null,
@@ -4158,6 +4166,26 @@ function renderScreeningReviewPanel(app, focus) {
   html += '</div>';
   if (focus && focus.subject_name) html += '<div style="font-size:12px;color:var(--text2);padding:0 18px 18px;">Focused subject: <strong>' + escapeHtml(focus.subject_name) + '</strong> (' + escapeHtml(String(focus.subject_type || '').replace('_', ' ')) + ')</div>';
   html += '</div>';
+
+  // Sumsub webhook KYC verification result (Finding S-13)
+  var wh = screeningSummary.sumsub_webhook;
+  if (wh) {
+    var whColor = wh.review_answer === 'GREEN' ? '#16a34a' : wh.review_answer === 'RED' ? '#dc2626' : '#d97706';
+    var whBadge = wh.review_answer || 'PENDING';
+    html += '<div class="card" style="margin-bottom:16px;border-left:4px solid ' + whColor + ';background:rgba(43,47,143,0.03);">';
+    html += '<div class="card-header"><div class="card-title" style="display:flex;align-items:center;gap:8px;">Sumsub KYC Verification <span class="badge" style="background:' + whColor + ';color:#fff;font-size:10px;">' + escapeHtml(whBadge) + '</span></div></div>';
+    html += '<div style="padding:12px 18px;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">';
+    html += '<div><span style="color:var(--text3);">Applicant ID:</span> <strong style="font-family:monospace;">' + escapeHtml(wh.sumsub_applicant_id || '-') + '</strong></div>';
+    html += '<div><span style="color:var(--text3);">External User:</span> ' + escapeHtml(wh.external_user_id || '-') + '</div>';
+    html += '<div><span style="color:var(--text3);">Received:</span> ' + escapeHtml(String(wh.received_at || '-').replace('T', ' ').slice(0, 19)) + '</div>';
+    html += '<div><span style="color:var(--text3);">Event:</span> ' + escapeHtml(wh.event_type || '-') + '</div>';
+    if (wh.review_answer === 'RED') {
+      var labels = Array.isArray(wh.rejection_labels) ? wh.rejection_labels : [];
+      html += '<div style="grid-column:span 2;"><span style="color:var(--text3);">Rejection Labels:</span> <span style="color:#dc2626;font-weight:600;">' + (labels.length ? escapeHtml(labels.join(', ')) : 'None') + '</span></div>';
+      if (wh.moderation_comment) html += '<div style="grid-column:span 2;"><span style="color:var(--text3);">Comment:</span> ' + escapeHtml(wh.moderation_comment) + '</div>';
+    }
+    html += '</div></div>';
+  }
 
   html += buildEntityScreeningReviewCard(app, queueMap['entity|' + app.company], screeningSummary, focus);
 
@@ -8246,7 +8274,8 @@ function renderValidationPanel(result) {
       var icon = sev === 'critical' ? '🔴' : sev === 'warning' ? '🟡' : 'ℹ️';
       issuesHtml += '<div class="memo-val-issue ' + sev + '">';
       issuesHtml += '<span class="issue-icon">' + icon + '</span>';
-      issuesHtml += '<div><strong>' + (issue.category || 'General').replace(/_/g, ' ') + ':</strong> ' + (issue.message || issue.description || 'No details') + '</div>';
+      var fixText = issue.fix || issue.fix_suggestion || '';
+      issuesHtml += '<div><strong>' + (issue.category || 'General').replace(/_/g, ' ') + ':</strong> ' + (issue.message || issue.description || 'No details') + (fixText ? '<br><span style="color:var(--brand);font-size:11px;font-weight:600;">💡 Fix: ' + fixText + '</span>' : '') + '</div>';
       issuesHtml += '</div>';
     });
   } else {

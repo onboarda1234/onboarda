@@ -65,6 +65,36 @@ except ImportError:
     BaseModel = None
     ValidationError = None
 
+# ── Persistent budget tracking via production_controls.UsageCapManager ──
+# This records Claude usage to the database so budget enforcement is durable
+# across requests, processes, and restarts. Falls back gracefully if unavailable.
+
+def _record_persistent_usage(model: str, input_tokens: int, output_tokens: int, method: str = ""):
+    """Record Claude API usage to the persistent budget store (database-backed)."""
+    try:
+        from production_controls import usage_cap_manager
+        # Pricing per 1M tokens (matching UsageTracker pricing)
+        pricing = {
+            "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
+            "claude-opus-4-6": {"input": 15.0, "output": 45.0},
+        }
+        model_pricing = pricing.get(model, {"input": 3.0, "output": 15.0})
+        cost = (input_tokens * model_pricing["input"] / 1_000_000
+                + output_tokens * model_pricing["output"] / 1_000_000)
+        desc = f"{model}:{method} in={input_tokens} out={output_tokens}"
+        usage_cap_manager.record_usage("CLAUDE", cost, desc)
+    except Exception as e:
+        logging.getLogger("claude_client").debug(f"Persistent usage recording skipped: {e}")
+
+
+def _check_persistent_budget(estimated_cost: float = 0.01) -> bool:
+    """Check if Claude budget allows another request. Returns True if within budget."""
+    try:
+        from production_controls import usage_cap_manager
+        return usage_cap_manager.check_budget("CLAUDE", estimated_cost)
+    except Exception:
+        return True  # Fail-open: if budget store unavailable, allow the request
+
 # ── C-03: AI Output Validation Schemas ─────────────────────────
 if PYDANTIC_AVAILABLE:
     class RiskDimensionSchema(BaseModel):
@@ -857,6 +887,39 @@ class ClaudeClient:
         # Pass 6: Length limit
         return result[:max_length]
 
+    def _deep_sanitize(self, data: Any, max_depth: int = 10, _depth: int = 0) -> Any:
+        """
+        Recursively sanitize nested data structures for safe embedding in prompts.
+
+        Handles dicts, lists, tuples, and strings at any nesting depth.
+        Non-string primitives (int, float, bool, None) pass through unchanged.
+        Prevents infinite recursion via max_depth.
+
+        Args:
+            data: Any nested data structure (dict, list, tuple, str, int, etc.)
+            max_depth: Maximum recursion depth (default 10, sufficient for compliance data)
+            _depth: Internal depth counter (do not set externally)
+
+        Returns:
+            Sanitized copy of the data structure with all strings cleaned.
+        """
+        if _depth > max_depth:
+            return "[DEPTH_LIMIT]"
+
+        if isinstance(data, str):
+            return self._sanitize_for_prompt(data)
+        elif isinstance(data, dict):
+            return {
+                k: self._deep_sanitize(v, max_depth, _depth + 1)
+                for k, v in data.items()
+            }
+        elif isinstance(data, (list, tuple)):
+            sanitized = [self._deep_sanitize(item, max_depth, _depth + 1) for item in data]
+            return type(data)(sanitized) if isinstance(data, tuple) else sanitized
+        else:
+            # int, float, bool, None — pass through unchanged
+            return data
+
     # ── Sprint 3.5: Risk-Based Model Routing ─────────────────────
 
     # Routing tiers (environment-overridable)
@@ -964,16 +1027,8 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
     "recommendation": "<APPROVE|REVIEW|REJECT>"
 }"""
 
-        # Sanitize user-controlled fields to prevent prompt injection
-        sanitized_data = {}
-        for key, value in application_data.items():
-            if isinstance(value, str):
-                sanitized_data[key] = self._sanitize_for_prompt(value)
-            elif isinstance(value, dict):
-                sanitized_data[key] = {k: self._sanitize_for_prompt(v) if isinstance(v, str) else v
-                                        for k, v in value.items()}
-            else:
-                sanitized_data[key] = value
+        # Sanitize user-controlled fields recursively to prevent prompt injection
+        sanitized_data = self._deep_sanitize(application_data)
 
         user_prompt = f"""Score the following application for AML/CFT risk:
 
@@ -1053,13 +1108,17 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
     "confidence": <0.0-1.0>
 }"""
 
+        # Sanitize all input data recursively (Finding 8 fix)
+        sanitized_business = self._deep_sanitize(business_data)
+        sanitized_registry = self._deep_sanitize(registry_data)
+
         user_prompt = f"""Assess business model plausibility:
 
 BUSINESS DATA:
-{json.dumps(business_data, indent=2)}
+{json.dumps(sanitized_business, indent=2)}
 
 REGISTRY/REFERENCE DATA:
-{json.dumps(registry_data, indent=2)}
+{json.dumps(sanitized_registry, indent=2)}
 
 Evaluate business story consistency, sector alignment, transaction volume benchmarking,
 geographic logic, and source of funds alignment."""
@@ -1140,21 +1199,10 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
     "recommendations": ["recommendation1", "recommendation2"]
 }"""
 
-        # Sanitize user inputs
+        # Sanitize user inputs recursively (Finding 8 fix)
         sanitized_jurisdiction = self._sanitize_for_prompt(jurisdiction)
-        sanitized_directors = []
-        for d in directors:
-            sanitized_d = {}
-            for k, v in d.items():
-                sanitized_d[k] = self._sanitize_for_prompt(v) if isinstance(v, str) else v
-            sanitized_directors.append(sanitized_d)
-
-        sanitized_ubos = []
-        for u in ubos:
-            sanitized_u = {}
-            for k, v in u.items():
-                sanitized_u[k] = self._sanitize_for_prompt(v) if isinstance(v, str) else v
-            sanitized_ubos.append(sanitized_u)
+        sanitized_directors = self._deep_sanitize(directors)
+        sanitized_ubos = self._deep_sanitize(ubos)
 
         user_prompt = f"""Analyze this corporate structure:
 
@@ -1265,7 +1313,7 @@ ENTITY: {sanitized_person_name}
 ENTITY TYPE: {sanitized_entity_type}
 
 SCREENING RESULTS:
-{json.dumps(screening_results, indent=2)}
+{json.dumps(self._deep_sanitize(screening_results), indent=2)}
 
 Identify false positives, consolidate confirmed hits, rank severity, and provide recommendation."""
 
@@ -1418,29 +1466,9 @@ Return ONLY valid JSON (no markdown, no code blocks) with this EXACT structure:
     }
 }"""
 
-        # Sanitize application data
-        sanitized_app_data = {}
-        for key, value in application_data.items():
-            if isinstance(value, str):
-                sanitized_app_data[key] = self._sanitize_for_prompt(value)
-            elif isinstance(value, dict):
-                sanitized_app_data[key] = {k: self._sanitize_for_prompt(v) if isinstance(v, str) else v
-                                            for k, v in value.items()}
-            else:
-                sanitized_app_data[key] = value
-
-        # Sanitize agent results
-        sanitized_agent_results = {}
-        for key, value in agent_results.items():
-            if isinstance(value, str):
-                sanitized_agent_results[key] = self._sanitize_for_prompt(value)
-            elif isinstance(value, dict):
-                sanitized_agent_results[key] = {k: self._sanitize_for_prompt(v) if isinstance(v, str) else v
-                                                 for k, v in value.items()}
-            elif isinstance(value, list):
-                sanitized_agent_results[key] = [self._sanitize_for_prompt(item) if isinstance(item, str) else item for item in value]
-            else:
-                sanitized_agent_results[key] = value
+        # Sanitize application data and agent results recursively (Finding 8 fix)
+        sanitized_app_data = self._deep_sanitize(application_data)
+        sanitized_agent_results = self._deep_sanitize(agent_results)
 
         user_prompt = f"""Generate a Big 4-grade compliance onboarding memo for this application.
 
@@ -1938,6 +1966,68 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
             logger.error(f"Failed to read file for vision: {e}")
             return []
 
+    def generate(
+        self,
+        prompt: str,
+        max_tokens: int = 300,
+        model: str = None,
+        timeout: int = 30,
+    ) -> str:
+        """
+        Public text-generation method for monitoring agents and free-form prompts.
+
+        Unlike the structured agent methods (score_risk, verify_document, etc.),
+        this returns raw text — no JSON parsing, no schema validation.
+
+        Args:
+            prompt: The user prompt / instruction.
+            max_tokens: Maximum tokens in the response (default 300).
+            model: Model override. Defaults to the fast model (Sonnet).
+            timeout: Timeout in seconds.
+
+        Returns:
+            Raw text string from Claude, or empty string on failure.
+        """
+        if self.mock_mode:
+            logger.info("generate() called in mock mode — returning empty string")
+            return ""
+
+        fail_result = self._check_fail_closed("generate")
+        if fail_result:
+            raise RuntimeError(fail_result.get("error", "Fail-closed mode active"))
+
+        chosen_model = model or self.ROUTING_MODELS["fast"]
+        system_prompt = "You are a compliance monitoring assistant. Provide concise, factual responses."
+
+        try:
+            if not self.client:
+                logger.warning("generate() called but Claude client not initialised")
+                return ""
+
+            response = self.client.messages.create(
+                model=chosen_model,
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=timeout,
+            )
+
+            text_content = response.content[0].text
+            self.usage_tracker.log_usage(
+                model=chosen_model,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+            )
+            _record_persistent_usage(
+                chosen_model, response.usage.input_tokens,
+                response.usage.output_tokens, method="generate"
+            )
+            return text_content
+
+        except Exception as e:
+            logger.error(f"generate() failed: {e}")
+            return ""
+
     def _call_claude(
         self,
         system_prompt: str,
@@ -1968,6 +2058,12 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                 "Claude client not available. Initialize with valid API key or enable mock mode."
             )
 
+        # Persistent budget enforcement — block if monthly cap exceeded
+        if not _check_persistent_budget():
+            raise RuntimeError(
+                "Claude API monthly budget exceeded. Check usage via /api/config/ai-agents or contact admin."
+            )
+
         # Build message content — multimodal if content_blocks provided, else plain text
         message_content = content_blocks if content_blocks else user_prompt
 
@@ -1985,12 +2081,16 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                     timeout=timeout,
                 )
 
-                # Extract text content and track usage
+                # Extract text content and track usage (in-memory + persistent)
                 text_content = response.content[0].text
                 self.usage_tracker.log_usage(
                     model=model,
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
+                )
+                _record_persistent_usage(
+                    model, response.usage.input_tokens,
+                    response.usage.output_tokens, method="_call_claude"
                 )
 
                 logger.debug(f"Claude {model} request succeeded")

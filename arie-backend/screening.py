@@ -28,6 +28,7 @@ from config import (
     SUMSUB_WEBHOOK_SECRET,
 )
 from rule_engine import SANCTIONED, FATF_BLACK, FATF_GREY
+from sumsub_client import get_sumsub_client
 from environment import (
     ENV, is_production, is_staging, is_demo,
     get_sumsub_base_url, get_sumsub_app_token, get_sumsub_secret_key,
@@ -362,269 +363,69 @@ def sumsub_create_applicant(external_user_id, first_name=None, last_name=None,
                             level_name=None):
     """
     Create a Sumsub applicant for KYC verification.
+    Thin wrapper — delegates to SumsubClient for retry, cost tracking, and consistent error handling.
     Returns: { applicant_id, external_user_id, status, source }
     """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        logger.info(f"Sumsub: No credentials — simulating applicant creation for '{external_user_id}'")
-        return _simulate_sumsub_applicant(external_user_id, first_name, last_name)
-
-    try:
-        level = level_name or SUMSUB_LEVEL_NAME
-        url_path = f"/resources/applicants?levelName={level}"
-        body_data = {
-            "externalUserId": external_user_id,
-        }
-        if first_name or last_name:
-            fixed_info = {}
-            if first_name:
-                fixed_info["firstName"] = first_name
-            if last_name:
-                fixed_info["lastName"] = last_name
-            if dob:
-                fixed_info["dob"] = dob
-            if country:
-                fixed_info["country"] = country
-            body_data["fixedInfo"] = fixed_info
-        if email:
-            body_data["email"] = email
-        if phone:
-            body_data["phone"] = phone
-
-        body_bytes = json.dumps(body_data).encode("utf-8")
-        headers = _sumsub_sign("POST", url_path, body_bytes)
-        headers["Content-Type"] = "application/json"
-
-        resp = requests.post(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            data=body_bytes,
-            timeout=15
-        )
-
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            applicant_id = data.get("id", "")
-            logger.info(f"Sumsub: Created applicant {applicant_id} for user {external_user_id}")
-            return {
-                "applicant_id": applicant_id,
-                "external_user_id": external_user_id,
-                "status": data.get("review", {}).get("reviewStatus", "init"),
-                "inspection_id": data.get("inspectionId", ""),
-                "level_name": level,
-                "created_at": data.get("createdAt", ""),
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            logger.warning(f"Sumsub create applicant failed: {resp.status_code} — {resp.text[:300]}")
-            # If applicant already exists, try to get existing
-            if resp.status_code == 409:
-                return sumsub_get_applicant_by_external_id(external_user_id)
-            return _simulate_sumsub_applicant(external_user_id, first_name, last_name,
-                                             note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub create applicant error: {e}")
-        return _simulate_sumsub_applicant(external_user_id, first_name, last_name,
-                                         note=f"Exception: {str(e)[:100]}")
+    client = get_sumsub_client()
+    info = {}
+    if first_name or last_name or dob or country:
+        info = {}
+        if first_name: info["firstName"] = first_name
+        if last_name: info["lastName"] = last_name
+        if dob: info["dob"] = dob
+        if country: info["country"] = country
+    return client.create_applicant(
+        external_user_id=external_user_id,
+        first_name=first_name,
+        last_name=last_name,
+        level_name=level_name,
+        info=info if info else None,
+    )
 
 
 def sumsub_get_applicant_by_external_id(external_user_id):
-    """Retrieve an existing Sumsub applicant by external user ID."""
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        return _simulate_sumsub_applicant(external_user_id)
-
-    try:
-        url_path = f"/resources/applicants/-;externalUserId={external_user_id}/one"
-        headers = _sumsub_sign("GET", url_path)
-
-        resp = requests.get(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            return {
-                "applicant_id": data.get("id", ""),
-                "external_user_id": external_user_id,
-                "status": data.get("review", {}).get("reviewStatus", "init"),
-                "review_answer": data.get("review", {}).get("reviewResult", {}).get("reviewAnswer", ""),
-                "inspection_id": data.get("inspectionId", ""),
-                "level_name": data.get("requiredIdDocs", {}).get("docSets", [{}])[0].get("idDocSetType", "") if data.get("requiredIdDocs") else "",
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            return _simulate_sumsub_applicant(external_user_id,
-                                             note=f"Lookup returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub get applicant error: {e}")
-        return _simulate_sumsub_applicant(external_user_id, note=str(e)[:100])
+    """Retrieve an existing Sumsub applicant by external user ID.
+    Thin wrapper — delegates to SumsubClient."""
+    client = get_sumsub_client()
+    return client.get_applicant_by_external_id(external_user_id)
 
 
 def sumsub_generate_access_token(external_user_id, level_name=None):
-    """
-    Generate an access token for the Sumsub WebSDK.
-    The client portal uses this token to launch the KYC widget.
-    Returns: { token, userId, source }
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        logger.info(f"Sumsub: No credentials — simulating access token for '{external_user_id}'")
-        return _simulate_sumsub_token(external_user_id)
-
-    try:
-        level = level_name or SUMSUB_LEVEL_NAME
-        url_path = f"/resources/accessTokens?userId={external_user_id}&levelName={level}"
-        headers = _sumsub_sign("POST", url_path)
-
-        resp = requests.post(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            logger.info(f"Sumsub: Generated access token for user {external_user_id}")
-            return {
-                "token": data.get("token", ""),
-                "user_id": external_user_id,
-                "level_name": level,
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            logger.warning(f"Sumsub token gen failed: {resp.status_code} — {resp.text[:300]}")
-            return _simulate_sumsub_token(external_user_id,
-                                         note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub token error: {e}")
-        return _simulate_sumsub_token(external_user_id, note=str(e)[:100])
+    """Generate an access token for the Sumsub WebSDK.
+    Thin wrapper — delegates to SumsubClient."""
+    client = get_sumsub_client()
+    return client.generate_access_token(external_user_id, level_name=level_name)
 
 
 def sumsub_get_applicant_status(applicant_id):
-    """
-    Get the verification status of a Sumsub applicant.
-    Returns: { applicant_id, status, review_answer, verification_steps, source }
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        return _simulate_sumsub_status(applicant_id)
-
-    try:
-        # Get applicant data
-        url_path = f"/resources/applicants/{applicant_id}/one"
-        headers = _sumsub_sign("GET", url_path)
-
-        resp = requests.get(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            timeout=15
-        )
-
-        if resp.status_code == 200:
-            data = resp.json()
-            review = data.get("review", {})
-            review_result = review.get("reviewResult", {})
-
-            result = {
-                "applicant_id": applicant_id,
-                "external_user_id": data.get("externalUserId", ""),
-                "status": review.get("reviewStatus", "init"),
-                "review_answer": review_result.get("reviewAnswer", ""),
-                "rejection_labels": review_result.get("rejectLabels", []),
-                "moderation_comment": review_result.get("moderationComment", ""),
-                "created_at": data.get("createdAt", ""),
-                "source": "sumsub",
-                "api_status": "live",
-            }
-
-            # Also get verification steps
-            steps_url = f"/resources/applicants/{applicant_id}/requiredIdDocsStatus"
-            steps_headers = _sumsub_sign("GET", steps_url)
-            steps_resp = requests.get(
-                f"{SUMSUB_BASE_URL}{steps_url}",
-                headers=steps_headers,
-                timeout=10
-            )
-            if steps_resp.status_code == 200:
-                result["verification_steps"] = steps_resp.json()
-
-            return result
-        else:
-            logger.warning(f"Sumsub status check failed: {resp.status_code}")
-            return _simulate_sumsub_status(applicant_id,
-                                          note=f"API returned {resp.status_code}")
-
-    except Exception as e:
-        logger.error(f"Sumsub status error: {e}")
-        return _simulate_sumsub_status(applicant_id, note=str(e)[:100])
+    """Get the verification status of a Sumsub applicant.
+    Thin wrapper — delegates to SumsubClient."""
+    client = get_sumsub_client()
+    return client.get_applicant_status(applicant_id)
 
 
 def sumsub_add_document(applicant_id, doc_type, country, file_path=None, file_data=None, file_name="document.pdf"):
-    """
-    Add an identity document to a Sumsub applicant.
-    doc_type: PASSPORT, ID_CARD, DRIVERS, SELFIE, etc.
-    """
-    if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
-        return {"status": "simulated", "message": "Sumsub not configured", "source": "simulated"}
+    """Add an identity document to a Sumsub applicant.
+    Thin wrapper — resolves file content then delegates to SumsubClient."""
+    # Resolve file content from path or base64 data
+    content = None
+    if file_path and os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            content = f.read()
+    elif file_data:
+        content = base64.b64decode(file_data) if isinstance(file_data, str) else file_data
 
-    try:
-        url_path = f"/resources/applicants/{applicant_id}/info/idDoc"
-        metadata = json.dumps({
-            "idDocType": doc_type,
-            "country": country,
-        })
+    if not content:
+        return {"status": "error", "message": "No document content provided", "source": "sumsub"}
 
-        # Read file content
-        content = None
-        if file_path and os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                content = f.read()
-        elif file_data:
-            content = base64.b64decode(file_data) if isinstance(file_data, str) else file_data
-
-        if not content:
-            return {"status": "error", "message": "No document content provided", "source": "sumsub"}
-
-        # Multipart form data — we need to sign without the body for multipart
-        headers = _sumsub_sign("POST", url_path)
-
-        files = {
-            "metadata": (None, metadata, "application/json"),
-            "content": (file_name, content, "application/octet-stream"),
-        }
-
-        resp = requests.post(
-            f"{SUMSUB_BASE_URL}{url_path}",
-            headers=headers,
-            files=files,
-            timeout=30
-        )
-
-        if resp.status_code in (200, 201):
-            logger.info(f"Sumsub: Added {doc_type} document for applicant {applicant_id}")
-            return {
-                "status": "uploaded",
-                "doc_type": doc_type,
-                "applicant_id": applicant_id,
-                "source": "sumsub",
-                "api_status": "live",
-            }
-        else:
-            logger.warning(f"Sumsub doc upload failed: {resp.status_code} — {resp.text[:200]}")
-            return {
-                "status": "error",
-                "message": f"Upload failed: {resp.status_code}",
-                "source": "sumsub",
-            }
-
-    except Exception as e:
-        logger.error(f"Sumsub doc upload error: {e}")
-        return {"status": "error", "message": str(e)[:100], "source": "sumsub"}
+    client = get_sumsub_client()
+    return client.add_document(
+        applicant_id=applicant_id,
+        doc_type=doc_type,
+        file_data=content,
+        filename=file_name,
+        country=country,
+    )
 
 
 def sumsub_verify_webhook(body_bytes, signature_header):

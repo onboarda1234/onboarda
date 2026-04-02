@@ -491,11 +491,34 @@ def validate_compliance_memo(memo_data):
     if not issues:
         summary_parts.append("No issues identified — memo meets gold-standard requirements")
 
+    # Map internal score keys → frontend-expected category names for display.
+    # Keep scores_breakdown for backend consumers; add category_scores for the UI.
+    _CATEGORY_KEY_MAP = {
+        "structure": "structural_completeness",
+        "risk_consistency": "risk_consistency",
+        "decision": "decision_alignment",
+        "ownership": "ownership_quality",
+        "screening": "screening_defensibility",
+        "documents": "document_verification",
+        "red_flags": "red_flags_mitigants",
+        "explainability": "confidence_explainability",
+        "data_gaps": "missing_data_handling",
+        # Additional granular keys — pass through unchanged
+        "factor_classification": "factor_classification",
+        "ownership_risk": "ownership_risk",
+        "confidence_decision": "confidence_decision",
+        "doc_adequacy": "doc_adequacy",
+        "rule_engine": "rule_engine",
+        "rule_enforcement_check": "rule_enforcement_check",
+    }
+    category_scores = {_CATEGORY_KEY_MAP.get(k, k): v for k, v in scores.items()}
+
     return {
         "validation_status": validation_status,
         "quality_score": quality_score,
         "issues": issues,
         "scores_breakdown": scores,
+        "category_scores": category_scores,
         "summary": ". ".join(summary_parts) + ".",
         "total_issues": len(issues),
         "critical_count": len(critical_issues),
