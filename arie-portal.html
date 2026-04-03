@@ -3742,6 +3742,9 @@
         <p style="color:var(--text3);font-size:13px;max-width:500px;margin:0 auto;">Please review all uploaded documents and information before final submission. Ensure all required items are complete.</p>
       </div>
 
+      <!-- Pre-Screening Summary -->
+      <div id="review-prescreening-summary" style="margin-bottom:20px;"></div>
+
       <!-- Summary Stats -->
       <div class="review-summary-card" id="review-summary-card">
         <div class="review-stat"><div class="review-stat-num green" id="review-uploaded-count">0</div><div class="review-stat-label">Uploaded</div></div>
@@ -6514,6 +6517,14 @@ function restoreDraftFromData(data) {
       restorePartyRows('intermediaries-body', data.intermediaries, 'intermediary');
     }
 
+    // Sync KYC cards and expand PEP panels for restored party data
+    if (typeof syncDirectorsUBOsToKYC === 'function') {
+      try { syncDirectorsUBOsToKYC(); } catch(e) { console.warn('syncDirectorsUBOsToKYC on restore:', e); }
+    }
+    if (typeof checkPEPAndShowDeclaration === 'function') {
+      try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on restore:', e); }
+    }
+
     // Mark uploaded docs visually
     uploadedDocs.forEach(function(docId) {
       var item = document.getElementById(docId);
@@ -6664,7 +6675,146 @@ var SECTION_C_DOCS = [
 var SECTION_D_DOCS = [];
 var sectionDCounter = 0;
 
+function _gfv(id) {
+  var el = document.getElementById(id);
+  if (!el) return '';
+  return typeof el.value === 'string' ? el.value.trim() : (el.value || '');
+}
+
+function buildPrescreeningSummary() {
+  var container = document.getElementById('review-prescreening-summary');
+  if (!container) return;
+
+  function esc(s) { return escapeHtml(s || ''); }
+  function row(label, value) {
+    var v = (value || '').toString().trim();
+    if (!v) return '';
+    return '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border1);font-size:12px;">' +
+      '<span style="color:var(--text3);min-width:180px;">' + esc(label) + '</span>' +
+      '<span style="color:var(--text1);font-weight:500;text-align:right;flex:1;word-break:break-word;">' + esc(v) + '</span></div>';
+  }
+  function section(title, icon, content) {
+    if (!content) return '';
+    return '<div style="margin-bottom:14px;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--radius-sm);overflow:hidden;">' +
+      '<div style="font-size:12px;font-weight:700;color:var(--text1);padding:10px 14px;background:var(--surface1);border-bottom:1px solid var(--border2);display:flex;align-items:center;gap:6px;">' + icon + ' ' + esc(title) + '</div>' +
+      '<div style="padding:8px 14px;">' + content + '</div></div>';
+  }
+
+  // Collect values from the live form
+  var entityRows =
+    row('Legal Entity Name', _gfv('f-reg-name')) +
+    row('Trading Name', _gfv('f-trade-name')) +
+    row('Entity Type', _gfv('f-entity-type')) +
+    row('Ownership Structure', _gfv('f-ownership-structure')) +
+    row('Registration / BRN', _gfv('f-brn')) +
+    row('Incorporation Date', _gfv('f-inc-date')) +
+    row('Country of Incorporation', _gfv('f-inc-country')) +
+    row('Registered Address', _gfv('f-reg-address')) +
+    row('Head Office Address', _gfv('f-hq-address')) +
+    row('Website', _gfv('f-website')) +
+    row('Licences', _gfv('f-licences'));
+
+  var contactRows =
+    row('Contact Name', [_gfv('f-contact-first'), _gfv('f-contact-last')].filter(Boolean).join(' ')) +
+    row('Contact Email', _gfv('f-email')) +
+    row('Contact Mobile', [_gfv('f-phone-code'), _gfv('f-mobile')].filter(Boolean).join(' '));
+
+  // Arrays from checkbox grids and multi-selects
+  var services = getCheckboxValues('service-grid');
+  var purposes = getCheckboxValues('purpose-grid');
+  var countries = msState['ms-op-countries'] ? Array.from(msState['ms-op-countries']) : [];
+  var markets = msState['ms-target-markets'] ? Array.from(msState['ms-target-markets']) : [];
+  var currencies = Array.from(document.querySelectorAll('input[name="currencies"]:checked')).map(function(c) { return c.value; });
+
+  var businessRows =
+    row('Business Overview', _gfv('f-biz-overview')) +
+    row('Sector', _gfv('f-sector')) +
+    row('Services Required', services.join(', ')) +
+    row('Account Purposes', purposes.join(', ')) +
+    row('Countries of Operation', countries.join(', ')) +
+    row('Target Markets', markets.join(', ')) +
+    row('Currencies', currencies.join(', ')) +
+    row('Transaction Complexity', _gfv('f-txn-complexity')) +
+    row('Monthly Volume', _gfv('f-monthly-volume'));
+
+  var fundsRows =
+    row('Source of Wealth', _gfv('f-source-wealth-type')) +
+    row('Source of Wealth Detail', _gfv('f-source-wealth')) +
+    row('Initial Source of Funds', _gfv('f-source-init-type')) +
+    row('Initial Funds Detail', _gfv('f-source-init')) +
+    row('Ongoing Source of Funds', _gfv('f-source-ongoing-type')) +
+    row('Ongoing Funds Detail', _gfv('f-source-ongoing'));
+
+  // Directors
+  var dirHtml = '';
+  document.querySelectorAll('#directors-body tr').forEach(function(r) {
+    var texts = r.querySelectorAll('input[type="text"]');
+    var nat = r.querySelector('select.nat-select');
+    var pep = r.querySelector('select.pep-select');
+    var name = [texts[0] ? texts[0].value : '', texts[1] ? texts[1].value : ''].filter(Boolean).join(' ');
+    if (name) dirHtml += '<div style="padding:5px 0;font-size:12px;border-bottom:1px solid var(--border1);">' +
+      '<span style="font-weight:600;color:var(--text1);">' + esc(name) + '</span>' +
+      '<span style="color:var(--text3);margin-left:8px;">' + esc(nat ? nat.value : '') + '</span>' +
+      (pep && pep.value === 'Yes' ? ' <span style="color:#dc2626;font-weight:600;font-size:10px;margin-left:6px;">PEP</span>' : '') +
+      '</div>';
+  });
+
+  // UBOs
+  var uboHtml = '';
+  document.querySelectorAll('#ubos-body tr').forEach(function(r) {
+    var texts = r.querySelectorAll('input[type="text"]');
+    var nat = r.querySelector('select.nat-select');
+    var pep = r.querySelector('select.pep-select');
+    var pct = r.querySelector('input[type="number"]');
+    var name = [texts[0] ? texts[0].value : '', texts[1] ? texts[1].value : ''].filter(Boolean).join(' ');
+    if (name) uboHtml += '<div style="padding:5px 0;font-size:12px;border-bottom:1px solid var(--border1);">' +
+      '<span style="font-weight:600;color:var(--text1);">' + esc(name) + '</span>' +
+      (pct && pct.value ? ' <span style="color:var(--text3);">(' + esc(pct.value) + '%)</span>' : '') +
+      '<span style="color:var(--text3);margin-left:8px;">' + esc(nat ? nat.value : '') + '</span>' +
+      (pep && pep.value === 'Yes' ? ' <span style="color:#dc2626;font-weight:600;font-size:10px;margin-left:6px;">PEP</span>' : '') +
+      '</div>';
+  });
+
+  // Intermediaries
+  var intHtml = '';
+  document.querySelectorAll('#intermediaries-body tr').forEach(function(r) {
+    var text = r.querySelector('input[type="text"]');
+    var nat = r.querySelector('select.nat-select');
+    var pct = r.querySelector('input[type="number"]');
+    var name = text ? text.value : '';
+    if (name) intHtml += '<div style="padding:5px 0;font-size:12px;border-bottom:1px solid var(--border1);">' +
+      '<span style="font-weight:600;color:var(--text1);">' + esc(name) + '</span>' +
+      (pct && pct.value ? ' <span style="color:var(--text3);">(' + esc(pct.value) + '%)</span>' : '') +
+      '<span style="color:var(--text3);margin-left:8px;">' + esc(nat ? nat.value : '') + '</span></div>';
+  });
+
+  var partiesContent = '';
+  if (dirHtml) partiesContent += '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:4px;">Directors</div>' + dirHtml;
+  if (uboHtml) partiesContent += '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;margin:10px 0 4px;">UBOs</div>' + uboHtml;
+  if (intHtml) partiesContent += '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;margin:10px 0 4px;">Intermediary Shareholders</div>' + intHtml;
+
+  // Financial summary
+  var finRows =
+    row('Existing Bank Account', _gfv('f-has-bank')) +
+    row('Bank Name', _gfv('f-bank-name')) +
+    row('Management Overview', _gfv('f-mgmt')) +
+    row('Introduction Method', _gfv('f-intro-method')) +
+    row('Referrer', _gfv('f-referrer-name'));
+
+  var html = '<div style="margin-bottom:8px;font-size:13px;font-weight:700;color:var(--text1);">Pre-Screening Summary</div>' +
+    '<p style="font-size:11px;color:var(--text3);margin:0 0 14px;">Please verify that the information you provided during pre-screening is correct before final submission.</p>' +
+    section('Entity Information', '🏢', entityRows) +
+    section('Contact Details', '📞', contactRows) +
+    section('Business Profile', '📊', businessRows) +
+    section('Source of Funds & Wealth', '💰', fundsRows) +
+    section('Directors, UBOs & Intermediaries', '👥', partiesContent) +
+    section('Additional Information', '📋', finRows);
+
+  container.innerHTML = html;
+}
+
 function buildReviewScreen() {
+  buildPrescreeningSummary();
   var isHighRisk = (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH');
   var uploadedCount = 0;
   var missingCount = 0;
@@ -8338,10 +8488,11 @@ async function resumeApplication(ref, stage) {
       target = getApplicationView(app.status || stage);
 
       // Restore saved form data from save-resume API
+      var restoredFields = false;
       try {
         var savedSession = await apiCall('GET', '/save-resume?application_id=' + encodeURIComponent(currentApplicationId));
         if (savedSession && savedSession.form_data && typeof savedSession.form_data === 'object') {
-          restoreDraftFromData(savedSession.form_data);
+          restoredFields = restoreDraftFromData(savedSession.form_data);
         }
       } catch (resumeErr) {
         console.warn('No saved session to restore or restore failed:', resumeErr);
@@ -8357,7 +8508,11 @@ async function resumeApplication(ref, stage) {
     const el = document.getElementById(snavId);
     if (el) el.classList.add('active');
   }
-  showToast('info', 'Application Loaded', 'Ref: ' + ref + ' — view restored to the latest saved stage.');
+  if (restoredFields) {
+    showToast('success', 'Draft Restored', 'Ref: ' + ref + ' — your saved form data, documents, and party details have been restored.');
+  } else {
+    showToast('info', 'Application Loaded', 'Ref: ' + ref + ' — view restored to the latest saved stage.');
+  }
 }
 
 function renderSidebarApps(apps) {
