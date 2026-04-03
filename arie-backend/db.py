@@ -2026,7 +2026,47 @@ def _populate_default_scoring_config(db: 'DBConnection'):
 # Seed Data
 # ============================================================================
 
+# Metadata used by _migrate_agent_definitions INSERT fallback when rows are missing
+_AGENT_METADATA = {
+    1: ("Identity & Document Integrity Agent", "🔍", "Onboarding"),
+    2: ("External Database Cross-Verification Agent", "🔎", "Onboarding"),
+    3: ("FinCrime Screening Interpretation Agent", "💼", "Onboarding"),
+    4: ("Corporate Structure & UBO Mapping Agent", "🏗️", "Onboarding"),
+    5: ("Compliance Memo & Risk Recommendation Agent", "📝", "Onboarding"),
+    6: ("Periodic Review Preparation Agent", "📅", "Monitoring"),
+    7: ("Adverse Media & PEP Monitoring Agent", "📡", "Monitoring"),
+    8: ("Behaviour & Risk Drift Agent", "📈", "Monitoring"),
+    9: ("Regulatory Impact Agent", "⚖️", "Monitoring"),
+    10: ("Ongoing Compliance Review Agent", "📋", "Monitoring"),
+}
+
 _AGENT_DEFINITIONS_V2 = {
+    1: {
+        "description": (
+            "Validates authenticity and consistency of uploaded documents against predefined deterministic checks. "
+            "Each document type has a fixed set of checks defined in the rule engine — the AI evaluates each check but does NOT decide what checks to run. "
+            "Covers entity documents (COI, M&A, registers, financials, etc.) and person documents (passport, PoA, CV, bank reference). "
+            "Does NOT do sanctions screening or registry lookups."
+        ),
+        "checks": [
+            "COI: Entity Name Match", "COI: Registration Number", "COI: Document Clarity",
+            "M&A: Entity Name Match", "M&A: Completeness", "M&A: Certification",
+            "Registration: Entity Name Match", "Registration: Current Validity", "Registration: Document Clarity",
+            "Shareholder Register: Ownership Consistency", "Shareholder Register: Completeness", "Shareholder Register: Currency",
+            "Director Register: Director Consistency", "Director Register: Completeness", "Director Register: Clarity",
+            "Financials: Financial Period", "Financials: Entity Name Match", "Financials: Audit Status", "Financials: Completeness",
+            "Board Resolution: Signatory Match", "Board Resolution: Date", "Board Resolution: Scope of Authority",
+            "Structure Chart: UBO Chain", "Structure Chart: Ownership Match", "Structure Chart: Legibility",
+            "Proof of Address: Document Date", "Proof of Address: Entity Name Match", "Proof of Address: Clarity", "Proof of Address: Address Match",
+            "Bank Reference: Letterhead", "Bank Reference: Date", "Bank Reference: Entity Name Match",
+            "Licence: Entity Name Match", "Licence: Validity", "Licence: Issuing Authority",
+            "Passport: Document Expiry", "Passport: Photo Quality", "Passport: Name Match", "Passport: Nationality Match",
+            "Personal PoA: Document Date", "Personal PoA: Name Match", "Personal PoA: Clarity", "Personal PoA: Certification",
+            "CV: Name Match", "CV: Employment History",
+            "Bank Reference (PEP): Date", "Bank Reference (PEP): Name Match", "Bank Reference (PEP): Bank ID",
+            "Bank Reference (PEP): Account Standing", "Bank Reference (PEP): Signatory",
+        ],
+    },
     3: {
         "description": (
             "Policy-bounded screening interpreter. Reads stored screening results from prescreening_data. "
@@ -2162,6 +2202,17 @@ _AGENT_DEFINITIONS_V2 = {
             "Drift narrative and recommendation (hybrid)",
         ],
     },
+    9: {
+        "description": (
+            "Detects when regulatory changes affect existing clients, "
+            "tracks jurisdiction-specific regulations, and alerts on compliance requirement updates."
+        ),
+        "checks": [
+            "Regulatory change monitoring", "Impact assessment on client portfolio",
+            "Jurisdiction-specific regulation tracking", "Compliance requirement updates",
+            "Client-specific regulatory alerts",
+        ],
+    },
     10: {
         "description": (
             "Consolidation agent with AI narrative. Verifies document currency, screening recency, "
@@ -2187,12 +2238,30 @@ _AGENT_DEFINITIONS_V2 = {
 
 
 def _migrate_agent_definitions(db: DBConnection):
-    """Update agent 2/4/5 descriptions and checks to match Wave 1+2 implementations."""
+    """Upsert agent definitions to match Wave 1-4 implementations.
+
+    Uses UPDATE for existing rows; if a row is missing (e.g. demo DB was
+    cleared), falls back to INSERT so the agent is recreated.
+    """
     for agent_num, defn in _AGENT_DEFINITIONS_V2.items():
-        db.execute(
+        result = db.execute(
             "UPDATE ai_agents SET description=?, checks=? WHERE agent_number=?",
             (defn["description"], json.dumps(defn["checks"]), agent_num)
         )
+        # If UPDATE matched nothing, the row is missing — insert it
+        rows_affected = getattr(result, "rowcount", None)
+        if rows_affected is not None and rows_affected == 0:
+            try:
+                meta = _AGENT_METADATA.get(agent_num, (f"Agent {agent_num}", "🤖", "Onboarding"))
+                db.execute(
+                    "INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (agent_num, meta[0], meta[1], meta[2],
+                     defn["description"], True, json.dumps(defn["checks"]))
+                )
+                logger.info(f"Inserted missing agent {agent_num} via migration")
+            except Exception as e:
+                logger.warning(f"Could not insert agent {agent_num}: {e}")
     db.commit()
     logger.info("Migrated agent definitions to Wave 1-4 versions")
 
@@ -2378,9 +2447,9 @@ def seed_initial_data(db: DBConnection):
     checks_count = db.execute("SELECT COUNT(*) as c FROM ai_checks").fetchone()["c"]
     risk_count = db.execute("SELECT COUNT(*) as c FROM risk_config").fetchone()["c"]
 
-    # --- Migration: update agent 2/4/5 descriptions & checks (Wave 1+2 alignment) ---
-    if agents_count > 0:
-        _migrate_agent_definitions(db)
+    # --- Migration: upsert agent definitions (Wave 1-4 alignment) ---
+    # Always run: inserts missing agents AND updates existing ones
+    _migrate_agent_definitions(db)
 
     if users_count > 0 and agents_count > 0 and checks_count > 0 and risk_count > 0:
         logger.info("Database already seeded, skipping core initialization")
