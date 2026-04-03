@@ -4928,9 +4928,11 @@ async function runRealtimeDocumentIntegrityCheck(docId, fileName) {
   statusEl.innerHTML = '<div style="padding:8px;background:var(--blue-dim);border-radius:6px;color:var(--blue);"><strong>📄 Checking document integrity...</strong></div>';
 
   try {
+    // Normalize doc_type from HTML ID to canonical backend type
+    var apiDocType = (typeof DOC_TYPE_MAP !== 'undefined' && DOC_TYPE_MAP[docId]) ? DOC_TYPE_MAP[docId] : docId;
     // Call API to verify document
     const response = await apiCall('POST', '/documents/ai-verify', {
-      doc_type: docId,
+      doc_type: apiDocType,
       file_name: fileName,
       person_name: '',
       doc_category: 'company'
