@@ -6917,6 +6917,17 @@ function triggerUpload(docId) {
   document.querySelector('#' + docId + ' .file-input').click();
 }
 
+// Normalize portal HTML IDs to backend canonical doc_type values
+var DOC_TYPE_MAP = {
+  'doc-coi': 'cert_inc', 'doc-memarts': 'memarts', 'doc-shareholders': 'reg_sh',
+  'doc-directors-reg': 'reg_dir', 'doc-financials': 'fin_stmt', 'doc-proof-address': 'poa',
+  'doc-board-res': 'board_res', 'doc-structure-chart': 'structure_chart',
+  'doc-bank-ref': 'bankref', 'doc-license-cert': 'licence',
+  'doc-contracts': 'contracts', 'doc-source-wealth-proof': 'source_wealth',
+  'doc-source-funds-proof': 'source_funds', 'doc-bank-statements': 'bank_statements',
+  'doc-aml-policy': 'aml_policy'
+};
+
 function handleUpload(docId, input) {
   const files = input.files;
   if (!files || files.length === 0) return;
@@ -6930,10 +6941,11 @@ function handleUpload(docId, input) {
   // Upload to API if authenticated
   if (AUTH_TOKEN && currentApplicationId) {
     Promise.all(Array.from(files).map(async function(file) {
+      var apiDocType = DOC_TYPE_MAP[docId] || docId;
       var fd = new FormData();
       fd.append('file', file);
-      fd.append('doc_type', docId);
-      var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(docId), fd, true);
+      fd.append('doc_type', apiDocType);
+      var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(apiDocType), fd, true);
       if (resp.id) {
         try { await apiCall('POST', '/documents/' + resp.id + '/verify'); } catch(e) {}
       }
