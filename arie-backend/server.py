@@ -1794,7 +1794,7 @@ class SubmitApplicationHandler(BaseHandler):
         if country in SANCTIONED_COUNTRIES_FULL:
             db.close()
             return self.error(
-                "ARIE Finance cannot onboard clients involved in sanctioned or prohibited jurisdictions.",
+                f"{BRAND['portal_name']} cannot onboard clients involved in sanctioned or prohibited jurisdictions.",
                 403
             )
 
