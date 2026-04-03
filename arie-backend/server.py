@@ -2819,6 +2819,18 @@ class DocumentAIVerifyHandler(BaseHandler):
         ubos = body.get("ubos", [])
         app_id = body.get("application_id", "")
 
+        # Defense-in-depth: normalize portal HTML IDs to canonical doc_type values
+        _DOC_TYPE_NORMALIZE = {
+            "doc-coi": "cert_inc", "doc-memarts": "memarts", "doc-shareholders": "reg_sh",
+            "doc-directors-reg": "reg_dir", "doc-financials": "fin_stmt", "doc-proof-address": "poa",
+            "doc-board-res": "board_res", "doc-structure-chart": "structure_chart",
+            "doc-bank-ref": "bankref", "doc-license-cert": "licence",
+            "doc-contracts": "contracts", "doc-source-wealth-proof": "source_wealth",
+            "doc-source-funds-proof": "source_funds", "doc-bank-statements": "bank_statements",
+            "doc-aml-policy": "aml_policy",
+        }
+        doc_type = _DOC_TYPE_NORMALIZE.get(doc_type, doc_type)
+
         if not doc_type or not file_name:
             return self.error("doc_type and file_name are required", 400)
 
@@ -2840,11 +2852,11 @@ class DocumentAIVerifyHandler(BaseHandler):
             except Exception as e:
                 logger.warning(f"Could not look up pre-screening data for app {app_id}: {e}")
 
-        # Resolve file path if doc_id provided
+        # Resolve file path if doc_id provided, with S3 fallback
         file_path = None
         if doc_id:
             db = get_db()
-            doc_record = db.execute("SELECT file_path FROM documents WHERE id=?", (doc_id,)).fetchone()
+            doc_record = db.execute("SELECT file_path, s3_key, doc_name, application_id, person_id FROM documents WHERE id=?", (doc_id,)).fetchone()
             db.close()
             if doc_record:
                 fp = doc_record.get("file_path", "")
@@ -2852,6 +2864,40 @@ class DocumentAIVerifyHandler(BaseHandler):
                     file_path = os.path.join(UPLOAD_DIR, os.path.basename(fp))
                 elif fp:
                     file_path = fp
+
+                # S3 fallback: local file missing (e.g. after container redeploy)
+                if (not file_path or not os.path.isfile(file_path)) and doc_record.get("s3_key") and HAS_S3:
+                    try:
+                        s3 = get_s3_client()
+                        s3_ok, s3_data = s3.download_document(doc_record["s3_key"])
+                        if s3_ok and isinstance(s3_data, bytes):
+                            ext = os.path.splitext(doc_record.get("doc_name", "") or "")[1] or ".bin"
+                            cache_name = f"s3_cache_{doc_id}{ext}"
+                            cache_path = os.path.join(UPLOAD_DIR, cache_name)
+                            with open(cache_path, "wb") as _cf:
+                                _cf.write(s3_data)
+                            file_path = cache_path
+                            logger.info(f"[ai-verify] doc={doc_id} retrieved from S3 ({len(s3_data)} bytes)")
+                    except Exception as s3_err:
+                        logger.error(f"[ai-verify] doc={doc_id} S3 fallback error: {s3_err}")
+
+                # Auto-resolve application_id from document record if not provided
+                if not app_id and doc_record.get("application_id"):
+                    app_id = doc_record["application_id"]
+
+                # Auto-resolve person_name from document record if not provided
+                if not person_name and doc_record.get("person_id"):
+                    try:
+                        db2 = get_db()
+                        person_row = db2.execute(
+                            "SELECT full_name FROM directors WHERE id=? UNION SELECT full_name FROM ubos WHERE id=?",
+                            (doc_record["person_id"], doc_record["person_id"])
+                        ).fetchone()
+                        db2.close()
+                        if person_row:
+                            person_name = person_row.get("full_name", "")
+                    except Exception:
+                        pass
 
         # Initialize Claude client
         if not HAS_CLAUDE_CLIENT:
@@ -2900,7 +2946,7 @@ class DocumentAIVerifyHandler(BaseHandler):
             self.success(result)
         except Exception as e:
             logger.error(f"Document AI verification failed: {e}")
-            self.error(f"Verification failed: {str(e)[:200]}", 500)
+            self.error("AI verification temporarily unavailable — please retry or proceed with manual review", 500)
 
 
 # ══════════════════════════════════════════════════════════
