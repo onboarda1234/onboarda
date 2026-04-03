@@ -871,12 +871,14 @@ def get_db():
 
 def init_db():
     """Initialize database schema and seed initial data."""
-    from db import seed_initial_data, sync_ai_checks_from_seed
+    from db import seed_initial_data, sync_ai_checks_from_seed, normalize_legacy_doc_types
     db_init_db()
     db = get_db()
     try:
         seed_initial_data(db)
         db.commit()
+        # Normalize any legacy portal-style doc_type values in documents table
+        normalize_legacy_doc_types(db)
         # Upsert canonical ai_checks on every startup so stale rows on
         # existing databases (staging/prod) are always brought up to date.
         sync_ai_checks_from_seed(db)
