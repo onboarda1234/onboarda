@@ -75,10 +75,11 @@ class TestPIIEncryptor:
 
     def test_decrypt_with_wrong_key_fails(self, valid_key):
         from security_hardening import PIIEncryptor
+        from cryptography.fernet import InvalidToken
         enc1 = PIIEncryptor(key=valid_key)
         enc2 = PIIEncryptor(key=Fernet.generate_key().decode())
         encrypted = enc1.encrypt("secret-data")
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidToken):
             enc2.decrypt(encrypted)
 
     def test_encrypt_dict_fields(self, encryptor):

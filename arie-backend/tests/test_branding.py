@@ -76,14 +76,25 @@ class TestBrandingEnvironmentOverrides:
 
     def test_portal_name_env_override(self, monkeypatch):
         monkeypatch.setenv("BRAND_PORTAL_NAME", "CustomPortal")
-        # Branding reads env at import time; test the mechanism
-        portal_name = os.environ.get("BRAND_PORTAL_NAME", "Onboarda")
-        assert portal_name == "CustomPortal"
+        import importlib
+        import branding
+        importlib.reload(branding)
+        assert branding.BRAND["portal_name"] == "CustomPortal"
+        assert branding.portal_name() == "CustomPortal"
+        # Restore default so other tests aren't affected
+        monkeypatch.delenv("BRAND_PORTAL_NAME", raising=False)
+        importlib.reload(branding)
 
     def test_backoffice_name_env_override(self, monkeypatch):
         monkeypatch.setenv("BRAND_BACKOFFICE_NAME", "CustomBackoffice")
-        backoffice = os.environ.get("BRAND_BACKOFFICE_NAME", "RegMind")
-        assert backoffice == "CustomBackoffice"
+        import importlib
+        import branding
+        importlib.reload(branding)
+        assert branding.BRAND["backoffice_name"] == "CustomBackoffice"
+        assert branding.backoffice_name() == "CustomBackoffice"
+        # Restore default so other tests aren't affected
+        monkeypatch.delenv("BRAND_BACKOFFICE_NAME", raising=False)
+        importlib.reload(branding)
 
 
 class TestConvenienceAccessors:

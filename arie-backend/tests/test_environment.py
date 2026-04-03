@@ -16,7 +16,7 @@ class TestGetEnvironment:
         import importlib
         import environment
         result = environment.get_environment()
-        assert result in ("demo", "testing")  # conftest sets ENVIRONMENT=testing
+        assert result == "demo"
 
     def test_reads_environment_var(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "production")
