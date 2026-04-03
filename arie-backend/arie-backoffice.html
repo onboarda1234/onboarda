@@ -3886,9 +3886,9 @@ function renderUsers() {
       '<div class="user-info"><div class="user-name">' + escapeHtml(u.name) + '</div><div class="user-email">' + escapeHtml(u.email) + '</div></div>' +
       '<span class="user-role-badge ' + safeRole + '">' + escapeHtml(ROLE_LABELS[u.role]) + '</span>' +
       '<span class="badge ' + (u.status === 'active' ? 'approved' : 'rejected') + '">' + escapeHtml(u.status) + '</span>' +
-      (currentUser && currentUser.sub === u.id ? '' :
+      (currentUser && (currentUser.sub === u.id || currentUser.id === u.id) ? '' :
         '<button class="btn btn-outline btn-sm" onclick="editUser(\'' + escapeHtml(String(u.id)) + '\')">Edit</button>' +
-        '<button class="btn btn-sm" style="background:' + (u.status === 'active' ? 'var(--danger)' : 'var(--success)') + ';color:#fff;border:none;font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;" onclick="toggleUserStatus(\'' + escapeHtml(String(u.id)) + '\')">' + (u.status === 'active' ? 'Deactivate' : 'Reactivate') + '</button>');
+        '<button class="btn btn-sm" style="background:' + (u.status === 'active' ? 'var(--red)' : 'var(--green)') + ';color:#fff;border:none;font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;" onclick="toggleUserStatus(\'' + escapeHtml(String(u.id)) + '\')">' + (u.status === 'active' ? 'Deactivate' : 'Reactivate') + '</button>');
     list.appendChild(card);
   });
 }
