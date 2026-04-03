@@ -577,10 +577,13 @@ a { color:var(--brand); text-decoration:none; }
 .kpi-date-filter { display:flex; align-items:center; gap:10px; margin-bottom:20px; }
 
 /* ── Role-based visibility ── */
-.role-admin-only { display:none; }
-body.role-admin .role-admin-only { display:initial; }
-body.role-admin .role-admin-only-flex { display:flex; }
-body.role-admin .role-admin-only-block { display:block; }
+.role-admin-only { display:none !important; }
+body.role-admin .role-admin-only { display:initial !important; }
+body.role-admin .role-admin-only-flex, body.role-admin .snav-item.role-admin-only { display:flex !important; }
+body.role-admin .role-admin-only-block, body.role-admin .snav-section.role-admin-only { display:block !important; }
+.role-sco-only { display:none !important; }
+body.role-admin .role-sco-only, body.role-sco .role-sco-only { display:initial !important; }
+body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only { display:flex !important; }
 
 /* ── AI Chat Sidebar ── */
 .ai-chat-sidebar { position:fixed; top:0; right:-400px; width:400px; height:100vh; background:white; box-shadow:-4px 0 24px rgba(0,0,0,0.12); z-index:1000; transition:right 0.3s ease; display:flex; flex-direction:column; border-left:1px solid var(--border1); }
@@ -689,16 +692,16 @@ body.role-admin .role-admin-only-block { display:block; }
     <div class="snav-section">Compliance Supervisor</div>
     <div class="snav-item" onclick="showView('supervisor',this)"><span class="snav-icon">🛡️</span> Supervisor Dashboard</div>
     <div class="snav-item" onclick="showView('supervisor-audit',this)"><span class="snav-icon">🔗</span> Audit Chain</div>
-    <div class="snav-section">Administration</div>
-    <div class="snav-item" onclick="showView('users',this)"><span class="snav-icon">👥</span> User Management</div>
-    <div class="snav-item" onclick="showView('roles',this)"><span class="snav-icon">🔐</span> Roles & Permissions</div>
-    <div class="snav-item" onclick="showView('risk-model',this)"><span class="snav-icon">🎯</span> Risk Scoring Model</div>
-    <div class="snav-item" onclick="showView('ai-checks',this)"><span class="snav-icon">🔬</span> AI Verification Checks</div>
-    <div class="snav-item" onclick="showView('ai-agents',this)"><span class="snav-icon">🤖</span> AI Agents</div>
-    <div class="snav-item" onclick="showView('agent-health',this)"><span class="snav-icon">💓</span> Agent Health</div>
+    <div class="snav-section role-admin-only">Administration</div>
+    <div class="snav-item role-admin-only" onclick="showView('users',this)"><span class="snav-icon">👥</span> User Management</div>
+    <div class="snav-item role-admin-only" onclick="showView('roles',this)"><span class="snav-icon">🔐</span> Roles & Permissions</div>
+    <div class="snav-item role-admin-only" onclick="showView('risk-model',this)"><span class="snav-icon">🎯</span> Risk Scoring Model</div>
+    <div class="snav-item role-admin-only" onclick="showView('ai-checks',this)"><span class="snav-icon">🔬</span> AI Verification Checks</div>
+    <div class="snav-item role-admin-only" onclick="showView('ai-agents',this)"><span class="snav-icon">🤖</span> AI Agents</div>
+    <div class="snav-item role-admin-only" onclick="showView('agent-health',this)"><span class="snav-icon">💓</span> Agent Health</div>
     <div class="snav-item" onclick="showView('resources',this)"><span class="snav-icon">📚</span> Resources</div>
-    <div class="snav-item" onclick="showView('settings',this)"><span class="snav-icon">⚙️</span> Settings</div>
-    <div class="snav-item" onclick="showView('audit',this)"><span class="snav-icon">📝</span> Audit Trail</div>
+    <div class="snav-item role-admin-only" onclick="showView('settings',this)"><span class="snav-icon">⚙️</span> Settings</div>
+    <div class="snav-item role-sco-only" onclick="showView('audit',this)"><span class="snav-icon">📝</span> Audit Trail</div>
   </nav>
   <div class="sidebar-user">
     <div class="sidebar-avatar" id="sidebar-avatar">AS</div>
@@ -1972,13 +1975,43 @@ body.role-admin .role-admin-only-block { display:block; }
           <option value="admin">Administrator</option>
         </select>
       </div>
-      <div class="form-group"><div class="form-label">Status</div>
-        <select class="form-select" id="new-user-status"><option value="active">Active</option><option value="inactive">Inactive</option></select>
-      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-add-user')">Cancel</button>
       <button class="btn btn-primary" onclick="addUser()">Add User</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ EDIT USER MODAL ═══════════════ -->
+<div class="modal-overlay" id="modal-edit-user">
+  <div class="modal">
+    <div class="modal-header"><h3>Edit User</h3><button class="modal-close" onclick="closeModal('modal-edit-user')">&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="edit-user-id" />
+      <div class="form-group"><div class="form-label">Full Name</div><input class="form-input" id="edit-user-name" /></div>
+      <div class="form-group"><div class="form-label">Email</div><input class="form-input" id="edit-user-email" disabled style="opacity:0.6;" /></div>
+      <div class="form-group"><div class="form-label">Role</div>
+        <select class="form-select" id="edit-user-role">
+          <option value="analyst">Analyst</option>
+          <option value="co">Compliance Officer</option>
+          <option value="sco">Senior Compliance Officer</option>
+          <option value="admin">Administrator</option>
+        </select>
+      </div>
+      <div class="form-group"><div class="form-label">Status</div>
+        <select class="form-select" id="edit-user-status">
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+      </div>
+      <div id="edit-user-self-warning" style="display:none;background:var(--amber-bg);color:var(--amber);padding:10px;border-radius:6px;font-size:12px;margin-top:8px;">
+        You cannot modify your own account.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-edit-user')">Cancel</button>
+      <button class="btn btn-primary" id="edit-user-save-btn" onclick="saveUserEdit()">Save Changes</button>
     </div>
   </div>
 </div>
@@ -2907,6 +2940,17 @@ function populateOfficerDropdowns() {
 // VIEW MANAGEMENT
 // ═══════════════════════════════════════════════════════════
 function showView(name, navItem) {
+  // Enforce frontend role restrictions on admin-only views
+  var adminOnlyViews = ['users', 'roles', 'risk-model', 'ai-checks', 'ai-agents', 'agent-health', 'settings'];
+  var scoOnlyViews = ['audit'];
+  var role = currentUser ? currentUser.role : '';
+  if (adminOnlyViews.indexOf(name) >= 0 && role !== 'admin') {
+    showToast('Access restricted to administrators', 'error'); return;
+  }
+  if (scoOnlyViews.indexOf(name) >= 0 && role !== 'admin' && role !== 'sco') {
+    showToast('Access restricted to senior compliance officers', 'error'); return;
+  }
+
   document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
   var view = document.getElementById('view-' + name);
   if (view) view.classList.add('active');
@@ -3842,7 +3886,9 @@ function renderUsers() {
       '<div class="user-info"><div class="user-name">' + escapeHtml(u.name) + '</div><div class="user-email">' + escapeHtml(u.email) + '</div></div>' +
       '<span class="user-role-badge ' + safeRole + '">' + escapeHtml(ROLE_LABELS[u.role]) + '</span>' +
       '<span class="badge ' + (u.status === 'active' ? 'approved' : 'rejected') + '">' + escapeHtml(u.status) + '</span>' +
-      '<button class="btn btn-outline btn-sm" onclick="editUser(' + escapeHtml(String(u.id)) + ')">Edit</button>';
+      (currentUser && currentUser.sub === u.id ? '' :
+        '<button class="btn btn-outline btn-sm" onclick="editUser(\'' + escapeHtml(String(u.id)) + '\')">Edit</button>' +
+        '<button class="btn btn-sm" style="background:' + (u.status === 'active' ? 'var(--danger)' : 'var(--success)') + ';color:#fff;border:none;font-size:11px;padding:4px 10px;border-radius:6px;cursor:pointer;" onclick="toggleUserStatus(\'' + escapeHtml(String(u.id)) + '\')">' + (u.status === 'active' ? 'Deactivate' : 'Reactivate') + '</button>');
     list.appendChild(card);
   });
 }
@@ -5074,7 +5120,7 @@ async function confirmDecision() {
   try {
     var resp = await boApiCall('POST', '/applications/' + currentApp.id + '/decision', payload);
     var detail = pendingDecision + ' — ' + reason + (notes ? ' | Notes: ' + notes : '');
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:pendingDecision, target:currentApp.ref, detail:detail, ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:pendingDecision, target:currentApp.ref, detail:detail, ip:'client' });
     closeModal('modal-decision-reason');
     await refreshCurrentAppDetail();
 
@@ -5165,7 +5211,7 @@ async function confirmOverride() {
       override_reason: reason
     });
     var detail = 'Override: Changed recommendation to ' + decision + ' — ' + reason;
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Override', target:currentApp.ref, detail:detail, ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Override', target:currentApp.ref, detail:detail, ip:'client' });
     closeModal('modal-override');
     await refreshCurrentAppDetail();
     if (resp.status === 'first_approval_recorded') {
@@ -5196,7 +5242,7 @@ async function confirmReassign() {
   var assigneeLabel = assignUser ? assignUser.name : 'Unassigned';
   currentApp.assignedId = assignUser ? assignUser.id : '';
   currentApp.assigned = assigneeLabel;
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Assign', target:currentApp.ref, detail:'Reassigned to ' + assigneeLabel, ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Assign', target:currentApp.ref, detail:'Reassigned to ' + assigneeLabel, ip:'client' });
   if (BO_AUTH_TOKEN && currentApp.id) {
     try { await boApiCall('PATCH', '/applications/' + currentApp.id, { assigned_to: assignUser ? assignUser.id : '' }); } catch(e) {}
   }
@@ -5230,7 +5276,7 @@ async function preApproveApplication() {
     await boApiCall('POST', '/applications/' + currentApp.id + '/pre-approval-decision', {
       decision: 'PRE_APPROVE', notes: notes
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approve', target:currentApp.ref, detail:'Pre-approved: ' + notes, ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approve', target:currentApp.ref, detail:'Pre-approved: ' + notes, ip:'client' });
     await refreshCurrentAppDetail();
     showToast('Application pre-approved. Client can now proceed to KYC document submission.');
   } catch(e) {
@@ -5248,7 +5294,7 @@ async function preApprovalReject() {
     await boApiCall('POST', '/applications/' + currentApp.id + '/pre-approval-decision', {
       decision: 'REJECT', notes: notes
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approval Reject', target:currentApp.ref, detail:'Rejected at pre-approval: ' + notes, ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approval Reject', target:currentApp.ref, detail:'Rejected at pre-approval: ' + notes, ip:'client' });
     await refreshCurrentAppDetail();
     showToast('Application rejected at pre-approval stage.');
   } catch(e) {
@@ -5266,7 +5312,7 @@ async function preApprovalRequestInfo() {
     await boApiCall('POST', '/applications/' + currentApp.id + '/pre-approval-decision', {
       decision: 'REQUEST_INFO', notes: notes
     });
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approval RMI', target:currentApp.ref, detail:'Requested info at pre-approval: ' + notes, ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Pre-Approval RMI', target:currentApp.ref, detail:'Requested info at pre-approval: ' + notes, ip:'client' });
     await refreshCurrentAppDetail();
     showToast('Additional information requested. Client will be notified to update pre-screening data.');
   } catch(e) {
@@ -5291,11 +5337,17 @@ async function addUser() {
     var resp = await boApiCall('POST', '/users', { full_name: name, email: email, role: role });
     // Reload users from API to get authoritative state
     var usersResp = await boApiCall('GET', '/users');
-    if (usersResp && Array.isArray(usersResp)) {
-      USERS = usersResp.map(function(u) { return { id: u.id, name: u.full_name || u.name, email: u.email, role: u.role, initials: (u.full_name || u.name || '').split(' ').map(function(w){return w[0];}).join('').toUpperCase().slice(0,2), status: u.status || 'active' }; });
+    var usersList = usersResp && usersResp.users ? usersResp.users : (Array.isArray(usersResp) ? usersResp : []);
+    if (usersList.length > 0) {
+      USERS = usersList.map(function(u) { return { id: u.id, name: u.full_name || u.name, email: u.email, role: u.role, initials: (u.full_name || u.name || '').split(' ').map(function(w){return w[0];}).join('').toUpperCase().slice(0,2), status: u.status || 'active' }; });
     }
     closeModal('modal-add-user');
+    // Clear form fields
+    document.getElementById('new-user-name').value = '';
+    document.getElementById('new-user-email').value = '';
+    document.getElementById('new-user-role').value = 'analyst';
     renderUsers();
+    populateOfficerDropdowns();
     showToast('User ' + name + ' created successfully');
   } catch(err) {
     showToast('Failed to create user: ' + (err.message || 'Unknown error'), 'error');
@@ -5305,31 +5357,65 @@ async function addUser() {
 function editUser(id) {
   var u = USERS.find(function(u) { return u.id === id; });
   if (!u) { showToast('User not found'); return; }
-  var newRole = prompt('Edit role for ' + u.name + '\\nCurrent role: ' + u.role + '\\n\\nEnter new role (admin, sco, co, analyst):', u.role);
-  if (!newRole || !['admin','sco','co','analyst'].includes(newRole.trim().toLowerCase())) {
-    if (newRole !== null) showToast('Invalid role. Must be: admin, sco, co, or analyst', 'error');
-    return;
-  }
-  newRole = newRole.trim().toLowerCase();
-  // Call API to update user role
-  boApiCall('PUT', '/users/' + u.id, { full_name: u.name, role: newRole, status: u.status || 'active' }).then(function(resp) {
-    u.role = newRole;
-    renderUsers();
-    showToast('Role updated: ' + u.name + ' → ' + newRole, 'success');
-  }).catch(function(err) {
-    showToast('Failed to update role: ' + (err.message || err), 'error');
-  });
+  // Populate edit modal
+  document.getElementById('edit-user-id').value = u.id;
+  document.getElementById('edit-user-name').value = u.name;
+  document.getElementById('edit-user-email').value = u.email;
+  document.getElementById('edit-user-role').value = u.role;
+  document.getElementById('edit-user-status').value = u.status || 'active';
+  // Check if editing self — disable fields if so
+  var isSelf = currentUser && currentUser.id === u.id;
+  var warning = document.getElementById('edit-user-self-warning');
+  var saveBtn = document.getElementById('edit-user-save-btn');
+  document.getElementById('edit-user-name').disabled = isSelf;
+  document.getElementById('edit-user-role').disabled = isSelf;
+  document.getElementById('edit-user-status').disabled = isSelf;
+  warning.style.display = isSelf ? 'block' : 'none';
+  saveBtn.disabled = isSelf;
+  saveBtn.style.opacity = isSelf ? '0.5' : '1';
+  document.getElementById('modal-edit-user').classList.add('open');
 }
 
-function switchUser(role) {
-  var user = USERS.find(function(u) { return u.role === role; });
-  if (!user) return;
-  currentUser = user;
-  document.getElementById('sidebar-avatar').textContent = user.initials;
-  document.getElementById('sidebar-user-name').textContent = user.name;
-  document.getElementById('sidebar-user-role').textContent = ROLE_LABELS[user.role];
-  document.body.className = 'role-' + role;
-  showToast('Switched to ' + user.name + ' (' + ROLE_LABELS[role] + ')');
+async function saveUserEdit() {
+  var id = document.getElementById('edit-user-id').value;
+  var name = document.getElementById('edit-user-name').value.trim();
+  var role = document.getElementById('edit-user-role').value;
+  var status = document.getElementById('edit-user-status').value;
+  if (!name) { showToast('Name is required', 'error'); return; }
+  try {
+    await boApiCall('PUT', '/users/' + id, { full_name: name, role: role, status: status });
+    // Reload users from API
+    var usersResp = await boApiCall('GET', '/users');
+    var usersList = usersResp && usersResp.users ? usersResp.users : [];
+    if (usersList.length > 0) {
+      USERS = usersList.map(function(u) { return { id: u.id, name: u.full_name || u.name, email: u.email, role: u.role, initials: (u.full_name || u.name || '').split(' ').map(function(w){return w[0];}).join('').toUpperCase().slice(0,2), status: u.status || 'active' }; });
+    }
+    closeModal('modal-edit-user');
+    renderUsers();
+    populateOfficerDropdowns();
+    showToast('User updated successfully');
+  } catch(err) {
+    showToast('Failed to update user: ' + (err.message || err), 'error');
+  }
+}
+
+async function toggleUserStatus(id) {
+  var u = USERS.find(function(u) { return u.id === id; });
+  if (!u) return;
+  if (currentUser && currentUser.id === u.id) {
+    showToast('Cannot deactivate your own account', 'error'); return;
+  }
+  var newStatus = u.status === 'active' ? 'inactive' : 'active';
+  var action = newStatus === 'inactive' ? 'deactivate' : 'reactivate';
+  if (!confirm('Are you sure you want to ' + action + ' ' + u.name + '?')) return;
+  try {
+    await boApiCall('PUT', '/users/' + u.id, { full_name: u.name, role: u.role, status: newStatus });
+    u.status = newStatus;
+    renderUsers();
+    showToast(u.name + ' ' + action + 'd successfully');
+  } catch(err) {
+    showToast('Failed to ' + action + ' user: ' + (err.message || err), 'error');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -5899,7 +5985,7 @@ function toggleCountryEdit() {
   if (!countryEditMode) {
     boApiCall('PUT', '/config/risk-model', { country_risk_scores: COUNTRY_RISK_LISTS })
       .then(function() {
-        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated country risk lists', ip:'196.192.44.12' });
+        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated country risk lists', ip:'client' });
         showToast('Country risk lists saved');
       })
       .catch(function(e) {
@@ -5917,7 +6003,7 @@ function toggleSectorEdit() {
     });
     boApiCall('PUT', '/config/risk-model', { sector_risk_scores: SECTOR_RISK_CONFIG })
       .then(function() {
-        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated sector risk scores', ip:'196.192.44.12' });
+        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated sector risk scores', ip:'client' });
         showToast('Sector risk scores saved');
       })
       .catch(function(e) {
@@ -5937,7 +6023,7 @@ function toggleEntityEdit() {
     });
     boApiCall('PUT', '/config/risk-model', { entity_type_scores: ENTITY_TYPE_SCORES })
       .then(function() {
-        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated entity type risk scores', ip:'196.192.44.12' });
+        AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Updated entity type risk scores', ip:'client' });
         showToast('Entity type risk scores saved');
       })
       .catch(function(e) {
@@ -6091,13 +6177,13 @@ function toggleConfigPanel(id) {
 function addSubCriteria(dimIdx) {
   RISK_DIMENSIONS[dimIdx].subcriteria.push({ name:'New Criterion', weight:0, scoring:'Define scoring 1-4' });
   renderRiskModel();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Added sub-criterion to ' + RISK_DIMENSIONS[dimIdx].id, ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Added sub-criterion to ' + RISK_DIMENSIONS[dimIdx].id, ip:'client' });
 }
 
 function removeSubCriteria(dimIdx, subIdx) {
   var removed = RISK_DIMENSIONS[dimIdx].subcriteria.splice(subIdx, 1);
   renderRiskModel();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Removed "' + removed[0].name + '" from ' + RISK_DIMENSIONS[dimIdx].id, ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Removed "' + removed[0].name + '" from ' + RISK_DIMENSIONS[dimIdx].id, ip:'client' });
 }
 
 function saveRiskModel() {
@@ -6152,7 +6238,7 @@ function saveRiskModel() {
     showToast('⚠️ Dimension weights total ' + totalWeight + '% — must equal 100%');
     return;
   }
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Risk scoring model updated', ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Risk Model', detail:'Risk scoring model updated', ip:'client' });
   // Exit edit mode
   riskEditMode = false;
   document.getElementById('btn-edit-risk').style.display = '';
@@ -6340,14 +6426,14 @@ function addCheck(type, docIdx) {
   var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
   data[docIdx].checks.push({ label:'New Check', rule:'Define the verification rule', type:'content' });
   renderAIChecks();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'Added check to ' + data[docIdx].name, ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'Added check to ' + data[docIdx].name, ip:'client' });
 }
 
 function removeCheck(type, docIdx, checkIdx) {
   var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
   var removed = data[docIdx].checks.splice(checkIdx, 1);
   renderAIChecks();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'Removed "' + removed[0].label + '" from ' + data[docIdx].name, ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'Removed "' + removed[0].label + '" from ' + data[docIdx].name, ip:'client' });
 }
 
 function addDocType(type) {
@@ -6356,7 +6442,7 @@ function addDocType(type) {
   var data = type === 'entity' ? ENTITY_DOC_CHECKS : PERSON_DOC_CHECKS;
   data.push({ docId:'doc-' + name.toLowerCase().replace(/\s+/g,'-'), name:name, checks:[] });
   renderAIChecks();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'Added document type: ' + name, ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'Added document type: ' + name, ip:'client' });
   showToast('Document type "' + name + '" added');
 }
 
@@ -6385,7 +6471,7 @@ async function saveAIChecks() {
     for (var i = 0; i < payloads.length; i++) {
       await boApiCall('PUT', '/config/verification-checks', payloads[i]);
     }
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'AI verification checks updated', ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Checks', detail:'AI verification checks updated', ip:'client' });
     renderAIChecks();
     showToast('✅ AI verification checks saved — ' + document.getElementById('total-checks-count').textContent + ' checks active');
   } catch (err) {
@@ -6499,7 +6585,7 @@ function toggleAgent(idx, el) {
   AI_AGENTS[idx].enabled = !AI_AGENTS[idx].enabled;
   el.classList.toggle('on');
   var state = AI_AGENTS[idx].enabled ? 'enabled' : 'disabled';
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'Agent ' + AI_AGENTS[idx].id + ' ' + state, ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'Agent ' + AI_AGENTS[idx].id + ' ' + state, ip:'client' });
   showToast('Agent ' + AI_AGENTS[idx].id + ': ' + AI_AGENTS[idx].name + ' ' + state);
 }
 
@@ -6521,14 +6607,14 @@ function addNewAgent() {
     checks:['Define first check']
   });
   renderAgentsPipeline();
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'Added new Agent ' + newId, ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'Added new Agent ' + newId, ip:'client' });
   showToast('New agent added — configure it below');
 }
 
 function deleteAgent(agentIdx) {
   if (!confirm('Delete Agent ' + AI_AGENTS[agentIdx].id + ': ' + AI_AGENTS[agentIdx].name + '? This cannot be undone.')) return;
   var removed = AI_AGENTS.splice(agentIdx, 1);
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'Deleted Agent ' + removed[0].id + ': ' + removed[0].name, ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'Deleted Agent ' + removed[0].id + ': ' + removed[0].name, ip:'client' });
   renderAgentsPipeline();
   showToast('Agent deleted');
 }
@@ -6550,7 +6636,7 @@ function saveAgents() {
   document.querySelectorAll('.agent-check-input').forEach(function(el) {
     AI_AGENTS[parseInt(el.dataset.agent)].checks[parseInt(el.dataset.check)] = el.value;
   });
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'AI agent pipeline configuration updated', ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'AI Agents', detail:'AI agent pipeline configuration updated', ip:'client' });
   // Sync each agent to API
   if (BO_AUTH_TOKEN) {
     var savePromises = AI_AGENTS.map(function(agent) {
@@ -6844,7 +6930,7 @@ function runGoldenTest(idx) {
   setTimeout(function() {
     var score = (88 + Math.random() * 11).toFixed(1);
     showToast('✅ ' + agent.name + ' scored ' + score + '% on golden dataset (' + agent.checks.length + ' test cases)');
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Test', target:'Agent Health', detail:'Golden dataset test for ' + agent.name + ': ' + score + '%', ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Test', target:'Agent Health', detail:'Golden dataset test for ' + agent.name + ': ' + score + '%', ip:'client' });
   }, 2000);
 }
 
@@ -6862,7 +6948,7 @@ function exportAgentHealthReport() {
   a.href = url; a.download = 'agent_health_report_' + new Date().toISOString().slice(0,10) + '.csv';
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
   showToast('Agent health report exported as CSV');
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:'Agent Health', detail:'Exported agent health report', ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:'Agent Health', detail:'Exported agent health report', ip:'client' });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -6872,7 +6958,7 @@ function signOut() {
   // httpOnly session cookie cleared by server on logout; no JS cookie to expire
   BO_AUTH_TOKEN = '';
   BO_AUTH_USER = null;
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Logout', target:'System', detail:'Signed out', ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Logout', target:'System', detail:'Signed out', ip:'client' });
   showToast('Signed out successfully');
   showLoginScreen();
 }
@@ -6939,7 +7025,7 @@ async function handleLogin(e) {
     if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){return w[0];}).join('');
     document.body.className = 'role-' + (currentUser.role || 'admin');
 
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Login', target:'System', detail: isOffline ? 'Signed in (Demo Mode — backend offline)' : 'Signed in via login page', ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Login', target:'System', detail: isOffline ? 'Signed in (Demo Mode — backend offline)' : 'Signed in via login page', ip:'client' });
 
     if (!isOffline) { await loadFromAPI(); }
     populateOfficerDropdowns();
@@ -7607,7 +7693,7 @@ function saveReviewSchedule() {
   REVIEW_SCHEDULE.MEDIUM.months = parseInt(document.getElementById('review-medium-months').value) || 24;
   REVIEW_SCHEDULE.HIGH.months = parseInt(document.getElementById('review-high-months').value) || 12;
   REVIEW_SCHEDULE.VERY_HIGH.months = parseInt(document.getElementById('review-vhigh-months').value) || 6;
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Review Schedule', detail:'Updated: Low=' + REVIEW_SCHEDULE.LOW.months + 'm, Med=' + REVIEW_SCHEDULE.MEDIUM.months + 'm, High=' + REVIEW_SCHEDULE.HIGH.months + 'm, VHigh=' + REVIEW_SCHEDULE.VERY_HIGH.months + 'm', ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'Review Schedule', detail:'Updated: Low=' + REVIEW_SCHEDULE.LOW.months + 'm, Med=' + REVIEW_SCHEDULE.MEDIUM.months + 'm, High=' + REVIEW_SCHEDULE.HIGH.months + 'm, VHigh=' + REVIEW_SCHEDULE.VERY_HIGH.months + 'm', ip:'client' });
   showToast('✅ Review schedule saved — reminders will trigger accordingly');
 }
 
@@ -7641,7 +7727,7 @@ async function saveSystemSettings() {
 
   try {
     await boApiCall('PUT', '/config/system-settings', payload);
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'System Settings', detail:'System settings updated', ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Config', target:'System Settings', detail:'System settings updated', ip:'client' });
     showToast('✅ Settings saved successfully');
   } catch (e) {
     console.warn('Could not save system settings:', e);
@@ -7671,7 +7757,7 @@ async function downloadResource(resourceId) {
     link.remove();
     setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
 
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'View', target:'Resources', detail:'Viewed resource: ' + resourceId, ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'View', target:'Resources', detail:'Viewed resource: ' + resourceId, ip:'client' });
     showToast('Opening resource...');
   } catch (e) {
     console.warn('Resource download failed:', e);
@@ -7698,7 +7784,7 @@ async function handleResourceUpload(input) {
     var names = (data.uploaded || []).map(function(r) { return r.file_name || r.title; }).join(', ');
     await loadFromAPI();
     renderResources();
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Upload', target:'Resources', detail:'Uploaded: ' + names, ip:'196.192.44.12' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Upload', target:'Resources', detail:'Uploaded: ' + names, ip:'client' });
     showToast('Uploaded ' + (data.count || input.files.length) + ' file(s) successfully');
   } catch (e) {
     console.warn('Resource upload failed:', e);
@@ -9027,7 +9113,7 @@ function downloadRiskCSV() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   showToast('CSV report downloaded');
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:app.ref, detail:'Risk computation CSV exported', ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:app.ref, detail:'Risk computation CSV exported', ip:'client' });
 }
 
 function downloadRiskPDF() {
@@ -9209,7 +9295,7 @@ function downloadRiskPDF() {
   w.document.close();
 
   showToast('PDF report opened — use Print / Save as PDF');
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:app.ref, detail:'Risk computation PDF (full audit trail) exported', ip:'196.192.44.12' });
+  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Export', target:app.ref, detail:'Risk computation PDF (full audit trail) exported', ip:'client' });
 }
 </script>
 </body>
