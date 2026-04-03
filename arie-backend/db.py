@@ -2969,6 +2969,53 @@ def seed_initial_data(db: DBConnection):
     logger.info("Database seeded with initial data")
 
 
+def normalize_legacy_doc_types(db: DBConnection):
+    """
+    Idempotent migration: normalize legacy portal-style doc_type values in the
+    documents table to canonical backend values.
+
+    Runs on every startup. Only updates rows whose doc_type matches a known
+    legacy key; already-canonical rows are untouched.
+    """
+    _DOC_TYPE_NORMALIZE = {
+        "doc-coi": "cert_inc", "doc-memarts": "memarts", "doc-shareholders": "reg_sh",
+        "doc-directors-reg": "reg_dir", "doc-financials": "fin_stmt", "doc-proof-address": "poa",
+        "doc-board-res": "board_res", "doc-structure-chart": "structure_chart",
+        "doc-bank-ref": "bankref", "doc-license-cert": "licence",
+        "doc-contracts": "contracts", "doc-source-wealth-proof": "source_wealth",
+        "doc-source-funds-proof": "source_funds", "doc-bank-statements": "bank_statements",
+        "doc-aml-policy": "aml_policy",
+    }
+    total_updated = 0
+    for old_type, new_type in _DOC_TYPE_NORMALIZE.items():
+        try:
+            db.execute(
+                "UPDATE documents SET doc_type=? WHERE doc_type=?",
+                (new_type, old_type)
+            )
+            # rowcount is not always reliable across DB adapters, so we count separately
+            count_row = db.execute(
+                "SELECT COUNT(*) as cnt FROM documents WHERE doc_type=?",
+                (old_type,)
+            ).fetchone()
+            # If the count is 0 after update, the update worked (or there were none)
+        except Exception as e:
+            logger.warning(f"normalize_legacy_doc_types: failed to update {old_type} -> {new_type}: {e}")
+    # Log summary
+    remaining = 0
+    for old_type in _DOC_TYPE_NORMALIZE:
+        try:
+            row = db.execute("SELECT COUNT(*) as cnt FROM documents WHERE doc_type=?", (old_type,)).fetchone()
+            remaining += (row["cnt"] if row else 0)
+        except Exception:
+            pass
+    db.commit()
+    if remaining == 0:
+        logger.info("normalize_legacy_doc_types: all document types are canonical (no legacy values remaining)")
+    else:
+        logger.warning(f"normalize_legacy_doc_types: {remaining} legacy doc_type rows still remain after migration")
+
+
 def sync_ai_checks_from_seed(db: DBConnection):
     """
     Upsert the canonical ai_checks seed on every startup.
