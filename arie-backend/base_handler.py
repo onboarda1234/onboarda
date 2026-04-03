@@ -265,13 +265,18 @@ class BaseHandler(tornado.web.RequestHandler):
         return True
 
     def write_error(self, status_code, **kwargs):
-        """Cross-cutting: Safe error responses — no stack traces in production."""
-        if ENVIRONMENT == "production":
-            self.write({"error": self._reason or "Internal server error", "status": status_code})
-        else:
-            # In dev, include more detail for debugging
-            import traceback
-            error_detail = ""
-            if "exc_info" in kwargs:
-                error_detail = traceback.format_exception(*kwargs["exc_info"])[-1].strip()
-            self.write({"error": self._reason or "Internal server error", "status": status_code, "detail": error_detail})
+        """Cross-cutting: Safe error responses — no stack traces or DB internals in any environment."""
+        import traceback
+        error_msg = self._reason or "Internal server error"
+        if "exc_info" in kwargs:
+            exc_type, exc_value, _ = kwargs["exc_info"]
+            # Log full detail server-side for debugging
+            logger.error("Unhandled exception in %s: %s", self.__class__.__name__,
+                         traceback.format_exception(*kwargs["exc_info"])[-1].strip())
+            # Never expose raw DB errors, constraint names, or row data to the client
+            if ENVIRONMENT not in ("production", "demo", "staging"):
+                # Local dev only: include exception type (not message, which may contain row data)
+                self.write({"error": error_msg, "status": status_code,
+                            "debug_type": f"{exc_type.__module__}.{exc_type.__name__}" if exc_type else ""})
+                return
+        self.write({"error": error_msg, "status": status_code})

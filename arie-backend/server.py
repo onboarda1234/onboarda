@@ -3480,6 +3480,8 @@ class UsersHandler(BaseHandler):
         db.close()
         self.success({"users": [dict(r) for r in rows]})
 
+    VALID_ROLES = ("admin", "sco", "co", "analyst")
+
     def post(self):
         user = self.require_auth(roles=["admin"])
         if not user:
@@ -3487,9 +3489,21 @@ class UsersHandler(BaseHandler):
 
         data = self.get_json()
         email = data.get("email", "").strip().lower()
-        name = data.get("full_name", "")
+        name = data.get("full_name", "").strip()
         role = data.get("role", "analyst")
         password = data.get("password", "")
+
+        if not email or not name:
+            return self.error("Email and full name required")
+
+        # Validate email format
+        if "@" not in email or "." not in email.split("@")[-1]:
+            return self.error("Invalid email format", 400)
+
+        # Validate role
+        if role not in self.VALID_ROLES:
+            return self.error(f"Invalid role. Must be one of: {', '.join(self.VALID_ROLES)}", 400)
+
         if not password:
             password = PasswordPolicy.generate_temporary()
             must_change_password = True
@@ -3499,20 +3513,21 @@ class UsersHandler(BaseHandler):
             if not is_valid:
                 return self.error(f"Password policy violation: {pw_error}", 400)
 
-        if not email or not name:
-            return self.error("Email and full name required")
-
         db = get_db()
         exists = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
         if exists:
             db.close()
-            return self.error("Email already exists")
+            return self.error("Email already exists", 400)
 
         user_id = uuid.uuid4().hex[:16]
         pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        db.execute("INSERT INTO users (id, email, password_hash, full_name, role) VALUES (?,?,?,?,?)",
-                    (user_id, email, pw_hash, name, role))
-        db.commit()
+        try:
+            db.execute("INSERT INTO users (id, email, password_hash, full_name, role) VALUES (?,?,?,?,?)",
+                        (user_id, email, pw_hash, name, role))
+            db.commit()
+        except Exception:
+            db.close()
+            return self.error("Failed to create user", 500)
         db.close()
 
         self.log_audit(user, "Create User", name, f"New user added as {role}")
@@ -3521,25 +3536,52 @@ class UsersHandler(BaseHandler):
 
 class UserDetailHandler(BaseHandler):
     """PUT /api/users/:id — update user"""
+
+    VALID_ROLES = ("admin", "sco", "co", "analyst")
+    VALID_STATUSES = ("active", "inactive")
+
     def put(self, user_id):
         user = self.require_auth(roles=["admin"])
         if not user:
             return
 
+        # Prevent self-modification (avoid admin lockout)
+        if user_id == user.get("sub"):
+            return self.error("Cannot modify your own account", 403)
+
         data = self.get_json()
+
+        # Validate role
+        new_role = data.get("role")
+        if new_role and new_role not in self.VALID_ROLES:
+            return self.error(f"Invalid role. Must be one of: {', '.join(self.VALID_ROLES)}", 400)
+
+        # Validate status
+        new_status = data.get("status")
+        if new_status and new_status not in self.VALID_STATUSES:
+            return self.error(f"Invalid status. Must be one of: {', '.join(self.VALID_STATUSES)}", 400)
+
         db = get_db()
         u = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
         if not u:
             db.close()
             return self.error("User not found", 404)
 
-        db.execute("UPDATE users SET full_name=?, role=?, status=?, updated_at=datetime('now') WHERE id=?",
-                   (data.get("full_name", u["full_name"]), data.get("role", u["role"]),
-                    data.get("status", u["status"]), user_id))
-        db.commit()
+        updated_name = data.get("full_name", u["full_name"])
+        updated_role = new_role or u["role"]
+        updated_status = new_status or u["status"]
+
+        try:
+            db.execute("UPDATE users SET full_name=?, role=?, status=?, updated_at=datetime('now') WHERE id=?",
+                       (updated_name, updated_role, updated_status, user_id))
+            db.commit()
+        except Exception:
+            db.close()
+            return self.error("Failed to update user", 500)
         db.close()
 
-        self.log_audit(user, "Update User", u["full_name"], f"Updated: role={data.get('role')}, status={data.get('status')}")
+        self.log_audit(user, "Update User", u["full_name"],
+                       f"Updated: role={u['role']}→{updated_role}, status={u['status']}→{updated_status}, name={u['full_name']}→{updated_name}")
         self.success({"status": "updated"})
 
 
