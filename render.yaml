@@ -80,6 +80,19 @@ services:
         value: "true"
       - key: ENABLE_REAL_SCREENING
         value: "true"
+      # ── Production feature flags (completed features — managed in dashboard) ──
+      - key: ENABLE_PHASE2_FEATURES
+        sync: false
+      - key: ENABLE_MONITORING_DASHBOARD
+        sync: false
+      - key: ENABLE_REGULATORY_INTELLIGENCE_FULL
+        sync: false
+      - key: ENABLE_AI_SUPERVISOR
+        sync: false
+      - key: ENABLE_DOCUMENT_AI_ANALYSIS
+        sync: false
+      - key: ENABLE_SAR_WORKFLOW
+        sync: false
 
   # ─────────────────────────────────────────────────────────────
   # 2. DEMO — Demo Environment (simulated APIs + sample data)
