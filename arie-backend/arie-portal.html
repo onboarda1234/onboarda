@@ -5109,6 +5109,7 @@ function buildUploadPanelHTML(p) {
 
 // ─── Sync Directors/UBOs table to KYC Persons list ───────────
 function syncDirectorsUBOsToKYC() {
+  if (_suppressKYCSync) return;
   var container = document.getElementById('kyc-persons-list');
   if (!container) return;
 
@@ -5167,7 +5168,9 @@ function syncDirectorsUBOsToKYC() {
   // Generate KYC person cards for each director/UBO/Intermediary
   persons.forEach(function(p) {
     var cardId = 'kyc-person-' + p.id;
-    var name = (p.first && p.last) ? (p.first + ' ' + p.last) : (p.type === 'director' ? 'Director' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'UBO') + ' ' + p.id.replace(/[a-z]+/, '');
+    var fullName = [p.first, p.last].filter(Boolean).join(' ').trim();
+    var fallbackLabel = (p.type === 'director' ? 'Director' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'UBO') + ' ' + p.id.replace(/[a-z]+/, '');
+    var name = fullName || fallbackLabel;
     var typeLabel = p.type === 'ubo' ? 'UBO' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'Director';
     var dirActive = p.type === 'director' ? 'active' : '';
     var uboActive = p.type === 'ubo' ? 'active' : '';
@@ -6550,9 +6553,14 @@ function restoreMultiSelect(msId, values) {
   renderMSTags(msId);
 }
 
+var _suppressKYCSync = false;
+
 function restorePartyRows(tbodyId, rows, partyType) {
   var tbody = document.getElementById(tbodyId);
   if (!tbody) return;
+  // Suppress intermediate syncDirectorsUBOsToKYC calls during batch restore
+  // (each addDirectorRow/addUBORow triggers a sync with empty values)
+  _suppressKYCSync = true;
   // Clear existing rows
   tbody.innerHTML = '';
   rows.forEach(function(rowData, idx) {
@@ -6595,6 +6603,7 @@ function restorePartyRows(tbodyId, rows, partyType) {
       lastRow.dataset.personKey = rowData.person_key;
     }
   });
+  _suppressKYCSync = false;
 }
 
 function loadDraft(ref) {
