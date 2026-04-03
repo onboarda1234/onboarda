@@ -172,7 +172,7 @@ cd arie-backend
 python -m pytest tests/ -v
 ```
 
-The test suite contains **995+ tests** across 39 test files covering API endpoints, authentication, risk scoring, validation, supervision, PDF generation, GDPR, integration flows, and more.
+The test suite contains **750+ tests** across 38 test files covering API endpoints, authentication, risk scoring, validation, supervision, PDF generation, GDPR, integration flows, and more.
 
 ### CI Enforcement
 
