@@ -2027,17 +2027,18 @@ def _populate_default_scoring_config(db: 'DBConnection'):
 # ============================================================================
 
 # Metadata used by _migrate_agent_definitions INSERT fallback when rows are missing
+# Format: (name, icon, stage, supervisor_agent_type, risk_dimensions)
 _AGENT_METADATA = {
-    1: ("Identity & Document Integrity Agent", "🔍", "Onboarding"),
-    2: ("External Database Cross-Verification Agent", "🔎", "Onboarding"),
-    3: ("FinCrime Screening Interpretation Agent", "💼", "Onboarding"),
-    4: ("Corporate Structure & UBO Mapping Agent", "🏗️", "Onboarding"),
-    5: ("Compliance Memo & Risk Recommendation Agent", "📝", "Onboarding"),
-    6: ("Periodic Review Preparation Agent", "📅", "Monitoring"),
-    7: ("Adverse Media & PEP Monitoring Agent", "📡", "Monitoring"),
-    8: ("Behaviour & Risk Drift Agent", "📈", "Monitoring"),
-    9: ("Regulatory Impact Agent", "⚖️", "Monitoring"),
-    10: ("Ongoing Compliance Review Agent", "📋", "Monitoring"),
+    1:  ("Identity & Document Integrity Agent", "🔍", "Onboarding", "identity_document_integrity", ["D1"]),
+    2:  ("External Database Cross-Verification Agent", "🔎", "Onboarding", "external_database_verification", ["D1", "D2"]),
+    3:  ("FinCrime Screening Interpretation Agent", "💼", "Onboarding", "fincrime_screening", ["D1"]),
+    4:  ("Corporate Structure & UBO Mapping Agent", "🏗️", "Onboarding", "corporate_structure_ubo", ["D1"]),
+    5:  ("Compliance Memo & Risk Recommendation Agent", "📝", "Onboarding", "compliance_memo_risk", ["D1", "D2", "D3", "D4", "D5"]),
+    6:  ("Periodic Review Preparation Agent", "📅", "Monitoring", "periodic_review_preparation", ["D1"]),
+    7:  ("Adverse Media & PEP Monitoring Agent", "📡", "Monitoring", "adverse_media_pep_monitoring", ["D1"]),
+    8:  ("Behaviour & Risk Drift Agent", "📈", "Monitoring", "behaviour_risk_drift", ["D1", "D5"]),
+    9:  ("Regulatory Impact Agent", "⚖️", "Monitoring", "regulatory_impact", ["D2", "D3"]),
+    10: ("Ongoing Compliance Review Agent", "📋", "Monitoring", "ongoing_compliance_review", ["D1", "D2", "D3", "D4", "D5"]),
 }
 
 _AGENT_DEFINITIONS_V2 = {
@@ -2244,20 +2245,22 @@ def _migrate_agent_definitions(db: DBConnection):
     cleared), falls back to INSERT so the agent is recreated.
     """
     for agent_num, defn in _AGENT_DEFINITIONS_V2.items():
-        result = db.execute(
+        db.execute(
             "UPDATE ai_agents SET description=?, checks=? WHERE agent_number=?",
             (defn["description"], json.dumps(defn["checks"]), agent_num)
         )
         # If UPDATE matched nothing, the row is missing — insert it
-        rows_affected = getattr(result, "rowcount", None)
-        if rows_affected is not None and rows_affected == 0:
+        # db.execute() returns self (DBConnection), cursor is internal
+        rows_affected = getattr(db._cursor, "rowcount", -1) if db._cursor else -1
+        if rows_affected == 0:
             try:
-                meta = _AGENT_METADATA.get(agent_num, (f"Agent {agent_num}", "🤖", "Onboarding"))
+                meta = _AGENT_METADATA.get(agent_num, (f"Agent {agent_num}", "🤖", "Onboarding", None, []))
                 db.execute(
-                    "INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks) "
-                    "VALUES (?,?,?,?,?,?,?)",
+                    "INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks, supervisor_agent_type, risk_dimensions) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
                     (agent_num, meta[0], meta[1], meta[2],
-                     defn["description"], True, json.dumps(defn["checks"]))
+                     defn["description"], True, json.dumps(defn["checks"]),
+                     meta[3], json.dumps(meta[4]))
                 )
                 logger.info(f"Inserted missing agent {agent_num} via migration")
             except Exception as e:
