@@ -3745,6 +3745,9 @@
         <p style="color:var(--text3);font-size:13px;max-width:500px;margin:0 auto;">Please review all uploaded documents and information before final submission. Ensure all required items are complete.</p>
       </div>
 
+      <!-- Pre-Screening Summary -->
+      <div id="review-prescreening-summary" style="margin-bottom:20px;"></div>
+
       <!-- Summary Stats -->
       <div class="review-summary-card" id="review-summary-card">
         <div class="review-stat"><div class="review-stat-num green" id="review-uploaded-count">0</div><div class="review-stat-label">Uploaded</div></div>
@@ -4928,9 +4931,11 @@ async function runRealtimeDocumentIntegrityCheck(docId, fileName) {
   statusEl.innerHTML = '<div style="padding:8px;background:var(--blue-dim);border-radius:6px;color:var(--blue);"><strong>📄 Checking document integrity...</strong></div>';
 
   try {
+    // Normalize doc_type from HTML ID to canonical backend type
+    var apiDocType = (typeof DOC_TYPE_MAP !== 'undefined' && DOC_TYPE_MAP[docId]) ? DOC_TYPE_MAP[docId] : docId;
     // Call API to verify document
     const response = await apiCall('POST', '/documents/ai-verify', {
-      doc_type: docId,
+      doc_type: apiDocType,
       file_name: fileName,
       person_name: '',
       doc_category: 'company'
@@ -5111,6 +5116,7 @@ function buildUploadPanelHTML(p) {
 
 // ─── Sync Directors/UBOs table to KYC Persons list ───────────
 function syncDirectorsUBOsToKYC() {
+  if (_suppressKYCSync) return;
   var container = document.getElementById('kyc-persons-list');
   if (!container) return;
 
@@ -5169,7 +5175,9 @@ function syncDirectorsUBOsToKYC() {
   // Generate KYC person cards for each director/UBO/Intermediary
   persons.forEach(function(p) {
     var cardId = 'kyc-person-' + p.id;
-    var name = (p.first && p.last) ? (p.first + ' ' + p.last) : (p.type === 'director' ? 'Director' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'UBO') + ' ' + p.id.replace(/[a-z]+/, '');
+    var fullName = [p.first, p.last].filter(Boolean).join(' ').trim();
+    var fallbackLabel = (p.type === 'director' ? 'Director' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'UBO') + ' ' + p.id.replace(/[a-z]+/, '');
+    var name = fullName || fallbackLabel;
     var typeLabel = p.type === 'ubo' ? 'UBO' : p.type === 'intermediary' ? 'Intermediary Shareholder' : 'Director';
     var dirActive = p.type === 'director' ? 'active' : '';
     var uboActive = p.type === 'ubo' ? 'active' : '';
@@ -6089,7 +6097,7 @@ var KYC_PERSON_DOC_RULES = {
 };
 
 // Simulate AI verification with realistic delays
-async function runAIDocVerification(docId, fileName) {
+async function runAIDocVerification(docId, fileName, uploadedDocId) {
   var rules = DOC_RULES[docId];
   if (!rules) return;
 
@@ -6105,13 +6113,19 @@ async function runAIDocVerification(docId, fileName) {
   item.appendChild(resultsDiv);
 
   try {
-    // Call real AI verification API
-    var response = await apiCall('POST', '/documents/ai-verify', {
-      doc_type: docId,
+    // Normalize doc_type from HTML ID to canonical backend type
+    var apiDocType = DOC_TYPE_MAP[docId] || docId;
+
+    // Call real AI verification API with full context
+    var payload = {
+      doc_type: apiDocType,
       file_name: fileName,
       person_name: '',
-      doc_category: 'company'
-    });
+      doc_category: 'company',
+      application_id: currentApplicationId || ''
+    };
+    if (uploadedDocId) payload.doc_id = uploadedDocId;
+    var response = await apiCall('POST', '/documents/ai-verify', payload);
 
     var apiChecks = response.checks || [];
     var fails = 0;
@@ -6193,7 +6207,7 @@ async function runAIDocVerification(docId, fileName) {
   }
 }
 
-async function runAIPersonDocVerification(personId, docType, fileName) {
+async function runAIPersonDocVerification(personId, docType, fileName, uploadedDocId) {
   var rules = KYC_PERSON_DOC_RULES[docType];
   if (!rules) return;
 
@@ -6221,13 +6235,16 @@ async function runAIPersonDocVerification(personId, docType, fileName) {
       personName = cardHeader.getAttribute('data-person-name') || '';
     }
 
-    // Call API to verify document
-    var response = await apiCall('POST', '/documents/ai-verify', {
+    // Call API to verify document with full application context
+    var payload = {
       doc_type: docType,
       file_name: fileName,
       person_name: personName,
-      doc_category: 'kyc'
-    });
+      doc_category: 'kyc',
+      application_id: currentApplicationId || ''
+    };
+    if (uploadedDocId) payload.doc_id = uploadedDocId;
+    var response = await apiCall('POST', '/documents/ai-verify', payload);
 
     // Process API response
     var apiChecks = response.checks || [];
@@ -6508,6 +6525,14 @@ function restoreDraftFromData(data) {
       restorePartyRows('intermediaries-body', data.intermediaries, 'intermediary');
     }
 
+    // Sync KYC cards and expand PEP panels for restored party data
+    if (typeof syncDirectorsUBOsToKYC === 'function') {
+      try { syncDirectorsUBOsToKYC(); } catch(e) { console.warn('syncDirectorsUBOsToKYC on restore:', e); }
+    }
+    if (typeof checkPEPAndShowDeclaration === 'function') {
+      try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on restore:', e); }
+    }
+
     // Mark uploaded docs visually
     uploadedDocs.forEach(function(docId) {
       var item = document.getElementById(docId);
@@ -6544,9 +6569,14 @@ function restoreMultiSelect(msId, values) {
   renderMSTags(msId);
 }
 
+var _suppressKYCSync = false;
+
 function restorePartyRows(tbodyId, rows, partyType) {
   var tbody = document.getElementById(tbodyId);
   if (!tbody) return;
+  // Suppress intermediate syncDirectorsUBOsToKYC calls during batch restore
+  // (each addDirectorRow/addUBORow triggers a sync with empty values)
+  _suppressKYCSync = true;
   // Clear existing rows
   tbody.innerHTML = '';
   rows.forEach(function(rowData, idx) {
@@ -6589,6 +6619,7 @@ function restorePartyRows(tbodyId, rows, partyType) {
       lastRow.dataset.personKey = rowData.person_key;
     }
   });
+  _suppressKYCSync = false;
 }
 
 function loadDraft(ref) {
@@ -6658,7 +6689,146 @@ var SECTION_C_DOCS = [
 var SECTION_D_DOCS = [];
 var sectionDCounter = 0;
 
+function _gfv(id) {
+  var el = document.getElementById(id);
+  if (!el) return '';
+  return typeof el.value === 'string' ? el.value.trim() : (el.value || '');
+}
+
+function buildPrescreeningSummary() {
+  var container = document.getElementById('review-prescreening-summary');
+  if (!container) return;
+
+  function esc(s) { return escapeHtml(s || ''); }
+  function row(label, value) {
+    var v = (value || '').toString().trim();
+    if (!v) return '';
+    return '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border1);font-size:12px;">' +
+      '<span style="color:var(--text3);min-width:180px;">' + esc(label) + '</span>' +
+      '<span style="color:var(--text1);font-weight:500;text-align:right;flex:1;word-break:break-word;">' + esc(v) + '</span></div>';
+  }
+  function section(title, icon, content) {
+    if (!content) return '';
+    return '<div style="margin-bottom:14px;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--radius-sm);overflow:hidden;">' +
+      '<div style="font-size:12px;font-weight:700;color:var(--text1);padding:10px 14px;background:var(--surface1);border-bottom:1px solid var(--border2);display:flex;align-items:center;gap:6px;">' + icon + ' ' + esc(title) + '</div>' +
+      '<div style="padding:8px 14px;">' + content + '</div></div>';
+  }
+
+  // Collect values from the live form
+  var entityRows =
+    row('Legal Entity Name', _gfv('f-reg-name')) +
+    row('Trading Name', _gfv('f-trade-name')) +
+    row('Entity Type', _gfv('f-entity-type')) +
+    row('Ownership Structure', _gfv('f-ownership-structure')) +
+    row('Registration / BRN', _gfv('f-brn')) +
+    row('Incorporation Date', _gfv('f-inc-date')) +
+    row('Country of Incorporation', _gfv('f-inc-country')) +
+    row('Registered Address', _gfv('f-reg-address')) +
+    row('Head Office Address', _gfv('f-hq-address')) +
+    row('Website', _gfv('f-website')) +
+    row('Licences', _gfv('f-licences'));
+
+  var contactRows =
+    row('Contact Name', [_gfv('f-contact-first'), _gfv('f-contact-last')].filter(Boolean).join(' ')) +
+    row('Contact Email', _gfv('f-email')) +
+    row('Contact Mobile', [_gfv('f-phone-code'), _gfv('f-mobile')].filter(Boolean).join(' '));
+
+  // Arrays from checkbox grids and multi-selects
+  var services = getCheckboxValues('service-grid');
+  var purposes = getCheckboxValues('purpose-grid');
+  var countries = msState['ms-op-countries'] ? Array.from(msState['ms-op-countries']) : [];
+  var markets = msState['ms-target-markets'] ? Array.from(msState['ms-target-markets']) : [];
+  var currencies = Array.from(document.querySelectorAll('input[name="currencies"]:checked')).map(function(c) { return c.value; });
+
+  var businessRows =
+    row('Business Overview', _gfv('f-biz-overview')) +
+    row('Sector', _gfv('f-sector')) +
+    row('Services Required', services.join(', ')) +
+    row('Account Purposes', purposes.join(', ')) +
+    row('Countries of Operation', countries.join(', ')) +
+    row('Target Markets', markets.join(', ')) +
+    row('Currencies', currencies.join(', ')) +
+    row('Transaction Complexity', _gfv('f-txn-complexity')) +
+    row('Monthly Volume', _gfv('f-monthly-volume'));
+
+  var fundsRows =
+    row('Source of Wealth', _gfv('f-source-wealth-type')) +
+    row('Source of Wealth Detail', _gfv('f-source-wealth')) +
+    row('Initial Source of Funds', _gfv('f-source-init-type')) +
+    row('Initial Funds Detail', _gfv('f-source-init')) +
+    row('Ongoing Source of Funds', _gfv('f-source-ongoing-type')) +
+    row('Ongoing Funds Detail', _gfv('f-source-ongoing'));
+
+  // Directors
+  var dirHtml = '';
+  document.querySelectorAll('#directors-body tr').forEach(function(r) {
+    var texts = r.querySelectorAll('input[type="text"]');
+    var nat = r.querySelector('select.nat-select');
+    var pep = r.querySelector('select.pep-select');
+    var name = [texts[0] ? texts[0].value : '', texts[1] ? texts[1].value : ''].filter(Boolean).join(' ');
+    if (name) dirHtml += '<div style="padding:5px 0;font-size:12px;border-bottom:1px solid var(--border1);">' +
+      '<span style="font-weight:600;color:var(--text1);">' + esc(name) + '</span>' +
+      '<span style="color:var(--text3);margin-left:8px;">' + esc(nat ? nat.value : '') + '</span>' +
+      (pep && pep.value === 'Yes' ? ' <span style="color:#dc2626;font-weight:600;font-size:10px;margin-left:6px;">PEP</span>' : '') +
+      '</div>';
+  });
+
+  // UBOs
+  var uboHtml = '';
+  document.querySelectorAll('#ubos-body tr').forEach(function(r) {
+    var texts = r.querySelectorAll('input[type="text"]');
+    var nat = r.querySelector('select.nat-select');
+    var pep = r.querySelector('select.pep-select');
+    var pct = r.querySelector('input[type="number"]');
+    var name = [texts[0] ? texts[0].value : '', texts[1] ? texts[1].value : ''].filter(Boolean).join(' ');
+    if (name) uboHtml += '<div style="padding:5px 0;font-size:12px;border-bottom:1px solid var(--border1);">' +
+      '<span style="font-weight:600;color:var(--text1);">' + esc(name) + '</span>' +
+      (pct && pct.value ? ' <span style="color:var(--text3);">(' + esc(pct.value) + '%)</span>' : '') +
+      '<span style="color:var(--text3);margin-left:8px;">' + esc(nat ? nat.value : '') + '</span>' +
+      (pep && pep.value === 'Yes' ? ' <span style="color:#dc2626;font-weight:600;font-size:10px;margin-left:6px;">PEP</span>' : '') +
+      '</div>';
+  });
+
+  // Intermediaries
+  var intHtml = '';
+  document.querySelectorAll('#intermediaries-body tr').forEach(function(r) {
+    var text = r.querySelector('input[type="text"]');
+    var nat = r.querySelector('select.nat-select');
+    var pct = r.querySelector('input[type="number"]');
+    var name = text ? text.value : '';
+    if (name) intHtml += '<div style="padding:5px 0;font-size:12px;border-bottom:1px solid var(--border1);">' +
+      '<span style="font-weight:600;color:var(--text1);">' + esc(name) + '</span>' +
+      (pct && pct.value ? ' <span style="color:var(--text3);">(' + esc(pct.value) + '%)</span>' : '') +
+      '<span style="color:var(--text3);margin-left:8px;">' + esc(nat ? nat.value : '') + '</span></div>';
+  });
+
+  var partiesContent = '';
+  if (dirHtml) partiesContent += '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:4px;">Directors</div>' + dirHtml;
+  if (uboHtml) partiesContent += '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;margin:10px 0 4px;">UBOs</div>' + uboHtml;
+  if (intHtml) partiesContent += '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;margin:10px 0 4px;">Intermediary Shareholders</div>' + intHtml;
+
+  // Financial summary
+  var finRows =
+    row('Existing Bank Account', _gfv('f-has-bank')) +
+    row('Bank Name', _gfv('f-bank-name')) +
+    row('Management Overview', _gfv('f-mgmt')) +
+    row('Introduction Method', _gfv('f-intro-method')) +
+    row('Referrer', _gfv('f-referrer-name'));
+
+  var html = '<div style="margin-bottom:8px;font-size:13px;font-weight:700;color:var(--text1);">Pre-Screening Summary</div>' +
+    '<p style="font-size:11px;color:var(--text3);margin:0 0 14px;">Please verify that the information you provided during pre-screening is correct before final submission.</p>' +
+    section('Entity Information', '🏢', entityRows) +
+    section('Contact Details', '📞', contactRows) +
+    section('Business Profile', '📊', businessRows) +
+    section('Source of Funds & Wealth', '💰', fundsRows) +
+    section('Directors, UBOs & Intermediaries', '👥', partiesContent) +
+    section('Additional Information', '📋', finRows);
+
+  container.innerHTML = html;
+}
+
 function buildReviewScreen() {
+  buildPrescreeningSummary();
   var isHighRisk = (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH');
   var uploadedCount = 0;
   var missingCount = 0;
@@ -6920,6 +7090,17 @@ function triggerUpload(docId) {
   document.querySelector('#' + docId + ' .file-input').click();
 }
 
+// Normalize portal HTML IDs to backend canonical doc_type values
+var DOC_TYPE_MAP = {
+  'doc-coi': 'cert_inc', 'doc-memarts': 'memarts', 'doc-shareholders': 'reg_sh',
+  'doc-directors-reg': 'reg_dir', 'doc-financials': 'fin_stmt', 'doc-proof-address': 'poa',
+  'doc-board-res': 'board_res', 'doc-structure-chart': 'structure_chart',
+  'doc-bank-ref': 'bankref', 'doc-license-cert': 'licence',
+  'doc-contracts': 'contracts', 'doc-source-wealth-proof': 'source_wealth',
+  'doc-source-funds-proof': 'source_funds', 'doc-bank-statements': 'bank_statements',
+  'doc-aml-policy': 'aml_policy'
+};
+
 function handleUpload(docId, input) {
   const files = input.files;
   if (!files || files.length === 0) return;
@@ -6933,15 +7114,16 @@ function handleUpload(docId, input) {
   // Upload to API if authenticated
   if (AUTH_TOKEN && currentApplicationId) {
     Promise.all(Array.from(files).map(async function(file) {
+      var apiDocType = DOC_TYPE_MAP[docId] || docId;
       var fd = new FormData();
       fd.append('file', file);
-      fd.append('doc_type', docId);
-      var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(docId), fd, true);
+      fd.append('doc_type', apiDocType);
+      var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(apiDocType), fd, true);
       if (resp.id) {
         try { await apiCall('POST', '/documents/' + resp.id + '/verify'); } catch(e) {}
       }
       return resp;
-    })).then(function() {
+    })).then(function(results) {
       label.textContent = '✓ ' + names;
       item.classList.add('uploaded');
       uploadedDocs.add(docId);
@@ -6950,8 +7132,11 @@ function handleUpload(docId, input) {
       const checks = document.getElementById('doc-ai-checks');
       if (checks) checks.style.display = 'grid';
 
+      // Extract doc_id from the first successful upload response
+      var uploadedDocId = (results && results[0] && results[0].id) ? results[0].id : '';
+
       showToast('success', 'File Uploaded', 'Verification started for: ' + names);
-      runAIDocVerification(docId, names);
+      runAIDocVerification(docId, names, uploadedDocId);
 
       if (docId.includes('passport') || docId.includes('kyc-passport') || docId.includes('identity')) {
         runRealtimePassportValidation(docId, names);
@@ -7950,12 +8135,19 @@ function handleKYCUpload(personId, docType, input) {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN, 'Content-Type': 'application/json' }
         }).catch(function() {});
+        // Run real-time AI verification with doc_id context
+        runAIPersonDocVerification(personId, docType, fileName, resp.id);
+      } else {
+        runAIPersonDocVerification(personId, docType, fileName, '');
       }
-    }).catch(function(err) { console.warn('Intermediary doc upload error:', err); });
+    }).catch(function(err) {
+      console.warn('Intermediary doc upload error:', err);
+      runAIPersonDocVerification(personId, docType, fileName, '');
+    });
+  } else {
+    // No auth — run verification without doc_id
+    runAIPersonDocVerification(personId, docType, fileName, '');
   }
-
-  // Run real-time AI verification on person documents
-  runAIPersonDocVerification(personId, docType, fileName);
 }
 
 // ─── Section D: Add dynamic "Other" documents ─────────────────────────
@@ -8310,10 +8502,11 @@ async function resumeApplication(ref, stage) {
       target = getApplicationView(app.status || stage);
 
       // Restore saved form data from save-resume API
+      var restoredFields = false;
       try {
         var savedSession = await apiCall('GET', '/save-resume?application_id=' + encodeURIComponent(currentApplicationId));
         if (savedSession && savedSession.form_data && typeof savedSession.form_data === 'object') {
-          restoreDraftFromData(savedSession.form_data);
+          restoredFields = restoreDraftFromData(savedSession.form_data);
         }
       } catch (resumeErr) {
         console.warn('No saved session to restore or restore failed:', resumeErr);
@@ -8329,7 +8522,11 @@ async function resumeApplication(ref, stage) {
     const el = document.getElementById(snavId);
     if (el) el.classList.add('active');
   }
-  showToast('info', 'Application Loaded', 'Ref: ' + ref + ' — view restored to the latest saved stage.');
+  if (restoredFields) {
+    showToast('success', 'Draft Restored', 'Ref: ' + ref + ' — your saved form data, documents, and party details have been restored.');
+  } else {
+    showToast('info', 'Application Loaded', 'Ref: ' + ref + ' — view restored to the latest saved stage.');
+  }
 }
 
 function renderSidebarApps(apps) {

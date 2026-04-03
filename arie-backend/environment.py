@@ -97,7 +97,7 @@ _DEFAULT_FLAGS = {
         "ENABLE_REGULATORY_INTELLIGENCE_FULL": True,
         "ENABLE_MONITORING_DASHBOARD": True,
         "ENABLE_SAR_WORKFLOW": True,
-        "ENABLE_AI_SUPERVISOR": False,
+        "ENABLE_AI_SUPERVISOR": True,
         "ENABLE_KPI_DEMO_DATA": False,
         "ENABLE_DOCUMENT_AI_ANALYSIS": True,
         "ENABLE_SUMSUB_LIVE": True,
@@ -114,11 +114,11 @@ _DEFAULT_FLAGS = {
         "ENABLE_DEMO_DATA_SEEDING": False,
         "ENABLE_MOCK_FALLBACKS": False,
         "ENABLE_ROLE_SWITCHER": False,
-        "ENABLE_PHASE2_FEATURES": False,
-        "ENABLE_REGULATORY_INTELLIGENCE_FULL": False,
-        "ENABLE_MONITORING_DASHBOARD": False,  # Until real analytics wired
+        "ENABLE_PHASE2_FEATURES": True,
+        "ENABLE_REGULATORY_INTELLIGENCE_FULL": True,
+        "ENABLE_MONITORING_DASHBOARD": True,
         "ENABLE_SAR_WORKFLOW": True,
-        "ENABLE_AI_SUPERVISOR": False,
+        "ENABLE_AI_SUPERVISOR": True,
         "ENABLE_KPI_DEMO_DATA": False,
         "ENABLE_DOCUMENT_AI_ANALYSIS": True,
         "ENABLE_SUMSUB_LIVE": True,
@@ -175,8 +175,8 @@ class FeatureFlags:
         safe_keys = [
             "ENABLE_DEMO_MODE", "ENABLE_DEMO_BANNER", "ENABLE_PHASE2_FEATURES",
             "ENABLE_REGULATORY_INTELLIGENCE_FULL", "ENABLE_MONITORING_DASHBOARD",
-            "ENABLE_SAR_WORKFLOW", "ENABLE_KPI_DEMO_DATA", "ENABLE_ROLE_SWITCHER",
-            "ENABLE_DOCUMENT_AI_ANALYSIS",
+            "ENABLE_SAR_WORKFLOW", "ENABLE_AI_SUPERVISOR", "ENABLE_KPI_DEMO_DATA",
+            "ENABLE_ROLE_SWITCHER", "ENABLE_DOCUMENT_AI_ANALYSIS",
         ]
         return {k: self._cache.get(k, False) for k in safe_keys}
 

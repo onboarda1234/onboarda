@@ -871,12 +871,14 @@ def get_db():
 
 def init_db():
     """Initialize database schema and seed initial data."""
-    from db import seed_initial_data, sync_ai_checks_from_seed
+    from db import seed_initial_data, sync_ai_checks_from_seed, normalize_legacy_doc_types
     db_init_db()
     db = get_db()
     try:
         seed_initial_data(db)
         db.commit()
+        # Normalize any legacy portal-style doc_type values in documents table
+        normalize_legacy_doc_types(db)
         # Upsert canonical ai_checks on every startup so stale rows on
         # existing databases (staging/prod) are always brought up to date.
         sync_ai_checks_from_seed(db)
@@ -1794,7 +1796,7 @@ class SubmitApplicationHandler(BaseHandler):
         if country in SANCTIONED_COUNTRIES_FULL:
             db.close()
             return self.error(
-                "ARIE Finance cannot onboard clients involved in sanctioned or prohibited jurisdictions.",
+                f"{BRAND['portal_name']} cannot onboard clients involved in sanctioned or prohibited jurisdictions.",
                 403
             )
 
@@ -2372,6 +2374,18 @@ class DocumentUploadHandler(BaseHandler):
         doc_type = self.get_argument("doc_type", "general")
         person_id = self.get_argument("person_id", None)
 
+        # Defense-in-depth: normalize portal HTML IDs to canonical doc_type values
+        _DOC_TYPE_NORMALIZE = {
+            "doc-coi": "cert_inc", "doc-memarts": "memarts", "doc-shareholders": "reg_sh",
+            "doc-directors-reg": "reg_dir", "doc-financials": "fin_stmt", "doc-proof-address": "poa",
+            "doc-board-res": "board_res", "doc-structure-chart": "structure_chart",
+            "doc-bank-ref": "bankref", "doc-license-cert": "licence",
+            "doc-contracts": "contracts", "doc-source-wealth-proof": "source_wealth",
+            "doc-source-funds-proof": "source_funds", "doc-bank-statements": "bank_statements",
+            "doc-aml-policy": "aml_policy",
+        }
+        doc_type = _DOC_TYPE_NORMALIZE.get(doc_type, doc_type)
+
         db.execute("""
             INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, s3_key, file_size, mime_type)
             VALUES (?,?,?,?,?,?,?,?,?)
@@ -2417,10 +2431,32 @@ class DocumentVerifyHandler(BaseHandler):
         checks = []
         all_passed = True
 
-        # Resolve file path
+        # Resolve file path — prefer local, fallback to S3 download
         file_path = doc.get("file_path", "")
         if file_path and not os.path.isabs(file_path):
             file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
+
+        file_source = "none"
+        if file_path and os.path.isfile(file_path):
+            file_source = "local"
+        elif doc.get("s3_key") and HAS_S3:
+            # S3 fallback: local file missing (e.g. after container redeploy) but S3 key exists
+            try:
+                s3 = get_s3_client()
+                s3_ok, s3_data = s3.download_document(doc["s3_key"])
+                if s3_ok and isinstance(s3_data, bytes):
+                    ext = os.path.splitext(doc.get("doc_name", "") or "")[1] or ".bin"
+                    cache_name = f"s3_cache_{doc_id}{ext}"
+                    cache_path = os.path.join(UPLOAD_DIR, cache_name)
+                    with open(cache_path, "wb") as _cf:
+                        _cf.write(s3_data)
+                    file_path = cache_path
+                    file_source = "s3"
+                    logger.info(f"[verify] doc={doc_id} retrieved from S3 ({len(s3_data)} bytes)")
+                else:
+                    logger.warning(f"[verify] doc={doc_id} S3 download failed: {s3_data}")
+            except Exception as s3_err:
+                logger.error(f"[verify] doc={doc_id} S3 fallback error: {s3_err}")
 
         # Get person / entity names for verification cross-checks
         person_name = ""
@@ -2486,6 +2522,15 @@ class DocumentVerifyHandler(BaseHandler):
 
         # For company docs, pass the relevant company entity; for KYC docs, pass person name
         verify_name = (person_name if person_record and person_record.get("person_type") == "intermediary" else entity_name) if doc_category == "company" else person_name
+
+        # Diagnostic logging for verification context
+        logger.info(
+            f"[verify-context] doc={doc_id} app={doc.get('application_id','')} "
+            f"raw_doc_type={raw_doc_type} base_doc_type={base_doc_type} doc_category={doc_category} "
+            f"person_id={doc.get('person_id','')} verify_name={verify_name!r} entity_name={entity_name!r} "
+            f"file_source={file_source} local_exists={os.path.isfile(file_path) if file_path else False} "
+            f"s3_key={'yes' if doc.get('s3_key') else 'no'}"
+        )
 
         # Load check overrides from ai_checks table (hybrid/AI checks only)
         check_overrides = None
@@ -2654,10 +2699,19 @@ class DocumentVerifyHandler(BaseHandler):
         if _CFG_CLAUDE_MOCK_MODE:
             ai_source = "mock"
 
+        # Build system_warning if file was inaccessible
+        system_warning = None
+        if file_source == "none":
+            system_warning = "file_not_accessible"
+        elif not verify_name and doc_category == "company":
+            system_warning = "entity_context_missing"
+
         results = json.dumps({
             "checks": checks,
             "overall": status,
             "ai_source": ai_source,
+            "file_source": file_source,
+            "system_warning": system_warning,
             "verified_at": datetime.utcnow().isoformat(),
             "sanctions_screening": sanctions_result
         }, default=str)
@@ -2765,6 +2819,18 @@ class DocumentAIVerifyHandler(BaseHandler):
         ubos = body.get("ubos", [])
         app_id = body.get("application_id", "")
 
+        # Defense-in-depth: normalize portal HTML IDs to canonical doc_type values
+        _DOC_TYPE_NORMALIZE = {
+            "doc-coi": "cert_inc", "doc-memarts": "memarts", "doc-shareholders": "reg_sh",
+            "doc-directors-reg": "reg_dir", "doc-financials": "fin_stmt", "doc-proof-address": "poa",
+            "doc-board-res": "board_res", "doc-structure-chart": "structure_chart",
+            "doc-bank-ref": "bankref", "doc-license-cert": "licence",
+            "doc-contracts": "contracts", "doc-source-wealth-proof": "source_wealth",
+            "doc-source-funds-proof": "source_funds", "doc-bank-statements": "bank_statements",
+            "doc-aml-policy": "aml_policy",
+        }
+        doc_type = _DOC_TYPE_NORMALIZE.get(doc_type, doc_type)
+
         if not doc_type or not file_name:
             return self.error("doc_type and file_name are required", 400)
 
@@ -2786,11 +2852,11 @@ class DocumentAIVerifyHandler(BaseHandler):
             except Exception as e:
                 logger.warning(f"Could not look up pre-screening data for app {app_id}: {e}")
 
-        # Resolve file path if doc_id provided
+        # Resolve file path if doc_id provided, with S3 fallback
         file_path = None
         if doc_id:
             db = get_db()
-            doc_record = db.execute("SELECT file_path FROM documents WHERE id=?", (doc_id,)).fetchone()
+            doc_record = db.execute("SELECT file_path, s3_key, doc_name, application_id, person_id FROM documents WHERE id=?", (doc_id,)).fetchone()
             db.close()
             if doc_record:
                 fp = doc_record.get("file_path", "")
@@ -2798,6 +2864,40 @@ class DocumentAIVerifyHandler(BaseHandler):
                     file_path = os.path.join(UPLOAD_DIR, os.path.basename(fp))
                 elif fp:
                     file_path = fp
+
+                # S3 fallback: local file missing (e.g. after container redeploy)
+                if (not file_path or not os.path.isfile(file_path)) and doc_record.get("s3_key") and HAS_S3:
+                    try:
+                        s3 = get_s3_client()
+                        s3_ok, s3_data = s3.download_document(doc_record["s3_key"])
+                        if s3_ok and isinstance(s3_data, bytes):
+                            ext = os.path.splitext(doc_record.get("doc_name", "") or "")[1] or ".bin"
+                            cache_name = f"s3_cache_{doc_id}{ext}"
+                            cache_path = os.path.join(UPLOAD_DIR, cache_name)
+                            with open(cache_path, "wb") as _cf:
+                                _cf.write(s3_data)
+                            file_path = cache_path
+                            logger.info(f"[ai-verify] doc={doc_id} retrieved from S3 ({len(s3_data)} bytes)")
+                    except Exception as s3_err:
+                        logger.error(f"[ai-verify] doc={doc_id} S3 fallback error: {s3_err}")
+
+                # Auto-resolve application_id from document record if not provided
+                if not app_id and doc_record.get("application_id"):
+                    app_id = doc_record["application_id"]
+
+                # Auto-resolve person_name from document record if not provided
+                if not person_name and doc_record.get("person_id"):
+                    try:
+                        db2 = get_db()
+                        person_row = db2.execute(
+                            "SELECT full_name FROM directors WHERE id=? UNION SELECT full_name FROM ubos WHERE id=?",
+                            (doc_record["person_id"], doc_record["person_id"])
+                        ).fetchone()
+                        db2.close()
+                        if person_row:
+                            person_name = person_row.get("full_name", "")
+                    except Exception:
+                        pass
 
         # Initialize Claude client
         if not HAS_CLAUDE_CLIENT:
@@ -2846,7 +2946,7 @@ class DocumentAIVerifyHandler(BaseHandler):
             self.success(result)
         except Exception as e:
             logger.error(f"Document AI verification failed: {e}")
-            self.error(f"Verification failed: {str(e)[:200]}", 500)
+            self.error("AI verification temporarily unavailable — please retry or proceed with manual review", 500)
 
 
 # ══════════════════════════════════════════════════════════
@@ -3492,6 +3592,8 @@ class UsersHandler(BaseHandler):
         db.close()
         self.success({"users": [dict(r) for r in rows]})
 
+    VALID_ROLES = ("admin", "sco", "co", "analyst")
+
     def post(self):
         user = self.require_auth(roles=["admin"])
         if not user:
@@ -3499,9 +3601,21 @@ class UsersHandler(BaseHandler):
 
         data = self.get_json()
         email = data.get("email", "").strip().lower()
-        name = data.get("full_name", "")
+        name = data.get("full_name", "").strip()
         role = data.get("role", "analyst")
         password = data.get("password", "")
+
+        if not email or not name:
+            return self.error("Email and full name required")
+
+        # Validate email format
+        if "@" not in email or "." not in email.split("@")[-1]:
+            return self.error("Invalid email format", 400)
+
+        # Validate role
+        if role not in self.VALID_ROLES:
+            return self.error(f"Invalid role. Must be one of: {', '.join(self.VALID_ROLES)}", 400)
+
         if not password:
             password = PasswordPolicy.generate_temporary()
             must_change_password = True
@@ -3511,20 +3625,21 @@ class UsersHandler(BaseHandler):
             if not is_valid:
                 return self.error(f"Password policy violation: {pw_error}", 400)
 
-        if not email or not name:
-            return self.error("Email and full name required")
-
         db = get_db()
         exists = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
         if exists:
             db.close()
-            return self.error("Email already exists")
+            return self.error("Email already exists", 400)
 
         user_id = uuid.uuid4().hex[:16]
         pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        db.execute("INSERT INTO users (id, email, password_hash, full_name, role) VALUES (?,?,?,?,?)",
-                    (user_id, email, pw_hash, name, role))
-        db.commit()
+        try:
+            db.execute("INSERT INTO users (id, email, password_hash, full_name, role) VALUES (?,?,?,?,?)",
+                        (user_id, email, pw_hash, name, role))
+            db.commit()
+        except Exception:
+            db.close()
+            return self.error("Failed to create user", 500)
         db.close()
 
         self.log_audit(user, "Create User", name, f"New user added as {role}")
@@ -3533,25 +3648,52 @@ class UsersHandler(BaseHandler):
 
 class UserDetailHandler(BaseHandler):
     """PUT /api/users/:id — update user"""
+
+    VALID_ROLES = ("admin", "sco", "co", "analyst")
+    VALID_STATUSES = ("active", "inactive")
+
     def put(self, user_id):
         user = self.require_auth(roles=["admin"])
         if not user:
             return
 
+        # Prevent self-modification (avoid admin lockout)
+        if user_id == user.get("sub"):
+            return self.error("Cannot modify your own account", 403)
+
         data = self.get_json()
+
+        # Validate role
+        new_role = data.get("role")
+        if new_role and new_role not in self.VALID_ROLES:
+            return self.error(f"Invalid role. Must be one of: {', '.join(self.VALID_ROLES)}", 400)
+
+        # Validate status
+        new_status = data.get("status")
+        if new_status and new_status not in self.VALID_STATUSES:
+            return self.error(f"Invalid status. Must be one of: {', '.join(self.VALID_STATUSES)}", 400)
+
         db = get_db()
         u = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
         if not u:
             db.close()
             return self.error("User not found", 404)
 
-        db.execute("UPDATE users SET full_name=?, role=?, status=?, updated_at=datetime('now') WHERE id=?",
-                   (data.get("full_name", u["full_name"]), data.get("role", u["role"]),
-                    data.get("status", u["status"]), user_id))
-        db.commit()
+        updated_name = data.get("full_name", u["full_name"])
+        updated_role = new_role or u["role"]
+        updated_status = new_status or u["status"]
+
+        try:
+            db.execute("UPDATE users SET full_name=?, role=?, status=?, updated_at=datetime('now') WHERE id=?",
+                       (updated_name, updated_role, updated_status, user_id))
+            db.commit()
+        except Exception:
+            db.close()
+            return self.error("Failed to update user", 500)
         db.close()
 
-        self.log_audit(user, "Update User", u["full_name"], f"Updated: role={data.get('role')}, status={data.get('status')}")
+        self.log_audit(user, "Update User", u["full_name"],
+                       f"Updated: role={u['role']}→{updated_role}, status={u['status']}→{updated_status}, name={u['full_name']}→{updated_name}")
         self.success({"status": "updated"})
 
 

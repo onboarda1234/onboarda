@@ -2026,7 +2026,48 @@ def _populate_default_scoring_config(db: 'DBConnection'):
 # Seed Data
 # ============================================================================
 
+# Metadata used by _migrate_agent_definitions INSERT fallback when rows are missing
+# Format: (name, icon, stage, supervisor_agent_type, risk_dimensions)
+_AGENT_METADATA = {
+    1:  ("Identity & Document Integrity Agent", "🔍", "Onboarding", "identity_document_integrity", ["D1"]),
+    2:  ("External Database Cross-Verification Agent", "🔎", "Onboarding", "external_database_verification", ["D1", "D2"]),
+    3:  ("FinCrime Screening Interpretation Agent", "💼", "Onboarding", "fincrime_screening", ["D1"]),
+    4:  ("Corporate Structure & UBO Mapping Agent", "🏗️", "Onboarding", "corporate_structure_ubo", ["D1"]),
+    5:  ("Compliance Memo & Risk Recommendation Agent", "📝", "Onboarding", "compliance_memo_risk", ["D1", "D2", "D3", "D4", "D5"]),
+    6:  ("Periodic Review Preparation Agent", "📅", "Monitoring", "periodic_review_preparation", ["D1"]),
+    7:  ("Adverse Media & PEP Monitoring Agent", "📡", "Monitoring", "adverse_media_pep_monitoring", ["D1"]),
+    8:  ("Behaviour & Risk Drift Agent", "📈", "Monitoring", "behaviour_risk_drift", ["D1", "D5"]),
+    9:  ("Regulatory Impact Agent", "⚖️", "Monitoring", "regulatory_impact", ["D2", "D3"]),
+    10: ("Ongoing Compliance Review Agent", "📋", "Monitoring", "ongoing_compliance_review", ["D1", "D2", "D3", "D4", "D5"]),
+}
+
 _AGENT_DEFINITIONS_V2 = {
+    1: {
+        "description": (
+            "Validates authenticity and consistency of uploaded documents against predefined deterministic checks. "
+            "Each document type has a fixed set of checks defined in the rule engine — the AI evaluates each check but does NOT decide what checks to run. "
+            "Covers entity documents (COI, M&A, registers, financials, etc.) and person documents (passport, PoA, CV, bank reference). "
+            "Does NOT do sanctions screening or registry lookups."
+        ),
+        "checks": [
+            "COI: Entity Name Match", "COI: Registration Number", "COI: Document Clarity",
+            "M&A: Entity Name Match", "M&A: Completeness", "M&A: Certification",
+            "Registration: Entity Name Match", "Registration: Current Validity", "Registration: Document Clarity",
+            "Shareholder Register: Ownership Consistency", "Shareholder Register: Completeness", "Shareholder Register: Currency",
+            "Director Register: Director Consistency", "Director Register: Completeness", "Director Register: Clarity",
+            "Financials: Financial Period", "Financials: Entity Name Match", "Financials: Audit Status", "Financials: Completeness",
+            "Board Resolution: Signatory Match", "Board Resolution: Date", "Board Resolution: Scope of Authority",
+            "Structure Chart: UBO Chain", "Structure Chart: Ownership Match", "Structure Chart: Legibility",
+            "Proof of Address: Document Date", "Proof of Address: Entity Name Match", "Proof of Address: Clarity", "Proof of Address: Address Match",
+            "Bank Reference: Letterhead", "Bank Reference: Date", "Bank Reference: Entity Name Match",
+            "Licence: Entity Name Match", "Licence: Validity", "Licence: Issuing Authority",
+            "Passport: Document Expiry", "Passport: Photo Quality", "Passport: Name Match", "Passport: Nationality Match",
+            "Personal PoA: Document Date", "Personal PoA: Name Match", "Personal PoA: Clarity", "Personal PoA: Certification",
+            "CV: Name Match", "CV: Employment History",
+            "Bank Reference (PEP): Date", "Bank Reference (PEP): Name Match", "Bank Reference (PEP): Bank ID",
+            "Bank Reference (PEP): Account Standing", "Bank Reference (PEP): Signatory",
+        ],
+    },
     3: {
         "description": (
             "Policy-bounded screening interpreter. Reads stored screening results from prescreening_data. "
@@ -2162,6 +2203,17 @@ _AGENT_DEFINITIONS_V2 = {
             "Drift narrative and recommendation (hybrid)",
         ],
     },
+    9: {
+        "description": (
+            "Detects when regulatory changes affect existing clients, "
+            "tracks jurisdiction-specific regulations, and alerts on compliance requirement updates."
+        ),
+        "checks": [
+            "Regulatory change monitoring", "Impact assessment on client portfolio",
+            "Jurisdiction-specific regulation tracking", "Compliance requirement updates",
+            "Client-specific regulatory alerts",
+        ],
+    },
     10: {
         "description": (
             "Consolidation agent with AI narrative. Verifies document currency, screening recency, "
@@ -2187,12 +2239,32 @@ _AGENT_DEFINITIONS_V2 = {
 
 
 def _migrate_agent_definitions(db: DBConnection):
-    """Update agent 2/4/5 descriptions and checks to match Wave 1+2 implementations."""
+    """Upsert agent definitions to match Wave 1-4 implementations.
+
+    Uses UPDATE for existing rows; if a row is missing (e.g. demo DB was
+    cleared), falls back to INSERT so the agent is recreated.
+    """
     for agent_num, defn in _AGENT_DEFINITIONS_V2.items():
         db.execute(
             "UPDATE ai_agents SET description=?, checks=? WHERE agent_number=?",
             (defn["description"], json.dumps(defn["checks"]), agent_num)
         )
+        # If UPDATE matched nothing, the row is missing — insert it
+        # db.execute() returns self (DBConnection), cursor is internal
+        rows_affected = getattr(db._cursor, "rowcount", -1) if db._cursor else -1
+        if rows_affected == 0:
+            try:
+                meta = _AGENT_METADATA.get(agent_num, (f"Agent {agent_num}", "🤖", "Onboarding", None, []))
+                db.execute(
+                    "INSERT INTO ai_agents (agent_number, name, icon, stage, description, enabled, checks, supervisor_agent_type, risk_dimensions) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (agent_num, meta[0], meta[1], meta[2],
+                     defn["description"], True, json.dumps(defn["checks"]),
+                     meta[3], json.dumps(meta[4]))
+                )
+                logger.info(f"Inserted missing agent {agent_num} via migration")
+            except Exception as e:
+                logger.warning(f"Could not insert agent {agent_num}: {e}")
     db.commit()
     logger.info("Migrated agent definitions to Wave 1-4 versions")
 
@@ -2378,9 +2450,9 @@ def seed_initial_data(db: DBConnection):
     checks_count = db.execute("SELECT COUNT(*) as c FROM ai_checks").fetchone()["c"]
     risk_count = db.execute("SELECT COUNT(*) as c FROM risk_config").fetchone()["c"]
 
-    # --- Migration: update agent 2/4/5 descriptions & checks (Wave 1+2 alignment) ---
-    if agents_count > 0:
-        _migrate_agent_definitions(db)
+    # --- Migration: upsert agent definitions (Wave 1-4 alignment) ---
+    # Always run: inserts missing agents AND updates existing ones
+    _migrate_agent_definitions(db)
 
     if users_count > 0 and agents_count > 0 and checks_count > 0 and risk_count > 0:
         logger.info("Database already seeded, skipping core initialization")
@@ -2967,6 +3039,53 @@ def seed_initial_data(db: DBConnection):
 
     db.commit()
     logger.info("Database seeded with initial data")
+
+
+def normalize_legacy_doc_types(db: DBConnection):
+    """
+    Idempotent migration: normalize legacy portal-style doc_type values in the
+    documents table to canonical backend values.
+
+    Runs on every startup. Only updates rows whose doc_type matches a known
+    legacy key; already-canonical rows are untouched.
+    """
+    _DOC_TYPE_NORMALIZE = {
+        "doc-coi": "cert_inc", "doc-memarts": "memarts", "doc-shareholders": "reg_sh",
+        "doc-directors-reg": "reg_dir", "doc-financials": "fin_stmt", "doc-proof-address": "poa",
+        "doc-board-res": "board_res", "doc-structure-chart": "structure_chart",
+        "doc-bank-ref": "bankref", "doc-license-cert": "licence",
+        "doc-contracts": "contracts", "doc-source-wealth-proof": "source_wealth",
+        "doc-source-funds-proof": "source_funds", "doc-bank-statements": "bank_statements",
+        "doc-aml-policy": "aml_policy",
+    }
+    total_updated = 0
+    for old_type, new_type in _DOC_TYPE_NORMALIZE.items():
+        try:
+            db.execute(
+                "UPDATE documents SET doc_type=? WHERE doc_type=?",
+                (new_type, old_type)
+            )
+            # rowcount is not always reliable across DB adapters, so we count separately
+            count_row = db.execute(
+                "SELECT COUNT(*) as cnt FROM documents WHERE doc_type=?",
+                (old_type,)
+            ).fetchone()
+            # If the count is 0 after update, the update worked (or there were none)
+        except Exception as e:
+            logger.warning(f"normalize_legacy_doc_types: failed to update {old_type} -> {new_type}: {e}")
+    # Log summary
+    remaining = 0
+    for old_type in _DOC_TYPE_NORMALIZE:
+        try:
+            row = db.execute("SELECT COUNT(*) as cnt FROM documents WHERE doc_type=?", (old_type,)).fetchone()
+            remaining += (row["cnt"] if row else 0)
+        except Exception:
+            pass
+    db.commit()
+    if remaining == 0:
+        logger.info("normalize_legacy_doc_types: all document types are canonical (no legacy values remaining)")
+    else:
+        logger.warning(f"normalize_legacy_doc_types: {remaining} legacy doc_type rows still remain after migration")
 
 
 def sync_ai_checks_from_seed(db: DBConnection):

@@ -98,7 +98,7 @@ DEMO_MODE             # "true" for demo environment
 
 ### Demo Credentials
 - Email: `asudally@onboarda.com`
-- Password: `Onboarda2026!`
+- Passwords: Set via environment variables (`DEMO_PORTAL_PASSWORD`, `DEMO_BACKOFFICE_PASSWORD`, `DEMO_CLIENT_PASSWORD`) in Render dashboard or `.env`
 
 ## Document Sections (Back Office)
 
