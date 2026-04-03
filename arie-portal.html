@@ -6086,7 +6086,7 @@ var KYC_PERSON_DOC_RULES = {
 };
 
 // Simulate AI verification with realistic delays
-async function runAIDocVerification(docId, fileName) {
+async function runAIDocVerification(docId, fileName, uploadedDocId) {
   var rules = DOC_RULES[docId];
   if (!rules) return;
 
@@ -6102,13 +6102,19 @@ async function runAIDocVerification(docId, fileName) {
   item.appendChild(resultsDiv);
 
   try {
-    // Call real AI verification API
-    var response = await apiCall('POST', '/documents/ai-verify', {
-      doc_type: docId,
+    // Normalize doc_type from HTML ID to canonical backend type
+    var apiDocType = DOC_TYPE_MAP[docId] || docId;
+
+    // Call real AI verification API with full context
+    var payload = {
+      doc_type: apiDocType,
       file_name: fileName,
       person_name: '',
-      doc_category: 'company'
-    });
+      doc_category: 'company',
+      application_id: currentApplicationId || ''
+    };
+    if (uploadedDocId) payload.doc_id = uploadedDocId;
+    var response = await apiCall('POST', '/documents/ai-verify', payload);
 
     var apiChecks = response.checks || [];
     var fails = 0;
@@ -6190,7 +6196,7 @@ async function runAIDocVerification(docId, fileName) {
   }
 }
 
-async function runAIPersonDocVerification(personId, docType, fileName) {
+async function runAIPersonDocVerification(personId, docType, fileName, uploadedDocId) {
   var rules = KYC_PERSON_DOC_RULES[docType];
   if (!rules) return;
 
@@ -6218,13 +6224,16 @@ async function runAIPersonDocVerification(personId, docType, fileName) {
       personName = cardHeader.getAttribute('data-person-name') || '';
     }
 
-    // Call API to verify document
-    var response = await apiCall('POST', '/documents/ai-verify', {
+    // Call API to verify document with full application context
+    var payload = {
       doc_type: docType,
       file_name: fileName,
       person_name: personName,
-      doc_category: 'kyc'
-    });
+      doc_category: 'kyc',
+      application_id: currentApplicationId || ''
+    };
+    if (uploadedDocId) payload.doc_id = uploadedDocId;
+    var response = await apiCall('POST', '/documents/ai-verify', payload);
 
     // Process API response
     var apiChecks = response.checks || [];
@@ -6950,7 +6959,7 @@ function handleUpload(docId, input) {
         try { await apiCall('POST', '/documents/' + resp.id + '/verify'); } catch(e) {}
       }
       return resp;
-    })).then(function() {
+    })).then(function(results) {
       label.textContent = '✓ ' + names;
       item.classList.add('uploaded');
       uploadedDocs.add(docId);
@@ -6959,8 +6968,11 @@ function handleUpload(docId, input) {
       const checks = document.getElementById('doc-ai-checks');
       if (checks) checks.style.display = 'grid';
 
+      // Extract doc_id from the first successful upload response
+      var uploadedDocId = (results && results[0] && results[0].id) ? results[0].id : '';
+
       showToast('success', 'File Uploaded', 'Verification started for: ' + names);
-      runAIDocVerification(docId, names);
+      runAIDocVerification(docId, names, uploadedDocId);
 
       if (docId.includes('passport') || docId.includes('kyc-passport') || docId.includes('identity')) {
         runRealtimePassportValidation(docId, names);
@@ -7959,12 +7971,19 @@ function handleKYCUpload(personId, docType, input) {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN, 'Content-Type': 'application/json' }
         }).catch(function() {});
+        // Run real-time AI verification with doc_id context
+        runAIPersonDocVerification(personId, docType, fileName, resp.id);
+      } else {
+        runAIPersonDocVerification(personId, docType, fileName, '');
       }
-    }).catch(function(err) { console.warn('Intermediary doc upload error:', err); });
+    }).catch(function(err) {
+      console.warn('Intermediary doc upload error:', err);
+      runAIPersonDocVerification(personId, docType, fileName, '');
+    });
+  } else {
+    // No auth — run verification without doc_id
+    runAIPersonDocVerification(personId, docType, fileName, '');
   }
-
-  // Run real-time AI verification on person documents
-  runAIPersonDocVerification(personId, docType, fileName);
 }
 
 // ─── Section D: Add dynamic "Other" documents ─────────────────────────
