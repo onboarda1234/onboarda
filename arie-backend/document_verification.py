@@ -264,9 +264,10 @@ def run_gate_checks(file_path: str, file_size: int, mime_type: str,
     results = []
 
     # GATE-01: File format
+    file_exists = bool(file_path and os.path.isfile(file_path))
     ext = os.path.splitext(file_path)[1].lower() if file_path else ""
     magic_ok = False
-    if file_path and os.path.isfile(file_path):
+    if file_exists:
         try:
             with open(file_path, "rb") as f:
                 header = f.read(8)
@@ -277,16 +278,22 @@ def run_gate_checks(file_path: str, file_size: int, mime_type: str,
         except OSError:
             pass
 
-    mime_ok = mime_type in ALLOWED_MIME_TYPES if mime_type else False
-    ext_ok = ext in ALLOWED_EXTENSIONS
-
-    if (mime_ok or ext_ok) and (magic_ok or not file_path):
-        results.append(_pass("GATE-01", "File Format", CheckClassification.RULE,
-                             f"File format accepted ({ext or mime_type})", rule_type="enum"))
-    else:
+    if not file_exists:
+        # No file available — gate check cannot pass
         results.append(_fail("GATE-01", "File Format", CheckClassification.RULE,
-                             f"File format not accepted: {mime_type} / {ext}. "
-                             "Only PDF, JPEG, PNG are allowed.", rule_type="enum"))
+                             "File not accessible for format verification — "
+                             "this is a system issue, not a document problem.",
+                             rule_type="enum"))
+    else:
+        mime_ok = mime_type in ALLOWED_MIME_TYPES if mime_type else False
+        ext_ok = ext in ALLOWED_EXTENSIONS
+        if (mime_ok or ext_ok) and magic_ok:
+            results.append(_pass("GATE-01", "File Format", CheckClassification.RULE,
+                                 f"File format accepted ({ext or mime_type})", rule_type="enum"))
+        else:
+            results.append(_fail("GATE-01", "File Format", CheckClassification.RULE,
+                                 f"File format not accepted: {mime_type} / {ext}. "
+                                 "Only PDF, JPEG, PNG are allowed.", rule_type="enum"))
 
     # GATE-02: File size
     if file_size and file_size > MAX_FILE_SIZE_BYTES:
@@ -299,7 +306,7 @@ def run_gate_checks(file_path: str, file_size: int, mime_type: str,
                              rule_type="numeric"))
 
     # GATE-03: Duplicate detection
-    if file_path and os.path.isfile(file_path):
+    if file_exists:
         try:
             h = hashlib.sha256(open(file_path, "rb").read()).hexdigest()
             if existing_hashes and h in existing_hashes:
@@ -310,11 +317,12 @@ def run_gate_checks(file_path: str, file_size: int, mime_type: str,
                 results.append(_pass("GATE-03", "Duplicate Detection", CheckClassification.RULE,
                                      "No duplicate detected", rule_type="hash"))
         except OSError:
-            results.append(_pass("GATE-03", "Duplicate Detection", CheckClassification.RULE,
+            results.append(_warn("GATE-03", "Duplicate Detection", CheckClassification.RULE,
                                  "Duplicate check skipped — file not accessible", rule_type="hash"))
     else:
-        results.append(_pass("GATE-03", "Duplicate Detection", CheckClassification.RULE,
-                             "Duplicate check skipped — no local file", rule_type="hash"))
+        results.append(_warn("GATE-03", "Duplicate Detection", CheckClassification.RULE,
+                             "Duplicate check skipped — file not accessible (system issue)",
+                             rule_type="hash"))
 
     return results
 
@@ -718,7 +726,12 @@ def verify_document_layered(
                                  f"Verification checks for '{doc_type}' have been retired. "
                                  "Historical records preserved.")])
 
-    # ── Layer 0: Gate checks ──────────────────────────────────────
+    # ── Pre-check: file accessibility ────────────────────────────
+    file_accessible = bool(file_path and os.path.isfile(file_path))
+    if not file_accessible:
+        logger.warning(f"[verify-layered] File not accessible for {doc_type}: file_path={file_path!r}")
+
+    # ── Layer 0: Gate checks ──────���───────────────────────────────
     gate_results = run_gate_checks(file_path or "", file_size, mime_type, existing_hashes)
     all_results.extend(gate_results)
 
@@ -727,10 +740,10 @@ def verify_document_layered(
     if gate_hard_fail:
         return _aggregate(all_results)
 
-    # ── Extract document fields via Claude vision ─────────────────
+    # ── Extract document fields via Claude vision ──────────────���──
     # Claude extracts structured fields; rule engine then evaluates deterministically
     extracted_fields = {}
-    if claude_client and file_path:
+    if claude_client and file_path and file_accessible:
         try:
             extracted_fields = claude_client.extract_document_fields(
                 doc_type=doc_type,
@@ -747,8 +760,14 @@ def verify_document_layered(
     rule_results = run_rule_checks(doc_type, category, extracted_fields, prescreening_data, risk_level)
     all_results.extend(rule_results)
 
-    # ── Layers 2+3: Hybrid and AI checks via Claude ───────────────
-    if claude_client:
+    # ── Layers 2+3: Hybrid and AI checks via Claude ────��──────────
+    if claude_client and not file_accessible:
+        # File not accessible — skip AI analysis, mark as system-level inconclusive
+        all_results.append(_warn("SYS-FILE", "File Access", CheckClassification.RULE,
+                                 "Document file is not accessible — AI verification skipped. "
+                                 "This is a system issue, not a document problem. Manual review required.",
+                                 source="system"))
+    elif claude_client:
         # Determine which checks go to Claude
         if check_overrides:
             # DB overrides take priority, but filter to hybrid/AI only

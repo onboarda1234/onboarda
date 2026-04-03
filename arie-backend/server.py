@@ -2372,6 +2372,18 @@ class DocumentUploadHandler(BaseHandler):
         doc_type = self.get_argument("doc_type", "general")
         person_id = self.get_argument("person_id", None)
 
+        # Defense-in-depth: normalize portal HTML IDs to canonical doc_type values
+        _DOC_TYPE_NORMALIZE = {
+            "doc-coi": "cert_inc", "doc-memarts": "memarts", "doc-shareholders": "reg_sh",
+            "doc-directors-reg": "reg_dir", "doc-financials": "fin_stmt", "doc-proof-address": "poa",
+            "doc-board-res": "board_res", "doc-structure-chart": "structure_chart",
+            "doc-bank-ref": "bankref", "doc-license-cert": "licence",
+            "doc-contracts": "contracts", "doc-source-wealth-proof": "source_wealth",
+            "doc-source-funds-proof": "source_funds", "doc-bank-statements": "bank_statements",
+            "doc-aml-policy": "aml_policy",
+        }
+        doc_type = _DOC_TYPE_NORMALIZE.get(doc_type, doc_type)
+
         db.execute("""
             INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, s3_key, file_size, mime_type)
             VALUES (?,?,?,?,?,?,?,?,?)
@@ -2417,10 +2429,32 @@ class DocumentVerifyHandler(BaseHandler):
         checks = []
         all_passed = True
 
-        # Resolve file path
+        # Resolve file path — prefer local, fallback to S3 download
         file_path = doc.get("file_path", "")
         if file_path and not os.path.isabs(file_path):
             file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
+
+        file_source = "none"
+        if file_path and os.path.isfile(file_path):
+            file_source = "local"
+        elif doc.get("s3_key") and HAS_S3:
+            # S3 fallback: local file missing (e.g. after container redeploy) but S3 key exists
+            try:
+                s3 = get_s3_client()
+                s3_ok, s3_data = s3.download_document(doc["s3_key"])
+                if s3_ok and isinstance(s3_data, bytes):
+                    ext = os.path.splitext(doc.get("doc_name", "") or "")[1] or ".bin"
+                    cache_name = f"s3_cache_{doc_id}{ext}"
+                    cache_path = os.path.join(UPLOAD_DIR, cache_name)
+                    with open(cache_path, "wb") as _cf:
+                        _cf.write(s3_data)
+                    file_path = cache_path
+                    file_source = "s3"
+                    logger.info(f"[verify] doc={doc_id} retrieved from S3 ({len(s3_data)} bytes)")
+                else:
+                    logger.warning(f"[verify] doc={doc_id} S3 download failed: {s3_data}")
+            except Exception as s3_err:
+                logger.error(f"[verify] doc={doc_id} S3 fallback error: {s3_err}")
 
         # Get person / entity names for verification cross-checks
         person_name = ""
@@ -2486,6 +2520,15 @@ class DocumentVerifyHandler(BaseHandler):
 
         # For company docs, pass the relevant company entity; for KYC docs, pass person name
         verify_name = (person_name if person_record and person_record.get("person_type") == "intermediary" else entity_name) if doc_category == "company" else person_name
+
+        # Diagnostic logging for verification context
+        logger.info(
+            f"[verify-context] doc={doc_id} app={doc.get('application_id','')} "
+            f"raw_doc_type={raw_doc_type} base_doc_type={base_doc_type} doc_category={doc_category} "
+            f"person_id={doc.get('person_id','')} verify_name={verify_name!r} entity_name={entity_name!r} "
+            f"file_source={file_source} local_exists={os.path.isfile(file_path) if file_path else False} "
+            f"s3_key={'yes' if doc.get('s3_key') else 'no'}"
+        )
 
         # Load check overrides from ai_checks table (hybrid/AI checks only)
         check_overrides = None
@@ -2654,10 +2697,19 @@ class DocumentVerifyHandler(BaseHandler):
         if _CFG_CLAUDE_MOCK_MODE:
             ai_source = "mock"
 
+        # Build system_warning if file was inaccessible
+        system_warning = None
+        if file_source == "none":
+            system_warning = "file_not_accessible"
+        elif not verify_name and doc_category == "company":
+            system_warning = "entity_context_missing"
+
         results = json.dumps({
             "checks": checks,
             "overall": status,
             "ai_source": ai_source,
+            "file_source": file_source,
+            "system_warning": system_warning,
             "verified_at": datetime.utcnow().isoformat(),
             "sanctions_screening": sanctions_result
         }, default=str)

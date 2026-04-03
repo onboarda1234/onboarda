@@ -3264,6 +3264,14 @@ function buildVerificationResultsHtml(results) {
       var srcLabel = aiSrc === 'mock' ? '⚠️ Mock/Simulated AI Output' : aiSrc === 'error' ? '❌ AI Error — Manual Review Required' : aiSrc === 'unavailable' ? '⏸️ AI Unavailable' : '🔧 ' + aiSrc;
       items.push('<div style="background:' + srcColor + '11;border:1px solid ' + srcColor + ';border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:' + srcColor + ';font-weight:600;">' + srcLabel + '</div>');
     }
+    // System warning banner — distinguishes system failures from document failures
+    var sysWarn = results.system_warning || '';
+    if (sysWarn) {
+      var warnMsg = sysWarn === 'file_not_accessible' ? '⚠ System Issue: Document file was not accessible for analysis. Errors below may reflect missing file access, not actual document problems.'
+                  : sysWarn === 'entity_context_missing' ? '⚠ System Issue: Entity/person context was not available. Name-matching checks may be inaccurate.'
+                  : '⚠ System Issue: ' + sysWarn;
+      items.push('<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:#92400e;font-weight:600;">' + escapeHtml(warnMsg) + '</div>');
+    }
     pushItem('Overall Result', firstMeaningfulDetailValue(results.overall_result, results.result, results.status));
     pushItem('Summary', firstMeaningfulDetailValue(results.summary, results.reason, results.message));
     pushItem('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
