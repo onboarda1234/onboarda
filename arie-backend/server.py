@@ -1074,12 +1074,13 @@ class HealthHandler(BaseHandler):
             db.close()
             health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
         except Exception as e:
-            health["database"] = {"status": "error", "error": str(e)[:200]}
+            logger.error("Health check database error: %s", e)
+            health["database"] = {"status": "error"}
             health["status"] = "degraded"
 
         # External API status — only show if authenticated and is admin
         # Remove integrations section to avoid configuration leakage
-        user = self.get_current_user()
+        user = self.get_current_user_token()
         if user and user.get("role") == "admin":
             health["integrations"] = {
                 "opensanctions": "configured" if OPENSANCTIONS_API_KEY else "simulated",
