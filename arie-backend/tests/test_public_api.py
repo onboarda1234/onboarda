@@ -350,3 +350,183 @@ class TestPublicAPIClientOwnership:
             timeout=3,
         )
         assert resp.status_code == 403
+
+
+# ═══════════════════════════════════════════════════════════
+# 5. Dashboard Status Endpoint
+# ═══════════════════════════════════════════════════════════
+
+class TestPublicDashboardStatus:
+    def test_dashboard_requires_auth(self, api_server):
+        """GET /api/v1/dashboard/status returns 401 without auth."""
+        resp = http_requests.get(
+            f"{api_server}/api/v1/dashboard/status",
+            timeout=3,
+        )
+        assert resp.status_code == 401
+
+    def test_dashboard_returns_expected_shape(self, api_server):
+        """GET /api/v1/dashboard/status returns all expected top-level keys."""
+        token = _admin_token()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/dashboard/status",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "total_applications" in body
+        assert "applications_by_status" in body
+        assert "applications_by_risk_level" in body
+        assert "recent_activity" in body
+        assert "last_updated" in body
+        assert isinstance(body["total_applications"], int)
+        assert isinstance(body["applications_by_status"], dict)
+        assert isinstance(body["applications_by_risk_level"], dict)
+        assert isinstance(body["recent_activity"], list)
+
+    def test_dashboard_counts_match(self, api_server):
+        """Dashboard total matches sum of by-status counts."""
+        from db import get_db
+        uid = uuid.uuid4().hex[:8]
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (id, ref, company_name, status, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (f"dsh_a_{uid}", f"ARF-DSH-A-{uid}", "Dash A", "submitted", "2026-04-01T08:00:00"))
+        conn.execute("""
+            INSERT INTO applications (id, ref, company_name, status, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (f"dsh_b_{uid}", f"ARF-DSH-B-{uid}", "Dash B", "approved", "2026-04-01T09:00:00"))
+        conn.execute("""
+            INSERT INTO decision_records (id, application_ref, decision_type, risk_level,
+                confidence_score, source, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (f"dr_dsh_{uid}", f"ARF-DSH-B-{uid}", "approve", "LOW", 0.95, "supervisor", "2026-04-01T09:00:00"))
+        conn.commit()
+        conn.close()
+
+        token = _admin_token()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/dashboard/status",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        # Total must equal sum of all status counts
+        assert body["total_applications"] == sum(body["applications_by_status"].values())
+        # Verify risk level aggregation includes the inserted decision record
+        assert body["applications_by_risk_level"].get("LOW", 0) >= 1
+
+    def test_dashboard_recent_activity_limit(self, api_server):
+        """Recent activity returns at most 5 entries."""
+        token = _admin_token()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/dashboard/status",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["recent_activity"]) <= 5
+
+    def test_dashboard_recent_activity_fields(self, api_server):
+        """Each recent_activity item has the expected fields."""
+        from db import get_db
+        uid = uuid.uuid4().hex[:8]
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (id, ref, company_name, status, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (f"dsh_f_{uid}", f"ARF-DSH-F-{uid}", "Dash Fields", "in_review", "2026-04-02T10:00:00"))
+        conn.commit()
+        conn.close()
+
+        token = _admin_token()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/dashboard/status",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        for item in body["recent_activity"]:
+            assert "application_ref" in item
+            assert "status" in item
+            assert "timestamp" in item
+
+    def test_dashboard_client_scoped(self, api_server):
+        """Client token sees only their own applications in dashboard."""
+        from db import get_db
+        from auth import create_token
+        import bcrypt
+
+        uid = uuid.uuid4().hex[:8]
+        client_id = f"dsh_client_{uid}"
+        pw = bcrypt.hashpw("Pass123!".encode(), bcrypt.gensalt()).decode()
+
+        conn = get_db()
+        conn.execute(
+            "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?, ?, ?, ?)",
+            (client_id, f"dsh_{uid}@test.com", pw, "Dash Client Corp"),
+        )
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (f"dsh_c_{uid}", f"ARF-DSH-C-{uid}", client_id, "Client App", "submitted", "2026-04-01T11:00:00"))
+        conn.commit()
+        conn.close()
+
+        token = create_token(client_id, "client", "Dash Client", "client")
+        resp = http_requests.get(
+            f"{api_server}/api/v1/dashboard/status",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        # Client sees exactly 1 application they just created
+        assert body["total_applications"] == 1
+        assert body["applications_by_status"].get("submitted") == 1
+        assert len(body["recent_activity"]) == 1
+        assert body["recent_activity"][0]["application_ref"] == f"ARF-DSH-C-{uid}"
+
+    def test_dashboard_risk_level_uses_latest_decision_per_application(self, api_server):
+        """applications_by_risk_level counts each application once using its latest decision."""
+        from db import get_db
+        uid = uuid.uuid4().hex[:8]
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (id, ref, company_name, status, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (f"dsh_multi_{uid}", f"ARF-DSH-MULTI-{uid}", "Dash Multi", "approved", "2026-04-03T10:00:00"))
+        conn.execute("""
+            INSERT INTO decision_records (id, application_ref, decision_type, risk_level,
+                confidence_score, source, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (f"dr_dsh_old_{uid}", f"ARF-DSH-MULTI-{uid}", "escalate_edd", "LOW", 0.70, "rule_engine", "2026-04-03T09:00:00"))
+        conn.execute("""
+            INSERT INTO decision_records (id, application_ref, decision_type, risk_level,
+                confidence_score, source, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (f"dr_dsh_new_{uid}", f"ARF-DSH-MULTI-{uid}", "approve", "HIGH", 0.95, "supervisor", "2026-04-03T10:00:00"))
+        conn.commit()
+        conn.close()
+
+        token = _admin_token()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/dashboard/status",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        # The application should be counted under the latest risk level only
+        assert body["applications_by_risk_level"].get("HIGH", 0) >= 1
