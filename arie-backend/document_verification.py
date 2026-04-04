@@ -941,13 +941,19 @@ def verify_document_layered(
     elif claude_client:
         # Determine which checks go to Claude
         if check_overrides:
-            # DB overrides take priority, but filter to hybrid/AI only
+            # DB overrides take priority — only send hybrid/AI checks to Claude
             ai_hybrid_checks = [c for c in check_overrides
                                  if c.get("classification") in
                                  (CheckClassification.AI, CheckClassification.HYBRID)]
-            # Fallback: if override has no classification, include all
-            if not ai_hybrid_checks:
-                ai_hybrid_checks = check_overrides
+            # Log any checks with missing classification — do NOT send them to Claude
+            unclassified = [c for c in check_overrides if not c.get("classification")]
+            if unclassified:
+                labels = [c.get("label", c.get("id", "?")) for c in unclassified]
+                logger.warning(
+                    f"[verify-layered] {len(unclassified)} check(s) for {doc_type} have no classification "
+                    f"and will NOT be sent to Claude: {labels}. "
+                    f"Fix the ai_checks table or verification_matrix.py to set classification."
+                )
         else:
             ai_hybrid_checks = get_ai_checks_for_doc_type(doc_type, category)
 

@@ -2596,7 +2596,7 @@ async function loadFromAPI() {
             docId: item.doc_type || ('doc-' + String(item.doc_name || 'entity').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
             name: item.doc_name || item.doc_type || 'Untitled Entity Document',
             checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
-              return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content' };
+              return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
             }) : []
           };
         });
@@ -2607,7 +2607,7 @@ async function loadFromAPI() {
             docId: item.doc_type || ('doc-' + String(item.doc_name || 'person').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
             name: item.doc_name || item.doc_type || 'Untitled Person Document',
             checks: Array.isArray(item.checks) ? item.checks.map(function(ch) {
-              return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content' };
+              return { label: ch.label || 'Unnamed Check', rule: ch.rule || '', type: ch.type || 'content', classification: ch.classification || '' };
             }) : []
           };
         });
@@ -3831,7 +3831,7 @@ function renderAuthoritativeAppDetail(app, options) {
       reviewMeta +
       reviewComment +
       '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">' +
-        '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">📥 Download</button>' +
+        '<button class="doc-action-btn accept" onclick="viewBackofficeDocument(\'' + doc.id + '\')">👁️ View</button>' +
         '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">🔄 Re-Verify</button>' +
         '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">✓ Accept</button>' +
         '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">✗ Reject</button>' +
@@ -6265,16 +6265,16 @@ var ENTITY_DOC_CHECKS = [
   { docId:'cert_inc', name:'Certificate of Incorporation', checks:[
     { label:'Entity Name Match', rule:'Company name must match application', type:'name' },
     { label:'Registration Number Match', rule:'Registration number must match the number declared in pre-screening', type:'content' },
-    { label:'Date of Incorporation Match', rule:'Date of incorporation must match pre-screening declaration', type:'age' },
+    { label:'Incorporation Date Match', rule:'Date of incorporation must match pre-screening declaration', type:'age' },
     { label:'Jurisdiction Match', rule:'Jurisdiction/country of incorporation must match pre-screening', type:'content' },
     { label:'Document Clarity', rule:'Document must be legible, certified copy if applicable', type:'quality' },
     { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'memarts', name:'Memorandum of Association', checks:[
     { label:'Entity Name Match', rule:'Company name must match application', type:'name' },
-    { label:'Authorised Share Capital', rule:'Authorised share capital must match the amount declared in pre-screening', type:'content' },
-    { label:'Completeness', rule:'All pages must be present and legible', type:'quality' },
+    { label:'Completeness', rule:'All pages must be present and legible; key MoA sections (objects, capital, subscribers) must be present', type:'quality' },
     { label:'Business Objects / Activities', rule:'Declared business activities must fall within the objects clause of the MoA', type:'ai' },
+    { label:'Authorised Share Capital Match', rule:'Authorised share capital must match the amount declared in pre-screening', type:'content' },
     { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
   { docId:'reg_sh', name:'Shareholder Register', checks:[
@@ -6310,7 +6310,7 @@ var ENTITY_DOC_CHECKS = [
   ]},
   { docId:'bankref', name:'Bank Reference Letter (Entity)', checks:[
     { label:'Bank Letterhead', rule:'Must be on official bank letterhead', type:'quality' },
-    { label:'Date', rule:'Must be dated within the last 3 months', type:'age' },
+    { label:'Document Date', rule:'Must be dated within the last 3 months', type:'age' },
     { label:'Entity Name Match', rule:'Entity name must match application', type:'name' },
     { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
   ]},
@@ -6352,7 +6352,18 @@ var PERSON_DOC_CHECKS = [
   ]},
   { docId:'sow', name:'Source of Wealth Declaration', checks:[
     { label:'Name Match', rule:'Name must match the declared person', type:'name' },
-    { label:'Source of Wealth Evidence', rule:'Document must contain credible evidence supporting the declared source of wealth', type:'ai' },
+    { label:'Supporting Evidence', rule:'Document must contain credible evidence supporting the declared source of wealth', type:'ai' }
+  ]},
+  { docId:'national_id', name:'National ID Card', checks:[
+    { label:'Document Expiry', rule:'ID must not be expired. WARN if expiring within 30 days', type:'expiry' },
+    { label:'Name Match', rule:'Name must match the person declared in the application', type:'name' },
+    { label:'Nationality Match', rule:'Nationality must match declared nationality', type:'content' },
+    { label:'Photo Quality', rule:'Photo must be clear and identifiable', type:'quality' },
+    { label:'Certification', rule:'Must be certified by a notary, lawyer, or accountant', type:'quality' }
+  ]},
+  { docId:'pep_declaration', name:'PEP Declaration Form', checks:[
+    { label:'Completeness', rule:'All mandatory PEP fields must be populated: public function, net worth, origin of funds, period of office', type:'content' },
+    { label:'Source of Wealth Evidence', rule:'Supporting documents must substantiate declared source of wealth', type:'ai' },
     { label:'Consistency / Plausibility', rule:'Declared wealth, function, and source of funds must be internally consistent and plausible', type:'ai' }
   ]}
 ];
@@ -6391,6 +6402,7 @@ function renderCheckTab(type) {
           '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">' +
             '<input class="config-input-md check-label" value="' + ch.label + '" data-type="' + type + '" data-doc="' + di + '" data-check="' + ci + '" style="font-weight:600;" />' +
             '<span class="check-type-badge ' + ch.type + '">' + ch.type + '</span>' +
+            (ch.classification ? '<span style="font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px;background:' + (ch.classification==='rule'?'#16a34a22;color:#16a34a;border:1px solid #16a34a':ch.classification==='hybrid'?'#d9770622;color:#d97706;border:1px solid #d97706':'#7c3aed22;color:#7c3aed;border:1px solid #7c3aed') + ';">' + ch.classification + '</span>' : '') +
           '</div>' +
           '<input class="config-input-lg check-rule" value="' + ch.rule.replace(/"/g, '&quot;') + '" data-type="' + type + '" data-doc="' + di + '" data-check="' + ci + '" style="color:var(--text2);" />' +
         '</div>' +
@@ -7862,17 +7874,19 @@ async function submitBoDocUpload() {
   }
 }
 
-async function downloadBackofficeDocument(docId) {
-  if (!docId) { showToast('Document record is missing a download identifier'); return; }
+async function viewBackofficeDocument(docId) {
+  if (!docId) { showToast('Document record is missing a view identifier'); return; }
   try {
     var data = await boApiCall('GET', '/documents/' + docId + '/download');
     if (data.download_url) {
+      // Open inline in new tab — PDF/images display natively, others gracefully fallback
       window.open(data.download_url, '_blank', 'noopener');
       return;
     }
-    showToast('Document download is not available for this record');
+    // Fallback: try direct view endpoint for local files
+    window.open(BO_API_BASE + '/documents/' + docId + '/view?token=' + encodeURIComponent(BO_AUTH_TOKEN), '_blank', 'noopener');
   } catch (e) {
-    showToast(e.message || 'Document download failed');
+    showToast(e.message || 'Document view failed');
   }
 }
 

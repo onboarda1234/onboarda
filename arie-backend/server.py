@@ -3031,8 +3031,13 @@ class DocumentDownloadHandler(BaseHandler):
         if not file_path or not os.path.exists(file_path):
             return self.error("Document file not found on server", 404)
 
-        self.set_header("Content-Type", doc.get("mime_type") or "application/octet-stream")
-        self.set_header("Content-Disposition", f'attachment; filename="{doc["doc_name"]}"')
+        mime = doc.get("mime_type") or "application/octet-stream"
+        self.set_header("Content-Type", mime)
+        # Inline display for PDF/images so View opens in-browser; fallback to attachment for others
+        if mime in ("application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp"):
+            self.set_header("Content-Disposition", f'inline; filename="{doc["doc_name"]}"')
+        else:
+            self.set_header("Content-Disposition", f'attachment; filename="{doc["doc_name"]}"')
         with open(file_path, "rb") as f:
             self.write(f.read())
         self.log_audit(user, "Download", app["ref"], f"Document downloaded locally: {doc['doc_name']}")
