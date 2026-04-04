@@ -225,7 +225,7 @@ def get_decision_records(
                 "role": row["actor_role"],
             },
             "timestamp": row["timestamp"],
-            "key_flags": _safe_json_loads(row["key_flags"]),
+            "key_flags": _safe_json_loads(row["key_flags"], default=[]),
             "override_flag": bool(row["override_flag"]),
             "override_reason": row["override_reason"],
         }
@@ -376,13 +376,19 @@ def build_from_supervisor_verdict(
 # Internal helpers
 # ============================================================================
 
-def _safe_json_loads(value: Any) -> Any:
-    """Safely parse JSON, returning empty structure on failure."""
+def _safe_json_loads(value: Any, default: Any = None) -> Any:
+    """Safely parse JSON, returning default on failure.
+
+    Args:
+        value: Value to parse (string, dict, list, or None)
+        default: Default to return on None/failure. If not specified,
+                 returns {} for dict-like values, or the raw fallback.
+    """
     if value is None:
-        return {}
+        return default if default is not None else {}
     if isinstance(value, (dict, list)):
         return value
     try:
         return json.loads(value)
     except (json.JSONDecodeError, TypeError):
-        return {}
+        return default if default is not None else {}
