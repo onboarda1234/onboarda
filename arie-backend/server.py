@@ -4205,12 +4205,30 @@ class AuditHandler(BaseHandler):
 class AuditExportHandler(BaseHandler):
     """GET /api/audit/export — export audit_log entries as JSON or CSV."""
 
-    AUDIT_CSV_HEADERS = [
+    _BASE_HEADERS = [
         "id", "timestamp", "user_id", "user_name", "user_role",
         "action", "target", "detail", "ip_address",
+    ]
+    _DECISION_HEADERS = [
         "decision_id", "decision_type", "decision_risk_level",
         "decision_confidence", "decision_source",
     ]
+
+    MAX_EXPORT_ROWS = 10000
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_date(value):
+        """Parse an ISO-8601 date/datetime string. Returns str or None."""
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
+                    "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%fZ",
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(value, fmt)
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+        return None
 
     def get(self):
         user = self.require_auth(roles=["admin", "sco"])
@@ -4226,6 +4244,15 @@ class AuditExportHandler(BaseHandler):
         actor_user_id = self.get_argument("actor_user_id", None)
         action_filter = self.get_argument("action", None)
         include_decisions = self.get_argument("include_decisions", "false").lower() in ("true", "1", "yes")
+
+        if start_date:
+            start_date = self._parse_date(start_date)
+            if start_date is None:
+                return self.error("start_date must be a valid ISO-8601 date", 400)
+        if end_date:
+            end_date = self._parse_date(end_date)
+            if end_date is None:
+                return self.error("end_date must be a valid ISO-8601 date", 400)
 
         db = get_db()
         try:
@@ -4245,17 +4272,18 @@ class AuditExportHandler(BaseHandler):
                 query += " AND action = ?"
                 params.append(action_filter)
 
-            query += " ORDER BY timestamp DESC"
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(self.MAX_EXPORT_ROWS)
+
             rows = db.execute(query, tuple(params)).fetchall()
             entries = [dict(r) for r in rows]
 
-            # Normalise timestamps to ISO format strings
+            # Normalize timestamps to ISO format strings
             for entry in entries:
                 if entry.get("timestamp"):
                     entry["timestamp"] = str(entry["timestamp"])
 
-            # Optionally merge decision_records
-            decision_map = {}
+            # Optionally merge decision_records keyed by application ref
             if include_decisions:
                 d_query = "SELECT * FROM decision_records WHERE 1=1"
                 d_params = []
@@ -4270,15 +4298,15 @@ class AuditExportHandler(BaseHandler):
                     d_params.append(actor_user_id)
                 d_query += " ORDER BY timestamp DESC"
                 d_rows = db.execute(d_query, tuple(d_params)).fetchall()
+                decision_map = {}
                 for dr in d_rows:
                     d = dict(dr)
-                    key = d.get("actor_user_id", "")
+                    key = d.get("application_ref", "")
                     decision_map.setdefault(key, []).append(d)
 
-            if include_decisions:
                 for entry in entries:
-                    uid = entry.get("user_id", "")
-                    decisions = decision_map.get(uid, [])
+                    target = entry.get("target", "")
+                    decisions = decision_map.get(target, [])
                     if decisions:
                         best = decisions[0]
                         entry["decision_id"] = best.get("id", "")
@@ -4302,7 +4330,7 @@ class AuditExportHandler(BaseHandler):
 
     def _write_csv(self, entries, include_decisions):
         import csv, io as _io
-        headers = list(self.AUDIT_CSV_HEADERS) if include_decisions else self.AUDIT_CSV_HEADERS[:9]
+        headers = self._BASE_HEADERS + self._DECISION_HEADERS if include_decisions else list(self._BASE_HEADERS)
         buf = _io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
         writer.writeheader()
@@ -4316,14 +4344,18 @@ class AuditExportHandler(BaseHandler):
 class SupervisorAuditExportHandler(BaseHandler):
     """GET /api/audit/supervisor/export — export supervisor_audit_log entries as JSON or CSV."""
 
-    SUPERVISOR_CSV_HEADERS = [
+    _BASE_HEADERS = [
         "id", "timestamp", "event_type", "severity", "pipeline_id",
         "application_id", "run_id", "agent_type", "actor_type",
         "actor_id", "actor_name", "actor_role", "action", "detail",
         "ip_address", "session_id",
+    ]
+    _DECISION_HEADERS = [
         "decision_id", "decision_type", "decision_risk_level",
         "decision_confidence", "decision_source",
     ]
+
+    MAX_EXPORT_ROWS = 10000
 
     def get(self):
         user = self.require_auth(roles=["admin", "sco"])
@@ -4339,6 +4371,15 @@ class SupervisorAuditExportHandler(BaseHandler):
         actor_user_id = self.get_argument("actor_user_id", None)
         action_filter = self.get_argument("action", None)
         include_decisions = self.get_argument("include_decisions", "false").lower() in ("true", "1", "yes")
+
+        if start_date:
+            start_date = AuditExportHandler._parse_date(start_date)
+            if start_date is None:
+                return self.error("start_date must be a valid ISO-8601 date", 400)
+        if end_date:
+            end_date = AuditExportHandler._parse_date(end_date)
+            if end_date is None:
+                return self.error("end_date must be a valid ISO-8601 date", 400)
 
         db = get_db()
         try:
@@ -4358,11 +4399,13 @@ class SupervisorAuditExportHandler(BaseHandler):
                 query += " AND action = ?"
                 params.append(action_filter)
 
-            query += " ORDER BY timestamp DESC"
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(self.MAX_EXPORT_ROWS)
+
             rows = db.execute(query, tuple(params)).fetchall()
             entries = [dict(r) for r in rows]
 
-            # Normalise timestamps and strip internal hash fields
+            # Normalize timestamps and strip internal hash fields
             for entry in entries:
                 if entry.get("timestamp"):
                     entry["timestamp"] = str(entry["timestamp"])
@@ -4370,9 +4413,22 @@ class SupervisorAuditExportHandler(BaseHandler):
                 entry.pop("entry_hash", None)
                 entry.pop("data_json", None)
 
-            # Optionally merge decision_records by application_id
-            decision_map = {}
+            # Optionally merge decision_records by application_id → application_ref
             if include_decisions:
+                # Build a mapping from application id → ref for correct join
+                app_ids = list({e.get("application_id", "") for e in entries if e.get("application_id")})
+                id_to_ref = {}
+                if app_ids:
+                    placeholders = ",".join("?" for _ in app_ids)
+                    app_rows = db.execute(
+                        f"SELECT id, ref FROM applications WHERE id IN ({placeholders}) OR ref IN ({placeholders})",
+                        tuple(app_ids + app_ids),
+                    ).fetchall()
+                    for ar in app_rows:
+                        row = dict(ar)
+                        id_to_ref[row["id"]] = row["ref"]
+                        id_to_ref[row["ref"]] = row["ref"]
+
                 d_query = "SELECT * FROM decision_records WHERE 1=1"
                 d_params = []
                 if start_date:
@@ -4386,15 +4442,16 @@ class SupervisorAuditExportHandler(BaseHandler):
                     d_params.append(actor_user_id)
                 d_query += " ORDER BY timestamp DESC"
                 d_rows = db.execute(d_query, tuple(d_params)).fetchall()
+                decision_map = {}
                 for dr in d_rows:
                     d = dict(dr)
                     key = d.get("application_ref", "")
                     decision_map.setdefault(key, []).append(d)
 
-            if include_decisions:
                 for entry in entries:
                     app_id = entry.get("application_id", "")
-                    decisions = decision_map.get(app_id, [])
+                    app_ref = id_to_ref.get(app_id, app_id)
+                    decisions = decision_map.get(app_ref, [])
                     if decisions:
                         best = decisions[0]
                         entry["decision_id"] = best.get("id", "")
@@ -4418,7 +4475,7 @@ class SupervisorAuditExportHandler(BaseHandler):
 
     def _write_csv(self, entries, include_decisions):
         import csv, io as _io
-        headers = list(self.SUPERVISOR_CSV_HEADERS) if include_decisions else self.SUPERVISOR_CSV_HEADERS[:16]
+        headers = self._BASE_HEADERS + self._DECISION_HEADERS if include_decisions else list(self._BASE_HEADERS)
         buf = _io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
         writer.writeheader()
