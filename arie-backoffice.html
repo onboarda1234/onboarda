@@ -3724,10 +3724,57 @@ function renderAuthoritativeAppDetail(app, options) {
     '<div class="detail-row"><span class="label">Status</span><span class="value">' + escapeHtml(app.status) + '</span></div>' +
     '<div class="detail-row"><span class="label">Created</span><span class="value">' + escapeHtml(app.date) + '</span></div>';
 
+  // Format nested estimated_monthly_activity object into readable string
+  function formatMonthlyActivity(obj) {
+    if (!obj || typeof obj !== 'object') return '';
+    var parts = [];
+    var inf = obj.inflows || {};
+    var out = obj.outflows || {};
+    if (inf.transactions || inf.min_amount_usd || inf.max_amount_usd) {
+      var ip = [];
+      if (inf.transactions) ip.push(inf.transactions + ' txns');
+      if (inf.min_amount_usd) ip.push('min $' + Number(inf.min_amount_usd).toLocaleString());
+      if (inf.max_amount_usd) ip.push('max $' + Number(inf.max_amount_usd).toLocaleString());
+      if (inf.fx_amount_usd) ip.push('FX $' + Number(inf.fx_amount_usd).toLocaleString());
+      parts.push('Inflows: ' + ip.join(', '));
+    }
+    if (out.transactions || out.min_amount_usd || out.max_amount_usd) {
+      var op = [];
+      if (out.transactions) op.push(out.transactions + ' txns');
+      if (out.min_amount_usd) op.push('min $' + Number(out.min_amount_usd).toLocaleString());
+      if (out.max_amount_usd) op.push('max $' + Number(out.max_amount_usd).toLocaleString());
+      if (out.fx_amount_usd) op.push('FX $' + Number(out.fx_amount_usd).toLocaleString());
+      parts.push('Outflows: ' + op.join(', '));
+    }
+    return parts.join(' | ') || '';
+  }
+  // Format nested financial_forecast object into readable string
+  function formatFinancialForecast(obj) {
+    if (!obj || typeof obj !== 'object') return '';
+    var rows = [];
+    var rev = obj.revenue || {};
+    var cos = obj.cost_of_sales || {};
+    var prf = obj.profit || {};
+    if (rev.year_1 || rev.year_2 || rev.year_3) {
+      rows.push('Revenue: Y1 $' + Number(rev.year_1 || 0).toLocaleString() + ' / Y2 $' + Number(rev.year_2 || 0).toLocaleString() + ' / Y3 $' + Number(rev.year_3 || 0).toLocaleString());
+    }
+    if (cos.year_1 || cos.year_2 || cos.year_3) {
+      rows.push('COGS: Y1 $' + Number(cos.year_1 || 0).toLocaleString() + ' / Y2 $' + Number(cos.year_2 || 0).toLocaleString() + ' / Y3 $' + Number(cos.year_3 || 0).toLocaleString());
+    }
+    if (prf.year_1 || prf.year_2 || prf.year_3) {
+      rows.push('Profit: Y1 $' + Number(prf.year_1 || 0).toLocaleString() + ' / Y2 $' + Number(prf.year_2 || 0).toLocaleString() + ' / Y3 $' + Number(prf.year_3 || 0).toLocaleString());
+    }
+    return rows.join(' | ') || '';
+  }
+
+  // Pre-screening summary fields — ordered to match the portal form flow
   var prescreenFields = [
+    // ── Entity Information ──
+    { label: 'Registered Entity Name', value: detailValueFromAliases(psData, ['registered_entity_name', 'company_name', 'entity_name']) },
     { label: 'Trading Name', value: detailValueFromAliases(psData, ['trading_name', 'trade_name']) },
-    { label: 'Registered Address', value: detailValueFromAliases(psData, ['registered_address', 'reg_address']) },
-    { label: 'Head Office Address', value: detailValueFromAliases(psData, ['headquarters_address', 'hq_address']) },
+    { label: 'Entity Type', value: detailValueFromAliases(psData, ['entity_type']) },
+    { label: 'Ownership Structure', value: detailValueFromAliases(psData, ['ownership_structure']) },
+    // ── Contact ──
     { label: 'Contact Name', value: firstMeaningfulDetailValue(
         [detailValueFromAliases(psData, ['entity_contact_first', 'contact_first']), detailValueFromAliases(psData, ['entity_contact_last', 'contact_last'])].filter(Boolean).join(' '),
         detailValueFromAliases(psData, ['contact_name'])
@@ -3739,23 +3786,31 @@ function renderAuthoritativeAppDetail(app, options) {
         detailValueFromAliases(psData, ['contact_phone'])
       )
     },
+    // ── Address ──
+    { label: 'Registered Address', value: detailValueFromAliases(psData, ['registered_address', 'reg_address']) },
+    { label: 'Head Office Address', value: detailValueFromAliases(psData, ['headquarters_address', 'hq_address']) },
+    // ── Incorporation Details ──
+    { label: 'Incorporation Date', value: detailValueFromAliases(psData, ['incorporation_date']) },
+    { label: 'Country of Incorporation', value: detailValueFromAliases(psData, ['country_of_incorporation', 'country']) },
+    { label: 'Registration / BRN', value: detailValueFromAliases(psData, ['brn', 'registration_number', 'incorporation_number']) },
     { label: 'Website', value: detailValueFromAliases(psData, ['website']) },
+    // ── Licences ──
     { label: 'Licences', value: detailValueFromAliases(psData, ['regulatory_licences', 'licenses', 'licences']) },
+    // ── Business Operations ──
+    { label: 'Business Overview', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['business_overview', 'business_description']), '') },
     { label: 'Services Required', value: detailValueFromAliases(psData, ['services_required']) },
+    { label: 'Monthly Volume', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['monthly_volume', 'expected_monthly_volume']), detailValueFromAliases(psData, ['expected_volume'])) },
+    { label: 'Transaction Complexity', value: detailValueFromAliases(psData, ['transaction_complexity']) },
     { label: 'Countries of Operation', value: detailValueFromAliases(psData, ['countries_of_operation']) },
     { label: 'Target Markets', value: detailValueFromAliases(psData, ['target_markets']) },
     { label: 'Account Purposes', value: detailValueFromAliases(psData, ['account_purposes']) },
-    { label: 'Business Overview', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['business_overview', 'business_description']), detailValueFromAliases(psData, ['management_overview'])) },
-    { label: 'Monthly Volume', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['monthly_volume', 'expected_monthly_volume']), detailValueFromAliases(psData, ['expected_volume'])) },
-    { label: 'Transaction Complexity', value: detailValueFromAliases(psData, ['transaction_complexity']) },
+    { label: 'Existing Bank Account', value: detailValueFromAliases(psData, ['existing_bank_account']) },
+    { label: 'Bank Name', value: detailValueFromAliases(psData, ['existing_bank_name', 'bank_name']) },
+    // ── Currencies ──
     { label: 'Currencies', value: detailValueFromAliases(psData, ['currencies', 'currency']) },
+    // ── Source of Funds & Wealth ──
     { label: 'Source of Wealth', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_type']), detailValueFromAliases(psData, ['source_of_wealth'])) },
-    { label: 'Source of Wealth Detail', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_detail']), detailValueFromAliases(psData, ['source_of_wealth'])) },
-    { label: 'Source of Funds', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_funds']), detailValueFromAliases(psData, ['source_of_funds_initial_detail'])) },
-    { label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']) },
-    { label: 'Referrer', value: detailValueFromAliases(psData, ['referrer_name', 'referrer']) },
-    { label: 'Management Overview', value: detailValueFromAliases(psData, ['management_overview']) },
-    { label: 'Incorporation Date', value: detailValueFromAliases(psData, ['incorporation_date']) },
+    { label: 'Source of Wealth Detail', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['source_of_wealth_detail']), '') },
     { label: 'Source of Funds (Initial)', value: firstMeaningfulDetailValue(
         [detailValueFromAliases(psData, ['source_of_funds_initial_type']), detailValueFromAliases(psData, ['source_of_funds_initial_detail'])].filter(Boolean).join(' — '),
         ''
@@ -3766,8 +3821,15 @@ function renderAuthoritativeAppDetail(app, options) {
         ''
       )
     },
-    { label: 'Estimated Monthly Activity', value: detailValueFromAliases(psData, ['estimated_monthly_activity']) },
-    { label: 'Financial Forecast', value: detailValueFromAliases(psData, ['financial_forecast']) }
+    // ── Estimated Monthly Activity (formatted from nested object) ──
+    { label: 'Estimated Monthly Activity', value: formatMonthlyActivity(psData.estimated_monthly_activity) },
+    // ── Financial Forecast (formatted from nested object) ──
+    { label: 'Financial Forecast', value: formatFinancialForecast(psData.financial_forecast) },
+    // ── Management ──
+    { label: 'Management Overview', value: detailValueFromAliases(psData, ['management_overview']) },
+    // ── Referral ──
+    { label: 'Introduction Method', value: detailValueFromAliases(psData, ['introduction_method']) },
+    { label: 'Referrer', value: detailValueFromAliases(psData, ['referrer_name', 'referrer']) }
   ];
   document.getElementById('detail-prescreen-summary').innerHTML =
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
@@ -3818,9 +3880,7 @@ function renderAuthoritativeAppDetail(app, options) {
 
   document.getElementById('detail-business').innerHTML =
     '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(normalizeDetailValue(app.sector)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">PEPs Identified</span><span class="value">' + escapeHtml(String(app.pepCount)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Existing Bank</span><span class="value">' + escapeHtml(normalizeDetailValue(psData.existing_bank_account)) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Bank Details</span><span class="value">' + escapeHtml(normalizeDetailValue(psData.existing_bank_name)) + '</span></div>';
+    '<div class="detail-row"><span class="label">PEPs Identified</span><span class="value">' + escapeHtml(String(app.pepCount)) + '</span></div>';
 
   var dimLabels = { d1: 'Customer / Entity', d2: 'Geographic', d3: 'Product / Service', d4: 'Industry / Sector', d5: 'Delivery Channel' };
   var riskBarsHtml = '';
