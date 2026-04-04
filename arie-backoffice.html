@@ -773,7 +773,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 <!-- ── Topbar ── -->
 <div class="topbar">
   <div style="display:flex;align-items:center;gap:10px;">
-    <button class="mobile-menu-btn" id="mobile-menu-btn" onclick="toggleMobileMenu()" aria-label="Open navigation menu"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+    <button class="mobile-menu-btn" id="mobile-menu-btn" onclick="toggleMobileMenu()" aria-label="Open navigation menu" aria-expanded="false"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
     <div class="topbar-title" id="topbar-title">Dashboard</div>
   </div>
   <div class="topbar-actions">
@@ -2997,8 +2997,11 @@ function populateOfficerDropdowns() {
 function toggleMobileMenu() {
   var sidebar = document.querySelector('.sidebar');
   var overlay = document.getElementById('mobile-overlay');
+  var btn = document.getElementById('mobile-menu-btn');
   var isOpen = sidebar.classList.toggle('mobile-open');
   if (isOpen) { overlay.classList.add('open'); } else { overlay.classList.remove('open'); }
+  btn.setAttribute('aria-expanded', isOpen);
+  btn.setAttribute('aria-label', isOpen ? 'Close navigation menu' : 'Open navigation menu');
 }
 
 // VIEW MANAGEMENT
