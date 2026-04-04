@@ -8508,6 +8508,49 @@ async function resumeApplication(ref, stage) {
       } catch (resumeErr) {
         console.warn('No saved session to restore or restore failed:', resumeErr);
       }
+
+      // Fallback: if save-resume didn't restore directors/UBOs, populate from prescreening_data
+      var ps = app.prescreening_data || (typeof app.prescreening === 'string' ? JSON.parse(app.prescreening) : app.prescreening) || {};
+      var dirTbody = document.getElementById('directors-body');
+      var uboTbody = document.getElementById('ubos-body');
+      var intTbody = document.getElementById('intermediaries-body');
+      var dirEmpty = !dirTbody || !dirTbody.querySelector('input[type="text"]') || !dirTbody.querySelector('input[type="text"]').value.trim();
+      var uboEmpty = !uboTbody || !uboTbody.querySelector('input[type="text"]') || !uboTbody.querySelector('input[type="text"]').value.trim();
+
+      // Also accept top-level directors/ubos arrays from app data
+      var psDirs = ps.directors || app.directors || [];
+      var psUbos = ps.ubos || app.ubos || [];
+      var psInts = ps.intermediaries || app.intermediaries || [];
+
+      if (dirEmpty && Array.isArray(psDirs) && psDirs.length) {
+        restorePartyRows('directors-body', psDirs.map(function(d) {
+          return { first_name: d.first_name || '', last_name: d.last_name || '', nationality: d.nationality || '', is_pep: d.is_pep || 'No', person_key: d.person_key || '' };
+        }), 'director');
+        restoredFields = true;
+      }
+      if (uboEmpty && Array.isArray(psUbos) && psUbos.length) {
+        restorePartyRows('ubos-body', psUbos.map(function(u) {
+          return { first_name: u.first_name || '', last_name: u.last_name || '', nationality: u.nationality || '', ownership_pct: u.ownership_pct || '', is_pep: u.is_pep || 'No', person_key: u.person_key || '' };
+        }), 'ubo');
+        restoredFields = true;
+      }
+      if (Array.isArray(psInts) && psInts.length) {
+        var intEmpty = !intTbody || !intTbody.querySelector('input[type="text"]') || !intTbody.querySelector('input[type="text"]').value.trim();
+        if (intEmpty) {
+          restorePartyRows('intermediaries-body', psInts.map(function(i) {
+            return { entity_name: i.entity_name || '', jurisdiction: i.jurisdiction || '', ownership_pct: i.ownership_pct || '', person_key: i.person_key || '' };
+          }), 'intermediary');
+          restoredFields = true;
+        }
+      }
+
+      // Sync KYC cards now that party rows are populated
+      if (typeof syncDirectorsUBOsToKYC === 'function') {
+        try { syncDirectorsUBOsToKYC(); } catch(e) { console.warn('syncDirectorsUBOsToKYC on resume:', e); }
+      }
+      if (typeof checkPEPAndShowDeclaration === 'function') {
+        try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on resume:', e); }
+      }
     }
   } catch (err) {
     console.error('Failed to load application detail for resume:', err);
