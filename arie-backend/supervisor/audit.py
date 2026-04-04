@@ -243,7 +243,7 @@ class AuditLogger:
             event_type=AuditEventType.AGENT_RUN_FAILED,
             action=f"Agent {agent_type} run failed",
             detail=error,
-            severity=Severity.ERROR,
+            severity=Severity.HIGH,
             pipeline_id=pipeline_id,
             application_id=application_id,
             run_id=run_id,
