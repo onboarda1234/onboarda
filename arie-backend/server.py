@@ -926,6 +926,7 @@ from public_api import (
     PublicHealthHandler,
     PublicApplicationStatusHandler,
     PublicApplicationDecisionHandler,
+    PublicDashboardStatusHandler,
 )
 
 
@@ -7487,6 +7488,7 @@ def make_app():
         (r"/api/v1/health", PublicHealthHandler),
         (r"/api/v1/applications/([^/]+)/status", PublicApplicationStatusHandler),
         (r"/api/v1/applications/([^/]+)/decision", PublicApplicationDecisionHandler),
+        (r"/api/v1/dashboard/status", PublicDashboardStatusHandler),
 
         # Prometheus Metrics
         (r"/metrics", MetricsHandler),
