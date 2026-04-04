@@ -22,7 +22,7 @@ import json
 import logging
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -211,7 +211,7 @@ def _base_output(agent_type: AgentType, agent_name: str, application_id: str, ru
         "model_name": model_name or MODEL_NAME,
         "run_id": run_id,
         "application_id": application_id,
-        "processed_at": datetime.utcnow().isoformat() + "Z",
+        "processed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
@@ -279,7 +279,7 @@ def execute_identity_document(application_id: str, context: Dict[str, Any]) -> D
             "content_summary": f"Verified {d.get('document_type', 'document')}: {d.get('filename', '')}",
             "reference": d.get("id", ""),
             "verified": True,
-            "timestamp": d.get("uploaded_at") or datetime.utcnow().isoformat(),
+            "timestamp": d.get("uploaded_at") or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         })
 
     if missing:
@@ -1804,7 +1804,7 @@ def execute_fincrime_screening(application_id: str, context: Dict[str, Any]) -> 
         "highest_match_score": round(highest_score, 2),
         "screened_entities": screened_entities,
         "screening_provider": "prescreening_report" if not degraded else "stored_application_data",
-        "screening_date": datetime.utcnow().isoformat(),
+        "screening_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         "screening_mode": "full" if not degraded else "degraded",
         "checks_performed": checks_performed,
         "confirmed_hits": ranked_confirmed,
@@ -2291,7 +2291,7 @@ def _check_review_schedule(app: Dict, reviews: List[Dict]) -> Dict[str, Any]:
 
     try:
         last_date = datetime.fromisoformat(str(last_date_str).replace("Z", "+00:00").replace("+00:00", ""))
-        days_since = (datetime.utcnow() - last_date).days
+        days_since = (datetime.now(timezone.utc).replace(tzinfo=None) - last_date).days
     except (ValueError, TypeError):
         days_since = None
 
@@ -2342,7 +2342,7 @@ def _check_document_expiry(documents: List[Dict]) -> Dict[str, Any]:
     """Check #3 (rule): Document expiry scan."""
     expired = []
     expiring_soon = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     for doc in documents:
         expiry_str = doc.get("expiry_date") or doc.get("valid_until")
@@ -2448,7 +2448,7 @@ def _check_screening_staleness(app: Dict) -> Dict[str, Any]:
 
     try:
         screening_date = datetime.fromisoformat(str(screened_at).replace("Z", "+00:00").replace("+00:00", ""))
-        days = (datetime.utcnow() - screening_date).days
+        days = (datetime.now(timezone.utc).replace(tzinfo=None) - screening_date).days
     except (ValueError, TypeError):
         days = None
 
@@ -2824,7 +2824,7 @@ def _check_dormancy(app: Dict) -> Dict[str, Any]:
     if last_activity:
         try:
             last_dt = datetime.fromisoformat(str(last_activity).replace("Z", "+00:00").replace("+00:00", ""))
-            days_inactive = (datetime.utcnow() - last_dt).days
+            days_inactive = (datetime.now(timezone.utc).replace(tzinfo=None) - last_dt).days
         except (ValueError, TypeError):
             pass
 
@@ -3756,7 +3756,7 @@ _FILING_DEADLINES_MONTHS = {"annual_return": 12, "financial_statements": 18, "li
 
 def _check_document_currency(documents: List[Dict]) -> Dict[str, Any]:
     """Check #1 (rule): Document currency verification."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     results = []
     for doc in documents:
         doc_type = doc.get("document_type", "unknown")
@@ -3805,7 +3805,7 @@ def _check_screening_recency(app: Dict) -> Dict[str, Any]:
     if screened_at:
         try:
             dt = datetime.fromisoformat(str(screened_at).replace("Z", "+00:00").replace("+00:00", ""))
-            days = (datetime.utcnow() - dt).days
+            days = (datetime.now(timezone.utc).replace(tzinfo=None) - dt).days
         except (ValueError, TypeError):
             pass
 
@@ -3898,7 +3898,7 @@ def _check_filing_deadlines(app: Dict) -> Dict[str, Any]:
     if created_str:
         try:
             created = datetime.fromisoformat(str(created_str).replace("Z", "+00:00").replace("+00:00", ""))
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             for filing_type, months in _FILING_DEADLINES_MONTHS.items():
                 # Estimate next deadline from creation
                 next_due = created.replace(year=created.year + (months // 12))
@@ -4025,7 +4025,7 @@ def _recommend_review_frequency(app: Dict, risk_score: Dict) -> Dict[str, Any]:
         frequency = "annual"
         next_days = 365
 
-    next_review = (datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0))
+    next_review = (datetime.now(timezone.utc).replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0))
     next_review = next_review.replace(day=1)  # Start of next period
     from datetime import timedelta
     next_review = next_review + timedelta(days=next_days)

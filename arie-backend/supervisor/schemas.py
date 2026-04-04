@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -244,7 +244,7 @@ class AgentOutputBase(BaseModel):
 
     # Metadata
     processed_at: str = Field(
-        default_factory=lambda: datetime.utcnow().isoformat() + "Z",
+        default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         description="ISO 8601 timestamp"
     )
     processing_time_ms: Optional[int] = Field(None, ge=0)
@@ -602,7 +602,7 @@ class ValidationResult(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     schema_version: str = "1.0.0"
     validator_version: str = "1.0.0"
-    validated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    validated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 class ConfidenceScore(BaseModel):
@@ -617,7 +617,7 @@ class ConfidenceScore(BaseModel):
     routing_decision: ConfidenceRouting
     component_scores: Dict[str, float] = Field(default_factory=dict)
     calculation_method: Optional[str] = None
-    calculated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    calculated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 class Contradiction(BaseModel):
@@ -637,7 +637,7 @@ class Contradiction(BaseModel):
     agent_b_finding: str
     description: str
     resolution_required: bool = True
-    detected_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    detected_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 class RuleEvaluation(BaseModel):
@@ -656,7 +656,7 @@ class RuleEvaluation(BaseModel):
     ai_recommendation: Optional[str] = None
     rule_recommendation: Optional[str] = None
     severity: Optional[Severity] = None
-    evaluated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    evaluated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 class Escalation(BaseModel):
@@ -673,7 +673,7 @@ class Escalation(BaseModel):
     assigned_to: Optional[str] = None
     status: str = "pending"
     sla_deadline: Optional[str] = None
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 class HumanReview(BaseModel):
@@ -700,7 +700,7 @@ class HumanReview(BaseModel):
     follow_up_details: Optional[str] = None
     is_ai_override: bool = False
     override_reason: Optional[str] = None
-    decision_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    decision_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     @model_validator(mode="after")
     def validate_override_reason(self):
@@ -725,13 +725,13 @@ class Override(BaseModel):
     approver_id: Optional[str] = None
     approver_name: Optional[str] = None
     approved_at: Optional[str] = None
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
 
 class AuditEntry(BaseModel):
     """Append-only audit log entry."""
     audit_id: str = Field(default_factory=lambda: str(uuid4()))
-    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     event_type: AuditEventType
     severity: Severity = Severity.INFO
     pipeline_id: Optional[str] = None
@@ -844,7 +844,7 @@ class ComplianceAssistantOutput(BaseModel):
     assistant_version: str = "1.0.0"
     application_id: str
     review_type: str  # onboarding / periodic_review / monitoring_alert
-    generated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat() + "Z")
+    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     # Sections
     client_summary: Dict[str, Any] = Field(

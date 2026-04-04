@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import aiosqlite
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -78,9 +78,9 @@ class ExternalTaskQueue:
             Task ID
         """
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat() + "Z"
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             # Initial retry in 5 minutes
-            next_retry = (datetime.utcnow() + timedelta(minutes=5)).isoformat() + "Z"
+            next_retry = (datetime.now(timezone.utc) + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             cursor = await db.execute(
                 """
@@ -117,7 +117,7 @@ class ExternalTaskQueue:
             List of QueueTask objects
         """
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat() + "Z"
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             cursor = await db.execute(
                 """
@@ -160,7 +160,7 @@ class ExternalTaskQueue:
             task_id: Task ID
         """
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat() + "Z"
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             await db.execute(
                 """
@@ -184,7 +184,7 @@ class ExternalTaskQueue:
             error: Error message
         """
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat() + "Z"
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             # Get current task state
             cursor = await db.execute(
@@ -211,7 +211,7 @@ class ExternalTaskQueue:
                 # Schedule next retry with exponential backoff
                 status = TaskStatus.PENDING.value
                 delay_minutes = min(5 * (2 ** attempt_count), 1440)  # Max 24 hours
-                next_retry = (datetime.utcnow() + timedelta(minutes=delay_minutes)).isoformat() + "Z"
+                next_retry = (datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
                 logger.info(
                     f"Task {task_id} failed, scheduled next retry in {delay_minutes} minutes (attempt {attempt_count}/{max_retries})"
                 )
@@ -315,7 +315,7 @@ class ExternalTaskQueue:
             task_id: Task ID
         """
         async with aiosqlite.connect(self.db_path) as db:
-            now = datetime.utcnow().isoformat() + "Z"
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             await db.execute(
                 """

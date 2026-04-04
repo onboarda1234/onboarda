@@ -29,7 +29,7 @@ import hmac
 import hashlib
 import logging
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple
 from calendar import monthrange
 import requests
@@ -87,7 +87,7 @@ class APIUsageTracker:
 
     def _reset_if_new_month(self) -> None:
         """Reset usage counter if we've entered a new month."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         month_tuple = (now.year, now.month)
 
         if self.current_month is None or self.current_month != month_tuple:
@@ -797,7 +797,7 @@ class SumsubClient:
             "api_status": "error",
             "error": f"{operation} failed: {reason}",
             "note": reason,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         }
         result.update(extra)
         return result
@@ -823,7 +823,7 @@ class SumsubClient:
             "source": "simulated",
             "api_status": "simulated",
             "note": note,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         }
 
     @staticmethod
@@ -868,7 +868,7 @@ class SumsubClient:
             "source": "simulated",
             "api_status": "simulated",
             "note": note,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         }
 
     @staticmethod

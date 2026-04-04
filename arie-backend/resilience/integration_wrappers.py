@@ -6,7 +6,7 @@ Handles failures appropriately based on service type (blocking vs. non-blocking)
 
 import logging
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 from .resilient_client import ResilientAPIClient
@@ -36,7 +36,7 @@ class ApplicationStatusUpdater:
         """
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                now = datetime.utcnow().isoformat() + "Z"
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                 await db.execute(
                     """

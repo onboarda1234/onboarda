@@ -6,7 +6,7 @@ Ensures external dependencies are met before allowing approval.
 
 import logging
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Tuple, List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -220,7 +220,7 @@ class WorkflowEnforcer:
         """
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                now = datetime.utcnow().isoformat() + "Z"
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                 await db.execute(
                     """
@@ -254,7 +254,7 @@ class WorkflowEnforcer:
         """
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                now = datetime.utcnow().isoformat() + "Z"
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                 msg = f"Blocked: {provider} unavailable - {reason}"
                 await db.execute(
@@ -291,7 +291,7 @@ class WorkflowEnforcer:
         """
         try:
             async with aiosqlite.connect(self.db_path) as db:
-                now = datetime.utcnow().isoformat() + "Z"
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                 if verification_type == "kyc":
                     column = "kyc_status"

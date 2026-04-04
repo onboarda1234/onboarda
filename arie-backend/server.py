@@ -13,7 +13,7 @@ Env:  PORT=8080 SECRET_KEY=your-secret DB_PATH=./arie.db
 import os, sys, json, uuid, time, hashlib, hmac, re, sqlite3, base64, logging, secrets, io, smtplib
 from dotenv import load_dotenv
 load_dotenv()  # Load .env before any config reads
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -130,7 +130,7 @@ from decision_model import (
     save_decision_record,
     get_decision_records,
 )
-from branding import BRAND
+from branding import BRAND, get_status_label
 from prescreening.normalize import (
     compose_source_of_funds_summary as _compose_source_of_funds_summary,
     first_non_empty as _first_non_empty,
@@ -177,7 +177,7 @@ class JSONFormatter(logging.Formatter):
     """JSON structured log formatter for production log aggregation."""
     def format(self, record):
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -391,7 +391,7 @@ def build_regulatory_analysis(doc: dict) -> dict:
         "suggestions": suggestions,
         "affectedClientTypes": client_types,
         "confidence": confidence,
-        "analysedAt": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+        "analysedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
         "analysisSource": "backend_rule_assisted",
         "humanReviewRequired": True,
     }
@@ -1064,22 +1064,29 @@ class HealthHandler(BaseHandler):
             "platform": BRAND["portal_name"],
             "version": "1.0.0",
             "environment": ENV,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
         # Database connectivity check
+        db = None
         try:
             db = get_db()
             db.execute("SELECT 1")
-            db.close()
             health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
         except Exception as e:
-            health["database"] = {"status": "error", "error": str(e)[:200]}
+            logger.error("Health check database error: %s", e)
+            health["database"] = {"status": "error"}
             health["status"] = "degraded"
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
         # External API status — only show if authenticated and is admin
         # Remove integrations section to avoid configuration leakage
-        user = self.get_current_user()
+        user = self.get_current_user_token()
         if user and user.get("role") == "admin":
             health["integrations"] = {
                 "opensanctions": "configured" if OPENSANCTIONS_API_KEY else "simulated",
@@ -1124,10 +1131,8 @@ class OfficerLoginHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"officer_login:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=10, window_seconds=900):
-            self.set_status(429)
-            self.write({"error": "Too many login attempts. Please try again in 15 minutes."})
             logger.warning(f"Rate limited officer login from {ip} for {mask_email(email)}")
-            return
+            return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
         db = get_db()
         user = db.execute("SELECT * FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
@@ -1162,10 +1167,8 @@ class ClientLoginHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"client_login:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=10, window_seconds=900):
-            self.set_status(429)
-            self.write({"error": "Too many login attempts. Please try again in 15 minutes."})
             logger.warning(f"Rate limited client login from {ip} for {mask_email(email)}")
-            return
+            return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
         db = get_db()
         client = db.execute("SELECT * FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
@@ -1200,9 +1203,7 @@ class ClientRegisterHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"register:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=5, window_seconds=1800):
-            self.set_status(429)
-            self.write({"error": "Too many registration attempts. Please try again later."})
-            return
+            return self.error("Too many registration attempts. Please try again later.", 429)
 
         if len(password) < 12:
             return self.error("Password must be at least 12 characters")
@@ -1249,9 +1250,7 @@ class ForgotPasswordHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"forgot_pw:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=5, window_seconds=1800):
-            self.set_status(429)
-            self.write({"error": "Too many reset attempts. Please try again later."})
-            return
+            return self.error("Too many reset attempts. Please try again later.", 429)
 
         db = get_db()
         client = db.execute("SELECT id, email FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
@@ -1263,7 +1262,7 @@ class ForgotPasswordHandler(BaseHandler):
         # Generate reset token and expiry (1 hour)
         reset_token = secrets.token_urlsafe(32)
         reset_token_hash = hash_reset_token(reset_token)
-        expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+        expires = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
         db.execute("UPDATE clients SET password_reset_token=?, password_reset_expires=? WHERE id=?",
                    (reset_token_hash, expires, client["id"]))
         db.commit()
@@ -1320,7 +1319,7 @@ class ResetPasswordHandler(BaseHandler):
         # Check expiry
         try:
             expires = datetime.fromisoformat(client["password_reset_expires"])
-            if datetime.utcnow() > expires:
+            if datetime.now(timezone.utc).replace(tzinfo=None) > expires:
                 db.close()
                 return self.error("Reset token has expired", 400)
         except (ValueError, TypeError):
@@ -1440,6 +1439,7 @@ class ApplicationsHandler(BaseHandler):
         # Attach directors, UBOs, and documents for each — C-02: decrypt PII on read
         db = get_db()
         for app in apps:
+            app["status_label"] = get_status_label(app.get("status"))
             app["directors"], app["ubos"], app["intermediaries"] = get_application_parties(db, app["id"])
             app["documents"] = [dict(d) for d in db.execute(
                 "SELECT id, doc_type, doc_name, file_size, verification_status, verification_results, verified_at, person_id, review_status, review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?",
@@ -1494,7 +1494,7 @@ class ApplicationsHandler(BaseHandler):
         db.close()
 
         self.log_audit(user, "Create", ref, f"New application created: {company_name}")
-        self.success({"id": app_id, "ref": ref, "status": "draft"}, 201)
+        self.success({"id": app_id, "ref": ref, "status": "draft", "status_label": get_status_label("draft")}, 201)
 
 
 class ApplicationDetailHandler(BaseHandler):
@@ -1515,6 +1515,7 @@ class ApplicationDetailHandler(BaseHandler):
             return
 
         result = dict(app)
+        result["status_label"] = get_status_label(result.get("status"))
         result["assigned_name"] = resolve_user_display_name(db, result.get("assigned_to"))
         result["directors"], result["ubos"], result["intermediaries"] = get_application_parties(db, result["id"])
         result["documents"] = [dict(d) for d in db.execute(
@@ -1807,7 +1808,7 @@ class SubmitApplicationHandler(BaseHandler):
             try:
                 from datetime import date
                 parsed_date = datetime.strptime(inc_date, "%Y-%m-%d").date()
-                if parsed_date > datetime.utcnow().date():
+                if parsed_date > datetime.now(timezone.utc).date():
                     db.close()
                     return self.error("Incorporation date cannot be in the future.", 400)
             except ValueError:
@@ -2755,7 +2756,7 @@ class DocumentVerifyHandler(BaseHandler):
             "ai_source": ai_source,
             "file_source": file_source,
             "system_warning": system_warning,
-            "verified_at": datetime.utcnow().isoformat(),
+            "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "sanctions_screening": sanctions_result
         }, default=str)
 
@@ -3347,7 +3348,7 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         else:
             doc_id = uuid.uuid4().hex[:16]
 
-        created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        created_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         audit_trail = [{"time": created_at, "action": f"Document uploaded by {user.get('name', 'Compliance Officer')}"}]
 
         if source_text:
@@ -3484,7 +3485,7 @@ class RegulatoryIntelligenceReviewHandler(BaseHandler):
             db.close()
             return self.error("Suggestion not found on this regulatory document", 404)
 
-        reviewed_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        reviewed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         suggestion["status"] = decision
         suggestion["reviewedBy"] = user.get("name", "Compliance Officer")
         suggestion["reviewedAt"] = reviewed_at
@@ -3537,7 +3538,7 @@ class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
         except (json.JSONDecodeError, TypeError):
             audit_trail = []
 
-        reviewed_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        reviewed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         analysis_summary = build_regulatory_analysis({
             "title": row_dict.get("title"),
             "regulator": row_dict.get("regulator"),
@@ -4886,7 +4887,7 @@ def _build_screening_queue_payload(db, user):
     return {
         "metrics": metrics,
         "rows": rows,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
@@ -5014,7 +5015,7 @@ class ScreeningHandler(BaseHandler):
         # Store screening report
         prescreening = safe_json_loads(app["prescreening_data"])
         prescreening["screening_report"] = report
-        prescreening["last_screened_at"] = datetime.utcnow().isoformat()
+        prescreening["last_screened_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         prescreening["screened_by"] = user["sub"]
         db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now') WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
@@ -5270,16 +5271,12 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
         # Verify webhook signature — always verify, never skip (Finding S-16)
         if not sumsub_verify_webhook(body, signature):
             logger.warning("Sumsub webhook: Invalid or missing signature")
-            self.set_status(401)
-            self.write(json.dumps({"error": "Invalid signature"}))
-            return
+            return self.error("Invalid signature", 401)
 
         try:
             payload = json.loads(body)
         except Exception:
-            self.set_status(400)
-            self.write(json.dumps({"error": "Invalid JSON"}))
-            return
+            return self.error("Invalid JSON", 400)
 
         event_type = payload.get("type", "")
         applicant_id = payload.get("applicantId", "")
@@ -5302,7 +5299,7 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
                     "rejection_labels": review_result.get("rejectLabels", []),
                     "moderation_comment": review_result.get("moderationComment", ""),
                     "event_type": event_type,
-                    "received_at": datetime.utcnow().isoformat(),
+                    "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
                 })
 
                 # Store webhook data in audit log
@@ -6484,11 +6481,13 @@ def build_status_lookup_payload(app_row):
     """Return the minimal public-safe status payload."""
     if not app_row:
         return None
-    return {
+    payload = {
         field: app_row[field]
         for field in STATUS_LOOKUP_PUBLIC_FIELDS
         if field in app_row.keys()
     }
+    payload["status_label"] = get_status_label(payload.get("status"))
+    return payload
 
 
 class ClientStatusLookupHandler(BaseHandler):

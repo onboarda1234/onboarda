@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Tuple, Union
 import boto3
 from botocore.exceptions import ClientError
@@ -86,14 +86,14 @@ class S3Client:
         """
         try:
             # Build S3 key: clients/{client_id}/{doc_type}/{timestamp}_{filename}
-            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
             key = f"clients/{client_id}/{doc_type}/{timestamp}_{filename}"
 
             # Prepare tags
             tags_list = [
                 {'Key': 'client_id', 'Value': client_id},
                 {'Key': 'doc_type', 'Value': doc_type},
-                {'Key': 'uploaded_at', 'Value': datetime.utcnow().isoformat()},
+                {'Key': 'uploaded_at', 'Value': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")},
                 {'Key': 'filename', 'Value': filename}
             ]
 

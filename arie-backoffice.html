@@ -2833,10 +2833,13 @@ async function loadFromAPI() {
 }
 
 function formatStatus(s) {
-  var map = { draft:'Draft', prescreening_submitted:'Pre-Screening Submitted', pricing_review:'Pricing Review',
-              pricing_accepted:'Pricing Accepted', kyc_documents:'KYC & Documents', kyc_submitted:'KYC Submitted',
-              compliance_review:'Compliance Review', submitted:'Submitted', pending_review:'Pending Review', in_review:'In Review',
-              edd_required:'EDD Required', approved:'Approved', rejected:'Rejected', rmi_sent:'Info Requested', withdrawn:'Withdrawn' };
+  var map = { draft:'Application Started', submitted:'Application Submitted', prescreening_submitted:'Pre-Screening in Progress',
+              pricing_review:'Pricing Under Review', pricing_accepted:'Pricing Accepted',
+              pre_approval_review:'Pre-Approval Under Review', pre_approved:'Pre-Approved',
+              kyc_documents:'KYC Documents Required', kyc_submitted:'KYC Documents Submitted',
+              compliance_review:'Compliance Review in Progress', pending_review:'Pending Review', in_review:'Verification Ongoing',
+              edd_required:'Enhanced Due Diligence Required', approved:'Approved \u2013 Ready for Activation',
+              rejected:'Application Declined', rmi_sent:'Further Information Requested', withdrawn:'Application Withdrawn' };
   return map[s] || s || 'Unknown';
 }
 

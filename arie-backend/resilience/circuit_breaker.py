@@ -7,7 +7,7 @@ States: CLOSED (normal), OPEN (failed), HALF_OPEN (testing recovery)
 import asyncio
 import logging
 import aiosqlite
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from enum import Enum
 
@@ -66,7 +66,7 @@ class CircuitBreaker:
         lock = await self._get_lock(provider)
         async with lock:
             async with aiosqlite.connect(self.db_path) as db:
-                now = datetime.utcnow().isoformat() + "Z"
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                 # Get or create circuit breaker entry
                 cursor = await db.execute(
@@ -91,7 +91,7 @@ class CircuitBreaker:
                     # Check if failures exceed threshold within window
                     if failure_count >= self.FAILURE_THRESHOLD:
                         # Get count of failures in the last 5 minutes
-                        cutoff = (datetime.utcnow() - timedelta(minutes=self.FAILURE_WINDOW_MINUTES)).isoformat() + "Z"
+                        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=self.FAILURE_WINDOW_MINUTES)).strftime("%Y-%m-%dT%H:%M:%SZ")
                         cursor = await db.execute(
                             """
                             SELECT COUNT(*) FROM circuit_breaker_state
@@ -147,7 +147,7 @@ class CircuitBreaker:
         lock = await self._get_lock(provider)
         async with lock:
             async with aiosqlite.connect(self.db_path) as db:
-                now = datetime.utcnow().isoformat() + "Z"
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                 cursor = await db.execute(
                     "SELECT state FROM circuit_breaker_state WHERE provider = ?",
@@ -209,12 +209,12 @@ class CircuitBreaker:
                 # Check if we should transition from OPEN to HALF_OPEN
                 if state_str == CircuitState.OPEN.value and opened_at_str:
                     opened_at = datetime.fromisoformat(opened_at_str.replace("Z", "+00:00"))
-                    now = datetime.utcnow()
+                    now = datetime.now(timezone.utc)
                     cooldown_passed = (now - opened_at) > timedelta(minutes=self.COOLDOWN_MINUTES)
 
                     if cooldown_passed:
                         logger.info(f"Circuit breaker entering HALF_OPEN state for {provider} after {self.COOLDOWN_MINUTES} minutes")
-                        now_str = datetime.utcnow().isoformat() + "Z"
+                        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                         await db.execute(
                             """
                             UPDATE circuit_breaker_state
@@ -258,7 +258,7 @@ class CircuitBreaker:
         lock = await self._get_lock(provider)
         async with lock:
             async with aiosqlite.connect(self.db_path) as db:
-                now = datetime.utcnow().isoformat() + "Z"
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
                 logger.info(f"Manually resetting circuit breaker for {provider}")
 

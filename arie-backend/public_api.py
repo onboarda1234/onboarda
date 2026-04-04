@@ -14,6 +14,7 @@ Endpoints:
 import logging
 
 from base_handler import BaseHandler
+from branding import get_status_label
 from db import get_db
 
 logger = logging.getLogger("arie")
@@ -69,6 +70,7 @@ class PublicApplicationStatusHandler(BaseHandler):
         self.success({
             "application_ref": app["ref"],
             "status": app["status"],
+            "status_label": get_status_label(app["status"]),
             "last_updated": app["updated_at"],
         })
 
@@ -195,6 +197,7 @@ class PublicDashboardStatusHandler(BaseHandler):
                 {
                     "application_ref": r["ref"],
                     "status": r["status"],
+                    "status_label": get_status_label(r["status"]),
                     "timestamp": _normalize_ts(r["updated_at"]),
                 }
                 for r in recent_rows

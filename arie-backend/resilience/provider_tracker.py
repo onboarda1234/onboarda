@@ -7,7 +7,7 @@ Records success/failure rates, latencies, and circuit breaker states.
 import asyncio
 import logging
 import aiosqlite
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from statistics import mean
 
@@ -53,7 +53,7 @@ class ProviderStatusTracker:
             circuit_state: Circuit breaker state at time of call
         """
         async with aiosqlite.connect(self.db_path) as db:
-            created_at = datetime.utcnow().isoformat() + "Z"
+            created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             await db.execute(
                 """
@@ -107,7 +107,7 @@ class ProviderStatusTracker:
             error_message: Error description
         """
         async with aiosqlite.connect(self.db_path) as db:
-            created_at = datetime.utcnow().isoformat() + "Z"
+            created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             await db.execute(
                 """
@@ -286,7 +286,7 @@ class ProviderStatusTracker:
             List of failure records
         """
         async with aiosqlite.connect(self.db_path) as db:
-            cutoff = (datetime.utcnow() - timedelta(minutes=minutes)).isoformat() + "Z"
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             if provider:
                 cursor = await db.execute(
@@ -364,5 +364,5 @@ class ProviderStatusTracker:
             "overall_success_rate": round(overall_success_rate, 3),
             "avg_latency_ms": round(avg_latency, 2),
             "unhealthy_providers": unhealthy,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         }

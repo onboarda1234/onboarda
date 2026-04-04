@@ -12,7 +12,7 @@ import uuid
 import time
 import html
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import jwt
 
@@ -59,9 +59,9 @@ def create_token(user_id, role, name, token_type="officer"):
         "type": token_type,
         "jti": jti,
         "iss": "arie-finance",
-        "exp": datetime.utcnow() + timedelta(hours=TOKEN_EXPIRY_HOURS),
-        "iat": datetime.utcnow(),
-        "nbf": datetime.utcnow(),  # Not valid before issuance
+        "exp": datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRY_HOURS),
+        "iat": datetime.now(timezone.utc),
+        "nbf": datetime.now(timezone.utc),  # Not valid before issuance
     }
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 

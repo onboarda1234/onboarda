@@ -24,7 +24,7 @@ import hashlib
 import logging
 import smtplib
 import functools
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Any, Tuple
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -308,7 +308,7 @@ class UsageCapManager:
     def _get_month_key(self, dt: Optional[datetime] = None) -> str:
         """Get month key in YYYY-MM format."""
         if dt is None:
-            dt = datetime.utcnow()
+            dt = datetime.now(timezone.utc)
         return dt.strftime("%Y-%m")
 
     def check_budget(self, service: str, estimated_cost: float) -> bool:
@@ -454,7 +454,7 @@ class HealthMonitor:
         """Get detailed health status."""
         health = {
             "status": "healthy",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "uptime_seconds": int(time.time() - self._start_time),
             "checks": {}
         }
@@ -534,12 +534,12 @@ class HealthMonitor:
 
     def get_metrics(self) -> Dict[str, Any]:
         """Get system metrics."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         one_hour_ago = now - timedelta(hours=1)
         one_day_ago = now - timedelta(days=1)
 
         metrics = {
-            "timestamp": now.isoformat(),
+            "timestamp": now.strftime("%Y-%m-%dT%H:%M:%S"),
             "uptime_seconds": int(time.time() - self._start_time),
             "requests": {},
             "errors": {"total": self._error_count},
@@ -555,7 +555,7 @@ class HealthMonitor:
                 FROM metrics
                 WHERE timestamp > ?
                 GROUP BY endpoint
-            """, (one_hour_ago.isoformat(),))
+            """, (one_hour_ago.strftime("%Y-%m-%dT%H:%M:%S"),))
             results = db.fetchall()
             metrics["requests"]["last_hour"] = {row.get('endpoint', row[0]): row.get('count', row[1]) for row in results}
 
@@ -565,7 +565,7 @@ class HealthMonitor:
                 FROM metrics
                 WHERE timestamp > ?
                 GROUP BY endpoint
-            """, (one_day_ago.isoformat(),))
+            """, (one_day_ago.strftime("%Y-%m-%dT%H:%M:%S"),))
             results = db.fetchall()
             metrics["requests"]["last_24h"] = {row.get('endpoint', row[0]): row.get('count', row[1]) for row in results}
 
@@ -574,7 +574,7 @@ class HealthMonitor:
                 SELECT AVG(response_time_ms) as avg_ms
                 FROM metrics
                 WHERE timestamp > ?
-            """, (one_hour_ago.isoformat(),))
+            """, (one_hour_ago.strftime("%Y-%m-%dT%H:%M:%S"),))
             result = db.fetchone()
             avg_val = 0
             if result:
@@ -589,7 +589,7 @@ class HealthMonitor:
                 SELECT COUNT(*) as errors
                 FROM metrics
                 WHERE status_code >= 500 AND timestamp > ?
-            """, (one_hour_ago.isoformat(),))
+            """, (one_hour_ago.strftime("%Y-%m-%dT%H:%M:%S"),))
             result = db.fetchone()
 
             if result:
@@ -835,7 +835,7 @@ class IncidentLogger:
         db = get_db()
         try:
             query = "SELECT * FROM incidents WHERE timestamp BETWEEN ? AND ?"
-            params = [start_date.isoformat(), end_date.isoformat()]
+            params = [start_date.strftime("%Y-%m-%dT%H:%M:%S"), end_date.strftime("%Y-%m-%dT%H:%M:%S")]
 
             if severity:
                 query += " AND severity = ?"
@@ -885,7 +885,7 @@ class IncidentLogger:
                 UPDATE incidents
                 SET resolved = ?, resolved_by = ?, resolved_at = ?
                 WHERE id = ?
-            """, (True, resolved_by, datetime.utcnow().isoformat(), incident_id))
+            """, (True, resolved_by, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), incident_id))
             db.commit()
         finally:
             db.close()
@@ -958,7 +958,7 @@ class RetentionManager:
         """
         with self._lock:
             summary = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
                 "deleted": {},
                 "errors": []
             }
@@ -966,11 +966,11 @@ class RetentionManager:
             db = get_db()
             try:
                 # Session data (90 days)
-                cutoff = datetime.utcnow() - timedelta(days=self.RETENTION_PERIODS["session_data"])
+                cutoff = datetime.now(timezone.utc) - timedelta(days=self.RETENTION_PERIODS["session_data"])
                 try:
                     count = db.execute("""
                         DELETE FROM sessions WHERE created_at < ?
-                    """, (cutoff.isoformat(),))
+                    """, (cutoff.strftime("%Y-%m-%dT%H:%M:%S"),))
                     db.commit()
                     if count:
                         summary["deleted"]["session_data"] = count
@@ -979,12 +979,12 @@ class RetentionManager:
                     summary["errors"].append(f"Session cleanup failed: {e}")
 
                 # Temporary uploads (30 days)
-                cutoff = datetime.utcnow() - timedelta(days=self.RETENTION_PERIODS["temporary_uploads"])
+                cutoff = datetime.now(timezone.utc) - timedelta(days=self.RETENTION_PERIODS["temporary_uploads"])
                 try:
                     count = db.execute("""
                         DELETE FROM documents
                         WHERE document_type = 'temporary' AND created_at < ?
-                    """, (cutoff.isoformat(),))
+                    """, (cutoff.strftime("%Y-%m-%dT%H:%M:%S"),))
                     db.commit()
                     if count:
                         summary["deleted"]["temporary_uploads"] = count
@@ -993,11 +993,11 @@ class RetentionManager:
                     summary["errors"].append(f"Temporary upload cleanup failed: {e}")
 
                 # Incident logs (3 years)
-                cutoff = datetime.utcnow() - timedelta(days=self.RETENTION_PERIODS["incidents"])
+                cutoff = datetime.now(timezone.utc) - timedelta(days=self.RETENTION_PERIODS["incidents"])
                 try:
                     count = db.execute("""
                         DELETE FROM incidents WHERE timestamp < ? AND resolved = ?
-                    """, (cutoff.isoformat(), True))
+                    """, (cutoff.strftime("%Y-%m-%dT%H:%M:%S"), True))
                     db.commit()
                     if count:
                         summary["deleted"]["incidents"] = count
@@ -1033,7 +1033,7 @@ class RetentionManager:
     def get_retention_report(self) -> Dict[str, Any]:
         """Get a report of data volumes and retention status."""
         report = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "categories": {}
         }
 
@@ -1146,8 +1146,8 @@ class IncidentsHandler(tornado.web.RequestHandler):
         severity = self.get_argument("severity", None)
         incident_type = self.get_argument("type", None)
 
-        start_date = datetime.utcnow() - timedelta(days=days_back)
-        end_date = datetime.utcnow()
+        start_date = datetime.now(timezone.utc) - timedelta(days=days_back)
+        end_date = datetime.now(timezone.utc)
 
         incidents = incident_logger.get_incidents(
             start_date=start_date,

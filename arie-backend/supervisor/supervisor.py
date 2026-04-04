@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import uuid4
 
@@ -83,7 +83,7 @@ class SupervisorPipelineResult:
     def __init__(self, pipeline_id: str, application_id: str):
         self.pipeline_id = pipeline_id
         self.application_id = application_id
-        self.started_at = datetime.utcnow().isoformat() + "Z"
+        self.started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.completed_at: Optional[str] = None
 
         # Results from each stage
@@ -395,7 +395,7 @@ class AgentSupervisor:
         else:
             result.status = "completed"
 
-        result.completed_at = datetime.utcnow().isoformat() + "Z"
+        result.completed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # ── 12. Log pipeline completion ──
         self.audit.log(

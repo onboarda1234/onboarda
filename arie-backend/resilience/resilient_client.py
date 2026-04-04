@@ -8,7 +8,7 @@ import asyncio
 import logging
 import time
 from typing import Any, Callable, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .retry_policy import RetryPolicy, RetryPolicyError
 from .circuit_breaker import CircuitBreaker, CircuitBreakerError, CircuitState
@@ -303,5 +303,5 @@ class ResilientAPIClient:
             "provider_statuses": await self.tracker.get_all_statuses(),
             "queue_stats": await self.task_queue.get_queue_stats(),
             "health": await self.tracker.get_health_summary(),
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         }
