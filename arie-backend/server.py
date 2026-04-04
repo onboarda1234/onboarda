@@ -921,6 +921,13 @@ from screening import (
 # Sprint 3.5: BaseHandler extracted to base_handler.py to reduce server.py concentration risk
 from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db  # noqa: F401
 
+# Public API v1 — versioned external endpoints
+from public_api import (
+    PublicHealthHandler,
+    PublicApplicationStatusHandler,
+    PublicApplicationDecisionHandler,
+)
+
 
 # ── Database Reset (temporary — remove after staging wipe) ──
 class AdminResetDBHandler(BaseHandler):
@@ -7475,6 +7482,11 @@ def make_app():
 
         # Save & Resume
         (r"/api/save-resume", SaveResumeHandler),
+
+        # ── Public API v1 ─────────────────────────────────────
+        (r"/api/v1/health", PublicHealthHandler),
+        (r"/api/v1/applications/([^/]+)/status", PublicApplicationStatusHandler),
+        (r"/api/v1/applications/([^/]+)/decision", PublicApplicationDecisionHandler),
 
         # Prometheus Metrics
         (r"/metrics", MetricsHandler),
