@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
 from typing import Any, Dict, Optional
 
@@ -389,7 +389,7 @@ def generate_memo_pdf(
     sector = application.get("sector", "N/A")
     entity_type = application.get("entity_type", "N/A")
 
-    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # Content hash for immutability verification
     content_hash = hashlib.sha256(json.dumps(memo_data, sort_keys=True).encode()).hexdigest()[:16]

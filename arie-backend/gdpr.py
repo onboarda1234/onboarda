@@ -10,7 +10,7 @@ Provides:
 """
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("arie")
@@ -46,7 +46,7 @@ def get_expired_data_summary(db) -> List[Dict]:
     for policy in policies:
         category = policy["data_category"]
         retention_days = policy["retention_days"]
-        cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime("%Y-%m-%dT%H:%M:%S")
 
         mapping = CATEGORY_TABLE_MAP.get(category)
         if not mapping:
@@ -107,7 +107,7 @@ def purge_expired_data(
         return {"error": f"No retention policy found for category '{category}'"}
 
     retention_days = policy["retention_days"]
-    cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime("%Y-%m-%dT%H:%M:%S")
 
     mapping = CATEGORY_TABLE_MAP.get(category)
     if not mapping:
@@ -200,7 +200,7 @@ def create_dsar(
     if request_type not in valid_types:
         return {"error": f"Invalid request type. Must be one of: {valid_types}"}
 
-    due_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    due_at = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
 
     db.execute(
         "INSERT INTO data_subject_requests (request_type, requester_email, requester_name, client_id, description, due_at) VALUES (?,?,?,?,?,?)",
@@ -239,7 +239,7 @@ def complete_dsar(
 
     db.execute(
         "UPDATE data_subject_requests SET status = ?, handled_by = ?, response_notes = ?, completed_at = ? WHERE id = ?",
-        (new_status, handled_by, response_notes, datetime.utcnow().isoformat(), dsar_id)
+        (new_status, handled_by, response_notes, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), dsar_id)
     )
     db.commit()
 

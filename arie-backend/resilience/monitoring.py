@@ -152,8 +152,8 @@ class RetryQueueTaskHandler(BaseResilienceHandler):
                 return
 
             # Reset for immediate retry
-            from datetime import datetime
-            now = datetime.utcnow().isoformat() + "Z"
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             # Mark as pending with immediate next_retry_at
             # This is a bit hacky - we need a proper method for this

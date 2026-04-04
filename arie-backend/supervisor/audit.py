@@ -26,7 +26,7 @@ import hashlib
 import json
 import logging
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional
 from uuid import uuid4
 
@@ -122,7 +122,7 @@ class AuditLogger:
         """
         entry = AuditEntry(
             audit_id=str(uuid4()),
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             event_type=event_type,
             severity=severity,
             pipeline_id=pipeline_id,

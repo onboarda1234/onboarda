@@ -13,7 +13,7 @@ Env:  PORT=8080 SECRET_KEY=your-secret DB_PATH=./arie.db
 import os, sys, json, uuid, time, hashlib, hmac, re, sqlite3, base64, logging, secrets, io, smtplib
 from dotenv import load_dotenv
 load_dotenv()  # Load .env before any config reads
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -177,7 +177,7 @@ class JSONFormatter(logging.Formatter):
     """JSON structured log formatter for production log aggregation."""
     def format(self, record):
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -391,7 +391,7 @@ def build_regulatory_analysis(doc: dict) -> dict:
         "suggestions": suggestions,
         "affectedClientTypes": client_types,
         "confidence": confidence,
-        "analysedAt": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+        "analysedAt": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
         "analysisSource": "backend_rule_assisted",
         "humanReviewRequired": True,
     }
@@ -1064,7 +1064,7 @@ class HealthHandler(BaseHandler):
             "platform": BRAND["portal_name"],
             "version": "1.0.0",
             "environment": ENV,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
         # Database connectivity check
@@ -1263,7 +1263,7 @@ class ForgotPasswordHandler(BaseHandler):
         # Generate reset token and expiry (1 hour)
         reset_token = secrets.token_urlsafe(32)
         reset_token_hash = hash_reset_token(reset_token)
-        expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+        expires = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
         db.execute("UPDATE clients SET password_reset_token=?, password_reset_expires=? WHERE id=?",
                    (reset_token_hash, expires, client["id"]))
         db.commit()
@@ -1320,7 +1320,7 @@ class ResetPasswordHandler(BaseHandler):
         # Check expiry
         try:
             expires = datetime.fromisoformat(client["password_reset_expires"])
-            if datetime.utcnow() > expires:
+            if datetime.now(timezone.utc).replace(tzinfo=None) > expires:
                 db.close()
                 return self.error("Reset token has expired", 400)
         except (ValueError, TypeError):
@@ -1807,7 +1807,7 @@ class SubmitApplicationHandler(BaseHandler):
             try:
                 from datetime import date
                 parsed_date = datetime.strptime(inc_date, "%Y-%m-%d").date()
-                if parsed_date > datetime.utcnow().date():
+                if parsed_date > datetime.now(timezone.utc).date():
                     db.close()
                     return self.error("Incorporation date cannot be in the future.", 400)
             except ValueError:
@@ -2755,7 +2755,7 @@ class DocumentVerifyHandler(BaseHandler):
             "ai_source": ai_source,
             "file_source": file_source,
             "system_warning": system_warning,
-            "verified_at": datetime.utcnow().isoformat(),
+            "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             "sanctions_screening": sanctions_result
         }, default=str)
 
@@ -3347,7 +3347,7 @@ class RegulatoryIntelligenceHandler(BaseHandler):
         else:
             doc_id = uuid.uuid4().hex[:16]
 
-        created_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        created_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         audit_trail = [{"time": created_at, "action": f"Document uploaded by {user.get('name', 'Compliance Officer')}"}]
 
         if source_text:
@@ -3484,7 +3484,7 @@ class RegulatoryIntelligenceReviewHandler(BaseHandler):
             db.close()
             return self.error("Suggestion not found on this regulatory document", 404)
 
-        reviewed_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        reviewed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         suggestion["status"] = decision
         suggestion["reviewedBy"] = user.get("name", "Compliance Officer")
         suggestion["reviewedAt"] = reviewed_at
@@ -3537,7 +3537,7 @@ class RegulatoryIntelligenceSourceTextHandler(BaseHandler):
         except (json.JSONDecodeError, TypeError):
             audit_trail = []
 
-        reviewed_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        reviewed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
         analysis_summary = build_regulatory_analysis({
             "title": row_dict.get("title"),
             "regulator": row_dict.get("regulator"),
@@ -4886,7 +4886,7 @@ def _build_screening_queue_payload(db, user):
     return {
         "metrics": metrics,
         "rows": rows,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
@@ -5014,7 +5014,7 @@ class ScreeningHandler(BaseHandler):
         # Store screening report
         prescreening = safe_json_loads(app["prescreening_data"])
         prescreening["screening_report"] = report
-        prescreening["last_screened_at"] = datetime.utcnow().isoformat()
+        prescreening["last_screened_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         prescreening["screened_by"] = user["sub"]
         db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now') WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
@@ -5302,7 +5302,7 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
                     "rejection_labels": review_result.get("rejectLabels", []),
                     "moderation_comment": review_result.get("moderationComment", ""),
                     "event_type": event_type,
-                    "received_at": datetime.utcnow().isoformat(),
+                    "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
                 })
 
                 # Store webhook data in audit log

@@ -17,7 +17,7 @@ import hashlib
 import base64
 import random
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -109,7 +109,7 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
             "results": hits,
             "source": "sumsub",
             "api_status": "live",
-            "screened_at": datetime.utcnow().isoformat()
+            "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         }
 
     except Exception as e:
@@ -121,7 +121,7 @@ def _simulate_aml_screen(name, note="No Sumsub credentials configured — simula
     """Fallback: realistic simulation when Sumsub not configured."""
     if is_production():
         logger.error("BLOCKED: Mock screening attempted in production")
-        return {"matched": False, "results": [], "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production", "screened_at": datetime.utcnow().isoformat()}
+        return {"matched": False, "results": [], "source": "blocked", "api_status": "error", "note": "Mock fallback blocked in production", "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}
     import random
     is_hit = random.random() < 0.08  # 8% simulated hit rate
     results = []
@@ -143,7 +143,7 @@ def _simulate_aml_screen(name, note="No Sumsub credentials configured — simula
         "source": "simulated",
         "api_status": "simulated",
         "note": note,
-        "screened_at": datetime.utcnow().isoformat()
+        "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     }
 
 
@@ -192,7 +192,7 @@ def lookup_opencorporates(company_name, jurisdiction=None):
                 "total_results": data.get("results", {}).get("total_count", 0),
                 "source": "opencorporates",
                 "api_status": "live",
-                "searched_at": datetime.utcnow().isoformat()
+                "searched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
             }
         elif resp.status_code == 401:
             logger.warning("OpenCorporates: Invalid API key — falling back to simulation")
@@ -234,7 +234,7 @@ def _simulate_company_lookup(company_name, note="No API key configured — simul
         "source": "simulated",
         "api_status": "simulated",
         "note": note,
-        "searched_at": datetime.utcnow().isoformat()
+        "searched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     }
 
 
@@ -255,7 +255,7 @@ def geolocate_ip(ip_address):
             "risk_level": "LOW",
             "source": "local",
             "api_status": "skipped",
-            "checked_at": datetime.utcnow().isoformat()
+            "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         }
 
     try:
@@ -295,7 +295,7 @@ def geolocate_ip(ip_address):
                 "risk_level": ip_risk,
                 "source": "ipapi",
                 "api_status": "live",
-                "checked_at": datetime.utcnow().isoformat()
+                "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
             }
         else:
             return _simulate_ip_geolocation(ip_address, note=f"API returned {resp.status_code}")
@@ -328,7 +328,7 @@ def _simulate_ip_geolocation(ip_address, note="Simulated result"):
         "source": "simulated",
         "api_status": "simulated",
         "note": note,
-        "checked_at": datetime.utcnow().isoformat()
+        "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     }
 
 
@@ -462,7 +462,7 @@ def _simulate_sumsub_applicant(external_user_id, first_name=None, last_name=None
         "source": "simulated",
         "api_status": "simulated",
         "note": note,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
 
@@ -505,7 +505,7 @@ def _simulate_sumsub_status(applicant_id, note="No Sumsub credentials configured
         "source": "simulated",
         "api_status": "simulated",
         "note": note,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
 
@@ -518,7 +518,7 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
     country = application_data.get("country", "")
 
     report = {
-        "screened_at": datetime.utcnow().isoformat(),
+        "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         "company_screening": {},
         "director_screenings": [],
         "ubo_screenings": [],

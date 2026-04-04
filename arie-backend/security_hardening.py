@@ -28,7 +28,7 @@ import secrets
 import re
 import time
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Tuple, Dict, List, Optional, Any
 from pathlib import Path
 
@@ -1401,7 +1401,7 @@ def get_safe_health_response() -> Dict:
         'status': 'ok',
         'service': 'ARIE Finance API',
         'version': '1.0.0',
-        'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'timestamp': datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
