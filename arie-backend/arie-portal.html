@@ -6779,10 +6779,12 @@ function buildPrescreeningSummary() {
     var texts = r.querySelectorAll('input[type="text"]');
     var nat = r.querySelector('select.nat-select');
     var pep = r.querySelector('select.pep-select');
+    var dob = r.querySelector('.dob-input') || r.querySelector('input[type="date"]');
     var name = [texts[0] ? texts[0].value : '', texts[1] ? texts[1].value : ''].filter(Boolean).join(' ');
     if (name) dirHtml += '<div style="padding:5px 0;font-size:12px;border-bottom:1px solid var(--border1);">' +
       '<span style="font-weight:600;color:var(--text1);">' + esc(name) + '</span>' +
       '<span style="color:var(--text3);margin-left:8px;">' + esc(nat ? nat.value : '') + '</span>' +
+      (dob && dob.value ? ' <span style="color:var(--text3);margin-left:6px;">DOB: ' + esc(dob.value) + '</span>' : '') +
       (pep && pep.value === 'Yes' ? ' <span style="color:#dc2626;font-weight:600;font-size:10px;margin-left:6px;">PEP</span>' : '') +
       '</div>';
   });
@@ -6794,11 +6796,13 @@ function buildPrescreeningSummary() {
     var nat = r.querySelector('select.nat-select');
     var pep = r.querySelector('select.pep-select');
     var pct = r.querySelector('input[type="number"]');
+    var dob = r.querySelector('.dob-input') || r.querySelector('input[type="date"]');
     var name = [texts[0] ? texts[0].value : '', texts[1] ? texts[1].value : ''].filter(Boolean).join(' ');
     if (name) uboHtml += '<div style="padding:5px 0;font-size:12px;border-bottom:1px solid var(--border1);">' +
       '<span style="font-weight:600;color:var(--text1);">' + esc(name) + '</span>' +
       (pct && pct.value ? ' <span style="color:var(--text3);">(' + esc(pct.value) + '%)</span>' : '') +
       '<span style="color:var(--text3);margin-left:8px;">' + esc(nat ? nat.value : '') + '</span>' +
+      (dob && dob.value ? ' <span style="color:var(--text3);margin-left:6px;">DOB: ' + esc(dob.value) + '</span>' : '') +
       (pep && pep.value === 'Yes' ? ' <span style="color:#dc2626;font-weight:600;font-size:10px;margin-left:6px;">PEP</span>' : '') +
       '</div>';
   });

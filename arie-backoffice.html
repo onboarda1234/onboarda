@@ -2506,8 +2506,8 @@ async function loadFromAPI() {
           date: (a.created_at || '').split('T')[0].split(' ')[0],
           country: a.country || '',
           brn: a.brn || '',
-          directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
-          ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
+          directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, dob: d.date_of_birth || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
+          ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
           intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
           dims: dims,
           docs: backendDocuments.map(function(d) { return d.doc_type; }),
@@ -3564,6 +3564,7 @@ async function fetchApplicationDetail(ref) {
       first_name: d.first_name || '',
       last_name: d.last_name || '',
       nat: d.nationality || '',
+      dob: d.date_of_birth || '',
       pep: normalizePepDisplay(d.is_pep),
       pep_declaration: d.pep_declaration || {}
     };
@@ -3576,6 +3577,7 @@ async function fetchApplicationDetail(ref) {
       first_name: u.first_name || '',
       last_name: u.last_name || '',
       nat: u.nationality || '',
+      dob: u.date_of_birth || '',
       pct: u.ownership_pct || 0,
       pep: normalizePepDisplay(u.is_pep),
       pep_declaration: u.pep_declaration || {}
@@ -3714,6 +3716,7 @@ function renderAuthoritativeAppDetail(app, options) {
     var nationality = normalizeDetailValue(d.nat);
     var labels = [];
     if (nationality !== '—') labels.push(nationality);
+    if (d.dob) labels.push('DOB: ' + escapeHtml(d.dob));
     labels.push('PEP: ' + normalizePepDisplay(d.pep));
     return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
@@ -3726,6 +3729,7 @@ function renderAuthoritativeAppDetail(app, options) {
     var meta = ['Ownership: ' + escapeHtml(normalizeDetailValue(u.pct)) + '%'];
     var nationality = normalizeDetailValue(u.nat);
     if (nationality !== '—') meta.push('Nationality: ' + escapeHtml(nationality));
+    if (u.dob) meta.push('DOB: ' + escapeHtml(u.dob));
     meta.push('PEP: ' + escapeHtml(normalizePepDisplay(u.pep)));
     return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
@@ -3831,7 +3835,8 @@ function renderAuthoritativeAppDetail(app, options) {
       reviewMeta +
       reviewComment +
       '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">' +
-        '<button class="doc-action-btn accept" onclick="viewBackofficeDocument(\'' + doc.id + '\')">👁️ View</button>' +
+        '<button class="doc-action-btn info" onclick="viewBackofficeDocument(\'' + doc.id + '\')">👁 View</button>' +
+        '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">📥 Download</button>' +
         '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">🔄 Re-Verify</button>' +
         '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">✓ Accept</button>' +
         '<button class="doc-action-btn reject" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'rejected\')">✗ Reject</button>' +
@@ -7875,18 +7880,31 @@ async function submitBoDocUpload() {
 }
 
 async function viewBackofficeDocument(docId) {
-  if (!docId) { showToast('Document record is missing a view identifier'); return; }
+  if (!docId) { showToast('Document record is missing an identifier'); return; }
+  try {
+    var data = await boApiCall('GET', '/documents/' + docId + '/download?view=inline');
+    if (data.download_url) {
+      window.open(data.download_url, '_blank', 'noopener');
+      return;
+    }
+    showToast('Document preview is not available — try downloading instead');
+  } catch (e) {
+    showToast(e.message || 'Document preview failed');
+  }
+}
+
+async function downloadBackofficeDocument(docId) {
+  if (!docId) { showToast('Document record is missing a download identifier'); return; }
   try {
     var data = await boApiCall('GET', '/documents/' + docId + '/download');
     if (data.download_url) {
-      // Open inline in new tab — PDF/images display natively, others gracefully fallback
       window.open(data.download_url, '_blank', 'noopener');
       return;
     }
     // Fallback: try direct view endpoint for local files
     window.open(BO_API_BASE + '/documents/' + docId + '/view?token=' + encodeURIComponent(BO_AUTH_TOKEN), '_blank', 'noopener');
   } catch (e) {
-    showToast(e.message || 'Document view failed');
+    showToast(e.message || 'Document download failed');
   }
 }
 
