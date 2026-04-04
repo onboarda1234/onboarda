@@ -67,6 +67,7 @@ class TestStatusLookupContract:
 
         assert payload["ref"] == created["ref"]
         assert payload["status"] == "compliance_review"
+        assert payload["status_label"] == "Compliance Review in Progress"
         assert "updated_at" in payload
         assert "company_name" not in payload
         assert "risk_level" not in payload
@@ -89,4 +90,4 @@ class TestStatusLookupContract:
         assert payload["ref"] == created["ref"]
         assert payload["status"] == "compliance_review"
         assert "updated_at" in payload
-        assert set(payload.keys()) == {"ref", "status", "updated_at"}
+        assert set(payload.keys()) == {"ref", "status", "status_label", "updated_at"}

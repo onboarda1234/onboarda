@@ -1068,15 +1068,21 @@ class HealthHandler(BaseHandler):
         }
 
         # Database connectivity check
+        db = None
         try:
             db = get_db()
             db.execute("SELECT 1")
-            db.close()
             health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
         except Exception as e:
             logger.error("Health check database error: %s", e)
             health["database"] = {"status": "error"}
             health["status"] = "degraded"
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
         # External API status — only show if authenticated and is admin
         # Remove integrations section to avoid configuration leakage
@@ -6475,11 +6481,13 @@ def build_status_lookup_payload(app_row):
     """Return the minimal public-safe status payload."""
     if not app_row:
         return None
-    return {
+    payload = {
         field: app_row[field]
         for field in STATUS_LOOKUP_PUBLIC_FIELDS
         if field in app_row.keys()
     }
+    payload["status_label"] = get_status_label(payload.get("status"))
+    return payload
 
 
 class ClientStatusLookupHandler(BaseHandler):
