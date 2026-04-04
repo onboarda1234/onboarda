@@ -972,6 +972,9 @@ class AdminResetDBHandler(BaseHandler):
 class AdminResetPasswordHandler(BaseHandler):
     """POST /api/admin/reset-password — reset a client's password (staging only)."""
     def post(self):
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
         from config import IS_PRODUCTION
         if IS_PRODUCTION:
             self.error("Not available in production", 403)
@@ -999,8 +1002,11 @@ class AdminResetPasswordHandler(BaseHandler):
 class AdminOfficerPasswordResetHandler(BaseHandler):
     """POST /api/admin/officer-reset-password — reset an officer's password (staging only).
     Targets the users table (officers/admins), NOT the clients table.
-    Requires confirmation token. NOT available in production."""
+    Requires admin auth + confirmation token. NOT available in production."""
     def post(self):
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
         from config import IS_PRODUCTION
         if IS_PRODUCTION:
             return self.error("Not available in production", 403)
@@ -5851,6 +5857,15 @@ class ApplicationDecisionHandler(BaseHandler):
 
         # ── SECURITY: Enforce approval preconditions (mandatory) ──
         if decision == "approve":
+            # ── H-1 FIX: Enforce ROLE_PERMISSION_MATRIX — CO cannot approve HIGH/VERY_HIGH ──
+            if user.get("role") == "co" and app["risk_level"] in ("HIGH", "VERY_HIGH"):
+                db.close()
+                return self.error(
+                    "Approval blocked: Compliance Officers cannot approve HIGH or VERY_HIGH risk applications. "
+                    "Only Admin or Senior Compliance Officer roles may approve at this risk level.",
+                    403
+                )
+
             # ── C-05 FIX: Enforce compliance memo existence via DB lookup on ALL approval paths ──
             memo_exists = db.execute(
                 "SELECT id FROM compliance_memos WHERE application_id = ?", (real_id,)

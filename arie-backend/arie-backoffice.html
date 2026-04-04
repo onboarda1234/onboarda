@@ -2852,6 +2852,24 @@ var USERS = [];
 
 var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'Compliance Officer', analyst:'Analyst' };
 
+// ── Demo role switcher (called by #login-as-select onchange) ──
+function switchUser(role) {
+  var match = USERS.find(function(u) { return u.role === role; });
+  if (!match) {
+    match = { id: 0, name: ROLE_LABELS[role] || role, email: '', role: role, initials: '--', status: 'active' };
+  }
+  currentUser = match;
+  document.body.className = 'role-' + (role || 'admin');
+  var nameEl = document.getElementById('sidebar-user-name');
+  var roleEl = document.getElementById('sidebar-user-role');
+  var avatarEl = document.getElementById('sidebar-avatar');
+  if (nameEl) nameEl.textContent = currentUser.name;
+  if (roleEl) roleEl.textContent = ROLE_LABELS[role] || role;
+  if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){return w[0];}).join('');
+  showView('dashboard', document.querySelector('.snav-item'));
+  showToast('Switched to ' + (ROLE_LABELS[role] || role));
+}
+
 var APPLICATIONS = [];
 // Demo data is no longer hardcoded. APPLICATIONS is populated from API via loadFromAPI().
 var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
