@@ -5165,14 +5165,24 @@ class SupervisorRunHandler(BaseHandler):
                 ),
                 timeout=120.0,
             )
+        except asyncio.TimeoutError:
+            logger.error("Supervisor pipeline timed out after 120s for app %s", app_id)
+            return self.error("Pipeline execution timed out after 120 seconds", 504)
+        except Exception as e:
+            import traceback
+            logger.error("Supervisor pipeline execution failed for app %s: %s (%s)\n%s",
+                         app_id, e, type(e).__name__, traceback.format_exc())
+            return self.error(f"Pipeline execution failed: {type(e).__name__}: {str(e)}", 500)
 
-            # Persist to database (survives restarts)
-            try:
-                from supervisor.api import persist_pipeline_result
-                persist_pipeline_result(result, trigger_type=trigger_type, trigger_source=trigger_source)
-            except Exception as persist_err:
-                logger.error("Failed to persist pipeline result: %s", persist_err)
+        # Persist to database (survives restarts)
+        try:
+            from supervisor.api import persist_pipeline_result
+            persist_pipeline_result(result, trigger_type=trigger_type, trigger_source=trigger_source)
+        except Exception as persist_err:
+            logger.error("Failed to persist pipeline result: %s", persist_err)
 
+        # Serialize and return results — separate try/except for clearer diagnostics
+        try:
             self.success({
                 "pipeline_id": result.pipeline_id,
                 "status": result.status,
@@ -5204,12 +5214,23 @@ class SupervisorRunHandler(BaseHandler):
                 ],
                 "failed_agent_details": result.failed_agents,
             })
-        except asyncio.TimeoutError:
-            logger.error("Supervisor pipeline timed out after 120s for app %s", app_id)
-            return self.error("Pipeline execution timed out after 120 seconds", 504)
-        except Exception as e:
-            logger.error("Supervisor pipeline failed: %s", e, exc_info=True)
-            return self.error(f"Pipeline execution failed: {str(e)}", 500)
+        except Exception as ser_err:
+            import traceback
+            logger.error("Supervisor result serialization failed for app %s: %s (%s)\n%s",
+                         app_id, ser_err, type(ser_err).__name__, traceback.format_exc())
+            # Return minimal result without complex serialization
+            self.success({
+                "pipeline_id": result.pipeline_id,
+                "status": result.status,
+                "started_at": result.started_at,
+                "completed_at": result.completed_at,
+                "agent_count": len(result.agent_outputs),
+                "failed_agents": len(result.failed_agents),
+                "requires_human_review": result.requires_human_review,
+                "review_reasons": result.review_reasons,
+                "blocking_issues": result.blocking_issues,
+                "_serialization_error": f"{type(ser_err).__name__}: {str(ser_err)}",
+            })
 
 
 class SupervisorResultHandler(BaseHandler):
