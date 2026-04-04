@@ -250,7 +250,9 @@ def _project_compatibility_aliases(merged, canonical):
     merged["country"] = first_non_empty(merged.get("country"), canonical["entity"]["incorporation_country"])
     merged["brn"] = canonical["entity"]["registration_number"]
     merged["registration_number"] = canonical["entity"]["registration_number"]
+    merged["incorporation_number"] = canonical["entity"]["registration_number"]
     merged["registered_address"] = canonical["entity"]["registered_address"]["full_text"]
+    merged["registered_office_address"] = canonical["entity"]["registered_address"]["full_text"]
     merged["headquarters_address"] = canonical["entity"]["headquarters_address"]["full_text"]
 
     merged["services_required"] = canonical["business"]["services"]["primary_services"]
@@ -289,6 +291,8 @@ def _project_compatibility_aliases(merged, canonical):
 
     merged["intermediaries"] = canonical["parties"]["intermediary_shareholders"]
     merged["intermediary_shareholders"] = canonical["parties"]["intermediary_shareholders"]
+    merged["shareholders"] = canonical["parties"]["ubos"]
+    merged["bank_name"] = first_non_empty(merged.get("existing_bank_name"), merged.get("bank_name", ""))
     merged["schema_version"] = canonical["submission"]["schema_version"]
 
     return merged

@@ -497,10 +497,41 @@ def run_rule_checks(doc_type: str, category: str,
                                      "Shareholding data could not be extracted — manual check required",
                                      rule_type=rtype))
                 continue
-            # Simple check: count match
-            results.append(_pass(id_, label, cls,
-                                 f"Shareholding data extracted for {len(extracted_holders)} holders",
-                                 rule_type=rtype))
+            # Compare declared vs extracted shareholding percentages by name match
+            mismatches = []
+            matched = 0
+            for declared in declared_shareholders:
+                d_name = declared.get("full_name", "") or f"{declared.get('first_name', '')} {declared.get('last_name', '')}".strip()
+                d_pct = declared.get("ownership_pct") or declared.get("percentage")
+                if not d_name:
+                    continue
+                best_match = None
+                best_sim = 0
+                for ext in extracted_holders:
+                    e_name = ext.get("name", "") or ext.get("full_name", "")
+                    sim = _name_similarity(d_name, e_name) if d_name and e_name else 0
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_match = ext
+                if best_match and best_sim >= NAME_MATCH_WARN_THRESHOLD:
+                    matched += 1
+                    e_pct = best_match.get("percentage") or best_match.get("ownership_pct")
+                    if d_pct is not None and e_pct is not None:
+                        try:
+                            if abs(float(d_pct) - float(e_pct)) > 1.0:
+                                mismatches.append(f"{d_name}: declared {d_pct}%, register {e_pct}%")
+                        except (ValueError, TypeError):
+                            pass
+            if mismatches:
+                results.append(_fail(id_, label, cls,
+                                     f"Shareholding percentage mismatch: {'; '.join(mismatches)}",
+                                     ps_field=PSField.SHAREHOLDERS,
+                                     rule_type=rtype))
+            else:
+                results.append(_pass(id_, label, cls,
+                                     f"Shareholding percentages verified for {matched}/{len(declared_shareholders)} declared holders",
+                                     ps_field=PSField.SHAREHOLDERS,
+                                     rule_type=rtype))
 
         # ── Total Shares Sum to 100% ──
         elif id_ == "DOC-15A":
@@ -579,9 +610,52 @@ def run_rule_checks(doc_type: str, category: str,
 
         # ── Ownership Match (structure chart vs pre-screening) ──
         elif id_ == "DOC-28":
-            results.append(_warn(id_, label, cls,
-                                 "Ownership match: cross-document comparison requires extracted data",
-                                 rule_type=rtype))
+            declared_shareholders = ps_get(PSField.SHAREHOLDERS, "shareholders", "ubos") or []
+            extracted_entities = ef.get("entities", ef.get("shareholders", []))
+            if not declared_shareholders:
+                results.append(_warn(id_, label, cls,
+                                     "No declared shareholders/UBOs to compare against structure chart",
+                                     rule_type=rtype))
+                continue
+            if not extracted_entities:
+                results.append(_warn(id_, label, cls,
+                                     "Structure chart entities could not be extracted — manual check required",
+                                     rule_type=rtype))
+                continue
+            mismatches = []
+            matched = 0
+            for declared in declared_shareholders:
+                d_name = declared.get("full_name", "") or f"{declared.get('first_name', '')} {declared.get('last_name', '')}".strip()
+                d_pct = declared.get("ownership_pct") or declared.get("percentage")
+                if not d_name:
+                    continue
+                best_match = None
+                best_sim = 0
+                for ext in extracted_entities:
+                    e_name = ext.get("name", "") or ext.get("full_name", "")
+                    sim = _name_similarity(d_name, e_name) if d_name and e_name else 0
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_match = ext
+                if best_match and best_sim >= NAME_MATCH_WARN_THRESHOLD:
+                    matched += 1
+                    e_pct = best_match.get("percentage") or best_match.get("ownership_pct")
+                    if d_pct is not None and e_pct is not None:
+                        try:
+                            if abs(float(d_pct) - float(e_pct)) > 2.0:
+                                mismatches.append(f"{d_name}: declared {d_pct}%, chart {e_pct}%")
+                        except (ValueError, TypeError):
+                            pass
+            if mismatches:
+                results.append(_fail(id_, label, cls,
+                                     f"Structure chart ownership mismatch: {'; '.join(mismatches)}",
+                                     ps_field=PSField.SHAREHOLDERS,
+                                     rule_type=rtype))
+            else:
+                results.append(_pass(id_, label, cls,
+                                     f"Structure chart ownership verified for {matched}/{len(declared_shareholders)} declared holders",
+                                     ps_field=PSField.SHAREHOLDERS,
+                                     rule_type=rtype))
 
         # ── CV Employment History — Presence ──
         elif id_ == "DOC-57A":
@@ -607,6 +681,103 @@ def run_rule_checks(doc_type: str, category: str,
                 results.append(_pass(id_, label, cls,
                                      "All required PEP declaration fields are present",
                                      rule_type="presence"))
+
+        # ── Incorporation Date Match (DOC-06A) ──
+        elif id_ == "DOC-06A":
+            declared_inc_date = ps_get(PSField.INCORPORATION_DATE, "incorporation_date")
+            extracted_inc_date = ef.get("incorporation_date") or ef.get("date_of_incorporation")
+            if not declared_inc_date:
+                results.append(_warn(id_, label, cls,
+                                     "Incorporation date not declared in pre-screening",
+                                     rule_type=rtype))
+                continue
+            if not extracted_inc_date:
+                results.append(_warn(id_, label, cls,
+                                     "Incorporation date could not be extracted — manual check required",
+                                     rule_type=rtype))
+                continue
+            d_d = _parse_date(declared_inc_date)
+            d_e = _parse_date(extracted_inc_date)
+            if d_d and d_e and d_d == d_e:
+                results.append(_pass(id_, label, cls,
+                                     f"Incorporation date matches ({extracted_inc_date})",
+                                     ps_field=PSField.INCORPORATION_DATE,
+                                     ps_value=str(declared_inc_date),
+                                     extracted_value=str(extracted_inc_date),
+                                     rule_type=rtype))
+            else:
+                results.append(_fail(id_, label, cls,
+                                     f"Incorporation date mismatch: document has '{extracted_inc_date}', "
+                                     f"declared is '{declared_inc_date}'",
+                                     ps_field=PSField.INCORPORATION_DATE,
+                                     ps_value=str(declared_inc_date),
+                                     extracted_value=str(extracted_inc_date),
+                                     rule_type=rtype))
+
+        # ── Jurisdiction Match (DOC-07) ──
+        elif id_ == "DOC-07":
+            declared_jur = ps_get(PSField.JURISDICTION, "country_of_incorporation", "country")
+            extracted_jur = ef.get("jurisdiction") or ef.get("country") or ef.get("country_of_incorporation")
+            if not declared_jur or not extracted_jur:
+                results.append(_warn(id_, label, cls,
+                                     "Jurisdiction not extractable or not declared — manual check required",
+                                     rule_type=rtype))
+                continue
+            d_n = _normalise_name(declared_jur)
+            e_n = _normalise_name(extracted_jur)
+            if d_n == e_n or d_n[:3] == e_n[:3]:
+                results.append(_pass(id_, label, cls,
+                                     f"Jurisdiction matches ({extracted_jur})",
+                                     ps_field=PSField.JURISDICTION,
+                                     ps_value=declared_jur,
+                                     extracted_value=extracted_jur,
+                                     rule_type=rtype))
+            else:
+                results.append(_fail(id_, label, cls,
+                                     f"Jurisdiction mismatch: document has '{extracted_jur}', "
+                                     f"declared is '{declared_jur}'",
+                                     ps_field=PSField.JURISDICTION,
+                                     ps_value=declared_jur,
+                                     extracted_value=extracted_jur,
+                                     rule_type=rtype))
+
+        # ��─ Authorised Share Capital Match (DOC-13) ──
+        elif id_ == "DOC-13":
+            declared_cap = ps_get(PSField.AUTHORISED_CAPITAL, "authorised_share_capital")
+            extracted_cap = ef.get("authorised_share_capital") or ef.get("share_capital")
+            if not declared_cap:
+                results.append(_warn(id_, label, cls,
+                                     "Authorised share capital not declared in pre-screening",
+                                     rule_type=rtype))
+                continue
+            if not extracted_cap:
+                results.append(_warn(id_, label, cls,
+                                     "Authorised share capital could not be extracted — manual check required",
+                                     rule_type=rtype))
+                continue
+            try:
+                d_val = float(re.sub(r"[^\d.]", "", str(declared_cap)))
+                e_val = float(re.sub(r"[^\d.]", "", str(extracted_cap)))
+                if abs(d_val - e_val) / max(d_val, 1) < 0.001:
+                    results.append(_pass(id_, label, cls,
+                                         f"Authorised share capital matches ({extracted_cap})",
+                                         ps_field=PSField.AUTHORISED_CAPITAL,
+                                         ps_value=str(declared_cap),
+                                         extracted_value=str(extracted_cap),
+                                         rule_type=rtype))
+                else:
+                    results.append(_fail(id_, label, cls,
+                                         f"Capital mismatch: document has '{extracted_cap}', "
+                                         f"declared is '{declared_cap}'",
+                                         ps_field=PSField.AUTHORISED_CAPITAL,
+                                         ps_value=str(declared_cap),
+                                         extracted_value=str(extracted_cap),
+                                         rule_type=rtype))
+            except (ValueError, TypeError):
+                results.append(_warn(id_, label, cls,
+                                     f"Could not parse capital values for comparison "
+                                     f"(declared: '{declared_cap}', extracted: '{extracted_cap}')",
+                                     rule_type=rtype))
 
         else:
             # Unknown rule check — return warn rather than silently skip
@@ -781,6 +952,15 @@ def verify_document_layered(
             ai_hybrid_checks = get_ai_checks_for_doc_type(doc_type, category)
 
         if ai_hybrid_checks:
+            # Build pre-screening context for AI: extract declared values for each check's ps_field
+            ps_context = {}
+            if prescreening_data and ai_hybrid_checks:
+                for chk in ai_hybrid_checks:
+                    pf = chk.get("ps_field")
+                    if pf:
+                        val = prescreening_data.get(pf)
+                        if val not in (None, "", [], {}):
+                            ps_context[pf] = val
             try:
                 ai_result = claude_client.verify_document(
                     doc_type=doc_type,
@@ -792,6 +972,7 @@ def verify_document_layered(
                     entity_name=entity_name,
                     directors=directors or [],
                     ubos=ubos or [],
+                    prescreening_context=ps_context,
                 )
 
                 # P0-2: Guard against rejected/invalid AI responses

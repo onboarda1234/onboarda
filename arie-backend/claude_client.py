@@ -1743,6 +1743,7 @@ CRITICAL REQUIREMENTS:
         entity_name: str = "",
         directors: list = None,
         ubos: list = None,
+        prescreening_context: dict = None,
     ) -> Dict[str, Any]:
         """
         Agent 1: Identity & Document Integrity Agent — Verify document authenticity and compliance using Claude AI.
@@ -1879,12 +1880,25 @@ RULES:
         if app_context_lines:
             app_context_block = "\n\nApplication Context (use for cross-referencing names in the document):\n- " + "\n- ".join(app_context_lines)
 
+        # Build pre-screening declared values block for AI cross-referencing
+        ps_context_block = ""
+        if prescreening_context:
+            ps_lines = []
+            for key, value in prescreening_context.items():
+                if value not in (None, "", [], {}):
+                    sanitized_val = self._sanitize_for_prompt(str(value)) if isinstance(value, str) else str(value)
+                    ps_lines.append(f"{key}: {sanitized_val}")
+            if ps_lines:
+                ps_context_block = ("\n\nPre-Screening Declared Values "
+                                    "(use for cross-referencing against document content):\n- "
+                                    + "\n- ".join(ps_lines))
+
         user_prompt = f"""Verify this document:
 
 Claimed Document Type: {doc_type}
 File Name: {file_name}
 Document Category: {doc_category}
-Associated Person/Entity: {sanitized_person_name if sanitized_person_name else "Not provided"}{app_context_block}
+Associated Person/Entity: {sanitized_person_name if sanitized_person_name else "Not provided"}{app_context_block}{ps_context_block}
 
 {"Analyze the attached document image/file carefully." if has_vision else "No file attached — verify based on metadata and flag that manual review is recommended."}
 Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Return results for each one."""

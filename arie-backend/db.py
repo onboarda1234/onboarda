@@ -318,6 +318,7 @@ def _get_postgres_schema() -> str:
         nationality TEXT,
         is_pep BOOLEAN DEFAULT false,
         pep_declaration JSONB DEFAULT '{}',
+        date_of_birth TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -333,6 +334,7 @@ def _get_postgres_schema() -> str:
         ownership_pct REAL,
         is_pep BOOLEAN DEFAULT false,
         pep_declaration JSONB DEFAULT '{}',
+        date_of_birth TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -877,6 +879,7 @@ def _get_sqlite_schema() -> str:
         nationality TEXT,
         is_pep TEXT DEFAULT 'No',
         pep_declaration TEXT DEFAULT '{}',
+        date_of_birth TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -892,6 +895,7 @@ def _get_sqlite_schema() -> str:
         ownership_pct REAL,
         is_pep TEXT DEFAULT 'No',
         pep_declaration TEXT DEFAULT '{}',
+        date_of_birth TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
 

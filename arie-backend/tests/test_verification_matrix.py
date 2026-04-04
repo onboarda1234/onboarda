@@ -430,3 +430,190 @@ class TestBackwardCompatibility:
             # Gate and rule checks must have classification
             if check.get("id", "").startswith("GATE") or check.get("source") == "rule":
                 assert "classification" in check
+
+
+# ── Agent 1 Matrix Alignment Tests ───────────────────────────────────
+
+class TestNewCheckDefinitions:
+    """Verify new checks required by Agent 1 matrix exist in ALL_DOC_CHECKS."""
+
+    def test_cert_inc_has_incorporation_date_match(self):
+        checks = get_checks_for_doc_type("cert_inc", "entity")
+        ids = [c["id"] for c in checks]
+        assert "DOC-06A" in ids, "DOC-06A (Incorporation Date Match) missing from cert_inc"
+
+    def test_cert_inc_has_jurisdiction_match(self):
+        checks = get_checks_for_doc_type("cert_inc", "entity")
+        ids = [c["id"] for c in checks]
+        assert "DOC-07" in ids, "DOC-07 (Jurisdiction Match) missing from cert_inc"
+
+    def test_memarts_has_share_capital_match(self):
+        checks = get_checks_for_doc_type("memarts", "entity")
+        ids = [c["id"] for c in checks]
+        assert "DOC-13" in ids, "DOC-13 (Authorised Share Capital Match) missing from memarts"
+
+
+class TestFieldAlignmentToMatrix:
+    """Verify normalization produces the field names expected by the Agent 1 matrix."""
+
+    def test_incorporation_number_alias_produced(self):
+        from prescreening.normalize import normalize_prescreening_data
+        data = {"prescreening_data": {"brn": "BRN-12345"}}
+        result = normalize_prescreening_data(data)
+        assert result.get("incorporation_number") == "BRN-12345"
+        assert result.get("registration_number") == "BRN-12345"
+
+    def test_bank_name_alias_produced(self):
+        from prescreening.normalize import normalize_prescreening_data
+        data = {"prescreening_data": {"existing_bank_name": "HSBC"}}
+        result = normalize_prescreening_data(data)
+        assert result.get("bank_name") == "HSBC"
+
+    def test_shareholders_alias_produced(self):
+        from prescreening.normalize import normalize_prescreening_data
+        ubos = [{"full_name": "Alice", "ownership_pct": 60}]
+        data = {"ubos": ubos, "prescreening_data": {}}
+        result = normalize_prescreening_data(data)
+        assert isinstance(result.get("shareholders"), list)
+
+    def test_registered_office_address_alias_produced(self):
+        from prescreening.normalize import normalize_prescreening_data
+        data = {"prescreening_data": {"registered_address": "123 Main St"}}
+        result = normalize_prescreening_data(data)
+        assert result.get("registered_office_address") == "123 Main St"
+
+
+class TestNewRuleChecks:
+    """Test rule check implementations for DOC-06A, DOC-07, DOC-13."""
+
+    def test_incorporation_date_match_pass(self):
+        extracted = {"incorporation_date": "2020-06-15"}
+        ps = {"incorporation_date": "2020-06-15"}
+        results = run_rule_checks("cert_inc", "entity", extracted, ps, "LOW")
+        date_checks = [r for r in results if r.get("id") == "DOC-06A"]
+        assert len(date_checks) == 1
+        assert date_checks[0]["result"] == CheckStatus.PASS
+
+    def test_incorporation_date_match_fail(self):
+        extracted = {"incorporation_date": "2020-06-15"}
+        ps = {"incorporation_date": "2019-01-01"}
+        results = run_rule_checks("cert_inc", "entity", extracted, ps, "LOW")
+        date_checks = [r for r in results if r.get("id") == "DOC-06A"]
+        assert len(date_checks) == 1
+        assert date_checks[0]["result"] == CheckStatus.FAIL
+
+    def test_jurisdiction_match_pass(self):
+        extracted = {"jurisdiction": "Mauritius"}
+        ps = {"country_of_incorporation": "Mauritius"}
+        results = run_rule_checks("cert_inc", "entity", extracted, ps, "LOW")
+        jur_checks = [r for r in results if r.get("id") == "DOC-07"]
+        assert len(jur_checks) == 1
+        assert jur_checks[0]["result"] == CheckStatus.PASS
+
+    def test_jurisdiction_match_fail(self):
+        extracted = {"jurisdiction": "United Kingdom"}
+        ps = {"country_of_incorporation": "Mauritius"}
+        results = run_rule_checks("cert_inc", "entity", extracted, ps, "LOW")
+        jur_checks = [r for r in results if r.get("id") == "DOC-07"]
+        assert len(jur_checks) == 1
+        assert jur_checks[0]["result"] == CheckStatus.FAIL
+
+    def test_share_capital_match_pass(self):
+        extracted = {"authorised_share_capital": "100000"}
+        ps = {"authorised_share_capital": "100000"}
+        results = run_rule_checks("memarts", "entity", extracted, ps, "LOW")
+        cap_checks = [r for r in results if r.get("id") == "DOC-13"]
+        assert len(cap_checks) == 1
+        assert cap_checks[0]["result"] == CheckStatus.PASS
+
+    def test_share_capital_match_fail(self):
+        extracted = {"authorised_share_capital": "500000"}
+        ps = {"authorised_share_capital": "100000"}
+        results = run_rule_checks("memarts", "entity", extracted, ps, "LOW")
+        cap_checks = [r for r in results if r.get("id") == "DOC-13"]
+        assert len(cap_checks) == 1
+        assert cap_checks[0]["result"] == CheckStatus.FAIL
+
+
+class TestPersonContextVerification:
+    """Test that person-level checks work when person fields are injected."""
+
+    def test_passport_dob_match_with_person_context(self):
+        """DOC-49A should PASS when date_of_birth is present in prescreening_data."""
+        extracted = {"date_of_birth": "1985-03-20", "expiry_date": "2030-01-01"}
+        ps = {"date_of_birth": "1985-03-20", "full_name": "John Smith", "nationality": "British"}
+        results = run_rule_checks("passport", "person", extracted, ps, "LOW")
+        dob_checks = [r for r in results if r.get("id") == "DOC-49A"]
+        assert len(dob_checks) == 1
+        assert dob_checks[0]["result"] == CheckStatus.PASS
+
+    def test_passport_nationality_match_with_person_context(self):
+        """DOC-52 should PASS when nationality is present in prescreening_data."""
+        extracted = {"nationality": "British", "expiry_date": "2030-01-01"}
+        ps = {"nationality": "British", "full_name": "John Smith"}
+        results = run_rule_checks("passport", "person", extracted, ps, "LOW")
+        nat_checks = [r for r in results if r.get("id") == "DOC-52"]
+        assert len(nat_checks) == 1
+        assert nat_checks[0]["result"] == CheckStatus.PASS
+
+    def test_passport_name_match_with_person_context(self):
+        """DOC-51 should use full_name from person context."""
+        extracted = {"entity_name": "John Smith", "expiry_date": "2030-01-01"}
+        ps = {"full_name": "John Smith"}
+        results = run_rule_checks("passport", "person", extracted, ps, "LOW")
+        name_checks = [r for r in results if "name" in r.get("label", "").lower() and r.get("id") == "DOC-51"]
+        assert len(name_checks) == 1
+        assert name_checks[0]["result"] == CheckStatus.PASS
+
+    def test_person_checks_warn_without_context(self):
+        """Without person context, DOC-49A should WARN (not silently pass)."""
+        extracted = {"date_of_birth": "1985-03-20", "expiry_date": "2030-01-01"}
+        ps = {}  # No person context injected
+        results = run_rule_checks("passport", "person", extracted, ps, "LOW")
+        dob_checks = [r for r in results if r.get("id") == "DOC-49A"]
+        assert len(dob_checks) == 1
+        assert dob_checks[0]["result"] == CheckStatus.WARN
+
+
+class TestCompletedStubs:
+    """Test that DOC-15 and DOC-28 are no longer stubs."""
+
+    def test_doc15_compares_percentages(self):
+        """DOC-15 should compare actual percentages, not just count holders."""
+        extracted = {"shareholders": [
+            {"name": "Alice Smith", "percentage": 60},
+            {"name": "Bob Jones", "percentage": 40},
+        ]}
+        ps = {"shareholders": [
+            {"full_name": "Alice Smith", "ownership_pct": 60},
+            {"full_name": "Bob Jones", "ownership_pct": 40},
+        ]}
+        results = run_rule_checks("reg_sh", "entity", extracted, ps, "LOW")
+        pct_checks = [r for r in results if r.get("id") == "DOC-15"]
+        assert len(pct_checks) == 1
+        assert pct_checks[0]["result"] == CheckStatus.PASS
+
+    def test_doc15_fails_on_mismatch(self):
+        extracted = {"shareholders": [
+            {"name": "Alice Smith", "percentage": 80},
+        ]}
+        ps = {"shareholders": [
+            {"full_name": "Alice Smith", "ownership_pct": 60},
+        ]}
+        results = run_rule_checks("reg_sh", "entity", extracted, ps, "LOW")
+        pct_checks = [r for r in results if r.get("id") == "DOC-15"]
+        assert len(pct_checks) == 1
+        assert pct_checks[0]["result"] == CheckStatus.FAIL
+
+    def test_doc28_no_longer_placeholder(self):
+        """DOC-28 should do real comparison when data is available."""
+        extracted = {"entities": [
+            {"name": "Alice Smith", "percentage": 60},
+        ]}
+        ps = {"shareholders": [
+            {"full_name": "Alice Smith", "ownership_pct": 60},
+        ]}
+        results = run_rule_checks("structure_chart", "entity", extracted, ps, "LOW")
+        own_checks = [r for r in results if r.get("id") == "DOC-28"]
+        assert len(own_checks) == 1
+        assert own_checks[0]["result"] == CheckStatus.PASS

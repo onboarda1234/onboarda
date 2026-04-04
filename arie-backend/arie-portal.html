@@ -4,10 +4,12 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Onboarda — Client Onboarding Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 
   /* ── Reset & Base ── */
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
     --bg:       #FAFBFD;
@@ -35,6 +37,7 @@
     --radius:   14px;
     --radius-sm:10px;
     --shadow:   0 4px 24px rgba(0,0,0,0.08);
+    --shadow-sm:0 1px 3px rgba(0,0,0,0.06);
     --shadow-lg:0 20px 60px rgba(0,0,0,0.12);
     --shadow-glow: 0 0 40px rgba(43,47,143,0.15);
     --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -2356,13 +2359,14 @@
           <div id="directors-container">
             <table class="dyn-table" id="directors-table">
               <thead>
-                <tr><th>First Name</th><th>Last Name</th><th>Nationality</th><th>PEP</th><th></th></tr>
+                <tr><th>First Name</th><th>Last Name</th><th>Nationality</th><th>Date of Birth</th><th>PEP</th><th></th></tr>
               </thead>
               <tbody id="directors-body">
                 <tr>
                   <td><input type="text" placeholder="First name" /></td>
                   <td><input type="text" placeholder="Last name" /></td>
                   <td><select class="nat-select"><option value="">Nationality</option></select></td>
+                  <td><input type="date" class="dob-input" /></td>
                   <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
                   <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
                 </tr>
@@ -2390,13 +2394,14 @@
           <div id="ubos-container">
             <table class="dyn-table" id="ubos-table">
               <thead>
-                <tr><th>First Name</th><th>Last Name</th><th>Nationality</th><th>% Ownership</th><th>PEP</th><th></th></tr>
+                <tr><th>First Name</th><th>Last Name</th><th>Nationality</th><th>Date of Birth</th><th>% Ownership</th><th>PEP</th><th></th></tr>
               </thead>
               <tbody id="ubos-body">
                 <tr>
                   <td><input type="text" placeholder="First name" /></td>
                   <td><input type="text" placeholder="Last name" /></td>
                   <td><select class="nat-select"><option value="">Nationality</option></select></td>
+                  <td><input type="date" class="dob-input" /></td>
                   <td><input type="number" placeholder="% Ownership" min="0" max="100" /></td>
                   <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
                   <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
@@ -5002,6 +5007,7 @@ function addDirectorRow() {
     <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
     <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
     <td><select class="nat-select"><option value="">Nationality</option></select></td>
+    <td><input type="date" class="dob-input" /></td>
     <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
     <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
   `;
@@ -5020,6 +5026,7 @@ function addUBORow() {
     <td><input type="text" placeholder="First name" oninput="runRealtimeBackgroundScreening(this)"/></td>
     <td><input type="text" placeholder="Last name" oninput="runRealtimeBackgroundScreening(this)"/></td>
     <td><select class="nat-select"><option value="">Nationality</option></select></td>
+    <td><input type="date" class="dob-input" /></td>
     <td><input type="number" placeholder="% Ownership" min="0" max="100" oninput="runRealtimeUBOMappingAnalysis(this)"/></td>
     <td><select class="pep-select" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
     <td style="position:relative;"><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button><span class="screening-indicator" style="display:none;position:absolute;right:30px;top:8px;width:16px;height:16px;border-radius:50%;font-size:10px;line-height:16px;text-align:center;"></span></td>
@@ -5387,6 +5394,7 @@ async function submitPrescreening(e) {
     var fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
     var pepSelect = row.querySelector('.pep-select');
     var isPep = pepSelect ? (pepSelect.value || 'No') : 'No';
+    var dobInput = row.querySelector('.dob-input');
     if (fullName) {
       directors.push({
         person_key: personKey,
@@ -5394,6 +5402,7 @@ async function submitPrescreening(e) {
         last_name: lastName,
         full_name: fullName,
         nationality: (row.querySelector('.nat-select') || {}).value || '',
+        date_of_birth: dobInput ? dobInput.value : '',
         is_pep: isPep,
         pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes')
       });
@@ -5411,6 +5420,7 @@ async function submitPrescreening(e) {
     var ownershipInput = row.querySelector('input[type="number"]');
     var pepSelect = row.querySelector('.pep-select');
     var isPep = pepSelect ? (pepSelect.value || 'No') : 'No';
+    var dobInput = row.querySelector('.dob-input');
     if (fullName) {
       ubos.push({
         person_key: personKey,
@@ -5418,6 +5428,7 @@ async function submitPrescreening(e) {
         last_name: lastName,
         full_name: fullName,
         nationality: (row.querySelector('.nat-select') || {}).value || '',
+        date_of_birth: dobInput ? dobInput.value : '',
         ownership_pct: ownershipInput ? (parseFloat(ownershipInput.value) || 0) : 0,
         is_pep: isPep,
         pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes')
@@ -6372,10 +6383,12 @@ function collectFormData() {
     var texts = row.querySelectorAll('input[type="text"]');
     var natSel = row.querySelector('select.nat-select');
     var pepSel = row.querySelector('select.pep-select');
+    var dobInput = row.querySelector('.dob-input') || row.querySelector('input[type="date"]');
     data.directors.push({
       first_name: texts[0] ? texts[0].value : '',
       last_name: texts[1] ? texts[1].value : '',
       nationality: natSel ? natSel.value : '',
+      date_of_birth: dobInput ? dobInput.value : '',
       is_pep: pepSel ? pepSel.value : 'No',
       person_key: row.dataset.personkey || row.dataset.personKey || ''
     });
@@ -6388,10 +6401,12 @@ function collectFormData() {
     var natSel = row.querySelector('select.nat-select');
     var pepSel = row.querySelector('select.pep-select');
     var numInput = row.querySelector('input[type="number"]');
+    var dobInput = row.querySelector('.dob-input') || row.querySelector('input[type="date"]');
     data.ubos.push({
       first_name: texts[0] ? texts[0].value : '',
       last_name: texts[1] ? texts[1].value : '',
       nationality: natSel ? natSel.value : '',
+      date_of_birth: dobInput ? dobInput.value : '',
       ownership_pct: numInput ? numInput.value : '',
       is_pep: pepSel ? pepSel.value : 'No',
       person_key: row.dataset.personkey || row.dataset.personKey || ''
@@ -6603,6 +6618,8 @@ function restorePartyRows(tbodyId, rows, partyType) {
       if (texts[0]) texts[0].value = rowData.first_name || '';
       if (texts[1]) texts[1].value = rowData.last_name || '';
       if (natSel) natSel.value = rowData.nationality || '';
+      var dobInput = lastRow.querySelector('.dob-input') || lastRow.querySelector('input[type="date"]');
+      if (dobInput) dobInput.value = rowData.date_of_birth || '';
       if (pepSel) pepSel.value = rowData.is_pep || 'No';
       if (partyType === 'ubo') {
         var numInput = lastRow.querySelector('input[type="number"]');

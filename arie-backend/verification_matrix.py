@@ -203,6 +203,30 @@ SECTION_A_CHECKS = {
                 rule_type="exact",
             ),
             _check(
+                id_="DOC-06A",
+                label="Incorporation Date Match",
+                classification=CheckClassification.RULE,
+                ps_field=PSField.INCORPORATION_DATE,
+                why="Date comparison is deterministic.",
+                logic="Parse date from document, normalise to ISO format, compare with "
+                      "pre-screening incorporation_date.",
+                trigger=TriggerTiming.AFTER_OCR,
+                escalation=EscalationOutcome.FAIL,
+                rule_type="date_match",
+            ),
+            _check(
+                id_="DOC-07",
+                label="Jurisdiction Match",
+                classification=CheckClassification.RULE,
+                ps_field=PSField.JURISDICTION,
+                why="Enum/list comparison is deterministic.",
+                logic="Extract jurisdiction/country from document, normalise country name/code, "
+                      "compare with pre-screening jurisdiction.",
+                trigger=TriggerTiming.AFTER_OCR,
+                escalation=EscalationOutcome.FAIL,
+                rule_type="enum",
+            ),
+            _check(
                 id_="DOC-07A",
                 label="Document Clarity",
                 classification=CheckClassification.HYBRID,
@@ -268,6 +292,18 @@ SECTION_A_CHECKS = {
                                "PASS if declared activity is clearly within scope. "
                                "WARN if scope is broad/ambiguous but plausibly includes declared activity. "
                                "FAIL if declared activity appears outside objects.",
+            ),
+            _check(
+                id_="DOC-13",
+                label="Authorised Share Capital Match",
+                classification=CheckClassification.RULE,
+                ps_field=PSField.AUTHORISED_CAPITAL,
+                why="Numeric comparison is deterministic.",
+                logic="Parse currency and amount from document, compare with pre-screening "
+                      "authorised_share_capital.",
+                trigger=TriggerTiming.AFTER_OCR,
+                escalation=EscalationOutcome.FAIL,
+                rule_type="numeric",
             ),
             CERTIFICATION_CHECK,
         ],

@@ -600,8 +600,8 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             db.execute("""
                 INSERT INTO directors (
                     application_id, person_key, first_name, last_name, full_name,
-                    nationality, is_pep, pep_declaration
-                ) VALUES (?,?,?,?,?,?,?,?)
+                    nationality, is_pep, pep_declaration, date_of_birth
+                ) VALUES (?,?,?,?,?,?,?,?,?)
             """, (
                 application_id,
                 director.get("person_key"),
@@ -610,7 +610,8 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 full_name,
                 encrypted.get("nationality", ""),
                 normalize_is_pep(director.get("is_pep", "No")),
-                json.dumps(parse_json_field(director.get("pep_declaration"), {}))
+                json.dumps(parse_json_field(director.get("pep_declaration"), {})),
+                director.get("date_of_birth", ""),
             ))
     if ubos is not None:
         db.execute("DELETE FROM ubos WHERE application_id = ?", (application_id,))
@@ -622,8 +623,8 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             db.execute("""
                 INSERT INTO ubos (
                     application_id, person_key, first_name, last_name, full_name,
-                    nationality, ownership_pct, is_pep, pep_declaration
-                ) VALUES (?,?,?,?,?,?,?,?,?)
+                    nationality, ownership_pct, is_pep, pep_declaration, date_of_birth
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
             """, (
                 application_id,
                 ubo.get("person_key"),
@@ -633,7 +634,8 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 encrypted.get("nationality", ""),
                 encrypted.get("ownership_pct", 0),
                 normalize_is_pep(ubo.get("is_pep", "No")),
-                json.dumps(parse_json_field(ubo.get("pep_declaration"), {}))
+                json.dumps(parse_json_field(ubo.get("pep_declaration"), {})),
+                ubo.get("date_of_birth", ""),
             ))
     if intermediaries is not None:
         db.execute("DELETE FROM intermediaries WHERE application_id = ?", (application_id,))
@@ -660,7 +662,7 @@ def resolve_application_person(db, application_id, person_ref):
         return None
 
     director = db.execute("""
-        SELECT id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration
+        SELECT id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration, date_of_birth
         FROM directors WHERE application_id = ? AND (id = ? OR person_key = ?)
         LIMIT 1
     """, (application_id, person_ref, person_ref)).fetchone()
@@ -671,7 +673,7 @@ def resolve_application_person(db, application_id, person_ref):
         return result
 
     ubo = db.execute("""
-        SELECT id, person_key, first_name, last_name, full_name, nationality, ownership_pct, is_pep, pep_declaration
+        SELECT id, person_key, first_name, last_name, full_name, nationality, ownership_pct, is_pep, pep_declaration, date_of_birth
         FROM ubos WHERE application_id = ? AND (id = ? OR person_key = ?)
         LIMIT 1
     """, (application_id, person_ref, person_ref)).fetchone()
@@ -2552,6 +2554,27 @@ class DocumentVerifyHandler(BaseHandler):
         # Build prescreening_data and risk_level from application record
         prescreening_data = safe_json_loads(app.get("prescreening_data") if app else None) or {}
         risk_level = (app.get("risk_level") or "MEDIUM") if app else "MEDIUM"
+
+        # Inject person-level fields into prescreening_data for person-category verification.
+        # The verification engine uses ps_get() to look up flat keys like full_name, nationality,
+        # date_of_birth — these must come from the resolved person record, not the application blob.
+        if person_record and doc_category == "kyc":
+            prescreening_data = dict(prescreening_data)  # shallow copy — don't mutate original
+            pep_decl = parse_json_field(person_record.get("pep_declaration"), {}) or {}
+            person_fields = {
+                "full_name": person_record.get("full_name", ""),
+                "date_of_birth": person_record.get("date_of_birth", ""),
+                "nationality": person_record.get("nationality", ""),
+                "residential_address": person_record.get("residential_address", ""),
+                "role": person_record.get("person_type", ""),
+                "source_of_wealth_detail": pep_decl.get("source_of_wealth_detail", ""),
+                "pep_function": pep_decl.get("public_function", ""),
+                "pep_net_worth": pep_decl.get("estimated_assets_usd", ""),
+                "pep_source_of_funds": pep_decl.get("source_of_wealth_detail", ""),
+            }
+            for k, v in person_fields.items():
+                if v not in (None, "", {}, []):
+                    prescreening_data[k] = v
 
         # Compute SHA-256 hashes of other documents already uploaded for this application
         # Used by GATE-03 duplicate detection
