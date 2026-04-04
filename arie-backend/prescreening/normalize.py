@@ -137,6 +137,8 @@ def _populate_canonical(merged):
         merged.get("entity_name"),
     )
     canonical["entity"]["trading_name"] = first_non_empty(merged.get("trading_name"))
+    canonical["entity"]["type"] = first_non_empty(merged.get("entity_type"))
+    canonical["entity"]["website"] = first_non_empty(merged.get("website"))
     canonical["entity"]["incorporation_country"] = first_non_empty(
         merged.get("country_of_incorporation"),
         merged.get("country"),
@@ -148,9 +150,15 @@ def _populate_canonical(merged):
     canonical["entity"]["incorporation_date"] = first_non_empty(merged.get("incorporation_date"))
     canonical["entity"]["registered_address"]["full_text"] = first_non_empty(merged.get("registered_address"))
     canonical["entity"]["headquarters_address"]["full_text"] = first_non_empty(merged.get("headquarters_address"))
+    canonical["entity"]["contact"]["first_name"] = first_non_empty(merged.get("entity_contact_first"))
+    canonical["entity"]["contact"]["last_name"] = first_non_empty(merged.get("entity_contact_last"))
+    canonical["entity"]["contact"]["email"] = first_non_empty(merged.get("entity_contact_email"))
+    canonical["entity"]["contact"]["phone_code"] = first_non_empty(merged.get("entity_contact_phone_code"))
+    canonical["entity"]["contact"]["mobile"] = first_non_empty(merged.get("entity_contact_mobile"))
 
     canonical["business"]["sector"] = first_non_empty(merged.get("sector"))
     canonical["business"]["activity_description"] = first_non_empty(merged.get("business_overview"))
+    canonical["business"]["management_overview"] = first_non_empty(merged.get("management_overview"))
     canonical["business"]["services"]["primary_services"] = _copy_list(merged.get("services_required"))
     canonical["business"]["account_purposes"] = _copy_list(merged.get("account_purposes"))
 
@@ -211,7 +219,25 @@ def _populate_canonical(merged):
     canonical["licensing"]["regulated_activity_declared"] = merged.get("regulated_activity_declared")
     canonical["licensing"]["licences"] = _copy_list(merged.get("licences"))
 
+    canonical["banking"]["existing_account"] = first_non_empty(merged.get("existing_bank_account"))
+    canonical["banking"]["bank_name"] = first_non_empty(
+        merged.get("existing_bank_name"),
+        merged.get("bank_name"),
+    )
+
     canonical["delivery_channel"]["introduction_method"] = first_non_empty(merged.get("introduction_method"))
+    canonical["delivery_channel"]["referrer_name"] = first_non_empty(merged.get("referrer_name"))
+
+    consents = {}
+    for key in ("consent_data_processing", "consent_information_sharing",
+                "consent_data_retention", "consent_ongoing_monitoring",
+                "consent_marketing", "consent_declaration",
+                "consent_pricing", "consent_terms"):
+        val = merged.get(key)
+        if val is not None:
+            consents[key] = bool(val)
+    canonical["submission"]["consents"] = consents
+
     canonical["submission"]["schema_version"] = first_non_empty(
         merged.get("schema_version"),
         CURRENT_SCHEMA_VERSION,
@@ -239,6 +265,7 @@ def _project_compatibility_aliases(merged, canonical):
     merged["transaction"] = canonical["transaction"]
     merged["wealth"] = canonical["wealth"]
     merged["funds"] = canonical["funds"]
+    merged["banking"] = canonical["banking"]
     merged["licensing"] = canonical["licensing"]
     merged["delivery_channel"] = canonical["delivery_channel"]
 
@@ -292,8 +319,21 @@ def _project_compatibility_aliases(merged, canonical):
     merged["intermediaries"] = canonical["parties"]["intermediary_shareholders"]
     merged["intermediary_shareholders"] = canonical["parties"]["intermediary_shareholders"]
     merged["shareholders"] = canonical["parties"]["ubos"]
-    merged["bank_name"] = first_non_empty(merged.get("existing_bank_name"), merged.get("bank_name", ""))
+    merged["bank_name"] = first_non_empty(canonical["banking"]["bank_name"], merged.get("existing_bank_name"), merged.get("bank_name", ""))
+    merged["existing_bank_name"] = canonical["banking"]["bank_name"]
+    merged["existing_bank_account"] = canonical["banking"]["existing_account"]
     merged["schema_version"] = canonical["submission"]["schema_version"]
+
+    # Project new canonical fields as flat aliases for backward compatibility
+    merged["entity_type"] = canonical["entity"]["type"]
+    merged["website"] = canonical["entity"]["website"]
+    merged["entity_contact_first"] = canonical["entity"]["contact"]["first_name"]
+    merged["entity_contact_last"] = canonical["entity"]["contact"]["last_name"]
+    merged["entity_contact_email"] = canonical["entity"]["contact"]["email"]
+    merged["entity_contact_phone_code"] = canonical["entity"]["contact"]["phone_code"]
+    merged["entity_contact_mobile"] = canonical["entity"]["contact"]["mobile"]
+    merged["management_overview"] = canonical["business"]["management_overview"]
+    merged["referrer_name"] = canonical["delivery_channel"]["referrer_name"]
 
     return merged
 

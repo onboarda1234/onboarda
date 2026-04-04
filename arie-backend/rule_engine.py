@@ -414,7 +414,7 @@ def compute_risk_score(app_data, config_override=None):
     all_persons = data.get("directors", []) + data.get("ubos", [])
     nat_scores = []
     for person in all_persons:
-        nat = (person.get("nationality") or person.get("nat") or "").strip().lower()
+        nat = (person.get("nationality") or "").strip().lower()
         if nat:
             mapped = nat_demonym_map.get(nat, nat)
             nat_scores.append(classify_country(mapped, country_scores))
@@ -559,7 +559,7 @@ def compute_risk_score(app_data, config_override=None):
     # the overall risk level MUST be VERY_HIGH regardless of composite score.
     sanctioned_set = SANCTIONED | FATF_BLACK
     for person in data.get("directors", []) + data.get("ubos", []):
-        nat = (person.get("nationality") or person.get("nat") or "").strip().lower()
+        nat = (person.get("nationality") or "").strip().lower()
         if nat:
             mapped = nat_demonym_map.get(nat, nat)
             if mapped in sanctioned_set:

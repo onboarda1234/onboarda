@@ -545,14 +545,14 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
         for d in directors:
             d_name = d.get("full_name", "")
             if d_name:
-                f = executor.submit(screen_sumsub_aml, d_name, nationality=d.get("nationality"), entity_type="Person")
+                f = executor.submit(screen_sumsub_aml, d_name, birth_date=d.get("date_of_birth"), nationality=d.get("nationality"), entity_type="Person")
                 director_futures.append((d, f))
 
         ubo_futures = []
         for u in ubos:
             u_name = u.get("full_name", "")
             if u_name:
-                f = executor.submit(screen_sumsub_aml, u_name, nationality=u.get("nationality"), entity_type="Person")
+                f = executor.submit(screen_sumsub_aml, u_name, birth_date=u.get("date_of_birth"), nationality=u.get("nationality"), entity_type="Person")
                 ubo_futures.append((u, f))
 
         ip_future = executor.submit(geolocate_ip, client_ip) if client_ip else None
