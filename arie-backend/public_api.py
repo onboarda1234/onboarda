@@ -43,7 +43,7 @@ class PublicApplicationStatusHandler(BaseHandler):
         db = get_db()
         try:
             app = db.execute(
-                "SELECT ref, status, updated_at FROM applications WHERE ref = ?",
+                "SELECT * FROM applications WHERE ref = ?",
                 (app_ref,),
             ).fetchone()
             if not app:
@@ -51,10 +51,7 @@ class PublicApplicationStatusHandler(BaseHandler):
 
             # Clients may only view their own applications
             if user.get("role") == "client":
-                full_app = db.execute(
-                    "SELECT * FROM applications WHERE ref = ?", (app_ref,)
-                ).fetchone()
-                if full_app and not self.check_app_ownership(user, full_app):
+                if not self.check_app_ownership(user, app):
                     return
         finally:
             db.close()
@@ -79,7 +76,7 @@ class PublicApplicationDecisionHandler(BaseHandler):
         db = get_db()
         try:
             app = db.execute(
-                "SELECT id, ref, client_id FROM applications WHERE ref = ?",
+                "SELECT * FROM applications WHERE ref = ?",
                 (app_ref,),
             ).fetchone()
             if not app:
@@ -87,10 +84,7 @@ class PublicApplicationDecisionHandler(BaseHandler):
 
             # Clients may only view their own applications
             if user.get("role") == "client":
-                full_app = db.execute(
-                    "SELECT * FROM applications WHERE ref = ?", (app_ref,)
-                ).fetchone()
-                if full_app and not self.check_app_ownership(user, full_app):
+                if not self.check_app_ownership(user, app):
                     return
 
             row = db.execute(
