@@ -802,6 +802,28 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_sup_audit_ts ON supervisor_audit_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_sup_audit_event ON supervisor_audit_log(event_type);
     CREATE INDEX IF NOT EXISTS idx_sup_audit_app ON supervisor_audit_log(application_id);
+
+    -- Decision records (normalized audit layer)
+    CREATE TABLE IF NOT EXISTS decision_records (
+        id TEXT PRIMARY KEY,
+        application_ref TEXT NOT NULL,
+        decision_type TEXT NOT NULL CHECK(decision_type IN (
+            'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
+        )),
+        risk_level TEXT,
+        confidence_score REAL,
+        source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
+        actor_user_id TEXT,
+        actor_role TEXT,
+        timestamp TIMESTAMP NOT NULL,
+        key_flags TEXT DEFAULT '[]',
+        override_flag INTEGER DEFAULT 0,
+        override_reason TEXT,
+        extra_json TEXT DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_dec_rec_app ON decision_records(application_ref);
+    CREATE INDEX IF NOT EXISTS idx_dec_rec_type ON decision_records(decision_type);
+    CREATE INDEX IF NOT EXISTS idx_dec_rec_ts ON decision_records(timestamp);
     """
 
 
@@ -1356,6 +1378,28 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_sup_audit_ts ON supervisor_audit_log(timestamp);
     CREATE INDEX IF NOT EXISTS idx_sup_audit_event ON supervisor_audit_log(event_type);
     CREATE INDEX IF NOT EXISTS idx_sup_audit_app ON supervisor_audit_log(application_id);
+
+    -- Decision records (normalized audit layer)
+    CREATE TABLE IF NOT EXISTS decision_records (
+        id TEXT PRIMARY KEY,
+        application_ref TEXT NOT NULL,
+        decision_type TEXT NOT NULL CHECK(decision_type IN (
+            'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
+        )),
+        risk_level TEXT,
+        confidence_score REAL,
+        source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
+        actor_user_id TEXT,
+        actor_role TEXT,
+        timestamp TEXT NOT NULL,
+        key_flags TEXT DEFAULT '[]',
+        override_flag INTEGER DEFAULT 0,
+        override_reason TEXT,
+        extra_json TEXT DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_dec_rec_app ON decision_records(application_ref);
+    CREATE INDEX IF NOT EXISTS idx_dec_rec_type ON decision_records(decision_type);
+    CREATE INDEX IF NOT EXISTS idx_dec_rec_ts ON decision_records(timestamp);
     """
 
 
@@ -1965,6 +2009,59 @@ def _run_migrations(db: DBConnection):
             CREATE INDEX IF NOT EXISTS idx_sup_audit_app ON supervisor_audit_log(application_id);
             """)
         logger.info("Migration v2.9: supervisor_audit_log table ready")
+
+    # Migration v2.10: Add decision_records table (normalized decision audit layer)
+    try:
+        db.execute("SELECT id FROM decision_records LIMIT 1")
+    except Exception:
+        logger.info("Migration v2.10: Creating decision_records table")
+        if USE_POSTGRESQL:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS decision_records (
+                id TEXT PRIMARY KEY,
+                application_ref TEXT NOT NULL,
+                decision_type TEXT NOT NULL CHECK(decision_type IN (
+                    'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
+                )),
+                risk_level TEXT,
+                confidence_score REAL,
+                source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
+                actor_user_id TEXT,
+                actor_role TEXT,
+                timestamp TIMESTAMP NOT NULL,
+                key_flags TEXT DEFAULT '[]',
+                override_flag INTEGER DEFAULT 0,
+                override_reason TEXT,
+                extra_json TEXT DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_dec_rec_app ON decision_records(application_ref);
+            CREATE INDEX IF NOT EXISTS idx_dec_rec_type ON decision_records(decision_type);
+            CREATE INDEX IF NOT EXISTS idx_dec_rec_ts ON decision_records(timestamp);
+            """)
+        else:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS decision_records (
+                id TEXT PRIMARY KEY,
+                application_ref TEXT NOT NULL,
+                decision_type TEXT NOT NULL CHECK(decision_type IN (
+                    'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
+                )),
+                risk_level TEXT,
+                confidence_score REAL,
+                source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
+                actor_user_id TEXT,
+                actor_role TEXT,
+                timestamp TEXT NOT NULL,
+                key_flags TEXT DEFAULT '[]',
+                override_flag INTEGER DEFAULT 0,
+                override_reason TEXT,
+                extra_json TEXT DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_dec_rec_app ON decision_records(application_ref);
+            CREATE INDEX IF NOT EXISTS idx_dec_rec_type ON decision_records(decision_type);
+            CREATE INDEX IF NOT EXISTS idx_dec_rec_ts ON decision_records(timestamp);
+            """)
+        logger.info("Migration v2.10: decision_records table ready")
 
 
 def _populate_default_scoring_config(db: 'DBConnection'):
