@@ -2561,8 +2561,8 @@ async function loadFromAPI() {
           date: (a.created_at || '').split('T')[0].split(' ')[0],
           country: a.country || '',
           brn: a.brn || '',
-          directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
-          ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
+          directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, dob: d.date_of_birth || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
+          ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
           intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
           dims: dims,
           docs: backendDocuments.map(function(d) { return d.doc_type; }),
@@ -3635,6 +3635,7 @@ async function fetchApplicationDetail(ref) {
       first_name: d.first_name || '',
       last_name: d.last_name || '',
       nat: d.nationality || '',
+      dob: d.date_of_birth || '',
       pep: normalizePepDisplay(d.is_pep),
       pep_declaration: d.pep_declaration || {}
     };
@@ -3647,6 +3648,7 @@ async function fetchApplicationDetail(ref) {
       first_name: u.first_name || '',
       last_name: u.last_name || '',
       nat: u.nationality || '',
+      dob: u.date_of_birth || '',
       pct: u.ownership_pct || 0,
       pep: normalizePepDisplay(u.is_pep),
       pep_declaration: u.pep_declaration || {}
@@ -3785,6 +3787,7 @@ function renderAuthoritativeAppDetail(app, options) {
     var nationality = normalizeDetailValue(d.nat);
     var labels = [];
     if (nationality !== '—') labels.push(nationality);
+    if (d.dob) labels.push('DOB: ' + escapeHtml(d.dob));
     labels.push('PEP: ' + normalizePepDisplay(d.pep));
     return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
@@ -3797,6 +3800,7 @@ function renderAuthoritativeAppDetail(app, options) {
     var meta = ['Ownership: ' + escapeHtml(normalizeDetailValue(u.pct)) + '%'];
     var nationality = normalizeDetailValue(u.nat);
     if (nationality !== '—') meta.push('Nationality: ' + escapeHtml(nationality));
+    if (u.dob) meta.push('DOB: ' + escapeHtml(u.dob));
     meta.push('PEP: ' + escapeHtml(normalizePepDisplay(u.pep)));
     return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
