@@ -169,3 +169,57 @@ class TestNoBrandHardcoding:
     def test_website_uses_onboarda_domain(self):
         from branding import BRAND
         assert "onboarda.com" in BRAND["website"]
+
+
+class TestStatusLabels:
+    """Test STATUS_LABELS mapping and get_status_label() accessor."""
+
+    # All application statuses defined in the DB schema CHECK constraint
+    ALL_DB_STATUSES = [
+        "draft", "submitted", "prescreening_submitted", "pricing_review",
+        "pricing_accepted", "pre_approval_review", "pre_approved",
+        "kyc_documents", "kyc_submitted", "compliance_review", "in_review",
+        "edd_required", "approved", "rejected", "rmi_sent", "withdrawn",
+    ]
+
+    def test_status_labels_dict_exists(self):
+        from branding import STATUS_LABELS
+        assert isinstance(STATUS_LABELS, dict)
+
+    def test_all_db_statuses_have_labels(self):
+        """Every status in the DB CHECK constraint must have a human-readable label."""
+        from branding import STATUS_LABELS
+        for status in self.ALL_DB_STATUSES:
+            assert status in STATUS_LABELS, f"Missing label for status '{status}'"
+
+    def test_labels_are_nonempty_strings(self):
+        from branding import STATUS_LABELS
+        for status, label in STATUS_LABELS.items():
+            assert isinstance(label, str) and len(label) > 0, f"Empty label for '{status}'"
+
+    def test_labels_are_human_readable(self):
+        """Labels should not contain underscores (internal format)."""
+        from branding import STATUS_LABELS
+        for status, label in STATUS_LABELS.items():
+            assert "_" not in label, f"Label for '{status}' contains underscore: '{label}'"
+
+    def test_get_status_label_known_status(self):
+        from branding import get_status_label
+        assert get_status_label("approved") == "Approved \u2013 Ready for Activation"
+
+    def test_get_status_label_draft(self):
+        from branding import get_status_label
+        assert get_status_label("draft") == "Application Started"
+
+    def test_get_status_label_unknown_fallback(self):
+        """Unknown statuses should be title-cased with underscores replaced."""
+        from branding import get_status_label
+        assert get_status_label("some_custom_status") == "Some Custom Status"
+
+    def test_get_status_label_none(self):
+        from branding import get_status_label
+        assert get_status_label(None) == "Unknown"
+
+    def test_get_status_label_empty_string(self):
+        from branding import get_status_label
+        assert get_status_label("") == "Unknown"
