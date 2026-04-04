@@ -59,7 +59,7 @@ onboarda/
 │   ├── resilience/                # Circuit breaker, retry, resilient HTTP
 │   ├── supervisor/                # Advanced AI agent execution & supervision
 │   ├── migrations/                # SQL schema migrations
-│   ├── tests/                     # Test suite (995+ tests)
+│   ├── tests/                     # Test suite
 │   ├── Dockerfile                 # Container build
 │   ├── docker-compose.yml         # Backend + PostgreSQL stack
 │   └── requirements.txt           # Pinned Python dependencies
@@ -132,7 +132,7 @@ pip install -r requirements.txt
 python server.py
 ```
 
-The backend runs on port **10000** by default. Open `arie-portal.html` and `arie-backoffice.html` directly in a browser (or serve via any static file server) — no build step required.
+The backend runs on port **8080** by default for local development. On Render, `PORT=10000` is set via `render.yaml`. Open `arie-portal.html` and `arie-backoffice.html` directly in a browser (or serve via any static file server) — no build step required.
 
 ### Docker
 
@@ -150,13 +150,15 @@ docker compose logs -f backend
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `ENVIRONMENT` | `production` · `demo` · `development` | No (defaults to `demo`) |
+| `ENVIRONMENT` / `ENV` | `production` · `demo` · `staging` · `development` (CI uses `testing`, which falls back to `demo`) | No (defaults to `demo`) |
 | `SECRET_KEY` | Server secret key | Yes (production) |
 | `JWT_SECRET` | JWT signing secret | Yes (production) |
 | `DATABASE_URL` | PostgreSQL connection string | Yes (production) |
+| `PII_ENCRYPTION_KEY` | Base64-encoded Fernet key for PII encryption | Yes (production) |
 | `ANTHROPIC_API_KEY` | Claude API key | Yes (for AI features) |
 | `SUMSUB_APP_TOKEN` | Sumsub app token | Yes (for live KYC) |
 | `SUMSUB_SECRET_KEY` | Sumsub secret key | Yes (for live KYC) |
+| `SUMSUB_WEBHOOK_SECRET` | Sumsub webhook signature secret | Yes (production) |
 | `S3_BUCKET` | AWS S3 bucket name | Yes (for document storage) |
 | `AWS_ACCESS_KEY_ID` | AWS access key | Yes (for S3) |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key | Yes (for S3) |
@@ -172,7 +174,7 @@ cd arie-backend
 python -m pytest tests/ -v
 ```
 
-The test suite contains **750+ tests** across 38 test files covering API endpoints, authentication, risk scoring, validation, supervision, PDF generation, GDPR, integration flows, and more.
+The test suite spans dozens of test files covering API endpoints, authentication, risk scoring, validation, supervision, PDF generation, GDPR, integration flows, and more.
 
 ### CI Enforcement
 
