@@ -22,6 +22,15 @@ logger = logging.getLogger("arie")
 _PUBLIC_API_ROLES = ("admin", "sco", "co", "analyst", "client")
 
 
+def _normalize_ts(value):
+    """Return an ISO-8601 string for both datetime objects and raw strings."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
 class PublicHealthHandler(BaseHandler):
     """GET /api/v1/health — Simple health check."""
 
@@ -145,20 +154,34 @@ class PublicDashboardStatusHandler(BaseHandler):
             ).fetchall()
             by_status = {r["status"]: r["c"] for r in status_rows}
 
-            # Applications grouped by risk level from decision_records
+            # Applications grouped by risk level from the latest decision_record per application
             if is_client:
                 risk_sql = """
                     SELECT dr.risk_level, COUNT(DISTINCT dr.application_ref) AS c
                     FROM decision_records dr
+                    JOIN (
+                        SELECT application_ref, MAX(timestamp) AS max_timestamp
+                        FROM decision_records
+                        GROUP BY application_ref
+                    ) latest
+                        ON latest.application_ref = dr.application_ref
+                       AND latest.max_timestamp = dr.timestamp
                     JOIN applications a ON a.ref = dr.application_ref
                     WHERE a.client_id = ?
                     GROUP BY dr.risk_level
                 """
             else:
                 risk_sql = """
-                    SELECT risk_level, COUNT(DISTINCT application_ref) AS c
-                    FROM decision_records
-                    GROUP BY risk_level
+                    SELECT dr.risk_level, COUNT(DISTINCT dr.application_ref) AS c
+                    FROM decision_records dr
+                    JOIN (
+                        SELECT application_ref, MAX(timestamp) AS max_timestamp
+                        FROM decision_records
+                        GROUP BY application_ref
+                    ) latest
+                        ON latest.application_ref = dr.application_ref
+                       AND latest.max_timestamp = dr.timestamp
+                    GROUP BY dr.risk_level
                 """
             risk_rows = db.execute(risk_sql, params if is_client else ()).fetchall()
             by_risk = {r["risk_level"]: r["c"] for r in risk_rows if r["risk_level"]}
@@ -172,7 +195,7 @@ class PublicDashboardStatusHandler(BaseHandler):
                 {
                     "application_ref": r["ref"],
                     "status": r["status"],
-                    "timestamp": r["updated_at"],
+                    "timestamp": _normalize_ts(r["updated_at"]),
                 }
                 for r in recent_rows
             ]
@@ -182,7 +205,7 @@ class PublicDashboardStatusHandler(BaseHandler):
                 f"SELECT MAX(updated_at) AS last_updated FROM applications{client_filter}",
                 params,
             ).fetchone()
-            last_updated = last_row["last_updated"] if last_row else None
+            last_updated = _normalize_ts(last_row["last_updated"]) if last_row else None
         finally:
             db.close()
 

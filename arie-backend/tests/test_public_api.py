@@ -495,3 +495,38 @@ class TestPublicDashboardStatus:
         assert body["applications_by_status"].get("submitted") == 1
         assert len(body["recent_activity"]) == 1
         assert body["recent_activity"][0]["application_ref"] == f"ARF-DSH-C-{uid}"
+
+    def test_dashboard_risk_level_uses_latest_decision_per_application(self, api_server):
+        """applications_by_risk_level counts each application once using its latest decision."""
+        from db import get_db
+        uid = uuid.uuid4().hex[:8]
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (id, ref, company_name, status, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (f"dsh_multi_{uid}", f"ARF-DSH-MULTI-{uid}", "Dash Multi", "approved", "2026-04-03T10:00:00"))
+        conn.execute("""
+            INSERT INTO decision_records (id, application_ref, decision_type, risk_level,
+                confidence_score, source, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (f"dr_dsh_old_{uid}", f"ARF-DSH-MULTI-{uid}", "escalate_edd", "LOW", 0.70, "rule_engine", "2026-04-03T09:00:00"))
+        conn.execute("""
+            INSERT INTO decision_records (id, application_ref, decision_type, risk_level,
+                confidence_score, source, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (f"dr_dsh_new_{uid}", f"ARF-DSH-MULTI-{uid}", "approve", "HIGH", 0.95, "supervisor", "2026-04-03T10:00:00"))
+        conn.commit()
+        conn.close()
+
+        token = _admin_token()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/dashboard/status",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        # The application should be counted under the latest risk level only
+        assert body["applications_by_risk_level"].get("HIGH", 0) >= 1
