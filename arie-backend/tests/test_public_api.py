@@ -263,3 +263,90 @@ class TestPublicApplicationDecision:
         assert resp.status_code == 404
         body = resp.json()
         assert "error" in body
+
+
+# ═══════════════════════════════════════════════════════════
+# 4. Client Ownership Enforcement
+# ═══════════════════════════════════════════════════════════
+
+class TestPublicAPIClientOwnership:
+    """Verify that client-scoped tokens can only access their own applications."""
+
+    def _setup_two_clients(self):
+        """Create two clients and an application owned by client A."""
+        from db import get_db
+        from auth import create_token
+        import bcrypt
+
+        uid = uuid.uuid4().hex[:8]
+        client_a_id = f"client_a_{uid}"
+        client_b_id = f"client_b_{uid}"
+        ref = f"ARF-2026-OWN-{uid}"
+
+        pw = bcrypt.hashpw("Pass123!".encode(), bcrypt.gensalt()).decode()
+        conn = get_db()
+        conn.execute(
+            "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?, ?, ?, ?)",
+            (client_a_id, f"a_{uid}@test.com", pw, "Client A Corp"),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?, ?, ?, ?)",
+            (client_b_id, f"b_{uid}@test.com", pw, "Client B Corp"),
+        )
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (f"own_{uid}", ref, client_a_id, "Owned Corp", "in_review", "2026-04-01T10:00:00"))
+        conn.execute("""
+            INSERT INTO decision_records (id, application_ref, decision_type, risk_level,
+                confidence_score, source, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (f"dr_own_{uid}", ref, "approve", "LOW", 0.90, "supervisor", "2026-04-01T12:00:00"))
+        conn.commit()
+        conn.close()
+
+        token_a = create_token(client_a_id, "client", "Client A", "client")
+        token_b = create_token(client_b_id, "client", "Client B", "client")
+        return ref, token_a, token_b
+
+    def test_client_can_access_own_status(self, api_server):
+        """Client A can fetch status of its own application."""
+        ref, token_a, _ = self._setup_two_clients()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/applications/{ref}/status",
+            headers={"Authorization": f"Bearer {token_a}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["application_ref"] == ref
+
+    def test_client_cannot_access_other_status(self, api_server):
+        """Client B gets 403 when fetching Client A's application status."""
+        ref, _, token_b = self._setup_two_clients()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/applications/{ref}/status",
+            headers={"Authorization": f"Bearer {token_b}"},
+            timeout=3,
+        )
+        assert resp.status_code == 403
+
+    def test_client_can_access_own_decision(self, api_server):
+        """Client A can fetch decision of its own application."""
+        ref, token_a, _ = self._setup_two_clients()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/applications/{ref}/decision",
+            headers={"Authorization": f"Bearer {token_a}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["decision_type"] == "approve"
+
+    def test_client_cannot_access_other_decision(self, api_server):
+        """Client B gets 403 when fetching Client A's application decision."""
+        ref, _, token_b = self._setup_two_clients()
+        resp = http_requests.get(
+            f"{api_server}/api/v1/applications/{ref}/decision",
+            headers={"Authorization": f"Bearer {token_b}"},
+            timeout=3,
+        )
+        assert resp.status_code == 403

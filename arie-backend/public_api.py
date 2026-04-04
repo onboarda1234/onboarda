@@ -43,14 +43,14 @@ class PublicApplicationStatusHandler(BaseHandler):
         db = get_db()
         try:
             app = db.execute(
-                "SELECT * FROM applications WHERE ref = ?",
+                "SELECT ref, status, updated_at, client_id FROM applications WHERE ref = ?",
                 (app_ref,),
             ).fetchone()
             if not app:
                 return self.error("Application not found", 404)
 
             # Clients may only view their own applications
-            if user.get("role") == "client":
+            if user.get("type") == "client":
                 if not self.check_app_ownership(user, app):
                     return
         finally:
@@ -76,14 +76,14 @@ class PublicApplicationDecisionHandler(BaseHandler):
         db = get_db()
         try:
             app = db.execute(
-                "SELECT * FROM applications WHERE ref = ?",
+                "SELECT ref, client_id FROM applications WHERE ref = ?",
                 (app_ref,),
             ).fetchone()
             if not app:
                 return self.error("Application not found", 404)
 
             # Clients may only view their own applications
-            if user.get("role") == "client":
+            if user.get("type") == "client":
                 if not self.check_app_ownership(user, app):
                     return
 
