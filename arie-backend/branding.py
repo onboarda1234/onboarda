@@ -84,3 +84,37 @@ def pdf_footer() -> str:
 def system_id() -> str:
     """Technical system identifier for logs and metrics."""
     return BRAND["system_id"]
+
+
+# ═══════════════════════════════════════════════════════════
+# HUMAN-READABLE STATUS LABELS
+# ═══════════════════════════════════════════════════════════
+# Maps internal application status codes to clear, non-technical
+# language suitable for clients, compliance officers, and audit logs.
+
+STATUS_LABELS = {
+    "draft":                     "Application Started",
+    "submitted":                 "Application Submitted",
+    "prescreening_submitted":    "Pre-Screening in Progress",
+    "pricing_review":            "Pricing Under Review",
+    "pricing_accepted":          "Pricing Accepted",
+    "pre_approval_review":       "Pre-Approval Under Review",
+    "pre_approved":              "Pre-Approved",
+    "kyc_documents":             "KYC Documents Required",
+    "kyc_submitted":             "KYC Documents Submitted",
+    "compliance_review":         "Compliance Review in Progress",
+    "in_review":                 "Verification Ongoing",
+    "edd_required":              "Enhanced Due Diligence Required",
+    "approved":                  "Approved – Ready for Activation",
+    "rejected":                  "Application Declined",
+    "rmi_sent":                  "Further Information Requested",
+    "withdrawn":                 "Application Withdrawn",
+}
+
+
+def get_status_label(status):
+    """Return a human-readable label for an application status code.
+
+    Falls back to a title-cased version of the status if no mapping exists.
+    """
+    return STATUS_LABELS.get(status, status.replace("_", " ").title() if status else "Unknown")
