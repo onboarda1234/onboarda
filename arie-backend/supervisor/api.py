@@ -99,23 +99,48 @@ def persist_pipeline_result(result: SupervisorPipelineResult, trigger_type: str 
         result_dict["failed_agent_details"] = result.failed_agents
         result_json = json.dumps(result_dict, default=str)
 
-        db.execute(
-            """INSERT OR REPLACE INTO supervisor_pipeline_results
-               (id, pipeline_id, application_id, status, trigger_type, trigger_source,
-                started_at, completed_at, result_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                result.pipeline_id,
-                result.pipeline_id,
-                result.application_id,
-                result.status,
-                trigger_type,
-                trigger_source,
-                result.started_at,
-                result.completed_at,
-                result_json,
+        # Use INSERT with ON CONFLICT for PostgreSQL compatibility (INSERT OR REPLACE is SQLite-only)
+        import os
+        if os.environ.get("DATABASE_URL"):
+            db.execute(
+                """INSERT INTO supervisor_pipeline_results
+                   (id, pipeline_id, application_id, status, trigger_type, trigger_source,
+                    started_at, completed_at, result_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    result_json = EXCLUDED.result_json,
+                    completed_at = EXCLUDED.completed_at""",
+                (
+                    result.pipeline_id,
+                    result.pipeline_id,
+                    result.application_id,
+                    result.status,
+                    trigger_type,
+                    trigger_source,
+                    result.started_at,
+                    result.completed_at,
+                    result_json,
+                )
             )
-        )
+        else:
+            db.execute(
+                """INSERT OR REPLACE INTO supervisor_pipeline_results
+                   (id, pipeline_id, application_id, status, trigger_type, trigger_source,
+                    started_at, completed_at, result_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    result.pipeline_id,
+                    result.pipeline_id,
+                    result.application_id,
+                    result.status,
+                    trigger_type,
+                    trigger_source,
+                    result.started_at,
+                    result.completed_at,
+                    result_json,
+                )
+            )
         db.commit()
         logger.info("Pipeline result %s persisted to DB for app %s", result.pipeline_id, result.application_id)
     except Exception as e:
