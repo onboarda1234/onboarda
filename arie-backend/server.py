@@ -6009,8 +6009,18 @@ class DecisionRecordsHandler(BaseHandler):
             return self.error("Application not found", 404)
 
         decision_type = self.get_argument("decision_type", None)
-        limit = int(self.get_argument("limit", "50"))
-        limit = max(1, min(limit, 200))
+        raw_limit = self.get_argument("limit", "50")
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            db.close()
+            return self.error("Invalid 'limit' parameter: must be a positive integer", 400)
+
+        if limit <= 0:
+            db.close()
+            return self.error("Invalid 'limit' parameter: must be a positive integer", 400)
+
+        limit = min(limit, 200)
 
         try:
             records = get_decision_records(db, app["ref"], decision_type=decision_type, limit=limit)

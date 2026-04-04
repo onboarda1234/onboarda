@@ -213,6 +213,11 @@ def get_decision_records(
 
     results = []
     for row in rows:
+        # Normalize timestamp to ISO-8601 string for cross-DB consistency
+        ts = row["timestamp"]
+        if hasattr(ts, "isoformat"):
+            ts = ts.isoformat()
+
         record = {
             "decision_id": row["id"],
             "application_ref": row["application_ref"],
@@ -224,7 +229,7 @@ def get_decision_records(
                 "user_id": row["actor_user_id"],
                 "role": row["actor_role"],
             },
-            "timestamp": row["timestamp"],
+            "timestamp": ts,
             "key_flags": _safe_json_loads(row["key_flags"], default=[]),
             "override_flag": bool(row["override_flag"]),
             "override_reason": row["override_reason"],
