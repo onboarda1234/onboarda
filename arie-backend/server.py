@@ -130,7 +130,7 @@ from decision_model import (
     save_decision_record,
     get_decision_records,
 )
-from branding import BRAND
+from branding import BRAND, get_status_label
 from prescreening.normalize import (
     compose_source_of_funds_summary as _compose_source_of_funds_summary,
     first_non_empty as _first_non_empty,
@@ -1124,10 +1124,8 @@ class OfficerLoginHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"officer_login:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=10, window_seconds=900):
-            self.set_status(429)
-            self.write({"error": "Too many login attempts. Please try again in 15 minutes."})
             logger.warning(f"Rate limited officer login from {ip} for {mask_email(email)}")
-            return
+            return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
         db = get_db()
         user = db.execute("SELECT * FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
@@ -1162,10 +1160,8 @@ class ClientLoginHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"client_login:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=10, window_seconds=900):
-            self.set_status(429)
-            self.write({"error": "Too many login attempts. Please try again in 15 minutes."})
             logger.warning(f"Rate limited client login from {ip} for {mask_email(email)}")
-            return
+            return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
         db = get_db()
         client = db.execute("SELECT * FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
@@ -1200,9 +1196,7 @@ class ClientRegisterHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"register:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=5, window_seconds=1800):
-            self.set_status(429)
-            self.write({"error": "Too many registration attempts. Please try again later."})
-            return
+            return self.error("Too many registration attempts. Please try again later.", 429)
 
         if len(password) < 12:
             return self.error("Password must be at least 12 characters")
@@ -1249,9 +1243,7 @@ class ForgotPasswordHandler(BaseHandler):
         ip = self.get_client_ip()
         rl_key = f"forgot_pw:{ip}"
         if rate_limiter.is_limited(rl_key, max_attempts=5, window_seconds=1800):
-            self.set_status(429)
-            self.write({"error": "Too many reset attempts. Please try again later."})
-            return
+            return self.error("Too many reset attempts. Please try again later.", 429)
 
         db = get_db()
         client = db.execute("SELECT id, email FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
@@ -1440,6 +1432,7 @@ class ApplicationsHandler(BaseHandler):
         # Attach directors, UBOs, and documents for each — C-02: decrypt PII on read
         db = get_db()
         for app in apps:
+            app["status_label"] = get_status_label(app.get("status"))
             app["directors"], app["ubos"], app["intermediaries"] = get_application_parties(db, app["id"])
             app["documents"] = [dict(d) for d in db.execute(
                 "SELECT id, doc_type, doc_name, file_size, verification_status, verification_results, verified_at, person_id, review_status, review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?",
@@ -1494,7 +1487,7 @@ class ApplicationsHandler(BaseHandler):
         db.close()
 
         self.log_audit(user, "Create", ref, f"New application created: {company_name}")
-        self.success({"id": app_id, "ref": ref, "status": "draft"}, 201)
+        self.success({"id": app_id, "ref": ref, "status": "draft", "status_label": get_status_label("draft")}, 201)
 
 
 class ApplicationDetailHandler(BaseHandler):
@@ -1515,6 +1508,7 @@ class ApplicationDetailHandler(BaseHandler):
             return
 
         result = dict(app)
+        result["status_label"] = get_status_label(result.get("status"))
         result["assigned_name"] = resolve_user_display_name(db, result.get("assigned_to"))
         result["directors"], result["ubos"], result["intermediaries"] = get_application_parties(db, result["id"])
         result["documents"] = [dict(d) for d in db.execute(
@@ -5270,16 +5264,12 @@ class SumsubWebhookHandler(tornado.web.RequestHandler):
         # Verify webhook signature — always verify, never skip (Finding S-16)
         if not sumsub_verify_webhook(body, signature):
             logger.warning("Sumsub webhook: Invalid or missing signature")
-            self.set_status(401)
-            self.write(json.dumps({"error": "Invalid signature"}))
-            return
+            return self.error("Invalid signature", 401)
 
         try:
             payload = json.loads(body)
         except Exception:
-            self.set_status(400)
-            self.write(json.dumps({"error": "Invalid JSON"}))
-            return
+            return self.error("Invalid JSON", 400)
 
         event_type = payload.get("type", "")
         applicant_id = payload.get("applicantId", "")
