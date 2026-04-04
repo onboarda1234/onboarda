@@ -2976,12 +2976,23 @@ class DocumentAIVerifyHandler(BaseHandler):
 # DOCUMENT DOWNLOAD ENDPOINT
 # ══════════════════════════════════════════════════════════
 
+    # MIME types that support inline preview in browsers
+    INLINE_PREVIEWABLE_TYPES = {
+        "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp",
+    }
+
 class DocumentDownloadHandler(BaseHandler):
-    """GET /api/documents/:id/download — get presigned S3 URL or serve local file"""
+    """GET /api/documents/:id/download — get presigned S3 URL or serve local file.
+    Query params:
+      ?view=inline — for previewable types (PDF, images), serve with Content-Disposition: inline
+                     so the browser opens the file in a new tab instead of downloading.
+    """
     def get(self, doc_id):
         user = self.require_auth()
         if not user:
             return
+
+        inline_view = self.get_argument("view", "") == "inline"
 
         db = get_db()
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
@@ -2999,6 +3010,10 @@ class DocumentDownloadHandler(BaseHandler):
             return self.error("Access denied", 403)
         db.close()
 
+        mime_type = doc.get("mime_type") or "application/octet-stream"
+        is_previewable = mime_type in INLINE_PREVIEWABLE_TYPES
+        disposition = "inline" if (inline_view and is_previewable) else "attachment"
+
         s3_key = doc.get("s3_key") if doc else None
 
         # Prefer S3 presigned URL if document is stored in S3
@@ -3015,8 +3030,15 @@ class DocumentDownloadHandler(BaseHandler):
                 )
                 if success:
                     db.close()
-                    self.log_audit(user, "Download", app["ref"], f"Document downloaded via S3: {doc['doc_name']}")
-                    return self.success({"download_url": url_or_error, "source": "s3", "expires_in": 900})
+                    action = "View" if inline_view else "Download"
+                    self.log_audit(user, action, app["ref"], f"Document {action.lower()}ed via S3: {doc['doc_name']}")
+                    return self.success({
+                        "download_url": url_or_error,
+                        "source": "s3",
+                        "expires_in": 900,
+                        "disposition": disposition,
+                        "previewable": is_previewable,
+                    })
                 else:
                     logger.warning(f"S3 presigned URL failed for {doc_id}: {url_or_error}. Falling back to local.")
             except Exception as e:
@@ -3031,11 +3053,12 @@ class DocumentDownloadHandler(BaseHandler):
         if not file_path or not os.path.exists(file_path):
             return self.error("Document file not found on server", 404)
 
-        self.set_header("Content-Type", doc.get("mime_type") or "application/octet-stream")
-        self.set_header("Content-Disposition", f'attachment; filename="{doc["doc_name"]}"')
+        self.set_header("Content-Type", mime_type)
+        self.set_header("Content-Disposition", f'{disposition}; filename="{doc["doc_name"]}"')
         with open(file_path, "rb") as f:
             self.write(f.read())
-        self.log_audit(user, "Download", app["ref"], f"Document downloaded locally: {doc['doc_name']}")
+        action = "View" if inline_view else "Download"
+        self.log_audit(user, action, app["ref"], f"Document {action.lower()}ed locally: {doc['doc_name']}")
         self.finish()
 
 

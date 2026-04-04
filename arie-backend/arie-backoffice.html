@@ -3906,6 +3906,7 @@ function renderAuthoritativeAppDetail(app, options) {
       reviewMeta +
       reviewComment +
       '<div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">' +
+        '<button class="doc-action-btn info" onclick="viewBackofficeDocument(\'' + doc.id + '\')">👁 View</button>' +
         '<button class="doc-action-btn accept" onclick="downloadBackofficeDocument(\'' + doc.id + '\')">📥 Download</button>' +
         '<button class="doc-action-btn info" onclick="verifyBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\')">🔄 Re-Verify</button>' +
         '<button class="doc-action-btn accept" onclick="reviewBackofficeDocument(\'' + doc.id + '\',\'' + app.ref + '\',\'accepted\')">✓ Accept</button>' +
@@ -7934,6 +7935,20 @@ async function submitBoDocUpload() {
     console.warn('Back-office document upload failed:', e);
     showToast(e.message || 'Document upload failed');
     return;
+  }
+}
+
+async function viewBackofficeDocument(docId) {
+  if (!docId) { showToast('Document record is missing an identifier'); return; }
+  try {
+    var data = await boApiCall('GET', '/documents/' + docId + '/download?view=inline');
+    if (data.download_url) {
+      window.open(data.download_url, '_blank', 'noopener');
+      return;
+    }
+    showToast('Document preview is not available — try downloading instead');
+  } catch (e) {
+    showToast(e.message || 'Document preview failed');
   }
 }
 
