@@ -389,3 +389,80 @@ class TestMemoPDFEndpoint:
         resp = http_requests.get(f"{api_server}/api/applications/nonexistent/memo/pdf",
                                  headers={"Authorization": f"Bearer {token}"}, timeout=3)
         assert resp.status_code == 404
+
+
+# ═══════════════════════════════════════════════════════════
+# 6. Decision Records Endpoint
+# ═══════════════════════════════════════════════════════════
+
+class TestDecisionRecordsEndpoint:
+    def test_decision_records_requires_auth(self, api_server):
+        """GET /api/applications/:id/decision-records without token must return 401."""
+        resp = http_requests.get(f"{api_server}/api/applications/nonexistent/decision-records", timeout=3)
+        assert resp.status_code == 401
+
+    def test_decision_records_returns_404_for_unknown_app(self, api_server):
+        """GET /api/applications/:id/decision-records for non-existent app must return 404."""
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(f"{api_server}/api/applications/nonexistent-app/decision-records",
+                                 headers={"Authorization": f"Bearer {token}"}, timeout=3)
+        assert resp.status_code == 404
+
+    def test_decision_records_returns_empty_list(self, api_server):
+        """GET /api/applications/:id/decision-records for app with no records returns empty list."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("""
+            INSERT OR IGNORE INTO applications (id, ref, company_name, status)
+            VALUES (?, ?, ?, ?)
+        """, ("app_dec_rec_test", "ARF-2026-DECREC", "DecRec Test Corp", "in_review"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(f"{api_server}/api/applications/app_dec_rec_test/decision-records",
+                                 headers={"Authorization": f"Bearer {token}"}, timeout=3)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "records" in body
+        assert body["count"] == 0
+        assert body["records"] == []
+
+    def test_decision_records_invalid_limit_returns_400(self, api_server):
+        """GET /api/applications/:id/decision-records?limit=abc must return 400."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("""
+            INSERT OR IGNORE INTO applications (id, ref, company_name, status)
+            VALUES (?, ?, ?, ?)
+        """, ("app_dec_rec_test", "ARF-2026-DECREC", "DecRec Test Corp", "in_review"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(f"{api_server}/api/applications/app_dec_rec_test/decision-records?limit=abc",
+                                 headers={"Authorization": f"Bearer {token}"}, timeout=3)
+        assert resp.status_code == 400
+
+    def test_decision_records_negative_limit_returns_400(self, api_server):
+        """GET /api/applications/:id/decision-records?limit=-5 must return 400."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("""
+            INSERT OR IGNORE INTO applications (id, ref, company_name, status)
+            VALUES (?, ?, ?, ?)
+        """, ("app_dec_rec_test", "ARF-2026-DECREC", "DecRec Test Corp", "in_review"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(f"{api_server}/api/applications/app_dec_rec_test/decision-records?limit=-5",
+                                 headers={"Authorization": f"Bearer {token}"}, timeout=3)
+        assert resp.status_code == 400

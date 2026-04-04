@@ -124,6 +124,12 @@ from validation_engine import (
 )
 from supervisor_engine import run_memo_supervisor
 from memo_handler import build_compliance_memo
+from decision_model import (
+    build_from_application_decision,
+    build_from_supervisor_verdict,
+    save_decision_record,
+    get_decision_records,
+)
 from branding import BRAND
 from prescreening.normalize import (
     compose_source_of_funds_summary as _compose_source_of_funds_summary,
@@ -5765,6 +5771,23 @@ class MemoSupervisorHandler(BaseHandler):
                        (user.get("sub",""), user.get("name",""), user.get("role",""), "Run Memo Supervisor", app_id,
                         "Supervisor verdict: " + supervisor_result["verdict"] + " | Contradictions: " + str(supervisor_result["contradiction_count"]),
                         self.get_client_ip()))
+
+            # ── Record normalized supervisor decision record ──
+            try:
+                app_row = db.execute(
+                    "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                    (app_id, app_id)
+                ).fetchone()
+                if app_row:
+                    sup_record = build_from_supervisor_verdict(
+                        app=dict(app_row),
+                        supervisor_result=supervisor_result,
+                        user=user,
+                    )
+                    save_decision_record(db, sup_record)
+            except Exception as rec_err:
+                logger.error("Failed to record supervisor decision record for %s: %s", app_id, rec_err)
+
             db.commit()
         except Exception as e:
             logger.error(f"Failed to store memo supervisor results for {app_id}: {e}", exc_info=True)
@@ -5938,10 +5961,76 @@ class ApplicationDecisionHandler(BaseHandler):
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip()))
 
+        # ── Record normalized decision record ──
+        try:
+            # Try to derive confidence from supervisor result in the compliance memo
+            supervisor_result = None
+            try:
+                memo_row = db.execute(
+                    "SELECT memo_data FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC LIMIT 1",
+                    (real_id,)
+                ).fetchone()
+                if memo_row:
+                    memo_data = json.loads(memo_row["memo_data"]) if memo_row["memo_data"] else {}
+                    supervisor_result = memo_data.get("supervisor")
+            except Exception:
+                pass  # Non-critical: proceed without supervisor data
+
+            decision_record = build_from_application_decision(
+                app=dict(app),
+                decision=decision,
+                decision_reason=decision_reason,
+                user=user,
+                override_ai=override_ai,
+                override_reason=override_reason,
+                supervisor_result=supervisor_result,
+            )
+            save_decision_record(db, decision_record)
+        except Exception as e:
+            logger.error("Failed to record decision record for app %s: %s", app["ref"], e)
+
         db.commit()
         db.close()
 
         self.success({"status": "decision_recorded", "decision": decision, "application_status": new_status}, 201)
+
+
+class DecisionRecordsHandler(BaseHandler):
+    """GET /api/applications/:id/decision-records — Retrieve normalized decision records"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        decision_type = self.get_argument("decision_type", None)
+        raw_limit = self.get_argument("limit", "50")
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            db.close()
+            return self.error("Invalid 'limit' parameter: must be a positive integer", 400)
+
+        if limit <= 0:
+            db.close()
+            return self.error("Invalid 'limit' parameter: must be a positive integer", 400)
+
+        limit = min(limit, 200)
+
+        try:
+            records = get_decision_records(db, app["ref"], decision_type=decision_type, limit=limit)
+        except Exception as e:
+            db.close()
+            logger.error("Failed to retrieve decision records for %s: %s", app_id, e)
+            return self.error("Failed to retrieve decision records", 500)
+
+        db.close()
+        self.success({"records": records, "count": len(records)})
 
 
 # ══════════════════════════════════════════════════════════
@@ -7008,6 +7097,7 @@ def make_app():
         (r"/api/applications/([^/]+)/memo/supervisor", MemoSupervisorResultHandler),
         (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
         (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
+        (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/documents", DocumentUploadHandler),
         (r"/api/applications/([^/]+)", ApplicationDetailHandler),
