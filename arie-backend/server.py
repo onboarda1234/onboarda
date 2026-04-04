@@ -2982,10 +2982,10 @@ class DocumentAIVerifyHandler(BaseHandler):
 # DOCUMENT DOWNLOAD ENDPOINT
 # ══════════════════════════════════════════════════════════
 
-    # MIME types that support inline preview in browsers
-    INLINE_PREVIEWABLE_TYPES = {
-        "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp",
-    }
+# MIME types that support inline preview in browsers
+INLINE_PREVIEWABLE_TYPES = {
+    "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp",
+}
 
 class DocumentDownloadHandler(BaseHandler):
     """GET /api/documents/:id/download — get presigned S3 URL or serve local file.
