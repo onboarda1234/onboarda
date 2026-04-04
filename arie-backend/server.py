@@ -4202,6 +4202,290 @@ class AuditHandler(BaseHandler):
         self.success({"entries": [dict(r) for r in rows], "total": total})
 
 
+class AuditExportHandler(BaseHandler):
+    """GET /api/audit/export — export audit_log entries as JSON or CSV."""
+
+    _BASE_HEADERS = [
+        "id", "timestamp", "user_id", "user_name", "user_role",
+        "action", "target", "detail", "ip_address",
+    ]
+    _DECISION_HEADERS = [
+        "decision_id", "decision_type", "decision_risk_level",
+        "decision_confidence", "decision_source",
+    ]
+
+    MAX_EXPORT_ROWS = 10000
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_date(value):
+        """Parse an ISO-8601 date/datetime string. Returns str or None."""
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
+                    "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%fZ",
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(value, fmt)
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+        return None
+
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        fmt = self.get_argument("format", "json").lower()
+        if fmt not in ("json", "csv"):
+            return self.error("format must be json or csv", 400)
+
+        start_date = self.get_argument("start_date", None)
+        end_date = self.get_argument("end_date", None)
+        actor_user_id = self.get_argument("actor_user_id", None)
+        action_filter = self.get_argument("action", None)
+        include_decisions = self.get_argument("include_decisions", "false").lower() in ("true", "1", "yes")
+
+        if start_date:
+            start_date = self._parse_date(start_date)
+            if start_date is None:
+                return self.error("start_date must be a valid ISO-8601 date", 400)
+        if end_date:
+            end_date = self._parse_date(end_date)
+            if end_date is None:
+                return self.error("end_date must be a valid ISO-8601 date", 400)
+
+        db = get_db()
+        try:
+            query = "SELECT * FROM audit_log WHERE 1=1"
+            params = []
+
+            if start_date:
+                query += " AND timestamp >= ?"
+                params.append(start_date)
+            if end_date:
+                query += " AND timestamp <= ?"
+                params.append(end_date)
+            if actor_user_id:
+                query += " AND user_id = ?"
+                params.append(actor_user_id)
+            if action_filter:
+                query += " AND action = ?"
+                params.append(action_filter)
+
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(self.MAX_EXPORT_ROWS)
+
+            rows = db.execute(query, tuple(params)).fetchall()
+            entries = [dict(r) for r in rows]
+
+            # Normalize timestamps to ISO format strings
+            for entry in entries:
+                if entry.get("timestamp"):
+                    entry["timestamp"] = str(entry["timestamp"])
+
+            # Optionally merge decision_records keyed by application ref
+            if include_decisions:
+                d_query = "SELECT * FROM decision_records WHERE 1=1"
+                d_params = []
+                if start_date:
+                    d_query += " AND timestamp >= ?"
+                    d_params.append(start_date)
+                if end_date:
+                    d_query += " AND timestamp <= ?"
+                    d_params.append(end_date)
+                if actor_user_id:
+                    d_query += " AND actor_user_id = ?"
+                    d_params.append(actor_user_id)
+                d_query += " ORDER BY timestamp DESC"
+                d_rows = db.execute(d_query, tuple(d_params)).fetchall()
+                decision_map = {}
+                for dr in d_rows:
+                    d = dict(dr)
+                    key = d.get("application_ref", "")
+                    decision_map.setdefault(key, []).append(d)
+
+                for entry in entries:
+                    target = entry.get("target", "")
+                    decisions = decision_map.get(target, [])
+                    if decisions:
+                        best = decisions[0]
+                        entry["decision_id"] = best.get("id", "")
+                        entry["decision_type"] = best.get("decision_type", "")
+                        entry["decision_risk_level"] = best.get("risk_level", "")
+                        entry["decision_confidence"] = best.get("confidence_score", "")
+                        entry["decision_source"] = best.get("source", "")
+                    else:
+                        entry["decision_id"] = ""
+                        entry["decision_type"] = ""
+                        entry["decision_risk_level"] = ""
+                        entry["decision_confidence"] = ""
+                        entry["decision_source"] = ""
+
+            if fmt == "csv":
+                return self._write_csv(entries, include_decisions)
+
+            self.success({"entries": entries, "total": len(entries)})
+        finally:
+            db.close()
+
+    def _write_csv(self, entries, include_decisions):
+        import csv, io as _io
+        headers = self._BASE_HEADERS + self._DECISION_HEADERS if include_decisions else list(self._BASE_HEADERS)
+        buf = _io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow({h: entry.get(h, "") for h in headers})
+        self.set_header("Content-Type", "text/csv; charset=utf-8")
+        self.set_header("Content-Disposition", "attachment; filename=audit_export.csv")
+        self.write(buf.getvalue())
+
+
+class SupervisorAuditExportHandler(BaseHandler):
+    """GET /api/audit/supervisor/export — export supervisor_audit_log entries as JSON or CSV."""
+
+    _BASE_HEADERS = [
+        "id", "timestamp", "event_type", "severity", "pipeline_id",
+        "application_id", "run_id", "agent_type", "actor_type",
+        "actor_id", "actor_name", "actor_role", "action", "detail",
+        "ip_address", "session_id",
+    ]
+    _DECISION_HEADERS = [
+        "decision_id", "decision_type", "decision_risk_level",
+        "decision_confidence", "decision_source",
+    ]
+
+    MAX_EXPORT_ROWS = 10000
+
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        fmt = self.get_argument("format", "json").lower()
+        if fmt not in ("json", "csv"):
+            return self.error("format must be json or csv", 400)
+
+        start_date = self.get_argument("start_date", None)
+        end_date = self.get_argument("end_date", None)
+        actor_user_id = self.get_argument("actor_user_id", None)
+        action_filter = self.get_argument("action", None)
+        include_decisions = self.get_argument("include_decisions", "false").lower() in ("true", "1", "yes")
+
+        if start_date:
+            start_date = AuditExportHandler._parse_date(start_date)
+            if start_date is None:
+                return self.error("start_date must be a valid ISO-8601 date", 400)
+        if end_date:
+            end_date = AuditExportHandler._parse_date(end_date)
+            if end_date is None:
+                return self.error("end_date must be a valid ISO-8601 date", 400)
+
+        db = get_db()
+        try:
+            query = "SELECT * FROM supervisor_audit_log WHERE 1=1"
+            params = []
+
+            if start_date:
+                query += " AND timestamp >= ?"
+                params.append(start_date)
+            if end_date:
+                query += " AND timestamp <= ?"
+                params.append(end_date)
+            if actor_user_id:
+                query += " AND actor_id = ?"
+                params.append(actor_user_id)
+            if action_filter:
+                query += " AND action = ?"
+                params.append(action_filter)
+
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(self.MAX_EXPORT_ROWS)
+
+            rows = db.execute(query, tuple(params)).fetchall()
+            entries = [dict(r) for r in rows]
+
+            # Normalize timestamps and strip internal hash fields
+            for entry in entries:
+                if entry.get("timestamp"):
+                    entry["timestamp"] = str(entry["timestamp"])
+                entry.pop("previous_hash", None)
+                entry.pop("entry_hash", None)
+                entry.pop("data_json", None)
+
+            # Optionally merge decision_records by application_id → application_ref
+            if include_decisions:
+                # Build a mapping from application id → ref for correct join
+                app_ids = list({e.get("application_id", "") for e in entries if e.get("application_id")})
+                id_to_ref = {}
+                if app_ids:
+                    placeholders = ",".join("?" for _ in app_ids)
+                    app_rows = db.execute(
+                        f"SELECT id, ref FROM applications WHERE id IN ({placeholders}) OR ref IN ({placeholders})",
+                        tuple(app_ids + app_ids),
+                    ).fetchall()
+                    for ar in app_rows:
+                        row = dict(ar)
+                        id_to_ref[row["id"]] = row["ref"]
+                        id_to_ref[row["ref"]] = row["ref"]
+
+                d_query = "SELECT * FROM decision_records WHERE 1=1"
+                d_params = []
+                if start_date:
+                    d_query += " AND timestamp >= ?"
+                    d_params.append(start_date)
+                if end_date:
+                    d_query += " AND timestamp <= ?"
+                    d_params.append(end_date)
+                if actor_user_id:
+                    d_query += " AND actor_user_id = ?"
+                    d_params.append(actor_user_id)
+                d_query += " ORDER BY timestamp DESC"
+                d_rows = db.execute(d_query, tuple(d_params)).fetchall()
+                decision_map = {}
+                for dr in d_rows:
+                    d = dict(dr)
+                    key = d.get("application_ref", "")
+                    decision_map.setdefault(key, []).append(d)
+
+                for entry in entries:
+                    app_id = entry.get("application_id", "")
+                    app_ref = id_to_ref.get(app_id, app_id)
+                    decisions = decision_map.get(app_ref, [])
+                    if decisions:
+                        best = decisions[0]
+                        entry["decision_id"] = best.get("id", "")
+                        entry["decision_type"] = best.get("decision_type", "")
+                        entry["decision_risk_level"] = best.get("risk_level", "")
+                        entry["decision_confidence"] = best.get("confidence_score", "")
+                        entry["decision_source"] = best.get("source", "")
+                    else:
+                        entry["decision_id"] = ""
+                        entry["decision_type"] = ""
+                        entry["decision_risk_level"] = ""
+                        entry["decision_confidence"] = ""
+                        entry["decision_source"] = ""
+
+            if fmt == "csv":
+                return self._write_csv(entries, include_decisions)
+
+            self.success({"entries": entries, "total": len(entries)})
+        finally:
+            db.close()
+
+    def _write_csv(self, entries, include_decisions):
+        import csv, io as _io
+        headers = self._BASE_HEADERS + self._DECISION_HEADERS if include_decisions else list(self._BASE_HEADERS)
+        buf = _io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+        writer.writeheader()
+        for entry in entries:
+            writer.writerow({h: entry.get(h, "") for h in headers})
+        self.set_header("Content-Type", "text/csv; charset=utf-8")
+        self.set_header("Content-Disposition", "attachment; filename=supervisor_audit_export.csv")
+        self.write(buf.getvalue())
+
+
 # ══════════════════════════════════════════════════════════
 # DASHBOARD STATS
 # ══════════════════════════════════════════════════════════
@@ -7148,6 +7432,8 @@ def make_app():
         (r"/api/reports/generate", ReportHandler),
 
         # Audit
+        (r"/api/audit/export", AuditExportHandler),
+        (r"/api/audit/supervisor/export", SupervisorAuditExportHandler),
         (r"/api/audit", AuditHandler),
 
         # Dashboard
