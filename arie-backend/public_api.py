@@ -160,7 +160,7 @@ class PublicDashboardStatusHandler(BaseHandler):
                     FROM decision_records
                     GROUP BY risk_level
                 """
-            risk_rows = db.execute(risk_sql, params).fetchall()
+            risk_rows = db.execute(risk_sql, params if is_client else ()).fetchall()
             by_risk = {r["risk_level"]: r["c"] for r in risk_rows if r["risk_level"]}
 
             # Recent activity: last 5 updated applications

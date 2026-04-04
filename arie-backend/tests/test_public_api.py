@@ -418,6 +418,8 @@ class TestPublicDashboardStatus:
 
         # Total must equal sum of all status counts
         assert body["total_applications"] == sum(body["applications_by_status"].values())
+        # Verify risk level aggregation includes the inserted decision record
+        assert body["applications_by_risk_level"].get("LOW", 0) >= 1
 
     def test_dashboard_recent_activity_limit(self, api_server):
         """Recent activity returns at most 5 entries."""
