@@ -95,15 +95,25 @@ CANONICAL_TEMPLATE = {
     "entity": {
         "legal_name": "",
         "trading_name": "",
+        "type": "",
         "incorporation_country": "",
         "registration_number": "",
         "incorporation_date": "",
+        "website": "",
         "registered_address": {"full_text": ""},
         "headquarters_address": {"full_text": ""},
+        "contact": {
+            "first_name": "",
+            "last_name": "",
+            "email": "",
+            "phone_code": "",
+            "mobile": "",
+        },
     },
     "business": {
         "sector": "",
         "activity_description": "",
+        "management_overview": "",
         "services": {"primary_services": []},
         "account_purposes": [],
     },
@@ -125,8 +135,6 @@ CANONICAL_TEMPLATE = {
         "cross_border_expected": False,
         "expected_monthly_volume": {
             "band_legacy": "",
-            "amount": None,
-            "currency": "",
         },
         "estimated_activity": {
             "inflows": {},
@@ -147,6 +155,10 @@ CANONICAL_TEMPLATE = {
         "ongoing_source": {},
         "summary": "",
     },
+    "banking": {
+        "existing_account": "",
+        "bank_name": "",
+    },
     "licensing": {
         "legacy_text": "",
         "has_licence": None,
@@ -155,9 +167,11 @@ CANONICAL_TEMPLATE = {
     },
     "delivery_channel": {
         "introduction_method": "",
+        "referrer_name": "",
     },
     "submission": {
         "schema_version": CURRENT_SCHEMA_VERSION,
+        "consents": {},
     },
 }
 
