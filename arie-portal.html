@@ -8492,17 +8492,20 @@ function getApplicationView(status) {
   const stageMap = {
     draft: 'prescreening',
     submitted: 'pending',
+    prescreening_submitted: 'pending',
     pricing_review: 'pricing',
     pricing_accepted: 'onboarding',
     pre_approval_review: 'pre-approval-hold',
     pre_approved: 'onboarding',
     kyc_documents: 'onboarding',
-    pending_review: 'pending',
+    kyc_submitted: 'pending',
     in_review: 'pending',
     compliance_review: 'compliance-hold',
     approved: 'approved',
     rejected: 'rejected',
-    edd_required: 'pending'
+    edd_required: 'pending',
+    rmi_sent: 'pending',
+    withdrawn: 'rejected'
   };
   return stageMap[status] || 'pending';
 }

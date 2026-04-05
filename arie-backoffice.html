@@ -948,7 +948,6 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <option value="Pricing Review">Pricing Review</option>
       <option value="KYC & Documents">KYC & Documents</option>
       <option value="Compliance Review">Compliance Review</option>
-      <option value="Pending Review">Pending Review</option>
       <option value="In Review">In Review</option>
       <option value="EDD Required">EDD Required</option>
       <option value="Approved">Approved</option>
@@ -2837,7 +2836,7 @@ function formatStatus(s) {
               pricing_review:'Pricing Under Review', pricing_accepted:'Pricing Accepted',
               pre_approval_review:'Pre-Approval Under Review', pre_approved:'Pre-Approved',
               kyc_documents:'KYC Documents Required', kyc_submitted:'KYC Documents Submitted',
-              compliance_review:'Compliance Review in Progress', pending_review:'Pending Review', in_review:'Verification Ongoing',
+              compliance_review:'Compliance Review in Progress', in_review:'Verification Ongoing',
               edd_required:'Enhanced Due Diligence Required', approved:'Approved \u2013 Ready for Activation',
               rejected:'Application Declined', rmi_sent:'Further Information Requested', withdrawn:'Application Withdrawn' };
   return map[s] || s || 'Unknown';
@@ -3098,7 +3097,6 @@ function statusBadge(status) {
     'KYC & Documents':'kyc-documents', 'kyc_documents':'kyc-documents',
     'KYC Submitted':'kyc-submitted', 'kyc_submitted':'kyc-submitted',
     'Compliance Review':'compliance-review', 'compliance_review':'compliance-review',
-    'Pending Review':'pending', 'pending_review':'pending',
     'In Review':'in-review', 'in_review':'in-review',
     'EDD Required':'edd-required', 'edd_required':'edd-required',
     'Approved':'approved', 'approved':'approved',
@@ -8907,7 +8905,7 @@ function svStatCard(label, value, color) {
 // ── Supervisor Dashboard (global view) ──
 async function refreshSupervisorDashboard() {
   try {
-    var res = await fetch(BO_API_BASE.replace('/api','') + '/api/supervisor/dashboard', {
+    var res = await fetch(BO_API_BASE + '/supervisor/dashboard', {
       headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
     });
     var data = await res.json();
@@ -8946,7 +8944,7 @@ async function refreshSupervisorDashboard() {
     document.getElementById('sv-escalations-list').innerHTML = eHtml;
 
     // Rules
-    var rulesRes = await fetch(BO_API_BASE.replace('/api','') + '/api/supervisor/rules', {
+    var rulesRes = await fetch(BO_API_BASE + '/supervisor/rules', {
       headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
     });
     var rulesData = await rulesRes.json();
@@ -8971,7 +8969,7 @@ async function refreshSupervisorDashboard() {
 // ── Supervisor Audit Chain ──
 async function refreshSupervisorAudit() {
   var filterType = document.getElementById('sv-audit-filter-type').value;
-  var url = BO_API_BASE.replace('/api','') + '/api/supervisor/audit?limit=100';
+  var url = BO_API_BASE + '/supervisor/audit?limit=100';
   if (filterType) url += '&event_type=' + filterType;
   try {
     var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') } });
@@ -9001,7 +8999,7 @@ async function refreshSupervisorAudit() {
 
 async function verifySupervisorAuditChain() {
   try {
-    var res = await fetch(BO_API_BASE.replace('/api','') + '/api/supervisor/audit/verify', {
+    var res = await fetch(BO_API_BASE + '/supervisor/audit/verify', {
       headers: { 'Authorization': 'Bearer ' + (BO_AUTH_TOKEN || '') }
     });
     var data = await res.json();
