@@ -7749,7 +7749,7 @@ function togglePurpose(label) {
 document.addEventListener('DOMContentLoaded', () => {
   // Store original upload label text so it can be restored after clearing
   document.querySelectorAll('[id$="-label"]').forEach(function(lbl) {
-    if (lbl.id.match(/^doc-.*-label$/) && lbl.textContent.indexOf('Click to upload') === 0) {
+    if (lbl.id.match(/^doc-.*-label$/)) {
       lbl.setAttribute('data-original-label', lbl.textContent);
     }
   });
