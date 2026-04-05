@@ -201,8 +201,8 @@ class TestReviewSchedule:
         assert result["days_since_last_review"] > 365
 
     def test_on_schedule(self):
-        from datetime import datetime, timedelta
-        recent = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        from datetime import datetime, timedelta, timezone
+        recent = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         reviews = [{"completed_at": recent}]
         result = _check_review_schedule({"risk_level": "LOW"}, reviews)
         assert result["schedule_status"] == "on_schedule"
@@ -237,8 +237,8 @@ class TestDocumentExpiry:
         assert len(result["expired_documents"]) == 1
 
     def test_expiring_soon(self):
-        from datetime import datetime, timedelta
-        soon = (datetime.utcnow() + timedelta(days=30)).isoformat()
+        from datetime import datetime, timedelta, timezone
+        soon = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
         docs = [{"id": "d1", "document_type": "passport", "expiry_date": soon}]
         result = _check_document_expiry(docs)
         assert result["expiring_soon_count"] == 1
@@ -264,8 +264,8 @@ class TestScreeningStaleness:
         assert result["is_stale"] is True
 
     def test_fresh_screening(self):
-        from datetime import datetime, timedelta
-        recent = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        from datetime import datetime, timedelta, timezone
+        recent = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         data = json.dumps({"screening_report": {"screened_at": recent}})
         result = _check_screening_staleness({"prescreening_data": data})
         assert result["is_stale"] is False
@@ -399,8 +399,8 @@ class TestProductUsageDeviation:
 
 class TestDormancy:
     def test_not_dormant(self):
-        from datetime import datetime
-        result = _check_dormancy({"status": "approved", "updated_at": datetime.utcnow().isoformat()})
+        from datetime import datetime, timezone
+        result = _check_dormancy({"status": "approved", "updated_at": datetime.now(timezone.utc).isoformat()})
         assert result["is_dormant"] is False
 
     def test_dormant(self):
@@ -701,8 +701,8 @@ class TestScreeningRecency:
         assert result["status"] == "no_screening_data"
 
     def test_recent_screening(self):
-        from datetime import datetime, timedelta
-        recent = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        from datetime import datetime, timedelta, timezone
+        recent = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         data = json.dumps({"screening_report": {"screened_at": recent}})
         result = _check_screening_recency({"prescreening_data": data})
         assert result["is_recent"] is True

@@ -123,16 +123,16 @@ class TestTokenRevocationInDecode:
 
     def test_expired_token_returns_none(self, temp_db):
         import jwt as pyjwt
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         from auth import SECRET_KEY, decode_token
 
         payload = {
             "sub": "user1", "role": "admin", "name": "Test",
             "type": "officer", "jti": "test-jti",
             "iss": "arie-finance",
-            "exp": datetime.utcnow() - timedelta(hours=1),
-            "iat": datetime.utcnow() - timedelta(hours=2),
-            "nbf": datetime.utcnow() - timedelta(hours=2),
+            "exp": datetime.now(timezone.utc) - timedelta(hours=1),
+            "iat": datetime.now(timezone.utc) - timedelta(hours=2),
+            "nbf": datetime.now(timezone.utc) - timedelta(hours=2),
         }
         token = pyjwt.encode(payload, SECRET_KEY, algorithm="HS256")
         result = decode_token(token)
@@ -140,14 +140,14 @@ class TestTokenRevocationInDecode:
 
     def test_invalid_issuer_returns_none(self, temp_db):
         import jwt as pyjwt
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         from auth import SECRET_KEY, decode_token
 
         payload = {
             "sub": "user1", "role": "admin", "name": "Test",
             "jti": "test-jti", "iss": "wrong-issuer",
-            "exp": datetime.utcnow() + timedelta(hours=1),
-            "iat": datetime.utcnow(),
+            "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+            "iat": datetime.now(timezone.utc),
         }
         token = pyjwt.encode(payload, SECRET_KEY, algorithm="HS256")
         result = decode_token(token)
