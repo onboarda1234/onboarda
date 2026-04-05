@@ -1,5 +1,5 @@
 """
-ARIE Platform — Environment Configuration & Feature Flags
+Onboarda Platform — Environment Configuration & Feature Flags
 =========================================================
 Single codebase, strict separation between Demo, Staging, and Production.
 """
@@ -272,7 +272,7 @@ def enforce_startup_safety():
     Call at application startup. Blocks production if unsafe.
     Logs warnings for staging. Passes silently for demo.
     """
-    logger.info(f"═══ ARIE Platform Environment: {ENV.upper()} ═══")
+    logger.info(f"═══ Onboarda Platform Environment: {ENV.upper()} ═══")
     logger.info(f"Feature flags loaded: {len(flags.get_all())} flags")
 
     errors = validate_environment()

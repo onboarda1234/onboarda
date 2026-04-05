@@ -20,6 +20,19 @@
   --ease:cubic-bezier(0.4, 0, 0.2, 1); --ease-spring:cubic-bezier(0.16, 1, 0.3, 1);
   --sidebar-w:240px;
 }
+html[data-theme="dark"] {
+  --bg:#0F1117; --surface:#1A1D2E; --surface2:#232738; --surface3:#2D3148;
+  --text1:#E2E8F0; --text2:#94A3B8; --text3:#64748B;
+  --border1:#2D3148; --border2:#374151;
+  --brand-dim:rgba(68,72,184,0.15);
+  --green-bg:rgba(34,197,94,0.12); --red-bg:rgba(239,68,68,0.12);
+  --amber-bg:rgba(245,158,11,0.12); --blue-bg:rgba(37,99,235,0.12);
+  --shadow:0 1px 3px rgba(0,0,0,0.2); --shadow-md:0 4px 16px rgba(0,0,0,0.3); --shadow-lg:0 20px 48px rgba(0,0,0,0.4);
+}
+html[data-theme="dark"] ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.15); }
+html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.25); }
+html[data-theme="dark"] .sidebar { background:#1E2048; }
+html[data-theme="dark"] img { opacity:0.9; }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:var(--bg); color:var(--text1); font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
 ::-webkit-scrollbar { width:6px; height:6px; }
@@ -396,8 +409,14 @@ a { color:var(--brand); text-decoration:none; }
 .perm-x { color:var(--red); font-weight:700; }
 
 /* ── Toast ── */
-.toast { position:fixed; bottom:24px; right:24px; background:var(--text1); color:#fff; padding:12px 20px; border-radius:var(--radius-sm); font-size:13px; z-index:300; opacity:0; transform:translateY(20px); transition:all 0.3s; display:flex; align-items:center; gap:8px; }
+.toast { position:fixed; bottom:24px; right:24px; background:var(--text1); color:#fff; padding:12px 20px; border-radius:var(--radius-sm); font-size:13px; z-index:300; opacity:0; transform:translateY(20px); transition:all 0.3s; display:flex; align-items:center; gap:8px; max-width:420px; line-height:1.4; box-shadow:var(--shadow-md); }
 .toast.show { opacity:1; transform:translateY(0); }
+.toast.toast-error { background:#dc2626; }
+.toast.toast-success { background:#16a34a; }
+.toast.toast-warning { background:#d97706; }
+/* ── Theme Toggle ── */
+.theme-toggle { background:none; border:1px solid var(--border2); border-radius:var(--radius-sm); padding:6px 10px; cursor:pointer; font-size:16px; line-height:1; color:var(--text2); display:flex; align-items:center; transition:all 0.2s var(--ease); }
+.theme-toggle:hover { border-color:var(--brand); color:var(--brand); }
 
 /* ── Sign Out Button ── */
 .signout-btn { background:none; border:1px solid rgba(255,255,255,0.2); color:rgba(255,255,255,0.7); font-size:11px; padding:6px 12px; border-radius:var(--radius-sm); cursor:pointer; transition:all 0.15s; width:100%; margin-top:8px; }
@@ -406,14 +425,14 @@ a { color:var(--brand); text-decoration:none; }
 /* ── Login Screen ── */
 .login-overlay { position:fixed; inset:0; z-index:9999; background:linear-gradient(135deg, #1a1d5e 0%, #2B2F8F 40%, #4448B8 100%); display:flex; align-items:center; justify-content:center; }
 .login-overlay.hidden { display:none; }
-.login-card { background:#fff; border-radius:16px; padding:48px 44px 40px; width:420px; max-width:90vw; box-shadow:0 24px 80px rgba(0,0,0,0.3); }
+.login-card { background:var(--surface); border-radius:16px; padding:48px 44px 40px; width:420px; max-width:90vw; box-shadow:0 24px 80px rgba(0,0,0,0.3); }
 .login-logo { text-align:center; margin-bottom:32px; }
 .login-logo h1 { font-size:26px; font-weight:800; color:var(--brand); letter-spacing:-0.5px; }
 .login-logo p { font-size:13px; color:var(--text3); margin-top:4px; }
 .login-form .form-group { margin-bottom:18px; }
 .login-form .form-label { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.4px; color:var(--text2); display:block; margin-bottom:6px; }
 .login-form .form-input { width:100%; padding:12px 14px; border:1px solid var(--border2); border-radius:var(--radius-sm); font-size:14px; background:var(--surface2); color:var(--text1); outline:none; transition:all 0.15s; }
-.login-form .form-input:focus { border-color:var(--brand); background:#fff; box-shadow:0 0 0 3px rgba(43,47,143,0.1); }
+.login-form .form-input:focus { border-color:var(--brand); background:var(--surface); box-shadow:0 0 0 3px rgba(43,47,143,0.1); }
 .login-btn { width:100%; padding:13px; background:linear-gradient(135deg, var(--brand), var(--brand-light)); color:#fff; border:none; border-radius:var(--radius-sm); font-size:14px; font-weight:700; cursor:pointer; transition:all 0.25s var(--ease); margin-top:6px; box-shadow:0 4px 14px rgba(43,47,143,0.3); }
 .login-btn:hover { transform:translateY(-1px); box-shadow:0 8px 20px rgba(43,47,143,0.4); }
 .login-btn:disabled { opacity:0.6; cursor:not-allowed; }
@@ -423,6 +442,10 @@ a { color:var(--brand); text-decoration:none; }
 .login-footer a { color:var(--brand); font-weight:600; }
 .login-remember { display:flex; align-items:center; gap:8px; margin-bottom:18px; font-size:13px; color:var(--text2); }
 .login-remember input { accent-color:var(--brand); }
+.input-password-wrap { position:relative; }
+.input-password-wrap .form-input { padding-right:44px; }
+.pwd-toggle { position:absolute; right:12px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--text3); cursor:pointer; font-size:16px; padding:2px; transition:all 0.15s var(--ease); }
+.pwd-toggle:hover { color:var(--text1); }
 
 /* ── Review Schedule Settings ── */
 .review-schedule-card { background:var(--surface); border:1px solid var(--border1); border-radius:var(--radius); padding:20px; margin-bottom:16px; }
@@ -496,7 +519,7 @@ a { color:var(--brand); text-decoration:none; }
 .agent-config-card.open .agent-config-body { display:block; }
 .toggle-switch { position:relative; width:40px; height:22px; background:var(--border2); border-radius:11px; cursor:pointer; transition:background 0.2s; flex-shrink:0; }
 .toggle-switch.on { background:var(--green); }
-.toggle-switch::after { content:''; position:absolute; top:2px; left:2px; width:18px; height:18px; background:#fff; border-radius:50%; transition:transform 0.2s; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
+.toggle-switch::after { content:''; position:absolute; top:2px; left:2px; width:18px; height:18px; background:var(--surface); border-radius:50%; transition:transform 0.2s; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
 .toggle-switch.on::after { transform:translateX(18px); }
 .check-item { display:flex; align-items:flex-start; gap:10px; padding:8px 12px; border:1px solid var(--border1); border-radius:var(--radius-sm); margin-bottom:6px; font-size:12px; background:var(--surface); }
 .check-item .check-icon { font-size:14px; flex-shrink:0; margin-top:1px; }
@@ -600,7 +623,7 @@ body.role-admin .role-sco-only, body.role-sco .role-sco-only { display:initial !
 body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only { display:flex !important; }
 
 /* ── AI Chat Sidebar ── */
-.ai-chat-sidebar { position:fixed; top:0; right:-400px; width:400px; height:100vh; background:white; box-shadow:-4px 0 24px rgba(0,0,0,0.12); z-index:1000; transition:right 0.3s ease; display:flex; flex-direction:column; border-left:1px solid var(--border1); }
+.ai-chat-sidebar { position:fixed; top:0; right:-400px; width:400px; height:100vh; background:var(--surface); box-shadow:-4px 0 24px rgba(0,0,0,0.12); z-index:1000; transition:right 0.3s ease; display:flex; flex-direction:column; border-left:1px solid var(--border1); }
 .ai-chat-sidebar.open { right:0; }
 .ai-chat-header { padding:16px 18px; border-bottom:1px solid var(--border1); display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
 .ai-chat-header h3 { font-size:15px; font-weight:700; margin:0; }
@@ -613,7 +636,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 .ai-message.user .ai-message-bubble { background:#2B2F8F; color:white; border-radius:12px 0 12px 12px; }
 .ai-message.ai .ai-message-bubble { background:var(--surface2); color:var(--text1); border-radius:0 12px 12px 12px; }
 .ai-chat-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:12px 16px; border-bottom:1px solid var(--border1); flex-shrink:0; }
-.ai-quick-btn { padding:8px 10px; font-size:12px; border:1px solid var(--border1); background:white; border-radius:6px; cursor:pointer; transition:all 0.15s; }
+.ai-quick-btn { padding:8px 10px; font-size:12px; border:1px solid var(--border1); background:var(--surface); border-radius:6px; cursor:pointer; transition:all 0.15s; }
 .ai-quick-btn:hover { border-color:var(--brand); color:var(--brand); }
 .ai-chat-input-box { padding:12px 16px; display:flex; gap:8px; flex-shrink:0; }
 .ai-chat-input { flex:1; padding:8px 12px; border:1px solid var(--border1); border-radius:6px; font-size:13px; outline:none; }
@@ -631,7 +654,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 .kanban-column-header.amber { background:var(--amber); }
 .kanban-column-header.blue { background:var(--blue); }
 .kanban-column-header.red { background:var(--red); }
-.kanban-card { background:white; border-radius:10px; padding:14px; margin-bottom:10px; border:1px solid rgba(0,0,0,0.06); box-shadow:0 2px 8px rgba(0,0,0,0.04); cursor:grab; transition:all 0.2s; }
+.kanban-card { background:var(--surface); border-radius:10px; padding:14px; margin-bottom:10px; border:1px solid rgba(0,0,0,0.06); box-shadow:0 2px 8px rgba(0,0,0,0.04); cursor:grab; transition:all 0.2s; }
 .kanban-card:hover { box-shadow:0 4px 16px rgba(0,0,0,0.08); transform:translateY(-2px); }
 .kanban-card-company { font-weight:700; font-size:13px; margin-bottom:6px; }
 .kanban-card-id { font-size:11px; color:var(--text3); margin-bottom:8px; }
@@ -643,7 +666,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 .kanban-card-meta { font-size:11px; color:var(--text3); margin-bottom:8px; display:flex; flex-direction:column; gap:2px; }
 .kanban-card-officer { font-size:11px; margin-bottom:8px; }
 .kanban-card-actions { display:flex; gap:6px; }
-.kanban-card-actions button { padding:4px 8px; font-size:11px; border:1px solid var(--border2); background:white; border-radius:4px; cursor:pointer; transition:all 0.15s; }
+.kanban-card-actions button { padding:4px 8px; font-size:11px; border:1px solid var(--border2); background:var(--surface); border-radius:4px; cursor:pointer; transition:all 0.15s; }
 .kanban-card-actions button:hover { border-color:var(--brand); color:var(--brand); }
 
 /* ── Mobile menu button ── */
@@ -708,7 +731,10 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       </div>
       <div class="form-group">
         <label class="form-label" for="login-password">Password</label>
-        <input class="form-input" type="password" id="login-password" placeholder="Enter your password" required autocomplete="current-password" />
+        <div class="input-password-wrap">
+          <input class="form-input" type="password" id="login-password" placeholder="Enter your password" required autocomplete="current-password" />
+          <button type="button" class="pwd-toggle" onclick="togglePwd('login-password', this)" aria-label="Show password">👁</button>
+        </div>
       </div>
       <label class="login-remember">
         <input type="checkbox" id="login-remember" checked /> Remember me
@@ -723,12 +749,12 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 </div>
 
 <!-- ═══════════════ SIDEBAR ═══════════════ -->
-<div class="sidebar">
+<div class="sidebar" role="complementary">
   <div class="sidebar-brand">
     <h2>RegMind</h2>
     <span>Back Office Portal</span>
   </div>
-  <nav class="sidebar-nav">
+  <nav class="sidebar-nav" aria-label="Back office navigation">
     <div class="snav-section">Main</div>
     <div class="snav-item active" onclick="showView('dashboard',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span> Dashboard</div>
     <div class="snav-item" onclick="showView('kpis',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> KPI Dashboard</div>
@@ -778,6 +804,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
   </div>
   <div class="topbar-actions">
     <input type="text" class="topbar-search" placeholder="Search applications, clients..." id="global-search" oninput="handleGlobalSearch(this.value)" />
+    <button class="theme-toggle" id="theme-toggle" onclick="toggleDarkMode()" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
     <button class="topbar-btn" onclick="showNotifications()">🔔 <span id="notif-count" style="background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:none;align-items:center;justify-content:center;font-size:10px;font-weight:700;">0</span></button>
     <select class="form-select" style="width:auto;padding:6px 10px;font-size:12px;" id="login-as-select" onchange="switchUser(this.value)">
       <option value="admin">Login as: Admin</option>
@@ -2170,7 +2197,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 </div>
 
 <!-- Toast -->
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="alert" aria-live="polite"></div>
 
 <!-- Quick Reference Sidebar -->
 <div class="ai-chat-sidebar" id="ai-chat-sidebar">
@@ -2415,7 +2442,7 @@ var BO_AUTH_TOKEN = '';
 var BO_AUTH_USER = null;
 
 // ─── Environment Detection ────────────────────────────────────
-var ARIE_ENV = 'production';
+var APP_ENV = 'production';
 var FEATURE_FLAGS = {};
 var DEMO_CREDENTIALS = {};
 
@@ -2423,7 +2450,7 @@ async function loadEnvironment() {
   try {
     const res = await fetch((BO_API_BASE || '/api') + '/config/environment');
     const data = await res.json();
-    ARIE_ENV = data.environment || 'production';
+    APP_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
     DEMO_CREDENTIALS = data.demo_credentials || {};
     applyEnvironmentUI();
@@ -2461,12 +2488,12 @@ function applyEnvironmentUI() {
   }
 
   // Non-demo: clear seeded regulatory documents (loaded at parse time before env detection)
-  if (ARIE_ENV !== 'demo') {
+  if (APP_ENV !== 'demo') {
     if (typeof REG_DOCUMENTS !== 'undefined') REG_DOCUMENTS = [];
   }
 
   // Demo mode: restore fabricated dashboard monitoring stats
-  if (ARIE_ENV === 'demo') {
+  if (APP_ENV === 'demo') {
     var monStats = document.getElementById('dashboard-monitoring-stats');
     if (monStats) {
       var cards = monStats.querySelectorAll('.stat-card-value');
@@ -2508,6 +2535,12 @@ async function boApiCall(method, path, body) {
   try {
     var res = await fetch(BO_API_BASE + path, opts);
     var data = await res.json();
+    if (res.status === 401 && BO_AUTH_TOKEN) {
+      showToast('Your session has expired. Please sign in again.', 'warning');
+      BO_AUTH_TOKEN = '';
+      showLoginScreen();
+      throw new Error('Session expired');
+    }
     if (!res.ok) throw new Error(data.error || 'Request failed');
     return data;
   } catch (err) {
@@ -5576,14 +5609,42 @@ async function toggleUserStatus(id) {
 // ═══════════════════════════════════════════════════════════
 // UTILITIES
 // ═══════════════════════════════════════════════════════════
-function showToast(msg) {
+function showToast(msg, type) {
   var t = document.getElementById('toast');
   t.textContent = msg;
+  t.className = 'toast' + (type ? ' toast-' + type : '');
   t.classList.add('show');
-  setTimeout(function() { t.classList.remove('show'); }, 3000);
+  setTimeout(function() { t.classList.remove('show'); }, 3500);
 }
 
 function showNotifications() { showToast('No new notifications.'); }
+
+// ── Password Visibility Toggle ──
+function togglePwd(id, btn) {
+  var inp = document.getElementById(id);
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  btn.textContent = inp.type === 'password' ? '👁' : '🙈';
+}
+
+// ── Dark Mode Toggle ──
+function toggleDarkMode() {
+  var html = document.documentElement;
+  var current = html.getAttribute('data-theme');
+  var next = current === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  localStorage.setItem('regmind-theme', next);
+  var btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = next === 'dark' ? '☀️' : '🌙';
+}
+(function initTheme() {
+  var saved = localStorage.getItem('regmind-theme');
+  if (!saved) saved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.addEventListener('DOMContentLoaded', function() {
+    var btn = document.getElementById('theme-toggle');
+    if (btn) btn.textContent = saved === 'dark' ? '☀️' : '🌙';
+  });
+})();
 
 function handleGlobalSearch(q) {
   if (!q) return;
@@ -6903,7 +6964,7 @@ function generateAgentHealthData() {
 
 function renderAgentHealth() {
   // Non-demo: show placeholder — no real agent health metrics available yet
-  if (ARIE_ENV !== 'demo') {
+  if (APP_ENV !== 'demo') {
     document.getElementById('ah-summary-stats').innerHTML =
       '<div style="text-align:center;padding:60px 20px;color:var(--text3);">' +
       '<div style="font-size:48px;margin-bottom:16px;">📊</div>' +
@@ -7170,7 +7231,7 @@ async function handleLogin(e) {
     } catch(apiErr) {
       // Backend not running — demo/offline mode (only allowed in demo environment)
       var demoBoPw = (DEMO_CREDENTIALS || {}).backoffice_password || '';
-      if (ARIE_ENV === 'demo' && demoUser && demoBoPw && (password === demoBoPw || password === 'admin123')) {
+      if (APP_ENV === 'demo' && demoUser && demoBoPw && (password === demoBoPw || password === 'admin123')) {
         isOffline = true;
         resp = {
           token: 'demo_' + btoa(email + ':' + Date.now()),
@@ -9144,7 +9205,6 @@ document.addEventListener('DOMContentLoaded', async function() {
   if (BO_AUTH_TOKEN) {
     try {
       var me = await boApiCall('GET', '/auth/me');
-      console.log('Authenticated as:', me.name, me.role);
       await loadFromAPI();
       populateOfficerDropdowns();
       hideLoginScreen();

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ARIE Finance — Back-End API Server
+Onboarda — Back-End API Server
 ====================================
 Single-file production-ready API server using Tornado + SQLite.
 Provides: authentication, application CRUD, document uploads,
@@ -10,7 +10,7 @@ Run:  python server.py
 Env:  PORT=8080 SECRET_KEY=your-secret DB_PATH=./arie.db
 """
 
-import os, sys, json, uuid, time, hashlib, hmac, re, sqlite3, base64, logging, secrets, io, smtplib
+import os, sys, json, uuid, time, hashlib, re, base64, logging, secrets, smtplib
 from dotenv import load_dotenv
 load_dotenv()  # Load .env before any config reads
 from datetime import datetime, timedelta, timezone

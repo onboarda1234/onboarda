@@ -1,5 +1,5 @@
 """
-Database abstraction layer for ARIE Finance platform.
+Database abstraction layer for Onboarda platform.
 Supports both SQLite (development) and PostgreSQL (production).
 """
 
