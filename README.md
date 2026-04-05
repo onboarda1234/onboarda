@@ -33,7 +33,7 @@ The platform ships as two branded surfaces:
 onboarda/
 ├── arie-backend/                  # Python backend
 │   ├── server.py                  # Main API server (all endpoints)
-│   ├── claude_client.py           # Claude AI integration (5 compliance agents)
+│   ├── claude_client.py           # Claude AI integration (10 compliance agents)
 │   ├── db.py                      # Database layer (SQLite + PostgreSQL)
 │   ├── rule_engine.py             # Country/sector risk scoring (FATF lists)
 │   ├── memo_handler.py            # Compliance memo generation
@@ -93,7 +93,7 @@ Applicant submits via Portal
             ▼
 ┌───────────────────────────────┐
 │  3. AI Memo Generation        │  Claude Sonnet (LOW/MEDIUM)
-│     (5 agents, 11 sections)   │  Claude Opus  (HIGH/VERY_HIGH)
+│     (10 agents, 11 sections)  │  Claude Opus  (HIGH/VERY_HIGH)
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐
@@ -104,13 +104,23 @@ Applicant submits via Portal
     PDF Report → Back-office Review → Decision
 ```
 
-**The 5 AI Agents:**
+**The 10 AI Agents:**
+
+**Onboarding Agents (1–5):**
 
 1. **Identity & Document Integrity** — OCR, document validation, cross-document consistency
 2. **External Database Cross-Verification** — Registry lookups, corporate verification
 3. **FinCrime Screening Interpretation** — Sanctions/PEP analysis, false-positive reduction
 4. **Corporate Structure & UBO Mapping** — Ownership chains, nominee detection
 5. **Compliance Memo & Risk Recommendation** — Composite scoring, final memo generation
+
+**Monitoring Agents (6–10):**
+
+6. **Periodic Review Preparation** — Scheduled review triggers and data collection
+7. **Adverse Media & PEP Monitoring** — Continuous media and PEP screening
+8. **Behaviour & Risk Drift** — Transaction pattern analysis and risk drift detection
+9. **Regulatory Impact** — Regulatory change assessment for existing clients
+10. **Ongoing Compliance Review** — Continuous compliance posture evaluation
 
 ---
 
@@ -194,7 +204,7 @@ Deployment is managed via **Render.com** using the `render.yaml` blueprint at th
 
 | Service | Environment | Auto-deploy | External APIs |
 |---------|------------|-------------|--------------|
-| `arie-finance-live` | Production | Manual only | Real (Sumsub, S3, Claude) |
+| `arie-finance-live` | Production | On push to `main` (CI-gated) | Real (Sumsub, S3, Claude) |
 | `arie-finance-demo` | Demo | On push to `main` | Simulated / sandbox |
 
 ### Feature Flags
