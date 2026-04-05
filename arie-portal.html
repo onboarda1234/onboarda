@@ -243,7 +243,8 @@
   body.sidebar-active #view-onboarding,
   body.sidebar-active #view-docs-review,
   body.sidebar-active #view-approved,
-  body.sidebar-active #view-rejected {
+  body.sidebar-active #view-rejected,
+  body.sidebar-active #view-withdrawn {
     margin-left: 260px;
   }
 
@@ -4050,6 +4051,25 @@
   </div>
 
   <!-- ══════════════════════════════════════
+       VIEW: WITHDRAWN
+  ══════════════════════════════════════ -->
+  <div id="view-withdrawn" class="hidden">
+    <div class="page">
+      <div class="status-hero">
+        <div class="status-icon-lg pending">↩</div>
+        <h2 style="color:var(--text2)">Application Withdrawn</h2>
+        <p>Your application has been withdrawn. If this was not intentional, or if you would like to restart the process, please contact our support team or begin a new application below.</p>
+      </div>
+      <div class="card" style="text-align:center;">
+        <p style="color:var(--text2); font-size:13px; margin-bottom:16px;">
+          You can submit a new application at any time. Your previous information will not be carried over.
+        </p>
+        <button class="btn btn-outline" onclick="showView('prescreening')">↩ Start New Application</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
        VIEW: STATUS LOOKUP
   ══════════════════════════════════════ -->
   <div id="view-status-lookup" class="hidden">
@@ -4609,7 +4629,7 @@ function showLicenceDocs() {
 
 // ─── View switching ───────────────────────────────────────
 // Views where the persistent client sidebar is shown
-const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','client-notifications','account-security'];
+const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','withdrawn','client-notifications','account-security'];
 
 function showView(name) {
   document.querySelectorAll('[id^="view-"]').forEach(v => v.classList.add('hidden'));
@@ -8492,17 +8512,20 @@ function getApplicationView(status) {
   const stageMap = {
     draft: 'prescreening',
     submitted: 'pending',
+    prescreening_submitted: 'pending',
     pricing_review: 'pricing',
     pricing_accepted: 'onboarding',
     pre_approval_review: 'pre-approval-hold',
     pre_approved: 'onboarding',
     kyc_documents: 'onboarding',
-    pending_review: 'pending',
+    kyc_submitted: 'pending',
     in_review: 'pending',
     compliance_review: 'compliance-hold',
     approved: 'approved',
     rejected: 'rejected',
-    edd_required: 'pending'
+    edd_required: 'pending',
+    rmi_sent: 'pending',
+    withdrawn: 'withdrawn'
   };
   return stageMap[status] || 'pending';
 }
