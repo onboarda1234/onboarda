@@ -2486,7 +2486,9 @@ class DocumentDeleteHandler(BaseHandler):
         if doc.get("s3_key") and HAS_S3:
             try:
                 s3 = get_s3_client()
-                s3.delete_document(doc["s3_key"])
+                deleted, message = s3.delete_document(doc["s3_key"])
+                if not deleted:
+                    logging.warning("S3 deletion failed for key %s: %s", doc["s3_key"], message)
             except Exception as e:
                 logging.warning("S3 deletion failed for key %s: %s", doc["s3_key"], e)
 

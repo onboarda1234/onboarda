@@ -7284,8 +7284,11 @@ function clearUploadedDocument(docId) {
   var clearBtn = document.getElementById('clear-' + docId);
   if (clearBtn) clearBtn.remove();
 
-  // Reset UI
-  if (label) label.textContent = 'Click to upload';
+  // Reset UI — restore original per-doc label text (stored in data attribute)
+  if (label) {
+    var originalText = label.getAttribute('data-original-label') || 'Click to upload';
+    label.textContent = originalText;
+  }
   if (item) item.classList.remove('uploaded');
   if (fileInput) fileInput.value = '';
   uploadedDocs.delete(docId);
@@ -7294,15 +7297,18 @@ function clearUploadedDocument(docId) {
   // Delete from backend if we have the doc ID
   var backendIds = uploadedDocIds[docId];
   if (backendIds && AUTH_TOKEN && currentApplicationId) {
-    backendIds.forEach(function(bid) {
-      apiCall('DELETE', '/applications/' + currentApplicationId + '/documents/' + bid).catch(function(e) {
-        console.warn('Backend delete failed for doc', bid, e);
-      });
+    Promise.all(backendIds.map(function(bid) {
+      return apiCall('DELETE', '/applications/' + currentApplicationId + '/documents/' + bid);
+    })).then(function() {
+      delete uploadedDocIds[docId];
+      showToast('info', 'Document Removed', 'You can now re-upload a new file.');
+    }).catch(function(e) {
+      console.warn('Backend delete failed for doc', docId, e);
+      showToast('error', 'Removal Failed', 'Could not remove document from server. Please try again.');
     });
-    delete uploadedDocIds[docId];
+  } else {
+    showToast('info', 'Document Removed', 'You can now re-upload a new file.');
   }
-
-  showToast('info', 'Document Removed', 'You can now re-upload a new file.');
 }
 
 function addClearButton(docId) {
@@ -7741,6 +7747,12 @@ function togglePurpose(label) {
 
 // ─── Init on load ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  // Store original upload label text so it can be restored after clearing
+  document.querySelectorAll('[id$="-label"]').forEach(function(lbl) {
+    if (lbl.id.match(/^doc-.*-label$/) && lbl.textContent.indexOf('Click to upload') === 0) {
+      lbl.setAttribute('data-original-label', lbl.textContent);
+    }
+  });
   initMultiSelect('ms-op-countries', ALL_COUNTRIES);
   initMultiSelect('ms-target-markets', ALL_COUNTRIES);
   populateNationalitySelects();
