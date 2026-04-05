@@ -4036,16 +4036,51 @@
   ══════════════════════════════════════ -->
   <div id="view-rejected" class="hidden">
     <div class="page">
+      <div class="steps">
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Review</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">KYC &amp; Documents</div></div>
+        <div class="step"><div class="step-circle" style="background:var(--red);color:#fff;">✗</div><div class="step-label">Decision</div></div>
+      </div>
+
       <div class="status-hero">
         <div class="status-icon-lg rejected">✗</div>
         <h2 style="color:var(--red)">Application Not Approved</h2>
         <p>After careful review, we are unable to proceed with your application at this time. You will receive a detailed explanation by email within 48 hours.</p>
       </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon" style="background:var(--blue-dim);color:var(--blue);">ℹ️</div>
+          <div>
+            <div class="card-title">What Happens Next</div>
+            <div class="card-sub">Your options going forward</div>
+          </div>
+        </div>
+        <div style="padding:0 4px;">
+          <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:14px;">
+            <span style="font-size:18px;">📧</span>
+            <div><div style="font-weight:600;font-size:13px;">Detailed explanation</div><div style="color:var(--text2);font-size:12px;">You will receive a full written explanation of the decision within 48 hours.</div></div>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:14px;">
+            <span style="font-size:18px;">📝</span>
+            <div><div style="font-weight:600;font-size:13px;">Request a review</div><div style="color:var(--text2);font-size:12px;">If you have additional information to provide, you may request a review by contacting our compliance team.</div></div>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span style="font-size:18px;">🔄</span>
+            <div><div style="font-weight:600;font-size:13px;">Apply again</div><div style="color:var(--text2);font-size:12px;">You are welcome to submit a new application at any time with updated information.</div></div>
+          </div>
+        </div>
+      </div>
+
       <div class="card" style="text-align:center;">
         <p style="color:var(--text2); font-size:13px; margin-bottom:16px;">
-          If you believe this decision is incorrect or have additional information to provide, you may request a review by contacting our compliance team.
+          Need assistance? Our team is here to help.
         </p>
-        <button class="btn btn-outline" onclick="showView('prescreening')">↩ Start New Application</button>
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+          <a href="mailto:support@onboarda.com" class="btn btn-outline">📧 Contact Support</a>
+          <button class="btn btn-outline" onclick="showView('prescreening')">↩ Start New Application</button>
+        </div>
       </div>
     </div>
   </div>
@@ -4060,11 +4095,35 @@
         <h2 style="color:var(--text2)">Application Withdrawn</h2>
         <p>Your application has been withdrawn. If this was not intentional, or if you would like to restart the process, please contact our support team or begin a new application below.</p>
       </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon" style="background:var(--blue-dim);color:var(--blue);">ℹ️</div>
+          <div>
+            <div class="card-title">Withdrawal Information</div>
+            <div class="card-sub">What this means for you</div>
+          </div>
+        </div>
+        <div style="padding:0 4px;">
+          <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:14px;">
+            <span style="font-size:18px;">🔒</span>
+            <div><div style="font-weight:600;font-size:13px;">Your data is safe</div><div style="color:var(--text2);font-size:12px;">All submitted documents are securely stored and will be handled in accordance with data protection regulations.</div></div>
+          </div>
+          <div style="display:flex;gap:12px;align-items:flex-start;">
+            <span style="font-size:18px;">🔄</span>
+            <div><div style="font-weight:600;font-size:13px;">Ready to restart?</div><div style="color:var(--text2);font-size:12px;">You can submit a new application at any time. Previous information will not be carried over.</div></div>
+          </div>
+        </div>
+      </div>
+
       <div class="card" style="text-align:center;">
         <p style="color:var(--text2); font-size:13px; margin-bottom:16px;">
-          You can submit a new application at any time. Your previous information will not be carried over.
+          Need assistance? Our team is here to help.
         </p>
-        <button class="btn btn-outline" onclick="showView('prescreening')">↩ Start New Application</button>
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+          <a href="mailto:support@onboarda.com" class="btn btn-outline">📧 Contact Support</a>
+          <button class="btn btn-outline" onclick="showView('prescreening')">↩ Start New Application</button>
+        </div>
       </div>
     </div>
   </div>
@@ -4521,14 +4580,14 @@ let AUTH_USER = null;
 let currentApplicationId = '';
 
 // ─── Environment Detection ────────────────────────────────
-var ARIE_ENV = 'production';
+var APP_ENV = 'production';
 var FEATURE_FLAGS = {};
 var DEMO_CREDENTIALS = {};
 
 async function loadEnvironment() {
   try {
     const data = await apiCall('GET', '/config/environment');
-    ARIE_ENV = data.environment || 'production';
+    APP_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
     DEMO_CREDENTIALS = data.demo_credentials || {};
     applyEnvironmentUI();
@@ -6666,6 +6725,7 @@ function startAutoSave() {
   autoSaveTimer = setInterval(async function() {
     if (appRef) {
       var data = collectFormData();
+      var saveOk = true;
       if (AUTH_TOKEN) {
         try {
           await apiCall('POST', '/save-resume', {
@@ -6673,12 +6733,17 @@ function startAutoSave() {
             form_data: data,
             last_step: getCurrentStep()
           });
-        } catch(e) {}
+        } catch(e) { saveOk = false; }
       }
       var statusEl = document.getElementById('save-status');
       if (statusEl) {
-        statusEl.textContent = 'Auto-saved ' + new Date().toLocaleTimeString();
-        statusEl.style.color = 'var(--text3)';
+        if (saveOk) {
+          statusEl.textContent = '✓ Auto-saved ' + new Date().toLocaleTimeString();
+          statusEl.style.color = 'var(--green)';
+        } else {
+          statusEl.textContent = '⚠ Save failed — will retry';
+          statusEl.style.color = 'var(--amber)';
+        }
       }
     }
   }, 30000); // Auto-save every 30 seconds
@@ -7193,7 +7258,7 @@ function handleUpload(docId, input) {
     return;
   }
 
-  if (ARIE_ENV !== 'demo') {
+  if (APP_ENV !== 'demo') {
     label.textContent = 'Click to upload';
     input.value = '';
     showToast('error', 'Authentication Required', 'Please sign in before uploading documents.');
@@ -7774,7 +7839,7 @@ async function submitLogin(e) {
     } catch(apiErr) {
       // Backend not running — demo/offline mode (only allowed in demo environment)
       var demoPw = (DEMO_CREDENTIALS || {}).portal_password || '';
-      if (ARIE_ENV === 'demo' && demoPw && (password === demoPw || password === 'demo123')) {
+      if (APP_ENV === 'demo' && demoPw && (password === demoPw || password === 'demo123')) {
         isOffline = true;
         const demoName = email.split('@')[0].replace(/[._]/g,' ').replace(/\b\w/g, c => c.toUpperCase());
         resp = {
@@ -7940,7 +8005,7 @@ function checkPasswordStrength(val) {
 // ─── Company Lookup ───────────────────────────────────────────
 function startCompanyLookup() {
   // In non-demo environments, no registry integration exists — redirect to manual entry
-  if (ARIE_ENV !== 'demo') {
+  if (APP_ENV !== 'demo') {
     showToast('info', 'Manual Entry', 'Company details can be entered directly in the application form.');
     showView('prescreening');
     return;

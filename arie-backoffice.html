@@ -20,6 +20,19 @@
   --ease:cubic-bezier(0.4, 0, 0.2, 1); --ease-spring:cubic-bezier(0.16, 1, 0.3, 1);
   --sidebar-w:240px;
 }
+html[data-theme="dark"] {
+  --bg:#0F1117; --surface:#1A1D2E; --surface2:#232738; --surface3:#2D3148;
+  --text1:#E2E8F0; --text2:#94A3B8; --text3:#64748B;
+  --border1:#2D3148; --border2:#374151;
+  --brand-dim:rgba(68,72,184,0.15);
+  --green-bg:rgba(34,197,94,0.12); --red-bg:rgba(239,68,68,0.12);
+  --amber-bg:rgba(245,158,11,0.12); --blue-bg:rgba(37,99,235,0.12);
+  --shadow:0 1px 3px rgba(0,0,0,0.2); --shadow-md:0 4px 16px rgba(0,0,0,0.3); --shadow-lg:0 20px 48px rgba(0,0,0,0.4);
+}
+html[data-theme="dark"] ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.15); }
+html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.25); }
+html[data-theme="dark"] .sidebar { background:#1E2048; }
+html[data-theme="dark"] img { opacity:0.9; }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:var(--bg); color:var(--text1); font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
 ::-webkit-scrollbar { width:6px; height:6px; }
@@ -396,8 +409,14 @@ a { color:var(--brand); text-decoration:none; }
 .perm-x { color:var(--red); font-weight:700; }
 
 /* ── Toast ── */
-.toast { position:fixed; bottom:24px; right:24px; background:var(--text1); color:#fff; padding:12px 20px; border-radius:var(--radius-sm); font-size:13px; z-index:300; opacity:0; transform:translateY(20px); transition:all 0.3s; display:flex; align-items:center; gap:8px; }
+.toast { position:fixed; bottom:24px; right:24px; background:var(--text1); color:#fff; padding:12px 20px; border-radius:var(--radius-sm); font-size:13px; z-index:300; opacity:0; transform:translateY(20px); transition:all 0.3s; display:flex; align-items:center; gap:8px; max-width:420px; line-height:1.4; box-shadow:var(--shadow-md); }
 .toast.show { opacity:1; transform:translateY(0); }
+.toast.toast-error { background:#dc2626; }
+.toast.toast-success { background:#16a34a; }
+.toast.toast-warning { background:#d97706; }
+/* ── Theme Toggle ── */
+.theme-toggle { background:none; border:1px solid var(--border2); border-radius:var(--radius-sm); padding:6px 10px; cursor:pointer; font-size:16px; line-height:1; color:var(--text2); display:flex; align-items:center; transition:all 0.2s var(--ease); }
+.theme-toggle:hover { border-color:var(--brand); color:var(--brand); }
 
 /* ── Sign Out Button ── */
 .signout-btn { background:none; border:1px solid rgba(255,255,255,0.2); color:rgba(255,255,255,0.7); font-size:11px; padding:6px 12px; border-radius:var(--radius-sm); cursor:pointer; transition:all 0.15s; width:100%; margin-top:8px; }
@@ -778,6 +797,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
   </div>
   <div class="topbar-actions">
     <input type="text" class="topbar-search" placeholder="Search applications, clients..." id="global-search" oninput="handleGlobalSearch(this.value)" />
+    <button class="theme-toggle" id="theme-toggle" onclick="toggleDarkMode()" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
     <button class="topbar-btn" onclick="showNotifications()">🔔 <span id="notif-count" style="background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:none;align-items:center;justify-content:center;font-size:10px;font-weight:700;">0</span></button>
     <select class="form-select" style="width:auto;padding:6px 10px;font-size:12px;" id="login-as-select" onchange="switchUser(this.value)">
       <option value="admin">Login as: Admin</option>
@@ -2415,7 +2435,7 @@ var BO_AUTH_TOKEN = '';
 var BO_AUTH_USER = null;
 
 // ─── Environment Detection ────────────────────────────────────
-var ARIE_ENV = 'production';
+var APP_ENV = 'production';
 var FEATURE_FLAGS = {};
 var DEMO_CREDENTIALS = {};
 
@@ -2423,7 +2443,7 @@ async function loadEnvironment() {
   try {
     const res = await fetch((BO_API_BASE || '/api') + '/config/environment');
     const data = await res.json();
-    ARIE_ENV = data.environment || 'production';
+    APP_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
     DEMO_CREDENTIALS = data.demo_credentials || {};
     applyEnvironmentUI();
@@ -2461,12 +2481,12 @@ function applyEnvironmentUI() {
   }
 
   // Non-demo: clear seeded regulatory documents (loaded at parse time before env detection)
-  if (ARIE_ENV !== 'demo') {
+  if (APP_ENV !== 'demo') {
     if (typeof REG_DOCUMENTS !== 'undefined') REG_DOCUMENTS = [];
   }
 
   // Demo mode: restore fabricated dashboard monitoring stats
-  if (ARIE_ENV === 'demo') {
+  if (APP_ENV === 'demo') {
     var monStats = document.getElementById('dashboard-monitoring-stats');
     if (monStats) {
       var cards = monStats.querySelectorAll('.stat-card-value');
@@ -5576,14 +5596,35 @@ async function toggleUserStatus(id) {
 // ═══════════════════════════════════════════════════════════
 // UTILITIES
 // ═══════════════════════════════════════════════════════════
-function showToast(msg) {
+function showToast(msg, type) {
   var t = document.getElementById('toast');
   t.textContent = msg;
+  t.className = 'toast' + (type ? ' toast-' + type : '');
   t.classList.add('show');
-  setTimeout(function() { t.classList.remove('show'); }, 3000);
+  setTimeout(function() { t.classList.remove('show'); }, 3500);
 }
 
 function showNotifications() { showToast('No new notifications.'); }
+
+// ── Dark Mode Toggle ──
+function toggleDarkMode() {
+  var html = document.documentElement;
+  var current = html.getAttribute('data-theme');
+  var next = current === 'dark' ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  localStorage.setItem('regmind-theme', next);
+  var btn = document.getElementById('theme-toggle');
+  if (btn) btn.textContent = next === 'dark' ? '☀️' : '🌙';
+}
+(function initTheme() {
+  var saved = localStorage.getItem('regmind-theme');
+  if (!saved) saved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.addEventListener('DOMContentLoaded', function() {
+    var btn = document.getElementById('theme-toggle');
+    if (btn) btn.textContent = saved === 'dark' ? '☀️' : '🌙';
+  });
+})();
 
 function handleGlobalSearch(q) {
   if (!q) return;
@@ -6903,7 +6944,7 @@ function generateAgentHealthData() {
 
 function renderAgentHealth() {
   // Non-demo: show placeholder — no real agent health metrics available yet
-  if (ARIE_ENV !== 'demo') {
+  if (APP_ENV !== 'demo') {
     document.getElementById('ah-summary-stats').innerHTML =
       '<div style="text-align:center;padding:60px 20px;color:var(--text3);">' +
       '<div style="font-size:48px;margin-bottom:16px;">📊</div>' +
@@ -7170,7 +7211,7 @@ async function handleLogin(e) {
     } catch(apiErr) {
       // Backend not running — demo/offline mode (only allowed in demo environment)
       var demoBoPw = (DEMO_CREDENTIALS || {}).backoffice_password || '';
-      if (ARIE_ENV === 'demo' && demoUser && demoBoPw && (password === demoBoPw || password === 'admin123')) {
+      if (APP_ENV === 'demo' && demoUser && demoBoPw && (password === demoBoPw || password === 'admin123')) {
         isOffline = true;
         resp = {
           token: 'demo_' + btoa(email + ':' + Date.now()),
@@ -9144,7 +9185,6 @@ document.addEventListener('DOMContentLoaded', async function() {
   if (BO_AUTH_TOKEN) {
     try {
       var me = await boApiCall('GET', '/auth/me');
-      console.log('Authenticated as:', me.name, me.role);
       await loadFromAPI();
       populateOfficerDropdowns();
       hideLoginScreen();
