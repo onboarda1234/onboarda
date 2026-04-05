@@ -69,3 +69,8 @@ Credentials.docx
 
 # ── Pytest cache ──
 .pytest_cache/
+
+# ── Frontend HTML copies in backend dir (source of truth is repo root) ──
+# These are copied at build time by CI/CD workflows and Render buildCommand
+arie-backend/arie-portal.html
+arie-backend/arie-backoffice.html

@@ -51,9 +51,7 @@ def test_no_scoped_ui_or_memo_surfaces_use_stale_agent_labels():
     backend = root / "arie-backend"
     scoped_files = [
         root / "arie-backoffice.html",
-        backend / "arie-backoffice.html",
         root / "arie-portal.html",
-        backend / "arie-portal.html",
         backend / "memo_handler.py",
         backend / "claude_client.py",
         backend / "supervisor" / "agent_executors.py",

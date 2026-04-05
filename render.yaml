@@ -1,6 +1,9 @@
 # ═══════════════════════════════════════════════════════════════
-# Render.com — Blueprint spec for ARIE Finance
+# Render.com — Blueprint spec for Onboarda / RegMind
 # Two services: LIVE (production) and DEMO (demo mode)
+# Both auto-deploy on push to main. CI gates merges.
+# HTML frontends are copied from repo root into arie-backend/
+# at build time (source of truth is repo root).
 # Place this at the REPO ROOT (not inside arie-backend/)
 # ═══════════════════════════════════════════════════════════════
 
@@ -13,10 +16,10 @@ services:
     runtime: python
     plan: starter
     rootDir: .
-    buildCommand: pip install -r arie-backend/requirements.txt
+    buildCommand: "cp arie-portal.html arie-backend/arie-portal.html && cp arie-backoffice.html arie-backend/arie-backoffice.html && pip install -r arie-backend/requirements.txt"
     startCommand: cd arie-backend && python3 server.py
     healthCheckPath: /api/health
-    autoDeploy: false          # Manual deploy for production safety
+    autoDeploy: true           # Auto-deploy on push (CI gates merges to main)
     disk:
       name: arie-data-live
       mountPath: /data
@@ -102,7 +105,7 @@ services:
     runtime: python
     plan: starter
     rootDir: .
-    buildCommand: pip install -r arie-backend/requirements.txt
+    buildCommand: "cp arie-portal.html arie-backend/arie-portal.html && cp arie-backoffice.html arie-backend/arie-backoffice.html && pip install -r arie-backend/requirements.txt"
     startCommand: cd arie-backend && python3 server.py
     healthCheckPath: /api/health
     autoDeploy: true           # Auto-deploy on push for demo
