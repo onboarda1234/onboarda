@@ -100,21 +100,20 @@ python3.11 -m pytest tests/ -x -q --tb=short --ignore=tests/test_pdf_generator.p
 ```
 Expected: `365 passed`. Do not proceed if tests fail.
 
-### Step 2: Copy HTML files into backend directory
-```bash
-cd ~/Desktop/Onboarda
-cp arie-portal.html arie-backend/arie-portal.html
-cp arie-backoffice.html arie-backend/arie-backoffice.html
-```
+### Step 2: Build Docker image
 
-### Step 3: Build Docker image
+> **Note:** HTML files (`arie-portal.html`, `arie-backoffice.html`) are copied from the repo root
+> into `arie-backend/` automatically by CI/CD workflows and the Render build command.
+> For local Docker builds, copy them manually first:
+> `cp arie-portal.html arie-backend/ && cp arie-backoffice.html arie-backend/`
+
 ```bash
 cd arie-backend
 docker build --platform linux/amd64 -t regmind-backend .
 ```
 Must use `--platform linux/amd64` (dev machine is ARM, ECS runs amd64).
 
-### Step 4: Tag and push to ECR
+### Step 3: Tag and push to ECR
 ```bash
 docker tag regmind-backend:latest 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:latest
 
@@ -125,7 +124,7 @@ docker push 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:latest
 ```
 If push returns `403 Forbidden`, re-run the login command.
 
-### Step 5: Deploy to ECS
+### Step 4: Deploy to ECS
 ```bash
 aws ecs update-service --cluster regmind-staging --service regmind-backend \
   --desired-count 0 --region af-south-1 > /dev/null
@@ -137,12 +136,12 @@ aws ecs update-service --cluster regmind-staging --service regmind-backend \
 ```
 Expected: `PRIMARY`
 
-### Step 6: Wait for stabilisation
+### Step 5: Wait for stabilisation
 ```bash
 sleep 120
 ```
 
-### Step 7: Verify health
+### Step 6: Verify health
 ```bash
 curl -s https://staging.regmind.co/api/health | python3 -m json.tool
 ```
@@ -298,8 +297,7 @@ PRE-DEPLOY
 [ ] AWS CLI configured (af-south-1)
 
 BUILD
-[ ] cp arie-portal.html arie-backend/arie-portal.html
-[ ] cp arie-backoffice.html arie-backend/arie-backoffice.html
+[ ] cp arie-portal.html arie-backend/ && cp arie-backoffice.html arie-backend/  (local builds only; CI does this automatically)
 [ ] docker build --platform linux/amd64 -t regmind-backend .
 [ ] docker tag → 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:latest
 [ ] aws ecr get-login-password (if >12h since last login)
