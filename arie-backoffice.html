@@ -799,8 +799,8 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Pending Review</div>
-      <div class="stat-card-value" style="color:var(--amber);" id="dash-stat-pending">0</div>
-      <div class="stat-card-change" id="dash-stat-pending-change"></div>
+      <div class="stat-card-value" style="color:var(--amber);" id="dash-stat-early-stage">0</div>
+      <div class="stat-card-change" id="dash-stat-early-stage-change"></div>
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Approved This Month</div>
@@ -3138,7 +3138,7 @@ function updateDashboardStats() {
 
   var el;
   el = document.getElementById('dash-stat-total'); if (el) el.textContent = total;
-  el = document.getElementById('dash-stat-pending'); if (el) el.textContent = earlyStage;
+  el = document.getElementById('dash-stat-early-stage'); if (el) el.textContent = earlyStage;
   el = document.getElementById('dash-stat-approved'); if (el) el.textContent = approved;
   el = document.getElementById('dash-stat-rejected'); if (el) el.textContent = rejected;
   el = document.getElementById('dash-stat-edd'); if (el) el.textContent = edd;
