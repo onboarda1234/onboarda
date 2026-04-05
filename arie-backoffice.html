@@ -742,12 +742,12 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 </div>
 
 <!-- ═══════════════ SIDEBAR ═══════════════ -->
-<div class="sidebar">
+<div class="sidebar" role="complementary">
   <div class="sidebar-brand">
     <h2>RegMind</h2>
     <span>Back Office Portal</span>
   </div>
-  <nav class="sidebar-nav">
+  <nav class="sidebar-nav" aria-label="Back office navigation">
     <div class="snav-section">Main</div>
     <div class="snav-item active" onclick="showView('dashboard',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span> Dashboard</div>
     <div class="snav-item" onclick="showView('kpis',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> KPI Dashboard</div>
@@ -2190,7 +2190,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 </div>
 
 <!-- Toast -->
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="alert" aria-live="polite"></div>
 
 <!-- Quick Reference Sidebar -->
 <div class="ai-chat-sidebar" id="ai-chat-sidebar">
@@ -2528,6 +2528,12 @@ async function boApiCall(method, path, body) {
   try {
     var res = await fetch(BO_API_BASE + path, opts);
     var data = await res.json();
+    if (res.status === 401 && BO_AUTH_TOKEN) {
+      showToast('Your session has expired. Please sign in again.', 'warning');
+      BO_AUTH_TOKEN = '';
+      showLoginScreen();
+      throw new Error('Session expired');
+    }
     if (!res.ok) throw new Error(data.error || 'Request failed');
     return data;
   } catch (err) {

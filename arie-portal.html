@@ -1388,7 +1388,7 @@
 <div class="bg-glow"></div>
 
 <!-- NAVBAR -->
-<nav class="navbar">
+<nav class="navbar" role="navigation" aria-label="Main navigation">
   <div class="logo">
     <div class="logo-icon">
       <svg viewBox="0 0 38 30" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:26px;height:20px">
@@ -1410,7 +1410,7 @@
 </nav>
 
 <!-- ══ Global Client Sidebar (persistent for logged-in views) ══ -->
-<aside id="global-client-sidebar">
+<aside id="global-client-sidebar" role="navigation" aria-label="Application navigation">
   <div class="dash-user-block" style="margin-bottom:18px;">
     <div class="dash-avatar" id="dash-avatar-initials">--</div>
     <div class="dash-user-name" id="dash-user-name">Loading...</div>
@@ -1448,7 +1448,7 @@
 </aside>
 
 <!-- TOAST -->
-<div id="toast">
+<div id="toast" role="alert" aria-live="polite">
   <div class="toast-icon" id="toast-icon">✓</div>
   <div>
     <div class="toast-title" id="toast-title">Success</div>
@@ -4625,6 +4625,12 @@ async function apiCall(method, path, body, isFormData) {
   try {
     const res = await fetch(API_BASE + path, opts);
     const data = await res.json();
+    if (res.status === 401 && AUTH_TOKEN) {
+      showToast('warn', 'Session Expired', 'Your session has expired. Please sign in again.');
+      clearAuth();
+      showView('login');
+      throw new Error('Session expired');
+    }
     if (!res.ok) throw new Error(data.error || 'Request failed');
     return data;
   } catch (err) {
@@ -4787,6 +4793,10 @@ async function loadMyApplications() {
     renderRecentActivity(apps);
   } catch(e) {
     console.error('Failed to load applications:', e);
+    var tbody = document.getElementById('my-apps-tbody');
+    if (tbody) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--red);">Unable to load your applications. Please check your connection and <a href="#" onclick="loadMyApplications();return false;" style="color:var(--brand);font-weight:600;">try again</a>.</td></tr>';
+    }
   }
 }
 
