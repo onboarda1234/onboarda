@@ -379,7 +379,8 @@ def run_rule_checks(doc_type: str, category: str,
                               "registration_number", "brn")
             extracted = ef.get("registration_number") or ef.get("incorporation_number", "")
             logger.debug("DOC-06 Registration Number: field_name=registration_number, "
-                         "expected_value=%s, extracted_value=%s", declared, extracted)
+                         "declared_present=%s, extracted_present=%s",
+                         bool(declared), bool(extracted))
             if not declared:
                 results.append(_warn(id_, label, cls,
                                      "Incorporation number not declared in pre-screening",
@@ -436,7 +437,8 @@ def run_rule_checks(doc_type: str, category: str,
             declared_dob = ps_get(PSField.PERSON_DOB, "date_of_birth", "dob")
             extracted_dob = ef.get("date_of_birth") or ef.get("dob")
             logger.debug("DOC-49A Date of Birth: field_name=date_of_birth, "
-                         "expected_value=%s, extracted_value=%s", declared_dob, extracted_dob)
+                         "declared_present=%s, extracted_present=%s",
+                         bool(declared_dob), bool(extracted_dob))
             if not declared_dob:
                 results.append(_warn(id_, label, cls,
                                      "Date of birth not declared in pre-screening",
@@ -467,7 +469,8 @@ def run_rule_checks(doc_type: str, category: str,
             declared_nat = ps_get(PSField.PERSON_NATIONALITY, "nationality", "country_of_nationality")
             extracted_nat = ef.get("nationality") or ef.get("country")
             logger.debug("%s Nationality: field_name=nationality, "
-                         "expected_value=%s, extracted_value=%s", id_, declared_nat, extracted_nat)
+                         "declared_present=%s, extracted_present=%s",
+                         id_, bool(declared_nat), bool(extracted_nat))
             if not declared_nat or not extracted_nat:
                 results.append(_warn(id_, label, cls,
                                      "Nationality not extractable or not declared — manual check required",

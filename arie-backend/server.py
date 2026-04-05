@@ -2460,7 +2460,8 @@ class DocumentDeleteHandler(BaseHandler):
             db.close()
             return
 
-        # Only allow deletion in pre-submission statuses
+        # Only allow deletion in pre-submission statuses (post-submission documents
+        # are part of the compliance audit trail and must not be removed)
         allowed_statuses = ("draft", "kyc_documents", "pricing_accepted", "pricing_review", "pre_approved")
         if app["status"] not in allowed_statuses:
             db.close()
@@ -2481,13 +2482,13 @@ class DocumentDeleteHandler(BaseHandler):
             except OSError:
                 pass
 
-        # Delete from S3 if applicable
+        # Delete from S3 if applicable (best-effort; DB record removal proceeds regardless)
         if doc.get("s3_key") and HAS_S3:
             try:
                 s3 = get_s3_client()
                 s3.delete_document(doc["s3_key"])
-            except Exception:
-                pass
+            except Exception as e:
+                logging.warning("S3 deletion failed for key %s: %s", doc["s3_key"], e)
 
         db.execute("DELETE FROM documents WHERE id=? AND application_id=?", (doc_id, app["id"]))
         db.commit()
