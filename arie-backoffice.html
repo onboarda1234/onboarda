@@ -442,6 +442,10 @@ a { color:var(--brand); text-decoration:none; }
 .login-footer a { color:var(--brand); font-weight:600; }
 .login-remember { display:flex; align-items:center; gap:8px; margin-bottom:18px; font-size:13px; color:var(--text2); }
 .login-remember input { accent-color:var(--brand); }
+.input-password-wrap { position:relative; }
+.input-password-wrap .form-input { padding-right:44px; }
+.pwd-toggle { position:absolute; right:12px; top:50%; transform:translateY(-50%); background:none; border:none; color:var(--text3); cursor:pointer; font-size:16px; padding:2px; transition:all 0.15s var(--ease); }
+.pwd-toggle:hover { color:var(--text1); }
 
 /* ── Review Schedule Settings ── */
 .review-schedule-card { background:var(--surface); border:1px solid var(--border1); border-radius:var(--radius); padding:20px; margin-bottom:16px; }
@@ -727,7 +731,10 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       </div>
       <div class="form-group">
         <label class="form-label" for="login-password">Password</label>
-        <input class="form-input" type="password" id="login-password" placeholder="Enter your password" required autocomplete="current-password" />
+        <div class="input-password-wrap">
+          <input class="form-input" type="password" id="login-password" placeholder="Enter your password" required autocomplete="current-password" />
+          <button type="button" class="pwd-toggle" onclick="togglePwd('login-password', this)" aria-label="Show password">👁</button>
+        </div>
       </div>
       <label class="login-remember">
         <input type="checkbox" id="login-remember" checked /> Remember me
@@ -5611,6 +5618,13 @@ function showToast(msg, type) {
 }
 
 function showNotifications() { showToast('No new notifications.'); }
+
+// ── Password Visibility Toggle ──
+function togglePwd(id, btn) {
+  var inp = document.getElementById(id);
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  btn.textContent = inp.type === 'password' ? '👁' : '🙈';
+}
 
 // ── Dark Mode Toggle ──
 function toggleDarkMode() {
