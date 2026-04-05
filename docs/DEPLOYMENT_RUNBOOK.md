@@ -104,8 +104,8 @@ Expected: `365 passed`. Do not proceed if tests fail.
 
 > **Note:** HTML files (`arie-portal.html`, `arie-backoffice.html`) are copied from the repo root
 > into `arie-backend/` automatically by CI/CD workflows and the Render build command.
-> For local Docker builds, copy them manually first:
-> `cp arie-portal.html arie-backend/ && cp arie-backoffice.html arie-backend/`
+> For local Docker builds, copy them manually first (from `arie-backend/`):
+> `cp ../arie-portal.html . && cp ../arie-backoffice.html .`
 
 ```bash
 cd arie-backend
@@ -297,7 +297,7 @@ PRE-DEPLOY
 [ ] AWS CLI configured (af-south-1)
 
 BUILD
-[ ] cp arie-portal.html arie-backend/ && cp arie-backoffice.html arie-backend/  (local builds only; CI does this automatically)
+[ ] cp ../arie-portal.html . && cp ../arie-backoffice.html .  (run from `arie-backend/`; local builds only; CI does this automatically)
 [ ] docker build --platform linux/amd64 -t regmind-backend .
 [ ] docker tag → 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:latest
 [ ] aws ecr get-login-password (if >12h since last login)
