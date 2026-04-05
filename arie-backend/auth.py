@@ -1,5 +1,5 @@
 """
-ARIE Finance — Authentication, Token Management, and Rate Limiting
+Onboarda — Authentication, Token Management, and Rate Limiting
 Extracted from server.py during Sprint 2 monolith decomposition.
 
 Provides:

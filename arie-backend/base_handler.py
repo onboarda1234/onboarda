@@ -1,5 +1,5 @@
 """
-ARIE Finance — BaseHandler
+Onboarda — BaseHandler
 ===========================
 Sprint 3.5: Extracted from server.py to reduce concentration risk.
 Central Tornado request handler base class used by all API endpoints.
