@@ -8,7 +8,7 @@ import json
 import sqlite3
 import tempfile
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -93,7 +93,7 @@ class TestExpiredDataDetection:
         """Audit logs older than retention period must be detected."""
         from gdpr import get_expired_data_summary
         # Insert an old audit entry (11 years ago)
-        old_date = (datetime.utcnow() - timedelta(days=4000)).isoformat()
+        old_date = (datetime.now(timezone.utc) - timedelta(days=4000)).isoformat()
         gdpr_db.execute(
             "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, timestamp) VALUES (?,?,?,?,?,?,?,?)",
             ("test", "Test User", "admin", "test_action", "test", "Old entry", "127.0.0.1", old_date)
@@ -114,7 +114,7 @@ class TestPurgeExecution:
     def test_dry_run_does_not_delete(self, gdpr_db):
         """Dry run must count but not delete records."""
         from gdpr import purge_expired_data
-        old_date = (datetime.utcnow() - timedelta(days=4000)).isoformat()
+        old_date = (datetime.now(timezone.utc) - timedelta(days=4000)).isoformat()
         gdpr_db.execute(
             "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, timestamp) VALUES (?,?,?,?,?,?,?,?)",
             ("test", "Test", "admin", "test", "test", "Old", "127.0.0.1", old_date)
@@ -133,7 +133,7 @@ class TestPurgeExecution:
     def test_actual_purge_deletes_and_logs(self, gdpr_db):
         """Actual purge must delete records and create purge log entry."""
         from gdpr import purge_expired_data
-        old_date = (datetime.utcnow() - timedelta(days=4000)).isoformat()
+        old_date = (datetime.now(timezone.utc) - timedelta(days=4000)).isoformat()
         gdpr_db.execute(
             "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, timestamp) VALUES (?,?,?,?,?,?,?,?)",
             ("test", "Test", "admin", "purge_test", "test", "Old entry for purge", "127.0.0.1", old_date)

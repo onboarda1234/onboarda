@@ -16,7 +16,7 @@ import hashlib
 import time
 import tempfile
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -125,7 +125,7 @@ class TestSumsubWebhookProcessing:
             "rejection_labels": payload["reviewResult"]["rejectLabels"],
             "moderation_comment": payload["reviewResult"]["moderationComment"],
             "event_type": payload["type"],
-            "received_at": datetime.utcnow().isoformat(),
+            "received_at": datetime.now(timezone.utc).isoformat(),
         }
 
         assert kyc_data["sumsub_applicant_id"] == "sumsub_abc123"
@@ -164,7 +164,7 @@ class TestSumsubWebhookProcessing:
         kyc_data = {
             "sumsub_applicant_id": payload["applicantId"],
             "review_answer": payload["reviewResult"]["reviewAnswer"],
-            "received_at": datetime.utcnow().isoformat(),
+            "received_at": datetime.now(timezone.utc).isoformat(),
         }
 
         # Simulate writing to prescreening_data twice
@@ -334,7 +334,7 @@ class TestSumsubMappingIntegrity:
             "rejection_labels": [],
             "moderation_comment": "",
             "event_type": "applicantReviewed",
-            "received_at": datetime.utcnow().isoformat(),
+            "received_at": datetime.now(timezone.utc).isoformat(),
         }
 
         required_fields = [
