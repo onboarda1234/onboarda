@@ -1831,6 +1831,26 @@ class SubmitApplicationHandler(BaseHandler):
             db.close()
             return self.error(f"Currency '{currency}' not supported. Allowed: {', '.join(ALLOWED_CURRENCIES)}", 400)
 
+        # ── v2.3: Validate contact fields (email, phone, website) ──
+        contact_email = prescreening_raw.get("entity_contact_email", "")
+        if contact_email:
+            if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', contact_email):
+                db.close()
+                return self.error("Invalid email format. Please provide a valid email address.", 400)
+
+        contact_phone = prescreening_raw.get("entity_contact_mobile", "")
+        if contact_phone:
+            stripped_phone = re.sub(r'[\s\-()]', '', contact_phone)
+            if not re.match(r'^[0-9]{4,15}$', stripped_phone):
+                db.close()
+                return self.error("Invalid phone number. Please enter 4-15 digits.", 400)
+
+        website = prescreening_raw.get("website", "")
+        if website:
+            if not re.match(r'^(https?://)?([a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(/.*)?$', website):
+                db.close()
+                return self.error("Invalid website URL. Please enter a valid domain (e.g. www.company.com).", 400)
+
         directors, ubos, intermediaries = get_application_parties(db, real_id)
 
         prescreening = safe_json_loads(app["prescreening_data"])
@@ -2418,6 +2438,66 @@ class DocumentUploadHandler(BaseHandler):
 
         self.log_audit(user, "Upload", app["ref"], f"Document uploaded: {filename} ({doc_type})")
         self.success({"id": doc_id, "doc_name": filename, "doc_type": doc_type, "file_size": len(body), "s3_key": s3_key}, 201)
+
+
+class DocumentDeleteHandler(BaseHandler):
+    """DELETE /api/applications/:app_id/documents/:doc_id — delete an uploaded document"""
+    def delete(self, app_id, doc_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute(
+            "SELECT id, ref, client_id, status FROM applications WHERE id=? OR ref=?",
+            (app_id, app_id)
+        ).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        # Only allow deletion in pre-submission statuses (post-submission documents
+        # are part of the compliance audit trail and must not be removed)
+        allowed_statuses = ("draft", "kyc_documents", "pricing_accepted", "pricing_review", "pre_approved")
+        if app["status"] not in allowed_statuses:
+            db.close()
+            return self.error("Documents cannot be deleted after submission.", 403)
+
+        doc = db.execute(
+            "SELECT id, doc_name, file_path, s3_key FROM documents WHERE id=? AND application_id=?",
+            (doc_id, app["id"])
+        ).fetchone()
+        if not doc:
+            db.close()
+            return self.error("Document not found", 404)
+
+        # Delete local file if exists
+        if doc["file_path"] and os.path.exists(doc["file_path"]):
+            try:
+                os.remove(doc["file_path"])
+            except OSError:
+                pass
+
+        # Delete from S3 if applicable (best-effort; DB record removal proceeds regardless)
+        if doc.get("s3_key") and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                deleted, message = s3.delete_document(doc["s3_key"])
+                if not deleted:
+                    logging.warning("S3 deletion failed for key %s: %s", doc["s3_key"], message)
+            except Exception as e:
+                logging.warning("S3 deletion failed for key %s: %s", doc["s3_key"], e)
+
+        db.execute("DELETE FROM documents WHERE id=? AND application_id=?", (doc_id, app["id"]))
+        db.commit()
+        db.close()
+
+        self.log_audit(user, "Delete", app["ref"], f"Document deleted: {doc['doc_name']}")
+        self.success({"deleted": True, "id": doc_id})
 
 
 class DocumentVerifyHandler(BaseHandler):
@@ -7390,6 +7470,7 @@ def make_app():
         (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
         (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
+        (r"/api/applications/([^/]+)/documents/([^/]+)", DocumentDeleteHandler),
         (r"/api/applications/([^/]+)/documents", DocumentUploadHandler),
         (r"/api/applications/([^/]+)", ApplicationDetailHandler),
         (r"/api/applications", ApplicationsHandler),

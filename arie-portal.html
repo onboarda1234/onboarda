@@ -1957,7 +1957,7 @@
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Register</div></div>
         <div class="step active" id="step-1"><div class="step-circle">2</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step" id="step-2"><div class="step-circle">3</div><div class="step-label">AI Review</div></div>
+        <div class="step" id="step-2"><div class="step-circle">3</div><div class="step-label">Risk Profiling</div></div>
         <div class="step" id="step-3"><div class="step-circle">4</div><div class="step-label">KYC & Documents</div></div>
         <div class="step" id="step-4"><div class="step-circle">5</div><div class="step-label">Approved</div></div>
       </div>
@@ -2714,15 +2714,15 @@
               </div>
               <div class="activity-row">
                 <label>Min Amount (USD)</label>
-                <input type="number" id="f-in-min" placeholder="e.g. 10,000" style="flex:1;" />
+                <input type="text" inputmode="numeric" id="f-in-min" placeholder="e.g. 10,000" style="flex:1;" oninput="formatCurrencyInput(this)" />
               </div>
               <div class="activity-row">
                 <label>Max Amount (USD)</label>
-                <input type="number" id="f-in-max" placeholder="e.g. 500,000" style="flex:1;" />
+                <input type="text" inputmode="numeric" id="f-in-max" placeholder="e.g. 500,000" style="flex:1;" oninput="formatCurrencyInput(this)" />
               </div>
               <div class="activity-row">
                 <label>FX Amount (USD)</label>
-                <input type="number" id="f-in-fx" placeholder="e.g. 50,000" style="flex:1;" />
+                <input type="text" inputmode="numeric" id="f-in-fx" placeholder="e.g. 50,000" style="flex:1;" oninput="formatCurrencyInput(this)" />
               </div>
             </div>
             <div class="activity-section">
@@ -2733,15 +2733,15 @@
               </div>
               <div class="activity-row">
                 <label>Min Amount (USD)</label>
-                <input type="number" id="f-out-min" placeholder="e.g. 5,000" style="flex:1;" />
+                <input type="text" inputmode="numeric" id="f-out-min" placeholder="e.g. 5,000" style="flex:1;" oninput="formatCurrencyInput(this)" />
               </div>
               <div class="activity-row">
                 <label>Max Amount (USD)</label>
-                <input type="number" id="f-out-max" placeholder="e.g. 400,000" style="flex:1;" />
+                <input type="text" inputmode="numeric" id="f-out-max" placeholder="e.g. 400,000" style="flex:1;" oninput="formatCurrencyInput(this)" />
               </div>
               <div class="activity-row">
                 <label>FX Amount (USD)</label>
-                <input type="number" id="f-out-fx" placeholder="e.g. 30,000" style="flex:1;" />
+                <input type="text" inputmode="numeric" id="f-out-fx" placeholder="e.g. 30,000" style="flex:1;" oninput="formatCurrencyInput(this)" />
               </div>
             </div>
           </div>
@@ -2761,21 +2761,21 @@
               <tbody>
                 <tr>
                   <td style="padding:8px 10px;color:var(--text2);font-size:12px;">Revenue (USD)</td>
-                  <td><input type="number" id="f-rev1" placeholder="0" /></td>
-                  <td><input type="number" id="f-rev2" placeholder="0" /></td>
-                  <td><input type="number" id="f-rev3" placeholder="0" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-rev1" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-rev2" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-rev3" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
                 </tr>
                 <tr>
                   <td style="padding:8px 10px;color:var(--text2);font-size:12px;">Cost of Sales (USD)</td>
-                  <td><input type="number" id="f-cos1" placeholder="0" /></td>
-                  <td><input type="number" id="f-cos2" placeholder="0" /></td>
-                  <td><input type="number" id="f-cos3" placeholder="0" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-cos1" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-cos2" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-cos3" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
                 </tr>
                 <tr>
                   <td style="padding:8px 10px;color:var(--text2);font-size:12px;">Profit (USD)</td>
-                  <td><input type="number" id="f-profit1" placeholder="0" /></td>
-                  <td><input type="number" id="f-profit2" placeholder="0" /></td>
-                  <td><input type="number" id="f-profit3" placeholder="0" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-profit1" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-profit2" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-profit3" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
                 </tr>
               </tbody>
             </table>
@@ -2864,7 +2864,7 @@
       <!-- Steps -->
       <div class="steps">
         <div class="step done" id="s2-1"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step active" id="s2-2"><div class="step-circle">2</div><div class="step-label">AI Review</div></div>
+        <div class="step active" id="s2-2"><div class="step-circle">2</div><div class="step-label">Risk Profiling</div></div>
         <div class="step" id="s2-3"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step" id="s2-4"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
@@ -2949,7 +2949,7 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step active"><div class="step-circle">2</div><div class="step-label">AI Review</div></div>
+        <div class="step active"><div class="step-circle">2</div><div class="step-label">Risk Profiling</div></div>
         <div class="step"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
@@ -3013,7 +3013,7 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pricing</div></div>
         <div class="step active"><div class="step-circle">4</div><div class="step-label">Pre-Approval</div></div>
         <div class="step"><div class="step-circle">5</div><div class="step-label">KYC & Documents</div></div>
@@ -3083,7 +3083,7 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
         <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
@@ -3115,7 +3115,7 @@
     <div class="page">
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
         <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
@@ -3177,7 +3177,7 @@
       <!-- Steps -->
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
         <div class="step active"><div class="step-circle">3</div><div class="step-label">KYC & Documents</div></div>
         <div class="step"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
@@ -3737,7 +3737,7 @@
     <div class="page">
       <div class="step-bar">
         <div class="step done">Application Form</div>
-        <div class="step done">AI Review</div>
+        <div class="step done">Risk Profiling</div>
         <div class="step done">KYC & Documents</div>
         <div class="step active">Review & Submit</div>
       </div>
@@ -3836,7 +3836,7 @@
 
       <div class="steps">
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">Pre-Screening</div></div>
-        <div class="step done"><div class="step-circle">✓</div><div class="step-label">AI Review</div></div>
+        <div class="step done"><div class="step-circle">✓</div><div class="step-label">Risk Profiling</div></div>
         <div class="step done"><div class="step-circle">✓</div><div class="step-label">KYC & Documents</div></div>
         <div class="step active"><div class="step-circle">4</div><div class="step-label">Approved</div></div>
       </div>
@@ -4151,6 +4151,7 @@
         </div>
         <button class="btn-submit" onclick="lookupApplication()">🔍 Track Application</button>
         <div id="status-lookup-result" style="display:none;margin-top:16px;padding:14px;border:1px solid var(--border2);border-radius:8px;background:var(--surface2);"></div>
+        <button class="btn btn-outline" onclick="showView('my-apps')" style="margin-top:16px;width:100%;">← Back to Dashboard</button>
       </div>
     </div>
   </div>
@@ -4829,6 +4830,24 @@ function debounce(key, fn, delay = 800) {
   debounceTimers[key] = setTimeout(fn, delay);
 }
 
+// ─── Currency input formatting (live comma separators) ─────
+function formatCurrencyInput(el) {
+  var pos = el.selectionStart;
+  var raw = el.value.replace(/[^0-9]/g, '');
+  if (!raw) { el.value = ''; return; }
+  var formatted = Number(raw).toLocaleString('en-US');
+  var addedChars = formatted.length - el.value.length;
+  el.value = formatted;
+  var newPos = Math.max(0, pos + addedChars);
+  el.setSelectionRange(newPos, newPos);
+}
+
+function getCurrencyFieldValue(id) {
+  var el = document.getElementById(id);
+  if (!el) return '';
+  return (el.value || '').replace(/,/g, '').trim();
+}
+
 // ─── A. Real-time Registry Verification ────────────────────
 let registryValidationTimeout = null;
 function handleCompanyNameInput() {
@@ -5363,7 +5382,7 @@ async function submitPrescreening(e) {
   }
 
   function getOptionalNumber(id) {
-    var value = getFieldValue(id);
+    var value = getFieldValue(id).replace(/,/g, '');
     if (value === '') return null;
     var parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -5472,6 +5491,45 @@ async function submitPrescreening(e) {
     showToast('error', 'Incomplete Fields', 'All fields for Directors, UBOs, and Intermediary Shareholders are mandatory. Please complete all highlighted fields.');
     return;
   }
+
+  // ── Email validation ──
+  var emailVal = getFieldValue('f-email');
+  var emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (emailVal && !emailRegex.test(emailVal)) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    var emailEl = document.getElementById('f-email');
+    if (emailEl) emailEl.style.borderColor = 'var(--red)';
+    showToast('error', 'Invalid Email', 'Please enter a valid email address (e.g. name@company.com).');
+    return;
+  }
+  var fEmailEl = document.getElementById('f-email');
+  if (fEmailEl) fEmailEl.style.borderColor = '';
+
+  // ── Phone validation ──
+  var phoneVal = getFieldValue('f-mobile');
+  var phoneRegex = /^[0-9]{4,15}$/;
+  if (phoneVal && !phoneRegex.test(phoneVal.replace(/[\s\-()]/g, ''))) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    var phoneEl = document.getElementById('f-mobile');
+    if (phoneEl) phoneEl.style.borderColor = 'var(--red)';
+    showToast('error', 'Invalid Phone', 'Please enter a valid phone number (digits only, 4-15 characters).');
+    return;
+  }
+  var fPhoneEl = document.getElementById('f-mobile');
+  if (fPhoneEl) fPhoneEl.style.borderColor = '';
+
+  // ── Website validation ──
+  var websiteVal = getFieldValue('f-website');
+  var websiteRegex = /^(https?:\/\/)?([a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(\/.*)?$/;
+  if (websiteVal && !websiteRegex.test(websiteVal)) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    var webEl = document.getElementById('f-website');
+    if (webEl) webEl.style.borderColor = 'var(--red)';
+    showToast('error', 'Invalid Website', 'Please enter a valid website URL (e.g. www.company.com).');
+    return;
+  }
+  var fWebEl = document.getElementById('f-website');
+  if (fWebEl) fWebEl.style.borderColor = '';
 
   var dirRows = document.querySelectorAll('#directors-body tr');
   var directors = [];
@@ -7203,6 +7261,9 @@ function triggerUpload(docId) {
   document.querySelector('#' + docId + ' .file-input').click();
 }
 
+// Track uploaded document backend IDs for deletion
+var uploadedDocIds = {};
+
 // Normalize portal HTML IDs to backend canonical doc_type values
 var DOC_TYPE_MAP = {
   'doc-coi': 'cert_inc', 'doc-memarts': 'memarts', 'doc-shareholders': 'reg_sh',
@@ -7213,6 +7274,54 @@ var DOC_TYPE_MAP = {
   'doc-source-funds-proof': 'source_funds', 'doc-bank-statements': 'bank_statements',
   'doc-aml-policy': 'aml_policy'
 };
+
+function clearUploadedDocument(docId) {
+  var item = document.getElementById(docId);
+  var label = document.getElementById(docId + '-label');
+  var fileInput = item ? item.querySelector('.file-input') : null;
+
+  // Remove clear button
+  var clearBtn = document.getElementById('clear-' + docId);
+  if (clearBtn) clearBtn.remove();
+
+  // Reset UI — restore original per-doc label text (stored in data attribute)
+  if (label) {
+    var originalText = label.getAttribute('data-original-label') || 'Click to upload';
+    label.textContent = originalText;
+  }
+  if (item) item.classList.remove('uploaded');
+  if (fileInput) fileInput.value = '';
+  uploadedDocs.delete(docId);
+  updateProgress();
+
+  // Delete from backend if we have the doc ID
+  var backendIds = uploadedDocIds[docId];
+  if (backendIds && AUTH_TOKEN && currentApplicationId) {
+    Promise.all(backendIds.map(function(bid) {
+      return apiCall('DELETE', '/applications/' + currentApplicationId + '/documents/' + bid);
+    })).then(function() {
+      delete uploadedDocIds[docId];
+      showToast('info', 'Document Removed', 'You can now re-upload a new file.');
+    }).catch(function(e) {
+      console.warn('Backend delete failed for doc', docId, e);
+      showToast('error', 'Removal Failed', 'Could not remove document from server. Please try again.');
+    });
+  } else {
+    showToast('info', 'Document Removed', 'You can now re-upload a new file.');
+  }
+}
+
+function addClearButton(docId) {
+  var item = document.getElementById(docId);
+  if (!item || document.getElementById('clear-' + docId)) return;
+  var btn = document.createElement('button');
+  btn.id = 'clear-' + docId;
+  btn.type = 'button';
+  btn.onclick = function() { clearUploadedDocument(docId); };
+  btn.style.cssText = 'background:none;border:1px solid #ef4444;color:#ef4444;cursor:pointer;font-size:11px;padding:4px 10px;border-radius:4px;margin-top:8px;display:inline-flex;align-items:center;gap:4px;';
+  btn.innerHTML = '✕ Remove';
+  item.appendChild(btn);
+}
 
 function handleUpload(docId, input) {
   const files = input.files;
@@ -7241,6 +7350,10 @@ function handleUpload(docId, input) {
       item.classList.add('uploaded');
       uploadedDocs.add(docId);
       updateProgress();
+
+      // Store backend doc IDs for deletion support
+      uploadedDocIds[docId] = results.filter(function(r) { return r && r.id; }).map(function(r) { return r.id; });
+      addClearButton(docId);
 
       const checks = document.getElementById('doc-ai-checks');
       if (checks) checks.style.display = 'grid';
@@ -7279,6 +7392,7 @@ function handleUpload(docId, input) {
   item.classList.add('uploaded');
   uploadedDocs.add(docId);
   updateProgress();
+  addClearButton(docId);
   showToast('success', 'File Uploaded', 'Document saved in demo mode: ' + names);
 }
 
@@ -7633,6 +7747,12 @@ function togglePurpose(label) {
 
 // ─── Init on load ─────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  // Store original upload label text so it can be restored after clearing
+  document.querySelectorAll('[id$="-label"]').forEach(function(lbl) {
+    if (lbl.id.match(/^doc-.*-label$/)) {
+      lbl.setAttribute('data-original-label', lbl.textContent);
+    }
+  });
   initMultiSelect('ms-op-countries', ALL_COUNTRIES);
   initMultiSelect('ms-target-markets', ALL_COUNTRIES);
   populateNationalitySelects();
