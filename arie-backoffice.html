@@ -3126,7 +3126,7 @@ function renderDashboardRecent() {
 
 function updateDashboardStats() {
   var total = APPLICATIONS.length;
-  var pending = APPLICATIONS.filter(function(a) { var s = (a.status||'').toLowerCase(); return s === 'pending review' || s === 'pending' || s === 'in review' || s === 'submitted' || s === 'prescreening submitted' || s === 'pricing review' || s === 'kyc submitted' || s === 'compliance review'; }).length;
+  var earlyStage = APPLICATIONS.filter(function(a) { var s = (a.status||'').toLowerCase(); return s === 'pending review' || s === 'pending' || s === 'in review' || s === 'submitted' || s === 'prescreening submitted' || s === 'pricing review' || s === 'kyc submitted' || s === 'compliance review'; }).length;
   // Approved This Month: only count applications approved with a date in the current calendar month
   var now = new Date();
   var currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
@@ -3138,7 +3138,7 @@ function updateDashboardStats() {
 
   var el;
   el = document.getElementById('dash-stat-total'); if (el) el.textContent = total;
-  el = document.getElementById('dash-stat-pending'); if (el) el.textContent = pending;
+  el = document.getElementById('dash-stat-pending'); if (el) el.textContent = earlyStage;
   el = document.getElementById('dash-stat-approved'); if (el) el.textContent = approved;
   el = document.getElementById('dash-stat-rejected'); if (el) el.textContent = rejected;
   el = document.getElementById('dash-stat-edd'); if (el) el.textContent = edd;
