@@ -290,7 +290,7 @@ def _get_postgres_schema() -> str:
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
             'pre_approval_review','pre_approved',
-            'kyc_documents','kyc_submitted','compliance_review','in_review',
+            'kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
@@ -873,7 +873,7 @@ def _get_sqlite_schema() -> str:
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
             'pre_approval_review','pre_approved',
-            'kyc_documents','kyc_submitted','compliance_review','in_review',
+            'kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
