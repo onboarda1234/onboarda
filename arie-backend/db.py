@@ -807,7 +807,7 @@ def _get_postgres_schema() -> str:
         decision_type TEXT NOT NULL CHECK(decision_type IN (
             'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
         )),
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         confidence_score REAL,
         source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
         actor_user_id TEXT,
@@ -1383,7 +1383,7 @@ def _get_sqlite_schema() -> str:
         decision_type TEXT NOT NULL CHECK(decision_type IN (
             'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
         )),
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         confidence_score REAL,
         source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
         actor_user_id TEXT,
@@ -2020,7 +2020,7 @@ def _run_migrations(db: DBConnection):
                 decision_type TEXT NOT NULL CHECK(decision_type IN (
                     'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
                 )),
-                risk_level TEXT,
+                risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
                 confidence_score REAL,
                 source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
                 actor_user_id TEXT,
@@ -2043,7 +2043,7 @@ def _run_migrations(db: DBConnection):
                 decision_type TEXT NOT NULL CHECK(decision_type IN (
                     'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
                 )),
-                risk_level TEXT,
+                risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
                 confidence_score REAL,
                 source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
                 actor_user_id TEXT,
@@ -2059,6 +2059,42 @@ def _run_migrations(db: DBConnection):
             CREATE INDEX IF NOT EXISTS idx_dec_rec_ts ON decision_records(timestamp);
             """)
         logger.info("Migration v2.10: decision_records table ready")
+
+    # Migration v2.11: Add CHECK constraints on risk_level columns in secondary tables
+    # For existing PostgreSQL databases that were created before CHECK constraints
+    # were added to the CREATE TABLE definitions.  Fresh databases already have them.
+    if USE_POSTGRESQL:
+        _risk_level_checks = [
+            # (table, column, constraint_name)
+            ("periodic_reviews", "risk_level", "periodic_reviews_risk_level_check"),
+            ("periodic_reviews", "previous_risk_level", "periodic_reviews_prev_risk_level_check"),
+            ("periodic_reviews", "new_risk_level", "periodic_reviews_new_risk_level_check"),
+            ("sar_reports", "risk_level", "sar_reports_risk_level_check"),
+            ("edd_cases", "risk_level", "edd_cases_risk_level_check"),
+            ("decision_records", "risk_level", "decision_records_risk_level_check"),
+        ]
+        for table, column, cname in _risk_level_checks:
+            try:
+                # Check if constraint already exists
+                row = db.execute(
+                    "SELECT 1 FROM information_schema.table_constraints "
+                    "WHERE table_name=%s AND constraint_name=%s",
+                    (table, cname)
+                ).fetchone()
+                if not row:
+                    db.execute(
+                        f"ALTER TABLE {table} ADD CONSTRAINT {cname} "
+                        f"CHECK({column} IS NULL OR {column} IN "
+                        f"('LOW','MEDIUM','HIGH','VERY_HIGH'))"
+                    )
+                    db.commit()
+                    logger.info("Migration v2.11: Added %s on %s.%s", cname, table, column)
+            except Exception as e:
+                logger.debug("Migration v2.11: %s.%s constraint skipped: %s", table, column, e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
 
 def _populate_default_scoring_config(db: 'DBConnection'):
