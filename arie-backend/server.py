@@ -1526,16 +1526,37 @@ class ApplicationsHandler(BaseHandler):
         if not company_name:
             return self.error("Registered entity name is required.", 400)
 
+        # W3: BRN basic validation — must be alphanumeric if provided
+        brn = first_non_empty(data.get("brn"), prescreening_data.get("brn")) or ""
+        brn = brn.strip()
+        if brn and not re.match(r'^[A-Za-z0-9\-/. ]{2,30}$', brn):
+            return self.error("Invalid Business Registration Number format. Please use alphanumeric characters (2-30 chars).", 400)
+
         db = get_db()
+
+        # W3/GATE-03: Prevent duplicate active applications for same client + company
+        client_id = user["sub"] if user["type"] == "client" else data.get("client_id")
+        if client_id and company_name:
+            existing = db.execute(
+                "SELECT ref FROM applications WHERE client_id=? AND company_name=? AND status NOT IN ('rejected','withdrawn')",
+                (client_id, company_name)
+            ).fetchone()
+            if existing:
+                db.close()
+                return self.error(
+                    f"An active application for '{company_name}' already exists (ref: {existing['ref']}). "
+                    "Please resume the existing application instead of creating a new one.",
+                    409
+                )
         db.execute("""
             INSERT INTO applications (id, ref, client_id, company_name, brn, country, sector,
                 entity_type, ownership_structure, prescreening_data, status)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """, (
             app_id, ref,
-            user["sub"] if user["type"] == "client" else data.get("client_id"),
+            client_id,
             company_name,
-            first_non_empty(data.get("brn"), prescreening_data.get("brn")),
+            brn,
             first_non_empty(data.get("country"), prescreening_data.get("country_of_incorporation")),
             first_non_empty(data.get("sector"), prescreening_data.get("sector")),
             first_non_empty(data.get("entity_type"), prescreening_data.get("entity_type")),
