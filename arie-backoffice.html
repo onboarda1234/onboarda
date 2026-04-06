@@ -3639,7 +3639,7 @@ function renderExplainabilityPanel(app, screeningSummary) {
     var factorsHtml = (dimensionFactors[key] || []).filter(function(text) {
       return normalizeDetailValue(text) !== '—';
     }).map(function(text) {
-      return '<div class="dim-explain-factor"><span class="factor-icon">•</span><span class="factor-text">' + escapeHtml(text) + '</span><span class="factor-impact">' + escapeHtml(value.toFixed(2)) + '</span></div>';
+      return '<div class="dim-explain-factor"><span class="factor-icon">•</span><span class="factor-text">' + escapeHtml(text) + '</span></div>';
     }).join('');
     return '<div class="dim-explain-card" id="dim-explain-' + idx + '" onclick="toggleDimExplain(' + idx + ')">' +
       '<div class="dim-explain-name">' + escapeHtml(dimensionLabels[key]) + '</div>' +
