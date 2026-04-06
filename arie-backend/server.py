@@ -1794,7 +1794,7 @@ class ApplicationDetailHandler(BaseHandler):
                 )
 
             # v2.1: HIGH/VERY_HIGH risk MUST go through pre_approval_review before kyc_documents
-            risk_level = app.get("risk_level", "").upper()
+            risk_level = (app.get("risk_level") or "").upper()
             if new_status == "kyc_documents" and risk_level in ("HIGH", "VERY_HIGH"):
                 if app.get("pre_approval_decision") != "PRE_APPROVE":
                     db.close()
