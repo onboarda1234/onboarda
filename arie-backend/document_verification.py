@@ -63,6 +63,101 @@ ALLOWED_MAGIC_BYTES = {
     b"\x89PNG": "image/png",
 }
 NAME_MATCH_PASS_THRESHOLD = 0.90       # ≥90% similarity = pass
+
+# ── Jurisdiction / Country synonym mapping ─────────────────────────
+# Maps alternate names, abbreviations, and sub-jurisdictions to a
+# canonical ISO 3166-1 form.  Used by DOC-07 jurisdiction match and
+# country-risk scoring to eliminate false positives/negatives caused
+# by the old 3-character prefix comparison.
+
+_JURISDICTION_SYNONYMS: Dict[str, str] = {
+    # United Kingdom variants
+    "uk": "united kingdom", "gb": "united kingdom", "gbr": "united kingdom",
+    "great britain": "united kingdom", "britain": "united kingdom",
+    "england": "united kingdom", "scotland": "united kingdom",
+    "wales": "united kingdom", "northern ireland": "united kingdom",
+    "england and wales": "united kingdom", "england & wales": "united kingdom",
+    # United States variants
+    "us": "united states", "usa": "united states",
+    "united states of america": "united states",
+    # Mauritius variants
+    "mu": "mauritius", "republic of mauritius": "mauritius",
+    "mauritian": "mauritius",
+    # Common country aliases
+    "uae": "united arab emirates", "emirates": "united arab emirates",
+    "korea": "south korea", "republic of korea": "south korea",
+    "rok": "south korea", "dprk": "north korea",
+    "prc": "china", "peoples republic of china": "china",
+    "people's republic of china": "china",
+    "bvi": "british virgin islands",
+    "hk": "hong kong", "sar": "hong kong",
+    "sg": "singapore", "ch": "switzerland",
+    "de": "germany", "fr": "france", "nl": "netherlands",
+    "ie": "ireland", "republic of ireland": "ireland",
+    "nz": "new zealand", "au": "australia", "ca": "canada",
+    "jp": "japan", "za": "south africa",
+    "isle of man": "isle of man", "guernsey": "guernsey", "jersey": "jersey",
+}
+
+
+def _canonicalise_jurisdiction(name: str) -> str:
+    """Resolve country/jurisdiction to a canonical lowercase form."""
+    if not name:
+        return ""
+    n = _normalise_name(name)
+    return _JURISDICTION_SYNONYMS.get(n, n)
+
+
+# ── Nationality ↔ Country mapping (demonyms + ISO codes) ──────────
+# Maps demonyms (e.g. "mauritian") and ISO alpha-2 codes to canonical
+# country names, enabling DOC-52/DOC-56 to correctly compare a
+# passport-declared nationality against a pre-screening country.
+
+_NATIONALITY_TO_COUNTRY: Dict[str, str] = {
+    # ISO alpha-2 codes
+    "gb": "united kingdom", "us": "united states", "mu": "mauritius",
+    "fr": "france", "de": "germany", "in": "india", "cn": "china",
+    "za": "south africa", "sg": "singapore", "ae": "united arab emirates",
+    "au": "australia", "ca": "canada", "nz": "new zealand", "jp": "japan",
+    "kr": "south korea", "ie": "ireland", "nl": "netherlands",
+    "ch": "switzerland", "it": "italy", "es": "spain", "pt": "portugal",
+    "se": "sweden", "no": "norway", "dk": "denmark", "fi": "finland",
+    "be": "belgium", "lu": "luxembourg", "at": "austria", "hk": "hong kong",
+    # Demonyms
+    "british": "united kingdom", "english": "united kingdom",
+    "scottish": "united kingdom", "welsh": "united kingdom",
+    "american": "united states", "mauritian": "mauritius",
+    "french": "france", "german": "germany", "indian": "india",
+    "chinese": "china", "south african": "south africa",
+    "singaporean": "singapore", "emirati": "united arab emirates",
+    "australian": "australia", "canadian": "canada",
+    "new zealander": "new zealand", "japanese": "japan",
+    "korean": "south korea", "irish": "ireland", "dutch": "netherlands",
+    "swiss": "switzerland", "italian": "italy", "spanish": "spain",
+    "portuguese": "portugal", "swedish": "sweden", "norwegian": "norway",
+    "danish": "denmark", "finnish": "finland", "belgian": "belgium",
+    "luxembourgish": "luxembourg", "austrian": "austria",
+    "russian": "russia", "brazilian": "brazil", "mexican": "mexico",
+    "nigerian": "nigeria", "kenyan": "kenya", "ghanaian": "ghana",
+    "egyptian": "egypt", "turkish": "turkey", "saudi": "saudi arabia",
+    "pakistani": "pakistan", "bangladeshi": "bangladesh",
+    "sri lankan": "sri lanka", "thai": "thailand", "vietnamese": "vietnam",
+    "filipino": "philippines", "indonesian": "indonesia",
+    "malaysian": "malaysia",
+}
+
+
+def _canonicalise_nationality(name: str) -> str:
+    """Resolve a nationality string (demonym, ISO code, or country name) to canonical country."""
+    if not name:
+        return ""
+    n = _normalise_name(name)
+    # Check demonym / ISO lookup first
+    resolved = _NATIONALITY_TO_COUNTRY.get(n)
+    if resolved:
+        return resolved
+    # Fall through to jurisdiction synonyms (handles "republic of mauritius" etc.)
+    return _canonicalise_jurisdiction(n)
 NAME_MATCH_WARN_THRESHOLD = 0.70       # 70-89% = warn; <70% = fail
 DATE_WINDOW_3_MONTHS  = 90             # days
 DATE_WINDOW_12_MONTHS = 365
@@ -193,15 +288,33 @@ def _check_name_match(id_, label, extracted: str, declared: str,
 # ── Date checking ──────────────────────────────────────────────────
 
 def _parse_date(val) -> Optional[date]:
-    """Try several common date formats, return date or None."""
+    """Try several common date formats, return date or None.
+
+    Handles:
+    - ordinals: "4th March 2026" → "4 March 2026"
+    - 2-digit years: "04/03/26" → interprets as 20XX (window 2000-2099)
+    - multiple common date formats
+    """
     if not val:
         return None
     if isinstance(val, (date, datetime)):
         return val.date() if isinstance(val, datetime) else val
+    s = str(val).strip()
+    if not s:
+        return None
+    # Strip ordinal suffixes: 1st, 2nd, 3rd, 4th, 21st, etc.
+    s = re.sub(r'(\d+)(st|nd|rd|th)\b', r'\1', s, flags=re.IGNORECASE)
+    # Try standard formats first
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d %B %Y",
                 "%d-%m-%Y", "%B %d, %Y", "%d %b %Y", "%Y"):
         try:
-            return datetime.strptime(str(val).strip(), fmt).date()
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    # 2-digit year formats: dd/mm/yy, dd-mm-yy
+    for fmt in ("%d/%m/%y", "%d-%m-%y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(s, fmt).date()
         except ValueError:
             continue
     return None
@@ -391,9 +504,9 @@ def run_rule_checks(doc_type: str, category: str,
                                      "Registration number could not be extracted — manual check required",
                                      rule_type=rtype))
                 continue
-            # Normalise: strip spaces and hyphens for comparison
-            d_norm = re.sub(r"[\s\-]", "", str(declared).upper())
-            e_norm = re.sub(r"[\s\-]", "", str(extracted).upper())
+            # Normalise: strip spaces, hyphens, and leading zeros for comparison
+            d_norm = re.sub(r"[\s\-]", "", str(declared).upper()).lstrip("0") or "0"
+            e_norm = re.sub(r"[\s\-]", "", str(extracted).upper()).lstrip("0") or "0"
             if d_norm == e_norm:
                 results.append(_pass(id_, label, cls, f"Registration number matches ({extracted})",
                                      ps_field=PSField.INCORPORATION_NUMBER,
@@ -451,7 +564,16 @@ def run_rule_checks(doc_type: str, category: str,
                 continue
             d_d = _parse_date(declared_dob)
             d_e = _parse_date(extracted_dob)
-            if d_d and d_e and d_d == d_e:
+            if not d_d or not d_e:
+                # Cannot parse one or both dates — never silently pass
+                results.append(_warn(id_, label, cls,
+                                     f"Date of birth could not be parsed for comparison "
+                                     f"(declared: '{declared_dob}' → {d_d}, "
+                                     f"extracted: '{extracted_dob}' → {d_e}) — manual check required",
+                                     ps_field=PSField.PERSON_DOB,
+                                     ps_value=str(declared_dob), extracted_value=str(extracted_dob),
+                                     rule_type=rtype))
+            elif d_d == d_e:
                 results.append(_pass(id_, label, cls, f"Date of birth matches ({extracted_dob})",
                                      ps_field=PSField.PERSON_DOB,
                                      ps_value=str(declared_dob), extracted_value=str(extracted_dob),
@@ -476,10 +598,10 @@ def run_rule_checks(doc_type: str, category: str,
                                      "Nationality not extractable or not declared — manual check required",
                                      rule_type=rtype))
                 continue
-            # Normalise to 2-letter ISO or full name comparison
-            d_n = _normalise_name(declared_nat)
-            e_n = _normalise_name(extracted_nat)
-            if d_n == e_n or d_n[:3] == e_n[:3]:
+            # Canonicalise via demonym / ISO / synonym lookup
+            d_n = _canonicalise_nationality(declared_nat)
+            e_n = _canonicalise_nationality(extracted_nat)
+            if d_n == e_n:
                 results.append(_pass(id_, label, cls, f"Nationality matches ({extracted_nat})",
                                      ps_field=PSField.PERSON_NATIONALITY,
                                      ps_value=declared_nat, extracted_value=extracted_nat,
@@ -707,7 +829,17 @@ def run_rule_checks(doc_type: str, category: str,
                 continue
             d_d = _parse_date(declared_inc_date)
             d_e = _parse_date(extracted_inc_date)
-            if d_d and d_e and d_d == d_e:
+            if not d_d or not d_e:
+                # Cannot parse one or both dates — never silently pass
+                results.append(_warn(id_, label, cls,
+                                     f"Date could not be parsed for comparison "
+                                     f"(declared: '{declared_inc_date}' → {d_d}, "
+                                     f"extracted: '{extracted_inc_date}' → {d_e}) — manual check required",
+                                     ps_field=PSField.INCORPORATION_DATE,
+                                     ps_value=str(declared_inc_date),
+                                     extracted_value=str(extracted_inc_date),
+                                     rule_type=rtype))
+            elif d_d == d_e:
                 results.append(_pass(id_, label, cls,
                                      f"Incorporation date matches ({extracted_inc_date})",
                                      ps_field=PSField.INCORPORATION_DATE,
@@ -732,9 +864,9 @@ def run_rule_checks(doc_type: str, category: str,
                                      "Jurisdiction not extractable or not declared — manual check required",
                                      rule_type=rtype))
                 continue
-            d_n = _normalise_name(declared_jur)
-            e_n = _normalise_name(extracted_jur)
-            if d_n == e_n or d_n[:3] == e_n[:3]:
+            d_n = _canonicalise_jurisdiction(declared_jur)
+            e_n = _canonicalise_jurisdiction(extracted_jur)
+            if d_n == e_n:
                 results.append(_pass(id_, label, cls,
                                      f"Jurisdiction matches ({extracted_jur})",
                                      ps_field=PSField.JURISDICTION,

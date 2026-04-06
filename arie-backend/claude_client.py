@@ -1049,7 +1049,17 @@ Return ONLY valid JSON (no markdown, no code blocks) with this exact structure:
             if fail_result:
                 fail_result["ai_error"] = str(e)[:200]
                 return fail_result
-            logger.error(f"Risk scoring failed: {e} — returning mock fallback")
+            if not self.mock_mode:
+                # Not in explicit mock mode — do not silently return mock
+                logger.error(f"Risk scoring failed and mock_mode is off: {e}")
+                return {
+                    "status": "error",
+                    "error": f"Risk scoring failed: {str(e)[:200]}",
+                    "ai_source": "error",
+                    "ai_error": str(e)[:200],
+                    "requires_review": True,
+                }
+            logger.warning(f"Risk scoring failed: {e} — returning mock fallback (mock_mode=True)")
             result = _mock_risk_score()
             result["ai_source"] = "mock"
             result["ai_error"] = str(e)[:200]
@@ -1138,7 +1148,11 @@ geographic logic, and source of funds alignment."""
             if fail_result:
                 fail_result["ai_error"] = str(e)[:200]
                 return fail_result
-            logger.error(f"Business plausibility assessment failed: {e} — returning mock response")
+            if not self.mock_mode:
+                logger.error(f"Business plausibility assessment failed and mock_mode is off: {e}")
+                return {"status": "error", "error": f"Plausibility assessment failed: {str(e)[:200]}",
+                        "ai_source": "error", "ai_error": str(e)[:200], "requires_review": True}
+            logger.warning(f"Business plausibility assessment failed: {e} — returning mock response (mock_mode=True)")
             result = _mock_assess_business_plausibility()
             result["ai_source"] = "mock"
             result["ai_error"] = str(e)[:200]
@@ -1231,7 +1245,11 @@ Map the ownership chain, identify the ultimate beneficial owner, and flag any ri
             if fail_result:
                 fail_result["ai_error"] = str(e)[:200]
                 return fail_result
-            logger.error(f"Structure analysis failed: {e} — returning mock response")
+            if not self.mock_mode:
+                logger.error(f"Structure analysis failed and mock_mode is off: {e}")
+                return {"status": "error", "error": f"Structure analysis failed: {str(e)[:200]}",
+                        "ai_source": "error", "ai_error": str(e)[:200], "requires_review": True}
+            logger.warning(f"Structure analysis failed: {e} — returning mock response (mock_mode=True)")
             result = _mock_analyze_corporate_structure()
             result["ai_source"] = "mock"
             result["ai_error"] = str(e)[:200]
@@ -1332,7 +1350,11 @@ Identify false positives, consolidate confirmed hits, rank severity, and provide
             if fail_result:
                 fail_result["ai_error"] = str(e)[:200]
                 return fail_result
-            logger.error(f"FinCrime screening interpretation failed: {e} — returning mock response")
+            if not self.mock_mode:
+                logger.error(f"FinCrime screening interpretation failed and mock_mode is off: {e}")
+                return {"status": "error", "error": f"FinCrime screening failed: {str(e)[:200]}",
+                        "ai_source": "error", "ai_error": str(e)[:200], "requires_review": True}
+            logger.warning(f"FinCrime screening interpretation failed: {e} — returning mock response (mock_mode=True)")
             result = _mock_interpret_fincrime_screening()
             result["ai_source"] = "mock"
             result["ai_error"] = str(e)[:200]
@@ -1513,7 +1535,11 @@ CRITICAL REQUIREMENTS:
             if fail_result:
                 fail_result["ai_error"] = str(e)[:200]
                 return fail_result
-            logger.error(f"Memo generation failed: {e} — returning mock response")
+            if not self.mock_mode:
+                logger.error(f"Memo generation failed and mock_mode is off: {e}")
+                return {"status": "error", "error": f"Memo generation failed: {str(e)[:200]}",
+                        "ai_source": "error", "ai_error": str(e)[:200], "requires_review": True}
+            logger.warning(f"Memo generation failed: {e} — returning mock response (mock_mode=True)")
             result = _mock_generate_compliance_memo()
             result["ai_source"] = "mock"
             result["ai_error"] = str(e)[:200]
