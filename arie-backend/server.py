@@ -2052,31 +2052,30 @@ class KYCSubmitHandler(BaseHandler):
             db.close()
             return self.error("Please upload at least one document before submitting", 400)
 
-        # Re-compute risk score at KYC submission if not already scored
+        # Always recompute risk at KYC submission — data may have changed since pre-screening
         risk_score = app["risk_score"] or 0
-        risk_level = app["risk_level"] or "LOW"
-        if risk_score == 0:
-            try:
-                prescreening = safe_json_loads(app["prescreening_data"])
-                directors, ubos, intermediaries = get_application_parties(db, real_id)
-                scoring_input = build_prescreening_risk_input(
-                    application=app,
-                    prescreening_data=prescreening,
-                    directors=directors,
-                    ubos=ubos,
-                    intermediaries=intermediaries,
-                )
-                score_result = compute_risk_score(scoring_input)
-                risk_score = score_result["score"]
-                risk_level = score_result["level"]
-                db.execute("""UPDATE applications SET
-                    risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
-                    updated_at=datetime('now') WHERE id=?""",
-                    (score_result["score"], score_result["level"],
-                     json.dumps(score_result.get("dimensions", {})),
-                     score_result.get("lane", "Standard Review"), real_id))
-            except Exception as e:
-                logger.warning(f"Risk scoring at KYC submit failed for {app['ref']}: {e}")
+        risk_level = app["risk_level"] or "MEDIUM"
+        try:
+            prescreening = safe_json_loads(app["prescreening_data"])
+            directors, ubos, intermediaries = get_application_parties(db, real_id)
+            scoring_input = build_prescreening_risk_input(
+                application=app,
+                prescreening_data=prescreening,
+                directors=directors,
+                ubos=ubos,
+                intermediaries=intermediaries,
+            )
+            score_result = compute_risk_score(scoring_input)
+            risk_score = score_result["score"]
+            risk_level = score_result["level"]
+            db.execute("""UPDATE applications SET
+                risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                updated_at=datetime('now') WHERE id=?""",
+                (score_result["score"], score_result["level"],
+                 json.dumps(score_result.get("dimensions", {})),
+                 score_result.get("lane", "Standard Review"), real_id))
+        except Exception as e:
+            logger.warning(f"Risk scoring at KYC submit failed for {app['ref']}: {e}")
 
         # ALL applications after KYC go to compliance review — no auto-approval
         db.execute("""
@@ -6816,10 +6815,10 @@ class PeriodicReviewScheduleHandler(BaseHandler):
         today = now.date().isoformat()
 
         risk_intervals = {
-            "LOW": 730,  # days
-            "MEDIUM": 365,
-            "HIGH": 180,
-            "VERY_HIGH": 90
+            "LOW": 1095,       # 36 months (3 years)
+            "MEDIUM": 730,     # 24 months (2 years)
+            "HIGH": 365,       # 12 months (1 year)
+            "VERY_HIGH": 180   # 6 months
         }
 
         created_count = 0
