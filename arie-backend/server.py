@@ -1646,11 +1646,68 @@ class ApplicationDetailHandler(BaseHandler):
                 intermediaries=data["intermediaries"] if "intermediaries" in data else None
             )
 
+        # ── Risk recomputation on material field edits ──
+        # If any risk-relevant field changed, recompute the canonical risk score.
+        # This prevents stale risk values after back-office edits.
+        RISK_RELEVANT_FIELDS = {
+            "entity_type", "ownership_structure", "sector", "country",
+            "directors", "ubos", "intermediaries",
+        }
+        # Also check fields inside prescreening_data that affect scoring
+        RISK_RELEVANT_PRESCREENING = {
+            "operating_countries", "countries_of_operation", "target_markets",
+            "primary_service", "service_required", "monthly_volume",
+            "expected_volume", "transaction_complexity", "payment_corridors",
+            "source_of_wealth", "source_of_funds", "introduction_method",
+            "customer_interaction", "interaction_type", "cross_border",
+        }
+        risk_changed = any(k in data for k in RISK_RELEVANT_FIELDS)
+        if not risk_changed and "prescreening_data" in data:
+            ps = data.get("prescreening_data", {})
+            if isinstance(ps, dict):
+                risk_changed = any(k in ps for k in RISK_RELEVANT_PRESCREENING)
+
+        risk_recomputed = False
+        if risk_changed and app.get("risk_score") is not None:
+            try:
+                # Reload to get updated field values
+                updated_app = db.execute("SELECT * FROM applications WHERE id=?", (real_id,)).fetchone()
+                prescreening_data = safe_json_loads(updated_app["prescreening_data"])
+                directors, ubos, intermediaries = get_application_parties(db, real_id)
+                scoring_input = build_prescreening_risk_input(
+                    application=updated_app,
+                    prescreening_data=prescreening_data,
+                    directors=directors,
+                    ubos=ubos,
+                    intermediaries=intermediaries,
+                )
+                new_risk = compute_risk_score(scoring_input)
+                old_score = app.get("risk_score")
+                old_level = app.get("risk_level")
+                db.execute("""UPDATE applications SET
+                    risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                    updated_at=datetime('now') WHERE id=?""",
+                    (new_risk["score"], new_risk["level"],
+                     json.dumps(new_risk.get("dimensions", {})),
+                     new_risk.get("lane", "Standard Review"), real_id))
+                risk_recomputed = True
+                if old_score != new_risk["score"] or old_level != new_risk["level"]:
+                    logger.info(
+                        f"RISK RECOMPUTED on edit: {app['ref']} "
+                        f"score {old_score}→{new_risk['score']}, "
+                        f"level {old_level}→{new_risk['level']}"
+                    )
+            except Exception as e:
+                logger.warning(f"Risk recomputation on edit failed for {app.get('ref')}: {e}")
+
         db.commit()
         db.close()
 
-        self.log_audit(user, "Update", app["ref"], f"Application updated")
-        self.success({"status": "updated"})
+        audit_detail = "Application updated"
+        if risk_recomputed:
+            audit_detail += " (risk recomputed)"
+        self.log_audit(user, "Update", app["ref"], audit_detail)
+        self.success({"status": "updated", "risk_recomputed": risk_recomputed})
 
     def patch(self, app_id):
         """Partial update — status changes, assignments, etc."""
