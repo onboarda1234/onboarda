@@ -2870,6 +2870,7 @@ function formatStatus(s) {
               pre_approval_review:'Pre-Approval Under Review', pre_approved:'Pre-Approved',
               kyc_documents:'KYC Documents Required', kyc_submitted:'KYC Documents Submitted',
               compliance_review:'Compliance Review in Progress', in_review:'Verification Ongoing',
+              under_review:'Under Compliance Review',
               edd_required:'Enhanced Due Diligence Required', approved:'Approved \u2013 Ready for Activation',
               rejected:'Application Declined', rmi_sent:'Further Information Requested', withdrawn:'Application Withdrawn' };
   return map[s] || s || 'Unknown';
@@ -3131,6 +3132,7 @@ function statusBadge(status) {
     'KYC Submitted':'kyc-submitted', 'kyc_submitted':'kyc-submitted',
     'Compliance Review':'compliance-review', 'compliance_review':'compliance-review',
     'In Review':'in-review', 'in_review':'in-review',
+    'Under Review':'in-review', 'under_review':'in-review',
     'EDD Required':'edd-required', 'edd_required':'edd-required',
     'Approved':'approved', 'approved':'approved',
     'Rejected':'rejected', 'rejected':'rejected',

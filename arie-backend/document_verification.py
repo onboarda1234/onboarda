@@ -113,7 +113,274 @@ def _skip(id_, label, classification, message, **kw):
     return _result(id_, label, classification, CheckStatus.SKIP, message, source="gate", **kw)
 
 
-# ── Name normalisation & fuzzy matching ───────────────────────────
+# ── Country / Nationality canonical mapping ──────────────────────
+# Maps common variations (full names, demonyms, ISO codes) to a single
+# canonical key for reliable comparison in DOC-07 / DOC-52 / DOC-56.
+
+_COUNTRY_CANONICAL = {}  # populated below from _COUNTRY_ENTRIES
+
+_COUNTRY_ENTRIES = [
+    ("AF", ["afghanistan", "afghan"]),
+    ("AL", ["albania", "albanian"]),
+    ("DZ", ["algeria", "algerian"]),
+    ("AD", ["andorra", "andorran"]),
+    ("AO", ["angola", "angolan"]),
+    ("AG", ["antigua and barbuda", "antiguan", "barbudan"]),
+    ("AR", ["argentina", "argentine", "argentinian"]),
+    ("AM", ["armenia", "armenian"]),
+    ("AU", ["australia", "australian"]),
+    ("AT", ["austria", "austrian"]),
+    ("AZ", ["azerbaijan", "azerbaijani"]),
+    ("BS", ["bahamas", "bahamian"]),
+    ("BH", ["bahrain", "bahraini"]),
+    ("BD", ["bangladesh", "bangladeshi"]),
+    ("BB", ["barbados", "barbadian", "bajan"]),
+    ("BY", ["belarus", "belarusian"]),
+    ("BE", ["belgium", "belgian"]),
+    ("BZ", ["belize", "belizean"]),
+    ("BJ", ["benin", "beninese"]),
+    ("BT", ["bhutan", "bhutanese"]),
+    ("BO", ["bolivia", "bolivian"]),
+    ("BA", ["bosnia and herzegovina", "bosnian", "herzegovinian"]),
+    ("BW", ["botswana", "motswana", "batswana"]),
+    ("BR", ["brazil", "brazilian"]),
+    ("BN", ["brunei", "bruneian"]),
+    ("BG", ["bulgaria", "bulgarian"]),
+    ("BF", ["burkina faso", "burkinabe"]),
+    ("BI", ["burundi", "burundian"]),
+    ("CV", ["cabo verde", "cape verde", "cape verdean"]),
+    ("KH", ["cambodia", "cambodian"]),
+    ("CM", ["cameroon", "cameroonian"]),
+    ("CA", ["canada", "canadian"]),
+    ("CF", ["central african republic", "central african"]),
+    ("TD", ["chad", "chadian"]),
+    ("CL", ["chile", "chilean"]),
+    ("CN", ["china", "chinese", "peoples republic of china", "prc"]),
+    ("CO", ["colombia", "colombian"]),
+    ("KM", ["comoros", "comorian"]),
+    ("CG", ["congo", "congolese", "republic of the congo"]),
+    ("CD", ["democratic republic of the congo", "drc", "dr congo"]),
+    ("CR", ["costa rica", "costa rican"]),
+    ("CI", ["cote d ivoire", "ivory coast", "ivorian"]),
+    ("HR", ["croatia", "croatian"]),
+    ("CU", ["cuba", "cuban"]),
+    ("CY", ["cyprus", "cypriot"]),
+    ("CZ", ["czech republic", "czechia", "czech"]),
+    ("DK", ["denmark", "danish", "dane"]),
+    ("DJ", ["djibouti", "djiboutian"]),
+    ("DM", ["dominica", "dominican"]),
+    ("DO", ["dominican republic"]),
+    ("EC", ["ecuador", "ecuadorian"]),
+    ("EG", ["egypt", "egyptian"]),
+    ("SV", ["el salvador", "salvadoran"]),
+    ("GQ", ["equatorial guinea", "equatoguinean"]),
+    ("ER", ["eritrea", "eritrean"]),
+    ("EE", ["estonia", "estonian"]),
+    ("SZ", ["eswatini", "swaziland", "swazi"]),
+    ("ET", ["ethiopia", "ethiopian"]),
+    ("FJ", ["fiji", "fijian"]),
+    ("FI", ["finland", "finnish", "finn"]),
+    ("FR", ["france", "french"]),
+    ("GA", ["gabon", "gabonese"]),
+    ("GM", ["gambia", "gambian"]),
+    ("GE", ["georgia", "georgian"]),
+    ("DE", ["germany", "german"]),
+    ("GH", ["ghana", "ghanaian"]),
+    ("GR", ["greece", "greek"]),
+    ("GD", ["grenada", "grenadian"]),
+    ("GT", ["guatemala", "guatemalan"]),
+    ("GN", ["guinea", "guinean"]),
+    ("GW", ["guinea-bissau", "guinea bissau", "bissau-guinean"]),
+    ("GY", ["guyana", "guyanese"]),
+    ("HT", ["haiti", "haitian"]),
+    ("HN", ["honduras", "honduran"]),
+    ("HK", ["hong kong"]),
+    ("HU", ["hungary", "hungarian"]),
+    ("IS", ["iceland", "icelandic", "icelander"]),
+    ("IN", ["india", "indian"]),
+    ("ID", ["indonesia", "indonesian"]),
+    ("IR", ["iran", "iranian"]),
+    ("IQ", ["iraq", "iraqi"]),
+    ("IE", ["ireland", "irish"]),
+    ("IL", ["israel", "israeli"]),
+    ("IT", ["italy", "italian"]),
+    ("JM", ["jamaica", "jamaican"]),
+    ("JP", ["japan", "japanese"]),
+    ("JO", ["jordan", "jordanian"]),
+    ("KZ", ["kazakhstan", "kazakh"]),
+    ("KE", ["kenya", "kenyan"]),
+    ("KI", ["kiribati", "i-kiribati"]),
+    ("KP", ["north korea", "dprk"]),
+    ("KR", ["south korea", "korea", "korean"]),
+    ("KW", ["kuwait", "kuwaiti"]),
+    ("KG", ["kyrgyzstan", "kyrgyz"]),
+    ("LA", ["laos", "lao"]),
+    ("LV", ["latvia", "latvian"]),
+    ("LB", ["lebanon", "lebanese"]),
+    ("LS", ["lesotho", "basotho"]),
+    ("LR", ["liberia", "liberian"]),
+    ("LY", ["libya", "libyan"]),
+    ("LI", ["liechtenstein"]),
+    ("LT", ["lithuania", "lithuanian"]),
+    ("LU", ["luxembourg", "luxembourgish"]),
+    ("MO", ["macao", "macau"]),
+    ("MG", ["madagascar", "malagasy"]),
+    ("MW", ["malawi", "malawian"]),
+    ("MY", ["malaysia", "malaysian"]),
+    ("MV", ["maldives", "maldivian"]),
+    ("ML", ["mali", "malian"]),
+    ("MT", ["malta", "maltese"]),
+    ("MH", ["marshall islands", "marshallese"]),
+    ("MR", ["mauritania", "mauritanian"]),
+    ("MU", ["mauritius", "mauritian"]),
+    ("MX", ["mexico", "mexican"]),
+    ("FM", ["micronesia", "micronesian"]),
+    ("MD", ["moldova", "moldovan"]),
+    ("MC", ["monaco", "monacan", "monegasque"]),
+    ("MN", ["mongolia", "mongolian"]),
+    ("ME", ["montenegro", "montenegrin"]),
+    ("MA", ["morocco", "moroccan"]),
+    ("MZ", ["mozambique", "mozambican"]),
+    ("MM", ["myanmar", "burmese", "burma"]),
+    ("NA", ["namibia", "namibian"]),
+    ("NR", ["nauru", "nauruan"]),
+    ("NP", ["nepal", "nepalese", "nepali"]),
+    ("NL", ["netherlands", "dutch", "holland"]),
+    ("NZ", ["new zealand", "new zealander", "kiwi"]),
+    ("NI", ["nicaragua", "nicaraguan"]),
+    ("NE", ["niger", "nigerien"]),
+    ("NG", ["nigeria", "nigerian"]),
+    ("MK", ["north macedonia", "macedonia", "macedonian"]),
+    ("NO", ["norway", "norwegian"]),
+    ("OM", ["oman", "omani"]),
+    ("PK", ["pakistan", "pakistani"]),
+    ("PW", ["palau", "palauan"]),
+    ("PS", ["palestine", "palestinian"]),
+    ("PA", ["panama", "panamanian"]),
+    ("PG", ["papua new guinea", "papua new guinean"]),
+    ("PY", ["paraguay", "paraguayan"]),
+    ("PE", ["peru", "peruvian"]),
+    ("PH", ["philippines", "filipino", "philippine"]),
+    ("PL", ["poland", "polish"]),
+    ("PT", ["portugal", "portuguese"]),
+    ("QA", ["qatar", "qatari"]),
+    ("RO", ["romania", "romanian"]),
+    ("RU", ["russia", "russian", "russian federation"]),
+    ("RW", ["rwanda", "rwandan"]),
+    ("KN", ["saint kitts and nevis", "kittitian", "nevisian"]),
+    ("LC", ["saint lucia", "saint lucian"]),
+    ("VC", ["saint vincent and the grenadines", "vincentian"]),
+    ("WS", ["samoa", "samoan"]),
+    ("SM", ["san marino", "sammarinese"]),
+    ("ST", ["sao tome and principe"]),
+    ("SA", ["saudi arabia", "saudi"]),
+    ("SN", ["senegal", "senegalese"]),
+    ("RS", ["serbia", "serbian"]),
+    ("SC", ["seychelles", "seychellois"]),
+    ("SL", ["sierra leone", "sierra leonean"]),
+    ("SG", ["singapore", "singaporean"]),
+    ("SK", ["slovakia", "slovak"]),
+    ("SI", ["slovenia", "slovenian"]),
+    ("SB", ["solomon islands"]),
+    ("SO", ["somalia", "somali"]),
+    ("ZA", ["south africa", "south african"]),
+    ("SS", ["south sudan", "south sudanese"]),
+    ("ES", ["spain", "spanish"]),
+    ("LK", ["sri lanka", "sri lankan"]),
+    ("SD", ["sudan", "sudanese"]),
+    ("SR", ["suriname", "surinamese"]),
+    ("SE", ["sweden", "swedish", "swede"]),
+    ("CH", ["switzerland", "swiss"]),
+    ("SY", ["syria", "syrian"]),
+    ("TW", ["taiwan", "taiwanese"]),
+    ("TJ", ["tajikistan", "tajik"]),
+    ("TZ", ["tanzania", "tanzanian"]),
+    ("TH", ["thailand", "thai"]),
+    ("TL", ["timor-leste", "east timor", "timorese"]),
+    ("TG", ["togo", "togolese"]),
+    ("TO", ["tonga", "tongan"]),
+    ("TT", ["trinidad and tobago", "trinidadian", "tobagonian"]),
+    ("TN", ["tunisia", "tunisian"]),
+    ("TR", ["turkey", "turkiye", "turkish"]),
+    ("TM", ["turkmenistan", "turkmen"]),
+    ("TV", ["tuvalu", "tuvaluan"]),
+    ("UG", ["uganda", "ugandan"]),
+    ("UA", ["ukraine", "ukrainian"]),
+    ("AE", ["united arab emirates", "uae", "emirati"]),
+    ("GB", ["united kingdom", "uk", "british", "great britain", "england", "scotland", "wales", "northern ireland"]),
+    ("US", ["united states", "usa", "us", "american", "united states of america"]),
+    ("UY", ["uruguay", "uruguayan"]),
+    ("UZ", ["uzbekistan", "uzbek"]),
+    ("VU", ["vanuatu", "ni-vanuatu"]),
+    ("VA", ["vatican city", "vatican"]),
+    ("VE", ["venezuela", "venezuelan"]),
+    ("VN", ["vietnam", "vietnamese", "viet nam"]),
+    ("YE", ["yemen", "yemeni"]),
+    ("ZM", ["zambia", "zambian"]),
+    ("ZW", ["zimbabwe", "zimbabwean"]),
+    # Overseas territories / special entities
+    ("VG", ["british virgin islands", "bvi"]),
+    ("KY", ["cayman islands", "caymanian"]),
+    ("BM", ["bermuda", "bermudian"]),
+    ("GI", ["gibraltar", "gibraltarian"]),
+    ("JE", ["jersey"]),
+    ("GG", ["guernsey"]),
+    ("IM", ["isle of man", "manx"]),
+    ("CW", ["curacao"]),
+    ("PR", ["puerto rico", "puerto rican"]),
+    ("GU", ["guam", "guamanian"]),
+    ("AS", ["american samoa"]),
+    ("VI", ["us virgin islands"]),
+    ("TC", ["turks and caicos islands", "turks and caicos"]),
+]
+
+def _build_country_canonical():
+    """Build the reverse-lookup from variations to canonical ISO code."""
+    for iso_code, variants in _COUNTRY_ENTRIES:
+        code_lower = iso_code.lower()
+        _COUNTRY_CANONICAL[code_lower] = iso_code
+        for var in variants:
+            _COUNTRY_CANONICAL[var.lower()] = iso_code
+
+_build_country_canonical()
+
+
+def _canonicalise_country(value: str) -> str:
+    """Resolve a country name, nationality, or ISO code to a canonical ISO 3166-1 alpha-2 code.
+    Returns empty string if no match found.
+    """
+    if not value:
+        return ""
+    normed = re.sub(r"[.,'\-]", " ", value.lower())
+    normed = re.sub(r"\s+", " ", normed).strip()
+    # Direct lookup
+    canon = _COUNTRY_CANONICAL.get(normed)
+    if canon:
+        return canon
+    # Try 2-char or 3-char code match
+    if len(normed) <= 3:
+        canon = _COUNTRY_CANONICAL.get(normed)
+        if canon:
+            return canon
+    # Fuzzy: try stripping common suffixes like "republic of ..."
+    for prefix in ("republic of ", "the ", "state of "):
+        if normed.startswith(prefix):
+            canon = _COUNTRY_CANONICAL.get(normed[len(prefix):])
+            if canon:
+                return canon
+    return ""
+
+
+def _countries_match(a: str, b: str) -> bool:
+    """Return True if two country/nationality/jurisdiction values resolve to the same canonical code."""
+    ca = _canonicalise_country(a)
+    cb = _canonicalise_country(b)
+    if ca and cb:
+        return ca == cb
+    # Fallback: normalised full string comparison
+    na = _normalise_name(a)
+    nb = _normalise_name(b)
+    return na == nb and na != ""
 
 def _normalise_name(name: str) -> str:
     """Lowercase, strip punctuation, collapse whitespace."""
@@ -476,10 +743,8 @@ def run_rule_checks(doc_type: str, category: str,
                                      "Nationality not extractable or not declared — manual check required",
                                      rule_type=rtype))
                 continue
-            # Normalise to 2-letter ISO or full name comparison
-            d_n = _normalise_name(declared_nat)
-            e_n = _normalise_name(extracted_nat)
-            if d_n == e_n or d_n[:3] == e_n[:3]:
+            # Canonical country/nationality comparison (replaces broken prefix logic)
+            if _countries_match(declared_nat, extracted_nat):
                 results.append(_pass(id_, label, cls, f"Nationality matches ({extracted_nat})",
                                      ps_field=PSField.PERSON_NATIONALITY,
                                      ps_value=declared_nat, extracted_value=extracted_nat,
@@ -732,9 +997,8 @@ def run_rule_checks(doc_type: str, category: str,
                                      "Jurisdiction not extractable or not declared — manual check required",
                                      rule_type=rtype))
                 continue
-            d_n = _normalise_name(declared_jur)
-            e_n = _normalise_name(extracted_jur)
-            if d_n == e_n or d_n[:3] == e_n[:3]:
+            # Canonical country comparison (replaces broken prefix logic)
+            if _countries_match(declared_jur, extracted_jur):
                 results.append(_pass(id_, label, cls,
                                      f"Jurisdiction matches ({extracted_jur})",
                                      ps_field=PSField.JURISDICTION,
