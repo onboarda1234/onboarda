@@ -145,12 +145,13 @@ from prescreening.risk_inputs import build_prescreening_risk_input
 
 # Layered document verification engine (Agent 1)
 try:
-    from document_verification import verify_document_layered, to_legacy_result
+    from document_verification import verify_document_layered, to_legacy_result, _canonicalise_country
     HAS_DOC_VERIFICATION = True
 except ImportError:
     HAS_DOC_VERIFICATION = False
     verify_document_layered = None
     to_legacy_result = None
+    _canonicalise_country = None
 
 # Sprint 3: Server-side PDF generation
 try:
@@ -595,13 +596,56 @@ def get_application_parties(db, application_id):
     return directors, ubos, intermediaries
 
 
+def _validate_date_of_birth(dob_str):
+    """Validate a date of birth string. Returns the cleaned date string or empty string if invalid.
+    Rejects future dates and implausible ages (< 16 or > 120 years old).
+    """
+    if not dob_str or not isinstance(dob_str, str):
+        return ""
+    dob_str = dob_str.strip()
+    if not dob_str:
+        return ""
+    try:
+        parsed = datetime.strptime(dob_str, "%Y-%m-%d").date()
+    except ValueError:
+        # Try other common formats
+        for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y"):
+            try:
+                parsed = datetime.strptime(dob_str, fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
+            return ""  # Unparseable → store empty rather than garbage
+    today = datetime.now(timezone.utc).date()
+    if parsed > today:
+        return ""  # Future date → invalid
+    from datetime import date as _date
+    age_years = (today - parsed).days / 365.25
+    if age_years < 16 or age_years > 120:
+        return ""  # Implausible age → store empty
+    return parsed.isoformat()  # Normalize to YYYY-MM-DD
+
+
 def store_application_parties(db, application_id, directors=None, ubos=None, intermediaries=None):
+    """Store party records with validation of DOB and ownership_pct."""
     if directors is not None:
         db.execute("DELETE FROM directors WHERE application_id = ?", (application_id,))
         for director in directors:
             full_name = build_full_name(director)
             if not full_name:
                 continue
+            # Validate DOB if provided
+            dob = director.get("date_of_birth", "")
+            if dob:
+                dob = _validate_date_of_birth(dob)
+            # W2-6: Normalize nationality if canonical lookup is available
+            raw_nat = director.get("nationality", "")
+            if raw_nat and _canonicalise_country:
+                canon = _canonicalise_country(raw_nat)
+                if canon:
+                    director = dict(director)
+                    director["nationality"] = canon
             encrypted = encrypt_pii_fields(director, PII_FIELDS_DIRECTORS)
             db.execute("""
                 INSERT INTO directors (
@@ -617,7 +661,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 encrypted.get("nationality", ""),
                 normalize_is_pep(director.get("is_pep", "No")),
                 json.dumps(parse_json_field(director.get("pep_declaration"), {})),
-                director.get("date_of_birth", ""),
+                dob,
             ))
     if ubos is not None:
         db.execute("DELETE FROM ubos WHERE application_id = ?", (application_id,))
@@ -625,6 +669,24 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             full_name = build_full_name(ubo)
             if not full_name:
                 continue
+            # Validate DOB if provided
+            dob = ubo.get("date_of_birth", "")
+            if dob:
+                dob = _validate_date_of_birth(dob)
+            # Validate ownership_pct range (0–100)
+            raw_pct = ubo.get("ownership_pct", 0)
+            try:
+                pct_val = float(raw_pct) if raw_pct else 0.0
+            except (ValueError, TypeError):
+                pct_val = 0.0
+            pct_val = max(0.0, min(100.0, pct_val))
+            # W2-6: Normalize nationality if canonical lookup is available
+            raw_nat = ubo.get("nationality", "")
+            if raw_nat and _canonicalise_country:
+                canon = _canonicalise_country(raw_nat)
+                if canon:
+                    ubo = dict(ubo)
+                    ubo["nationality"] = canon
             encrypted = encrypt_pii_fields(ubo, PII_FIELDS_UBOS)
             db.execute("""
                 INSERT INTO ubos (
@@ -638,10 +700,10 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 ubo.get("last_name", ""),
                 full_name,
                 encrypted.get("nationality", ""),
-                encrypted.get("ownership_pct", 0),
+                pct_val,
                 normalize_is_pep(ubo.get("is_pep", "No")),
                 json.dumps(parse_json_field(ubo.get("pep_declaration"), {})),
-                ubo.get("date_of_birth", ""),
+                dob,
             ))
     if intermediaries is not None:
         db.execute("DELETE FROM intermediaries WHERE application_id = ?", (application_id,))
@@ -1853,6 +1915,11 @@ class SubmitApplicationHandler(BaseHandler):
 
         directors, ubos, intermediaries = get_application_parties(db, real_id)
 
+        # W2-2: Require at least one director before submission
+        if not directors:
+            db.close()
+            return self.error("At least one director is required before submitting the application.", 400)
+
         prescreening = safe_json_loads(app["prescreening_data"])
         scoring_input = build_prescreening_risk_input(
             application=app,
@@ -2083,10 +2150,10 @@ class KYCSubmitHandler(BaseHandler):
             except Exception as e:
                 logger.warning(f"Risk scoring at KYC submit failed for {app['ref']}: {e}")
 
-        # ALL applications after KYC go to compliance review — no auto-approval
+        # W2-4: Set status to kyc_submitted (previously dead state, now active)
         db.execute("""
             UPDATE applications SET
-                status='compliance_review',
+                status='kyc_submitted',
                 updated_at=datetime('now')
             WHERE id=?
         """, (real_id,))
@@ -2104,7 +2171,7 @@ class KYCSubmitHandler(BaseHandler):
         self.log_audit(user, "KYC Submitted", app["ref"],
                        f"KYC documents submitted for compliance review — {doc_count} document(s)")
         self.success({
-            "status": "compliance_review",
+            "status": "kyc_submitted",
             "message": "Your documents have been submitted for compliance review. An officer will review your application shortly.",
             "documents_uploaded": doc_count
         })
@@ -4595,7 +4662,7 @@ class DashboardHandler(BaseHandler):
             stats["early_stage_applications"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') AND client_id=?", (client_id,)).fetchone()["c"]
             stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND client_id=?", (client_id,)).fetchone()["c"]
             stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required' AND client_id=?", (client_id,)).fetchone()["c"]
@@ -4619,7 +4686,7 @@ class DashboardHandler(BaseHandler):
             stats["early_stage_applications"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted')").fetchone()["c"]
             stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review'").fetchone()["c"]
             stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'").fetchone()["c"]
-            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
+            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted')").fetchone()["c"]
             stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved'").fetchone()["c"]
             stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected'").fetchone()["c"]
             stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required'").fetchone()["c"]
@@ -5471,7 +5538,7 @@ class MonitoringDashboardHandler(BaseHandler):
         }
 
         # Count applications pending compliance review
-        compliance_review = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
+        compliance_review = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted')").fetchone()["c"]
         stats["clients_under_review"] = compliance_review
 
         # Count high-risk alerts

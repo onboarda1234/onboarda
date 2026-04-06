@@ -5493,6 +5493,21 @@ async function submitPrescreening(e) {
     return;
   }
 
+  // W2-2: Minimum director count check
+  var dirRowsForCount = document.querySelectorAll('#directors-body tr');
+  var validDirCount = 0;
+  dirRowsForCount.forEach(function(row) {
+    var nameInputs = row.querySelectorAll('input[type="text"]');
+    var hasName = false;
+    nameInputs.forEach(function(inp) { if (inp.value.trim()) hasName = true; });
+    if (hasName) validDirCount++;
+  });
+  if (validDirCount === 0) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Director Required', 'At least one director is required before submitting the application.');
+    return;
+  }
+
   // ── Email validation ──
   var emailVal = getFieldValue('f-email');
   var emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

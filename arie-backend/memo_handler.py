@@ -31,10 +31,46 @@ def build_compliance_memo(app, directors, ubos, documents):
     Returns:
         tuple: (memo, rule_engine_result, supervisor_result, validation_result)
     """
-    # Collect PEP matches
+    # Collect PEP matches — from both declarations and screening results
     pep_directors = [d for d in directors if d.get("is_pep") == "Yes"]
     pep_ubos = [u for u in ubos if u.get("is_pep") == "Yes"]
     all_peps = pep_directors + pep_ubos
+
+    # W2-5: Also check screening results for PEP hits not covered by declarations
+    prescreening_data = {}
+    try:
+        import json as _json
+        raw_ps = app.get("prescreening_data", "{}")
+        prescreening_data = _json.loads(raw_ps) if isinstance(raw_ps, str) else (raw_ps or {})
+    except Exception:
+        pass
+    screening_results = prescreening_data.get("screening_results", {})
+    # Check director screenings for PEP matches
+    for ds in screening_results.get("director_screenings", []):
+        screening_data = ds.get("screening", {})
+        if screening_data.get("pep_match") or screening_data.get("is_pep"):
+            name = ds.get("name", "")
+            # Add to all_peps if not already declared
+            already_declared = any(p.get("full_name", "") == name for p in all_peps)
+            if not already_declared and name:
+                all_peps.append({"full_name": name, "is_pep": "Yes", "source": "screening"})
+    for us in screening_results.get("ubo_screenings", []):
+        screening_data = us.get("screening", {})
+        if screening_data.get("pep_match") or screening_data.get("is_pep"):
+            name = us.get("name", "")
+            already_declared = any(p.get("full_name", "") == name for p in all_peps)
+            if not already_declared and name:
+                all_peps.append({"full_name": name, "is_pep": "Yes", "source": "screening"})
+
+    # W2-1: Deduplicate PEPs appearing in both director and UBO roles
+    seen_pep_names = set()
+    deduped_peps = []
+    for p in all_peps:
+        pname = (p.get("full_name") or "").strip().lower()
+        if pname and pname not in seen_pep_names:
+            seen_pep_names.add(pname)
+            deduped_peps.append(p)
+    all_peps = deduped_peps
     has_documents = len(documents) > 0
     verified_docs = [d for d in documents if d.get("verification_status") == "verified"]
     pending_docs = [d for d in documents if d.get("verification_status") != "verified"]
