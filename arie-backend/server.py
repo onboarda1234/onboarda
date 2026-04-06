@@ -1693,12 +1693,13 @@ class ApplicationDetailHandler(BaseHandler):
                 risk_recomputed = True
                 if old_score != new_risk["score"] or old_level != new_risk["level"]:
                     logger.info(
-                        f"RISK RECOMPUTED on edit: {app['ref']} "
-                        f"score {old_score}→{new_risk['score']}, "
-                        f"level {old_level}→{new_risk['level']}"
+                        "RISK RECOMPUTED on edit: app_id=%s "
+                        "score %s→%s, level %s→%s",
+                        real_id, old_score, new_risk["score"],
+                        old_level, new_risk["level"]
                     )
             except Exception as e:
-                logger.warning(f"Risk recomputation on edit failed for {app.get('ref')}: {e}")
+                logger.warning("Risk recomputation on edit failed for app_id=%s: %s", real_id, e)
 
         db.commit()
         db.close()
