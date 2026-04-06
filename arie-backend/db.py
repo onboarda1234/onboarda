@@ -2082,8 +2082,7 @@ def _populate_default_scoring_config(db: 'DBConnection'):
         "saudi arabia": 2, "turkey": 2, "uae": 2,
         "uganda": 2, "ghana": 2, "ivory coast": 2, "jordan": 2, "sri lanka": 2, "tunisia": 2,
         "jersey": 2, "guernsey": 2, "isle of man": 2, "liechtenstein": 2,
-        "estonia": 2, "pakistan": 2,
-        "seychelles": 3,
+        "estonia": 2, "pakistan": 2, "seychelles": 2,
         "algeria": 3, "burkina faso": 3, "cameroon": 3, "democratic republic of congo": 3,
         "haiti": 3, "kenya": 3, "laos": 3, "lebanon": 3, "mali": 3, "monaco": 3,
         "mozambique": 3, "nigeria": 3, "philippines": 3, "senegal": 3, "south africa": 3,
@@ -2098,8 +2097,8 @@ def _populate_default_scoring_config(db: 'DBConnection'):
         "agriculture": 1, "education": 1,
         "healthcare": 2, "technology": 2, "software": 2, "saas": 2, "manufacturing": 2,
         "retail": 2, "e-commerce": 2, "media": 2, "logistics": 2, "insurance": 2,
-        "telecommunications": 2, "construction": 2, "banking": 2,
-        "import": 3, "export": 3, "real estate": 3, "mining": 3,
+        "telecommunications": 2, "banking": 2,
+        "construction": 3, "import": 3, "export": 3, "real estate": 3, "mining": 3,
         "oil": 3, "gas": 3, "energy": 3, "money services": 3, "forex": 3, "precious": 3,
         "non-profit": 3, "ngo": 3, "charity": 3, "advisory": 3,
         "management consulting": 3, "consulting": 3, "financial / tax advisory": 3,
@@ -2639,9 +2638,9 @@ def seed_initial_data(db: DBConnection):
         }
         ])
         default_thresholds = json.dumps([
-        {"level": "LOW", "min": 0, "max": 29.9},
-        {"level": "MEDIUM", "min": 30, "max": 49.9},
-        {"level": "HIGH", "min": 50, "max": 69.9},
+        {"level": "LOW", "min": 0, "max": 39.9},
+        {"level": "MEDIUM", "min": 40, "max": 54.9},
+        {"level": "HIGH", "min": 55, "max": 69.9},
         {"level": "VERY_HIGH", "min": 70, "max": 100}
         ])
         default_country_scores = json.dumps({
@@ -2660,9 +2659,8 @@ def seed_initial_data(db: DBConnection):
         "saudi arabia": 2, "turkey": 2, "uae": 2,
         "uganda": 2, "ghana": 2, "ivory coast": 2, "jordan": 2, "sri lanka": 2, "tunisia": 2,
         "jersey": 2, "guernsey": 2, "isle of man": 2, "liechtenstein": 2,
-        "estonia": 2, "pakistan": 2,
+        "estonia": 2, "pakistan": 2, "seychelles": 2,
         # Score 3 — High Risk (FATF grey list, offshore/secrecy)
-        "seychelles": 3,
         "algeria": 3, "burkina faso": 3, "cameroon": 3, "democratic republic of congo": 3,
         "haiti": 3, "kenya": 3, "laos": 3, "lebanon": 3, "mali": 3, "monaco": 3,
         "mozambique": 3, "nigeria": 3, "philippines": 3, "senegal": 3, "south africa": 3,
@@ -2678,8 +2676,8 @@ def seed_initial_data(db: DBConnection):
         "agriculture": 1, "education": 1,
         "healthcare": 2, "technology": 2, "software": 2, "saas": 2, "manufacturing": 2,
         "retail": 2, "e-commerce": 2, "media": 2, "logistics": 2, "insurance": 2,
-        "telecommunications": 2, "construction": 2, "banking": 2,
-        "import": 3, "export": 3, "real estate": 3, "mining": 3,
+        "telecommunications": 2, "banking": 2,
+        "construction": 3, "import": 3, "export": 3, "real estate": 3, "mining": 3,
         "oil": 3, "gas": 3, "energy": 3, "money services": 3, "forex": 3, "precious": 3,
         "non-profit": 3, "ngo": 3, "charity": 3, "advisory": 3,
         "management consulting": 3, "consulting": 3, "financial / tax advisory": 3,

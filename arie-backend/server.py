@@ -115,7 +115,7 @@ from rule_engine import (
     HIGH_RISK_SECTORS, MINIMUM_MEDIUM_SECTORS, MEDIUM_RISK_SECTORS,
     HIGH_RISK_COUNTRIES, ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
     RISK_WEIGHTS, RISK_RANK,
-    classify_country, score_sector, compute_risk_score,
+    classify_country, score_sector, compute_risk_score, classify_risk_level,
 )
 from validation_engine import (
     validate_compliance_memo,
@@ -1880,13 +1880,8 @@ class SubmitApplicationHandler(BaseHandler):
         if screening_report["total_hits"] > 0:
             risk_bump = min(screening_report["total_hits"] * 8, 25)  # Up to +25 points
             risk["score"] = min(100, risk["score"] + risk_bump)
-            # Re-classify level
-            if risk["score"] >= 70:
-                risk["level"] = "VERY_HIGH"
-            elif risk["score"] >= 55:
-                risk["level"] = "HIGH"
-            elif risk["score"] >= 40:
-                risk["level"] = "MEDIUM"
+            # Re-classify level using CANONICAL thresholds (single source of truth)
+            risk["level"] = classify_risk_level(risk["score"])
             risk["lane"] = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}[risk["level"]]
             risk["screening_elevated"] = True
             risk["screening_hits"] = screening_report["total_hits"]
