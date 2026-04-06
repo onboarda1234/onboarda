@@ -220,6 +220,30 @@ def _normalise_name(name: str) -> str:
     return n
 
 
+# ── Address abbreviation expansion ─────────────────────────────────
+_ADDRESS_ABBREVIATIONS: Dict[str, str] = {
+    "st": "street", "rd": "road", "ave": "avenue", "dr": "drive",
+    "blvd": "boulevard", "ct": "court", "pl": "place", "ln": "lane",
+    "cres": "crescent", "tce": "terrace", "hwy": "highway",
+    "sq": "square", "pk": "park", "grn": "green", "bldg": "building",
+    "ste": "suite", "apt": "apartment", "fl": "floor",
+}
+
+
+def _expand_address_abbreviations(text: str) -> str:
+    """Expand common address abbreviations for better matching.
+
+    '10 Downing St' → '10 Downing street'
+    """
+    if not text:
+        return ""
+    words = _normalise_name(text).split()
+    expanded = []
+    for w in words:
+        expanded.append(_ADDRESS_ABBREVIATIONS.get(w, w))
+    return " ".join(expanded)
+
+
 def _legal_suffix_strip(name: str) -> str:
     """Remove common legal suffixes for comparison."""
     suffixes = [
@@ -238,7 +262,8 @@ def _legal_suffix_strip(name: str) -> str:
 def _name_similarity(a: str, b: str) -> float:
     """
     Simple trigram similarity between two normalised names.
-    Returns 0.0–1.0.
+    Returns 0.0–1.0.  Also expands common address abbreviations
+    (St→Street, Rd→Road etc.) to reduce false negatives on addresses.
     """
     if not a or not b:
         return 0.0
@@ -249,13 +274,19 @@ def _name_similarity(a: str, b: str) -> float:
     # Exact match after normalisation
     if _normalise_name(a) == _normalise_name(b):
         return 1.0
+    # Try with address abbreviation expansion
+    a_exp = _expand_address_abbreviations(a)
+    b_exp = _expand_address_abbreviations(b)
+    if a_exp == b_exp:
+        return 1.0
 
     def trigrams(s):
         s = " " + s + " "
         return {s[i:i+3] for i in range(len(s) - 2)}
 
-    tg_a = trigrams(a)
-    tg_b = trigrams(b)
+    # Use expanded forms for trigram calculation to improve address matching
+    tg_a = trigrams(a_exp)
+    tg_b = trigrams(b_exp)
     intersection = tg_a & tg_b
     union = tg_a | tg_b
     return len(intersection) / len(union) if union else 0.0

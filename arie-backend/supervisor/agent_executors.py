@@ -3724,24 +3724,45 @@ def execute_adverse_media_pep(application_id: str, context: Dict[str, Any]) -> D
 
 
 def execute_regulatory_impact(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 9: Future-phase regulatory impact placeholder."""
+    """Agent 9: Regulatory Impact — DEFERRED (future phase).
+
+    This agent is registered in the master register but is explicitly deferred.
+    It returns a PARTIAL status with zero confidence and a clear invocation guard
+    message indicating it is not yet implemented for production use.
+    """
     run_id = str(uuid4())
     output = _base_output(AgentType.REGULATORY_IMPACT, "Agent 9: Regulatory Impact", application_id, run_id)
+    logger.warning(
+        "Agent 9 (Regulatory Impact) invoked for application %s — "
+        "this agent is DEFERRED (future phase) and returns placeholder output only. "
+        "Do not use for approval decisions.",
+        application_id,
+    )
     output.update({
         "status": AgentStatus.PARTIAL.value,
         "confidence_score": 0.0,
         "findings": [],
         "evidence": [],
-        "detected_issues": [],
+        "detected_issues": [{
+            "issue": "Agent 9 is a registered future-phase agent — not yet implemented",
+            "severity": "info",
+            "action_required": "Manual regulatory review required until Agent 9 is fully implemented",
+        }],
         "risk_indicators": [],
-        "recommendation": "Future phase — manual regulatory review required",
+        "recommendation": "DEFERRED — manual regulatory review required. Agent 9 is registered but not yet implemented.",
         "escalation_flag": False,
         "escalation_reason": None,
-        "impact_summary": "Regulatory Impact is a registered future-phase agent and is not active in the live approval chain.",
+        "impact_summary": (
+            "Regulatory Impact is a registered future-phase agent and is NOT active in the "
+            "live approval chain. This output is a placeholder only — do not rely on it for "
+            "compliance decisions."
+        ),
         "affected_jurisdictions": [],
         "affected_controls": [],
         "implementation_required": False,
         "implementation_deadline": None,
+        "_deferred": True,
+        "_deferred_reason": "Agent 9 is registered in master register but implementation is deferred to future phase",
     })
     return output
 
