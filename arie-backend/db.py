@@ -290,7 +290,7 @@ def _get_postgres_schema() -> str:
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
             'pre_approval_review','pre_approved',
-            'kyc_documents','kyc_submitted','compliance_review','in_review',
+            'kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
@@ -873,7 +873,7 @@ def _get_sqlite_schema() -> str:
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
             'pre_approval_review','pre_approved',
-            'kyc_documents','kyc_submitted','compliance_review','in_review',
+            'kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
@@ -1503,7 +1503,7 @@ def init_db():
                 db.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_status_check")
                 db.execute("""ALTER TABLE applications ADD CONSTRAINT applications_status_check
                     CHECK(status IN ('draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
-                    'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review','in_review',
+                    'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
                     'edd_required','approved','rejected','rmi_sent','withdrawn'))""")
                 db.commit()
             except Exception as e:
@@ -2062,6 +2062,25 @@ def _run_migrations(db: DBConnection):
             CREATE INDEX IF NOT EXISTS idx_dec_rec_ts ON decision_records(timestamp);
             """)
         logger.info("Migration v2.10: decision_records table ready")
+
+    # Migration v2.11: Add 'under_review' to applications status CHECK constraint
+    # Resolves inconsistency where server.py state transitions reference 'under_review'
+    # but the DB CHECK constraint did not include it, causing IntegrityError on transition.
+    if USE_POSTGRESQL:
+        try:
+            db.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_status_check")
+            db.execute("""ALTER TABLE applications ADD CONSTRAINT applications_status_check
+                CHECK(status IN ('draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
+                'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
+                'edd_required','approved','rejected','rmi_sent','withdrawn'))""")
+            db.commit()
+            logger.info("Migration v2.11: Added 'under_review' to applications status CHECK constraint")
+        except Exception as e:
+            logger.debug(f"Migration v2.11 status constraint update: {e}")
+            try:
+                db.conn.rollback()
+            except Exception:
+                pass
 
 
 def _populate_default_scoring_config(db: 'DBConnection'):
