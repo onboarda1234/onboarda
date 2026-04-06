@@ -508,24 +508,58 @@ def execute_external_database(application_id: str, context: Dict[str, Any]) -> D
     registry = _select_registry_source(country)
     checks["registry_source"] = registry
 
-    # 2. Company existence check (rule / degraded)
+    # 2. Company existence check (rule / live when API available)
     has_required_fields = bool(company_name and country)
-    if provider_mode == "live":
-        # Future: call OpenCorporates API here
-        # For now, treat as degraded even if key exists (API integration not wired)
-        company_found = has_required_fields
-        lookup_mode = "degraded"
+    oc_result = None
+    if provider_mode == "live" and has_required_fields:
+        # Wire OpenCorporates API via screening.lookup_opencorporates
+        try:
+            from screening import lookup_opencorporates
+            oc_result = lookup_opencorporates(company_name, country)
+            if oc_result and oc_result.get("source") not in ("simulated", "blocked"):
+                company_found = oc_result.get("found", False)
+                lookup_mode = "live"
+            else:
+                # API returned simulated/blocked — treat as degraded
+                company_found = has_required_fields
+                lookup_mode = "degraded"
+        except Exception:
+            company_found = has_required_fields
+            lookup_mode = "degraded"
     else:
         company_found = has_required_fields
         lookup_mode = "degraded"
 
-    checks["company_lookup"] = {
+    company_lookup_data = {
         "found": company_found,
         "mode": lookup_mode,
         "company_name": company_name,
         "country": country,
         "classification": "rule",
     }
+    if oc_result and lookup_mode == "live":
+        top_match = (oc_result.get("companies") or [{}])[0] if oc_result.get("companies") else {}
+        company_lookup_data["registry_name"] = top_match.get("name")
+        company_lookup_data["registry_number"] = top_match.get("company_number")
+        company_lookup_data["registry_status"] = top_match.get("status")
+        company_lookup_data["registry_jurisdiction"] = top_match.get("jurisdiction")
+        company_lookup_data["incorporation_date"] = top_match.get("incorporation_date")
+        company_lookup_data["total_results"] = oc_result.get("total_results", 0)
+        company_lookup_data["api_source"] = oc_result.get("source", "opencorporates")
+    checks["company_lookup"] = company_lookup_data
+
+    # Fire degraded-mode admin alert when running without external registry
+    if lookup_mode == "degraded":
+        try:
+            from production_controls import alert_degraded_mode
+            alert_degraded_mode(
+                agent_name="External Database Verification",
+                agent_number=2,
+                reason="No external registry API available — internal consistency checks only",
+                application_id=application_id,
+            )
+        except Exception:
+            pass
 
     # 3. Registration number format (rule)
     reg_check = _check_registration_number_format(reg_number, country)
@@ -2232,6 +2266,64 @@ def _get_monitoring_data(db_path: str, application_id: str) -> Dict[str, Any]:
                 pass
 
 
+def _get_transaction_data(db_path: str, application_id: str) -> List[Dict]:
+    """Fetch transaction records for an application from the transactions table.
+
+    Returns an empty list when the table does not exist or contains no rows.
+    This function supports Agent 8 (Behaviour & Risk Drift Detection).
+    """
+    db = None
+    try:
+        import os
+        has_postgres = bool(os.environ.get("DATABASE_URL"))
+        use_explicit_path = not has_postgres and db_path and os.path.isfile(db_path)
+
+        if use_explicit_path:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            db = _SqliteFallback(conn)
+        else:
+            global _get_db_connection, _get_db_loaded
+            if not _get_db_loaded:
+                import sys as _sys
+                db_mod = _sys.modules.get("db")
+                if db_mod and hasattr(db_mod, "get_db"):
+                    _get_db_connection = db_mod.get_db
+                else:
+                    try:
+                        from db import get_db as _gdb
+                        _get_db_connection = _gdb
+                    except ImportError:
+                        _get_db_connection = None
+                _get_db_loaded = True
+
+            if _get_db_connection is not None:
+                db = _get_db_connection()
+            elif db_path:
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row
+                db = _SqliteFallback(conn)
+            else:
+                return []
+
+        txns = []
+        try:
+            txns = [dict(r) for r in db.execute(
+                "SELECT * FROM transactions WHERE application_id=? ORDER BY transaction_date DESC",
+                (application_id,)
+            ).fetchall()]
+        except Exception:
+            pass
+
+        return txns
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+
 # ── Review schedule thresholds ──────────────────────────────
 
 _REVIEW_FREQUENCY_MAP = {
@@ -2746,67 +2838,172 @@ _DORMANCY_DAYS = 180            # 6 months without activity = dormant
 _CONCENTRATION_THRESHOLD = 0.60 # 60% to single counterparty = concentrated
 
 
-def _check_volume_baseline(app: Dict) -> Dict[str, Any]:
+def _check_volume_baseline(app: Dict, txns: List[Dict] = None) -> Dict[str, Any]:
     """Check #1 (rule): Transaction volume baseline comparison.
 
-    Degraded mode: no transaction table exists yet. Reports declared volume only.
+    When transaction data is available, compares actual monthly volume against
+    the declared expected_volume/monthly_volume.  Falls back to degraded mode
+    when no transaction records exist.
     """
     expected = app.get("expected_volume") or app.get("monthly_volume")
+    txns = txns or []
+
+    if not txns:
+        return {
+            "check": "Transaction volume baseline comparison",
+            "classification": "rule",
+            "status": "degraded",
+            "mode": "no_transaction_data",
+            "declared_volume": expected,
+            "actual_volume": None,
+            "deviation_pct": None,
+            "breach": False,
+        }
+
+    # Compute actual volume from transaction amounts
+    actual_volume = sum(float(t.get("amount", 0)) for t in txns)
+    deviation_pct = None
+    breach = False
+    if expected:
+        try:
+            exp_val = float(expected)
+            if exp_val > 0:
+                deviation_pct = round(((actual_volume - exp_val) / exp_val) * 100, 1)
+                breach = abs(deviation_pct) > 50  # >50% deviation = breach
+        except (ValueError, TypeError):
+            pass
+
     return {
         "check": "Transaction volume baseline comparison",
         "classification": "rule",
-        "status": "degraded",
-        "mode": "no_transaction_data",
+        "status": "completed",
+        "mode": "live",
         "declared_volume": expected,
-        "actual_volume": None,
-        "deviation_pct": None,
-        "breach": False,
+        "actual_volume": round(actual_volume, 2),
+        "transaction_count": len(txns),
+        "deviation_pct": deviation_pct,
+        "breach": breach,
     }
 
 
-def _check_geographic_deviation(app: Dict) -> Dict[str, Any]:
+def _check_geographic_deviation(app: Dict, txns: List[Dict] = None) -> Dict[str, Any]:
     """Check #2 (rule): Geographic activity deviation.
 
-    Compares declared country/jurisdiction against any detected activity locations.
-    Degraded mode: reports declared geography only.
+    Compares declared country/jurisdiction against transaction counterparty
+    countries.  Falls back to degraded mode when no transaction data exists.
     """
     country = app.get("country")
+    txns = txns or []
+
+    if not txns:
+        return {
+            "check": "Geographic activity deviation",
+            "classification": "rule",
+            "status": "degraded",
+            "mode": "no_transaction_data",
+            "declared_country": country,
+            "detected_countries": [],
+            "unexpected_countries": [],
+            "deviation_detected": False,
+        }
+
+    detected_countries = list({
+        t.get("counterparty_country")
+        for t in txns
+        if t.get("counterparty_country")
+    })
+    declared_upper = (country or "").upper()
+    unexpected = [c for c in detected_countries if c.upper() != declared_upper]
+
     return {
         "check": "Geographic activity deviation",
         "classification": "rule",
-        "status": "degraded",
-        "mode": "no_transaction_data",
+        "status": "completed",
+        "mode": "live",
         "declared_country": country,
-        "detected_countries": [],
-        "unexpected_countries": [],
-        "deviation_detected": False,
+        "detected_countries": detected_countries,
+        "unexpected_countries": unexpected,
+        "deviation_detected": len(unexpected) > 0,
     }
 
 
-def _check_counterparty_concentration(app: Dict) -> Dict[str, Any]:
-    """Check #3 (rule): Counterparty concentration check. Degraded mode."""
+def _check_counterparty_concentration(app: Dict, txns: List[Dict] = None) -> Dict[str, Any]:
+    """Check #3 (rule): Counterparty concentration check.
+
+    When transaction data is available, computes the share of total volume
+    going to the top counterparty.  Falls back to degraded mode otherwise.
+    """
+    txns = txns or []
+
+    if not txns:
+        return {
+            "check": "Counterparty concentration check",
+            "classification": "rule",
+            "status": "degraded",
+            "mode": "no_transaction_data",
+            "top_counterparties": [],
+            "concentration_ratio": None,
+            "concentrated": False,
+        }
+
+    from collections import Counter
+    ctr = Counter()
+    for t in txns:
+        cp = t.get("counterparty_name") or "unknown"
+        ctr[cp] += float(t.get("amount", 0))
+
+    total = sum(ctr.values()) or 1
+    top = ctr.most_common(5)
+    top_counterparties = [{"name": n, "volume": round(v, 2), "share": round(v / total, 3)} for n, v in top]
+    top_ratio = (top[0][1] / total) if top else 0
+
     return {
         "check": "Counterparty concentration check",
         "classification": "rule",
-        "status": "degraded",
-        "mode": "no_transaction_data",
-        "top_counterparties": [],
-        "concentration_ratio": None,
-        "concentrated": False,
+        "status": "completed",
+        "mode": "live",
+        "top_counterparties": top_counterparties,
+        "concentration_ratio": round(top_ratio, 3),
+        "concentrated": top_ratio >= _CONCENTRATION_THRESHOLD,
     }
 
 
-def _check_product_usage_deviation(app: Dict) -> Dict[str, Any]:
-    """Check #4 (rule): Product usage deviation. Degraded mode."""
+def _check_product_usage_deviation(app: Dict, txns: List[Dict] = None) -> Dict[str, Any]:
+    """Check #4 (rule): Product usage deviation.
+
+    When transaction data is available, examines the product_type distribution
+    for deviations from the declared sector.  Falls back to degraded mode
+    when no transaction records exist.
+    """
     sector = app.get("sector")
+    txns = txns or []
+
+    if not txns:
+        return {
+            "check": "Product usage deviation",
+            "classification": "rule",
+            "status": "degraded",
+            "mode": "no_transaction_data",
+            "declared_sector": sector,
+            "detected_product_mix": [],
+            "deviation_detected": False,
+        }
+
+    product_counts: Dict[str, int] = {}
+    for t in txns:
+        pt = t.get("product_type") or "unclassified"
+        product_counts[pt] = product_counts.get(pt, 0) + 1
+
+    detected_mix = [{"product": p, "count": c} for p, c in sorted(product_counts.items(), key=lambda x: -x[1])]
+
     return {
         "check": "Product usage deviation",
         "classification": "rule",
-        "status": "degraded",
-        "mode": "no_transaction_data",
+        "status": "completed",
+        "mode": "live",
         "declared_sector": sector,
-        "detected_product_mix": [],
-        "deviation_detected": False,
+        "detected_product_mix": detected_mix,
+        "deviation_detected": False,  # Requires sector->product mapping for real detection
     }
 
 
@@ -3041,16 +3238,31 @@ def execute_behaviour_risk_drift(application_id: str, context: Dict[str, Any]) -
     app = data["application"]
     monitoring = _get_monitoring_data(db_path, application_id)
     alerts = monitoring["alerts"]
+    txns = _get_transaction_data(db_path, application_id)
     run_id = str(uuid4())
 
-    # 6 rule checks
-    c1 = _check_volume_baseline(app)
-    c2 = _check_geographic_deviation(app)
-    c3 = _check_counterparty_concentration(app)
-    c4 = _check_product_usage_deviation(app)
+    # 6 rule checks (transaction-aware: live when txns exist, degraded otherwise)
+    c1 = _check_volume_baseline(app, txns)
+    c2 = _check_geographic_deviation(app, txns)
+    c3 = _check_counterparty_concentration(app, txns)
+    c4 = _check_product_usage_deviation(app, txns)
     c5 = _check_dormancy(app)
     c6 = _check_threshold_breach(app, alerts)
     rule_checks = [c1, c2, c3, c4, c5, c6]
+
+    # Fire degraded-mode admin alert if any checks are degraded
+    degraded_checks = [c for c in rule_checks if c.get("status") == "degraded"]
+    if degraded_checks:
+        try:
+            from production_controls import alert_degraded_mode
+            alert_degraded_mode(
+                agent_name="Behaviour & Risk Drift Detection",
+                agent_number=8,
+                reason=f"{len(degraded_checks)} of 6 rule checks in degraded mode (no transaction data)",
+                application_id=application_id,
+            )
+        except Exception:
+            pass
 
     # 5 hybrid checks
     c7 = _score_velocity_anomaly(rule_checks)
@@ -3724,24 +3936,45 @@ def execute_adverse_media_pep(application_id: str, context: Dict[str, Any]) -> D
 
 
 def execute_regulatory_impact(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Agent 9: Future-phase regulatory impact placeholder."""
+    """Agent 9: Regulatory Impact — DEFERRED (future phase).
+
+    This agent is registered in the master register but is explicitly deferred.
+    It returns a PARTIAL status with zero confidence and a clear invocation guard
+    message indicating it is not yet implemented for production use.
+    """
     run_id = str(uuid4())
     output = _base_output(AgentType.REGULATORY_IMPACT, "Agent 9: Regulatory Impact", application_id, run_id)
+    logger.warning(
+        "Agent 9 (Regulatory Impact) invoked for application %s — "
+        "this agent is DEFERRED (future phase) and returns placeholder output only. "
+        "Do not use for approval decisions.",
+        application_id,
+    )
     output.update({
         "status": AgentStatus.PARTIAL.value,
         "confidence_score": 0.0,
         "findings": [],
         "evidence": [],
-        "detected_issues": [],
+        "detected_issues": [{
+            "issue": "Agent 9 is a registered future-phase agent — not yet implemented",
+            "severity": "info",
+            "action_required": "Manual regulatory review required until Agent 9 is fully implemented",
+        }],
         "risk_indicators": [],
-        "recommendation": "Future phase — manual regulatory review required",
+        "recommendation": "DEFERRED — manual regulatory review required. Agent 9 is registered but not yet implemented.",
         "escalation_flag": False,
         "escalation_reason": None,
-        "impact_summary": "Regulatory Impact is a registered future-phase agent and is not active in the live approval chain.",
+        "impact_summary": (
+            "Regulatory Impact is a registered future-phase agent and is NOT active in the "
+            "live approval chain. This output is a placeholder only — do not rely on it for "
+            "compliance decisions."
+        ),
         "affected_jurisdictions": [],
         "affected_controls": [],
         "implementation_required": False,
         "implementation_deadline": None,
+        "_deferred": True,
+        "_deferred_reason": "Agent 9 is registered in master register but implementation is deferred to future phase",
     })
     return output
 
