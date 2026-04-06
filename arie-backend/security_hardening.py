@@ -238,7 +238,8 @@ class ApprovalGateValidator:
                         )
                 except (ValueError, TypeError) as ts_err:
                     logger.warning(f"Could not compare timestamps for staleness check: {ts_err}")
-                    # Do not block on timestamp parse failure — log and continue
+                    return (False, "Could not verify memo freshness due to timestamp format error. "
+                            "Please regenerate the compliance memo before approving.")
 
             # 8. Screening freshness: check screening was run after application submission
             submitted_at = app.get('submitted_at')
@@ -265,6 +266,8 @@ class ApprovalGateValidator:
                         )
                 except (ValueError, TypeError) as ts_err:
                     logger.warning(f"Could not compare screening timestamps: {ts_err}")
+                    return (False, "Could not verify screening freshness due to timestamp format error. "
+                            "Re-submit the application to trigger fresh screening.")
 
             logger.info(f"Application {app_id} passed approval gate validation")
             return (True, "")

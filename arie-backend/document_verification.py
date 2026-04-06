@@ -115,8 +115,10 @@ def _skip(id_, label, classification, message, **kw):
 
 # ── Nationality ISO lookup ─────────────────────────────────────────
 
-# Mapping of common nationality/country names and demonyms to ISO 3166-1 alpha-2 codes.
-# Covers jurisdictions commonly encountered in regulated onboarding.
+# ISO 3166-1 alpha-2 mapping for nationality/country name resolution.
+# Used by DOC-52 and DOC-56 verification checks for nationality matching.
+# Covers full country names, demonyms/adjectival forms, and common ISO codes.
+# Based on ISO 3166-1:2020 standard. Extend as new jurisdictions are encountered.
 _NATIONALITY_ISO_MAP = {
     # Full country names
     "mauritius": "MU", "united states": "US", "united states of america": "US",
