@@ -33,7 +33,10 @@ from threading import Lock
 import threading
 import socket
 import subprocess
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 import tornado.web
 import tornado.escape
@@ -470,30 +473,36 @@ class HealthMonitor:
             health["status"] = "unhealthy"
 
         # Disk usage
-        try:
-            disk = psutil.disk_usage('/')
-            health["checks"]["disk"] = {
-                "status": "ok",
-                "percent": disk.percent,
-                "available_gb": disk.free / (1024**3)
-            }
-            if disk.percent > 90:
-                health["status"] = "degraded"
-        except Exception as e:
-            health["checks"]["disk"] = {"status": "error", "error": str(e)}
+        if psutil is not None:
+            try:
+                disk = psutil.disk_usage('/')
+                health["checks"]["disk"] = {
+                    "status": "ok",
+                    "percent": disk.percent,
+                    "available_gb": disk.free / (1024**3)
+                }
+                if disk.percent > 90:
+                    health["status"] = "degraded"
+            except Exception as e:
+                health["checks"]["disk"] = {"status": "error", "error": str(e)}
+        else:
+            health["checks"]["disk"] = {"status": "unavailable", "error": "psutil not installed"}
 
         # Memory usage
-        try:
-            memory = psutil.virtual_memory()
-            health["checks"]["memory"] = {
-                "status": "ok",
-                "percent": memory.percent,
-                "available_gb": memory.available / (1024**3)
-            }
-            if memory.percent > 90:
-                health["status"] = "degraded"
-        except Exception as e:
-            health["checks"]["memory"] = {"status": "error", "error": str(e)}
+        if psutil is not None:
+            try:
+                memory = psutil.virtual_memory()
+                health["checks"]["memory"] = {
+                    "status": "ok",
+                    "percent": memory.percent,
+                    "available_gb": memory.available / (1024**3)
+                }
+                if memory.percent > 90:
+                    health["status"] = "degraded"
+            except Exception as e:
+                health["checks"]["memory"] = {"status": "error", "error": str(e)}
+        else:
+            health["checks"]["memory"] = {"status": "unavailable", "error": "psutil not installed"}
 
         # Sumsub API
         try:
