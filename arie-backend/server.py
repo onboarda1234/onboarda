@@ -1528,8 +1528,8 @@ class ApplicationsHandler(BaseHandler):
 
         # W3: BRN basic validation — must be alphanumeric if provided
         brn = first_non_empty(data.get("brn"), prescreening_data.get("brn")) or ""
-        brn = brn.strip()
-        if brn and not re.match(r'^[A-Za-z0-9\-/. ]{2,30}$', brn):
+        brn = re.sub(r'\s+', ' ', brn.strip())  # collapse multiple spaces
+        if brn and not re.match(r'^[A-Za-z0-9\-/.][A-Za-z0-9\-/. ]{0,28}[A-Za-z0-9\-/.]$', brn):
             return self.error("Invalid Business Registration Number format. Please use alphanumeric characters (2-30 chars).", 400)
 
         db = get_db()
