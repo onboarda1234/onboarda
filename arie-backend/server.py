@@ -1638,12 +1638,27 @@ class ApplicationDetailHandler(BaseHandler):
             ))
 
         if any(key in data for key in ("directors", "ubos", "intermediaries")):
+            # ── Phase 4: Block party modifications after compliance review / approval states ──
+            immutable_party_states = ("compliance_review", "in_review", "edd_required",
+                                      "under_review", "approved", "rejected")
+            if app["status"] in immutable_party_states:
+                db.close()
+                return self.error(
+                    f"Cannot modify directors/UBOs/intermediaries after compliance review has started. "
+                    f"Current status: {app['status']}. Revert to draft to make changes.",
+                    403
+                )
             store_application_parties(
                 db,
                 real_id,
                 directors=data["directors"] if "directors" in data else None,
                 ubos=data["ubos"] if "ubos" in data else None,
                 intermediaries=data["intermediaries"] if "intermediaries" in data else None
+            )
+            # Track party modification timestamp for staleness detection
+            db.execute(
+                "UPDATE applications SET updated_at=datetime('now') WHERE id=?",
+                (real_id,)
             )
 
         db.commit()

@@ -113,6 +113,83 @@ def _skip(id_, label, classification, message, **kw):
     return _result(id_, label, classification, CheckStatus.SKIP, message, source="gate", **kw)
 
 
+# ── Nationality ISO lookup ─────────────────────────────────────────
+
+# Mapping of common nationality/country names and demonyms to ISO 3166-1 alpha-2 codes.
+# Covers jurisdictions commonly encountered in regulated onboarding.
+_NATIONALITY_ISO_MAP = {
+    # Full country names
+    "mauritius": "MU", "united states": "US", "united states of america": "US",
+    "united kingdom": "GB", "great britain": "GB", "england": "GB",
+    "france": "FR", "germany": "DE", "india": "IN", "china": "CN",
+    "south africa": "ZA", "australia": "AU", "canada": "CA",
+    "singapore": "SG", "hong kong": "HK", "japan": "JP",
+    "united arab emirates": "AE", "uae": "AE", "dubai": "AE",
+    "switzerland": "CH", "netherlands": "NL", "ireland": "IE",
+    "new zealand": "NZ", "kenya": "KE", "nigeria": "NG",
+    "brazil": "BR", "russia": "RU", "russian federation": "RU",
+    "italy": "IT", "spain": "ES", "portugal": "PT", "belgium": "BE",
+    "luxembourg": "LU", "seychelles": "SC", "madagascar": "MG",
+    "cayman islands": "KY", "british virgin islands": "VG",
+    "isle of man": "IM", "jersey": "JE", "guernsey": "GG",
+    "bermuda": "BM", "bahamas": "BS", "barbados": "BB",
+    "pakistan": "PK", "bangladesh": "BD", "sri lanka": "LK",
+    "malaysia": "MY", "thailand": "TH", "philippines": "PH",
+    "indonesia": "ID", "vietnam": "VN", "south korea": "KR",
+    "korea": "KR", "taiwan": "TW", "israel": "IL", "turkey": "TR",
+    "saudi arabia": "SA", "qatar": "QA", "bahrain": "BH",
+    "oman": "OM", "kuwait": "KW", "lebanon": "LB", "egypt": "EG",
+    "morocco": "MA", "tunisia": "TN", "ghana": "GH", "tanzania": "TZ",
+    "uganda": "UG", "rwanda": "RW", "ethiopia": "ET", "mozambique": "MZ",
+    "botswana": "BW", "namibia": "NA", "zimbabwe": "ZW", "zambia": "ZM",
+    "mexico": "MX", "argentina": "AR", "chile": "CL", "colombia": "CO",
+    "peru": "PE", "panama": "PA", "costa rica": "CR",
+    "sweden": "SE", "norway": "NO", "denmark": "DK", "finland": "FI",
+    "austria": "AT", "poland": "PL", "czech republic": "CZ",
+    "czechia": "CZ", "hungary": "HU", "romania": "RO", "greece": "GR",
+    "cyprus": "CY", "malta": "MT", "croatia": "HR", "slovenia": "SI",
+    "estonia": "EE", "latvia": "LV", "lithuania": "LT", "slovakia": "SK",
+    # Demonyms / adjectival forms
+    "mauritian": "MU", "american": "US", "british": "GB", "french": "FR",
+    "german": "DE", "indian": "IN", "chinese": "CN", "south african": "ZA",
+    "australian": "AU", "canadian": "CA", "singaporean": "SG",
+    "japanese": "JP", "emirati": "AE", "swiss": "CH", "dutch": "NL",
+    "irish": "IE", "kenyan": "KE", "nigerian": "NG", "brazilian": "BR",
+    "russian": "RU", "italian": "IT", "spanish": "ES", "portuguese": "PT",
+    "belgian": "BE", "pakistani": "PK", "bangladeshi": "BD",
+    "malaysian": "MY", "thai": "TH", "filipino": "PH", "indonesian": "ID",
+    "vietnamese": "VN", "korean": "KR", "taiwanese": "TW", "israeli": "IL",
+    "turkish": "TR", "saudi": "SA", "qatari": "QA", "bahraini": "BH",
+    "omani": "OM", "kuwaiti": "KW", "lebanese": "LB", "egyptian": "EG",
+    "moroccan": "MA", "ghanaian": "GH", "tanzanian": "TZ", "ugandan": "UG",
+    "rwandan": "RW", "ethiopian": "ET", "mexican": "MX", "argentinian": "AR",
+    "argentine": "AR", "chilean": "CL", "colombian": "CO", "peruvian": "PE",
+    "swedish": "SE", "norwegian": "NO", "danish": "DK", "finnish": "FI",
+    "austrian": "AT", "polish": "PL", "czech": "CZ", "hungarian": "HU",
+    "romanian": "RO", "greek": "GR", "cypriot": "CY", "maltese": "MT",
+    "croatian": "HR", "slovenian": "SI", "estonian": "EE", "latvian": "LV",
+    "lithuanian": "LT", "slovak": "SK", "new zealander": "NZ",
+    # 2-letter ISO codes (pass-through)
+    "mu": "MU", "us": "US", "gb": "GB", "fr": "FR", "de": "DE",
+    "in": "IN", "cn": "CN", "za": "ZA", "au": "AU", "ca": "CA",
+    "sg": "SG", "hk": "HK", "jp": "JP", "ae": "AE", "ch": "CH",
+    "nl": "NL", "ie": "IE", "nz": "NZ", "ke": "KE", "ng": "NG",
+    # 3-letter ISO codes
+    "mus": "MU", "usa": "US", "gbr": "GB", "fra": "FR", "deu": "DE",
+    "ind": "IN", "chn": "CN", "zaf": "ZA", "aus": "AU", "can": "CA",
+    "sgp": "SG", "hkg": "HK", "jpn": "JP", "are": "AE", "che": "CH",
+    "nld": "NL", "irl": "IE", "nzl": "NZ", "ken": "KE", "nga": "NG",
+}
+
+
+def _nationality_to_iso(val: str) -> Optional[str]:
+    """Resolve a nationality / country name to ISO 3166-1 alpha-2, or None."""
+    if not val:
+        return None
+    key = _normalise_name(val)
+    return _NATIONALITY_ISO_MAP.get(key)
+
+
 # ── Name normalisation & fuzzy matching ───────────────────────────
 
 def _normalise_name(name: str) -> str:
@@ -198,8 +275,10 @@ def _parse_date(val) -> Optional[date]:
         return None
     if isinstance(val, (date, datetime)):
         return val.date() if isinstance(val, datetime) else val
+    # Order matters: ISO format first, then unambiguous long-form formats,
+    # then shorter formats. Year-only (%Y) is excluded to prevent false DOB matches.
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d %B %Y",
-                "%d-%m-%Y", "%B %d, %Y", "%d %b %Y", "%Y"):
+                "%d-%m-%Y", "%B %d, %Y", "%d %b %Y"):
         try:
             return datetime.strptime(str(val).strip(), fmt).date()
         except ValueError:
@@ -391,9 +470,9 @@ def run_rule_checks(doc_type: str, category: str,
                                      "Registration number could not be extracted — manual check required",
                                      rule_type=rtype))
                 continue
-            # Normalise: strip spaces and hyphens for comparison
-            d_norm = re.sub(r"[\s\-]", "", str(declared).upper())
-            e_norm = re.sub(r"[\s\-]", "", str(extracted).upper())
+            # Normalise: strip spaces, hyphens, dots, and slashes for comparison
+            d_norm = re.sub(r"[\s\-./]", "", str(declared).upper())
+            e_norm = re.sub(r"[\s\-./]", "", str(extracted).upper())
             if d_norm == e_norm:
                 results.append(_pass(id_, label, cls, f"Registration number matches ({extracted})",
                                      ps_field=PSField.INCORPORATION_NUMBER,
@@ -476,10 +555,13 @@ def run_rule_checks(doc_type: str, category: str,
                                      "Nationality not extractable or not declared — manual check required",
                                      rule_type=rtype))
                 continue
-            # Normalise to 2-letter ISO or full name comparison
+            # Normalise to full name comparison
             d_n = _normalise_name(declared_nat)
             e_n = _normalise_name(extracted_nat)
-            if d_n == e_n or d_n[:3] == e_n[:3]:
+            # Also try ISO code matching via lookup table
+            d_iso = _nationality_to_iso(declared_nat)
+            e_iso = _nationality_to_iso(extracted_nat)
+            if d_n == e_n or (d_iso and e_iso and d_iso == e_iso):
                 results.append(_pass(id_, label, cls, f"Nationality matches ({extracted_nat})",
                                      ps_field=PSField.PERSON_NATIONALITY,
                                      ps_value=declared_nat, extracted_value=extracted_nat,
