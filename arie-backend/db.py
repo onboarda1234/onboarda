@@ -1481,16 +1481,16 @@ def init_db():
             pass
         if _is_demo:
             try:
-                for app_id, ref, company in [
-                    ("demo-scenario-01", "ARF-2026-DEMO01", "Meridian Software Ltd"),
-                    ("demo-scenario-02", "ARF-2026-DEMO02", "Coral Bay Holdings Ltd"),
-                    ("demo-scenario-03", "ARF-2026-DEMO03", "Atlas Digital Assets DMCC"),
-                    ("demo-scenario-04", "ARF-2026-DEMO04", "Sunshine Trading Co"),
-                    ("demo-scenario-05", "ARF-2026-DEMO05", "Levant Global Enterprises S.A.L."),
+                for app_id, ref, company, status in [
+                    ("demo-scenario-01", "ARF-2026-DEMO01", "Meridian Software Ltd", "submitted"),
+                    ("demo-scenario-02", "ARF-2026-DEMO02", "Coral Bay Holdings Ltd", "submitted"),
+                    ("demo-scenario-03", "ARF-2026-DEMO03", "Atlas Digital Assets DMCC", "edd_required"),
+                    ("demo-scenario-04", "ARF-2026-DEMO04", "Sunshine Trading Co", "submitted"),
+                    ("demo-scenario-05", "ARF-2026-DEMO05", "Levant Global Enterprises S.A.L.", "edd_required"),
                 ]:
                     db.execute(
-                        "INSERT OR IGNORE INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, 'submitted')",
-                        (app_id, ref, company)
+                        "INSERT OR IGNORE INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, ?)",
+                        (app_id, ref, company, status)
                     )
                 db.commit()
                 logger.info("Demo application stubs ensured in init_db")
@@ -2407,16 +2407,16 @@ def _seed_monitoring_demo_data(db: DBConnection):
     # --- H-2: Ensure demo application stubs exist (monitoring/EDD data references these) ---
     try:
         demo_app_stubs = [
-            ("demo-scenario-01", "ARF-2026-DEMO01", "Meridian Software Ltd"),
-            ("demo-scenario-02", "ARF-2026-DEMO02", "Coral Bay Holdings Ltd"),
-            ("demo-scenario-03", "ARF-2026-DEMO03", "Atlas Digital Assets DMCC"),
-            ("demo-scenario-04", "ARF-2026-DEMO04", "Sunshine Trading Co"),
-            ("demo-scenario-05", "ARF-2026-DEMO05", "Levant Global Enterprises S.A.L."),
+            ("demo-scenario-01", "ARF-2026-DEMO01", "Meridian Software Ltd", "submitted"),
+            ("demo-scenario-02", "ARF-2026-DEMO02", "Coral Bay Holdings Ltd", "submitted"),
+            ("demo-scenario-03", "ARF-2026-DEMO03", "Atlas Digital Assets DMCC", "edd_required"),
+            ("demo-scenario-04", "ARF-2026-DEMO04", "Sunshine Trading Co", "submitted"),
+            ("demo-scenario-05", "ARF-2026-DEMO05", "Levant Global Enterprises S.A.L.", "edd_required"),
         ]
-        for app_id, ref, company in demo_app_stubs:
+        for app_id, ref, company, status in demo_app_stubs:
             db.execute(
-                "INSERT OR IGNORE INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, 'submitted')",
-                (app_id, ref, company)
+                "INSERT OR IGNORE INTO applications (id, ref, company_name, status) VALUES (?, ?, ?, ?)",
+                (app_id, ref, company, status)
             )
         db.commit()
         logger.info("H-2: Demo application stubs ensured")

@@ -6330,6 +6330,47 @@ class ApplicationDecisionHandler(BaseHandler):
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip()))
 
+        # ── Auto-create EDD case on escalation ──
+        if decision == "escalate_edd":
+            existing_edd = db.execute(
+                "SELECT id FROM edd_cases WHERE application_id = ? AND stage NOT IN ('edd_approved','edd_rejected')",
+                (real_id,)
+            ).fetchone()
+            if not existing_edd:
+                edd_trigger_notes = decision_reason or "Escalated to EDD by officer decision"
+                edd_initial_note = json.dumps([{
+                    "ts": datetime.now().isoformat(),
+                    "author": user.get("name", "System"),
+                    "note": edd_trigger_notes
+                }])
+                edd_insert_params = (
+                    real_id, app["company_name"],
+                    app.get("risk_level") or "HIGH",
+                    app.get("risk_score") or 0,
+                    "triggered", user["sub"],
+                    "officer_decision", edd_trigger_notes, edd_initial_note
+                )
+                if USE_POSTGRES:
+                    db.execute("""
+                        INSERT INTO edd_cases (application_id, client_name, risk_level, risk_score,
+                            stage, assigned_officer, trigger_source, trigger_notes, edd_notes)
+                        VALUES (?,?,?,?,?,?,?,?,?) RETURNING id
+                    """, edd_insert_params)
+                else:
+                    db.execute("""
+                        INSERT INTO edd_cases (application_id, client_name, risk_level, risk_score,
+                            stage, assigned_officer, trigger_source, trigger_notes, edd_notes)
+                        VALUES (?,?,?,?,?,?,?,?,?)
+                    """, edd_insert_params)
+                # Audit the EDD case creation
+                db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                    (user.get("sub",""), user.get("name",""), user.get("role",""),
+                     "EDD Created", app["ref"],
+                     f"EDD case auto-created on escalation for {app['company_name']}. Reason: {decision_reason}",
+                     self.get_client_ip())
+                )
+
         # ── Record normalized decision record ──
         try:
             # Try to derive confidence from supervisor result in the compliance memo
@@ -7339,6 +7380,21 @@ class EDDDetailHandler(BaseHandler):
         if note_text:
             detail += f" | Note: {note_text[:100]}"
         self.log_audit(user, "EDD Update", f"EDD-{case_id}", detail, db=db)
+
+        # ── Reverse-sync: update linked application status on EDD terminal states ──
+        if new_stage in ("edd_approved", "edd_rejected"):
+            app_status_map = {"edd_approved": "approved", "edd_rejected": "rejected"}
+            new_app_status = app_status_map[new_stage]
+            application_id = case["application_id"]
+            db.execute(
+                "UPDATE applications SET status=?, updated_at=datetime('now') WHERE id=?",
+                (new_app_status, application_id)
+            )
+            self.log_audit(
+                user, "Application Status Sync", f"EDD-{case_id}",
+                f"Application {application_id} status updated to '{new_app_status}' following EDD {new_stage}",
+                db=db
+            )
 
         db.commit()
         db.close()

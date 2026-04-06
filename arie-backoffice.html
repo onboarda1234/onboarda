@@ -969,16 +969,16 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     </select>
     <select class="form-select" style="width:auto;" id="filter-status" onchange="filterApplications()">
       <option value="">All Statuses</option>
-      <option value="Pre-Screening Submitted">Pre-Screening Submitted</option>
-      <option value="Pre-Approval Review">Pre-Approval Review</option>
-      <option value="Pre-Approved">Pre-Approved</option>
-      <option value="Pricing Review">Pricing Review</option>
-      <option value="KYC & Documents">KYC & Documents</option>
-      <option value="Compliance Review">Compliance Review</option>
-      <option value="In Review">In Review</option>
-      <option value="EDD Required">EDD Required</option>
-      <option value="Approved">Approved</option>
-      <option value="Rejected">Rejected</option>
+      <option value="prescreening_submitted">Pre-Screening Submitted</option>
+      <option value="pre_approval_review">Pre-Approval Review</option>
+      <option value="pre_approved">Pre-Approved</option>
+      <option value="pricing_review">Pricing Review</option>
+      <option value="kyc_documents">KYC &amp; Documents</option>
+      <option value="compliance_review">Compliance Review</option>
+      <option value="in_review">In Review</option>
+      <option value="edd_required">EDD Required</option>
+      <option value="approved">Approved</option>
+      <option value="rejected">Rejected</option>
     </select>
     <select class="form-select" style="width:auto;" id="filter-assigned" onchange="filterApplications()">
       <option value="">All Officers</option>
@@ -2588,6 +2588,7 @@ async function loadFromAPI() {
           score: a.risk_score || 0,
           lane: a.onboarding_lane || 'Standard Review',
           status: formatStatus(a.status),
+          statusRaw: a.status || '',
           assignedId: a.assigned_to || '',
           assigned: a.assigned_name || a.assigned_to || 'Unassigned',
           date: (a.created_at || '').split('T')[0].split(' ')[0],
@@ -3131,9 +3132,9 @@ function statusBadge(status) {
     'KYC Submitted':'kyc-submitted', 'kyc_submitted':'kyc-submitted',
     'Compliance Review':'compliance-review', 'compliance_review':'compliance-review',
     'In Review':'in-review', 'in_review':'in-review',
-    'EDD Required':'edd-required', 'edd_required':'edd-required',
-    'Approved':'approved', 'approved':'approved',
-    'Rejected':'rejected', 'rejected':'rejected',
+    'EDD Required':'edd-required', 'edd_required':'edd-required', 'Enhanced Due Diligence Required':'edd-required',
+    'Approved':'approved', 'approved':'approved', 'Approved – Ready for Activation':'approved',
+    'Rejected':'rejected', 'rejected':'rejected', 'Application Declined':'rejected',
     'RMI Sent':'rmi-sent', 'rmi_sent':'rmi-sent',
     'Withdrawn':'withdrawn', 'withdrawn':'withdrawn'
   };
@@ -3315,7 +3316,7 @@ function renderApplications() {
   tbody.innerHTML = '';
   APPLICATIONS.forEach(function(app) {
     if (riskFilter && app.risk !== riskFilter) return;
-    if (statusFilter && app.status !== statusFilter) return;
+    if (statusFilter && app.statusRaw !== statusFilter) return;
     if (assignedFilter) {
       var normalizedAssigned = app.assignedId || 'Unassigned';
       if (normalizedAssigned !== assignedFilter) return;

@@ -452,6 +452,15 @@ def run_pipeline_on_scenarios():
         for tp in scenario["talking_points"]:
             print(f"    → {tp}")
 
+    # ── EDD alignment: set applications with EDD cases to edd_required ──
+    edd_app_ids = ["demo-scenario-03", "demo-scenario-05"]
+    for edd_id in edd_app_ids:
+        db.execute("""
+            UPDATE applications SET status = 'edd_required', updated_at = ?
+            WHERE id = ?
+        """, (datetime.now().isoformat(), edd_id))
+    print(f"  EDD alignment: {len(edd_app_ids)} applications set to edd_required")
+
     db.commit()
     db.close()
     print(f"\n{'=' * 70}")
