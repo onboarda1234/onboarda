@@ -2,9 +2,9 @@
 
 **Date:** 2026-04-06  
 **Module:** Client Risk Computation (Score-to-Band, Escalation, Recomputation)  
-**Status:** Conditionally Closed pending existing-DB migration rollout  
+**Status:** Conditionally Closed pending merge + migration rollout  
 **Author:** Compliance Engineering  
-**Version:** 1.0  
+**Version:** 2.0 (updated with rollout verification pass)  
 
 ---
 
@@ -224,7 +224,7 @@ The code changes are committed and pushed to the branch. Live validation of demo
 
 ---
 
-## Appendix: Files Modified in This Closure
+## Appendix A: Files Modified in This Closure
 
 | File | Changes |
 |---|---|
@@ -233,3 +233,116 @@ The code changes are committed and pushed to the branch. Live validation of demo
 | `rule_engine.py` | (Prior commit) classify_risk_level(), CANONICAL_THRESHOLDS, escalation flags |
 | `arie-backoffice.html` | (Prior commit) RISK_THRESHOLDS aligned |
 | `tests/test_risk_hardening.py` | (Prior commit) 43 hardening tests |
+
+---
+
+## Appendix B: Final Rollout Verification Pass (v2.0)
+
+**Date:** 2026-04-06T16:24Z  
+**Performed by:** Compliance Engineering (automated)
+
+### 1. Migration Code Verification
+
+| Check | Result |
+|---|---|
+| Migration v2.11 exists in `_run_migrations()` | ✅ Confirmed at db.py lines 2063–2097 |
+| Covers periodic_reviews.risk_level | ✅ Named constraint: `periodic_reviews_risk_level_check` |
+| Covers periodic_reviews.previous_risk_level | ✅ Named constraint: `periodic_reviews_prev_risk_level_check` |
+| Covers periodic_reviews.new_risk_level | ✅ Named constraint: `periodic_reviews_new_risk_level_check` |
+| Covers sar_reports.risk_level | ✅ Named constraint: `sar_reports_risk_level_check` |
+| Covers edd_cases.risk_level | ✅ Named constraint: `edd_cases_risk_level_check` |
+| Covers decision_records.risk_level | ✅ Named constraint: `decision_records_risk_level_check` |
+| Idempotent (checks information_schema before ADD) | ✅ Lines 2079–2083 |
+| PostgreSQL-only guard | ✅ Line 2066: `if USE_POSTGRESQL` |
+| Error handling with rollback | ✅ Lines 2092–2097 |
+| Unconstrained risk_level TEXT columns in db.py | ✅ **Zero** — all instances have CHECK constraints |
+
+### 2. Deployment Verification
+
+| Environment | Deployed? | Evidence |
+|---|---|---|
+| **Repository (branch)** | ✅ Code committed | Branch `copilot/audit-client-risk-computation`, SHA `5cbdaff` |
+| **Main branch** | ❌ Not yet merged | Branch has not been merged to `main`; PR pending |
+| **Demo (Render)** | ❌ Not deployed | Render auto-deploys from `main` only (`render.yaml` confirms `autoDeploy: true` on main). Endpoint unreachable from sandbox. |
+| **Live/Production (Render)** | ❌ Not deployed | Same: auto-deploys from `main`. Endpoint unreachable from sandbox. |
+
+**Note:** Both Render services (`arie-finance-demo`, `arie-finance-live`) auto-deploy when code is pushed to `main`. Until this branch is merged, migration v2.11 is not deployed.
+
+### 3. Live DB Constraint Verification
+
+| Check | Result |
+|---|---|
+| Demo PostgreSQL constraints verified | ❌ **Cannot verify** — branch not deployed, live DB not accessible from CI sandbox |
+| Production PostgreSQL constraints verified | ❌ **Cannot verify** — same reason |
+
+**This is the only remaining gap.** The migration code is correct, tested, and idempotent. It will execute automatically on the next server startup after merge to `main`.
+
+### 4. Post-Migration Behavior Verification (Local Test Evidence)
+
+| Path | Test Coverage | Result |
+|---|---|---|
+| Application creation | test_risk_hardening.py, test_api.py | ✅ 1,169 tests pass |
+| KYC recomputation | test_risk_hardening.py | ✅ Passes |
+| Back-office edit recomputation | test_risk_hardening.py | ✅ Passes |
+| EDD case creation with risk_level | test_risk_hardening.py (DB constraint tests) | ✅ Rejects invalid, accepts valid + NULL |
+| SAR report creation with risk_level | test_risk_hardening.py (DB constraint tests) | ✅ Rejects invalid, accepts valid + NULL |
+| Periodic review creation with risk_level | test_risk_hardening.py (DB constraint tests) | ✅ Rejects invalid, accepts valid + NULL |
+| Decision record creation with risk_level | Schema CHECK constraint | ✅ Constraint present in all schema locations |
+| Threshold boundary correctness | test_risk_hardening.py | ✅ All 12 boundary values tested |
+| Escalation flag correctness | test_risk_hardening.py | ✅ All 9 scenarios tested |
+| Return shape correctness | test_risk_hardening.py | ✅ All 6 fields validated |
+
+**Full test suite:** 1,169 passed, 3 skipped, 0 failures (run 2026-04-06T16:24Z)  
+**Risk-specific tests:** 99 passed, 0 failures (test_risk_hardening.py + test_risk_scoring.py + test_risk.py)
+
+### 5. Remaining Gaps
+
+| # | Gap | Severity | Resolution Path |
+|---|---|---|---|
+| 1 | Branch not merged to `main` | HIGH | Merge PR → triggers auto-deploy |
+| 2 | Migration v2.11 not executed on live PG databases | HIGH | Runs automatically on next server startup after deploy |
+| 3 | Live demo/staging/production API validation not performed | MEDIUM | Requires post-merge verification by ops team |
+
+### 6. Final Verdict
+
+## **Conditionally Closed**
+
+The client risk computation module is **functionally production-ready and regulator-safe at the application logic level.** All code, schema, and test evidence confirms correct behavior.
+
+Closure is conditional on:
+
+1. **Merge of this branch to `main`** — triggers auto-deployment to Render
+2. **Verification that migration v2.11 executed successfully** on existing PostgreSQL databases (check server logs for `"Migration v2.11: Added"` entries)
+3. **Post-deployment spot-check** of API response `risk_level` values on demo and production
+
+### 7. Formal Closure Statement
+
+> The client risk computation module is **functionally production-ready and regulator-safe at the application logic level**, subject to:
+>
+> 1. Merge of the hardening branch (`copilot/audit-client-risk-computation`) to `main`
+> 2. Completion and verification of the PostgreSQL migration (v2.11) for existing deployed databases
+> 3. Post-deployment API/UI spot-check confirming canonical threshold behavior
+>
+> All computation logic, threshold mappings, escalation flags, recomputation paths, fallback behavior, and structural constraints have been verified, hardened, and tested with **1,169 passing tests** including dedicated boundary, escalation, floor-rule, DB-constraint, and return-shape coverage.
+
+### Governance Status Grid
+
+| Environment | Safe? | Condition |
+|---|---|---|
+| **Demo** | ✅ Yes | After merge to `main` (auto-deploys) |
+| **Pilot** | ✅ Yes | After merge + live validation |
+| **Staging/UAT** | ✅ Yes | After merge + live validation |
+| **Production** | ⚠️ Conditional | After merge + v2.11 migration rollout + verification |
+| **Regulatory** | ⚠️ Conditional | Same as production, with migration caveat documented |
+
+### Post-Merge Verification Checklist
+
+After this branch is merged to `main`, the ops/compliance team should:
+
+- [ ] Confirm Render auto-deploy completed for `arie-finance-demo`
+- [ ] Confirm Render auto-deploy completed for `arie-finance-live`
+- [ ] Check demo server logs for `"Migration v2.11: Added"` entries
+- [ ] Check production server logs for `"Migration v2.11: Added"` entries
+- [ ] Verify `GET /api/applications/:id` returns valid `risk_level` values (LOW/MEDIUM/HIGH/VERY_HIGH)
+- [ ] Verify back-office list page shows risk badges aligned with API
+- [ ] If all confirmed, update this report status to **Fully Closed**
