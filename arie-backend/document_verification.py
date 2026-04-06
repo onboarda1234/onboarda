@@ -70,6 +70,8 @@ NAME_MATCH_PASS_THRESHOLD = 0.90       # ≥90% similarity = pass
 # country-risk scoring to eliminate false positives/negatives caused
 # by the old 3-character prefix comparison.
 
+_ORDINAL_SUFFIX_RE = re.compile(r'(\d+)(st|nd|rd|th)\b', re.IGNORECASE)
+
 _JURISDICTION_SYNONYMS: Dict[str, str] = {
     # United Kingdom variants
     "uk": "united kingdom", "gb": "united kingdom", "gbr": "united kingdom",
@@ -334,7 +336,7 @@ def _parse_date(val) -> Optional[date]:
     if not s:
         return None
     # Strip ordinal suffixes: 1st, 2nd, 3rd, 4th, 21st, etc.
-    s = re.sub(r'(\d+)(st|nd|rd|th)\b', r'\1', s, flags=re.IGNORECASE)
+    s = _ORDINAL_SUFFIX_RE.sub(r'\1', s)
     # Try standard formats first
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d %B %Y",
                 "%d-%m-%Y", "%B %d, %Y", "%d %b %Y", "%Y"):
