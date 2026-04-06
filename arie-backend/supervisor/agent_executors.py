@@ -548,6 +548,19 @@ def execute_external_database(application_id: str, context: Dict[str, Any]) -> D
         company_lookup_data["api_source"] = oc_result.get("source", "opencorporates")
     checks["company_lookup"] = company_lookup_data
 
+    # Fire degraded-mode admin alert when running without external registry
+    if lookup_mode == "degraded":
+        try:
+            from production_controls import alert_degraded_mode
+            alert_degraded_mode(
+                agent_name="External Database Verification",
+                agent_number=2,
+                reason="No external registry API available — internal consistency checks only",
+                application_id=application_id,
+            )
+        except Exception:
+            pass
+
     # 3. Registration number format (rule)
     reg_check = _check_registration_number_format(reg_number, country)
     checks["registration_number"] = reg_check
@@ -3235,9 +3248,21 @@ def execute_behaviour_risk_drift(application_id: str, context: Dict[str, Any]) -
     c4 = _check_product_usage_deviation(app, txns)
     c5 = _check_dormancy(app)
     c6 = _check_threshold_breach(app, alerts)
-    c5 = _check_dormancy(app)
-    c6 = _check_threshold_breach(app, alerts)
     rule_checks = [c1, c2, c3, c4, c5, c6]
+
+    # Fire degraded-mode admin alert if any checks are degraded
+    degraded_checks = [c for c in rule_checks if c.get("status") == "degraded"]
+    if degraded_checks:
+        try:
+            from production_controls import alert_degraded_mode
+            alert_degraded_mode(
+                agent_name="Behaviour & Risk Drift Detection",
+                agent_number=8,
+                reason=f"{len(degraded_checks)} of 6 rule checks in degraded mode (no transaction data)",
+                application_id=application_id,
+            )
+        except Exception:
+            pass
 
     # 5 hybrid checks
     c7 = _score_velocity_anomaly(rule_checks)
