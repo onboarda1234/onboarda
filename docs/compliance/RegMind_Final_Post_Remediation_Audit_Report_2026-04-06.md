@@ -19,8 +19,8 @@
 
 The RegMind/Onboarda platform has undergone a significant remediation wave that resolved **all critical-severity defects** identified in the prior audit. The platform is now in a **materially improved state**:
 
-- **12 critical/high-severity defects** have been fixed, verified in code, and covered by 37 dedicated proof-of-fix tests
-- **Zero critical defects remain open** — all fail-open, false-positive, and data-integrity issues have been resolved
+- **13 defects have been fixed** and verified in code, including all 4 CRITICAL and 5 HIGH-severity items. 37 dedicated proof-of-fix tests cover 10 of the 13 fixes; 3 fixes are verified by code review only.
+- **Zero critical or incorrectly-implemented defects remain at the code level.** All fail-open, false-positive, and data-integrity issues have been resolved. One HIGH-severity infrastructure blocker and 6 MEDIUM/LOW items remain open (see Section D).
 - **1,163 tests pass** across the full test suite (3 skipped — pre-existing, unrelated to audit scope)
 - **10 AI agents** are registered, with 9 operational and 1 explicitly deferred (Agent 9: Regulatory Impact)
 
@@ -28,10 +28,10 @@ The RegMind/Onboarda platform has undergone a significant remediation wave that 
 
 | Environment | Ready? | Conditions |
 |---|---|---|
-| Internal demo | ✅ Yes | Suitable now for stakeholder demos |
-| Staging / UAT | ✅ Yes | Suitable for structured testing with test data |
+| Internal demo | ✅ Yes (code-level) | Suitable now for stakeholder demos; live deployment required |
+| Staging / UAT | ✅ Yes (code-level) | Suitable for structured testing with test data |
 | Regulator-facing review | ⚠️ Conditional | Code passes audit; demo/staging validation needed first |
-| Production | ❌ Not yet | 4 infrastructure items + staging validation must be completed |
+| Production | ❌ Not yet | 4 blocking items must be completed (see below) |
 
 ### Blocking Items for Production
 
@@ -42,9 +42,9 @@ The RegMind/Onboarda platform has undergone a significant remediation wave that 
 
 ---
 
-## B. FINAL COVERAGE TABLE — 10-Agent / 161-Check Framework
+## B. FINAL COVERAGE TABLE — Operational Subset of 178-Row Master Register
 
-### Agent-Level Coverage
+### Agent-Level Coverage (10 Agents, 161 Operational Checks)
 
 | Agent | Name | Stage | Mode | Checks | Status |
 |---|---|---|---|---|---|
@@ -56,29 +56,35 @@ The RegMind/Onboarda platform has undergone a significant remediation wave that 
 | 6 | Periodic Review Preparation | Monitoring | Deterministic | 10 | ✅ Operational |
 | 7 | Adverse Media & PEP Monitoring | Monitoring | Hybrid | 12 | ✅ Operational |
 | 8 | Behaviour & Risk Drift Detection | Monitoring | Deterministic | 11 | ⚠️ Degraded (no transaction table) |
-| 9 | Regulatory Impact Assessment | Monitoring | Future Phase | 0 | 🔲 Deferred |
+| 9 | Regulatory Impact Assessment | Monitoring | Future Phase | 0 † | 🔲 Deferred |
 | 10 | Ongoing Compliance Review | Monitoring | Hybrid | 11 | ✅ Operational |
 | **TOTAL** | | | | **161** | |
 
-### Check-Level Classification
+> † Agent 9 has **17 rows in the master register** but **0 operational checks** in code. All 17 rows are deferred to a future implementation phase and are excluded from the operational check count. See Reconciliation section below.
+
+### Check-Level Classification (161 Operational Checks Only — Excludes 17 Agent 9 Deferred Rows)
 
 | Classification | Count | Percentage | Notes |
 |---|---|---|---|
-| **Implemented Correctly** | 108 | 67.1% | Full logic, tested, no contradictions |
+| **Implemented Correctly** | 121 | 75.2% | Full logic, tested, no contradictions |
 | **Implemented — Runtime-Dependent** | 23 | 14.3% | Correct logic but outcome depends on external data/API availability |
 | **Degraded** | 17 | 10.6% | Agent 2 (7) + Agent 8 volume checks (10) — blocked by infrastructure |
 | **Generic WARN** | 0 | 0% | All WARN paths are deterministic boundary-condition responses (not catch-alls) |
 | **Implemented Incorrectly** | 0 | 0% | All previously-incorrect implementations have been fixed |
-| **Placeholder** | 0 | 0% | Agent 9 deferred checks are not counted in 161 |
-| **Missing** | 0 | 0% | No register-required checks are absent from code |
-| **TOTAL (operational)** | **161** | 100% | Excludes Agent 9 deferred rows |
+| **Placeholder** | 0 | 0% | Agent 9's 17 deferred rows are excluded from this operational subset |
+| **Missing** | 0 | 0% | No register-required operational checks are absent from code |
+| **TOTAL (operational)** | **161** | 100% | See reconciliation below for full 178-row register |
+
+> **Note:** The classifications above cover the 161 operational checks (Agents 1–8 and 10). Agent 9's 17 deferred rows are not classified here because Agent 9 is explicitly deferred to a future phase and has no active implementation. "Implemented Correctly" is the residual category: 161 − 23 (runtime-dependent) − 17 (degraded) = 121.
 
 ### Reconciliation with 178-Row Master Register
 
-The master register (RegMind_Master_AI_Agent_Register.xlsx) contains 178 rows. The 17-row difference from 161 operational checks is accounted for:
+The master register (RegMind_Master_AI_Agent_Register.xlsx) contains **178 rows** across all 10 agents. Of these:
 
-- **Agent 9 placeholder rows:** ~17 rows for the deferred Regulatory Impact agent
-- All 161 operational check rows have corresponding code implementations
+- **161 rows** belong to Agents 1–8 and 10 (operational agents) and are classified in the coverage table above
+- **17 rows** belong to Agent 9 (Regulatory Impact Assessment), which is explicitly deferred to a future implementation phase. These rows are registered but carry no active code implementation. Agent 9 returns `confidence_score: 0.0` with `_deferred: True` and cannot influence approval decisions.
+
+**Full Register Reconciliation:** 161 operational + 17 deferred = **178 total** ✓
 
 ---
 
@@ -104,7 +110,7 @@ All fixes below have been verified against actual code, with line-number evidenc
 
 ### Fix Evidence Summary
 
-- **13 findings fixed** (6 CRITICAL, 4 HIGH, 2 MEDIUM, 1 LOW)
+- **13 findings fixed** (4 CRITICAL, 5 HIGH, 3 MEDIUM, 1 LOW)
 - **10 of 13 have dedicated test coverage** (37 tests total in test_wave1_remediation.py)
 - **3 fixes are code-verified only** (mock leak, portal fields, Agent 9 guard) — no dedicated automated tests
 - **0 fixes show contradictory stale logic** — all old code paths have been replaced
@@ -180,7 +186,7 @@ The following findings from the prior report (v2.0) must be **removed entirely**
 |---|---|---|---|
 | Critical open defects | 6 | 0 | −6 |
 | High open defects | 4 | 1 | −3 |
-| Medium open defects | 3 | 5 | +2 (new findings added) |
+| Medium open defects | 3 | 4 | +1 (1 new finding added) |
 | Low open defects | 1 | 2 | +1 (new findings added) |
 | **Total open** | **14** | **7** | **−7** |
 | Total tests | 1,126 | 1,163 | +37 |
@@ -188,13 +194,15 @@ The following findings from the prior report (v2.0) must be **removed entirely**
 | Agents operational | 9 | 9 | — |
 | Agents deferred | 1 | 1 | — |
 
+> **Note:** The prior report's per-severity counts are reproduced as-is from that document. This report's Section C uses its own per-finding severity classification, which may differ slightly in individual assignments while producing the same total outcome.
+
 ---
 
 ## F. REMEDIATION SECTION — Completed Work
 
 ### Wave 1: Critical Fail-Open and False-Positive Defects
 
-**Completed:** All 7 critical/high findings resolved.
+**Completed:** All 6 Wave 1 items resolved (covering 9 individual critical/high-severity sub-findings from Section C).
 
 | Fix | Evidence | Tests |
 |---|---|---|
@@ -244,14 +252,14 @@ See Section D (Final Open Issues Register) — 7 items remain, none critical.
 
 | Environment | Verdict | Rationale |
 |---|---|---|
-| **Internal demo** | ✅ **Ready** | All critical defects resolved. Core compliance workflow functional. 9/10 agents operational. Suitable for stakeholder and investor demonstrations. |
-| **Staging / UAT** | ✅ **Ready** | Code quality supports structured testing. Transaction monitoring (Agent 8) limited to degraded mode, which is acceptable for staging. External registry checks (Agent 2) run internal-consistency mode only. |
-| **Regulator-facing review** | ⚠️ **Conditional** | Code-level audit is clean (0 critical, 0 incorrect implementations). However, live environment validation is required before presenting to regulators. The 4 remaining infrastructure items should be disclosed as roadmap items. |
-| **Production** | ❌ **Not ready** | 4 blocking items: (1) Agent 8 transaction infrastructure, (2) Agent 2 API wiring, (3) template fallback UI transparency, (4) staging validation. |
+| **Internal demo** | ✅ **Ready (code-level)** | All critical defects resolved. Core compliance workflow functional. 9/10 agents operational. Suitable for stakeholder and investor demonstrations. Live environment deployment required. |
+| **Staging / UAT** | ✅ **Ready (code-level)** | Code quality supports structured testing. Transaction monitoring (Agent 8) limited to degraded mode, which is acceptable for staging. External registry checks (Agent 2) run internal-consistency mode only. |
+| **Regulator-facing review** | ⚠️ **Conditional** | Code-level audit is clean (0 critical, 0 incorrect implementations). However, live environment validation has not been performed and is required before presenting to regulators. Remaining infrastructure items (OI-1 through OI-4) should be disclosed as roadmap items. |
+| **Production** | ❌ **Not ready** | 4 blocking items remain: (1) Agent 8 transaction infrastructure, (2) Agent 2 API wiring, (3) template fallback UI transparency, (4) staging end-to-end validation. |
 
 ### What Has Improved Since Prior Report
 
-1. **All 6 critical defects eliminated** — Zero fail-open or false-positive matching paths remain
+1. **All critical-severity defects eliminated** — Zero fail-open or false-positive matching paths remain
 2. **37 proof-of-fix tests added** — Remediation is regression-protected
 3. **Agent 9 properly guarded** — Cannot silently influence approval decisions
 4. **Portal prescreening complete** — All 7 required fields present with end-to-end wiring
