@@ -1441,6 +1441,46 @@ def send_alert(alert_type: str, subject: str, message: str):
     return alert_manager.send_alert(alert_type, subject, message)
 
 
+def alert_degraded_mode(agent_name: str, agent_number: int, reason: str, application_id: str = None):
+    """Fire a WARNING-level alert when an agent runs in degraded mode.
+
+    This ensures compliance officers and admins are notified when an AI agent
+    cannot perform full verification due to missing infrastructure (e.g. no
+    transaction data, no external registry API key).
+
+    Rate-limited to one alert per hour per agent via AlertManager.
+    Also logs the event to the incident logger if available.
+    """
+    subject = f"Agent {agent_number} ({agent_name}) running in DEGRADED mode"
+    details = [
+        f"Agent: {agent_name} (Agent {agent_number})",
+        f"Mode: DEGRADED",
+        f"Reason: {reason}",
+    ]
+    if application_id:
+        details.append(f"Application: {application_id}")
+    details.append(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+    message = "\n".join(details)
+
+    # Log the degraded-mode event
+    logger.warning(f"DEGRADED_MODE: {subject} — {reason}")
+
+    # Log to incident logger
+    try:
+        incident_logger.log_incident(
+            incident_type="OTHER",
+            description=f"Degraded mode: {subject}",
+            severity="MEDIUM",
+            details={"agent_name": agent_name, "agent_number": agent_number,
+                     "reason": reason, "application_id": application_id},
+        )
+    except Exception:
+        pass
+
+    # Send email alert (rate-limited)
+    return alert_manager.send_alert("WARNING", subject, message)
+
+
 if __name__ == "__main__":
     # Quick test
     init_production_controls()

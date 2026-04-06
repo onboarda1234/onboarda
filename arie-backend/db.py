@@ -618,6 +618,27 @@ def _get_postgres_schema() -> str:
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Transaction Ledger (Agent 8: Behaviour & Risk Drift Detection)
+    CREATE TABLE IF NOT EXISTS transactions (
+        id SERIAL PRIMARY KEY,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        transaction_ref TEXT,
+        transaction_date TIMESTAMP NOT NULL,
+        amount NUMERIC(18, 2) NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound','internal')),
+        counterparty_name TEXT,
+        counterparty_country TEXT,
+        product_type TEXT,
+        channel TEXT,
+        description TEXT,
+        risk_flags JSONB DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_transactions_application_id ON transactions(application_id);
+    CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_transactions_counterparty_country ON transactions(counterparty_country);
+
     -- Enhanced Due Diligence (EDD) Cases
     CREATE TABLE IF NOT EXISTS edd_cases (
         id SERIAL PRIMARY KEY,
@@ -1200,6 +1221,27 @@ def _get_sqlite_schema() -> str:
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- Transaction Ledger (Agent 8: Behaviour & Risk Drift Detection)
+    CREATE TABLE IF NOT EXISTS transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        transaction_ref TEXT,
+        transaction_date TEXT NOT NULL,
+        amount REAL NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound','internal')),
+        counterparty_name TEXT,
+        counterparty_country TEXT,
+        product_type TEXT,
+        channel TEXT,
+        description TEXT,
+        risk_flags TEXT DEFAULT '[]',
+        created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_transactions_application_id ON transactions(application_id);
+    CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_transactions_counterparty_country ON transactions(counterparty_country);
 
     -- Enhanced Due Diligence (EDD) Cases
     CREATE TABLE IF NOT EXISTS edd_cases (
