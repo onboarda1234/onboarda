@@ -5360,6 +5360,15 @@ function syncDirectorsUBOsToKYC() {
   });
 }
 
+// ─── Checkbox helper (top-level for use by collectFormData / buildPrescreeningSummary) ──
+function getCheckboxValues(containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(function(c) {
+    return c.value;
+  });
+}
+
 // ─── Pre-screening submit ─────────────────────────────────
 async function submitPrescreening(e) {
   e.preventDefault();
@@ -5371,14 +5380,6 @@ async function submitPrescreening(e) {
     var el = document.getElementById(id);
     if (!el) return '';
     return typeof el.value === 'string' ? el.value.trim() : (el.value || '');
-  }
-
-  function getCheckboxValues(containerId) {
-    var container = document.getElementById(containerId);
-    if (!container) return [];
-    return Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(function(c) {
-      return c.value;
-    });
   }
 
   function getOptionalNumber(id) {
