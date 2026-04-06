@@ -1539,21 +1539,6 @@ def init_db():
             except Exception as e:
                 logger.warning(f"Demo app stubs in init_db skipped: {e}")
 
-        # ── Fix: Add 'submitted' to applications status CHECK constraint (PostgreSQL only) ──
-        if USE_POSTGRESQL:
-            try:
-                db.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_status_check")
-                db.execute("""ALTER TABLE applications ADD CONSTRAINT applications_status_check
-                    CHECK(status IN ('draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
-                    'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
-                    'edd_required','approved','rejected','rmi_sent','withdrawn'))""")
-                db.commit()
-            except Exception as e:
-                logger.debug(f"Status constraint update: {e}")
-                try:
-                    db.conn.rollback()
-                except Exception:
-                    pass
     except Exception as e:
         logger.error(f"Error initializing database schema: {e}")
         raise
@@ -2110,13 +2095,29 @@ def _run_migrations(db: DBConnection):
     # but the DB CHECK constraint did not include it, causing IntegrityError on transition.
     if USE_POSTGRESQL:
         try:
-            db.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_status_check")
-            db.execute("""ALTER TABLE applications ADD CONSTRAINT applications_status_check
-                CHECK(status IN ('draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
-                'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
-                'edd_required','approved','rejected','rmi_sent','withdrawn'))""")
-            db.commit()
-            logger.info("Migration v2.11: Added 'under_review' to applications status CHECK constraint")
+            constraint_row = db.execute("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'applications_status_check'
+                  AND conrelid = 'applications'::regclass
+            """).fetchone()
+            constraint_def = None
+            if constraint_row:
+                if isinstance(constraint_row, dict):
+                    constraint_def = constraint_row.get("pg_get_constraintdef")
+                else:
+                    constraint_def = constraint_row[0]
+
+            if constraint_def and "'under_review'" in constraint_def:
+                logger.info("Migration v2.11: applications status CHECK constraint already includes 'under_review'")
+            else:
+                db.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_status_check")
+                db.execute("""ALTER TABLE applications ADD CONSTRAINT applications_status_check
+                    CHECK(status IN ('draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
+                    'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
+                    'edd_required','approved','rejected','rmi_sent','withdrawn'))""")
+                db.commit()
+                logger.info("Migration v2.11: Added 'under_review' to applications status CHECK constraint")
         except Exception as e:
             logger.debug(f"Migration v2.11 status constraint update: {e}")
             try:

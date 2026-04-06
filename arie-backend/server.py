@@ -1645,7 +1645,8 @@ class ApplicationDetailHandler(BaseHandler):
                 db.close()
                 return self.error(
                     f"Cannot modify directors/UBOs/intermediaries after compliance review has started. "
-                    f"Current status: {app['status']}. Revert to draft to make changes.",
+                    f"Current status: {app['status']}. Create a new application or contact an officer "
+                    f"to reopen the case if changes are required and reopening is allowed.",
                     403
                 )
             store_application_parties(
@@ -1654,11 +1655,6 @@ class ApplicationDetailHandler(BaseHandler):
                 directors=data["directors"] if "directors" in data else None,
                 ubos=data["ubos"] if "ubos" in data else None,
                 intermediaries=data["intermediaries"] if "intermediaries" in data else None
-            )
-            # Track party modification timestamp for staleness detection
-            db.execute(
-                "UPDATE applications SET updated_at=datetime('now') WHERE id=?",
-                (real_id,)
             )
 
         db.commit()
