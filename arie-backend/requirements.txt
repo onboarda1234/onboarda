@@ -33,6 +33,9 @@ boto3==1.42.73
 # Observability & Monitoring
 prometheus-client==0.24.1
 
+# System Health Monitoring (disk/memory in health endpoint)
+psutil==7.2.2
+
 # Async SQLite Support (for resilience layer)
 aiosqlite==0.22.1
 

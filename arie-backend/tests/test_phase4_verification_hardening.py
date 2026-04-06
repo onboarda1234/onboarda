@@ -29,62 +29,55 @@ class TestNationalityMatching:
     """DOC-52 / DOC-56: Nationality match must not false-pass on 3-char prefix."""
 
     def test_exact_match_passes(self):
-        from document_verification import _normalise_name, _nationality_to_iso
-        assert _normalise_name("Mauritius") == _normalise_name("mauritius")
+        from document_verification import _canonicalise_nationality
+        assert _canonicalise_nationality("Mauritius") == _canonicalise_nationality("mauritius")
 
-    def test_iso_lookup_resolves_demonyms(self):
-        from document_verification import _nationality_to_iso
-        assert _nationality_to_iso("Mauritian") == "MU"
-        assert _nationality_to_iso("British") == "GB"
-        assert _nationality_to_iso("American") == "US"
+    def test_canonicalise_resolves_demonyms(self):
+        from document_verification import _canonicalise_nationality
+        assert _canonicalise_nationality("Mauritian") == "mauritius"
+        assert _canonicalise_nationality("British") == "united kingdom"
+        assert _canonicalise_nationality("American") == "united states"
 
-    def test_iso_lookup_resolves_codes(self):
-        from document_verification import _nationality_to_iso
-        assert _nationality_to_iso("MU") == "MU"
-        assert _nationality_to_iso("GB") == "GB"
-        assert _nationality_to_iso("MUS") == "MU"
-        assert _nationality_to_iso("GBR") == "GB"
+    def test_canonicalise_resolves_codes(self):
+        from document_verification import _canonicalise_nationality
+        assert _canonicalise_nationality("MU") == "mauritius"
+        assert _canonicalise_nationality("GB") == "united kingdom"
 
     def test_united_states_vs_united_kingdom_fail(self):
         """Critical regression: these must NOT match despite sharing 'uni' prefix."""
-        from document_verification import _normalise_name, _nationality_to_iso
-        d_n = _normalise_name("United States")
-        e_n = _normalise_name("United Kingdom")
-        d_iso = _nationality_to_iso("United States")
-        e_iso = _nationality_to_iso("United Kingdom")
-        # Normalised names are different
+        from document_verification import _canonicalise_nationality
+        d_n = _canonicalise_nationality("United States")
+        e_n = _canonicalise_nationality("United Kingdom")
+        # Canonicalised names are different
         assert d_n != e_n
-        # ISO codes are different
-        assert d_iso != e_iso
-        # The combined check should NOT pass
-        assert not (d_n == e_n or (d_iso and e_iso and d_iso == e_iso))
+        # The check should NOT pass
+        assert not (d_n == e_n)
 
     def test_united_arab_emirates_vs_united_states_fail(self):
         """UAE vs US must not match."""
-        from document_verification import _normalise_name, _nationality_to_iso
-        d_iso = _nationality_to_iso("United Arab Emirates")
-        e_iso = _nationality_to_iso("United States")
-        assert d_iso != e_iso
+        from document_verification import _canonicalise_nationality
+        d_n = _canonicalise_nationality("United Arab Emirates")
+        e_n = _canonicalise_nationality("United States")
+        assert d_n != e_n
 
     def test_same_country_different_forms_passes(self):
-        """'Mauritian' and 'Mauritius' should match via ISO."""
-        from document_verification import _normalise_name, _nationality_to_iso
-        d_n = _normalise_name("Mauritian")
-        e_n = _normalise_name("Mauritius")
-        d_iso = _nationality_to_iso("Mauritian")
-        e_iso = _nationality_to_iso("Mauritius")
-        assert d_iso == e_iso == "MU"
+        """'Mauritian' and 'Mauritius' should match via canonicalisation."""
+        from document_verification import _canonicalise_nationality
+        d_n = _canonicalise_nationality("Mauritian")
+        e_n = _canonicalise_nationality("Mauritius")
+        assert d_n == e_n == "mauritius"
 
     def test_british_matches_gb(self):
-        """'British' and 'GB' should match via ISO."""
-        from document_verification import _nationality_to_iso
-        assert _nationality_to_iso("British") == _nationality_to_iso("GB") == "GB"
+        """'British' and 'GB' should match via canonicalisation."""
+        from document_verification import _canonicalise_nationality
+        assert _canonicalise_nationality("British") == _canonicalise_nationality("GB") == "united kingdom"
 
-    def test_unknown_nationality_returns_none(self):
-        from document_verification import _nationality_to_iso
-        assert _nationality_to_iso("Atlantean") is None
-        assert _nationality_to_iso("") is None
-        assert _nationality_to_iso(None) is None
+    def test_unknown_nationality_returns_input(self):
+        from document_verification import _canonicalise_nationality
+        # Unknown values pass through normalised
+        assert _canonicalise_nationality("Atlantean") == "atlantean"
+        assert _canonicalise_nationality("") == ""
+        assert _canonicalise_nationality(None) == ""
 
 
 class TestDOBMatching:

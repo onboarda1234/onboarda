@@ -2339,9 +2339,30 @@
               <label>Registration / BRN Number <span class="req">*</span></label>
               <input type="text" id="f-brn" placeholder="e.g. C12345678" required />
             </div>
+            <div class="form-group">
+              <label>Authorised Share Capital</label>
+              <input type="text" id="f-authorised-share-capital" placeholder="e.g. 100,000 USD" />
+            </div>
+            <div class="form-group">
+              <label>Authorised Signatory</label>
+              <input type="text" id="f-authorised-signatory" placeholder="Full name of authorised signatory" />
+            </div>
             <div class="form-group span-3">
               <label>Website</label>
               <input type="text" id="f-website" placeholder="www.company.com" />
+            </div>
+          </div>
+
+          <!-- Financial Information -->
+          <div class="section-title">Financial Information</div>
+          <div class="form-grid cols-2">
+            <div class="form-group">
+              <label>Financial Year End</label>
+              <input type="text" id="f-financial-year-end" placeholder="e.g. 31 December" />
+            </div>
+            <div class="form-group">
+              <label>Annual Turnover</label>
+              <input type="text" id="f-annual-turnover" placeholder="e.g. 5,000,000 USD" />
             </div>
           </div>
 
@@ -2351,6 +2372,20 @@
             <div class="form-group">
               <label>List any licences held <span class="req">*</span></label>
               <textarea id="f-licences" placeholder="E.g. FCA authorised payment institution (UK, ref. 123456), EMI licence Malta…&#10;Or enter 'None' if not applicable" required></textarea>
+            </div>
+          </div>
+          <div class="form-grid cols-3">
+            <div class="form-group">
+              <label>Licence Number</label>
+              <input type="text" id="f-licence-number" placeholder="e.g. 123456" />
+            </div>
+            <div class="form-group">
+              <label>Licence Authority</label>
+              <input type="text" id="f-licence-authority" placeholder="e.g. FCA, FSC, BdF" />
+            </div>
+            <div class="form-group">
+              <label>Licence Type</label>
+              <input type="text" id="f-licence-type" placeholder="e.g. EMI, PSP, Investment" />
             </div>
           </div>
 
@@ -5631,6 +5666,13 @@ async function submitPrescreening(e) {
       entity_contact_mobile: getFieldValue('f-mobile'),
       website: getFieldValue('f-website'),
       regulatory_licences: getFieldValue('f-licences'),
+      licence_number: getFieldValue('f-licence-number'),
+      licence_authority: getFieldValue('f-licence-authority'),
+      licence_type: getFieldValue('f-licence-type'),
+      authorised_share_capital: getFieldValue('f-authorised-share-capital'),
+      authorised_signatory: getFieldValue('f-authorised-signatory'),
+      financial_year_end: getFieldValue('f-financial-year-end'),
+      annual_turnover: getFieldValue('f-annual-turnover'),
       services_required: getCheckboxValues('service-grid'),
       monthly_volume: getFieldValue('f-monthly-volume'),
       expected_volume: getFieldValue('f-monthly-volume'),
@@ -6894,7 +6936,14 @@ function buildPrescreeningSummary() {
     row('Registered Address', _gfv('f-reg-address')) +
     row('Head Office Address', _gfv('f-hq-address')) +
     row('Website', _gfv('f-website')) +
-    row('Licences', _gfv('f-licences'));
+    row('Authorised Share Capital', _gfv('f-authorised-share-capital')) +
+    row('Authorised Signatory', _gfv('f-authorised-signatory')) +
+    row('Financial Year End', _gfv('f-financial-year-end')) +
+    row('Annual Turnover', _gfv('f-annual-turnover')) +
+    row('Licences', _gfv('f-licences')) +
+    row('Licence Number', _gfv('f-licence-number')) +
+    row('Licence Authority', _gfv('f-licence-authority')) +
+    row('Licence Type', _gfv('f-licence-type'));
 
   var contactRows =
     row('Contact Name', [_gfv('f-contact-first'), _gfv('f-contact-last')].filter(Boolean).join(' ')) +
