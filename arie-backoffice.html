@@ -3555,7 +3555,7 @@ function buildReportDataFromApplications(filters) {
 
   // Entity type breakdown
   var etMap = {};
-  apps.forEach(function(a) { var e = a.sector || 'Unknown'; etMap[e] = (etMap[e]||0) + 1; });
+  apps.forEach(function(a) { var e = a.entityType || 'Unknown'; etMap[e] = (etMap[e]||0) + 1; });
   var etBreakdown = Object.keys(etMap).map(function(k) { return { entity_type: k, count: etMap[k] }; }).sort(function(a,b) { return b.count - a.count; }).slice(0,20);
 
   // Pipeline stages
