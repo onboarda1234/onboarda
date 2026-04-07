@@ -604,9 +604,10 @@ def _parse_date(val) -> Optional[date]:
         return None
     # Strip ordinal suffixes: 1st, 2nd, 3rd, 4th, 21st, etc.
     s = _ORDINAL_SUFFIX_RE.sub(r'\1', s)
-    # Try standard formats first
+    # Order matters: ISO format first, then unambiguous long-form formats,
+    # then shorter formats. Year-only (%Y) is excluded to prevent false DOB matches.
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d %B %Y",
-                "%d-%m-%Y", "%B %d, %Y", "%d %b %Y", "%Y"):
+                "%d-%m-%Y", "%B %d, %Y", "%d %b %Y"):
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
@@ -804,9 +805,9 @@ def run_rule_checks(doc_type: str, category: str,
                                      "Registration number could not be extracted — manual check required",
                                      rule_type=rtype))
                 continue
-            # Normalise: strip spaces, hyphens, and leading zeros for comparison
-            d_norm = re.sub(r"[\s\-]", "", str(declared).upper()).lstrip("0") or "0"
-            e_norm = re.sub(r"[\s\-]", "", str(extracted).upper()).lstrip("0") or "0"
+            # Normalise: strip spaces, hyphens, dots, slashes, and leading zeros for comparison
+            d_norm = re.sub(r"[\s\-./]", "", str(declared).upper()).lstrip("0") or "0"
+            e_norm = re.sub(r"[\s\-./]", "", str(extracted).upper()).lstrip("0") or "0"
             if d_norm == e_norm:
                 results.append(_pass(id_, label, cls, f"Registration number matches ({extracted})",
                                      ps_field=PSField.INCORPORATION_NUMBER,

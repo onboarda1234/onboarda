@@ -110,7 +110,7 @@ class ApprovalGateValidator:
 
             # 3. Check compliance memo exists and meets quality gates
             memo_row = db.execute(
-                "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason "
+                "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, created_at "
                 "FROM compliance_memos WHERE application_id = ? ORDER BY version DESC LIMIT 1",
                 (app_id,)
             ).fetchone()
@@ -207,6 +207,67 @@ class ApprovalGateValidator:
                     "Compliance memo was generated with mock AI. "
                     "Live AI verification required for approval."
                 )
+
+            # 7. Staleness detection: application data modified after memo/screening
+            # If the application was updated after the memo was generated, the memo
+            # may be based on outdated data and should be regenerated.
+            app_updated_at = app.get('updated_at')
+            memo_created_at = memo_row.get('created_at')
+            if app_updated_at and memo_created_at:
+                try:
+                    # Parse timestamps — handle both ISO and SQLite datetime formats
+                    if isinstance(app_updated_at, str):
+                        app_ts = datetime.fromisoformat(app_updated_at.replace('Z', '+00:00'))
+                    else:
+                        app_ts = app_updated_at
+                    if isinstance(memo_created_at, str):
+                        memo_ts = datetime.fromisoformat(memo_created_at.replace('Z', '+00:00'))
+                    else:
+                        memo_ts = memo_created_at
+                    # Make both naive for comparison if they have mixed tz info
+                    if app_ts.tzinfo and not memo_ts.tzinfo:
+                        app_ts = app_ts.replace(tzinfo=None)
+                    elif memo_ts.tzinfo and not app_ts.tzinfo:
+                        memo_ts = memo_ts.replace(tzinfo=None)
+                    if app_ts > memo_ts:
+                        return (
+                            False,
+                            "Application data was modified after the compliance memo was generated. "
+                            "The memo may be based on outdated information. "
+                            "Please regenerate the compliance memo before approving."
+                        )
+                except (ValueError, TypeError) as ts_err:
+                    logger.warning(f"Could not compare timestamps for staleness check: {ts_err}")
+                    return (False, "Could not verify memo freshness due to timestamp format error. "
+                            "Please regenerate the compliance memo before approving.")
+
+            # 8. Screening freshness: check screening was run after application submission
+            submitted_at = app.get('submitted_at')
+            screening_ts_str = screening_report.get('screened_at') or screening_report.get('timestamp')
+            if submitted_at and screening_ts_str:
+                try:
+                    if isinstance(submitted_at, str):
+                        sub_ts = datetime.fromisoformat(submitted_at.replace('Z', '+00:00'))
+                    else:
+                        sub_ts = submitted_at
+                    if isinstance(screening_ts_str, str):
+                        scr_ts = datetime.fromisoformat(screening_ts_str.replace('Z', '+00:00'))
+                    else:
+                        scr_ts = screening_ts_str
+                    if sub_ts.tzinfo and not scr_ts.tzinfo:
+                        sub_ts = sub_ts.replace(tzinfo=None)
+                    elif scr_ts.tzinfo and not sub_ts.tzinfo:
+                        scr_ts = scr_ts.replace(tzinfo=None)
+                    if sub_ts > scr_ts:
+                        return (
+                            False,
+                            "Screening was run before the latest submission. "
+                            "Re-submit the application to trigger fresh screening."
+                        )
+                except (ValueError, TypeError) as ts_err:
+                    logger.warning(f"Could not compare screening timestamps: {ts_err}")
+                    return (False, "Could not verify screening freshness due to timestamp format error. "
+                            "Re-submit the application to trigger fresh screening.")
 
             logger.info(f"Application {app_id} passed approval gate validation")
             return (True, "")
