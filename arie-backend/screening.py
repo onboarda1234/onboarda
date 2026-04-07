@@ -583,8 +583,9 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
                 existing = seen_person_keys[dedup_key]
                 kyc_futures.append((person, ptype, p_name, existing[3]))
                 continue
-            # Use a role-agnostic ext_id based on name hash only
-            ext_id = person.get("email", "") or f"person_{hashlib.md5(p_name.encode()).hexdigest()[:12]}"
+            # Use a role-agnostic ext_id based on name + DOB hash to avoid cross-person collisions
+            hash_input = p_name + "|" + dedup_dob
+            ext_id = person.get("email", "") or f"person_{hashlib.md5(hash_input.encode()).hexdigest()[:12]}"
             parts = p_name.strip().split(" ", 1)
             first = parts[0] if parts else ""
             last = parts[1] if len(parts) > 1 else ""
