@@ -133,13 +133,13 @@ class ComplyAdvantageClient:
                 )
 
         except Timeout:
-            logger.error("ComplyAdvantage: Request timed out")
+            logger.error("ComplyAdvantage: Request timed out", exc_info=True)
             return self._error_result(name, "Request timed out")
         except RequestException as e:
-            logger.error(f"ComplyAdvantage: Network error — {e}")
+            logger.error(f"ComplyAdvantage: Network error — {e}", exc_info=True)
             return self._error_result(name, f"Network error: {str(e)[:100]}")
         except Exception as e:
-            logger.error(f"ComplyAdvantage: Unexpected error — {e}")
+            logger.error(f"ComplyAdvantage: Unexpected error — {e}", exc_info=True)
             return self._error_result(name, f"Unexpected error: {str(e)[:100]}")
 
     def _normalize_response(
@@ -202,7 +202,7 @@ class ComplyAdvantageClient:
             "api_status": "live",
             "total_hits": total_hits,
             "search_id": content.get("data", {}).get("id"),
-            "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
     def _not_configured_result(self, name: str) -> Dict[str, Any]:
@@ -213,7 +213,7 @@ class ComplyAdvantageClient:
             "source": "complyadvantage",
             "api_status": "not_configured",
             "note": "ComplyAdvantage API key not configured",
-            "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
     def _error_result(self, name: str, reason: str) -> Dict[str, Any]:
@@ -224,7 +224,7 @@ class ComplyAdvantageClient:
             "source": "complyadvantage",
             "api_status": "error",
             "note": f"ComplyAdvantage error: {reason}",
-            "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
     def health_check(self) -> Dict[str, Any]:

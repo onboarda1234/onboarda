@@ -62,10 +62,17 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
 
     Returns: { matched: bool, results: [...], source: "complyadvantage"|"sumsub"|"simulated" }
     """
-    # ── Priority 1: ComplyAdvantage live screening (when demo live-data is enabled) ──
-    if use_live_screening_in_demo() or (not is_demo() and not SUMSUB_APP_TOKEN):
-        ca_client = get_complyadvantage_client()
-        if ca_client.is_configured:
+    # ── Priority 1: ComplyAdvantage live screening ──
+    # Used when: (a) demo with DEMO_USE_LIVE_SCREENING=true + API key, or
+    #            (b) any environment where Sumsub is not configured but ComplyAdvantage is
+    ca_client = get_complyadvantage_client()
+    use_ca = False
+    if use_live_screening_in_demo():
+        use_ca = True
+    elif not SUMSUB_APP_TOKEN and ca_client.is_configured:
+        use_ca = True
+
+    if use_ca and ca_client.is_configured:
             try:
                 birth_year = None
                 if birth_date:
