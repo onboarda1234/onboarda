@@ -4204,6 +4204,9 @@ class ReportHandler(BaseHandler):
         risk_level = self.get_argument("risk_level", None)
         date_from = self.get_argument("date_from", None)
         date_to = self.get_argument("date_to", None)
+        jurisdiction = self.get_argument("jurisdiction", None)
+        entity_type = self.get_argument("entity_type", None)
+        assigned_to = self.get_argument("assigned_to", None)
         fields = self.get_argument("fields", "ref,company_name,status,risk_level,created_at,assigned_to")
 
         # Build query
@@ -4221,6 +4224,15 @@ class ReportHandler(BaseHandler):
         if date_to:
             conditions.append("a.created_at <= ?")
             params.append(date_to)
+        if jurisdiction:
+            conditions.append("a.country = ?")
+            params.append(jurisdiction)
+        if entity_type:
+            conditions.append("a.entity_type = ?")
+            params.append(entity_type)
+        if assigned_to:
+            conditions.append("a.assigned_to = ?")
+            params.append(assigned_to)
 
         where = " AND ".join(conditions) if conditions else "1=1"
 
@@ -4270,6 +4282,379 @@ class ReportHandler(BaseHandler):
             "fields": field_list,
             "data": results
         })
+
+class ReportAnalyticsHandler(BaseHandler):
+    """GET /api/reports/analytics — analytics data for the Reports page"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+
+        try:
+            # Collect filter parameters
+            date_from = self.get_argument("date_from", None)
+            date_to = self.get_argument("date_to", None)
+            status = self.get_argument("status", None)
+            risk_level = self.get_argument("risk_level", None)
+            jurisdiction = self.get_argument("jurisdiction", None)
+            entity_type = self.get_argument("entity_type", None)
+            assigned_to = self.get_argument("assigned_to", None)
+
+            # Build dynamic WHERE clause for applications
+            conditions = []
+            params = []
+            if date_from:
+                conditions.append("a.created_at >= ?")
+                params.append(date_from)
+            if date_to:
+                conditions.append("a.created_at <= ?")
+                params.append(date_to)
+            if status:
+                conditions.append("a.status = ?")
+                params.append(status)
+            if risk_level:
+                conditions.append("a.risk_level = ?")
+                params.append(risk_level)
+            if jurisdiction:
+                conditions.append("a.country = ?")
+                params.append(jurisdiction)
+            if entity_type:
+                conditions.append("a.entity_type = ?")
+                params.append(entity_type)
+            if assigned_to:
+                conditions.append("a.assigned_to = ?")
+                params.append(assigned_to)
+
+            where = " AND ".join(conditions) if conditions else "1=1"
+
+            # --- summary ---
+            summary = {
+                "total": 0, "approved": 0, "rejected": 0, "pending": 0,
+                "edd_required": 0, "withdrawn": 0,
+                "avg_risk_score": 0.0, "approval_rate": 0.0, "rejection_rate": 0.0
+            }
+            try:
+                row = db.execute(f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
+                        SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected,
+                        SUM(CASE WHEN a.status='pending' OR a.status='submitted' OR a.status='under_review' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN a.status='edd_required' THEN 1 ELSE 0 END) as edd_required,
+                        SUM(CASE WHEN a.status='withdrawn' THEN 1 ELSE 0 END) as withdrawn,
+                        AVG(CASE WHEN a.risk_score IS NOT NULL THEN a.risk_score ELSE NULL END) as avg_risk_score
+                    FROM applications a WHERE {where}
+                """, params).fetchone()
+                if row:
+                    r = dict(row)
+                    total = r.get("total") or 0
+                    approved = r.get("approved") or 0
+                    rejected = r.get("rejected") or 0
+                    summary = {
+                        "total": total,
+                        "approved": approved,
+                        "rejected": rejected,
+                        "pending": r.get("pending") or 0,
+                        "edd_required": r.get("edd_required") or 0,
+                        "withdrawn": r.get("withdrawn") or 0,
+                        "avg_risk_score": round(r.get("avg_risk_score") or 0.0, 2),
+                        "approval_rate": round((approved / total * 100) if total > 0 else 0.0, 2),
+                        "rejection_rate": round((rejected / total * 100) if total > 0 else 0.0, 2),
+                    }
+            except Exception:
+                pass
+
+            # --- risk_distribution ---
+            risk_distribution = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0}
+            try:
+                rows = db.execute(f"""
+                    SELECT a.risk_level, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.risk_level
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    level = r.get("risk_level") or ""
+                    if level in risk_distribution:
+                        risk_distribution[level] = r.get("cnt") or 0
+            except Exception:
+                pass
+
+            # --- status_distribution ---
+            status_distribution = {}
+            try:
+                rows = db.execute(f"""
+                    SELECT a.status, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.status
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    s = r.get("status") or "unknown"
+                    status_distribution[s] = r.get("cnt") or 0
+            except Exception:
+                pass
+
+            # --- monthly_trends ---
+            monthly_trends = []
+            try:
+                rows = db.execute(f"""
+                    SELECT strftime('%Y-%m', a.created_at) as month,
+                           COUNT(*) as submitted,
+                           SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
+                           SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected
+                    FROM applications a WHERE {where}
+                    GROUP BY strftime('%Y-%m', a.created_at)
+                    ORDER BY month ASC
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    monthly_trends.append({
+                        "month": r.get("month") or "",
+                        "submitted": r.get("submitted") or 0,
+                        "approved": r.get("approved") or 0,
+                        "rejected": r.get("rejected") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- jurisdiction_breakdown ---
+            jurisdiction_breakdown = []
+            try:
+                rows = db.execute(f"""
+                    SELECT a.country, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.country
+                    ORDER BY cnt DESC
+                    LIMIT 20
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    jurisdiction_breakdown.append({
+                        "country": r.get("country") or "Unknown",
+                        "count": r.get("cnt") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- entity_type_breakdown ---
+            entity_type_breakdown = []
+            try:
+                rows = db.execute(f"""
+                    SELECT a.entity_type, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.entity_type
+                    ORDER BY cnt DESC
+                    LIMIT 20
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    entity_type_breakdown.append({
+                        "entity_type": r.get("entity_type") or "Unknown",
+                        "count": r.get("cnt") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- pipeline_stages ---
+            pipeline_stages = {}
+            try:
+                rows = db.execute(f"""
+                    SELECT a.status, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.status
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    pipeline_stages[r.get("status") or "unknown"] = r.get("cnt") or 0
+            except Exception:
+                pass
+
+            # --- edd_stats ---
+            edd_stats = {"total": 0, "active": 0, "completed": 0, "by_stage": {}}
+            try:
+                # EDD stats respect all active filters via application join
+                edd_conditions = []
+                edd_params = []
+                if date_from:
+                    edd_conditions.append("a.created_at >= ?")
+                    edd_params.append(date_from)
+                if date_to:
+                    edd_conditions.append("a.created_at <= ?")
+                    edd_params.append(date_to)
+                if status:
+                    edd_conditions.append("a.status = ?")
+                    edd_params.append(status)
+                if risk_level:
+                    edd_conditions.append("a.risk_level = ?")
+                    edd_params.append(risk_level)
+                if jurisdiction:
+                    edd_conditions.append("a.country = ?")
+                    edd_params.append(jurisdiction)
+                if entity_type:
+                    edd_conditions.append("a.entity_type = ?")
+                    edd_params.append(entity_type)
+                if assigned_to:
+                    edd_conditions.append("a.assigned_to = ?")
+                    edd_params.append(assigned_to)
+                edd_where = " AND ".join(edd_conditions) if edd_conditions else "1=1"
+
+                edd_query = f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN e.stage NOT IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as active,
+                        SUM(CASE WHEN e.stage IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as completed
+                    FROM edd_cases e
+                    JOIN applications a ON a.id = e.application_id
+                    WHERE {edd_where}
+                """
+                row = db.execute(edd_query, edd_params).fetchone()
+                if row:
+                    r = dict(row)
+                    edd_stats["total"] = r.get("total") or 0
+                    edd_stats["active"] = r.get("active") or 0
+                    edd_stats["completed"] = r.get("completed") or 0
+
+                # by_stage
+                stage_rows = db.execute(f"""
+                    SELECT e.stage, COUNT(*) as cnt
+                    FROM edd_cases e
+                    JOIN applications a ON a.id = e.application_id
+                    WHERE {edd_where}
+                    GROUP BY e.stage
+                """, edd_params).fetchall()
+                by_stage = {}
+                for row in stage_rows:
+                    r = dict(row)
+                    by_stage[r.get("stage") or "unknown"] = r.get("cnt") or 0
+                edd_stats["by_stage"] = by_stage
+            except Exception:
+                pass
+
+            # --- screening_stats ---
+            screening_stats = {"total_reviews": 0, "cleared": 0, "escalated": 0, "follow_up": 0}
+            try:
+                row = db.execute(f"""
+                    SELECT
+                        COUNT(*) as total_reviews,
+                        SUM(CASE WHEN sr.disposition='cleared' THEN 1 ELSE 0 END) as cleared,
+                        SUM(CASE WHEN sr.disposition='escalated' THEN 1 ELSE 0 END) as escalated,
+                        SUM(CASE WHEN sr.disposition='follow_up_required' THEN 1 ELSE 0 END) as follow_up
+                    FROM screening_reviews sr
+                    JOIN applications a ON a.id = sr.application_id
+                    WHERE {where}
+                """, params).fetchone()
+                if row:
+                    r = dict(row)
+                    screening_stats = {
+                        "total_reviews": r.get("total_reviews") or 0,
+                        "cleared": r.get("cleared") or 0,
+                        "escalated": r.get("escalated") or 0,
+                        "follow_up": r.get("follow_up") or 0,
+                    }
+            except Exception:
+                pass
+
+            # --- periodic_review_stats ---
+            periodic_review_stats = {"total": 0, "pending": 0, "completed": 0, "overdue": 0}
+            try:
+                row = db.execute(f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN pr.status='pending' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN pr.status='completed' THEN 1 ELSE 0 END) as completed,
+                        SUM(CASE WHEN pr.status='pending' AND pr.due_date < date('now') THEN 1 ELSE 0 END) as overdue
+                    FROM periodic_reviews pr
+                    JOIN applications a ON a.id = pr.application_id
+                    WHERE {where}
+                """, params).fetchone()
+                if row:
+                    r = dict(row)
+                    periodic_review_stats = {
+                        "total": r.get("total") or 0,
+                        "pending": r.get("pending") or 0,
+                        "completed": r.get("completed") or 0,
+                        "overdue": r.get("overdue") or 0,
+                    }
+            except Exception:
+                pass
+
+            # --- reviewer_workload ---
+            reviewer_workload = []
+            try:
+                rows = db.execute(f"""
+                    SELECT a.assigned_to,
+                           COUNT(*) as cnt,
+                           SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
+                           SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected
+                    FROM applications a
+                    WHERE {where} AND a.assigned_to IS NOT NULL AND a.assigned_to != ''
+                    GROUP BY a.assigned_to
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    reviewer_workload.append({
+                        "assigned_to": r.get("assigned_to") or "",
+                        "count": r.get("cnt") or 0,
+                        "approved": r.get("approved") or 0,
+                        "rejected": r.get("rejected") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- recent_decisions ---
+            recent_decisions = []
+            try:
+                rows = db.execute(f"""
+                    SELECT d.application_ref, d.decision_type,
+                           d.risk_level, d.timestamp, d.source,
+                           a.company_name
+                    FROM decision_records d
+                    LEFT JOIN applications a ON a.ref = d.application_ref
+                    WHERE {where}
+                    ORDER BY d.timestamp DESC
+                    LIMIT 20
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    recent_decisions.append({
+                        "ref": r.get("application_ref") or "",
+                        "company_name": r.get("company_name") or "",
+                        "decision_type": r.get("decision_type") or "",
+                        "risk_level": r.get("risk_level") or "",
+                        "timestamp": r.get("timestamp") or "",
+                        "source": r.get("source") or "",
+                    })
+            except Exception:
+                pass
+
+            filter_desc = ", ".join(f"{k}={v}" for k, v in [
+                ("date_from", date_from), ("date_to", date_to),
+                ("status", status), ("risk_level", risk_level),
+                ("jurisdiction", jurisdiction), ("entity_type", entity_type),
+                ("assigned_to", assigned_to),
+            ] if v)
+            self.log_audit(user, "Report", "Analytics",
+                           f"Analytics report generated with filters: {filter_desc or 'none'}")
+
+            self.success({
+                "summary": summary,
+                "risk_distribution": risk_distribution,
+                "status_distribution": status_distribution,
+                "monthly_trends": monthly_trends,
+                "jurisdiction_breakdown": jurisdiction_breakdown,
+                "entity_type_breakdown": entity_type_breakdown,
+                "pipeline_stages": pipeline_stages,
+                "edd_stats": edd_stats,
+                "screening_stats": screening_stats,
+                "periodic_review_stats": periodic_review_stats,
+                "reviewer_workload": reviewer_workload,
+                "recent_decisions": recent_decisions,
+            })
+        finally:
+            db.close()
 
 
 # ══════════════════════════════════════════════════════════
@@ -7518,6 +7903,7 @@ def make_app():
 
         # Reports
         (r"/api/reports/generate", ReportHandler),
+        (r"/api/reports/analytics", ReportAnalyticsHandler),
 
         # Audit
         (r"/api/audit/export", AuditExportHandler),

@@ -613,6 +613,19 @@ a { color:var(--brand); text-decoration:none; }
 .kpi-trend-chip.flat { background:var(--surface3); color:var(--text3); }
 .kpi-date-filter { display:flex; align-items:center; gap:10px; margin-bottom:20px; }
 
+/* ── Reports tab styles ── */
+.rpt-tab { padding:10px 20px; font-size:13px; font-weight:600; color:var(--text3); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px; transition:all 0.15s ease; }
+.rpt-tab:hover { color:var(--text1); }
+.rpt-tab.active { color:var(--brand); border-bottom-color:var(--brand); }
+.rpt-tab-content { display:none; }
+.rpt-tab-content.active { display:block; }
+.rpt-hbar-row { display:flex; align-items:center; gap:10px; }
+.rpt-hbar-label { width:130px; font-size:12px; color:var(--text2); flex-shrink:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rpt-hbar-track { flex:1; height:10px; background:var(--surface3); border-radius:5px; overflow:hidden; }
+.rpt-hbar-fill { height:100%; border-radius:5px; transition:width 0.6s ease; }
+.rpt-hbar-val { width:60px; text-align:right; font-size:12px; font-weight:700; flex-shrink:0; }
+.rpt-donut-segment { transition:stroke-dashoffset 0.6s ease; }
+
 /* ── Role-based visibility ── */
 .role-admin-only { display:none !important; }
 body.role-admin .role-admin-only { display:initial !important; }
@@ -1478,19 +1491,197 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 
 <!-- ═══════════════ REPORTS VIEW ═══════════════ -->
 <div class="view" id="view-reports">
-  <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);">
-    <div class="stat-card"><div class="stat-card-label">Total Applications</div><div class="stat-card-value" id="report-ytd-count">0</div></div>
-    <div class="stat-card"><div class="stat-card-label">Approval Rate</div><div class="stat-card-value" id="report-approval-rate" style="color:var(--green);">—</div></div>
-    <div class="stat-card"><div class="stat-card-label">Avg. Risk Score</div><div class="stat-card-value" id="report-avg-score">—</div></div>
-  </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-    <div class="card">
-      <div class="card-title" style="margin-bottom:16px;">Monthly Application Trend</div>
-      <div id="report-monthly-chart" style="display:flex;align-items:flex-end;gap:8px;height:140px;"></div>
+  <!-- Header -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+    <div>
+      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Operational, compliance, and management reporting across the onboarding pipeline.</p>
     </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn btn-outline btn-sm" onclick="exportReportsCSV()" title="Export filtered data to CSV">📥 Export CSV</button>
+      <button class="btn btn-outline btn-sm" onclick="renderReportsPage()" title="Refresh analytics data">🔄 Refresh</button>
+    </div>
+  </div>
+
+  <!-- Degraded mode banner (shown when API unavailable, using client-side fallback) -->
+  <div id="rpt-degraded-banner" style="display:none;background:#fef3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 16px;margin-bottom:14px;font-size:12px;color:#856404;">
+    ⚠️ <strong>Limited data mode</strong> — Analytics API unavailable. Showing estimates from cached application data only. EDD, screening, and periodic review stats are not available in this mode.
+  </div>
+
+  <!-- Filter Bar -->
+  <div class="card" style="padding:14px 18px;margin-bottom:18px;">
+    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+      <div style="min-width:130px;">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;display:block;margin-bottom:3px;">Date From</label>
+        <input type="date" class="form-select" id="rpt-date-from" style="padding:6px 10px;font-size:12px;">
+      </div>
+      <div style="min-width:130px;">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;display:block;margin-bottom:3px;">Date To</label>
+        <input type="date" class="form-select" id="rpt-date-to" style="padding:6px 10px;font-size:12px;">
+      </div>
+      <div style="min-width:120px;">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;display:block;margin-bottom:3px;">Status</label>
+        <select class="form-select" id="rpt-status" style="padding:6px 10px;font-size:12px;">
+          <option value="">All Statuses</option>
+          <option value="submitted">Submitted</option>
+          <option value="in_review">In Review</option>
+          <option value="compliance_review">Compliance Review</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+          <option value="edd_required">EDD Required</option>
+          <option value="withdrawn">Withdrawn</option>
+          <option value="under_review">Under Review</option>
+        </select>
+      </div>
+      <div style="min-width:110px;">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;display:block;margin-bottom:3px;">Risk Level</label>
+        <select class="form-select" id="rpt-risk-level" style="padding:6px 10px;font-size:12px;">
+          <option value="">All Risk Levels</option>
+          <option value="LOW">Low</option>
+          <option value="MEDIUM">Medium</option>
+          <option value="HIGH">High</option>
+          <option value="VERY_HIGH">Very High</option>
+        </select>
+      </div>
+      <div style="min-width:110px;">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;display:block;margin-bottom:3px;">Jurisdiction</label>
+        <select class="form-select" id="rpt-jurisdiction" style="padding:6px 10px;font-size:12px;">
+          <option value="">All Jurisdictions</option>
+        </select>
+      </div>
+      <div style="min-width:110px;">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;display:block;margin-bottom:3px;">Entity Type</label>
+        <select class="form-select" id="rpt-entity-type" style="padding:6px 10px;font-size:12px;">
+          <option value="">All Entity Types</option>
+        </select>
+      </div>
+      <div style="min-width:110px;">
+        <label style="font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text3);font-weight:600;display:block;margin-bottom:3px;">Reviewer</label>
+        <select class="form-select" id="rpt-reviewer" style="padding:6px 10px;font-size:12px;">
+          <option value="">All Reviewers</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:6px;align-items:flex-end;">
+        <button class="btn btn-primary btn-sm" onclick="renderReportsPage()" style="white-space:nowrap;">Apply Filters</button>
+        <button class="btn btn-outline btn-sm" onclick="clearReportFilters()" style="white-space:nowrap;">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab Navigation -->
+  <div style="display:flex;gap:0;border-bottom:2px solid var(--border1);margin-bottom:20px;" id="rpt-tab-bar">
+    <div class="rpt-tab active" data-tab="overview" onclick="switchReportTab('overview')">Overview</div>
+    <div class="rpt-tab" data-tab="operations" onclick="switchReportTab('operations')">Operations</div>
+    <div class="rpt-tab" data-tab="compliance" onclick="switchReportTab('compliance')">Compliance &amp; Risk</div>
+    <div class="rpt-tab" data-tab="data" onclick="switchReportTab('data')">Detailed Data</div>
+  </div>
+
+  <!-- Tab: Overview -->
+  <div class="rpt-tab-content active" id="rpt-panel-overview">
+    <!-- Executive KPI Cards -->
+    <div class="kpi-grid" style="margin-bottom:20px;" id="rpt-kpi-cards"></div>
+
+    <!-- Charts Row 1: Trends -->
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px;">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Applications Over Time</div>
+        <div id="rpt-chart-monthly" style="display:flex;align-items:flex-end;gap:6px;height:180px;padding-top:10px;"></div>
+        <div id="rpt-chart-monthly-legend" style="display:flex;gap:16px;justify-content:center;margin-top:10px;font-size:11px;color:var(--text3);"></div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Risk Distribution</div>
+        <div id="rpt-chart-risk" style="display:flex;flex-direction:column;gap:12px;"></div>
+      </div>
+    </div>
+
+    <!-- Charts Row 2: Status & Jurisdiction -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Status Breakdown</div>
+        <div id="rpt-chart-status" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Top Jurisdictions</div>
+        <div id="rpt-chart-jurisdiction" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Operations -->
+  <div class="rpt-tab-content" id="rpt-panel-operations">
+    <!-- Pipeline Funnel -->
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-title" style="margin-bottom:14px;">Pipeline by Workflow Stage</div>
+      <div id="rpt-chart-pipeline" style="display:flex;flex-direction:column;gap:10px;"></div>
+    </div>
+
+    <!-- Entity Types & Reviewer Workload -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Applications by Entity Type</div>
+        <div id="rpt-chart-entity-type" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Reviewer Workload</div>
+        <div id="rpt-chart-reviewer" style="overflow-x:auto;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Compliance & Risk -->
+  <div class="rpt-tab-content" id="rpt-panel-compliance">
+    <!-- Compliance KPI row -->
+    <div class="kpi-grid" style="margin-bottom:20px;" id="rpt-compliance-kpis"></div>
+
+    <!-- EDD & Screening -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">EDD Pipeline Breakdown</div>
+        <div id="rpt-chart-edd" style="display:flex;flex-direction:column;gap:10px;"></div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Screening Review Outcomes</div>
+        <div id="rpt-chart-screening" style="display:flex;flex-direction:column;gap:10px;"></div>
+      </div>
+    </div>
+
+    <!-- Periodic Reviews & Recent Decisions -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Periodic Review Status</div>
+        <div id="rpt-chart-periodic" style="display:flex;flex-direction:column;gap:10px;"></div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px;">Recent Decisions</div>
+        <div id="rpt-recent-decisions" style="overflow-x:auto;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Detailed Data -->
+  <div class="rpt-tab-content" id="rpt-panel-data">
     <div class="card">
-      <div class="card-title" style="margin-bottom:16px;">Risk Distribution</div>
-      <div id="report-risk-chart" style="display:flex;flex-direction:column;gap:10px;"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div class="card-title">Application Data <span id="rpt-table-count" style="font-weight:400;font-size:12px;color:var(--text3);"></span></div>
+        <button class="btn btn-outline btn-sm" onclick="exportReportsCSV()">📥 Export CSV</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="data-table" id="rpt-data-table">
+          <thead>
+            <tr>
+              <th style="cursor:pointer;" onclick="sortReportTable('ref')">Reference ▾</th>
+              <th style="cursor:pointer;" onclick="sortReportTable('company')">Company ▾</th>
+              <th style="cursor:pointer;" onclick="sortReportTable('status')">Status ▾</th>
+              <th style="cursor:pointer;" onclick="sortReportTable('risk')">Risk ▾</th>
+              <th style="cursor:pointer;" onclick="sortReportTable('score')">Score ▾</th>
+              <th style="cursor:pointer;" onclick="sortReportTable('country')">Jurisdiction ▾</th>
+              <th style="cursor:pointer;" onclick="sortReportTable('assigned')">Reviewer ▾</th>
+              <th style="cursor:pointer;" onclick="sortReportTable('date')">Submitted ▾</th>
+            </tr>
+          </thead>
+          <tbody id="rpt-data-tbody"></tbody>
+        </table>
+      </div>
+      <div id="rpt-table-pagination" style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:12px;color:var(--text3);"></div>
     </div>
   </div>
 </div>
@@ -2584,6 +2775,7 @@ async function loadFromAPI() {
           ref: a.ref,
           company: a.company_name,
           sector: a.sector || 'Unknown',
+          entityType: a.entity_type || '',
           risk: a.risk_level || 'LOW',
           score: a.risk_score || 0,
           lane: a.onboarding_lane || 'Standard Review',
@@ -3104,7 +3296,7 @@ function showView(name, navItem) {
   if (name === 'supervisor') refreshSupervisorDashboard();
   if (name === 'supervisor-audit') refreshSupervisorAudit();
   if (name === 'agent-health') renderAgentHealth();
-  if (name === 'reports') renderReportsFromData();
+  if (name === 'reports') renderReportsPage();
   if (name === 'settings') {
     try { checkAPIStatus(); } catch(e) {}
     try { loadSystemSettings(); } catch(e) {}
@@ -3227,65 +3419,571 @@ function updateDashboardMonitoringStats() {
   el = document.getElementById('dash-mon-alerts-note'); if (el) el.textContent = alertsCount > 0 ? openAlerts + ' open alert(s) in monitoring' : 'No active monitoring alerts';
 }
 
-function renderReportsFromData() {
-  var total = APPLICATIONS.length;
-  var approved = APPLICATIONS.filter(function(a) { return a.status === 'approved'; }).length;
-  var scores = APPLICATIONS.map(function(a) { return parseFloat(a.score) || 0; });
-  var avgScore = scores.length ? (scores.reduce(function(s,v){ return s+v; }, 0) / scores.length).toFixed(1) : '—';
-  var approvalRate = total > 0 ? Math.round(approved / total * 100) + '%' : '—';
+// ═══════════════════════════════════════════════════════════
+// REPORTS & ANALYTICS PAGE
+// ═══════════════════════════════════════════════════════════
+var RPT_DATA = null; // cached analytics data
+var RPT_TABLE_SORT = { field: 'date', dir: 'desc' };
+var RPT_TABLE_PAGE = 0;
+var RPT_TABLE_PAGE_SIZE = 25;
 
-  var el;
-  el = document.getElementById('report-ytd-count'); if (el) el.textContent = total;
-  el = document.getElementById('report-approval-rate'); if (el) el.textContent = approvalRate;
-  el = document.getElementById('report-avg-score'); if (el) el.textContent = avgScore;
+function switchReportTab(tabName) {
+  document.querySelectorAll('.rpt-tab').forEach(function(t) { t.classList.toggle('active', t.getAttribute('data-tab') === tabName); });
+  document.querySelectorAll('.rpt-tab-content').forEach(function(p) { p.classList.toggle('active', p.id === 'rpt-panel-' + tabName); });
+}
 
-  // Monthly trend chart — group applications by month
-  var monthCounts = {};
-  var monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function clearReportFilters() {
+  var ids = ['rpt-date-from','rpt-date-to','rpt-status','rpt-risk-level','rpt-jurisdiction','rpt-entity-type','rpt-reviewer'];
+  ids.forEach(function(id) { var el = document.getElementById(id); if (el) el.value = ''; });
+  renderReportsPage();
+}
+
+function populateReportFilterDropdowns() {
+  // Populate jurisdiction, entity type, reviewer from APPLICATIONS
+  var jurisdictions = {}, entityTypes = {}, reviewers = {};
   APPLICATIONS.forEach(function(a) {
-    if (!a.date) return;
-    var parts = a.date.split(/[-\/]/);
-    var m = parseInt(parts[1] || parts[0], 10);
-    var key = monthNames[(m - 1) % 12] || 'Unknown';
-    monthCounts[key] = (monthCounts[key] || 0) + 1;
+    if (a.country) jurisdictions[a.country] = true;
+    if (a.entityType) entityTypes[a.entityType] = true;
+    if (a.assigned && a.assigned !== 'Unassigned') reviewers[a.assigned] = a.assignedId || a.assigned;
   });
-  var chartEl = document.getElementById('report-monthly-chart');
-  if (chartEl) {
-    var months = Object.keys(monthCounts);
-    if (months.length === 0) months = ['No data'];
-    var maxCount = Math.max.apply(null, Object.values(monthCounts).concat([1]));
-    var html = '';
-    months.forEach(function(m) {
-      var count = monthCounts[m] || 0;
-      var h = Math.max(Math.round(count / maxCount * 130), 4);
-      html += '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;" title="' + m + ': ' + count + '">' +
-        '<div style="font-size:9px;color:var(--text3);">' + count + '</div>' +
-        '<div style="width:100%;background:var(--brand);border-radius:4px 4px 0 0;height:' + h + 'px;"></div>' +
-        '<span style="font-size:10px;color:var(--text3);">' + m + '</span></div>';
-    });
-    chartEl.innerHTML = html;
+  var jEl = document.getElementById('rpt-jurisdiction');
+  if (jEl) {
+    var curVal = jEl.value;
+    jEl.innerHTML = '<option value="">All Jurisdictions</option>';
+    Object.keys(jurisdictions).sort().forEach(function(j) { jEl.innerHTML += '<option value="' + escapeHtml(j) + '">' + escapeHtml(j) + '</option>'; });
+    jEl.value = curVal;
+  }
+  var eEl = document.getElementById('rpt-entity-type');
+  if (eEl) {
+    var curVal = eEl.value;
+    eEl.innerHTML = '<option value="">All Entity Types</option>';
+    Object.keys(entityTypes).sort().forEach(function(e) { eEl.innerHTML += '<option value="' + escapeHtml(e) + '">' + escapeHtml(e) + '</option>'; });
+    eEl.value = curVal;
+  }
+  var rEl = document.getElementById('rpt-reviewer');
+  if (rEl) {
+    var curVal = rEl.value;
+    rEl.innerHTML = '<option value="">All Reviewers</option>';
+    Object.keys(reviewers).sort().forEach(function(r) { rEl.innerHTML += '<option value="' + escapeHtml(reviewers[r]) + '">' + escapeHtml(r) + '</option>'; });
+    rEl.value = curVal;
+  }
+}
+
+function getReportFilters() {
+  return {
+    date_from: (document.getElementById('rpt-date-from') || {}).value || '',
+    date_to: (document.getElementById('rpt-date-to') || {}).value || '',
+    status: (document.getElementById('rpt-status') || {}).value || '',
+    risk_level: (document.getElementById('rpt-risk-level') || {}).value || '',
+    jurisdiction: (document.getElementById('rpt-jurisdiction') || {}).value || '',
+    entity_type: (document.getElementById('rpt-entity-type') || {}).value || '',
+    assigned_to: (document.getElementById('rpt-reviewer') || {}).value || ''
+  };
+}
+
+function renderReportsPage() {
+  populateReportFilterDropdowns();
+  var filters = getReportFilters();
+  var qs = Object.keys(filters).filter(function(k) { return filters[k]; }).map(function(k) { return k + '=' + encodeURIComponent(filters[k]); }).join('&');
+
+  // Fetch analytics from backend API
+  boApiCall('GET', '/reports/analytics' + (qs ? '?' + qs : '')).then(function(data) {
+    RPT_DATA = data;
+    var banner = document.getElementById('rpt-degraded-banner');
+    if (banner) banner.style.display = 'none';
+    renderReportOverview(data);
+    renderReportOperations(data);
+    renderReportCompliance(data);
+    renderReportDataTable(data);
+  }).catch(function() {
+    // Fallback: render from in-memory APPLICATIONS data
+    RPT_DATA = buildReportDataFromApplications(filters);
+    var banner = document.getElementById('rpt-degraded-banner');
+    if (banner) banner.style.display = 'block';
+    renderReportOverview(RPT_DATA);
+    renderReportOperations(RPT_DATA);
+    renderReportCompliance(RPT_DATA);
+    renderReportDataTable(RPT_DATA);
+  });
+}
+
+function buildReportDataFromApplications(filters) {
+  var apps = APPLICATIONS.slice();
+  // Apply client-side filters
+  if (filters.date_from) apps = apps.filter(function(a) { return a.date >= filters.date_from; });
+  if (filters.date_to) apps = apps.filter(function(a) { return a.date <= filters.date_to; });
+  if (filters.status) apps = apps.filter(function(a) { return a.status && a.status.toLowerCase().replace(/\s+/g,'_') === filters.status; });
+  if (filters.risk_level) apps = apps.filter(function(a) { return (a.risk || '').toUpperCase().replace(' ','_') === filters.risk_level; });
+  if (filters.jurisdiction) apps = apps.filter(function(a) { return a.country === filters.jurisdiction; });
+  if (filters.entity_type) apps = apps.filter(function(a) { return a.entityType === filters.entity_type; });
+  if (filters.assigned_to) apps = apps.filter(function(a) { return a.assignedId === filters.assigned_to || a.assigned === filters.assigned_to; });
+
+  var total = apps.length;
+  var approved = apps.filter(function(a) { return a.status === 'approved' || a.status === 'Approved'; }).length;
+  var rejected = apps.filter(function(a) { var s = (a.status||'').toLowerCase(); return s === 'rejected' || s === 'declined'; }).length;
+  var pending = apps.filter(function(a) { var s = (a.status||'').toLowerCase().replace(/[\s\u2013-]+/g,'_'); return s === 'pending' || s === 'application_submitted' || s === 'submitted' || s === 'under_review'; }).length;
+  var eddReq = apps.filter(function(a) { return (a.status||'').toLowerCase().replace(/\s+/g,'_') === 'edd_required'; }).length;
+  var withdrawn = apps.filter(function(a) { return (a.status||'').toLowerCase() === 'withdrawn'; }).length;
+  var scores = apps.map(function(a) { return parseFloat(a.score) || 0; });
+  var avgScore = scores.length ? parseFloat((scores.reduce(function(s,v) { return s+v; },0) / scores.length).toFixed(2)) : 0;
+
+  // Risk distribution
+  var riskDist = { LOW: 0, MEDIUM: 0, HIGH: 0, VERY_HIGH: 0 };
+  apps.forEach(function(a) { var r = (a.risk||'').toUpperCase().replace(' ','_'); if (riskDist[r] !== undefined) riskDist[r]++; });
+
+  // Status distribution
+  var statusDist = {};
+  apps.forEach(function(a) { var s = a.status || 'Unknown'; statusDist[s] = (statusDist[s]||0) + 1; });
+
+  // Monthly trends
+  var monthMap = {};
+  apps.forEach(function(a) {
+    if (!a.date) return;
+    var m = a.date.substring(0, 7); // YYYY-MM
+    if (!monthMap[m]) monthMap[m] = { month: m, submitted: 0, approved: 0, rejected: 0 };
+    monthMap[m].submitted++;
+    if (a.status === 'approved' || a.status === 'Approved') monthMap[m].approved++;
+    var sl = (a.status||'').toLowerCase();
+    if (sl === 'rejected' || sl === 'declined') monthMap[m].rejected++;
+  });
+  var monthlyTrends = Object.values(monthMap).sort(function(a,b) { return a.month < b.month ? -1 : 1; });
+
+  // Jurisdiction breakdown
+  var jurisdMap = {};
+  apps.forEach(function(a) { var c = a.country || 'Unknown'; jurisdMap[c] = (jurisdMap[c]||0) + 1; });
+  var jurisdBreakdown = Object.keys(jurisdMap).map(function(k) { return { country: k, count: jurisdMap[k] }; }).sort(function(a,b) { return b.count - a.count; }).slice(0,20);
+
+  // Entity type breakdown
+  var etMap = {};
+  apps.forEach(function(a) { var e = a.entityType || 'Unknown'; etMap[e] = (etMap[e]||0) + 1; });
+  var etBreakdown = Object.keys(etMap).map(function(k) { return { entity_type: k, count: etMap[k] }; }).sort(function(a,b) { return b.count - a.count; }).slice(0,20);
+
+  // Pipeline stages
+  var pipeline = {};
+  apps.forEach(function(a) { var s = a.status || 'unknown'; pipeline[s] = (pipeline[s]||0) + 1; });
+
+  // Reviewer workload
+  var revMap = {};
+  apps.forEach(function(a) {
+    if (!a.assigned || a.assigned === 'Unassigned') return;
+    if (!revMap[a.assigned]) revMap[a.assigned] = { assigned_to: a.assigned, count: 0, approved: 0, rejected: 0 };
+    revMap[a.assigned].count++;
+    if (a.status === 'approved' || a.status === 'Approved') revMap[a.assigned].approved++;
+    var sl = (a.status||'').toLowerCase();
+    if (sl === 'rejected' || sl === 'declined') revMap[a.assigned].rejected++;
+  });
+  var reviewerWorkload = Object.values(revMap).sort(function(a,b) { return b.count - a.count; });
+
+  return {
+    summary: { total: total, approved: approved, rejected: rejected, pending: pending, edd_required: eddReq, withdrawn: withdrawn, avg_risk_score: avgScore, approval_rate: total > 0 ? parseFloat((approved/total*100).toFixed(2)) : 0, rejection_rate: total > 0 ? parseFloat((rejected/total*100).toFixed(2)) : 0 },
+    risk_distribution: riskDist,
+    status_distribution: statusDist,
+    monthly_trends: monthlyTrends,
+    jurisdiction_breakdown: jurisdBreakdown,
+    entity_type_breakdown: etBreakdown,
+    pipeline_stages: pipeline,
+    edd_stats: { total: 0, active: 0, completed: 0, by_stage: {} },
+    screening_stats: { total_reviews: 0, cleared: 0, escalated: 0, follow_up: 0 },
+    periodic_review_stats: { total: 0, pending: 0, completed: 0, overdue: 0 },
+    reviewer_workload: reviewerWorkload,
+    recent_decisions: [],
+    _apps: apps
+  };
+}
+
+// ── Horizontal bar helper ──
+function rptHBar(label, value, maxVal, color, suffix) {
+  var pct = maxVal > 0 ? Math.round(value / maxVal * 100) : 0;
+  return '<div class="rpt-hbar-row">' +
+    '<div class="rpt-hbar-label" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</div>' +
+    '<div class="rpt-hbar-track"><div class="rpt-hbar-fill" style="width:' + pct + '%;background:' + color + ';"></div></div>' +
+    '<div class="rpt-hbar-val" style="color:' + color + ';">' + value + (suffix || '') + '</div>' +
+  '</div>';
+}
+
+// ── OVERVIEW TAB ──
+function renderReportOverview(data) {
+  var s = data.summary || {};
+
+  // KPI cards with movement indicators
+  var kpiHtml = '';
+  function kpiCard(label, value, color, cssClass, sub) {
+    return '<div class="kpi-card ' + (cssClass||'') + '">' +
+      '<div class="kpi-card-label">' + label + '</div>' +
+      '<div class="kpi-card-value" style="color:' + color + ';">' + value + '</div>' +
+      (sub ? '<div class="kpi-card-sub">' + sub + '</div>' : '') +
+    '</div>';
   }
 
-  // Risk distribution chart
-  var riskCounts = { LOW: 0, MEDIUM: 0, HIGH: 0, VERY_HIGH: 0 };
-  APPLICATIONS.forEach(function(a) {
-    var r = (a.risk || '').toUpperCase().replace(' ', '_');
-    if (riskCounts[r] !== undefined) riskCounts[r]++;
-    else riskCounts['MEDIUM']++;
-  });
-  var riskEl = document.getElementById('report-risk-chart');
+  kpiHtml += kpiCard('Total Applications', s.total || 0, 'var(--text1)', 'brand', '');
+  kpiHtml += kpiCard('Approved', s.approved || 0, 'var(--green)', 'green', s.approval_rate ? s.approval_rate.toFixed(1) + '% approval rate' : '');
+  kpiHtml += kpiCard('Rejected', s.rejected || 0, 'var(--red)', 'red', s.rejection_rate ? s.rejection_rate.toFixed(1) + '% rejection rate' : '');
+  kpiHtml += kpiCard('Pending', s.pending || 0, 'var(--amber)', 'amber', 'In progress');
+  kpiHtml += kpiCard('EDD Required', s.edd_required || 0, 'var(--brand)', 'purple', 'Enhanced due diligence');
+  kpiHtml += kpiCard('Avg. Risk Score', s.avg_risk_score ? s.avg_risk_score.toFixed(1) : '—', 'var(--text1)', 'blue', s.avg_risk_score >= 50 ? '⚠ Above threshold' : s.avg_risk_score > 0 ? 'Within normal range' : '');
+
+  var kpiEl = document.getElementById('rpt-kpi-cards');
+  if (kpiEl) kpiEl.innerHTML = kpiHtml;
+
+  // Monthly chart (stacked bars: submitted, approved, rejected)
+  var trends = data.monthly_trends || [];
+  var chartEl = document.getElementById('rpt-chart-monthly');
+  if (chartEl) {
+    if (trends.length === 0) {
+      chartEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px;">No trend data available</div>';
+    } else {
+      var maxVal = Math.max.apply(null, trends.map(function(t) { return t.submitted || 0; }).concat([1]));
+      var html = '';
+      trends.forEach(function(t) {
+        var sub = t.submitted || 0;
+        var app = t.approved || 0;
+        var rej = t.rejected || 0;
+        var hTotal = Math.max(Math.round(sub / maxVal * 150), 4);
+        var hApp = sub > 0 ? Math.round(app / sub * hTotal) : 0;
+        var hRej = sub > 0 ? Math.round(rej / sub * hTotal) : 0;
+        var hOther = hTotal - hApp - hRej;
+        var monthLabel = t.month ? t.month.substring(5) : '?';
+        var monthNames = {  '01':'Jan','02':'Feb','03':'Mar','04':'Apr','05':'May','06':'Jun','07':'Jul','08':'Aug','09':'Sep','10':'Oct','11':'Nov','12':'Dec'};
+        var dispMonth = monthNames[monthLabel] || monthLabel;
+        html += '<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;min-width:30px;" title="' + dispMonth + ': ' + sub + ' submitted, ' + app + ' approved, ' + rej + ' rejected">' +
+          '<div style="font-size:9px;color:var(--text3);font-weight:600;">' + sub + '</div>' +
+          '<div style="width:100%;display:flex;flex-direction:column;">' +
+            (hRej > 0 ? '<div style="width:100%;background:var(--red);border-radius:4px 4px 0 0;height:' + hRej + 'px;opacity:0.8;"></div>' : '') +
+            (hOther > 0 ? '<div style="width:100%;background:var(--brand);height:' + Math.max(hOther, 2) + 'px;' + (hRej === 0 ? 'border-radius:4px 4px 0 0;' : '') + 'opacity:0.5;"></div>' : '') +
+            (hApp > 0 ? '<div style="width:100%;background:var(--green);border-radius:0 0 4px 4px;height:' + hApp + 'px;opacity:0.8;"></div>' : '') +
+          '</div>' +
+          '<span style="font-size:10px;color:var(--text3);">' + dispMonth + '</span></div>';
+      });
+      chartEl.innerHTML = html;
+    }
+    var legendEl = document.getElementById('rpt-chart-monthly-legend');
+    if (legendEl) {
+      legendEl.innerHTML = '<span><span style="display:inline-block;width:10px;height:10px;background:var(--green);border-radius:2px;margin-right:4px;opacity:0.8;"></span>Approved</span>' +
+        '<span><span style="display:inline-block;width:10px;height:10px;background:var(--brand);border-radius:2px;margin-right:4px;opacity:0.5;"></span>Other</span>' +
+        '<span><span style="display:inline-block;width:10px;height:10px;background:var(--red);border-radius:2px;margin-right:4px;opacity:0.8;"></span>Rejected</span>';
+    }
+  }
+
+  // Risk distribution
+  var rd = data.risk_distribution || {};
+  var riskEl = document.getElementById('rpt-chart-risk');
   if (riskEl) {
-    var riskColors = { LOW: 'var(--green)', MEDIUM: 'var(--blue)', HIGH: 'var(--amber)', VERY_HIGH: 'var(--red)' };
-    var riskLabels = { LOW: 'Low Risk', MEDIUM: 'Medium Risk', HIGH: 'High Risk', VERY_HIGH: 'Very High Risk' };
+    var riskTotal = (rd.LOW||0) + (rd.MEDIUM||0) + (rd.HIGH||0) + (rd.VERY_HIGH||0);
+    var maxRisk = Math.max(rd.LOW||0, rd.MEDIUM||0, rd.HIGH||0, rd.VERY_HIGH||0, 1);
+    var riskItems = [
+      { key: 'LOW', label: 'Low', color: 'var(--green)', count: rd.LOW||0 },
+      { key: 'MEDIUM', label: 'Medium', color: 'var(--blue)', count: rd.MEDIUM||0 },
+      { key: 'HIGH', label: 'High', color: 'var(--amber)', count: rd.HIGH||0 },
+      { key: 'VERY_HIGH', label: 'Very High', color: 'var(--red)', count: rd.VERY_HIGH||0 }
+    ];
     var html = '';
-    ['LOW','MEDIUM','HIGH','VERY_HIGH'].forEach(function(r) {
-      var count = riskCounts[r];
-      var pct = total > 0 ? Math.round(count / total * 100) : 0;
-      html += '<div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;"><span>' + riskLabels[r] + '</span><span style="font-weight:600;">' + count + ' (' + pct + '%)</span></div>' +
-        '<div style="height:6px;background:var(--surface3);border-radius:3px;"><div style="width:' + pct + '%;height:100%;background:' + riskColors[r] + ';border-radius:3px;"></div></div></div>';
+    riskItems.forEach(function(ri) {
+      var pct = riskTotal > 0 ? Math.round(ri.count / riskTotal * 100) : 0;
+      html += '<div>' +
+        '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">' +
+          '<span style="display:flex;align-items:center;gap:6px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + ri.color + ';"></span>' + ri.label + '</span>' +
+          '<span style="font-weight:700;">' + ri.count + ' <span style="font-weight:400;color:var(--text3);">(' + pct + '%)</span></span>' +
+        '</div>' +
+        '<div style="height:8px;background:var(--surface3);border-radius:4px;"><div style="width:' + pct + '%;height:100%;background:' + ri.color + ';border-radius:4px;transition:width 0.6s ease;"></div></div>' +
+      '</div>';
     });
     riskEl.innerHTML = html;
   }
+
+  // Status breakdown
+  var sd = data.status_distribution || {};
+  var statusEl = document.getElementById('rpt-chart-status');
+  if (statusEl) {
+    var statusColors = { approved: 'var(--green)', rejected: 'var(--red)', submitted: 'var(--blue)', in_review: 'var(--brand)', compliance_review: 'var(--brand-light)', edd_required: '#7c3aed', pending: 'var(--amber)', withdrawn: 'var(--text3)', under_review: 'var(--amber)', kyc_documents: 'var(--blue)' };
+    var statusEntries = Object.keys(sd).map(function(k) { return { status: k, count: sd[k] }; }).sort(function(a,b) { return b.count - a.count; });
+    var maxStatus = statusEntries.length > 0 ? statusEntries[0].count : 1;
+    var html = '';
+    statusEntries.forEach(function(se) {
+      var color = statusColors[se.status.toLowerCase().replace(/\s+/g,'_')] || 'var(--text3)';
+      var label = se.status.replace(/_/g,' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+      html += rptHBar(label, se.count, maxStatus, color);
+    });
+    statusEl.innerHTML = html || '<div style="font-size:13px;color:var(--text3);">No status data</div>';
+  }
+
+  // Jurisdiction breakdown
+  var jb = data.jurisdiction_breakdown || [];
+  var jurisdEl = document.getElementById('rpt-chart-jurisdiction');
+  if (jurisdEl) {
+    var maxJurisd = jb.length > 0 ? jb[0].count : 1;
+    var html = '';
+    jb.slice(0, 10).forEach(function(j) {
+      html += rptHBar(j.country || 'Unknown', j.count, maxJurisd, 'var(--brand)');
+    });
+    jurisdEl.innerHTML = html || '<div style="font-size:13px;color:var(--text3);">No jurisdiction data</div>';
+  }
+}
+
+// ── OPERATIONS TAB ──
+function renderReportOperations(data) {
+  // Pipeline by stage
+  var pipeline = data.pipeline_stages || {};
+  var pipelineEl = document.getElementById('rpt-chart-pipeline');
+  if (pipelineEl) {
+    var stageOrder = ['submitted','prescreening_submitted','in_review','kyc_documents','compliance_review','under_review','edd_required','approved','rejected','withdrawn'];
+    var stageLabels = { submitted:'Submitted', prescreening_submitted:'Pre-screening', in_review:'In Review', kyc_documents:'KYC Documents', compliance_review:'Compliance Review', under_review:'Under Review', edd_required:'EDD Required', approved:'Approved', rejected:'Rejected', withdrawn:'Withdrawn' };
+    var stageColors = { submitted:'var(--blue)', prescreening_submitted:'#6366f1', in_review:'var(--brand)', kyc_documents:'#8b5cf6', compliance_review:'var(--brand-light)', under_review:'var(--amber)', edd_required:'#7c3aed', approved:'var(--green)', rejected:'var(--red)', withdrawn:'var(--text3)' };
+
+    var entries = [];
+    stageOrder.forEach(function(s) { if (pipeline[s]) entries.push({ stage: s, count: pipeline[s] }); });
+    // Add any stages not in stageOrder
+    Object.keys(pipeline).forEach(function(s) { if (stageOrder.indexOf(s) === -1 && pipeline[s] > 0) entries.push({ stage: s, count: pipeline[s] }); });
+
+    var maxPipeline = entries.reduce(function(m, e) { return Math.max(m, e.count); }, 1);
+    var html = '';
+    entries.forEach(function(e) {
+      var label = stageLabels[e.stage] || e.stage.replace(/_/g,' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+      var color = stageColors[e.stage] || 'var(--text3)';
+      html += rptHBar(label, e.count, maxPipeline, color);
+    });
+    pipelineEl.innerHTML = html || '<div style="font-size:13px;color:var(--text3);">No pipeline data</div>';
+  }
+
+  // Entity type breakdown
+  var etb = data.entity_type_breakdown || [];
+  var etEl = document.getElementById('rpt-chart-entity-type');
+  if (etEl) {
+    var maxEt = etb.length > 0 ? etb[0].count : 1;
+    var html = '';
+    etb.slice(0, 10).forEach(function(e) {
+      html += rptHBar(e.entity_type || 'Unknown', e.count, maxEt, 'var(--brand)');
+    });
+    etEl.innerHTML = html || '<div style="font-size:13px;color:var(--text3);">No entity type data</div>';
+  }
+
+  // Reviewer workload table
+  var rw = data.reviewer_workload || [];
+  var rwEl = document.getElementById('rpt-chart-reviewer');
+  if (rwEl) {
+    if (rw.length === 0) {
+      rwEl.innerHTML = '<div style="font-size:13px;color:var(--text3);padding:10px;">No reviewer data available</div>';
+    } else {
+      var maxWorkload = rw.reduce(function(m, r) { return Math.max(m, r.count); }, 1);
+      var html = '<table class="kpi-mini-table"><thead><tr><th>Reviewer</th><th style="text-align:center;">Total</th><th style="text-align:center;">Approved</th><th style="text-align:center;">Rejected</th><th style="width:40%;">Workload</th></tr></thead><tbody>';
+      rw.forEach(function(r) {
+        var pct = Math.round(r.count / maxWorkload * 100);
+        var wColor = pct > 85 ? 'var(--red)' : pct > 65 ? 'var(--amber)' : 'var(--green)';
+        html += '<tr>' +
+          '<td style="font-weight:600;">' + escapeHtml(r.assigned_to) + '</td>' +
+          '<td style="text-align:center;">' + r.count + '</td>' +
+          '<td style="text-align:center;color:var(--green);">' + (r.approved||0) + '</td>' +
+          '<td style="text-align:center;color:var(--red);">' + (r.rejected||0) + '</td>' +
+          '<td><div style="display:flex;align-items:center;gap:8px;"><div style="flex:1;height:6px;background:var(--surface3);border-radius:3px;"><div style="width:' + pct + '%;height:100%;background:' + wColor + ';border-radius:3px;"></div></div><span style="font-size:11px;font-weight:600;color:' + wColor + ';">' + pct + '%</span></div></td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+      rwEl.innerHTML = html;
+    }
+  }
+}
+
+// ── COMPLIANCE TAB ──
+function renderReportCompliance(data) {
+  var edd = data.edd_stats || {};
+  var scr = data.screening_stats || {};
+  var pr = data.periodic_review_stats || {};
+
+  // Compliance KPIs
+  var kpiEl = document.getElementById('rpt-compliance-kpis');
+  if (kpiEl) {
+    var html = '';
+    html += '<div class="kpi-card purple"><div class="kpi-card-label">EDD Cases</div><div class="kpi-card-value" style="color:#7c3aed;">' + (edd.total||0) + '</div><div class="kpi-card-sub">' + (edd.active||0) + ' active, ' + (edd.completed||0) + ' completed</div></div>';
+    html += '<div class="kpi-card blue"><div class="kpi-card-label">Screening Reviews</div><div class="kpi-card-value" style="color:var(--blue);">' + (scr.total_reviews||0) + '</div><div class="kpi-card-sub">' + (scr.cleared||0) + ' cleared, ' + (scr.escalated||0) + ' escalated</div></div>';
+    html += '<div class="kpi-card amber"><div class="kpi-card-label">Periodic Reviews</div><div class="kpi-card-value" style="color:var(--amber);">' + (pr.total||0) + '</div><div class="kpi-card-sub">' + (pr.pending||0) + ' pending, ' + (pr.overdue||0) + ' overdue</div></div>';
+    html += '<div class="kpi-card ' + (pr.overdue > 0 ? 'red' : 'green') + '"><div class="kpi-card-label">Overdue Reviews</div><div class="kpi-card-value" style="color:' + (pr.overdue > 0 ? 'var(--red)' : 'var(--green)') + ';">' + (pr.overdue||0) + '</div><div class="kpi-card-sub">' + (pr.overdue > 0 ? '⚠ Action required' : '✓ All on schedule') + '</div></div>';
+    kpiEl.innerHTML = html;
+  }
+
+  // EDD breakdown by stage
+  var eddEl = document.getElementById('rpt-chart-edd');
+  if (eddEl) {
+    var byStage = edd.by_stage || {};
+    var stageEntries = Object.keys(byStage).map(function(k) { return { stage: k, count: byStage[k] }; }).sort(function(a,b) { return b.count - a.count; });
+    if (stageEntries.length === 0 && edd.total > 0) {
+      stageEntries = [{ stage: 'Total', count: edd.total }];
+    }
+    var maxStage = stageEntries.reduce(function(m,e) { return Math.max(m, e.count); }, 1);
+    var eddColors = { triggered:'var(--amber)', information_gathering:'var(--blue)', analysis:'var(--brand)', pending_senior_review:'#7c3aed', edd_approved:'var(--green)', edd_rejected:'var(--red)' };
+    var html = '';
+    stageEntries.forEach(function(e) {
+      var label = e.stage.replace(/_/g,' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+      var color = eddColors[e.stage] || 'var(--text3)';
+      html += rptHBar(label, e.count, maxStage, color);
+    });
+    eddEl.innerHTML = html || '<div style="font-size:13px;color:var(--text3);">No EDD cases found</div>';
+  }
+
+  // Screening outcomes
+  var scrEl = document.getElementById('rpt-chart-screening');
+  if (scrEl) {
+    var scrTotal = Math.max(scr.total_reviews || 0, 1);
+    var html = '';
+    html += rptHBar('Cleared', scr.cleared||0, scrTotal, 'var(--green)');
+    html += rptHBar('Escalated', scr.escalated||0, scrTotal, 'var(--red)');
+    html += rptHBar('Follow-up', scr.follow_up||0, scrTotal, 'var(--amber)');
+    scrEl.innerHTML = (scr.total_reviews||0) > 0 ? html : '<div style="font-size:13px;color:var(--text3);">No screening reviews found</div>';
+  }
+
+  // Periodic review status
+  var prEl = document.getElementById('rpt-chart-periodic');
+  if (prEl) {
+    var prTotal = Math.max(pr.total || 0, 1);
+    var html = '';
+    html += rptHBar('Pending', pr.pending||0, prTotal, 'var(--amber)');
+    html += rptHBar('Completed', pr.completed||0, prTotal, 'var(--green)');
+    html += rptHBar('Overdue', pr.overdue||0, prTotal, 'var(--red)');
+    prEl.innerHTML = (pr.total||0) > 0 ? html : '<div style="font-size:13px;color:var(--text3);">No periodic reviews found</div>';
+  }
+
+  // Recent decisions table
+  var rdList = data.recent_decisions || [];
+  var rdEl = document.getElementById('rpt-recent-decisions');
+  if (rdEl) {
+    if (rdList.length === 0) {
+      rdEl.innerHTML = '<div style="font-size:13px;color:var(--text3);padding:10px;">No recent decisions recorded</div>';
+    } else {
+      var html = '<table class="kpi-mini-table"><thead><tr><th>Reference</th><th>Company</th><th>Decision</th><th>Risk</th><th>Source</th><th>Date</th></tr></thead><tbody>';
+      rdList.slice(0, 10).forEach(function(d) {
+        var decLabel = (d.decision_type||'').replace(/_/g,' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+        var decColor = d.decision_type === 'approve' ? 'var(--green)' : d.decision_type === 'reject' ? 'var(--red)' : 'var(--text2)';
+        var riskBadgeHtml = d.risk_level ? riskBadge(d.risk_level) : '—';
+        var ts = d.timestamp ? d.timestamp.split('T')[0] || d.timestamp.split(' ')[0] : '—';
+        html += '<tr>' +
+          '<td style="font-weight:600;cursor:pointer;color:var(--brand);" onclick="openAppDetail(\'' + escapeHtml(d.ref) + '\')">' + escapeHtml(d.ref) + '</td>' +
+          '<td>' + escapeHtml(d.company_name || '—') + '</td>' +
+          '<td style="font-weight:600;color:' + decColor + ';">' + decLabel + '</td>' +
+          '<td>' + riskBadgeHtml + '</td>' +
+          '<td style="font-size:11px;">' + escapeHtml(d.source||'—') + '</td>' +
+          '<td style="font-size:11px;color:var(--text3);">' + ts + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+      rdEl.innerHTML = html;
+    }
+  }
+}
+
+// ── DETAILED DATA TAB ──
+function renderReportDataTable() {
+  var filters = getReportFilters();
+  var apps = APPLICATIONS.slice();
+
+  // Apply filters client-side for the table
+  if (filters.date_from) apps = apps.filter(function(a) { return a.date >= filters.date_from; });
+  if (filters.date_to) apps = apps.filter(function(a) { return a.date <= filters.date_to; });
+  if (filters.status) apps = apps.filter(function(a) { return a.status && a.status.toLowerCase().replace(/\s+/g,'_') === filters.status; });
+  if (filters.risk_level) apps = apps.filter(function(a) { return (a.risk || '').toUpperCase().replace(' ','_') === filters.risk_level; });
+  if (filters.jurisdiction) apps = apps.filter(function(a) { return a.country === filters.jurisdiction; });
+  if (filters.entity_type) apps = apps.filter(function(a) { return a.entityType === filters.entity_type; });
+  if (filters.assigned_to) apps = apps.filter(function(a) { return a.assignedId === filters.assigned_to || a.assigned === filters.assigned_to; });
+
+  // Sort
+  var sf = RPT_TABLE_SORT.field;
+  var dir = RPT_TABLE_SORT.dir === 'asc' ? 1 : -1;
+  apps.sort(function(a, b) {
+    var va = a[sf] || '', vb = b[sf] || '';
+    if (sf === 'score') { va = parseFloat(va) || 0; vb = parseFloat(vb) || 0; }
+    return va < vb ? -dir : va > vb ? dir : 0;
+  });
+
+  var totalCount = apps.length;
+  var startIdx = RPT_TABLE_PAGE * RPT_TABLE_PAGE_SIZE;
+  var pageApps = apps.slice(startIdx, startIdx + RPT_TABLE_PAGE_SIZE);
+
+  // Count display
+  var countEl = document.getElementById('rpt-table-count');
+  if (countEl) countEl.textContent = '(' + totalCount + ' records)';
+
+  // Build table rows
+  var tbody = document.getElementById('rpt-data-tbody');
+  if (tbody) {
+    var html = '';
+    if (pageApps.length === 0) {
+      html = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3);">No records match the current filters</td></tr>';
+    } else {
+      pageApps.forEach(function(a) {
+        html += '<tr style="cursor:pointer;" onclick="openAppDetail(\'' + escapeHtml(a.ref) + '\')">' +
+          '<td style="font-weight:600;color:var(--brand);">' + escapeHtml(a.ref) + '</td>' +
+          '<td>' + escapeHtml(a.company || '') + '</td>' +
+          '<td>' + statusBadge(a.status) + '</td>' +
+          '<td>' + riskBadge(a.risk) + '</td>' +
+          '<td style="text-align:center;font-weight:600;">' + (a.score || '—') + '</td>' +
+          '<td>' + escapeHtml(a.country || '—') + '</td>' +
+          '<td>' + escapeHtml(a.assigned || 'Unassigned') + '</td>' +
+          '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(a.date || '—') + '</td>' +
+        '</tr>';
+      });
+    }
+    tbody.innerHTML = html;
+  }
+
+  // Pagination
+  var paginationEl = document.getElementById('rpt-table-pagination');
+  if (paginationEl) {
+    var totalPages = Math.max(Math.ceil(totalCount / RPT_TABLE_PAGE_SIZE), 1);
+    var currentPage = RPT_TABLE_PAGE + 1;
+    paginationEl.innerHTML = '<span>Showing ' + (totalCount > 0 ? startIdx + 1 : 0) + '-' + Math.min(startIdx + RPT_TABLE_PAGE_SIZE, totalCount) + ' of ' + totalCount + '</span>' +
+      '<div style="display:flex;gap:6px;">' +
+        '<button class="btn btn-outline btn-sm" ' + (RPT_TABLE_PAGE === 0 ? 'disabled' : '') + ' onclick="RPT_TABLE_PAGE=0;renderReportDataTable();">«</button>' +
+        '<button class="btn btn-outline btn-sm" ' + (RPT_TABLE_PAGE === 0 ? 'disabled' : '') + ' onclick="RPT_TABLE_PAGE--;renderReportDataTable();">‹</button>' +
+        '<span style="padding:5px 10px;font-weight:600;">' + currentPage + ' / ' + totalPages + '</span>' +
+        '<button class="btn btn-outline btn-sm" ' + (currentPage >= totalPages ? 'disabled' : '') + ' onclick="RPT_TABLE_PAGE++;renderReportDataTable();">›</button>' +
+        '<button class="btn btn-outline btn-sm" ' + (currentPage >= totalPages ? 'disabled' : '') + ' onclick="RPT_TABLE_PAGE=' + (totalPages-1) + ';renderReportDataTable();">»</button>' +
+      '</div>';
+  }
+}
+
+function sortReportTable(field) {
+  if (RPT_TABLE_SORT.field === field) {
+    RPT_TABLE_SORT.dir = RPT_TABLE_SORT.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    RPT_TABLE_SORT.field = field;
+    RPT_TABLE_SORT.dir = 'asc';
+  }
+  RPT_TABLE_PAGE = 0;
+  renderReportDataTable();
+}
+
+function exportReportsCSV() {
+  var filters = getReportFilters();
+  var filterParams = Object.keys(filters).filter(function(k) { return filters[k]; }).map(function(k) { return k + '=' + encodeURIComponent(filters[k]); }).join('&');
+  var baseFields = 'fields=ref,company_name,status,risk_level,risk_score,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count';
+  var url = '/reports/generate?' + baseFields + (filterParams ? '&' + filterParams : '');
+  boApiCall('GET', url).then(function(resp) {
+    if (!resp.data || resp.data.length === 0) {
+      showToast('No data to export', 'warning');
+      return;
+    }
+    var fields = resp.fields;
+    var csv = fields.join(',') + '\n';
+    resp.data.forEach(function(row) {
+      var line = fields.map(function(f) {
+        var val = row[f] !== undefined && row[f] !== null ? String(row[f]) : '';
+        if (val.indexOf(',') >= 0 || val.indexOf('"') >= 0 || val.indexOf('\n') >= 0) {
+          val = '"' + val.replace(/"/g, '""') + '"';
+        }
+        return val;
+      });
+      csv += line.join(',') + '\n';
+    });
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'regmind_report_' + new Date().toISOString().split('T')[0] + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('📥 Report exported: ' + resp.data.length + ' records', 'success');
+  }).catch(function(err) {
+    showToast('Export failed: ' + (err.message || err), 'error');
+  });
 }
 
 function updateOnboardingLanes() {
