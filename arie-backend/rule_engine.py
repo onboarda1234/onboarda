@@ -190,24 +190,60 @@ def load_risk_config():
 # ══════════════════════════════════════════════════════════
 
 def classify_country(country_name, config_country_scores=None):
-    """Return risk score 1-4 for a country. Uses DB config if provided, else hardcoded FATF lists."""
+    """Return risk score 1-4 for a country. Uses DB config if provided, else hardcoded FATF lists.
+
+    Handles common prefixes like "Republic of Mauritius" → "mauritius",
+    and aliases like "England & Wales" → "united kingdom".
+    """
     if not country_name:
         return 2
     c = country_name.lower().strip()
-    # DB config lookup (canonical source)
-    if config_country_scores:
-        score = config_country_scores.get(c)
-        if score is not None:
-            return int(score)
-    # Hardcoded fallback
-    if c in SANCTIONED:
-        return 4
-    if c in FATF_BLACK:
-        return 4
-    if c in FATF_GREY:
-        return 3
-    if c in LOW_RISK:
-        return 1
+
+    # Apply known aliases first
+    _ALIASES = {
+        "uk": "united kingdom", "gb": "united kingdom", "gbr": "united kingdom",
+        "great britain": "united kingdom", "britain": "united kingdom",
+        "england": "united kingdom", "scotland": "united kingdom",
+        "wales": "united kingdom", "northern ireland": "united kingdom",
+        "england and wales": "united kingdom", "england & wales": "united kingdom",
+        "us": "united states", "usa": "united states",
+        "united states of america": "united states",
+        "uae": "united arab emirates", "emirates": "united arab emirates",
+        "korea": "south korea", "republic of korea": "south korea",
+        "bvi": "british virgin islands",
+        "hk": "hong kong", "sg": "singapore",
+    }
+    c = _ALIASES.get(c, c)
+
+    def _lookup(name):
+        """Check name against all risk lists. Returns score or None."""
+        if config_country_scores:
+            score = config_country_scores.get(name)
+            if score is not None:
+                return int(score)
+        if name in SANCTIONED:
+            return 4
+        if name in FATF_BLACK:
+            return 4
+        if name in FATF_GREY:
+            return 3
+        if name in LOW_RISK:
+            return 1
+        return None
+
+    # Try exact match first (handles "democratic republic of congo" etc.)
+    result = _lookup(c)
+    if result is not None:
+        return result
+
+    # Strip common country prefixes and retry
+    for prefix in ("republic of ", "state of ", "the ", "federation of "):
+        if c.startswith(prefix) and len(c) > len(prefix):
+            stripped = c[len(prefix):].strip()
+            result = _lookup(stripped)
+            if result is not None:
+                return result
+
     return 2  # standard
 
 

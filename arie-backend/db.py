@@ -96,8 +96,16 @@ class DBConnection:
             return sql
         # 1. Placeholders: ? -> %s
         sql = sql.replace('?', '%s')
-        # 2. Datetime: datetime('now') -> NOW()
+        # 2. Datetime: datetime('now') -> NOW(), date('now') -> CURRENT_DATE
         sql = sql.replace("datetime('now')", "NOW()")
+        sql = sql.replace("date('now')", "CURRENT_DATE")
+        # 2a. strftime('%Y-%m', col) -> to_char(col, 'YYYY-MM')  (SQLite→PostgreSQL)
+        import re
+        sql = re.sub(
+            r"strftime\(\s*'%Y-%m'\s*,\s*([^)]+)\)",
+            r"to_char(\1, 'YYYY-MM')",
+            sql
+        )
         # 2b. rowid -> id (rowid is SQLite-specific)
         sql = sql.replace("ORDER BY rowid", "ORDER BY id")
         # 2c. AUTOINCREMENT -> SERIAL (SQLite vs PostgreSQL auto-increment)
@@ -290,7 +298,7 @@ def _get_postgres_schema() -> str:
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
             'pre_approval_review','pre_approved',
-            'kyc_documents','kyc_submitted','compliance_review','in_review',
+            'kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
@@ -615,6 +623,27 @@ def _get_postgres_schema() -> str:
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Transaction Ledger (Agent 8: Behaviour & Risk Drift Detection)
+    CREATE TABLE IF NOT EXISTS transactions (
+        id SERIAL PRIMARY KEY,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        transaction_ref TEXT,
+        transaction_date TIMESTAMP NOT NULL,
+        amount NUMERIC(18, 2) NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound','internal')),
+        counterparty_name TEXT,
+        counterparty_country TEXT,
+        product_type TEXT,
+        channel TEXT,
+        description TEXT,
+        risk_flags JSONB DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_transactions_application_id ON transactions(application_id);
+    CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_transactions_counterparty_country ON transactions(counterparty_country);
+
     -- Enhanced Due Diligence (EDD) Cases
     CREATE TABLE IF NOT EXISTS edd_cases (
         id SERIAL PRIMARY KEY,
@@ -870,7 +899,7 @@ def _get_sqlite_schema() -> str:
         status TEXT DEFAULT 'draft' CHECK(status IN (
             'draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
             'pre_approval_review','pre_approved',
-            'kyc_documents','kyc_submitted','compliance_review','in_review',
+            'kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
             'edd_required','approved','rejected','rmi_sent','withdrawn'
         )),
         assigned_to TEXT REFERENCES users(id),
@@ -1198,6 +1227,27 @@ def _get_sqlite_schema() -> str:
         updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Transaction Ledger (Agent 8: Behaviour & Risk Drift Detection)
+    CREATE TABLE IF NOT EXISTS transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        transaction_ref TEXT,
+        transaction_date TEXT NOT NULL,
+        amount REAL NOT NULL,
+        currency TEXT DEFAULT 'USD',
+        direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound','internal')),
+        counterparty_name TEXT,
+        counterparty_country TEXT,
+        product_type TEXT,
+        channel TEXT,
+        description TEXT,
+        risk_flags TEXT DEFAULT '[]',
+        created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_transactions_application_id ON transactions(application_id);
+    CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_transactions_counterparty_country ON transactions(counterparty_country);
+
     -- Enhanced Due Diligence (EDD) Cases
     CREATE TABLE IF NOT EXISTS edd_cases (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1494,21 +1544,7 @@ def init_db():
             except Exception as e:
                 logger.warning(f"Demo app stubs in init_db skipped: {e}")
 
-        # ── Fix: Add 'submitted' to applications status CHECK constraint (PostgreSQL only) ──
-        if USE_POSTGRESQL:
-            try:
-                db.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_status_check")
-                db.execute("""ALTER TABLE applications ADD CONSTRAINT applications_status_check
-                    CHECK(status IN ('draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
-                    'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review','in_review',
-                    'edd_required','approved','rejected','rmi_sent','withdrawn'))""")
-                db.commit()
-            except Exception as e:
-                logger.debug(f"Status constraint update: {e}")
-                try:
-                    db.conn.rollback()
-                except Exception:
-                    pass
+
     except Exception as e:
         logger.error(f"Error initializing database schema: {e}")
         raise
@@ -2095,6 +2131,41 @@ def _run_migrations(db: DBConnection):
                     db.rollback()
                 except Exception:
                     pass
+
+    # Migration v2.12: Add 'under_review' to applications status CHECK constraint
+    # Resolves inconsistency where server.py state transitions reference 'under_review'
+    # but the DB CHECK constraint did not include it, causing IntegrityError on transition.
+    if USE_POSTGRESQL:
+        try:
+            constraint_row = db.execute("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'applications_status_check'
+                  AND conrelid = 'applications'::regclass
+            """).fetchone()
+            constraint_def = None
+            if constraint_row:
+                if isinstance(constraint_row, dict):
+                    constraint_def = constraint_row.get("pg_get_constraintdef")
+                else:
+                    constraint_def = constraint_row[0]
+
+            if constraint_def and "'under_review'" in constraint_def:
+                logger.info("Migration v2.12: applications status CHECK constraint already includes 'under_review'")
+            else:
+                db.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_status_check")
+                db.execute("""ALTER TABLE applications ADD CONSTRAINT applications_status_check
+                    CHECK(status IN ('draft','submitted','prescreening_submitted','pricing_review','pricing_accepted',
+                    'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
+                    'edd_required','approved','rejected','rmi_sent','withdrawn'))""")
+                db.commit()
+                logger.info("Migration v2.12: Added 'under_review' to applications status CHECK constraint")
+        except Exception as e:
+            logger.debug("Migration v2.12 status constraint update: %s", e)
+            try:
+                db.conn.rollback()
+            except Exception:
+                pass
 
 
 def _populate_default_scoring_config(db: 'DBConnection'):

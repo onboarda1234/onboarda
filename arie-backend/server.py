@@ -145,12 +145,13 @@ from prescreening.risk_inputs import build_prescreening_risk_input
 
 # Layered document verification engine (Agent 1)
 try:
-    from document_verification import verify_document_layered, to_legacy_result
+    from document_verification import verify_document_layered, to_legacy_result, _canonicalise_country
     HAS_DOC_VERIFICATION = True
 except ImportError:
     HAS_DOC_VERIFICATION = False
     verify_document_layered = None
     to_legacy_result = None
+    _canonicalise_country = None
 
 # Sprint 3: Server-side PDF generation
 try:
@@ -595,13 +596,56 @@ def get_application_parties(db, application_id):
     return directors, ubos, intermediaries
 
 
+def _validate_date_of_birth(dob_str):
+    """Validate a date of birth string. Returns the cleaned date string or empty string if invalid.
+    Rejects future dates and implausible ages (< 16 or > 120 years old).
+    """
+    if not dob_str or not isinstance(dob_str, str):
+        return ""
+    dob_str = dob_str.strip()
+    if not dob_str:
+        return ""
+    try:
+        parsed = datetime.strptime(dob_str, "%Y-%m-%d").date()
+    except ValueError:
+        # Try other common formats
+        for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y"):
+            try:
+                parsed = datetime.strptime(dob_str, fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
+            return ""  # Unparseable → store empty rather than garbage
+    today = datetime.now(timezone.utc).date()
+    if parsed > today:
+        return ""  # Future date → invalid
+    from datetime import date as _date
+    age_years = (today - parsed).days / 365.25
+    if age_years < 16 or age_years > 120:
+        return ""  # Implausible age → store empty
+    return parsed.isoformat()  # Normalize to YYYY-MM-DD
+
+
 def store_application_parties(db, application_id, directors=None, ubos=None, intermediaries=None):
+    """Store party records with validation of DOB and ownership_pct."""
     if directors is not None:
         db.execute("DELETE FROM directors WHERE application_id = ?", (application_id,))
         for director in directors:
             full_name = build_full_name(director)
             if not full_name:
                 continue
+            # Validate DOB if provided
+            dob = director.get("date_of_birth", "")
+            if dob:
+                dob = _validate_date_of_birth(dob)
+            # W2-6: Normalize nationality if canonical lookup is available
+            raw_nat = director.get("nationality", "")
+            if raw_nat and _canonicalise_country:
+                canon = _canonicalise_country(raw_nat)
+                if canon:
+                    director = dict(director)
+                    director["nationality"] = canon
             encrypted = encrypt_pii_fields(director, PII_FIELDS_DIRECTORS)
             db.execute("""
                 INSERT INTO directors (
@@ -617,7 +661,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 encrypted.get("nationality", ""),
                 normalize_is_pep(director.get("is_pep", "No")),
                 json.dumps(parse_json_field(director.get("pep_declaration"), {})),
-                director.get("date_of_birth", ""),
+                dob,
             ))
     if ubos is not None:
         db.execute("DELETE FROM ubos WHERE application_id = ?", (application_id,))
@@ -625,6 +669,24 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             full_name = build_full_name(ubo)
             if not full_name:
                 continue
+            # Validate DOB if provided
+            dob = ubo.get("date_of_birth", "")
+            if dob:
+                dob = _validate_date_of_birth(dob)
+            # Validate ownership_pct range (0–100)
+            raw_pct = ubo.get("ownership_pct", 0)
+            try:
+                pct_val = float(raw_pct) if raw_pct else 0.0
+            except (ValueError, TypeError):
+                pct_val = 0.0
+            pct_val = max(0.0, min(100.0, pct_val))
+            # W2-6: Normalize nationality if canonical lookup is available
+            raw_nat = ubo.get("nationality", "")
+            if raw_nat and _canonicalise_country:
+                canon = _canonicalise_country(raw_nat)
+                if canon:
+                    ubo = dict(ubo)
+                    ubo["nationality"] = canon
             encrypted = encrypt_pii_fields(ubo, PII_FIELDS_UBOS)
             db.execute("""
                 INSERT INTO ubos (
@@ -638,10 +700,10 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 ubo.get("last_name", ""),
                 full_name,
                 encrypted.get("nationality", ""),
-                encrypted.get("ownership_pct", 0),
+                pct_val,
                 normalize_is_pep(ubo.get("is_pep", "No")),
                 json.dumps(parse_json_field(ubo.get("pep_declaration"), {})),
-                ubo.get("date_of_birth", ""),
+                dob,
             ))
     if intermediaries is not None:
         db.execute("DELETE FROM intermediaries WHERE application_id = ?", (application_id,))
@@ -1464,16 +1526,41 @@ class ApplicationsHandler(BaseHandler):
         if not company_name:
             return self.error("Registered entity name is required.", 400)
 
+        # W3: BRN basic validation — if provided, allow letters, numbers, internal spaces, dashes, dots, and slashes
+        brn = first_non_empty(data.get("brn"), prescreening_data.get("brn")) or ""
+        brn = re.sub(r'\s+', ' ', brn.strip())  # collapse multiple spaces
+        if brn and not re.match(r'^[A-Za-z0-9\-/.][A-Za-z0-9\-/. ]{0,28}[A-Za-z0-9\-/.]$', brn):
+            return self.error("Invalid Business Registration Number format. Please use 2-30 characters consisting of letters, numbers, spaces, dashes, dots, or slashes.", 400)
+
         db = get_db()
+
+        # W3/GATE-03: Prevent duplicate active applications for same client + company
+        # Normalize company_name for comparison to prevent bypass via case/whitespace variants
+        client_id = user["sub"] if user["type"] == "client" else data.get("client_id")
+        if client_id and company_name:
+            normalized_name = re.sub(r'\s+', ' ', company_name.strip()).lower()
+            existing = db.execute(
+                "SELECT ref, company_name FROM applications WHERE client_id=? AND status NOT IN ('rejected','withdrawn')",
+                (client_id,)
+            ).fetchall()
+            dup = next((e for e in existing if re.sub(r'\s+', ' ', (e['company_name'] or '').strip()).lower() == normalized_name), None)
+            existing = dup
+            if existing:
+                db.close()
+                return self.error(
+                    f"An active application for '{company_name}' already exists (ref: {existing['ref']}). "
+                    "Please resume the existing application instead of creating a new one.",
+                    409
+                )
         db.execute("""
             INSERT INTO applications (id, ref, client_id, company_name, brn, country, sector,
                 entity_type, ownership_structure, prescreening_data, status)
             VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """, (
             app_id, ref,
-            user["sub"] if user["type"] == "client" else data.get("client_id"),
+            client_id,
             company_name,
-            first_non_empty(data.get("brn"), prescreening_data.get("brn")),
+            brn,
             first_non_empty(data.get("country"), prescreening_data.get("country_of_incorporation")),
             first_non_empty(data.get("sector"), prescreening_data.get("sector")),
             first_non_empty(data.get("entity_type"), prescreening_data.get("entity_type")),
@@ -1638,6 +1725,17 @@ class ApplicationDetailHandler(BaseHandler):
             ))
 
         if any(key in data for key in ("directors", "ubos", "intermediaries")):
+            # ── Phase 4: Block party modifications after compliance review / approval states ──
+            immutable_party_states = ("compliance_review", "in_review", "edd_required",
+                                      "under_review", "approved", "rejected")
+            if app["status"] in immutable_party_states:
+                db.close()
+                return self.error(
+                    f"Cannot modify directors/UBOs/intermediaries after compliance review has started. "
+                    f"Current status: {app['status']}. Create a new application or contact an officer "
+                    f"to reopen the case if changes are required and reopening is allowed.",
+                    403
+                )
             store_application_parties(
                 db,
                 real_id,
@@ -1769,7 +1867,7 @@ class ApplicationDetailHandler(BaseHandler):
                 )
 
             # v2.1: HIGH/VERY_HIGH risk MUST go through pre_approval_review before kyc_documents
-            risk_level = app.get("risk_level", "").upper()
+            risk_level = (app.get("risk_level") or "").upper()
             if new_status == "kyc_documents" and risk_level in ("HIGH", "VERY_HIGH"):
                 if app.get("pre_approval_decision") != "PRE_APPROVE":
                     db.close()
@@ -1910,6 +2008,11 @@ class SubmitApplicationHandler(BaseHandler):
                 return self.error("Invalid website URL. Please enter a valid domain (e.g. www.company.com).", 400)
 
         directors, ubos, intermediaries = get_application_parties(db, real_id)
+
+        # W2-2: Require at least one director before submission
+        if not directors:
+            db.close()
+            return self.error("At least one director is required before submitting the application.", 400)
 
         prescreening = safe_json_loads(app["prescreening_data"])
         scoring_input = build_prescreening_risk_input(
@@ -2135,10 +2238,10 @@ class KYCSubmitHandler(BaseHandler):
         except Exception as e:
             logger.warning(f"Risk scoring at KYC submit failed for {app['ref']}: {e}")
 
-        # ALL applications after KYC go to compliance review — no auto-approval
+        # W2-4: Set status to kyc_submitted (previously dead state, now active)
         db.execute("""
             UPDATE applications SET
-                status='compliance_review',
+                status='kyc_submitted',
                 updated_at=datetime('now')
             WHERE id=?
         """, (real_id,))
@@ -2156,7 +2259,7 @@ class KYCSubmitHandler(BaseHandler):
         self.log_audit(user, "KYC Submitted", app["ref"],
                        f"KYC documents submitted for compliance review — {doc_count} document(s)")
         self.success({
-            "status": "compliance_review",
+            "status": "kyc_submitted",
             "message": "Your documents have been submitted for compliance review. An officer will review your application shortly.",
             "documents_uploaded": doc_count
         })
@@ -4256,6 +4359,9 @@ class ReportHandler(BaseHandler):
         risk_level = self.get_argument("risk_level", None)
         date_from = self.get_argument("date_from", None)
         date_to = self.get_argument("date_to", None)
+        jurisdiction = self.get_argument("jurisdiction", None)
+        entity_type = self.get_argument("entity_type", None)
+        assigned_to = self.get_argument("assigned_to", None)
         fields = self.get_argument("fields", "ref,company_name,status,risk_level,created_at,assigned_to")
 
         # Build query
@@ -4273,6 +4379,15 @@ class ReportHandler(BaseHandler):
         if date_to:
             conditions.append("a.created_at <= ?")
             params.append(date_to)
+        if jurisdiction:
+            conditions.append("a.country = ?")
+            params.append(jurisdiction)
+        if entity_type:
+            conditions.append("a.entity_type = ?")
+            params.append(entity_type)
+        if assigned_to:
+            conditions.append("a.assigned_to = ?")
+            params.append(assigned_to)
 
         where = " AND ".join(conditions) if conditions else "1=1"
 
@@ -4322,6 +4437,379 @@ class ReportHandler(BaseHandler):
             "fields": field_list,
             "data": results
         })
+
+class ReportAnalyticsHandler(BaseHandler):
+    """GET /api/reports/analytics — analytics data for the Reports page"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        db = get_db()
+
+        try:
+            # Collect filter parameters
+            date_from = self.get_argument("date_from", None)
+            date_to = self.get_argument("date_to", None)
+            status = self.get_argument("status", None)
+            risk_level = self.get_argument("risk_level", None)
+            jurisdiction = self.get_argument("jurisdiction", None)
+            entity_type = self.get_argument("entity_type", None)
+            assigned_to = self.get_argument("assigned_to", None)
+
+            # Build dynamic WHERE clause for applications
+            conditions = []
+            params = []
+            if date_from:
+                conditions.append("a.created_at >= ?")
+                params.append(date_from)
+            if date_to:
+                conditions.append("a.created_at <= ?")
+                params.append(date_to)
+            if status:
+                conditions.append("a.status = ?")
+                params.append(status)
+            if risk_level:
+                conditions.append("a.risk_level = ?")
+                params.append(risk_level)
+            if jurisdiction:
+                conditions.append("a.country = ?")
+                params.append(jurisdiction)
+            if entity_type:
+                conditions.append("a.entity_type = ?")
+                params.append(entity_type)
+            if assigned_to:
+                conditions.append("a.assigned_to = ?")
+                params.append(assigned_to)
+
+            where = " AND ".join(conditions) if conditions else "1=1"
+
+            # --- summary ---
+            summary = {
+                "total": 0, "approved": 0, "rejected": 0, "pending": 0,
+                "edd_required": 0, "withdrawn": 0,
+                "avg_risk_score": 0.0, "approval_rate": 0.0, "rejection_rate": 0.0
+            }
+            try:
+                row = db.execute(f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
+                        SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected,
+                        SUM(CASE WHEN a.status='pending' OR a.status='submitted' OR a.status='under_review' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN a.status='edd_required' THEN 1 ELSE 0 END) as edd_required,
+                        SUM(CASE WHEN a.status='withdrawn' THEN 1 ELSE 0 END) as withdrawn,
+                        AVG(CASE WHEN a.risk_score IS NOT NULL THEN a.risk_score ELSE NULL END) as avg_risk_score
+                    FROM applications a WHERE {where}
+                """, params).fetchone()
+                if row:
+                    r = dict(row)
+                    total = r.get("total") or 0
+                    approved = r.get("approved") or 0
+                    rejected = r.get("rejected") or 0
+                    summary = {
+                        "total": total,
+                        "approved": approved,
+                        "rejected": rejected,
+                        "pending": r.get("pending") or 0,
+                        "edd_required": r.get("edd_required") or 0,
+                        "withdrawn": r.get("withdrawn") or 0,
+                        "avg_risk_score": round(r.get("avg_risk_score") or 0.0, 2),
+                        "approval_rate": round((approved / total * 100) if total > 0 else 0.0, 2),
+                        "rejection_rate": round((rejected / total * 100) if total > 0 else 0.0, 2),
+                    }
+            except Exception:
+                pass
+
+            # --- risk_distribution ---
+            risk_distribution = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0}
+            try:
+                rows = db.execute(f"""
+                    SELECT a.risk_level, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.risk_level
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    level = r.get("risk_level") or ""
+                    if level in risk_distribution:
+                        risk_distribution[level] = r.get("cnt") or 0
+            except Exception:
+                pass
+
+            # --- status_distribution ---
+            status_distribution = {}
+            try:
+                rows = db.execute(f"""
+                    SELECT a.status, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.status
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    s = r.get("status") or "unknown"
+                    status_distribution[s] = r.get("cnt") or 0
+            except Exception:
+                pass
+
+            # --- monthly_trends ---
+            monthly_trends = []
+            try:
+                rows = db.execute(f"""
+                    SELECT strftime('%Y-%m', a.created_at) as month,
+                           COUNT(*) as submitted,
+                           SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
+                           SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected
+                    FROM applications a WHERE {where}
+                    GROUP BY strftime('%Y-%m', a.created_at)
+                    ORDER BY month ASC
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    monthly_trends.append({
+                        "month": r.get("month") or "",
+                        "submitted": r.get("submitted") or 0,
+                        "approved": r.get("approved") or 0,
+                        "rejected": r.get("rejected") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- jurisdiction_breakdown ---
+            jurisdiction_breakdown = []
+            try:
+                rows = db.execute(f"""
+                    SELECT a.country, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.country
+                    ORDER BY cnt DESC
+                    LIMIT 20
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    jurisdiction_breakdown.append({
+                        "country": r.get("country") or "Unknown",
+                        "count": r.get("cnt") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- entity_type_breakdown ---
+            entity_type_breakdown = []
+            try:
+                rows = db.execute(f"""
+                    SELECT a.entity_type, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.entity_type
+                    ORDER BY cnt DESC
+                    LIMIT 20
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    entity_type_breakdown.append({
+                        "entity_type": r.get("entity_type") or "Unknown",
+                        "count": r.get("cnt") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- pipeline_stages ---
+            pipeline_stages = {}
+            try:
+                rows = db.execute(f"""
+                    SELECT a.status, COUNT(*) as cnt
+                    FROM applications a WHERE {where}
+                    GROUP BY a.status
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    pipeline_stages[r.get("status") or "unknown"] = r.get("cnt") or 0
+            except Exception:
+                pass
+
+            # --- edd_stats ---
+            edd_stats = {"total": 0, "active": 0, "completed": 0, "by_stage": {}}
+            try:
+                # EDD stats respect all active filters via application join
+                edd_conditions = []
+                edd_params = []
+                if date_from:
+                    edd_conditions.append("a.created_at >= ?")
+                    edd_params.append(date_from)
+                if date_to:
+                    edd_conditions.append("a.created_at <= ?")
+                    edd_params.append(date_to)
+                if status:
+                    edd_conditions.append("a.status = ?")
+                    edd_params.append(status)
+                if risk_level:
+                    edd_conditions.append("a.risk_level = ?")
+                    edd_params.append(risk_level)
+                if jurisdiction:
+                    edd_conditions.append("a.country = ?")
+                    edd_params.append(jurisdiction)
+                if entity_type:
+                    edd_conditions.append("a.entity_type = ?")
+                    edd_params.append(entity_type)
+                if assigned_to:
+                    edd_conditions.append("a.assigned_to = ?")
+                    edd_params.append(assigned_to)
+                edd_where = " AND ".join(edd_conditions) if edd_conditions else "1=1"
+
+                edd_query = f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN e.stage NOT IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as active,
+                        SUM(CASE WHEN e.stage IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as completed
+                    FROM edd_cases e
+                    JOIN applications a ON a.id = e.application_id
+                    WHERE {edd_where}
+                """
+                row = db.execute(edd_query, edd_params).fetchone()
+                if row:
+                    r = dict(row)
+                    edd_stats["total"] = r.get("total") or 0
+                    edd_stats["active"] = r.get("active") or 0
+                    edd_stats["completed"] = r.get("completed") or 0
+
+                # by_stage
+                stage_rows = db.execute(f"""
+                    SELECT e.stage, COUNT(*) as cnt
+                    FROM edd_cases e
+                    JOIN applications a ON a.id = e.application_id
+                    WHERE {edd_where}
+                    GROUP BY e.stage
+                """, edd_params).fetchall()
+                by_stage = {}
+                for row in stage_rows:
+                    r = dict(row)
+                    by_stage[r.get("stage") or "unknown"] = r.get("cnt") or 0
+                edd_stats["by_stage"] = by_stage
+            except Exception:
+                pass
+
+            # --- screening_stats ---
+            screening_stats = {"total_reviews": 0, "cleared": 0, "escalated": 0, "follow_up": 0}
+            try:
+                row = db.execute(f"""
+                    SELECT
+                        COUNT(*) as total_reviews,
+                        SUM(CASE WHEN sr.disposition='cleared' THEN 1 ELSE 0 END) as cleared,
+                        SUM(CASE WHEN sr.disposition='escalated' THEN 1 ELSE 0 END) as escalated,
+                        SUM(CASE WHEN sr.disposition='follow_up_required' THEN 1 ELSE 0 END) as follow_up
+                    FROM screening_reviews sr
+                    JOIN applications a ON a.id = sr.application_id
+                    WHERE {where}
+                """, params).fetchone()
+                if row:
+                    r = dict(row)
+                    screening_stats = {
+                        "total_reviews": r.get("total_reviews") or 0,
+                        "cleared": r.get("cleared") or 0,
+                        "escalated": r.get("escalated") or 0,
+                        "follow_up": r.get("follow_up") or 0,
+                    }
+            except Exception:
+                pass
+
+            # --- periodic_review_stats ---
+            periodic_review_stats = {"total": 0, "pending": 0, "completed": 0, "overdue": 0}
+            try:
+                row = db.execute(f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN pr.status='pending' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN pr.status='completed' THEN 1 ELSE 0 END) as completed,
+                        SUM(CASE WHEN pr.status='pending' AND pr.due_date < date('now') THEN 1 ELSE 0 END) as overdue
+                    FROM periodic_reviews pr
+                    JOIN applications a ON a.id = pr.application_id
+                    WHERE {where}
+                """, params).fetchone()
+                if row:
+                    r = dict(row)
+                    periodic_review_stats = {
+                        "total": r.get("total") or 0,
+                        "pending": r.get("pending") or 0,
+                        "completed": r.get("completed") or 0,
+                        "overdue": r.get("overdue") or 0,
+                    }
+            except Exception:
+                pass
+
+            # --- reviewer_workload ---
+            reviewer_workload = []
+            try:
+                rows = db.execute(f"""
+                    SELECT a.assigned_to,
+                           COUNT(*) as cnt,
+                           SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
+                           SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected
+                    FROM applications a
+                    WHERE {where} AND a.assigned_to IS NOT NULL AND a.assigned_to != ''
+                    GROUP BY a.assigned_to
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    reviewer_workload.append({
+                        "assigned_to": r.get("assigned_to") or "",
+                        "count": r.get("cnt") or 0,
+                        "approved": r.get("approved") or 0,
+                        "rejected": r.get("rejected") or 0,
+                    })
+            except Exception:
+                pass
+
+            # --- recent_decisions ---
+            recent_decisions = []
+            try:
+                rows = db.execute(f"""
+                    SELECT d.application_ref, d.decision_type,
+                           d.risk_level, d.timestamp, d.source,
+                           a.company_name
+                    FROM decision_records d
+                    LEFT JOIN applications a ON a.ref = d.application_ref
+                    WHERE {where}
+                    ORDER BY d.timestamp DESC
+                    LIMIT 20
+                """, params).fetchall()
+                for row in rows:
+                    r = dict(row)
+                    recent_decisions.append({
+                        "ref": r.get("application_ref") or "",
+                        "company_name": r.get("company_name") or "",
+                        "decision_type": r.get("decision_type") or "",
+                        "risk_level": r.get("risk_level") or "",
+                        "timestamp": r.get("timestamp") or "",
+                        "source": r.get("source") or "",
+                    })
+            except Exception:
+                pass
+
+            filter_desc = ", ".join(f"{k}={v}" for k, v in [
+                ("date_from", date_from), ("date_to", date_to),
+                ("status", status), ("risk_level", risk_level),
+                ("jurisdiction", jurisdiction), ("entity_type", entity_type),
+                ("assigned_to", assigned_to),
+            ] if v)
+            self.log_audit(user, "Report", "Analytics",
+                           f"Analytics report generated with filters: {filter_desc or 'none'}")
+
+            self.success({
+                "summary": summary,
+                "risk_distribution": risk_distribution,
+                "status_distribution": status_distribution,
+                "monthly_trends": monthly_trends,
+                "jurisdiction_breakdown": jurisdiction_breakdown,
+                "entity_type_breakdown": entity_type_breakdown,
+                "pipeline_stages": pipeline_stages,
+                "edd_stats": edd_stats,
+                "screening_stats": screening_stats,
+                "periodic_review_stats": periodic_review_stats,
+                "reviewer_workload": reviewer_workload,
+                "recent_decisions": recent_decisions,
+            })
+        finally:
+            db.close()
 
 
 # ══════════════════════════════════════════════════════════
@@ -4647,7 +5135,7 @@ class DashboardHandler(BaseHandler):
             stats["early_stage_applications"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') AND client_id=?", (client_id,)).fetchone()["c"]
             stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND client_id=?", (client_id,)).fetchone()["c"]
             stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required' AND client_id=?", (client_id,)).fetchone()["c"]
@@ -4671,7 +5159,7 @@ class DashboardHandler(BaseHandler):
             stats["early_stage_applications"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted')").fetchone()["c"]
             stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review'").fetchone()["c"]
             stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'").fetchone()["c"]
-            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
+            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted')").fetchone()["c"]
             stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved'").fetchone()["c"]
             stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected'").fetchone()["c"]
             stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required'").fetchone()["c"]
@@ -5523,7 +6011,7 @@ class MonitoringDashboardHandler(BaseHandler):
         }
 
         # Count applications pending compliance review
-        compliance_review = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='compliance_review'").fetchone()["c"]
+        compliance_review = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted')").fetchone()["c"]
         stats["clients_under_review"] = compliance_review
 
         # Count high-risk alerts
@@ -7570,6 +8058,7 @@ def make_app():
 
         # Reports
         (r"/api/reports/generate", ReportHandler),
+        (r"/api/reports/analytics", ReportAnalyticsHandler),
 
         # Audit
         (r"/api/audit/export", AuditExportHandler),
