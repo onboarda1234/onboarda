@@ -4,6 +4,7 @@ Wave 1 remediation regression tests — verifying all critical audit fixes.
 import json
 import os
 import sys
+import re
 import pytest
 
 # ── Ensure the backend root is importable ──
@@ -17,37 +18,36 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 class TestW1_1_UnderReviewStatus:
     """Verify 'under_review' is a valid status in all schema definitions."""
 
-    def _read_db_source(self):
-        db_path = os.path.join(os.path.dirname(__file__), "..", "db.py")
-        with open(db_path) as f:
-            return f.read()
-
     def test_under_review_in_sqlite_pg_schema(self):
-        """under_review must appear in the PostgreSQL applications table CHECK constraint."""
-        src = self._read_db_source()
-        # Both the PG and SQLite schemas contain the CHECK constraint
-        assert "'under_review'" in src or '"under_review"' in src, \
-            "under_review not found in db.py CHECK constraints"
+        """under_review must appear in the DB schema SQL returned by db module."""
+        import db
+        pg_schema = db._get_postgres_schema()
+        sqlite_schema = db._get_sqlite_schema()
+        assert "under_review" in pg_schema, \
+            "under_review not found in PostgreSQL schema"
+        assert "under_review" in sqlite_schema, \
+            "under_review not found in SQLite schema"
 
     def test_under_review_in_all_check_constraints(self):
-        """Count that under_review appears in every CHECK(status IN ...) block for applications."""
-        src = self._read_db_source()
-        import re
-        # Find all CHECK(status IN (...)) blocks
-        checks = re.findall(r"CHECK\(status IN \([^)]+\)\)", src)
-        for check in checks:
-            # Only check application status constraints (they have 'draft' in them)
-            if "'draft'" in check and "'approved'" in check:
-                assert "'under_review'" in check, \
-                    f"under_review missing from CHECK constraint: {check[:80]}..."
+        """under_review appears in every application status CHECK block in both schemas."""
+        import db
+        for schema_fn, label in [(db._get_postgres_schema, "PG"), (db._get_sqlite_schema, "SQLite")]:
+            src = schema_fn()
+            checks = re.findall(r"CHECK\(status\s+IN\s*\([^)]+\)\)", src)
+            for check in checks:
+                if "'draft'" in check and "'approved'" in check:
+                    assert "'under_review'" in check, \
+                        f"under_review missing from {label} CHECK constraint: {check[:80]}..."
 
     def test_server_transition_consistency(self):
-        """under_review targets in server.py must all be valid DB statuses."""
-        server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
-            src = f.read()
-        # Verify under_review is referenced in valid_transitions
-        assert '"under_review"' in src or "'under_review'" in src
+        """under_review must be reachable and have outgoing transitions in server module."""
+        import server
+        import inspect
+        # The valid_transitions dict is embedded in ApplicationDetailHandler.patch;
+        # verify it exists by inspecting that the handler accepts under_review as status.
+        handler_src = inspect.getsource(server.ApplicationDetailHandler.patch)
+        assert "under_review" in handler_src, \
+            "under_review must appear in ApplicationDetailHandler.patch transitions"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -123,24 +123,45 @@ class TestW1_3_NationalityMatching:
         assert not _countries_match("Atlantis", "Wakanda")
 
     def test_no_prefix_comparison_exists(self):
-        """Verify that the old broken [:3] prefix comparison is gone from document_verification.py."""
-        dv_path = os.path.join(os.path.dirname(__file__), "..", "document_verification.py")
-        with open(dv_path) as f:
-            src = f.read()
-        assert "[:3]" not in src, \
-            "Broken [:3] prefix comparison still exists in document_verification.py"
+        """Verify the old broken [:3] prefix logic is gone by testing actual behavior."""
+        from document_verification import _countries_match
+        # The [:3] bug would make "United States" match "United Kingdom" (both "uni").
+        # If this passes, the broken logic is gone.
+        assert not _countries_match("United States", "United Kingdom")
+        assert not _countries_match("South Africa", "South Korea")
 
     def test_jurisdiction_doc07_uses_countries_match(self):
-        """DOC-07 jurisdiction check should use _countries_match, not substring comparison."""
-        dv_path = os.path.join(os.path.dirname(__file__), "..", "document_verification.py")
-        with open(dv_path) as f:
-            src = f.read()
-        # Find the DOC-07 section and verify it uses _countries_match
+        """DOC-07 jurisdiction check should use _countries_match (verified via import inspection)."""
+        import document_verification
+        import inspect
+        src = inspect.getsource(document_verification)
         doc07_idx = src.find('"DOC-07"')
-        assert doc07_idx > 0
+        assert doc07_idx > 0, "DOC-07 check must exist in document_verification module"
         doc07_section = src[doc07_idx:doc07_idx + 800]
         assert "_countries_match" in doc07_section, \
             "DOC-07 should use _countries_match for jurisdiction comparison"
+
+    # ── Alpha-3 code tests (MUS, GBR, FRA etc.) ──
+
+    def test_alpha3_mauritius(self):
+        from document_verification import _countries_match
+        assert _countries_match("Mauritius", "MUS")
+
+    def test_alpha3_united_kingdom(self):
+        from document_verification import _countries_match
+        assert _countries_match("United Kingdom", "GBR")
+
+    def test_alpha3_france(self):
+        from document_verification import _countries_match
+        assert _countries_match("France", "FRA")
+
+    def test_alpha3_united_states(self):
+        from document_verification import _countries_match
+        assert _countries_match("United States", "USA")
+
+    def test_alpha3_bvi(self):
+        from document_verification import _countries_match
+        assert _countries_match("British Virgin Islands", "VGB")
 
 
 # ═══════════════════════════════════════════════════════════
