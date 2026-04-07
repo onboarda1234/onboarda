@@ -4477,8 +4477,8 @@ class ReportAnalyticsHandler(BaseHandler):
                     edd_query = f"""
                         SELECT
                             COUNT(*) as total,
-                            SUM(CASE WHEN e.status='active' OR e.status='in_progress' THEN 1 ELSE 0 END) as active,
-                            SUM(CASE WHEN e.status='completed' OR e.status='closed' THEN 1 ELSE 0 END) as completed
+                            SUM(CASE WHEN e.stage NOT IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as active,
+                            SUM(CASE WHEN e.stage IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as completed
                         FROM edd_cases e
                         JOIN applications a ON a.id = e.application_id
                         WHERE {edd_where}
@@ -4488,8 +4488,8 @@ class ReportAnalyticsHandler(BaseHandler):
                     row = db.execute("""
                         SELECT
                             COUNT(*) as total,
-                            SUM(CASE WHEN e.status='active' OR e.status='in_progress' THEN 1 ELSE 0 END) as active,
-                            SUM(CASE WHEN e.status='completed' OR e.status='closed' THEN 1 ELSE 0 END) as completed
+                            SUM(CASE WHEN e.stage NOT IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as active,
+                            SUM(CASE WHEN e.stage IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as completed
                         FROM edd_cases e
                     """).fetchone()
                 if row:
@@ -4501,22 +4501,22 @@ class ReportAnalyticsHandler(BaseHandler):
                 # by_stage
                 if edd_conditions:
                     stage_rows = db.execute(f"""
-                        SELECT e.current_stage, COUNT(*) as cnt
+                        SELECT e.stage, COUNT(*) as cnt
                         FROM edd_cases e
                         JOIN applications a ON a.id = e.application_id
                         WHERE {edd_where}
-                        GROUP BY e.current_stage
+                        GROUP BY e.stage
                     """, edd_params).fetchall()
                 else:
                     stage_rows = db.execute("""
-                        SELECT e.current_stage, COUNT(*) as cnt
+                        SELECT e.stage, COUNT(*) as cnt
                         FROM edd_cases e
-                        GROUP BY e.current_stage
+                        GROUP BY e.stage
                     """).fetchall()
                 by_stage = {}
                 for row in stage_rows:
                     r = dict(row)
-                    by_stage[r.get("current_stage") or "unknown"] = r.get("cnt") or 0
+                    by_stage[r.get("stage") or "unknown"] = r.get("cnt") or 0
                 edd_stats["by_stage"] = by_stage
             except Exception:
                 pass
@@ -4527,9 +4527,9 @@ class ReportAnalyticsHandler(BaseHandler):
                 row = db.execute("""
                     SELECT
                         COUNT(*) as total_reviews,
-                        SUM(CASE WHEN decision='cleared' THEN 1 ELSE 0 END) as cleared,
-                        SUM(CASE WHEN decision='escalated' THEN 1 ELSE 0 END) as escalated,
-                        SUM(CASE WHEN decision='follow_up' THEN 1 ELSE 0 END) as follow_up
+                        SUM(CASE WHEN disposition='cleared' THEN 1 ELSE 0 END) as cleared,
+                        SUM(CASE WHEN disposition='escalated' THEN 1 ELSE 0 END) as escalated,
+                        SUM(CASE WHEN disposition='follow_up_required' THEN 1 ELSE 0 END) as follow_up
                     FROM screening_reviews
                 """).fetchone()
                 if row:
@@ -4592,9 +4592,11 @@ class ReportAnalyticsHandler(BaseHandler):
             recent_decisions = []
             try:
                 rows = db.execute("""
-                    SELECT d.application_ref, d.company_name, d.decision_type,
-                           d.risk_level, d.timestamp, d.source
+                    SELECT d.application_ref, d.decision_type,
+                           d.risk_level, d.timestamp, d.source,
+                           a.company_name
                     FROM decision_records d
+                    LEFT JOIN applications a ON a.ref = d.application_ref
                     ORDER BY d.timestamp DESC
                     LIMIT 20
                 """).fetchall()
