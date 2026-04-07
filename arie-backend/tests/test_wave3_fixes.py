@@ -27,7 +27,7 @@ class TestW3_BRNValidation:
     def test_backend_brn_rejects_invalid(self):
         """Invalid BRN formats must be rejected."""
         assert not BRN_PATTERN.match(""), "Empty string should be invalid"
-        assert not BRN_PATTERN.match("A"), "Single character should be invalid (min 2)"
+        assert not BRN_PATTERN.match("A"), "Single character should be invalid (regex requires start + end chars)"
         assert not BRN_PATTERN.match(" ABC"), "Leading space should be invalid"
         assert not BRN_PATTERN.match("ABC "), "Trailing space should be invalid"
 

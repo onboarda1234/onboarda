@@ -77,8 +77,8 @@ class TestW2_2_MinimumDirector:
         import server
         import inspect
         src = inspect.getsource(server.SubmitApplicationHandler)
-        assert "director" in src.lower(), \
-            "SubmitApplicationHandler should validate director count"
+        assert "at least one director" in src.lower(), \
+            "SubmitApplicationHandler should validate minimum director count"
 
     def test_frontend_has_director_check(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
@@ -129,8 +129,8 @@ class TestW2_5_MemoPEPScreening:
         import memo_handler
         import inspect
         src = inspect.getsource(memo_handler.build_compliance_memo)
-        assert "screening_results" in src or "screening_report" in src, \
-            "build_compliance_memo should check screening data for PEP matches"
+        assert "screening_report" in src, \
+            "build_compliance_memo should check screening_report for PEP matches"
         assert "pep_match" in src or "is_pep" in src, \
             "build_compliance_memo should look for pep_match/is_pep in screening data"
 

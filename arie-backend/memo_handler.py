@@ -44,20 +44,20 @@ def build_compliance_memo(app, directors, ubos, documents):
         prescreening_data = _json.loads(raw_ps) if isinstance(raw_ps, str) else (raw_ps or {})
     except Exception:
         pass
-    screening_results = prescreening_data.get("screening_results", {})
-    # Check director screenings for PEP matches
-    for ds in screening_results.get("director_screenings", []):
-        screening_data = ds.get("screening", {})
-        if screening_data.get("pep_match") or screening_data.get("is_pep"):
-            name = ds.get("name", "")
-            # Add to all_peps if not already declared
-            already_declared = any(p.get("full_name", "") == name for p in all_peps)
-            if not already_declared and name:
-                all_peps.append({"full_name": name, "is_pep": "Yes", "source": "screening"})
-    for us in screening_results.get("ubo_screenings", []):
-        screening_data = us.get("screening", {})
-        if screening_data.get("pep_match") or screening_data.get("is_pep"):
-            name = us.get("name", "")
+    screening_report = prescreening_data.get("screening_report", {})
+    if not isinstance(screening_report, dict):
+        screening_report = {}
+    # Check director and UBO screenings for PEP matches
+    for entry in (screening_report.get("director_screenings", []) +
+                  screening_report.get("ubo_screenings", [])):
+        screening_data = entry.get("screening", {}) or {}
+        results = screening_data.get("results", []) or []
+        has_pep_hit = any(
+            isinstance(r, dict) and r.get("is_pep")
+            for r in results
+        )
+        if has_pep_hit:
+            name = entry.get("person_name", "")
             already_declared = any(p.get("full_name", "") == name for p in all_peps)
             if not already_declared and name:
                 all_peps.append({"full_name": name, "is_pep": "Yes", "source": "screening"})
