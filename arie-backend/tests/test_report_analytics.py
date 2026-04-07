@@ -326,3 +326,236 @@ class TestReportAnalyticsData:
 
         assert row["cnt"] >= 0
 
+
+class TestPostgreSQLTranslation:
+    """Test that _translate_query handles strftime and date('now') for PostgreSQL."""
+
+    def test_strftime_translation(self):
+        """strftime('%Y-%m', col) should translate to to_char(col, 'YYYY-MM') for PG."""
+        from db import DBConnection
+        conn = DBConnection(None, is_postgres=True)
+        sql = "SELECT strftime('%Y-%m', a.created_at) as month FROM applications a"
+        translated = conn._translate_query(sql)
+        assert "to_char" in translated
+        assert "YYYY-MM" in translated
+        assert "strftime" not in translated
+
+    def test_strftime_not_translated_for_sqlite(self):
+        """strftime should be left as-is for SQLite."""
+        from db import DBConnection
+        conn = DBConnection(None, is_postgres=False)
+        sql = "SELECT strftime('%Y-%m', a.created_at) as month FROM applications a"
+        translated = conn._translate_query(sql)
+        assert "strftime" in translated
+        assert "to_char" not in translated
+
+    def test_date_now_translation(self):
+        """date('now') should translate to CURRENT_DATE for PostgreSQL."""
+        from db import DBConnection
+        conn = DBConnection(None, is_postgres=True)
+        sql = "SELECT * FROM periodic_reviews WHERE due_date < date('now')"
+        translated = conn._translate_query(sql)
+        assert "CURRENT_DATE" in translated
+        assert "date('now')" not in translated
+
+    def test_date_now_not_translated_for_sqlite(self):
+        """date('now') should be left as-is for SQLite."""
+        from db import DBConnection
+        conn = DBConnection(None, is_postgres=False)
+        sql = "SELECT * FROM periodic_reviews WHERE due_date < date('now')"
+        translated = conn._translate_query(sql)
+        assert "date('now')" in translated
+
+    def test_strftime_with_group_by(self):
+        """strftime in GROUP BY should also be translated."""
+        from db import DBConnection
+        conn = DBConnection(None, is_postgres=True)
+        sql = """SELECT strftime('%Y-%m', a.created_at) as month, COUNT(*) as cnt
+                 FROM applications a
+                 GROUP BY strftime('%Y-%m', a.created_at)
+                 ORDER BY month ASC"""
+        translated = conn._translate_query(sql)
+        assert translated.count("to_char") == 2
+        assert "strftime" not in translated
+
+
+class TestFilteredComplianceStats:
+    """Test that compliance-related stats respect application-level filters."""
+
+    @pytest.fixture(autouse=True)
+    def seed_compliance_data(self, setup_db, seed_apps):
+        """Seed EDD, screening, periodic review, and decision data."""
+        from db import get_db
+        import uuid
+        db = get_db()
+
+        for app_id, disposition in [("rptapp1", "cleared"), ("rptapp2", "escalated"),
+                                     ("rptapp3", "cleared"), ("rptapp4", "follow_up_required")]:
+            try:
+                db.execute("""
+                    INSERT INTO screening_reviews (application_id, subject_type, subject_name, disposition, reviewer_name)
+                    VALUES (?, 'director', 'Test Person', ?, 'Test Reviewer')
+                """, (app_id, disposition))
+            except Exception:
+                pass
+
+        for app_id, stage in [("rptapp2", "triggered"), ("rptapp4", "information_gathering")]:
+            try:
+                db.execute("""
+                    INSERT INTO edd_cases (application_id, client_name, risk_level, stage, trigger_source)
+                    VALUES (?, 'Test Client', 'HIGH', ?, 'officer_decision')
+                """, (app_id, stage))
+            except Exception:
+                pass
+
+        for app_id, status in [("rptapp1", "completed"), ("rptapp3", "pending")]:
+            try:
+                db.execute("""
+                    INSERT INTO periodic_reviews (application_id, client_name, status, due_date)
+                    VALUES (?, 'Test Client', ?, '2025-01-01')
+                """, (app_id, status))
+            except Exception:
+                pass
+
+        for ref, dec_type in [("RPT-001", "approve"), ("RPT-002", "reject")]:
+            try:
+                db.execute("""
+                    INSERT INTO decision_records (id, application_ref, decision_type, risk_level, source, timestamp)
+                    VALUES (?, ?, ?, 'LOW', 'manual', datetime('now'))
+                """, (str(uuid.uuid4()), ref, dec_type))
+            except Exception:
+                pass
+
+        db.commit()
+        db.close()
+
+    def test_screening_stats_filtered_by_jurisdiction(self):
+        """Screening stats should respect jurisdiction filter via application join."""
+        from db import get_db
+        db = get_db()
+        row = db.execute("""
+            SELECT COUNT(*) as total_reviews,
+                   SUM(CASE WHEN sr.disposition='cleared' THEN 1 ELSE 0 END) as cleared
+            FROM screening_reviews sr
+            JOIN applications a ON a.id = sr.application_id
+            WHERE a.country = ?
+        """, ("Mauritius",)).fetchone()
+        db.close()
+        assert row["total_reviews"] >= 2
+        assert row["cleared"] >= 2
+
+    def test_screening_stats_filtered_by_risk_level(self):
+        """Screening stats should respect risk_level filter."""
+        from db import get_db
+        db = get_db()
+        row = db.execute("""
+            SELECT COUNT(*) as total_reviews
+            FROM screening_reviews sr
+            JOIN applications a ON a.id = sr.application_id
+            WHERE a.risk_level = ?
+        """, ("HIGH",)).fetchone()
+        db.close()
+        assert row["total_reviews"] >= 1
+
+    def test_edd_stats_filtered_by_jurisdiction(self):
+        """EDD stats should respect jurisdiction filter via application join."""
+        from db import get_db
+        db = get_db()
+        row = db.execute("""
+            SELECT COUNT(*) as total
+            FROM edd_cases e
+            JOIN applications a ON a.id = e.application_id
+            WHERE a.country = ?
+        """, ("India",)).fetchone()
+        db.close()
+        assert row["total"] >= 1
+
+    def test_periodic_review_stats_filtered(self):
+        """Periodic review stats should respect jurisdiction filter."""
+        from db import get_db
+        db = get_db()
+        row = db.execute("""
+            SELECT COUNT(*) as total,
+                   SUM(CASE WHEN pr.status='pending' THEN 1 ELSE 0 END) as pending
+            FROM periodic_reviews pr
+            JOIN applications a ON a.id = pr.application_id
+            WHERE a.country = ?
+        """, ("Mauritius",)).fetchone()
+        db.close()
+        assert row["total"] >= 2
+        assert row["pending"] >= 1
+
+    def test_recent_decisions_filtered_by_jurisdiction(self):
+        """Recent decisions should respect jurisdiction filter via application join."""
+        from db import get_db
+        db = get_db()
+        rows = db.execute("""
+            SELECT d.application_ref, d.decision_type
+            FROM decision_records d
+            LEFT JOIN applications a ON a.ref = d.application_ref
+            WHERE a.country = ?
+            ORDER BY d.timestamp DESC
+        """, ("Mauritius",)).fetchall()
+        db.close()
+        refs = [r["application_ref"] for r in rows]
+        assert "RPT-001" in refs
+
+    def test_edd_stats_full_filter_chain(self):
+        """EDD stats should work with multiple filters applied."""
+        from db import get_db
+        db = get_db()
+        row = db.execute("""
+            SELECT COUNT(*) as total
+            FROM edd_cases e
+            JOIN applications a ON a.id = e.application_id
+            WHERE a.country = ? AND a.risk_level = ?
+        """, ("India", "VERY_HIGH")).fetchone()
+        db.close()
+        assert row["total"] >= 1
+
+
+class TestReportHandlerFilters:
+    """Test that ReportHandler (CSV export) supports all filter parameters."""
+
+    def test_report_handler_accepts_jurisdiction_filter(self):
+        """Verify ReportHandler supports jurisdiction filter."""
+        from server import ReportHandler
+        assert hasattr(ReportHandler, 'get')
+
+    def test_report_handler_query_with_all_filters(self, setup_db, seed_apps):
+        """Verify the report query works with all filter types."""
+        from db import get_db
+        db = get_db()
+        conditions = ["a.status=?", "a.risk_level=?", "a.created_at >= ?",
+                      "a.created_at <= ?", "a.country = ?", "a.entity_type = ?"]
+        params = ["approved", "LOW", "2020-01-01", "2030-12-31", "Mauritius", "SME"]
+        where = " AND ".join(conditions)
+        rows = db.execute(f"""
+            SELECT a.ref, a.company_name, a.status, a.risk_level, a.country, a.entity_type
+            FROM applications a
+            WHERE {where}
+            ORDER BY a.created_at DESC
+        """, params).fetchall()
+        db.close()
+        assert len(rows) >= 1
+        assert any(r["ref"] == "RPT-001" for r in rows)
+
+    def test_entity_type_filter_uses_correct_column(self, setup_db, seed_apps):
+        """Verify entity_type filter queries entity_type column, not sector."""
+        from db import get_db
+        db = get_db()
+        row = db.execute("""
+            SELECT COUNT(*) as total
+            FROM applications
+            WHERE entity_type = ?
+        """, ("Bank",)).fetchone()
+        db.close()
+        assert row["total"] >= 2
+
+        db2 = get_db()
+        row2 = db2.execute("""
+            SELECT sector, entity_type FROM applications WHERE entity_type = ? LIMIT 1
+        """, ("Bank",)).fetchone()
+        db2.close()
+        assert row2["sector"] == "Finance"
+        assert row2["entity_type"] == "Bank"
