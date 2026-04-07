@@ -542,9 +542,13 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
         company_sanctions_future = executor.submit(screen_sumsub_aml, company_name, entity_type="Company")
 
         director_futures = []
+        # W2-1: Track screened persons to avoid duplicate AML screening
+        screened_persons = set()  # dedup_key → True
         for d in directors:
             d_name = d.get("full_name", "")
             if d_name:
+                dedup_key = " ".join(d_name.lower().split()) + "|" + (d.get("date_of_birth") or "").strip()
+                screened_persons.add(dedup_key)
                 f = executor.submit(screen_sumsub_aml, d_name, birth_date=d.get("date_of_birth"), nationality=d.get("nationality"), entity_type="Person")
                 director_futures.append((d, f))
 
@@ -552,24 +556,43 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
         for u in ubos:
             u_name = u.get("full_name", "")
             if u_name:
+                dedup_key = " ".join(u_name.lower().split()) + "|" + (u.get("date_of_birth") or "").strip()
+                if dedup_key in screened_persons:
+                    # Same person already screened as director — skip duplicate AML call
+                    continue
                 f = executor.submit(screen_sumsub_aml, u_name, birth_date=u.get("date_of_birth"), nationality=u.get("nationality"), entity_type="Person")
                 ubo_futures.append((u, f))
 
         ip_future = executor.submit(geolocate_ip, client_ip) if client_ip else None
 
         kyc_futures = []
+        # W2-1: Deduplicate persons across director and UBO roles to avoid duplicate Sumsub applicants.
+        # Use normalised name + DOB as the dedup key for conservative matching.
         all_persons = [(d, "director") for d in directors] + [(u, "ubo") for u in ubos]
+        seen_person_keys = {}  # dedup_key → (person, ptype, ext_id, future)
         for person, ptype in all_persons:
             p_name = person.get("full_name", "")
             if not p_name:
                 continue
-            ext_id = person.get("email", "") or f"{ptype}_{hashlib.md5(p_name.encode()).hexdigest()[:12]}"
+            # Build a conservative dedup key: normalised lowercase name + DOB
+            dedup_name = " ".join(p_name.lower().split())
+            dedup_dob = (person.get("date_of_birth") or "").strip()
+            dedup_key = f"{dedup_name}|{dedup_dob}"
+            if dedup_key in seen_person_keys:
+                # Same person already queued — reuse the existing Sumsub applicant
+                existing = seen_person_keys[dedup_key]
+                kyc_futures.append((person, ptype, p_name, existing[3]))
+                continue
+            # Use a role-agnostic ext_id based on name + DOB hash to avoid cross-person collisions
+            hash_input = p_name + "|" + dedup_dob
+            ext_id = person.get("email", "") or f"person_{hashlib.md5(hash_input.encode()).hexdigest()[:12]}"
             parts = p_name.strip().split(" ", 1)
             first = parts[0] if parts else ""
             last = parts[1] if len(parts) > 1 else ""
             f = executor.submit(sumsub_create_applicant,
                 external_user_id=ext_id, first_name=first, last_name=last,
                 country=person.get("nationality", ""))
+            seen_person_keys[dedup_key] = (person, ptype, p_name, f)
             kyc_futures.append((person, ptype, p_name, f))
 
         # ── Collect results ──

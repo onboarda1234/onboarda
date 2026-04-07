@@ -1547,6 +1547,7 @@ def init_db():
             except Exception as e:
                 logger.warning(f"Demo app stubs in init_db skipped: {e}")
 
+
     except Exception as e:
         logger.error(f"Error initializing database schema: {e}")
         raise

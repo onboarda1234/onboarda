@@ -2337,7 +2337,7 @@
             </div>
             <div class="form-group">
               <label>Registration / BRN Number <span class="req">*</span></label>
-              <input type="text" id="f-brn" placeholder="e.g. C12345678" required />
+              <input type="text" id="f-brn" placeholder="e.g. C12345678" required pattern="[A-Za-z0-9\-/.][A-Za-z0-9\-/. ]{0,28}[A-Za-z0-9\-/.]" title="2-30 alphanumeric characters, dashes, dots, slashes, or internal spaces" />
             </div>
             <div class="form-group">
               <label>Authorised Share Capital</label>
@@ -3190,7 +3190,7 @@
               <div class="consent-section-title">📋 Terms & Conditions</div>
               <div class="consent-check">
                 <input type="checkbox" id="pricing-tc-accept" />
-                <p><strong>I accept the Terms & Conditions</strong><br/>By checking this box, I acknowledge and accept the fee schedule above, understand that pricing is subject to revision upon final compliance review, and agree to the <span class="legal-link" onclick="showToast('info','Terms & Conditions','Full Terms & Conditions for Payment Intermediary Services will be provided in the service agreement. Contact compliance@arie-finance.com for a copy.')">Terms & Conditions</span> governing Onboarda Ltd Payment Intermediary Services. I further confirm that I am duly authorised to enter into this arrangement on behalf of the entity.</p>
+                <p><strong>I accept the Terms & Conditions</strong><br/>By checking this box, I acknowledge and accept the fee schedule above, understand that pricing is subject to revision upon final compliance review, and agree to the <span class="legal-link" onclick="showToast('info','Terms & Conditions','Full Terms & Conditions for Payment Intermediary Services will be provided in the service agreement. Contact compliance@onboarda.com for a copy.')">Terms & Conditions</span> governing Onboarda Ltd Payment Intermediary Services. I further confirm that I am duly authorised to enter into this arrangement on behalf of the entity.</p>
               </div>
             </div>
 
@@ -4806,8 +4806,8 @@ async function loadMyApplications() {
 
     var html = '';
     apps.forEach(function(app) {
-      var statusColors = {draft:'#6b7280',pending:'#f59e0b',submitted:'#f59e0b',prescreening_submitted:'#3b82f6',pricing_review:'#3b82f6',pricing_accepted:'#3b82f6',pre_approval_review:'#3b82f6',pre_approved:'#8b5cf6',kyc_documents:'#f59e0b',kyc_submitted:'#3b82f6',compliance_review:'#3b82f6',in_review:'#3b82f6',edd_required:'#8b5cf6',approved:'#10b981',rejected:'#ef4444',rmi_sent:'#f59e0b',withdrawn:'#6b7280'};
-      var statusLabels = {draft:'Application Started',submitted:'Application Submitted',prescreening_submitted:'Pre-Screening in Progress',pricing_review:'Pricing Under Review',pricing_accepted:'Pricing Accepted',pre_approval_review:'Pre-Approval Under Review',pre_approved:'Pre-Approved',kyc_documents:'KYC Documents Required',kyc_submitted:'KYC Documents Submitted',compliance_review:'Compliance Review in Progress',in_review:'Verification Ongoing',edd_required:'Enhanced Due Diligence Required',approved:'Approved \u2013 Ready for Activation',rejected:'Application Declined',rmi_sent:'Further Information Requested',withdrawn:'Application Withdrawn',pending:'Pending'};
+      var statusColors = {draft:'#6b7280',pending:'#f59e0b',submitted:'#f59e0b',prescreening_submitted:'#3b82f6',pricing_review:'#3b82f6',pricing_accepted:'#3b82f6',pre_approval_review:'#3b82f6',pre_approved:'#8b5cf6',kyc_documents:'#f59e0b',kyc_submitted:'#3b82f6',compliance_review:'#3b82f6',in_review:'#3b82f6',under_review:'#3b82f6',edd_required:'#8b5cf6',approved:'#10b981',rejected:'#ef4444',rmi_sent:'#f59e0b',withdrawn:'#6b7280'};
+      var statusLabels = {draft:'Application Started',submitted:'Application Submitted',prescreening_submitted:'Pre-Screening in Progress',pricing_review:'Pricing Under Review',pricing_accepted:'Pricing Accepted',pre_approval_review:'Pre-Approval Under Review',pre_approved:'Pre-Approved',kyc_documents:'KYC Documents Required',kyc_submitted:'KYC Documents Submitted',compliance_review:'Compliance Review in Progress',in_review:'Verification Ongoing',under_review:'Under Compliance Review',edd_required:'Enhanced Due Diligence Required',approved:'Approved \u2013 Ready for Activation',rejected:'Application Declined',rmi_sent:'Further Information Requested',withdrawn:'Application Withdrawn',pending:'Pending'};
       var color = statusColors[app.status] || '#999';
       var label = app.status_label || statusLabels[app.status] || app.status;
       var riskColors = {LOW:'#10b981',MEDIUM:'#f59e0b',HIGH:'#ef4444',VERY_HIGH:'#dc2626'};
@@ -4915,7 +4915,7 @@ function triggerRegistryVerification() {
 
   // Registry verification is handled server-side by the compliance team
   setTimeout(() => {
-    results.innerHTML = '<div style="padding:8px;background:rgba(59,130,246,0.08);border:1px solid #3b82f6;border-radius:6px;color:#3b82f6;font-size:11px;"><strong>&#9203; Pending</strong><br/>Registry verification will be completed by the compliance team during review.</div>';
+    results.innerHTML = '<div style="padding:8px;background:rgba(59,130,246,0.08);border:1px solid #3b82f6;border-radius:6px;color:#3b82f6;font-size:11px;"><strong>&#9203; Pending</strong><br/>Document verification will be performed automatically after submission. Results will appear here once processing is complete.</div>';
   }, 1200);
 }
 
@@ -5528,6 +5528,21 @@ async function submitPrescreening(e) {
     return;
   }
 
+  // W2-2: Minimum director count check
+  var dirRowsForCount = document.querySelectorAll('#directors-body tr');
+  var validDirCount = 0;
+  dirRowsForCount.forEach(function(row) {
+    var nameInputs = row.querySelectorAll('input[type="text"]');
+    var hasName = false;
+    nameInputs.forEach(function(inp) { if (inp.value.trim()) hasName = true; });
+    if (hasName) validDirCount++;
+  });
+  if (validDirCount === 0) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Director Required', 'At least one director is required before submitting the application.');
+    return;
+  }
+
   // ── Email validation ──
   var emailVal = getFieldValue('f-email');
   var emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -5765,12 +5780,16 @@ var computedRiskLevel = 'LOW';
 var computedRiskScore = 0;
 var dimScores = {};
 
-var PRICING = {
-  LOW:       { onboarding: 1500, monthly: 100,  txn: 30.00 },
-  MEDIUM:    { onboarding: 2500, monthly: 150,  txn: 40.00 },
-  HIGH:      { onboarding: 3500, monthly: 250,  txn: 60.00 },
-  VERY_HIGH: { onboarding: 5000, monthly: 250,  txn: 60.00 }
+// Server-authoritative pricing (populated from submit response).
+// Fallback values mirror backend PRICING_TIERS exactly.
+var PRICING_FALLBACK = {
+  LOW:       { onboarding_fee: 500,  annual_monitoring_fee: 250,  currency: 'USD' },
+  MEDIUM:    { onboarding_fee: 1500, annual_monitoring_fee: 750,  currency: 'USD' },
+  HIGH:      { onboarding_fee: 3500, annual_monitoring_fee: 2000, currency: 'USD' },
+  VERY_HIGH: { onboarding_fee: 5000, annual_monitoring_fee: 3500, currency: 'USD' }
 };
+var serverPricing = null; // set from server response after submit
+var serverScreening = null; // set from server response after submit
 
 function scoreFromValue(val, mapping) {
   if (!val) return 2;
@@ -5795,6 +5814,14 @@ function startRiskScoring(serverResult) {
     level: serverResult.risk_level || 'LOW',
     dims: serverResult.risk_dimensions || {}
   };
+  // Store server-authoritative pricing for display
+  if (serverResult.pricing) {
+    serverPricing = serverResult.pricing;
+  }
+  // Store server screening results for review page
+  if (serverResult.screening) {
+    serverScreening = serverResult.screening;
+  }
   computedRiskScore = Number(result.score || 0);
   computedRiskLevel = result.level || 'LOW';
   dimScores = result.dims || {};
@@ -5930,7 +5957,11 @@ function showPricingView() {
 
 function populatePricing(level) {
   if (!level) level = computedRiskLevel || 'LOW';
-  var p = PRICING[level] || PRICING.LOW;
+  // Use server-authoritative pricing if available, otherwise fallback to backend-aligned defaults
+  var p = serverPricing || PRICING_FALLBACK[level] || PRICING_FALLBACK.LOW;
+  var onboardingFee = Number(p.onboarding_fee || 0);
+  var annualFee = Number(p.annual_monitoring_fee || 0);
+  var currency = p.currency || 'USD';
   var levelDisplay = (level || 'LOW').replace('_',' ');
   document.getElementById('pricing-risk-level').textContent = levelDisplay + ' RISK';
   document.getElementById('pricing-plan-title').textContent = 'Corporate Account — ' + (level === 'VERY_HIGH' ? 'Enhanced' : level === 'HIGH' ? 'Enhanced' : level === 'MEDIUM' ? 'Standard' : 'Standard');
@@ -5949,9 +5980,8 @@ function populatePricing(level) {
 
   var tbody = document.getElementById('pricing-table-body');
   tbody.innerHTML = '' +
-    '<tr><td><strong>Onboarding Fee</strong><div class="fee-desc">One-time account setup, compliance screening, and due diligence</div></td><td>$ ' + p.onboarding.toLocaleString() + '.00</td></tr>' +
-    '<tr><td><strong>Monthly Account Fee</strong><div class="fee-desc">Recurring monthly fee for account maintenance and compliance monitoring</div></td><td>$ ' + p.monthly.toLocaleString() + '.00</td></tr>' +
-    '<tr><td><strong>Transaction Fee</strong><div class="fee-desc">Per-transaction processing fee (domestic and international)</div></td><td>$ ' + p.txn.toFixed(2) + '</td></tr>';
+    '<tr><td><strong>Onboarding Fee</strong><div class="fee-desc">One-time account setup, compliance screening, and due diligence</div></td><td>' + currency + ' ' + onboardingFee.toLocaleString() + '.00</td></tr>' +
+    '<tr><td><strong>Annual Monitoring Fee</strong><div class="fee-desc">Annual compliance monitoring, periodic review, and ongoing screening</div></td><td>' + currency + ' ' + annualFee.toLocaleString() + '.00</td></tr>';
 }
 
 async function acceptPricing() {
@@ -7273,11 +7303,29 @@ function generateComplianceMemo() {
     (pepFound ? '<span style="color:#d97706;font-weight:600;">⚠️ At least one PEP has been identified among the directors/UBOs. Enhanced due diligence measures have been applied including a PEP declaration form.</span>' : 'No Politically Exposed Persons have been identified among the declared directors and UBOs.') +
     ' Ownership structure has been reviewed against the Company Structure Chart.';
 
-  // Screening
+  // Screening — sourced from actual server screening results
   var screening = document.getElementById('memo-screening');
-  screening.innerHTML = '<strong>Sanctions:</strong> No matches identified across UN, EU, OFAC, and HMT sanctions lists.<br/>' +
-    '<strong>PEP:</strong> ' + (pepFound ? 'PEP match confirmed — declaration form completed and supporting documents collected.' : 'No PEP classifications identified.') + '<br/>' +
-    '<strong>Adverse Media:</strong> No material adverse media identified from automated scan of 100,000+ global sources.';
+  var screeningHtml = '';
+  if (serverScreening && serverScreening.total_hits != null) {
+    var sanctionsHits = serverScreening.total_hits || 0;
+    var flagsList = serverScreening.flags || [];
+    if (sanctionsHits === 0 && flagsList.length === 0) {
+      screeningHtml += '<strong>Sanctions:</strong> No matches identified from automated screening.<br/>';
+    } else {
+      screeningHtml += '<strong>Sanctions:</strong> <span style="color:#d97706;font-weight:600;">' + sanctionsHits + ' potential match(es) identified — manual review required.</span><br/>';
+    }
+    screeningHtml += '<strong>PEP:</strong> ' + (pepFound ? 'PEP declaration confirmed — declaration form completed and supporting documents collected.' : 'No PEP classifications declared.') + '<br/>';
+    if (flagsList.length > 0) {
+      screeningHtml += '<strong>Screening Flags:</strong> <span style="color:#d97706;">' + flagsList.length + ' flag(s) raised during automated screening.</span>';
+    } else {
+      screeningHtml += '<strong>Screening Flags:</strong> No flags raised during automated screening.';
+    }
+  } else {
+    screeningHtml += '<strong>Sanctions:</strong> <span style="color:var(--text3);">Screening results not yet available — will be completed during compliance review.</span><br/>';
+    screeningHtml += '<strong>PEP:</strong> ' + (pepFound ? 'PEP declaration confirmed — declaration form completed.' : 'No PEP classifications declared.') + '<br/>';
+    screeningHtml += '<strong>Adverse Media:</strong> <span style="color:var(--text3);">Results pending — will be completed during compliance review.</span>';
+  }
+  screening.innerHTML = screeningHtml;
 
   // Risk Drivers
   var drivers = document.getElementById('memo-risk-drivers');
@@ -8785,6 +8833,11 @@ async function resumeApplication(ref, stage) {
       computedRiskLevel = app.risk_level || computedRiskLevel;
       computedRiskScore = Number(app.risk_score || computedRiskScore || 0);
       if (app.risk_dimensions) dimScores = app.risk_dimensions;
+      // Restore server pricing from prescreening_data if available
+      var psDataForPricing = app.prescreening_data || {};
+      if (psDataForPricing.pricing) {
+        serverPricing = psDataForPricing.pricing;
+      }
       target = getApplicationView(app.status || stage);
 
       // Restore saved form data from save-resume API
@@ -8813,13 +8866,13 @@ async function resumeApplication(ref, stage) {
 
       if (dirEmpty && Array.isArray(psDirs) && psDirs.length) {
         restorePartyRows('directors-body', psDirs.map(function(d) {
-          return { first_name: d.first_name || '', last_name: d.last_name || '', nationality: d.nationality || '', is_pep: d.is_pep || 'No', person_key: d.person_key || '' };
+          return { first_name: d.first_name || '', last_name: d.last_name || '', date_of_birth: d.date_of_birth || '', nationality: d.nationality || '', is_pep: d.is_pep || 'No', person_key: d.person_key || '' };
         }), 'director');
         restoredFields = true;
       }
       if (uboEmpty && Array.isArray(psUbos) && psUbos.length) {
         restorePartyRows('ubos-body', psUbos.map(function(u) {
-          return { first_name: u.first_name || '', last_name: u.last_name || '', nationality: u.nationality || '', ownership_pct: u.ownership_pct || '', is_pep: u.is_pep || 'No', person_key: u.person_key || '' };
+          return { first_name: u.first_name || '', last_name: u.last_name || '', date_of_birth: u.date_of_birth || '', nationality: u.nationality || '', ownership_pct: u.ownership_pct || '', is_pep: u.is_pep || 'No', person_key: u.person_key || '' };
         }), 'ubo');
         restoredFields = true;
       }
@@ -8872,8 +8925,8 @@ function renderSidebarApps(apps) {
     var ref = app.ref || app.id || '';
     REF_TO_SNAV[ref] = snavId;
     var icon = app.status === 'approved' ? '&#x2705;' : '&#x1F4C4;';
-    var statusLabels = {draft:'Draft',submitted:'Submitted',prescreening_submitted:'Screening',pricing_review:'Pricing',pricing_accepted:'Accepted',pre_approval_review:'Review',pre_approved:'Pre-Approved',kyc_documents:'KYC',kyc_submitted:'KYC Sent',compliance_review:'Compliance',in_review:'Review',edd_required:'EDD',approved:'&#x2713;',rejected:'Declined',rmi_sent:'Info Req.',withdrawn:'Withdrawn',pending:'Pending'};
-    var statusClasses = {draft:'review',submitted:'review',prescreening_submitted:'review',pricing_review:'review',pricing_accepted:'review',pre_approval_review:'review',pre_approved:'review',kyc_documents:'kyc',kyc_submitted:'review',compliance_review:'review',in_review:'review',edd_required:'kyc',approved:'approved',rejected:'rejected',rmi_sent:'kyc',withdrawn:'rejected',pending:'review'};
+    var statusLabels = {draft:'Draft',submitted:'Submitted',prescreening_submitted:'Screening',pricing_review:'Pricing',pricing_accepted:'Accepted',pre_approval_review:'Review',pre_approved:'Pre-Approved',kyc_documents:'KYC',kyc_submitted:'KYC Sent',compliance_review:'Compliance',in_review:'Review',under_review:'Review',edd_required:'EDD',approved:'&#x2713;',rejected:'Declined',rmi_sent:'Info Req.',withdrawn:'Withdrawn',pending:'Pending'};
+    var statusClasses = {draft:'review',submitted:'review',prescreening_submitted:'review',pricing_review:'review',pricing_accepted:'review',pre_approval_review:'review',pre_approved:'review',kyc_documents:'kyc',kyc_submitted:'review',compliance_review:'review',in_review:'review',under_review:'review',edd_required:'kyc',approved:'approved',rejected:'rejected',rmi_sent:'kyc',withdrawn:'rejected',pending:'review'};
     var label = statusLabels[app.status] || app.status || '';
     var cls = statusClasses[app.status] || 'review';
     var stage = app.status || 'pending';
