@@ -63,6 +63,8 @@ _DEFAULT_FLAGS = {
         "ENABLE_REAL_SCREENING": False,
         "ENABLE_SIMULATED_SCREENING": True,
         "REQUIRE_REAL_API_KEYS": False,
+        "DEMO_USE_LIVE_SCREENING": False,
+        "DEMO_USE_LIVE_DOCUMENT_AI": False,
         "ENABLE_DEBUG_ENDPOINTS": True,
         "ENABLE_SHORTCUT_LOGIN": True,
     },
@@ -84,6 +86,8 @@ _DEFAULT_FLAGS = {
         "ENABLE_REAL_SCREENING": False,
         "ENABLE_SIMULATED_SCREENING": True,
         "REQUIRE_REAL_API_KEYS": False,
+        "DEMO_USE_LIVE_SCREENING": False,  # Set true + provide API key for live screening in demo
+        "DEMO_USE_LIVE_DOCUMENT_AI": False,  # Set true + provide ANTHROPIC_API_KEY for live doc AI in demo
         "ENABLE_DEBUG_ENDPOINTS": True,
         "ENABLE_SHORTCUT_LOGIN": True,
     },
@@ -105,6 +109,8 @@ _DEFAULT_FLAGS = {
         "ENABLE_REAL_SCREENING": True,
         "ENABLE_SIMULATED_SCREENING": False,
         "REQUIRE_REAL_API_KEYS": True,
+        "DEMO_USE_LIVE_SCREENING": False,
+        "DEMO_USE_LIVE_DOCUMENT_AI": False,
         "ENABLE_DEBUG_ENDPOINTS": False,
         "ENABLE_SHORTCUT_LOGIN": False,
     },
@@ -126,6 +132,8 @@ _DEFAULT_FLAGS = {
         "ENABLE_REAL_SCREENING": True,
         "ENABLE_SIMULATED_SCREENING": False,
         "REQUIRE_REAL_API_KEYS": True,
+        "DEMO_USE_LIVE_SCREENING": False,
+        "DEMO_USE_LIVE_DOCUMENT_AI": False,
         "ENABLE_DEBUG_ENDPOINTS": False,
         "ENABLE_SHORTCUT_LOGIN": False,
     },
@@ -370,6 +378,17 @@ def get_ip_geolocation_api_key() -> str:
 
 def get_opensanctions_api_key() -> str:
     return os.environ.get("OPENSANCTIONS_API_KEY", "")
+
+def get_complyadvantage_api_key() -> str:
+    return os.environ.get("COMPLYADVANTAGE_API_KEY", "")
+
+def use_live_screening_in_demo() -> bool:
+    """Check if demo should use live screening (ComplyAdvantage or other provider)."""
+    return flags.is_enabled("DEMO_USE_LIVE_SCREENING") and bool(get_complyadvantage_api_key())
+
+def use_live_document_ai_in_demo() -> bool:
+    """Check if demo should use live document AI (Anthropic Claude)."""
+    return flags.is_enabled("DEMO_USE_LIVE_DOCUMENT_AI") and bool(os.environ.get("ANTHROPIC_API_KEY", ""))
 
 
 def get_cors_origin() -> str:

@@ -56,6 +56,8 @@ services:
         sync: false
       - key: OPENSANCTIONS_API_KEY
         sync: false
+      - key: COMPLYADVANTAGE_API_KEY
+        sync: false
       - key: S3_BUCKET
         sync: false
       - key: AWS_ACCESS_KEY_ID
@@ -165,6 +167,17 @@ services:
         value: "true"
       - key: REQUIRE_REAL_API_KEYS
         value: "false"
+      # ── Demo live-data flags (set true + provide API keys for live screening in demo) ──
+      - key: DEMO_USE_LIVE_SCREENING
+        value: "false"
+      - key: DEMO_USE_LIVE_DOCUMENT_AI
+        value: "false"
+      # ── ComplyAdvantage credentials (set in Render dashboard for live screening) ──
+      - key: COMPLYADVANTAGE_API_KEY
+        sync: false
+      # ── Anthropic credentials (set in Render dashboard for live document AI) ──
+      - key: ANTHROPIC_API_KEY
+        sync: false
       - key: ENABLE_DEBUG_ENDPOINTS
         value: "true"
       - key: ENABLE_SHORTCUT_LOGIN

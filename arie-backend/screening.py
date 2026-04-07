@@ -33,7 +33,9 @@ from environment import (
     ENV, is_production, is_staging, is_demo,
     get_sumsub_base_url, get_sumsub_app_token, get_sumsub_secret_key,
     get_sumsub_level_name, get_opencorporates_api_key, get_ip_geolocation_api_key,
+    use_live_screening_in_demo,
 )
+from complyadvantage_client import get_complyadvantage_client
 
 logger = logging.getLogger("arie")
 
@@ -50,11 +52,53 @@ SUMSUB_LEVEL_NAME = get_sumsub_level_name()
 
 def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Person"):
     """
-    Screen a person or entity against Sumsub AML (sanctions, PEP, watchlists).
-    Returns: { matched: bool, results: [...], source: "sumsub"|"simulated" }
+    Screen a person or entity against AML (sanctions, PEP, watchlists).
+
+    Routing priority:
+      1. If DEMO_USE_LIVE_SCREENING is enabled and ComplyAdvantage API key is
+         configured → use ComplyAdvantage for live screening data in demo.
+      2. If Sumsub credentials are configured → use Sumsub AML path.
+      3. Otherwise → simulated fallback (clearly labeled).
+
+    Returns: { matched: bool, results: [...], source: "complyadvantage"|"sumsub"|"simulated" }
     """
+    # ── Priority 1: ComplyAdvantage live screening (when demo live-data is enabled) ──
+    if use_live_screening_in_demo() or (not is_demo() and not SUMSUB_APP_TOKEN):
+        ca_client = get_complyadvantage_client()
+        if ca_client.is_configured:
+            try:
+                birth_year = None
+                if birth_date:
+                    try:
+                        birth_year = int(str(birth_date)[:4])
+                    except (ValueError, TypeError):
+                        pass
+
+                country_codes = []
+                if nationality:
+                    country_codes = [nationality.upper()[:2]]
+
+                ca_entity = "person" if entity_type.lower() in ("person", "individual") else "company"
+                result = ca_client.screen_entity(
+                    name=name,
+                    entity_type=ca_entity,
+                    birth_year=birth_year,
+                    country_codes=country_codes if country_codes else None,
+                )
+
+                if result.get("api_status") == "live":
+                    logger.info(f"ComplyAdvantage screening completed for '{name}': "
+                                f"matched={result.get('matched')}, hits={len(result.get('results', []))}")
+                    return result
+                else:
+                    logger.warning(f"ComplyAdvantage screening failed for '{name}': {result.get('note', 'unknown')}")
+                    # Fall through to Sumsub or simulation
+            except Exception as e:
+                logger.error(f"ComplyAdvantage screening error for '{name}': {e}")
+                # Fall through to Sumsub or simulation
+
+    # ── Priority 2: Sumsub AML screening ──
     try:
-        # First create/retrieve a Sumsub applicant
         import hashlib
         ext_id = f"{entity_type}_{hashlib.md5(name.encode()).hexdigest()[:12]}"
         parts = name.strip().split(" ", 1)
@@ -71,18 +115,16 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
 
         if not applicant_result.get("applicant_id"):
             logger.warning(f"Sumsub AML: Failed to create/retrieve applicant for '{name}'")
-            return _simulate_aml_screen(name)
+            return _fallback_aml_screen(name)
 
         applicant_id = applicant_result["applicant_id"]
 
-        # Get AML screening results
         from sumsub_client import get_sumsub_client
         client = get_sumsub_client()
         aml_result = client.get_aml_screening(applicant_id)
 
         if aml_result.get("source") == "simulated":
-            # API not configured, return simulated
-            return _simulate_aml_screen(name)
+            return _fallback_aml_screen(name)
 
         # Parse AML check results into our standard format
         aml_checks = aml_result.get("aml_checks", [])
@@ -114,7 +156,23 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
 
     except Exception as e:
         logger.error(f"Sumsub AML screening error: {e}")
-        return _simulate_aml_screen(name)
+        return _fallback_aml_screen(name)
+
+
+def _fallback_aml_screen(name, note="No screening credentials configured — simulated result"):
+    """
+    Fallback screening: try ComplyAdvantage first if configured, otherwise simulate.
+    This ensures demo never shows simulated data when a live provider is available.
+    """
+    ca_client = get_complyadvantage_client()
+    if ca_client.is_configured:
+        try:
+            result = ca_client.screen_entity(name=name)
+            if result.get("api_status") == "live":
+                return result
+        except Exception as e:
+            logger.warning(f"ComplyAdvantage fallback failed for '{name}': {e}")
+    return _simulate_aml_screen(name, note=note)
 
 
 def _simulate_aml_screen(name, note="No Sumsub credentials configured — simulated result"):

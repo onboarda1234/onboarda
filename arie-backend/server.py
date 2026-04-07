@@ -5708,6 +5708,10 @@ class APIStatusHandler(BaseHandler):
         if not user:
             return
 
+        from complyadvantage_client import get_complyadvantage_client
+        from environment import use_live_screening_in_demo, use_live_document_ai_in_demo
+        ca_client = get_complyadvantage_client()
+
         self.success({
             "opensanctions": {
                 "configured": bool(OPENSANCTIONS_API_KEY),
@@ -5729,12 +5733,21 @@ class APIStatusHandler(BaseHandler):
                 "status": "live" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
                 "description": "KYC identity verification (document + selfie + liveness)"
             },
+            "complyadvantage": {
+                "configured": ca_client.is_configured,
+                "status": "live" if ca_client.is_configured else "not_configured",
+                "demo_live_screening": use_live_screening_in_demo(),
+                "description": "ComplyAdvantage AML/PEP/sanctions screening"
+            },
             "anthropic": {
                 "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
                 "status": "configured" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",
+                "demo_live_document_ai": use_live_document_ai_in_demo(),
                 "description": "Claude-backed document verification and optional analysis paths; the live compliance memo approval path remains deterministic"
             },
             "environment": ENVIRONMENT,
+            "demo_live_screening_enabled": use_live_screening_in_demo(),
+            "demo_live_document_ai_enabled": use_live_document_ai_in_demo(),
         })
 
 
