@@ -51,7 +51,7 @@ SUMSUB_LEVEL_NAME = get_sumsub_level_name()
 def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Person"):
     """
     Screen a person or entity against Sumsub AML (sanctions, PEP, watchlists).
-    Returns: { matched: bool, results: [...], source: "sumsub"|"simulated" }
+    Returns: { matched: bool, results: [...], source: "sumsub"|"simulated"|"error" }
     """
     try:
         # First create/retrieve a Sumsub applicant
@@ -71,6 +71,16 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
 
         if not applicant_result.get("applicant_id"):
             logger.warning(f"Sumsub AML: Failed to create/retrieve applicant for '{name}'")
+            # S-02 fix: if Sumsub is configured but returned an error, propagate it honestly
+            if applicant_result.get("api_status") == "error":
+                return {
+                    "matched": False,
+                    "results": [],
+                    "source": "sumsub",
+                    "api_status": "error",
+                    "error": applicant_result.get("error", "Applicant creation failed"),
+                    "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                }
             return _simulate_aml_screen(name)
 
         applicant_id = applicant_result["applicant_id"]
@@ -79,6 +89,17 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
         from sumsub_client import get_sumsub_client
         client = get_sumsub_client()
         aml_result = client.get_aml_screening(applicant_id)
+
+        # S-02 fix: if AML API returned an error, propagate it honestly
+        if aml_result.get("api_status") == "error":
+            return {
+                "matched": False,
+                "results": [],
+                "source": "sumsub",
+                "api_status": "error",
+                "error": aml_result.get("error", "AML screening failed"),
+                "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            }
 
         if aml_result.get("source") == "simulated":
             # API not configured, return simulated
@@ -114,6 +135,22 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
 
     except Exception as e:
         logger.error(f"Sumsub AML screening error: {e}")
+        # S-02 fix: if Sumsub is configured, do not silently fall back to simulation
+        client = None
+        try:
+            from sumsub_client import get_sumsub_client
+            client = get_sumsub_client()
+        except Exception:
+            pass
+        if client and client.is_configured:
+            return {
+                "matched": False,
+                "results": [],
+                "source": "sumsub",
+                "api_status": "error",
+                "error": f"Sumsub AML screening failed: {str(e)[:200]}",
+                "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            }
         return _simulate_aml_screen(name)
 
 

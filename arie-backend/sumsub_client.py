@@ -688,10 +688,16 @@ class SumsubClient:
                 }
             else:
                 logger.warning(f"Sumsub get AML screening failed: {status}")
+                if self.is_configured:
+                    return self._error_result("get_aml_screening", f"API returned {status}",
+                                              applicant_id=applicant_id)
                 return self._simulate_aml_screening(applicant_id, note=f"API returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
             logger.error(f"Sumsub get AML screening error: {e}")
+            if self.is_configured:
+                return self._error_result("get_aml_screening", str(e)[:100],
+                                          applicant_id=applicant_id)
             return self._simulate_aml_screening(applicant_id, note=str(e)[:100])
 
     def generate_access_token(
