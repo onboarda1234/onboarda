@@ -4204,6 +4204,9 @@ class ReportHandler(BaseHandler):
         risk_level = self.get_argument("risk_level", None)
         date_from = self.get_argument("date_from", None)
         date_to = self.get_argument("date_to", None)
+        jurisdiction = self.get_argument("jurisdiction", None)
+        entity_type = self.get_argument("entity_type", None)
+        assigned_to = self.get_argument("assigned_to", None)
         fields = self.get_argument("fields", "ref,company_name,status,risk_level,created_at,assigned_to")
 
         # Build query
@@ -4221,6 +4224,15 @@ class ReportHandler(BaseHandler):
         if date_to:
             conditions.append("a.created_at <= ?")
             params.append(date_to)
+        if jurisdiction:
+            conditions.append("a.country = ?")
+            params.append(jurisdiction)
+        if entity_type:
+            conditions.append("a.entity_type = ?")
+            params.append(entity_type)
+        if assigned_to:
+            conditions.append("a.assigned_to = ?")
+            params.append(assigned_to)
 
         where = " AND ".join(conditions) if conditions else "1=1"
 
@@ -4463,6 +4475,7 @@ class ReportAnalyticsHandler(BaseHandler):
             # --- edd_stats ---
             edd_stats = {"total": 0, "active": 0, "completed": 0, "by_stage": {}}
             try:
+                # EDD stats respect all active filters via application join
                 edd_conditions = []
                 edd_params = []
                 if date_from:
@@ -4471,27 +4484,33 @@ class ReportAnalyticsHandler(BaseHandler):
                 if date_to:
                     edd_conditions.append("a.created_at <= ?")
                     edd_params.append(date_to)
+                if status:
+                    edd_conditions.append("a.status = ?")
+                    edd_params.append(status)
+                if risk_level:
+                    edd_conditions.append("a.risk_level = ?")
+                    edd_params.append(risk_level)
+                if jurisdiction:
+                    edd_conditions.append("a.country = ?")
+                    edd_params.append(jurisdiction)
+                if entity_type:
+                    edd_conditions.append("a.entity_type = ?")
+                    edd_params.append(entity_type)
+                if assigned_to:
+                    edd_conditions.append("a.assigned_to = ?")
+                    edd_params.append(assigned_to)
                 edd_where = " AND ".join(edd_conditions) if edd_conditions else "1=1"
 
-                if edd_conditions:
-                    edd_query = f"""
-                        SELECT
-                            COUNT(*) as total,
-                            SUM(CASE WHEN e.stage NOT IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as active,
-                            SUM(CASE WHEN e.stage IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as completed
-                        FROM edd_cases e
-                        JOIN applications a ON a.id = e.application_id
-                        WHERE {edd_where}
-                    """
-                    row = db.execute(edd_query, edd_params).fetchone()
-                else:
-                    row = db.execute("""
-                        SELECT
-                            COUNT(*) as total,
-                            SUM(CASE WHEN e.stage NOT IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as active,
-                            SUM(CASE WHEN e.stage IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as completed
-                        FROM edd_cases e
-                    """).fetchone()
+                edd_query = f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN e.stage NOT IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as active,
+                        SUM(CASE WHEN e.stage IN ('edd_approved','edd_rejected') THEN 1 ELSE 0 END) as completed
+                    FROM edd_cases e
+                    JOIN applications a ON a.id = e.application_id
+                    WHERE {edd_where}
+                """
+                row = db.execute(edd_query, edd_params).fetchone()
                 if row:
                     r = dict(row)
                     edd_stats["total"] = r.get("total") or 0
@@ -4499,20 +4518,13 @@ class ReportAnalyticsHandler(BaseHandler):
                     edd_stats["completed"] = r.get("completed") or 0
 
                 # by_stage
-                if edd_conditions:
-                    stage_rows = db.execute(f"""
-                        SELECT e.stage, COUNT(*) as cnt
-                        FROM edd_cases e
-                        JOIN applications a ON a.id = e.application_id
-                        WHERE {edd_where}
-                        GROUP BY e.stage
-                    """, edd_params).fetchall()
-                else:
-                    stage_rows = db.execute("""
-                        SELECT e.stage, COUNT(*) as cnt
-                        FROM edd_cases e
-                        GROUP BY e.stage
-                    """).fetchall()
+                stage_rows = db.execute(f"""
+                    SELECT e.stage, COUNT(*) as cnt
+                    FROM edd_cases e
+                    JOIN applications a ON a.id = e.application_id
+                    WHERE {edd_where}
+                    GROUP BY e.stage
+                """, edd_params).fetchall()
                 by_stage = {}
                 for row in stage_rows:
                     r = dict(row)
@@ -4524,14 +4536,16 @@ class ReportAnalyticsHandler(BaseHandler):
             # --- screening_stats ---
             screening_stats = {"total_reviews": 0, "cleared": 0, "escalated": 0, "follow_up": 0}
             try:
-                row = db.execute("""
+                row = db.execute(f"""
                     SELECT
                         COUNT(*) as total_reviews,
-                        SUM(CASE WHEN disposition='cleared' THEN 1 ELSE 0 END) as cleared,
-                        SUM(CASE WHEN disposition='escalated' THEN 1 ELSE 0 END) as escalated,
-                        SUM(CASE WHEN disposition='follow_up_required' THEN 1 ELSE 0 END) as follow_up
-                    FROM screening_reviews
-                """).fetchone()
+                        SUM(CASE WHEN sr.disposition='cleared' THEN 1 ELSE 0 END) as cleared,
+                        SUM(CASE WHEN sr.disposition='escalated' THEN 1 ELSE 0 END) as escalated,
+                        SUM(CASE WHEN sr.disposition='follow_up_required' THEN 1 ELSE 0 END) as follow_up
+                    FROM screening_reviews sr
+                    JOIN applications a ON a.id = sr.application_id
+                    WHERE {where}
+                """, params).fetchone()
                 if row:
                     r = dict(row)
                     screening_stats = {
@@ -4546,14 +4560,16 @@ class ReportAnalyticsHandler(BaseHandler):
             # --- periodic_review_stats ---
             periodic_review_stats = {"total": 0, "pending": 0, "completed": 0, "overdue": 0}
             try:
-                row = db.execute("""
+                row = db.execute(f"""
                     SELECT
                         COUNT(*) as total,
-                        SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending,
-                        SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed,
-                        SUM(CASE WHEN status='pending' AND due_date < date('now') THEN 1 ELSE 0 END) as overdue
-                    FROM periodic_reviews
-                """).fetchone()
+                        SUM(CASE WHEN pr.status='pending' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN pr.status='completed' THEN 1 ELSE 0 END) as completed,
+                        SUM(CASE WHEN pr.status='pending' AND pr.due_date < date('now') THEN 1 ELSE 0 END) as overdue
+                    FROM periodic_reviews pr
+                    JOIN applications a ON a.id = pr.application_id
+                    WHERE {where}
+                """, params).fetchone()
                 if row:
                     r = dict(row)
                     periodic_review_stats = {
@@ -4591,15 +4607,16 @@ class ReportAnalyticsHandler(BaseHandler):
             # --- recent_decisions ---
             recent_decisions = []
             try:
-                rows = db.execute("""
+                rows = db.execute(f"""
                     SELECT d.application_ref, d.decision_type,
                            d.risk_level, d.timestamp, d.source,
                            a.company_name
                     FROM decision_records d
                     LEFT JOIN applications a ON a.ref = d.application_ref
+                    WHERE {where}
                     ORDER BY d.timestamp DESC
                     LIMIT 20
-                """).fetchall()
+                """, params).fetchall()
                 for row in rows:
                     r = dict(row)
                     recent_decisions.append({

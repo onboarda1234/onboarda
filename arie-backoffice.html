@@ -1502,6 +1502,11 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     </div>
   </div>
 
+  <!-- Degraded mode banner (shown when API unavailable, using client-side fallback) -->
+  <div id="rpt-degraded-banner" style="display:none;background:#fef3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 16px;margin-bottom:14px;font-size:12px;color:#856404;">
+    ⚠️ <strong>Limited data mode</strong> — Analytics API unavailable. Showing estimates from cached application data only. EDD, screening, and periodic review stats are not available in this mode.
+  </div>
+
   <!-- Filter Bar -->
   <div class="card" style="padding:14px 18px;margin-bottom:18px;">
     <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
@@ -2770,6 +2775,7 @@ async function loadFromAPI() {
           ref: a.ref,
           company: a.company_name,
           sector: a.sector || 'Unknown',
+          entityType: a.entity_type || '',
           risk: a.risk_level || 'LOW',
           score: a.risk_score || 0,
           lane: a.onboarding_lane || 'Standard Review',
@@ -3437,7 +3443,7 @@ function populateReportFilterDropdowns() {
   var jurisdictions = {}, entityTypes = {}, reviewers = {};
   APPLICATIONS.forEach(function(a) {
     if (a.country) jurisdictions[a.country] = true;
-    if (a.sector) entityTypes[a.sector] = true;
+    if (a.entityType) entityTypes[a.entityType] = true;
     if (a.assigned && a.assigned !== 'Unassigned') reviewers[a.assigned] = a.assignedId || a.assigned;
   });
   var jEl = document.getElementById('rpt-jurisdiction');
@@ -3483,6 +3489,8 @@ function renderReportsPage() {
   // Fetch analytics from backend API
   boApiCall('GET', '/reports/analytics' + (qs ? '?' + qs : '')).then(function(data) {
     RPT_DATA = data;
+    var banner = document.getElementById('rpt-degraded-banner');
+    if (banner) banner.style.display = 'none';
     renderReportOverview(data);
     renderReportOperations(data);
     renderReportCompliance(data);
@@ -3490,6 +3498,8 @@ function renderReportsPage() {
   }).catch(function() {
     // Fallback: render from in-memory APPLICATIONS data
     RPT_DATA = buildReportDataFromApplications(filters);
+    var banner = document.getElementById('rpt-degraded-banner');
+    if (banner) banner.style.display = 'block';
     renderReportOverview(RPT_DATA);
     renderReportOperations(RPT_DATA);
     renderReportCompliance(RPT_DATA);
@@ -3505,13 +3515,13 @@ function buildReportDataFromApplications(filters) {
   if (filters.status) apps = apps.filter(function(a) { return a.status && a.status.toLowerCase().replace(/\s+/g,'_') === filters.status; });
   if (filters.risk_level) apps = apps.filter(function(a) { return (a.risk || '').toUpperCase().replace(' ','_') === filters.risk_level; });
   if (filters.jurisdiction) apps = apps.filter(function(a) { return a.country === filters.jurisdiction; });
-  if (filters.entity_type) apps = apps.filter(function(a) { return a.sector === filters.entity_type; });
+  if (filters.entity_type) apps = apps.filter(function(a) { return a.entityType === filters.entity_type; });
   if (filters.assigned_to) apps = apps.filter(function(a) { return a.assignedId === filters.assigned_to || a.assigned === filters.assigned_to; });
 
   var total = apps.length;
   var approved = apps.filter(function(a) { return a.status === 'approved' || a.status === 'Approved'; }).length;
   var rejected = apps.filter(function(a) { var s = (a.status||'').toLowerCase(); return s === 'rejected' || s === 'declined'; }).length;
-  var pending = apps.filter(function(a) { var s = (a.status||'').toLowerCase().replace(/\s+/g,'_'); return s !== 'approved' && s !== 'rejected' && s !== 'declined' && s !== 'withdrawn'; }).length;
+  var pending = apps.filter(function(a) { var s = (a.status||'').toLowerCase().replace(/[\s\u2013-]+/g,'_'); return s === 'pending' || s === 'application_submitted' || s === 'submitted' || s === 'under_review'; }).length;
   var eddReq = apps.filter(function(a) { return (a.status||'').toLowerCase().replace(/\s+/g,'_') === 'edd_required'; }).length;
   var withdrawn = apps.filter(function(a) { return (a.status||'').toLowerCase() === 'withdrawn'; }).length;
   var scores = apps.map(function(a) { return parseFloat(a.score) || 0; });
@@ -3869,7 +3879,7 @@ function renderReportDataTable() {
   if (filters.status) apps = apps.filter(function(a) { return a.status && a.status.toLowerCase().replace(/\s+/g,'_') === filters.status; });
   if (filters.risk_level) apps = apps.filter(function(a) { return (a.risk || '').toUpperCase().replace(' ','_') === filters.risk_level; });
   if (filters.jurisdiction) apps = apps.filter(function(a) { return a.country === filters.jurisdiction; });
-  if (filters.entity_type) apps = apps.filter(function(a) { return a.sector === filters.entity_type; });
+  if (filters.entity_type) apps = apps.filter(function(a) { return a.entityType === filters.entity_type; });
   if (filters.assigned_to) apps = apps.filter(function(a) { return a.assignedId === filters.assigned_to || a.assigned === filters.assigned_to; });
 
   // Sort
@@ -3940,7 +3950,11 @@ function sortReportTable(field) {
 }
 
 function exportReportsCSV() {
-  boApiCall('GET', '/reports/generate?fields=ref,company_name,status,risk_level,risk_score,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count').then(function(resp) {
+  var filters = getReportFilters();
+  var filterParams = Object.keys(filters).filter(function(k) { return filters[k]; }).map(function(k) { return k + '=' + encodeURIComponent(filters[k]); }).join('&');
+  var baseFields = 'fields=ref,company_name,status,risk_level,risk_score,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count';
+  var url = '/reports/generate?' + baseFields + (filterParams ? '&' + filterParams : '');
+  boApiCall('GET', url).then(function(resp) {
     if (!resp.data || resp.data.length === 0) {
       showToast('No data to export', 'warning');
       return;

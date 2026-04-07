@@ -96,8 +96,16 @@ class DBConnection:
             return sql
         # 1. Placeholders: ? -> %s
         sql = sql.replace('?', '%s')
-        # 2. Datetime: datetime('now') -> NOW()
+        # 2. Datetime: datetime('now') -> NOW(), date('now') -> CURRENT_DATE
         sql = sql.replace("datetime('now')", "NOW()")
+        sql = sql.replace("date('now')", "CURRENT_DATE")
+        # 2a. strftime('%Y-%m', col) -> to_char(col, 'YYYY-MM')  (SQLite→PostgreSQL)
+        import re
+        sql = re.sub(
+            r"strftime\(\s*'%Y-%m'\s*,\s*([^)]+)\)",
+            r"to_char(\1, 'YYYY-MM')",
+            sql
+        )
         # 2b. rowid -> id (rowid is SQLite-specific)
         sql = sql.replace("ORDER BY rowid", "ORDER BY id")
         # 2c. AUTOINCREMENT -> SERIAL (SQLite vs PostgreSQL auto-increment)
