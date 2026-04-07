@@ -281,11 +281,62 @@ def _score_entity_type(entity_type_str, config_entity_scores=None):
     return 2
 
 
+# ══════════════════════════════════════════════════════════
+# CANONICAL RISK LEVEL CLASSIFICATION
+# Single source of truth for score-to-band mapping.
+# Aligned with Excel Risk Scoring Calculator v1.6:
+#   Low (0–39) | Medium (40–54) | High (55–69) | Very High (70–100)
+# No other code path may perform independent score-to-level mapping.
+# ══════════════════════════════════════════════════════════
+
+# Canonical hardcoded thresholds — must match DB seed and Excel
+CANONICAL_THRESHOLDS = [
+    {"level": "LOW", "min": 0, "max": 39.9},
+    {"level": "MEDIUM", "min": 40, "max": 54.9},
+    {"level": "HIGH", "min": 55, "max": 69.9},
+    {"level": "VERY_HIGH", "min": 70, "max": 100},
+]
+
+
+def classify_risk_level(composite_score, config=None):
+    """
+    Canonical score-to-band mapping.  ONE function, called from ONE place.
+    Reads thresholds from DB config first; falls back to CANONICAL_THRESHOLDS.
+
+    Thresholds (aligned with Excel Risk Scoring Calculator v1.6):
+        LOW:       0  – 39.9
+        MEDIUM:   40  – 54.9
+        HIGH:     55  – 69.9
+        VERY_HIGH: 70 – 100
+    """
+    if config and config.get("thresholds"):
+        thresholds = sorted(config["thresholds"], key=lambda t: t.get("min", 0))
+    else:
+        thresholds = CANONICAL_THRESHOLDS
+
+    level = "LOW"
+    for t in thresholds:
+        if composite_score >= t.get("min", 0):
+            level = t.get("level", "LOW")
+    return level
+
+
 def compute_risk_score(app_data, config_override=None):
     """
     Compute composite risk score from application data.
     Reads scoring configuration from DB (canonical). Falls back to hardcoded defaults.
-    Returns: { score, level, dimensions: {d1..d5}, lane }
+
+    Formula: composite = (weighted_avg - 1) / 3 × 100
+    Thresholds: LOW 0-39, MEDIUM 40-54, HIGH 55-69, VERY_HIGH 70-100
+
+    Returns: {
+        score: float (0-100),
+        level: str (LOW|MEDIUM|HIGH|VERY_HIGH),
+        dimensions: {d1..d5},
+        lane: str,
+        escalations: list[str],
+        requires_compliance_approval: bool,
+    }
     """
     data = safe_json_loads(app_data) if not isinstance(app_data, dict) else app_data
 
@@ -561,24 +612,11 @@ def compute_risk_score(app_data, config_override=None):
     weighted_avg = d1 * d1_weight + d2 * d2_weight + d3 * d3_weight + d4 * d4_weight + d5 * d5_weight
     composite = round((weighted_avg - 1) / 3 * 100, 1)
 
-    # ── Extract thresholds from config ──
-    if config and config.get("thresholds"):
-        thresholds = sorted(config["thresholds"], key=lambda t: t.get("min", 0))
-        level = "LOW"
-        for t in thresholds:
-            if composite >= t.get("min", 0):
-                level = t.get("level", "LOW")
-    else:
-        # Thresholds calibrated for (x-1)/3*100 normalisation (0-100 range)
-        # v1.6: Low 0-29, Medium 30-49, High 50-69, Very High 70-100
-        if composite >= 70:
-            level = "VERY_HIGH"
-        elif composite >= 50:
-            level = "HIGH"
-        elif composite >= 30:
-            level = "MEDIUM"
-        else:
-            level = "LOW"
+    # ── Classify risk level from score (single canonical mapping) ──
+    level = classify_risk_level(composite, config)
+
+    # ── Collect escalation flags ──
+    escalations = []
 
     # ── FLOOR RULE 1: Sanctioned / FATF_BLACK incorporation country → force VERY_HIGH ──
     # If the incorporation country is sanctioned or FATF blacklisted,
@@ -589,6 +627,7 @@ def compute_risk_score(app_data, config_override=None):
             logger.info(f"FLOOR RULE: Country '{inc_country}' is sanctioned/FATF_BLACK — forcing VERY_HIGH (was {level}, score {composite})")
         level = "VERY_HIGH"
         composite = max(composite, 70.0)
+        escalations.append(f"floor_rule_sanctioned_country:{inc_country}")
 
     # ── FLOOR RULE 2: UBO/Director sanctioned nationality → force VERY_HIGH ──
     # If any UBO or director holds nationality of a sanctioned/FATF_BLACK country,
@@ -604,7 +643,33 @@ def compute_risk_score(app_data, config_override=None):
                     logger.info(f"FLOOR RULE: UBO/Director '{person_name}' nationality '{nat}' maps to sanctioned '{mapped}' — forcing VERY_HIGH (was {level}, score {composite})")
                 level = "VERY_HIGH"
                 composite = max(composite, 70.0)
+                escalations.append(f"floor_rule_sanctioned_nationality:{mapped}")
                 break  # One match is sufficient
+
+    # ── ESCALATION RULE A: Any sub-factor scores 4 → mandatory compliance approval ──
+    # Per Excel Methodology: "Compliance approval is MANDATORY when any individual
+    # sub-factor scores 4 (Very High Risk)"
+    all_sub_scores = [
+        d1_entity, d1_owner, d1_pep, d1_adverse, d1_sow, d1_sof,
+        d2_inc, d2_ubo_nat, d2_inter, d2_op, d2_tgt,
+        d3_svc, d3_vol, d3_complexity,
+        d4,
+        d5_intro, d5_interaction
+    ]
+    if any(s >= 4 for s in all_sub_scores):
+        escalations.append("sub_factor_score_4")
+
+    # ── ESCALATION RULE B: Very High Risk sector → mandatory compliance approval ──
+    # Per Excel Methodology: "Business sector classified as Very High Risk"
+    if d4 >= 4:
+        escalations.append("very_high_risk_sector")
+
+    # ── ESCALATION RULE C: Composite score ≥ 85 → mandatory compliance approval ──
+    # Per Excel Methodology: "Overall composite score is 85 or above"
+    if composite >= 85:
+        escalations.append("composite_score_85_plus")
+
+    requires_compliance_approval = len(escalations) > 0
 
     lane_map = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}
 
@@ -612,5 +677,7 @@ def compute_risk_score(app_data, config_override=None):
         "score": composite,
         "level": level,
         "dimensions": {"d1": round(d1, 2), "d2": round(d2, 2), "d3": round(d3, 2), "d4": round(d4, 2), "d5": round(d5, 2)},
-        "lane": lane_map.get(level, "Standard Review")
+        "lane": lane_map.get(level, "Standard Review"),
+        "escalations": escalations,
+        "requires_compliance_approval": requires_compliance_approval,
     }

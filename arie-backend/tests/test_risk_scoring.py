@@ -70,9 +70,11 @@ EXCEL_SUBFACTORS = {
 
 # v1.6: Thresholds recalibrated for (x-1)/3*100 normalisation
 EXCEL_THRESHOLDS = [
-    ("LOW", 0, 29.9),
-    ("MEDIUM", 30, 49.9),
-    ("HIGH", 50, 69.9),
+    # Updated to match Excel Risk Scoring Calculator v1.6 (cell A50):
+    # Low (0–39) | Medium (40–54) | High (55–69) | Very High (70–100)
+    ("LOW", 0, 39.9),
+    ("MEDIUM", 40, 54.9),
+    ("HIGH", 55, 69.9),
     ("VERY_HIGH", 70, 100),
 ]
 

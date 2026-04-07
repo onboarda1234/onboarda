@@ -115,7 +115,7 @@ from rule_engine import (
     HIGH_RISK_SECTORS, MINIMUM_MEDIUM_SECTORS, MEDIUM_RISK_SECTORS,
     HIGH_RISK_COUNTRIES, ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
     RISK_WEIGHTS, RISK_RANK,
-    classify_country, score_sector, compute_risk_score,
+    classify_country, score_sector, compute_risk_score, classify_risk_level,
 )
 from validation_engine import (
     validate_compliance_memo,
@@ -1744,11 +1744,69 @@ class ApplicationDetailHandler(BaseHandler):
                 intermediaries=data["intermediaries"] if "intermediaries" in data else None
             )
 
+        # ── Risk recomputation on material field edits ──
+        # If any risk-relevant field changed, recompute the canonical risk score.
+        # This prevents stale risk values after back-office edits.
+        RISK_RELEVANT_FIELDS = {
+            "entity_type", "ownership_structure", "sector", "country",
+            "directors", "ubos", "intermediaries",
+        }
+        # Also check fields inside prescreening_data that affect scoring
+        RISK_RELEVANT_PRESCREENING = {
+            "operating_countries", "countries_of_operation", "target_markets",
+            "primary_service", "service_required", "monthly_volume",
+            "expected_volume", "transaction_complexity", "payment_corridors",
+            "source_of_wealth", "source_of_funds", "introduction_method",
+            "customer_interaction", "interaction_type", "cross_border",
+        }
+        risk_changed = any(k in data for k in RISK_RELEVANT_FIELDS)
+        if not risk_changed and "prescreening_data" in data:
+            ps = data.get("prescreening_data", {})
+            if isinstance(ps, dict):
+                risk_changed = any(k in ps for k in RISK_RELEVANT_PRESCREENING)
+
+        risk_recomputed = False
+        if risk_changed and app.get("risk_score") is not None:
+            try:
+                # Reload to get updated field values
+                updated_app = db.execute("SELECT * FROM applications WHERE id=?", (real_id,)).fetchone()
+                prescreening_data = safe_json_loads(updated_app["prescreening_data"])
+                directors, ubos, intermediaries = get_application_parties(db, real_id)
+                scoring_input = build_prescreening_risk_input(
+                    application=updated_app,
+                    prescreening_data=prescreening_data,
+                    directors=directors,
+                    ubos=ubos,
+                    intermediaries=intermediaries,
+                )
+                new_risk = compute_risk_score(scoring_input)
+                old_score = app.get("risk_score")
+                old_level = app.get("risk_level")
+                db.execute("""UPDATE applications SET
+                    risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                    updated_at=datetime('now') WHERE id=?""",
+                    (new_risk["score"], new_risk["level"],
+                     json.dumps(new_risk.get("dimensions", {})),
+                     new_risk.get("lane", "Standard Review"), real_id))
+                risk_recomputed = True
+                if old_score != new_risk["score"] or old_level != new_risk["level"]:
+                    logger.info(
+                        "RISK RECOMPUTED on edit: app_id=%s "
+                        "score %s→%s, level %s→%s",
+                        real_id, old_score, new_risk["score"],
+                        old_level, new_risk["level"]
+                    )
+            except Exception as e:
+                logger.warning("Risk recomputation on edit failed for app_id=%s: %s", real_id, e)
+
         db.commit()
         db.close()
 
-        self.log_audit(user, "Update", app["ref"], f"Application updated")
-        self.success({"status": "updated"})
+        audit_detail = "Application updated"
+        if risk_recomputed:
+            audit_detail += " (risk recomputed)"
+        self.log_audit(user, "Update", app["ref"], audit_detail)
+        self.success({"status": "updated", "risk_recomputed": risk_recomputed})
 
     def patch(self, app_id):
         """Partial update — status changes, assignments, etc."""
@@ -1983,13 +2041,8 @@ class SubmitApplicationHandler(BaseHandler):
         if screening_report["total_hits"] > 0:
             risk_bump = min(screening_report["total_hits"] * 8, 25)  # Up to +25 points
             risk["score"] = min(100, risk["score"] + risk_bump)
-            # Re-classify level
-            if risk["score"] >= 70:
-                risk["level"] = "VERY_HIGH"
-            elif risk["score"] >= 55:
-                risk["level"] = "HIGH"
-            elif risk["score"] >= 40:
-                risk["level"] = "MEDIUM"
+            # Re-classify level using CANONICAL thresholds (single source of truth)
+            risk["level"] = classify_risk_level(risk["score"])
             risk["lane"] = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}[risk["level"]]
             risk["screening_elevated"] = True
             risk["screening_hits"] = screening_report["total_hits"]
@@ -2160,31 +2213,30 @@ class KYCSubmitHandler(BaseHandler):
             db.close()
             return self.error("Please upload at least one document before submitting", 400)
 
-        # Re-compute risk score at KYC submission if not already scored
+        # Always recompute risk at KYC submission — data may have changed since pre-screening
         risk_score = app["risk_score"] or 0
-        risk_level = app["risk_level"] or "LOW"
-        if risk_score == 0:
-            try:
-                prescreening = safe_json_loads(app["prescreening_data"])
-                directors, ubos, intermediaries = get_application_parties(db, real_id)
-                scoring_input = build_prescreening_risk_input(
-                    application=app,
-                    prescreening_data=prescreening,
-                    directors=directors,
-                    ubos=ubos,
-                    intermediaries=intermediaries,
-                )
-                score_result = compute_risk_score(scoring_input)
-                risk_score = score_result["score"]
-                risk_level = score_result["level"]
-                db.execute("""UPDATE applications SET
-                    risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
-                    updated_at=datetime('now') WHERE id=?""",
-                    (score_result["score"], score_result["level"],
-                     json.dumps(score_result.get("dimensions", {})),
-                     score_result.get("lane", "Standard Review"), real_id))
-            except Exception as e:
-                logger.warning(f"Risk scoring at KYC submit failed for {app['ref']}: {e}")
+        risk_level = app["risk_level"] or "MEDIUM"
+        try:
+            prescreening = safe_json_loads(app["prescreening_data"])
+            directors, ubos, intermediaries = get_application_parties(db, real_id)
+            scoring_input = build_prescreening_risk_input(
+                application=app,
+                prescreening_data=prescreening,
+                directors=directors,
+                ubos=ubos,
+                intermediaries=intermediaries,
+            )
+            score_result = compute_risk_score(scoring_input)
+            risk_score = score_result["score"]
+            risk_level = score_result["level"]
+            db.execute("""UPDATE applications SET
+                risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                updated_at=datetime('now') WHERE id=?""",
+                (score_result["score"], score_result["level"],
+                 json.dumps(score_result.get("dimensions", {})),
+                 score_result.get("lane", "Standard Review"), real_id))
+        except Exception as e:
+            logger.warning(f"Risk scoring at KYC submit failed for {app['ref']}: {e}")
 
         # W2-4: Set status to kyc_submitted (previously dead state, now active)
         db.execute("""
@@ -7309,10 +7361,10 @@ class PeriodicReviewScheduleHandler(BaseHandler):
         today = now.date().isoformat()
 
         risk_intervals = {
-            "LOW": 730,  # days
-            "MEDIUM": 365,
-            "HIGH": 180,
-            "VERY_HIGH": 90
+            "LOW": 1095,       # 36 months (3 years)
+            "MEDIUM": 730,     # 24 months (2 years)
+            "HIGH": 365,       # 12 months (1 year)
+            "VERY_HIGH": 180   # 6 months
         }
 
         created_count = 0

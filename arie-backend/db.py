@@ -558,14 +558,11 @@ def _get_postgres_schema() -> str:
         id SERIAL PRIMARY KEY,
         application_id TEXT REFERENCES applications(id),
         client_name TEXT,
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         trigger_type TEXT,
         trigger_reason TEXT,
-        previous_risk_level TEXT,
-        new_risk_level TEXT,
-        review_memo TEXT,
-        status TEXT DEFAULT 'pending',
-        due_date DATE,
+        previous_risk_level TEXT CHECK(previous_risk_level IS NULL OR previous_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
+        new_risk_level TEXT CHECK(new_risk_level IS NULL OR new_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         started_at TIMESTAMP,
         completed_at TIMESTAMP,
         decision TEXT,
@@ -610,7 +607,7 @@ def _get_postgres_schema() -> str:
         report_type TEXT DEFAULT 'SAR' CHECK(report_type IN ('SAR','STR','CTR','MLRO')),
         subject_name TEXT NOT NULL,
         subject_type TEXT DEFAULT 'individual' CHECK(subject_type IN ('individual','entity')),
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         narrative TEXT NOT NULL,
         indicators JSONB DEFAULT '[]',
         transaction_details JSONB DEFAULT '{}',
@@ -652,7 +649,7 @@ def _get_postgres_schema() -> str:
         id SERIAL PRIMARY KEY,
         application_id TEXT NOT NULL REFERENCES applications(id),
         client_name TEXT NOT NULL,
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         risk_score REAL,
         stage TEXT DEFAULT 'triggered' CHECK(stage IN ('triggered','information_gathering','analysis','pending_senior_review','edd_approved','edd_rejected')),
         assigned_officer TEXT REFERENCES users(id),
@@ -839,7 +836,7 @@ def _get_postgres_schema() -> str:
         decision_type TEXT NOT NULL CHECK(decision_type IN (
             'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
         )),
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         confidence_score REAL,
         source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
         actor_user_id TEXT,
@@ -1162,11 +1159,11 @@ def _get_sqlite_schema() -> str:
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         application_id TEXT REFERENCES applications(id),
         client_name TEXT,
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         trigger_type TEXT,
         trigger_reason TEXT,
-        previous_risk_level TEXT,
-        new_risk_level TEXT,
+        previous_risk_level TEXT CHECK(previous_risk_level IS NULL OR previous_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
+        new_risk_level TEXT CHECK(new_risk_level IS NULL OR new_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         review_memo TEXT,
         status TEXT DEFAULT 'pending',
         due_date TEXT,
@@ -1214,7 +1211,7 @@ def _get_sqlite_schema() -> str:
         report_type TEXT DEFAULT 'SAR' CHECK(report_type IN ('SAR','STR','CTR','MLRO')),
         subject_name TEXT NOT NULL,
         subject_type TEXT DEFAULT 'individual' CHECK(subject_type IN ('individual','entity')),
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         narrative TEXT NOT NULL,
         indicators TEXT DEFAULT '[]',
         transaction_details TEXT DEFAULT '{}',
@@ -1256,7 +1253,7 @@ def _get_sqlite_schema() -> str:
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         application_id TEXT NOT NULL REFERENCES applications(id),
         client_name TEXT NOT NULL,
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         risk_score REAL,
         stage TEXT DEFAULT 'triggered' CHECK(stage IN ('triggered','information_gathering','analysis','pending_senior_review','edd_approved','edd_rejected')),
         assigned_officer TEXT REFERENCES users(id),
@@ -1436,7 +1433,7 @@ def _get_sqlite_schema() -> str:
         decision_type TEXT NOT NULL CHECK(decision_type IN (
             'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
         )),
-        risk_level TEXT,
+        risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         confidence_score REAL,
         source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
         actor_user_id TEXT,
@@ -2059,7 +2056,7 @@ def _run_migrations(db: DBConnection):
                 decision_type TEXT NOT NULL CHECK(decision_type IN (
                     'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
                 )),
-                risk_level TEXT,
+                risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
                 confidence_score REAL,
                 source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
                 actor_user_id TEXT,
@@ -2082,7 +2079,7 @@ def _run_migrations(db: DBConnection):
                 decision_type TEXT NOT NULL CHECK(decision_type IN (
                     'approve','reject','escalate_edd','request_documents','pre_approve','request_info'
                 )),
-                risk_level TEXT,
+                risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
                 confidence_score REAL,
                 source TEXT NOT NULL CHECK(source IN ('manual','supervisor','rule_engine')),
                 actor_user_id TEXT,
@@ -2099,7 +2096,43 @@ def _run_migrations(db: DBConnection):
             """)
         logger.info("Migration v2.10: decision_records table ready")
 
-    # Migration v2.11: Add 'under_review' to applications status CHECK constraint
+    # Migration v2.11: Add CHECK constraints on risk_level columns in secondary tables
+    # For existing PostgreSQL databases that were created before CHECK constraints
+    # were added to the CREATE TABLE definitions.  Fresh databases already have them.
+    if USE_POSTGRESQL:
+        _risk_level_checks = [
+            # (table, column, constraint_name)
+            ("periodic_reviews", "risk_level", "periodic_reviews_risk_level_check"),
+            ("periodic_reviews", "previous_risk_level", "periodic_reviews_prev_risk_level_check"),
+            ("periodic_reviews", "new_risk_level", "periodic_reviews_new_risk_level_check"),
+            ("sar_reports", "risk_level", "sar_reports_risk_level_check"),
+            ("edd_cases", "risk_level", "edd_cases_risk_level_check"),
+            ("decision_records", "risk_level", "decision_records_risk_level_check"),
+        ]
+        for table, column, cname in _risk_level_checks:
+            try:
+                # Check if constraint already exists
+                row = db.execute(
+                    "SELECT 1 FROM information_schema.table_constraints "
+                    "WHERE table_name=%s AND constraint_name=%s",
+                    (table, cname)
+                ).fetchone()
+                if not row:
+                    db.execute(
+                        f"ALTER TABLE {table} ADD CONSTRAINT {cname} "
+                        f"CHECK({column} IS NULL OR {column} IN "
+                        f"('LOW','MEDIUM','HIGH','VERY_HIGH'))"
+                    )
+                    db.commit()
+                    logger.info("Migration v2.11: Added %s on %s.%s", cname, table, column)
+            except Exception as e:
+                logger.debug("Migration v2.11: %s.%s constraint skipped: %s", table, column, e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+    # Migration v2.12: Add 'under_review' to applications status CHECK constraint
     # Resolves inconsistency where server.py state transitions reference 'under_review'
     # but the DB CHECK constraint did not include it, causing IntegrityError on transition.
     if USE_POSTGRESQL:
@@ -2118,7 +2151,7 @@ def _run_migrations(db: DBConnection):
                     constraint_def = constraint_row[0]
 
             if constraint_def and "'under_review'" in constraint_def:
-                logger.info("Migration v2.11: applications status CHECK constraint already includes 'under_review'")
+                logger.info("Migration v2.12: applications status CHECK constraint already includes 'under_review'")
             else:
                 db.execute("ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_status_check")
                 db.execute("""ALTER TABLE applications ADD CONSTRAINT applications_status_check
@@ -2126,9 +2159,9 @@ def _run_migrations(db: DBConnection):
                     'pre_approval_review','pre_approved','kyc_documents','kyc_submitted','compliance_review','in_review','under_review',
                     'edd_required','approved','rejected','rmi_sent','withdrawn'))""")
                 db.commit()
-                logger.info("Migration v2.11: Added 'under_review' to applications status CHECK constraint")
+                logger.info("Migration v2.12: Added 'under_review' to applications status CHECK constraint")
         except Exception as e:
-            logger.debug(f"Migration v2.11 status constraint update: {e}")
+            logger.debug("Migration v2.12 status constraint update: %s", e)
             try:
                 db.conn.rollback()
             except Exception:
@@ -2153,8 +2186,7 @@ def _populate_default_scoring_config(db: 'DBConnection'):
         "saudi arabia": 2, "turkey": 2, "uae": 2,
         "uganda": 2, "ghana": 2, "ivory coast": 2, "jordan": 2, "sri lanka": 2, "tunisia": 2,
         "jersey": 2, "guernsey": 2, "isle of man": 2, "liechtenstein": 2,
-        "estonia": 2, "pakistan": 2,
-        "seychelles": 3,
+        "estonia": 2, "pakistan": 2, "seychelles": 2,
         "algeria": 3, "burkina faso": 3, "cameroon": 3, "democratic republic of congo": 3,
         "haiti": 3, "kenya": 3, "laos": 3, "lebanon": 3, "mali": 3, "monaco": 3,
         "mozambique": 3, "nigeria": 3, "philippines": 3, "senegal": 3, "south africa": 3,
@@ -2169,8 +2201,8 @@ def _populate_default_scoring_config(db: 'DBConnection'):
         "agriculture": 1, "education": 1,
         "healthcare": 2, "technology": 2, "software": 2, "saas": 2, "manufacturing": 2,
         "retail": 2, "e-commerce": 2, "media": 2, "logistics": 2, "insurance": 2,
-        "telecommunications": 2, "construction": 2, "banking": 2,
-        "import": 3, "export": 3, "real estate": 3, "mining": 3,
+        "telecommunications": 2, "banking": 2,
+        "construction": 3, "import": 3, "export": 3, "real estate": 3, "mining": 3,
         "oil": 3, "gas": 3, "energy": 3, "money services": 3, "forex": 3, "precious": 3,
         "non-profit": 3, "ngo": 3, "charity": 3, "advisory": 3,
         "management consulting": 3, "consulting": 3, "financial / tax advisory": 3,
@@ -2710,9 +2742,9 @@ def seed_initial_data(db: DBConnection):
         }
         ])
         default_thresholds = json.dumps([
-        {"level": "LOW", "min": 0, "max": 29.9},
-        {"level": "MEDIUM", "min": 30, "max": 49.9},
-        {"level": "HIGH", "min": 50, "max": 69.9},
+        {"level": "LOW", "min": 0, "max": 39.9},
+        {"level": "MEDIUM", "min": 40, "max": 54.9},
+        {"level": "HIGH", "min": 55, "max": 69.9},
         {"level": "VERY_HIGH", "min": 70, "max": 100}
         ])
         default_country_scores = json.dumps({
@@ -2731,9 +2763,8 @@ def seed_initial_data(db: DBConnection):
         "saudi arabia": 2, "turkey": 2, "uae": 2,
         "uganda": 2, "ghana": 2, "ivory coast": 2, "jordan": 2, "sri lanka": 2, "tunisia": 2,
         "jersey": 2, "guernsey": 2, "isle of man": 2, "liechtenstein": 2,
-        "estonia": 2, "pakistan": 2,
+        "estonia": 2, "pakistan": 2, "seychelles": 2,
         # Score 3 — High Risk (FATF grey list, offshore/secrecy)
-        "seychelles": 3,
         "algeria": 3, "burkina faso": 3, "cameroon": 3, "democratic republic of congo": 3,
         "haiti": 3, "kenya": 3, "laos": 3, "lebanon": 3, "mali": 3, "monaco": 3,
         "mozambique": 3, "nigeria": 3, "philippines": 3, "senegal": 3, "south africa": 3,
@@ -2749,8 +2780,8 @@ def seed_initial_data(db: DBConnection):
         "agriculture": 1, "education": 1,
         "healthcare": 2, "technology": 2, "software": 2, "saas": 2, "manufacturing": 2,
         "retail": 2, "e-commerce": 2, "media": 2, "logistics": 2, "insurance": 2,
-        "telecommunications": 2, "construction": 2, "banking": 2,
-        "import": 3, "export": 3, "real estate": 3, "mining": 3,
+        "telecommunications": 2, "banking": 2,
+        "construction": 3, "import": 3, "export": 3, "real estate": 3, "mining": 3,
         "oil": 3, "gas": 3, "energy": 3, "money services": 3, "forex": 3, "precious": 3,
         "non-profit": 3, "ngo": 3, "charity": 3, "advisory": 3,
         "management consulting": 3, "consulting": 3, "financial / tax advisory": 3,
