@@ -93,6 +93,19 @@ def _derive_has_licence(legacy_text):
     return True
 
 
+def _coerce_boolish(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in ("yes", "true", "1"):
+        return True
+    if text in ("no", "false", "0"):
+        return False
+    return None
+
+
 def _derive_cross_border_expected(transaction):
     if transaction.get("cross_border_expected") is True:
         return True
@@ -213,9 +226,9 @@ def _populate_canonical(merged):
     )
 
     canonical["licensing"]["legacy_text"] = first_non_empty(merged.get("regulatory_licences"))
-    canonical["licensing"]["has_licence"] = merged.get("has_licence")
-    if canonical["licensing"]["has_licence"] is None:
-        canonical["licensing"]["has_licence"] = _derive_has_licence(canonical["licensing"]["legacy_text"])
+    canonical["licensing"]["is_licensed"] = first_non_empty(merged.get("is_licensed"), merged.get("has_licence"))
+    if canonical["licensing"]["is_licensed"] is None:
+        canonical["licensing"]["is_licensed"] = _derive_has_licence(canonical["licensing"]["legacy_text"])
     canonical["licensing"]["regulated_activity_declared"] = merged.get("regulated_activity_declared")
     canonical["licensing"]["licences"] = _copy_list(merged.get("licences"))
 
@@ -312,7 +325,8 @@ def _project_compatibility_aliases(merged, canonical):
     merged["source_of_funds"] = canonical["funds"]["summary"]
 
     merged["regulatory_licences"] = canonical["licensing"]["legacy_text"]
-    merged["has_licence"] = canonical["licensing"]["has_licence"]
+    merged["is_licensed"] = canonical["licensing"]["is_licensed"]
+    merged["has_licence"] = canonical["licensing"]["is_licensed"]
     merged["regulated_activity_declared"] = canonical["licensing"]["regulated_activity_declared"]
     merged["licences"] = canonical["licensing"]["licences"]
 
@@ -368,6 +382,16 @@ def normalize_prescreening_data(data, existing=None):
     for key in ("entity_type", "ownership_structure", "sector", "brn"):
         if payload.get(key):
             merged[key] = payload.get(key)
+
+    coerced_has_licence = _coerce_boolish(first_non_empty(merged.get("is_licensed"), merged.get("has_licence")))
+    if coerced_has_licence is not None:
+        merged["is_licensed"] = coerced_has_licence
+        merged["has_licence"] = coerced_has_licence
+        if not coerced_has_licence:
+            merged["regulatory_licences"] = ""
+            merged["licence_number"] = ""
+            merged["licence_authority"] = ""
+            merged["licence_type"] = ""
 
     if payload.get("directors") is not None:
         merged["directors"] = _copy_list(payload.get("directors"))

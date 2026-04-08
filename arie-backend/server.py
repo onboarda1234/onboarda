@@ -530,17 +530,11 @@ def merge_prescreening_sources(primary, fallback) -> dict:
 def load_saved_session_prescreening(db, app_record) -> dict:
     """Load the latest saved portal form snapshot for an application, if any."""
     app_id = app_record.get("id") if isinstance(app_record, dict) else None
-    client_id = app_record.get("client_id") if isinstance(app_record, dict) else None
     session = None
     if app_id:
         session = db.execute(
             "SELECT form_data FROM client_sessions WHERE application_id=? ORDER BY updated_at DESC LIMIT 1",
             (app_id,)
-        ).fetchone()
-    if not session and client_id:
-        session = db.execute(
-            "SELECT form_data FROM client_sessions WHERE client_id=? ORDER BY updated_at DESC LIMIT 1",
-            (client_id,)
         ).fetchone()
     if not session:
         return {}
@@ -1718,6 +1712,52 @@ class ApplicationsHandler(BaseHandler):
         self.success({"id": app_id, "ref": ref, "status": "draft", "status_label": get_status_label("draft")}, 201)
 
 
+def cleanup_application_delete_artifacts(db, application_id, application_ref):
+    """Delete uploaded document artifacts and non-cascading child rows before app hard delete."""
+    documents = db.execute(
+        "SELECT id, file_path, s3_key FROM documents WHERE application_id=?",
+        (application_id,)
+    ).fetchall()
+
+    for doc in documents:
+        file_path = doc["file_path"]
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                logger.warning("Failed to remove draft document file %s: %s", file_path, exc)
+
+        if doc.get("s3_key") and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                deleted, message = s3.delete_document(doc["s3_key"])
+                if not deleted:
+                    logger.warning("S3 deletion failed for draft application doc %s: %s", doc["s3_key"], message)
+            except Exception as exc:
+                logger.warning("S3 deletion failed for draft application doc %s: %s", doc["s3_key"], exc)
+
+    for table in (
+        "client_sessions",
+        "documents",
+        "client_notifications",
+        "monitoring_alerts",
+        "periodic_reviews",
+        "sar_reports",
+        "compliance_memos",
+        "edd_cases",
+        "directors",
+        "ubos",
+        "intermediaries",
+        "transactions",
+        "agent_executions",
+        "sumsub_applicant_mappings",
+        "supervisor_pipeline_results",
+        "supervisor_audit_log",
+    ):
+        db.execute(f"DELETE FROM {table} WHERE application_id=?", (application_id,))
+    db.execute("DELETE FROM decision_records WHERE application_ref=?", (application_ref,))
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -2065,6 +2105,37 @@ class ApplicationDetailHandler(BaseHandler):
         db.commit()
         db.close()
         self.success({"status": "updated"})
+
+    def delete(self, app_id):
+        """Delete a draft application for the owning client."""
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        if user.get("type") != "client":
+            db.close()
+            return self.error("Only portal clients can delete applications.", 403)
+
+        if app["status"] != "draft":
+            db.close()
+            return self.error("Only draft applications can be deleted.", 403)
+
+        cleanup_application_delete_artifacts(db, app["id"], app["ref"])
+        db.execute("DELETE FROM applications WHERE id=?", (app["id"],))
+        self.log_audit(user, "Delete", app["ref"], f"Draft application deleted by client: {app['company_name']}", db=db)
+        db.commit()
+        db.close()
+        self.success({"status": "deleted", "id": app["id"], "ref": app["ref"]})
 
 
 class SubmitApplicationHandler(BaseHandler):
@@ -5273,14 +5344,12 @@ class SaveResumeHandler(BaseHandler):
         db = get_db()
         # Support filtering by specific application_id
         app_id = self.get_argument("application_id", None)
-        if app_id:
-            session = db.execute(
-                "SELECT * FROM client_sessions WHERE client_id=? AND application_id=? ORDER BY updated_at DESC LIMIT 1",
-                (user["sub"], app_id)).fetchone()
-        else:
-            session = db.execute(
-                "SELECT * FROM client_sessions WHERE client_id=? ORDER BY updated_at DESC LIMIT 1",
-                (user["sub"],)).fetchone()
+        if not app_id:
+            db.close()
+            return self.error("application_id required", 400)
+        session = db.execute(
+            "SELECT * FROM client_sessions WHERE client_id=? AND application_id=? ORDER BY updated_at DESC LIMIT 1",
+            (user["sub"], app_id)).fetchone()
         db.close()
         if session:
             self.success({"form_data": safe_json_loads(session["form_data"]),
@@ -5296,20 +5365,17 @@ class SaveResumeHandler(BaseHandler):
         data = self.get_json()
         db = get_db()
         app_id = data.get("application_id")
-        if app_id:
-            existing = db.execute(
-                "SELECT id FROM client_sessions WHERE client_id=? AND application_id=?",
-                (user["sub"], app_id)
-            ).fetchone()
-        else:
-            existing = db.execute(
-                "SELECT id FROM client_sessions WHERE client_id=? AND application_id IS NULL",
-                (user["sub"],)
-            ).fetchone()
+        if not app_id:
+            db.close()
+            return self.error("application_id required", 400)
+        existing = db.execute(
+            "SELECT id FROM client_sessions WHERE client_id=? AND application_id=?",
+            (user["sub"], app_id)
+        ).fetchone()
         if existing:
             db.execute("UPDATE client_sessions SET form_data=?, last_step=?, application_id=?, updated_at=datetime('now') WHERE id=?",
                        (json.dumps(data.get("form_data",{})), data.get("last_step",0),
-                        data.get("application_id"), existing["id"]))
+                         data.get("application_id"), existing["id"]))
         else:
             db.execute("INSERT INTO client_sessions (client_id, application_id, form_data, last_step) VALUES (?,?,?,?)",
                        (user["sub"], data.get("application_id"), json.dumps(data.get("form_data",{})), data.get("last_step",0)))

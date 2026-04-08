@@ -528,7 +528,7 @@ def _get_postgres_schema() -> str:
     CREATE TABLE IF NOT EXISTS client_sessions (
         id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
         client_id TEXT REFERENCES clients(id),
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         form_data JSONB DEFAULT '{}',
         last_step INTEGER DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -537,7 +537,7 @@ def _get_postgres_schema() -> str:
     -- Monitoring Alerts
     CREATE TABLE IF NOT EXISTS monitoring_alerts (
         id SERIAL PRIMARY KEY,
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         client_name TEXT,
         alert_type TEXT,
         severity TEXT,
@@ -556,7 +556,7 @@ def _get_postgres_schema() -> str:
     -- Periodic Reviews
     CREATE TABLE IF NOT EXISTS periodic_reviews (
         id SERIAL PRIMARY KEY,
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         client_name TEXT,
         risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         trigger_type TEXT,
@@ -587,7 +587,7 @@ def _get_postgres_schema() -> str:
     -- Client Notifications
     CREATE TABLE IF NOT EXISTS client_notifications (
         id SERIAL PRIMARY KEY,
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         client_id TEXT REFERENCES clients(id),
         notification_type TEXT,
         title TEXT NOT NULL,
@@ -601,7 +601,7 @@ def _get_postgres_schema() -> str:
     -- Suspicious Activity Reports (SAR)
     CREATE TABLE IF NOT EXISTS sar_reports (
         id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         alert_id INTEGER REFERENCES monitoring_alerts(id),
         sar_reference TEXT UNIQUE,
         report_type TEXT DEFAULT 'SAR' CHECK(report_type IN ('SAR','STR','CTR','MLRO')),
@@ -1129,7 +1129,7 @@ def _get_sqlite_schema() -> str:
     CREATE TABLE IF NOT EXISTS client_sessions (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
         client_id TEXT REFERENCES clients(id),
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         form_data TEXT DEFAULT '{}',
         last_step INTEGER DEFAULT 0,
         updated_at TEXT DEFAULT (datetime('now'))
@@ -1138,7 +1138,7 @@ def _get_sqlite_schema() -> str:
     -- Monitoring Alerts
     CREATE TABLE IF NOT EXISTS monitoring_alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         client_name TEXT,
         alert_type TEXT,
         severity TEXT,
@@ -1157,7 +1157,7 @@ def _get_sqlite_schema() -> str:
     -- Periodic Reviews
     CREATE TABLE IF NOT EXISTS periodic_reviews (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         client_name TEXT,
         risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         trigger_type TEXT,
@@ -1191,7 +1191,7 @@ def _get_sqlite_schema() -> str:
     -- Client Notifications
     CREATE TABLE IF NOT EXISTS client_notifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         client_id TEXT REFERENCES clients(id),
         notification_type TEXT,
         title TEXT NOT NULL,
@@ -1205,7 +1205,7 @@ def _get_sqlite_schema() -> str:
     -- Suspicious Activity Reports (SAR)
     CREATE TABLE IF NOT EXISTS sar_reports (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(8)))),
-        application_id TEXT REFERENCES applications(id),
+        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         alert_id INTEGER REFERENCES monitoring_alerts(id),
         sar_reference TEXT UNIQUE,
         report_type TEXT DEFAULT 'SAR' CHECK(report_type IN ('SAR','STR','CTR','MLRO')),

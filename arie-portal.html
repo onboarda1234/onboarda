@@ -250,42 +250,47 @@
 
   /* ── Progress Steps ── */
   .steps {
-    display: flex; align-items: center; gap: 0;
-    margin-bottom: 40px; position: relative;
+    display: flex; align-items: flex-start; gap: 0;
+    margin: 0 0 32px; position: relative;
+    padding: 8px 4px 0;
   }
   .step {
     display: flex; flex-direction: column; align-items: center; flex: 1;
-    position: relative;
+    position: relative; gap: 10px;
+    text-align: center;
   }
   .step::after {
     content: '';
-    position: absolute; top: 16px; left: 50%; width: 100%;
-    height: 2px; background: var(--border);
+    position: absolute; top: 22px; left: 50%; width: 100%;
+    height: 3px; background: linear-gradient(90deg, rgba(203,213,225,0.95), rgba(226,232,240,0.95));
     z-index: 0;
     transition: var(--transition);
+    border-radius: 999px;
   }
   .step:last-child::after { display: none; }
   .step-circle {
-    width: 34px; height: 34px; border-radius: 50%;
+    width: 44px; height: 44px; border-radius: 999px;
     display: flex; align-items: center; justify-content: center;
     font-size: 13px; font-weight: 700; position: relative; z-index: 1;
-    background: var(--bg2); border: 2px solid var(--border2); color: var(--text3);
+    background: linear-gradient(180deg, #fff, var(--bg2));
+    border: 1.5px solid var(--border2); color: var(--text3);
     transition: var(--transition);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    box-shadow: 0 8px 20px rgba(15,23,42,0.06);
   }
   .step.active .step-circle {
     background: linear-gradient(135deg, var(--brand), #4F46E5);
-    border-color: transparent; color: #fff;
-    box-shadow: 0 4px 16px rgba(43,47,143,0.35);
+    border-color: rgba(79,70,229,0.2); color: #fff;
+    box-shadow: 0 10px 24px rgba(43,47,143,0.28);
+    transform: translateY(-1px);
   }
   .step.done .step-circle {
-    background: var(--green); border-color: transparent; color: #fff;
-    box-shadow: 0 2px 8px rgba(16,185,129,0.3);
+    background: linear-gradient(135deg, #16a34a, #22c55e); border-color: rgba(34,197,94,0.18); color: #fff;
+    box-shadow: 0 8px 18px rgba(34,197,94,0.22);
   }
-  .step.done::after { background: var(--green); opacity: 0.4; }
-  .step-label { font-size: 11px; margin-top: 8px; color: var(--text3); font-weight: 500; }
-  .step.active .step-label { color: var(--brand); font-weight: 600; }
-  .step.done .step-label { color: var(--green); }
+   .step.done::after { background: linear-gradient(90deg, rgba(22,163,74,0.55), rgba(34,197,94,0.35)); }
+  .step-label { font-size: 11px; line-height: 1.4; color: var(--text3); font-weight: 600; letter-spacing: 0.15px; max-width: 112px; }
+  .step.active .step-label { color: var(--brand); font-weight: 700; }
+  .step.done .step-label { color: #15803d; }
 
   /* ── Cards ── */
   .card {
@@ -1161,6 +1166,16 @@
   .app-table tr:last-child td { border-bottom: none; }
   .app-table tbody tr { transition: var(--transition); }
   .app-table tbody tr:hover td { background: rgba(43,47,143,0.02); cursor: pointer; }
+  .app-table .actions-cell { width: 144px; text-align: right; }
+  .app-table-actions { display:flex; justify-content:flex-end; gap:8px; }
+  .btn-table-action {
+    border:1px solid var(--border2); background:var(--bg2); color:var(--text2);
+    border-radius:10px; padding:7px 10px; font-size:11px; font-weight:600; cursor:pointer;
+    transition:var(--transition); font-family:inherit;
+  }
+  .btn-table-action:hover { border-color:var(--brand); color:var(--brand); background:rgba(43,47,143,0.04); }
+  .btn-table-action.danger { border-color:rgba(239,68,68,0.2); color:#dc2626; }
+  .btn-table-action.danger:hover { background:rgba(239,68,68,0.06); border-color:rgba(239,68,68,0.35); color:#b91c1c; }
   .app-tbl-name { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
   .app-tbl-ref { font-size: 11px; color: var(--text3); }
   .app-progress-bar {
@@ -1430,7 +1445,7 @@
 
   <div class="dash-nav-sep"></div>
   <div class="dash-sidebar-label">Account</div>
-  <button type="button" class="dash-nav-item" onclick="showView('prescreening')">
+  <button type="button" class="dash-nav-item" onclick="startNewApplication()">
     <span class="dash-nav-icon">➕</span> New Application
   </button>
   <button type="button" class="dash-nav-item" onclick="showView('status-lookup')">
@@ -1753,7 +1768,7 @@
             <div style="margin-top:12px;font-size:11px;opacity:0.8;" id="resume-cta-ref"></div>
             <div class="dash-cta-arrow">→</div>
           </div>
-          <div class="dash-cta-card secondary" onclick="showView('prescreening')">
+          <div class="dash-cta-card secondary" onclick="startNewApplication()">
             <div class="dash-cta-icon">➕</div>
             <div class="dash-cta-title">Start New Application</div>
             <div class="dash-cta-desc">Open an account for a new company. Our AI agent will pre-fill the form from global registries.</div>
@@ -1776,10 +1791,11 @@
                 <th>Progress</th>
                 <th>Status</th>
                 <th>Last Updated</th>
+                <th style="text-align:right;">Actions</th>
               </tr>
             </thead>
             <tbody id="my-apps-tbody">
-              <tr><td colspan="6" style="text-align:center;padding:2rem;color:#999;">Loading your applications...</td></tr>
+              <tr><td colspan="7" style="text-align:center;padding:2rem;color:#999;">Loading your applications...</td></tr>
             </tbody>
           </table>
         </div>
@@ -2353,39 +2369,38 @@
             </div>
           </div>
 
-          <!-- Financial Information -->
-          <div class="section-title">Financial Information</div>
-          <div class="form-grid cols-2">
-            <div class="form-group">
-              <label>Financial Year End</label>
-              <input type="text" id="f-financial-year-end" placeholder="e.g. 31 December" />
-            </div>
-            <div class="form-group">
-              <label>Annual Turnover</label>
-              <input type="text" id="f-annual-turnover" placeholder="e.g. 5,000,000 USD" />
-            </div>
-          </div>
-
           <!-- 4. Licences -->
           <div class="section-title">Licences & Regulations</div>
           <div class="form-grid cols-1">
             <div class="form-group">
-              <label>List any licences held <span class="req">*</span></label>
-              <textarea id="f-licences" placeholder="E.g. FCA authorised payment institution (UK, ref. 123456), EMI licence Malta…&#10;Or enter 'None' if not applicable" required></textarea>
+              <label>Is the company licensed? <span class="req">*</span></label>
+              <select id="f-is-licensed" required onchange="syncConditionalFormState()">
+                <option value="">Select…</option>
+                <option value="Yes">Yes</option>
+                <option value="No">No</option>
+              </select>
             </div>
           </div>
-          <div class="form-grid cols-3">
-            <div class="form-group">
-              <label>Licence Number</label>
-              <input type="text" id="f-licence-number" placeholder="e.g. 123456" />
+          <div id="licence-fields-group" style="display:none;">
+            <div class="form-grid cols-1">
+              <div class="form-group">
+                <label>Licence details / licence held <span class="req">*</span></label>
+                <textarea id="f-licences" placeholder="E.g. FCA authorised payment institution (UK, ref. 123456), EMI licence Malta…"></textarea>
+              </div>
             </div>
-            <div class="form-group">
-              <label>Licence Authority</label>
-              <input type="text" id="f-licence-authority" placeholder="e.g. FCA, FSC, BdF" />
-            </div>
-            <div class="form-group">
-              <label>Licence Type</label>
-              <input type="text" id="f-licence-type" placeholder="e.g. EMI, PSP, Investment" />
+            <div class="form-grid cols-3">
+              <div class="form-group">
+                <label>Licence Number</label>
+                <input type="text" id="f-licence-number" placeholder="e.g. 123456" />
+              </div>
+              <div class="form-group">
+                <label>Licence Authority</label>
+                <input type="text" id="f-licence-authority" placeholder="e.g. FCA, FSC, BdF" />
+              </div>
+              <div class="form-group">
+                <label>Licence Type</label>
+                <input type="text" id="f-licence-type" placeholder="e.g. EMI, PSP, Investment" />
+              </div>
             </div>
           </div>
 
@@ -2740,6 +2755,16 @@
 
           <!-- 10. Estimated Monthly Activity -->
           <div class="section-title">Estimated Monthly Activity</div>
+          <div class="form-grid cols-2" style="margin-bottom:18px;">
+            <div class="form-group">
+              <label>Financial Year End</label>
+              <input type="text" id="f-financial-year-end" placeholder="e.g. 31 December" />
+            </div>
+            <div class="form-group">
+              <label>Annual Turnover</label>
+              <input type="text" id="f-annual-turnover" placeholder="e.g. 5,000,000 USD" />
+            </div>
+          </div>
           <div class="activity-grid">
             <div class="activity-section">
               <h4>📥 Inflows</h4>
@@ -3818,13 +3843,8 @@
         <div class="review-items" id="review-section-d"></div>
       </div>
 
-      <!-- AI Verification Summary -->
-      <div class="review-section">
-        <div class="review-section-header">🤖 Document Intelligence Agent — Verification Summary</div>
-        <div class="review-items" id="review-ai-summary"></div>
-      </div>
-
       <!-- Actions -->
+      <div id="review-submit-note" style="display:none;margin-top:16px;padding:12px 14px;border-radius:10px;border:1px solid rgba(217,119,6,0.3);background:rgba(245,158,11,0.08);font-size:12px;color:#92400e;"></div>
       <div style="display:flex;gap:12px;margin-top:20px;">
         <button class="btn btn-outline" onclick="showView('onboarding')">← Back to Documents</button>
         <button class="btn btn-primary" id="btn-final-submit" onclick="finalSubmitFromReview()">🔒 Confirm & Submit Application</button>
@@ -3878,17 +3898,17 @@
 
       <div class="status-hero">
         <div class="status-icon-lg pending">🔍</div>
-        <h2>Documents Under Review</h2>
-        <p>All documents have been submitted. Our AI and compliance team are conducting final due diligence. You'll receive a decision within 24–48 hours.</p>
+        <h2 id="docs-review-title">Documents Under Review</h2>
+        <p id="docs-review-subtitle">All documents have been submitted. Our AI and compliance team are conducting final due diligence. You'll receive a decision within 24–48 hours.</p>
       </div>
 
       <div class="card" style="border-color:var(--brand-dim);background:rgba(43,47,143,0.04);">
         <div style="display:flex;gap:14px;align-items:flex-start;">
           <div style="font-size:28px;flex-shrink:0;">📋</div>
           <div>
-            <div class="font-semibold" style="margin-bottom:6px;">Documents Received — Final Review in Progress</div>
-            <p style="font-size:13px;color:var(--text2);line-height:1.7;">All your documents have been received and are being reviewed by our compliance team. You will receive an email notification with the outcome within 24–48 hours. No further action is required from you at this stage.</p>
-            <p style="font-size:12px;color:var(--text3);margin-top:10px;">If we require any additional information, our team will contact you directly at the email address provided in your application.</p>
+            <div class="font-semibold" style="margin-bottom:6px;" id="docs-review-card-title">Documents Received — Final Review in Progress</div>
+            <p style="font-size:13px;color:var(--text2);line-height:1.7;" id="docs-review-card-body">All your documents have been received and are being reviewed by our compliance team. You will receive an email notification with the outcome within 24–48 hours. No further action is required from you at this stage.</p>
+            <p style="font-size:12px;color:var(--text3);margin-top:10px;" id="docs-review-card-footnote">If we require any additional information, our team will contact you directly at the email address provided in your application.</p>
           </div>
         </div>
       </div>
@@ -4114,7 +4134,7 @@
         </p>
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
           <a href="mailto:support@onboarda.com" class="btn btn-outline">📧 Contact Support</a>
-          <button class="btn btn-outline" onclick="showView('prescreening')">↩ Start New Application</button>
+          <button class="btn btn-outline" onclick="startNewApplication()">↩ Start New Application</button>
         </div>
       </div>
     </div>
@@ -4157,7 +4177,7 @@
         </p>
         <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
           <a href="mailto:support@onboarda.com" class="btn btn-outline">📧 Contact Support</a>
-          <button class="btn btn-outline" onclick="showView('prescreening')">↩ Start New Application</button>
+          <button class="btn btn-outline" onclick="startNewApplication()">↩ Start New Application</button>
         </div>
       </div>
     </div>
@@ -4699,7 +4719,7 @@ function updateUserDisplay() {
 function clearAuth() {
   AUTH_TOKEN = '';
   AUTH_USER = null;
-  currentApplicationId = '';
+  resetPortalApplicationState();
   // httpOnly session cookie cleared by server on logout; no JS cookie to expire
 }
 
@@ -4707,12 +4727,264 @@ function clearAuth() {
 let appRef = '';
 let uploadedDocs = new Set();
 var TOTAL_REQUIRED_DOCS = 11;
+var APP_TABLE_COLSPAN = 7;
+var PRESCREENING_FIELD_BINDINGS = {
+  'f-reg-name': 'registered_entity_name',
+  'f-trade-name': 'trading_name',
+  'f-reg-address': 'registered_address',
+  'f-hq-address': 'headquarters_address',
+  'f-contact-first': 'entity_contact_first',
+  'f-contact-last': 'entity_contact_last',
+  'f-email': 'entity_contact_email',
+  'f-phone-code': 'entity_contact_phone_code',
+  'f-mobile': 'entity_contact_mobile',
+  'f-website': 'website',
+  'f-is-licensed': 'is_licensed',
+  'f-licences': 'regulatory_licences',
+  'f-licence-number': 'licence_number',
+  'f-licence-authority': 'licence_authority',
+  'f-licence-type': 'licence_type',
+  'f-inc-country': 'country_of_incorporation',
+  'f-inc-date': 'incorporation_date',
+  'f-brn': 'brn',
+  'f-financial-year-end': 'financial_year_end',
+  'f-annual-turnover': 'annual_turnover',
+  'f-sector': 'sector',
+  'f-entity-type': 'entity_type',
+  'f-ownership-structure': 'ownership_structure',
+  'f-monthly-volume': 'monthly_volume',
+  'f-txn-complexity': 'transaction_complexity',
+  'f-biz-overview': 'business_overview',
+  'f-has-bank': 'existing_bank_account',
+  'f-bank-name': 'existing_bank_name',
+  'f-source-wealth-type': 'source_of_wealth_type',
+  'f-source-wealth': 'source_of_wealth_detail',
+  'f-source-init-type': 'source_of_funds_initial_type',
+  'f-source-init': 'source_of_funds_initial_detail',
+  'f-source-ongoing-type': 'source_of_funds_ongoing_type',
+  'f-source-ongoing': 'source_of_funds_ongoing_detail',
+  'f-mgmt': 'management_overview',
+  'f-intro-method': 'introduction_method',
+  'f-referrer-name': 'referrer_name'
+};
+
+function isCompanyLicensed() {
+  return ((document.getElementById('f-is-licensed') || {}).value || '') === 'Yes';
+}
 
 function _licenceApplicable() {
-  // Mirrors backend is_licence_applicable(): false if field is 'None', 'none', 'n/a', 'no', or empty
-  var val = (document.getElementById('f-licences') || {}).value || '';
-  val = val.trim().toLowerCase();
-  return val && val !== 'none' && val !== 'n/a' && val !== 'no' && val !== 'na';
+  return isCompanyLicensed();
+}
+
+function syncPurposeOptionState(containerId) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  container.querySelectorAll('.purpose-option').forEach(function(label) {
+    var cb = label.querySelector('input[type="checkbox"]');
+    label.classList.toggle('checked', !!(cb && cb.checked));
+  });
+}
+
+function clearMultiSelectState(msId) {
+  if (!msState[msId]) msState[msId] = new Set();
+  msState[msId].clear();
+  document.querySelectorAll('#' + msId + '-options .ms-option').forEach(function(opt) {
+    var cb = opt.querySelector('input[type="checkbox"]');
+    if (cb) cb.checked = false;
+    opt.classList.remove('selected');
+  });
+  renderMSTags(msId);
+}
+
+function syncConditionalFormState() {
+  var licensed = isCompanyLicensed();
+  var licenceGroup = document.getElementById('licence-fields-group');
+  var licenceDetails = document.getElementById('f-licences');
+  if (licenceGroup) licenceGroup.style.display = licensed ? '' : 'none';
+  if (licenceDetails) licenceDetails.required = licensed;
+  if (!licensed) {
+    ['f-licences', 'f-licence-number', 'f-licence-authority', 'f-licence-type'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+  }
+  showLicenceDocs();
+}
+
+function resetPortalReviewState() {
+  ['review-section-a', 'review-section-b', 'review-section-c', 'review-section-d', 'review-prescreening-summary'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  });
+  var sectionDWrapper = document.getElementById('review-section-d-wrapper');
+  if (sectionDWrapper) sectionDWrapper.style.display = 'none';
+  var stats = {
+    'review-uploaded-count': '0',
+    'review-missing-count': '0',
+    'review-warning-count': '0',
+    'review-persons-count': '0'
+  };
+  Object.keys(stats).forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = stats[id];
+  });
+  var submitBtn = document.getElementById('btn-final-submit');
+  if (submitBtn) {
+    submitBtn.disabled = false;
+    submitBtn.style.opacity = '1';
+    submitBtn.style.cursor = 'pointer';
+    submitBtn.textContent = '🔒 Confirm & Submit Application';
+  }
+}
+
+function resetPortalPricingState() {
+  computedRiskLevel = 'LOW';
+  computedRiskScore = 0;
+  dimScores = {};
+  serverPricing = null;
+  serverScreening = null;
+  var pricingRiskLevel = document.getElementById('pricing-risk-level');
+  if (pricingRiskLevel) pricingRiskLevel.textContent = 'LOW RISK';
+  var pricingPlanTitle = document.getElementById('pricing-plan-title');
+  if (pricingPlanTitle) pricingPlanTitle.textContent = 'Corporate Account — Standard';
+  var pricingRiskBadge = document.getElementById('pricing-risk-badge');
+  if (pricingRiskBadge) {
+    pricingRiskBadge.style.background = '#16a34a';
+    pricingRiskBadge.textContent = 'LOW RISK';
+  }
+  var pricingRiskScore = document.getElementById('pricing-risk-score-display');
+  if (pricingRiskScore) pricingRiskScore.textContent = '0.0';
+  var pendingRiskScore = document.getElementById('pending-risk-score');
+  if (pendingRiskScore) pendingRiskScore.textContent = '0.0';
+}
+
+function resetPortalApplicationState() {
+  currentApplicationId = '';
+  appRef = '';
+  if (autoSaveTimer) {
+    clearInterval(autoSaveTimer);
+    autoSaveTimer = null;
+  }
+  resetPortalPricingState();
+  resetPortalDocumentState();
+  var form = document.getElementById('prescreening-form');
+  if (form) form.reset();
+  ['pricing-tc-accept', 'kyc-final-declaration'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.checked = false;
+  });
+  document.querySelectorAll('#prescreening-form input, #prescreening-form textarea, #prescreening-form select').forEach(function(el) {
+    el.style.borderColor = '';
+  });
+  syncPurposeOptionState('service-grid');
+  syncPurposeOptionState('purpose-grid');
+  syncPurposeOptionState('currency-checkboxes');
+  clearMultiSelectState('ms-op-countries');
+  clearMultiSelectState('ms-target-markets');
+  SECTION_D_DOCS = [];
+  sectionDCounter = 0;
+  PERSON_KEY_COUNTERS = { dir: 1, ubo: 1, int: 1 };
+  kycPersonCount = 2;
+  _suppressKYCSync = true;
+  var dirBody = document.getElementById('directors-body');
+  var uboBody = document.getElementById('ubos-body');
+  var intBody = document.getElementById('intermediaries-body');
+  if (dirBody) dirBody.innerHTML = '';
+  if (uboBody) uboBody.innerHTML = '';
+  if (intBody) intBody.innerHTML = '';
+  var kycList = document.getElementById('kyc-persons-list');
+  if (kycList) kycList.querySelectorAll('.kyc-person-card').forEach(function(card) { card.remove(); });
+  addDirectorRow();
+  addUBORow();
+  _suppressKYCSync = false;
+  syncDirectorsUBOsToKYC();
+  checkPEPAndShowDeclaration();
+  resetPortalReviewState();
+  syncConditionalFormState();
+  showHighRiskDocs();
+  updateProgress();
+  var pricingAcceptBtn = document.getElementById('btn-accept-pricing');
+  if (pricingAcceptBtn) {
+    pricingAcceptBtn.disabled = true;
+    pricingAcceptBtn.style.opacity = '0.5';
+    pricingAcceptBtn.style.cursor = 'not-allowed';
+  }
+  var saveStatus = document.getElementById('save-status');
+  if (saveStatus) {
+    saveStatus.textContent = 'Not saved yet';
+    saveStatus.style.color = '';
+  }
+  var refDisplay = document.getElementById('save-ref-display');
+  if (refDisplay) refDisplay.textContent = '';
+  if (typeof resetLookup === 'function') resetLookup();
+}
+
+function startNewApplication() {
+  resetPortalApplicationState();
+  showView('prescreening');
+}
+
+function buildDraftDataFromApplication(app) {
+  var ps = app && app.prescreening_data ? app.prescreening_data : {};
+  var derivedLicensed = ps.is_licensed;
+  if (derivedLicensed == null) derivedLicensed = ps.has_licence;
+  if (derivedLicensed == null) {
+    var licenceText = String(ps.regulatory_licences || '').trim().toLowerCase();
+    if (licenceText) derivedLicensed = ['none', 'n/a', 'na', 'no'].indexOf(licenceText) === -1;
+  }
+  var data = {
+    appRef: app && app.ref ? app.ref : '',
+    computedRiskLevel: app && app.risk_level ? app.risk_level : '',
+    prescreening: {},
+    servicesRequired: Array.isArray(ps.services_required) ? ps.services_required : [],
+    accountPurposes: Array.isArray(ps.account_purposes) ? ps.account_purposes : [],
+    currencies: Array.isArray(ps.currencies) ? ps.currencies : [],
+    countriesOfOperation: Array.isArray(ps.countries_of_operation) ? ps.countries_of_operation : [],
+    targetMarkets: Array.isArray(ps.target_markets) ? ps.target_markets : [],
+    directors: Array.isArray(app.directors) ? app.directors : [],
+    ubos: Array.isArray(app.ubos) ? app.ubos : [],
+    intermediaries: Array.isArray(app.intermediaries) ? app.intermediaries : []
+  };
+  Object.keys(PRESCREENING_FIELD_BINDINGS).forEach(function(id) {
+    var key = PRESCREENING_FIELD_BINDINGS[id];
+    if (id === 'f-is-licensed') {
+      data.prescreening[id] = derivedLicensed === true ? 'Yes' : derivedLicensed === false ? 'No' : '';
+    } else {
+      data.prescreening[id] = ps[key] == null ? '' : ps[key];
+    }
+  });
+  return data;
+}
+
+function applyApplicationViewState(target) {
+  syncConditionalFormState();
+  showHighRiskDocs();
+  if (target === 'pricing') {
+    populatePricing(computedRiskLevel);
+  }
+  if (target === 'pending') {
+    updatePendingRiskCard();
+  }
+  if (target === 'pre-approval-hold') {
+    var preApprovalRef = document.getElementById('pre-approval-ref-display');
+    if (preApprovalRef) preApprovalRef.textContent = appRef || '—';
+    var preApprovalRisk = document.getElementById('pre-approval-risk-label');
+    if (preApprovalRisk) preApprovalRisk.textContent = (computedRiskLevel || 'HIGH').replace('_',' ') + ' Risk';
+  }
+  if (target === 'compliance-hold') {
+    var complianceRisk = document.getElementById('compliance-risk-label');
+    if (complianceRisk) complianceRisk.textContent = (computedRiskLevel || 'HIGH').replace('_',' ') + ' Risk';
+    var complianceRef = document.getElementById('compliance-ref-display');
+    if (complianceRef) complianceRef.textContent = appRef || '—';
+  }
+  if (target === 'onboarding' || target === 'submission-review' || target === 'docs-review') {
+    syncDirectorsUBOsToKYC();
+    checkPEPAndShowDeclaration();
+    updateProgress();
+  }
+  if (target === 'submission-review') {
+    buildReviewScreen();
+  }
 }
 
 function updateTotalRequiredDocs() {
@@ -4800,7 +5072,7 @@ async function loadMyApplications() {
     if (!tbody) return;
 
     if (apps.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:#999;">No applications yet. Click "Start Application" to begin.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="' + APP_TABLE_COLSPAN + '" style="text-align:center;padding:2rem;color:#999;">No applications yet. Click "Start Application" to begin.</td></tr>';
       return;
     }
 
@@ -4813,12 +5085,20 @@ async function loadMyApplications() {
       var riskColors = {LOW:'#10b981',MEDIUM:'#f59e0b',HIGH:'#ef4444',VERY_HIGH:'#dc2626'};
       var riskColor = riskColors[app.risk_level] || '#999';
       var date = app.created_at ? new Date(app.created_at).toLocaleDateString() : '';
-      html += '<tr style="cursor:pointer;" onclick="resumeApplication(\'' + escapeHtml(app.ref || app.id) + '\', \'' + escapeHtml(app.status || '') + '\')">';
+      var ref = app.ref || app.id;
+      var refJs = JSON.stringify(ref).replace(/"/g, '&quot;');
+      var statusJs = JSON.stringify(app.status || '').replace(/"/g, '&quot;');
+      var companyJs = JSON.stringify(app.company_name || 'this draft application').replace(/"/g, '&quot;');
+      var isDraft = (app.status || '') === 'draft';
+      html += '<tr style="cursor:pointer;" onclick="resumeApplication(' + refJs + ', ' + statusJs + ')">';
       html += '<td style="font-weight:600;">' + escapeHtml(app.ref || app.id) + '</td>';
       html += '<td>' + escapeHtml(app.company_name || '-') + '</td>';
       html += '<td><span style="background:' + color + '20;color:' + color + ';padding:4px 12px;border-radius:20px;font-size:0.85rem;">' + escapeHtml(label) + '</span></td>';
       html += '<td><span style="color:' + riskColor + ';font-weight:600;">' + escapeHtml(app.risk_level || '-') + '</span></td>';
       html += '<td>' + escapeHtml(date) + '</td>';
+      html += '<td class="actions-cell"><div class="app-table-actions"><button type="button" class="btn-table-action" onclick="event.stopPropagation();resumeApplication(' + refJs + ', ' + statusJs + ')">Open</button>' +
+        (isDraft ? '<button type="button" class="btn-table-action danger" onclick="event.stopPropagation();deleteApplication(' + refJs + ', ' + companyJs + ')">Delete</button>' : '') +
+        '</div></td>';
       html += '</tr>';
     });
     tbody.innerHTML = html;
@@ -4831,7 +5111,7 @@ async function loadMyApplications() {
     console.error('Failed to load applications:', e);
     var tbody = document.getElementById('my-apps-tbody');
     if (tbody) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--red);">Unable to load your applications. Please check your connection and <a href="#" onclick="loadMyApplications();return false;" style="color:var(--brand);font-weight:600;">try again</a>.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="' + APP_TABLE_COLSPAN + '" style="text-align:center;padding:2rem;color:var(--red);">Unable to load your applications. Please check your connection and <a href="#" onclick="loadMyApplications();return false;" style="color:var(--brand);font-weight:600;">try again</a>.</td></tr>';
     }
   }
 }
@@ -5493,6 +5773,23 @@ async function submitPrescreening(e) {
   var fWebEl = document.getElementById('f-website');
   if (fWebEl) fWebEl.style.borderColor = '';
 
+  var licenceSelection = _gfv('f-is-licensed');
+  var licensed = isCompanyLicensed();
+  if (!licenceSelection) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Licence Status Required', 'Please confirm whether the company is licensed.');
+    return;
+  }
+  if (licensed && !getFieldValue('f-licences')) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    var licenceEl = document.getElementById('f-licences');
+    if (licenceEl) licenceEl.style.borderColor = 'var(--red)';
+    showToast('error', 'Licence Details Required', 'Please provide the licence details for a licensed company.');
+    return;
+  }
+  var licenceDetailsEl = document.getElementById('f-licences');
+  if (licenceDetailsEl) licenceDetailsEl.style.borderColor = '';
+
   var dirRows = document.querySelectorAll('#directors-body tr');
   var directors = [];
   dirRows.forEach(function(row) {
@@ -5591,10 +5888,12 @@ async function submitPrescreening(e) {
       entity_contact_phone_code: getFieldValue('f-phone-code'),
       entity_contact_mobile: getFieldValue('f-mobile'),
       website: getFieldValue('f-website'),
-      regulatory_licences: getFieldValue('f-licences'),
-      licence_number: getFieldValue('f-licence-number'),
-      licence_authority: getFieldValue('f-licence-authority'),
-      licence_type: getFieldValue('f-licence-type'),
+      is_licensed: licensed,
+      has_licence: licensed,
+      regulatory_licences: licensed ? getFieldValue('f-licences') : '',
+      licence_number: licensed ? getFieldValue('f-licence-number') : '',
+      licence_authority: licensed ? getFieldValue('f-licence-authority') : '',
+      licence_type: licensed ? getFieldValue('f-licence-type') : '',
       authorised_share_capital: getFieldValue('f-authorised-share-capital'),
       authorised_signatory: getFieldValue('f-authorised-signatory'),
       financial_year_end: getFieldValue('f-financial-year-end'),
@@ -6508,6 +6807,7 @@ function restoreDraftFromData(data) {
 
     if (data.appRef) appRef = data.appRef;
     if (data.computedRiskLevel) computedRiskLevel = data.computedRiskLevel;
+    if (Array.isArray(data.uploadedDocs)) uploadedDocs = new Set(data.uploadedDocs);
 
     // Restore simple form fields by element ID
     if (data.prescreening && typeof data.prescreening === 'object') {
@@ -6546,6 +6846,9 @@ function restoreDraftFromData(data) {
         cb.checked = data.currencies.indexOf(cb.value) !== -1;
       });
     }
+    syncPurposeOptionState('service-grid');
+    syncPurposeOptionState('purpose-grid');
+    syncPurposeOptionState('currency-checkboxes');
 
     // Restore multi-select: countries of operation
     if (Array.isArray(data.countriesOfOperation) && data.countriesOfOperation.length) {
@@ -6579,6 +6882,7 @@ function restoreDraftFromData(data) {
     if (typeof checkPEPAndShowDeclaration === 'function') {
       try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on restore:', e); }
     }
+    syncConditionalFormState();
 
     // Mark uploaded docs visually
     uploadedDocs.forEach(function(docId) {
@@ -6713,6 +7017,9 @@ showView = function(name) {
     var refDisplay = document.getElementById('save-ref-display');
     if (refDisplay) refDisplay.textContent = appRef || '';
     startAutoSave();
+  } else if (autoSaveTimer) {
+    clearInterval(autoSaveTimer);
+    autoSaveTimer = null;
   }
   if (name === 'client-notifications') {
     loadClientNotifications();
@@ -6743,6 +7050,7 @@ var SECTION_C_DOCS = [
 
 var SECTION_D_DOCS = [];
 var sectionDCounter = 0;
+var lastReviewSummaryState = null;
 
 function _gfv(id) {
   var el = document.getElementById(id);
@@ -6770,6 +7078,7 @@ function buildPrescreeningSummary() {
   }
 
   // Collect values from the live form
+  var licensedText = isCompanyLicensed() ? 'Yes' : (_gfv('f-is-licensed') === 'No' ? 'No' : '');
   var entityRows =
     row('Legal Entity Name', _gfv('f-reg-name')) +
     row('Trading Name', _gfv('f-trade-name')) +
@@ -6785,10 +7094,13 @@ function buildPrescreeningSummary() {
     row('Authorised Signatory', _gfv('f-authorised-signatory')) +
     row('Financial Year End', _gfv('f-financial-year-end')) +
     row('Annual Turnover', _gfv('f-annual-turnover')) +
-    row('Licences', _gfv('f-licences')) +
-    row('Licence Number', _gfv('f-licence-number')) +
-    row('Licence Authority', _gfv('f-licence-authority')) +
-    row('Licence Type', _gfv('f-licence-type'));
+    row('Licensed', licensedText) +
+    (isCompanyLicensed()
+      ? row('Licences', _gfv('f-licences')) +
+        row('Licence Number', _gfv('f-licence-number')) +
+        row('Licence Authority', _gfv('f-licence-authority')) +
+        row('Licence Type', _gfv('f-licence-type'))
+      : '');
 
   var contactRows =
     row('Contact Name', [_gfv('f-contact-first'), _gfv('f-contact-last')].filter(Boolean).join(' ')) +
@@ -6891,6 +7203,35 @@ function buildPrescreeningSummary() {
     section('Additional Information', '📋', finRows);
 
   container.innerHTML = html;
+}
+
+function updateDocsReviewMessaging(summary) {
+  var title = document.getElementById('docs-review-title');
+  var subtitle = document.getElementById('docs-review-subtitle');
+  var cardTitle = document.getElementById('docs-review-card-title');
+  var cardBody = document.getElementById('docs-review-card-body');
+  var cardFootnote = document.getElementById('docs-review-card-footnote');
+  if (!title || !subtitle || !cardTitle || !cardBody || !cardFootnote) return;
+
+  var missingCount = Number(summary && summary.missingCount || 0);
+  var warningCount = Number(summary && summary.warningCount || 0);
+  if (missingCount > 0 || warningCount > 0) {
+    var parts = [];
+    if (missingCount > 0) parts.push(missingCount + ' required item(s) are still missing');
+    if (warningCount > 0) parts.push(warningCount + ' uploaded document(s) still show warnings');
+    title.textContent = 'Submitted for Review — Issues Visible';
+    subtitle.textContent = 'Your application has been submitted for compliance review. The current missing items and warning-state documents remain visible to the compliance team and may trigger follow-up requests.';
+    cardTitle.textContent = 'Incomplete / Warning-State Submission Logged';
+    cardBody.textContent = 'This submission remains reviewable, but it is not treated as clean. ' + parts.join(' and ') + '. A compliance officer will review the case with these issues visible in the back office.';
+    cardFootnote.textContent = 'If we require additional information or missing documents, our team will contact you directly at the email address provided in your application.';
+    return;
+  }
+
+  title.textContent = 'Documents Under Review';
+  subtitle.textContent = 'All submitted documents are under review by our AI and compliance team. You\'ll receive a decision within 24–48 hours.';
+  cardTitle.textContent = 'Documents Received — Final Review in Progress';
+  cardBody.textContent = 'All submitted documents have been received and are being reviewed by our compliance team. You will receive an email notification with the outcome within 24–48 hours.';
+  cardFootnote.textContent = 'If we require any additional information, our team will contact you directly at the email address provided in your application.';
 }
 
 function buildReviewScreen() {
@@ -7027,44 +7368,42 @@ function buildReviewScreen() {
     }
   }
 
-  // AI Summary
-  var aiSummary = document.getElementById('review-ai-summary');
-  var allVerifyResults = document.querySelectorAll('.doc-verify-results');
-  var totalChecks = 0;
-  var passedChecks = 0;
-  var failedChecks = 0;
-  allVerifyResults.forEach(function(r) {
-    var rows = r.querySelectorAll('.doc-verify-row, div[style*="border-top"]');
-    rows.forEach(function(row) {
-      totalChecks++;
-      if (row.innerHTML.indexOf('✅') !== -1) passedChecks++;
-      else failedChecks++;
-    });
-  });
-
-  aiSummary.innerHTML = '<div class="review-item"><span class="review-item-name">Total AI Checks Run</span><span class="review-status blue">' + totalChecks + ' checks</span></div>' +
-    '<div class="review-item"><span class="review-item-name">Passed</span><span class="review-status uploaded">✅ ' + passedChecks + '</span></div>' +
-    (failedChecks > 0 ? '<div class="review-item"><span class="review-item-name">Warnings / Issues</span><span class="review-status warning">⚠️ ' + failedChecks + ' — please review before submitting</span></div>' : '<div class="review-item"><span class="review-item-name">Warnings / Issues</span><span class="review-status uploaded">✅ None</span></div>');
-
   // Update summary stats
   document.getElementById('review-uploaded-count').textContent = uploadedCount;
   document.getElementById('review-missing-count').textContent = missingCount;
   document.getElementById('review-warning-count').textContent = warningCount;
   document.getElementById('review-persons-count').textContent = personsVerified;
+  lastReviewSummaryState = {
+    uploadedCount: uploadedCount,
+    missingCount: missingCount,
+    warningCount: warningCount,
+    personsVerified: personsVerified
+  };
+  updateDocsReviewMessaging(lastReviewSummaryState);
 
-  // Disable submit if required docs missing
+  // Keep missing/warning items visible, but allow submission for compliance review testing/workflow progression
   var btn = document.getElementById('btn-final-submit');
+  var reviewSubmitNote = document.getElementById('review-submit-note');
   if (btn) {
-    if (missingCount > 0) {
-      btn.disabled = true;
-      btn.style.opacity = '0.5';
-      btn.style.cursor = 'not-allowed';
-      btn.textContent = '⚠️ ' + missingCount + ' Required Item(s) Missing';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.style.cursor = 'pointer';
+    if (missingCount > 0 || warningCount > 0) {
+      btn.textContent = '⚠️ Submit for Compliance Review';
     } else {
-      btn.disabled = false;
-      btn.style.opacity = '1';
-      btn.style.cursor = 'pointer';
       btn.textContent = '🔒 Confirm & Submit Application';
+    }
+  }
+  if (reviewSubmitNote) {
+    if (missingCount > 0 || warningCount > 0) {
+      var noteParts = [];
+      if (missingCount > 0) noteParts.push(missingCount + ' required item(s) are still missing');
+      if (warningCount > 0) noteParts.push(warningCount + ' uploaded document(s) still show warnings');
+      reviewSubmitNote.style.display = 'block';
+      reviewSubmitNote.innerHTML = '<strong>Incomplete / warning-state submission:</strong> ' + escapeHtml(noteParts.join(' and ')) + '. The application can still be submitted for compliance review, and these issues will remain visible to the back office.';
+    } else {
+      reviewSubmitNote.style.display = 'none';
+      reviewSubmitNote.textContent = '';
     }
   }
 }
@@ -7082,6 +7421,7 @@ async function finalSubmitFromReview() {
     return;
   }
   generateComplianceMemo();
+  updateDocsReviewMessaging(lastReviewSummaryState);
   showView('docs-review');
   showToast('info', 'Submitted for Compliance Review', 'Your KYC documents have been submitted. A compliance officer will review your application and you will be notified by email.');
   // Clear the draft
@@ -7663,6 +8003,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initMultiSelect('ms-target-markets', ALL_COUNTRIES);
   populateNationalitySelects();
   populateLookupCountry();
+  syncConditionalFormState();
   // Set incorporation date max to today
   var incDateEl = document.getElementById('f-inc-date');
   if (incDateEl) incDateEl.max = new Date().toISOString().split('T')[0];
@@ -7849,6 +8190,7 @@ function submitRegister(e) {
       });
       setAuth(resp.token, resp.client);
       btn.disabled = false; btn.innerHTML = '🚀 Create Account & Start Onboarding';
+      resetPortalApplicationState();
       prefillApplicationForm();
       showView('prescreening');
       showToast('success', 'Account created!', 'Welcome to Onboarda. Let\'s complete your application.');
@@ -7889,20 +8231,6 @@ async function submitLogin(e) {
 
     setAuth(resp.token, resp.client);
     btn.disabled = false; btn.textContent = '🔒 Sign In';
-
-    if (!isOffline) {
-      // Try to load any saved session from API
-      try {
-        const session = await apiCall('GET', '/save-resume');
-        if (session && session.application_id) {
-          currentApplicationId = session.application_id;
-          // Security: application ID kept in memory only
-          if (session.form_data && session.form_data.appRef) {
-            appRef = session.form_data.appRef;
-          }
-        }
-      } catch(e) { /* No saved session, that's fine */ }
-    }
 
     showView('my-apps');
     showToast('success', isOffline ? 'Demo Mode' : 'Welcome back!', isOffline ? 'Signed in offline — explore the portal demo.' : 'Pick up where you left off.');
@@ -8115,6 +8443,7 @@ function showLookupResult(found) {
 }
 
 function proceedToPreScreening() {
+  resetPortalApplicationState();
   prefillApplicationForm();
   showView('prescreening');
   showToast('success', 'Application Ready', 'Please complete your application form.');
@@ -8212,6 +8541,7 @@ function prefillApplicationForm() {
 // ─── Company lookup: manual proceed ────────────────────────────────────
 function proceedManually() {
   // Don't prefill — just navigate with empty form
+  resetPortalApplicationState();
   showView('prescreening');
   showToast('info', 'Manual Entry Mode', 'Please fill in all company details manually.');
 }
@@ -8719,27 +9049,29 @@ function syncPersistedApplicationDocuments(app) {
 
 async function resumeApplication(ref, stage) {
   var target = getApplicationView(stage);
+  var restoredFields = false;
   try {
     if (AUTH_TOKEN && ref) {
       var app = await apiCall('GET', '/applications/' + encodeURIComponent(ref));
-      currentApplicationId = app.id || currentApplicationId;
+      resetPortalApplicationState();
+      currentApplicationId = app.id || '';
       appRef = app.ref || ref;
-      computedRiskLevel = app.risk_level || computedRiskLevel;
-      computedRiskScore = Number(app.risk_score || computedRiskScore || 0);
+      computedRiskLevel = app.risk_level || 'LOW';
+      computedRiskScore = Number(app.risk_score || 0);
       if (app.risk_dimensions) dimScores = app.risk_dimensions;
-      // Restore server pricing from prescreening_data if available
       var psDataForPricing = app.prescreening_data || {};
-      if (psDataForPricing.pricing) {
-        serverPricing = psDataForPricing.pricing;
-      }
+      serverPricing = psDataForPricing.pricing || null;
+      serverScreening = psDataForPricing.screening_report || null;
       target = getApplicationView(app.status || stage);
 
+      restoredFields = restoreDraftFromData(buildDraftDataFromApplication(app)) || restoredFields;
+
       // Restore saved form data from save-resume API
-      var restoredFields = false;
       try {
         var savedSession = await apiCall('GET', '/save-resume?application_id=' + encodeURIComponent(currentApplicationId));
         if (savedSession && savedSession.form_data && typeof savedSession.form_data === 'object') {
-          restoredFields = restoreDraftFromData(savedSession.form_data);
+          // App-specific saved session is the most recent authoritative client draft overlay.
+          restoredFields = restoreDraftFromData(savedSession.form_data) || restoredFields;
         }
       } catch (resumeErr) {
         console.warn('No saved session to restore or restore failed:', resumeErr);
@@ -8788,11 +9120,16 @@ async function resumeApplication(ref, stage) {
         try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on resume:', e); }
       }
       syncPersistedApplicationDocuments(app);
+      buildReviewScreen();
     }
   } catch (err) {
     console.error('Failed to load application detail for resume:', err);
+    showToast('error', 'Application Load Failed', err.message || 'Could not restore this application.');
+    showView('my-apps');
+    return;
   }
   showView(target);
+  applyApplicationViewState(target);
   document.querySelectorAll('#global-client-sidebar .dash-nav-item').forEach(b => b.classList.remove('active'));
   const snavId = REF_TO_SNAV[ref];
   if (snavId) {
@@ -8803,6 +9140,24 @@ async function resumeApplication(ref, stage) {
     showToast('success', 'Draft Restored', 'Ref: ' + ref + ' — your saved form data, documents, and party details have been restored.');
   } else {
     showToast('info', 'Application Loaded', 'Ref: ' + ref + ' — view restored to the latest saved stage.');
+  }
+}
+
+async function deleteApplication(ref, companyName) {
+  if (!AUTH_TOKEN || !ref) return;
+  var label = companyName || 'this draft application';
+  if (!window.confirm('Delete ' + label + '? This cannot be undone.')) return;
+  try {
+    await apiCall('DELETE', '/applications/' + encodeURIComponent(ref));
+    if (currentApplicationId === ref || appRef === ref) {
+      resetPortalApplicationState();
+    }
+    await loadMyApplications();
+    showView('my-apps');
+    showToast('success', 'Application Deleted', label + ' has been deleted.');
+  } catch (err) {
+    console.error('Delete application failed:', err);
+    showToast('error', 'Delete Failed', err.message || 'Could not delete this application.');
   }
 }
 
@@ -8818,6 +9173,8 @@ function renderSidebarApps(apps) {
   apps.forEach(function(app, i) {
     var snavId = 'snav-app-' + i;
     var ref = app.ref || app.id || '';
+    var refJs = JSON.stringify(ref).replace(/"/g, '&quot;');
+    var stageJs = JSON.stringify(app.status || 'pending').replace(/"/g, '&quot;');
     REF_TO_SNAV[ref] = snavId;
     var icon = app.status === 'approved' ? '&#x2705;' : '&#x1F4C4;';
     var statusLabels = {draft:'Draft',submitted:'Submitted',prescreening_submitted:'Screening',pricing_review:'Pricing',pricing_accepted:'Accepted',pre_approval_review:'Review',pre_approved:'Pre-Approved',kyc_documents:'KYC',kyc_submitted:'KYC Sent',compliance_review:'Compliance',in_review:'Review',under_review:'Review',edd_required:'EDD',approved:'&#x2713;',rejected:'Declined',rmi_sent:'Info Req.',withdrawn:'Withdrawn',pending:'Pending'};
@@ -8826,7 +9183,7 @@ function renderSidebarApps(apps) {
     var cls = statusClasses[app.status] || 'review';
     var stage = app.status || 'pending';
     var name = app.company_name || app.ref || 'Application';
-    html += '<button type="button" class="dash-nav-item" id="' + snavId + '" onclick="resumeApplication(\'' + escapeHtml(ref) + '\',\'' + stage + '\')">' +
+    html += '<button type="button" class="dash-nav-item" id="' + snavId + '" onclick="resumeApplication(' + refJs + ',' + stageJs + ')">' +
       '<span class="dash-nav-icon">' + icon + '</span>' +
       '<span>' + escapeHtml(name) + '</span>' +
       '<span class="app-status ' + cls + '" style="font-size:9px;padding:1px 6px;margin-left:auto;">' + label + '</span>' +
@@ -8846,8 +9203,10 @@ function renderResumeCTA(apps) {
   var app = inProgress[0];
   var ref = app.ref || app.id || '';
   var stage = app.status || 'pending';
+  var refJs = JSON.stringify(ref).replace(/"/g, '&quot;');
+  var stageJs = JSON.stringify(stage).replace(/"/g, '&quot;');
   cta.style.display = '';
-  cta.setAttribute('onclick', "resumeApplication('" + ref + "','" + stage + "')");
+  cta.setAttribute('onclick', 'resumeApplication(' + refJs + ',' + stageJs + ')');
   var desc = document.getElementById('resume-cta-desc');
   var refEl = document.getElementById('resume-cta-ref');
   if (desc) desc.textContent = (app.company_name || 'Your application') + ' · Awaiting action';

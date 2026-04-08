@@ -4242,6 +4242,85 @@ function buildStoredRiskComputation(app) {
   };
 }
 
+function computeDocumentReadinessSummary(app) {
+  var docs = Array.isArray(app._documents) ? app._documents : [];
+  var psData = app.prescreeningData || {};
+  var isHighRisk = app.risk === 'HIGH' || app.risk === 'VERY_HIGH';
+  var hasLicence = psData.is_licensed === true || psData.has_licence === true;
+  var required = [
+    { doc_type: 'cert_inc', label: 'Certificate of Incorporation' },
+    { doc_type: 'memarts', label: 'Memorandum of Association' },
+    { doc_type: 'reg_sh', label: 'Shareholder Register' },
+    { doc_type: 'reg_dir', label: 'Register of Directors' },
+    { doc_type: 'fin_stmt', label: 'Financial Statements / Management Accounts' },
+    { doc_type: 'poa', label: 'Proof of Registered Address', person_id: null },
+    { doc_type: 'board_res', label: 'Board Resolution' },
+    { doc_type: 'structure_chart', label: 'Company Structure Chart' }
+  ];
+  if (isHighRisk) required.push({ doc_type: 'bankref', label: 'Bank Reference Letter', person_id: null });
+  if (hasLicence) required.push({ doc_type: 'licence', label: 'Regulatory Licence(s)', person_id: null });
+
+  (app.directors || []).forEach(function(person) {
+    required.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
+    required.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
+  });
+  (app.ubos || []).forEach(function(person) {
+    required.push({ doc_type: 'passport', label: 'Passport / Government ID', person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
+    required.push({ doc_type: 'poa', label: 'Proof of Address', person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
+  });
+  (app.intermediaries || []).forEach(function(person) {
+    ['cert_inc', 'reg_dir', 'reg_sh', 'cert_gs', 'fin_stmt'].forEach(function(docType) {
+      required.push({ doc_type: docType, label: docType, person_id: person.person_key || person.id, owner: buildPartyDisplayName(person) });
+    });
+  });
+
+  var missing = required.filter(function(expectation) {
+    return !docs.some(function(doc) {
+      var sameType = normalizeDetailValue(doc.doc_type) === normalizeDetailValue(expectation.doc_type);
+      if (!sameType) return false;
+      if (expectation.person_id == null) return !doc.person_id;
+      return doc.person_id === expectation.person_id;
+    });
+  });
+
+  var issueDocs = docs.filter(function(doc) {
+    var verStatus = normalizeDetailValue(doc.verification_status).toLowerCase();
+    var results = doc.verification_results || {};
+    var warnings = Array.isArray(results.warnings) ? results.warnings : [];
+    var overall = normalizeDetailValue(results.overall || results.status).toLowerCase();
+    return verStatus === 'flagged' || verStatus === 'failed' || overall === 'flagged' || overall === 'failed' || warnings.length > 0;
+  });
+
+  var pepIncomplete = (app.directors || []).concat(app.ubos || []).filter(function(person) {
+    if (normalizeDetailValue(person.pep).toLowerCase() !== 'yes') return false;
+    var decl = person.pep_declaration || {};
+    return !Object.keys(decl).some(function(key) { return normalizeDetailValue(decl[key]) !== '—'; });
+  });
+
+  return {
+    missingCount: missing.length,
+    issueCount: issueDocs.length,
+    pepIncompleteCount: pepIncomplete.length,
+    requiredCount: required.length,
+    uploadedCount: docs.length,
+    isIncomplete: missing.length > 0 || issueDocs.length > 0 || pepIncomplete.length > 0
+  };
+}
+
+function renderIncompleteSubmissionBadge(summary) {
+  if (!summary || !summary.isIncomplete) return '';
+  return ' <span class="badge pending">⚠ Incomplete / Warning-State</span>';
+}
+
+function renderDocumentReadinessBanner(summary) {
+  if (!summary || !summary.isIncomplete) return '';
+  var parts = [];
+  if (summary.missingCount > 0) parts.push(summary.missingCount + ' missing required item(s)');
+  if (summary.issueCount > 0) parts.push(summary.issueCount + ' uploaded document(s) with warnings or failed/flagged checks');
+  if (summary.pepIncompleteCount > 0) parts.push(summary.pepIncompleteCount + ' incomplete PEP declaration(s)');
+  return '<div class="ah-alert-banner warning" style="margin-bottom:12px;"><span style="font-size:18px;">⚠️</span><div><strong>Incomplete / warning-state submission:</strong> ' + escapeHtml(parts.join(' · ')) + '. This case is reviewable but should not be treated as clean.</div></div>';
+}
+
 function renderStoredRiskComputationHtml(app) {
   var computation = buildStoredRiskComputation(app);
   if (!computation) {
@@ -4465,12 +4544,13 @@ async function fetchApplicationDetail(ref) {
 
 function renderAuthoritativeAppDetail(app, options) {
   var psData = app.prescreeningData || {};
+  var documentReadiness = computeDocumentReadinessSummary(app);
   currentApp = app;
   window._currentDetailApp = app;
   currentScreeningReviewFocus = options.screeningFocus || null;
 
   document.getElementById('detail-company-name').textContent = app.company;
-  document.getElementById('detail-badges').innerHTML = riskBadge(app.risk) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>';
+  document.getElementById('detail-badges').innerHTML = riskBadge(app.risk) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>' + renderIncompleteSubmissionBadge(documentReadiness);
 
   document.getElementById('detail-entity-info').innerHTML =
     '<div class="detail-row"><span class="label">Reference</span><span class="value" style="font-family:monospace;">' + escapeHtml(app.ref) + '</span></div>' +
@@ -4549,7 +4629,11 @@ function renderAuthoritativeAppDetail(app, options) {
     { label: 'Registration / BRN', value: detailValueFromAliases(psData, ['brn', 'registration_number', 'incorporation_number']) },
     { label: 'Website', value: detailValueFromAliases(psData, ['website']) },
     // ── Licences ──
+    { label: 'Licensed', value: psData.is_licensed === true ? 'Yes' : psData.is_licensed === false ? 'No' : (psData.has_licence === true ? 'Yes' : psData.has_licence === false ? 'No' : '') },
     { label: 'Licences', value: detailValueFromAliases(psData, ['regulatory_licences', 'licenses', 'licences']) },
+    { label: 'Licence Number', value: detailValueFromAliases(psData, ['licence_number']) },
+    { label: 'Licence Authority', value: detailValueFromAliases(psData, ['licence_authority']) },
+    { label: 'Licence Type', value: detailValueFromAliases(psData, ['licence_type']) },
     // ── Business Operations ──
     { label: 'Business Overview', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['business_overview', 'business_description']), '') },
     { label: 'Services Required', value: detailValueFromAliases(psData, ['services_required']) },
@@ -4657,7 +4741,7 @@ function renderAuthoritativeAppDetail(app, options) {
     '<div style="display:flex;align-items:center;gap:6px;"><strong>Mode:</strong> ' + screeningModeBadge(screeningSummary.screening_mode) + '</div>' +
     '<div><strong>Screened At:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screened_at)) + '</div>' +
     '</div>';
-  document.getElementById('detail-screening-review').innerHTML = screeningMeta;
+  document.getElementById('detail-screening-review').innerHTML = renderDocumentReadinessBanner(documentReadiness) + screeningMeta;
   renderScreeningReviewPanel(app, currentScreeningReviewFocus);
   renderExplainabilityPanel(app, screeningSummary);
 
@@ -5099,6 +5183,7 @@ function renderScreeningReviewPanel(app, focus) {
   if (!host || !app) return;
 
   var screeningSummary = getApplicationScreeningSummary(app);
+  var documentReadiness = computeDocumentReadinessSummary(app);
   var queueRows = (SCREENING_QUEUE && SCREENING_QUEUE.rows ? SCREENING_QUEUE.rows : []).filter(function(row) {
     return row.application_ref === app.ref;
   });
@@ -5108,6 +5193,7 @@ function renderScreeningReviewPanel(app, focus) {
   });
 
   var html = '';
+  html += renderDocumentReadinessBanner(documentReadiness);
   html += '<div class="card" style="margin-bottom:16px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.03);">';
   html += '<div class="card-header" style="align-items:flex-start;gap:12px;flex-wrap:wrap;">';
   html += '<div><div class="card-title">Screening Review</div><div style="font-size:12px;color:var(--text3);margin-top:4px;">Stored provider AML/watchlist and PEP results for this application. This is the dedicated review surface opened from the Screening Queue.</div></div>';
