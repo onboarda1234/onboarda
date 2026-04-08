@@ -2359,10 +2359,7 @@
               <label>Authorised Share Capital</label>
               <input type="text" id="f-authorised-share-capital" placeholder="e.g. 100,000 USD" />
             </div>
-            <div class="form-group">
-              <label>Authorised Signatory</label>
-              <input type="text" id="f-authorised-signatory" placeholder="Full name of authorised signatory" />
-            </div>
+
             <div class="form-group span-3">
               <label>Website</label>
               <input type="text" id="f-website" placeholder="www.company.com" />
@@ -2755,16 +2752,7 @@
 
           <!-- 10. Estimated Monthly Activity -->
           <div class="section-title">Estimated Monthly Activity</div>
-          <div class="form-grid cols-2" style="margin-bottom:18px;">
-            <div class="form-group">
-              <label>Financial Year End</label>
-              <input type="text" id="f-financial-year-end" placeholder="e.g. 31 December" />
-            </div>
-            <div class="form-group">
-              <label>Annual Turnover</label>
-              <input type="text" id="f-annual-turnover" placeholder="e.g. 5,000,000 USD" />
-            </div>
-          </div>
+
           <div class="activity-grid">
             <div class="activity-section">
               <h4>📥 Inflows</h4>
@@ -4747,8 +4735,6 @@ var PRESCREENING_FIELD_BINDINGS = {
   'f-inc-country': 'country_of_incorporation',
   'f-inc-date': 'incorporation_date',
   'f-brn': 'brn',
-  'f-financial-year-end': 'financial_year_end',
-  'f-annual-turnover': 'annual_turnover',
   'f-sector': 'sector',
   'f-entity-type': 'entity_type',
   'f-ownership-structure': 'ownership_structure',
@@ -5347,6 +5333,7 @@ function addDirectorRow() {
   `;
   tbody.appendChild(tr);
   populateNationalitySelects();
+  setDobMaxToday();
   syncDirectorsUBOsToKYC();
 }
 function addUBORow() {
@@ -5367,6 +5354,7 @@ function addUBORow() {
   `;
   tbody.appendChild(tr);
   populateNationalitySelects();
+  setDobMaxToday();
   syncDirectorsUBOsToKYC();
 }
 
@@ -5682,6 +5670,12 @@ async function submitPrescreening(e) {
     showToast('error', 'Invalid Date', 'Incorporation date cannot be in the future.');
     return;
   }
+  // DOB future-date validation
+  if (!validateDobInputs()) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'Invalid Date of Birth', 'One or more dates of birth are in the future. Please correct them before submitting.');
+    return;
+  }
   // SoW/SoF detail fields are optional — no minimum enforced
 
   // Currency selection validation
@@ -5895,9 +5889,6 @@ async function submitPrescreening(e) {
       licence_authority: licensed ? getFieldValue('f-licence-authority') : '',
       licence_type: licensed ? getFieldValue('f-licence-type') : '',
       authorised_share_capital: getFieldValue('f-authorised-share-capital'),
-      authorised_signatory: getFieldValue('f-authorised-signatory'),
-      financial_year_end: getFieldValue('f-financial-year-end'),
-      annual_turnover: getFieldValue('f-annual-turnover'),
       services_required: getCheckboxValues('service-grid'),
       monthly_volume: getFieldValue('f-monthly-volume'),
       expected_volume: getFieldValue('f-monthly-volume'),
@@ -7091,9 +7082,6 @@ function buildPrescreeningSummary() {
     row('Head Office Address', _gfv('f-hq-address')) +
     row('Website', _gfv('f-website')) +
     row('Authorised Share Capital', _gfv('f-authorised-share-capital')) +
-    row('Authorised Signatory', _gfv('f-authorised-signatory')) +
-    row('Financial Year End', _gfv('f-financial-year-end')) +
-    row('Annual Turnover', _gfv('f-annual-turnover')) +
     row('Licensed', licensedText) +
     (isCompanyLicensed()
       ? row('Licences', _gfv('f-licences')) +
@@ -8002,6 +7990,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initMultiSelect('ms-op-countries', ALL_COUNTRIES);
   initMultiSelect('ms-target-markets', ALL_COUNTRIES);
   populateNationalitySelects();
+  setDobMaxToday();
   populateLookupCountry();
   syncConditionalFormState();
   // Set incorporation date max to today
@@ -8053,6 +8042,32 @@ function populateNationalitySelects() {
       });
     }
   });
+}
+
+function setDobMaxToday() {
+  var today = new Date();
+  var yyyy = today.getFullYear();
+  var mm = String(today.getMonth() + 1).padStart(2, '0');
+  var dd = String(today.getDate()).padStart(2, '0');
+  var maxDate = yyyy + '-' + mm + '-' + dd;
+  document.querySelectorAll('.dob-input').forEach(function(inp) {
+    inp.setAttribute('max', maxDate);
+    inp.setAttribute('title', 'Date of birth cannot be in the future');
+  });
+}
+
+function validateDobInputs() {
+  var today = new Date().toISOString().slice(0, 10);
+  var invalid = false;
+  document.querySelectorAll('.dob-input').forEach(function(inp) {
+    if (inp.value && inp.value > today) {
+      inp.style.borderColor = 'var(--red, #ef4444)';
+      invalid = true;
+    } else {
+      inp.style.borderColor = '';
+    }
+  });
+  return !invalid;
 }
 
 // ─── Back Office toggle ───────────────────────────────────────
