@@ -468,10 +468,13 @@ def sumsub_add_document(applicant_id, doc_type, country, file_path=None, file_da
 def sumsub_verify_webhook(body_bytes, signature_header):
     """Verify a Sumsub webhook signature (HMAC-SHA256)."""
     if not SUMSUB_WEBHOOK_SECRET:
-        if ENVIRONMENT == "production":
-            logger.error("Sumsub webhook secret not configured in production — REJECTING webhook")
+        if ENVIRONMENT in ("production", "staging"):
+            logger.error(
+                f"Sumsub webhook secret not configured in {ENVIRONMENT} — REJECTING webhook. "
+                "Set SUMSUB_WEBHOOK_SECRET environment variable."
+            )
             return False
-        logger.warning("Sumsub webhook secret not configured — accepting in dev mode only")
+        logger.warning("Sumsub webhook secret not configured — accepting in dev/demo mode only")
         return True
 
     expected = hmac.new(

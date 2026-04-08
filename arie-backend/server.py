@@ -6027,7 +6027,7 @@ class SumsubWebhookHandler(BaseHandler):
 
     def post(self):
         body = self.request.body
-        signature = self.request.headers.get("X-Payload-Digest", "")
+        signature = self.request.headers.get("X-App-Access-Sig", "")
 
         # Verify webhook signature — always verify, never skip (Finding S-16)
         if not sumsub_verify_webhook(body, signature):

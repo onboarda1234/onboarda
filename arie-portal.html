@@ -3533,10 +3533,10 @@
                     <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">Email Address</label>
                     <input type="email" id="kyc-email-dir1" placeholder="director@company.com" />
                   </div>
-                  <button type="button" class="kyc-send-btn" onclick="sendKYCLink('dir1')">📧 Send Link</button>
+                  <button type="button" class="kyc-send-btn" onclick="sendKYCLink('dir1')">🔗 Register</button>
                 </div>
                 <div class="kyc-link-sent" id="kyc-sent-dir1">
-                  ✅ Secure link sent! They will receive an email to upload their documents directly.
+                  ✅ Applicant registered. Your compliance officer will coordinate document submission.
                 </div>
               </div>
             </div>
@@ -3644,10 +3644,10 @@
                     <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">Email Address</label>
                     <input type="email" id="kyc-email-ubo1" placeholder="ubo@company.com" />
                   </div>
-                  <button type="button" class="kyc-send-btn" onclick="sendKYCLink('ubo1')">📧 Send Link</button>
+                  <button type="button" class="kyc-send-btn" onclick="sendKYCLink('ubo1')">🔗 Register</button>
                 </div>
                 <div class="kyc-link-sent" id="kyc-sent-ubo1">
-                  ✅ Secure link sent! They will receive an email to upload their documents directly.
+                  ✅ Applicant registered. Your compliance officer will coordinate document submission.
                 </div>
               </div>
             </div>
@@ -5574,9 +5574,9 @@ function syncDirectorsUBOsToKYC() {
             '<div class="kyc-link-form">' +
               '<div class="kyc-link-input-row">' +
                 '<div style="flex:1"><label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">Email Address</label><input type="email" id="kyc-email-' + p.id + '" placeholder="person@company.com" /></div>' +
-                '<button type="button" class="kyc-send-btn" onclick="sendKYCLink(\'' + p.id + '\')">&#128231; Send Link</button>' +
+                '<button type="button" class="kyc-send-btn" onclick="sendKYCLink(\'' + p.id + '\')">&#128279; Register</button>' +
               '</div>' +
-              '<div class="kyc-link-sent" id="kyc-sent-' + p.id + '">&#10004; Secure link sent! They will receive an email to upload their documents directly.</div>' +
+              '<div class="kyc-link-sent" id="kyc-sent-' + p.id + '">&#10003; Applicant registered. Your compliance officer will coordinate document submission.</div>' +
             '</div>' +
           '</div>'
         : '' /* No self-submission link panel for intermediary companies */
@@ -8683,7 +8683,7 @@ function removeSectionDDocument(docId) {
   showToast('info', 'Document Removed', 'The document slot has been removed.');
 }
 
-// ─── KYC: send self-submission link ────────────────────────────────────
+// ─── KYC: register applicant with Sumsub ────────────────────────────────
 async function sendKYCLink(personId) {
   const emailInput = document.getElementById('kyc-email-' + personId);
   const email = emailInput ? emailInput.value.trim() : '';
@@ -8701,52 +8701,56 @@ async function sendKYCLink(personId) {
   const firstName = nameParts[0] || 'User';
   const lastName = nameParts.slice(1).join(' ') || personId;
 
+  // Derive person type from ID prefix (F-04)
+  const personType = personId.startsWith('dir') ? 'director' : personId.startsWith('ubo') ? 'ubo' : 'individual';
+
   // Set loading state on button
   const card = document.getElementById('kyc-person-' + personId);
   const sendBtn = card ? card.querySelector('.kyc-send-btn') : null;
   if (sendBtn) {
     sendBtn.disabled = true;
-    sendBtn.textContent = '⏳ Sending...';
+    sendBtn.textContent = '⏳ Registering...';
   }
 
   try {
-    // Call backend to create/retrieve Sumsub applicant
+    // F-04: include application_id so the mapping table is populated for deterministic webhook linkage
     const applicantRes = await apiCall('POST', '/kyc/applicant', {
       external_user_id: personId,
       first_name: firstName,
       last_name: lastName,
       email: email,
-      country: 'US' // Default country; can be made dynamic if needed
+      country: 'US',
+      application_id: currentApplicationId || '',
+      person_type: personType
     });
 
-    // Generate WebSDK access token
-    const tokenRes = await apiCall('POST', '/kyc/token', {
-      external_user_id: personId,
-      level_name: 'individual'
-    });
+    const applicantId = applicantRes.applicant_id || applicantRes.applicantId || applicantRes.id || '';
 
-    // Show success state in UI
+    // F-03: show honest registered state — no email is sent automatically;
+    // the compliance officer coordinates document submission with the applicant.
     const sentDiv = document.getElementById('kyc-sent-' + personId);
-    if (sentDiv) sentDiv.style.display = 'flex';
+    if (sentDiv) {
+      sentDiv.style.display = 'flex';
+      // Update text to reflect the real outcome (not a sent email)
+      sentDiv.innerHTML = '&#10003; Applicant registered' + (applicantId ? ' (ID: <code>' + applicantId + '</code>)' : '') + '. Your compliance officer will coordinate document submission.';
+    }
 
     const badge = document.getElementById('kyc-badge-' + personId);
     if (badge) {
       badge.className = 'kyc-status-badge sent';
-      badge.textContent = '📧 Link Sent';
+      badge.textContent = '✓ Registered';
     }
 
-    // Show success toast with applicant ID
-    const applicantId = applicantRes.applicantId || applicantRes.id || 'created';
-    showToast('success', 'Link Sent!', 'Applicant ' + applicantId + ' created. Link sent to ' + email);
+    showToast('success', 'Applicant Registered', 'Sumsub applicant created for ' + fullName + '. Compliance officer will follow up.');
 
   } catch (err) {
-    console.error('KYC Link Error:', err);
-    showToast('error', 'Failed to Send', 'Could not send KYC link. Please try again.');
+    console.error('KYC Registration Error:', err);
+    showToast('error', 'Registration Failed', 'Could not register applicant. Please try again.');
   } finally {
     // Restore button state
     if (sendBtn) {
       sendBtn.disabled = false;
-      sendBtn.textContent = '📧 Send Link';
+      sendBtn.textContent = '🔗 Register';
     }
   }
 }
@@ -8884,10 +8888,10 @@ function addKYCPerson() {
             <label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">Email Address</label>
             <input type="email" id="kyc-email-${id}" placeholder="person@company.com" />
           </div>
-          <button type="button" class="kyc-send-btn" onclick="sendKYCLink('${id}')">📧 Send Link</button>
+          <button type="button" class="kyc-send-btn" onclick="sendKYCLink('${id}')">🔗 Register</button>
         </div>
         <div class="kyc-link-sent" id="kyc-sent-${id}">
-          ✅ Secure link sent! They will receive an email to upload their documents directly.
+          ✅ Applicant registered. Your compliance officer will coordinate document submission.
         </div>
       </div>
     </div>`;
