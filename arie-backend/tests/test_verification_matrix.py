@@ -770,3 +770,35 @@ class TestClaudeClientCheckDefinitionAlignment:
             f"Cross-doc-type ID conflicts in derived definitions:\n"
             + "\n".join(f"  {c}" for c in conflicts)
         )
+
+    def test_cache_is_populated_and_reused(self):
+        """_get_check_definitions() must populate the cache on first call and reuse it on second."""
+        from claude_client import ClaudeClient
+        # Clear the cache to ensure a fresh load
+        ClaudeClient._check_definitions_cache = None
+
+        first = ClaudeClient._get_check_definitions()
+        assert ClaudeClient._check_definitions_cache is not None, \
+            "Cache must be populated after first call"
+
+        second = ClaudeClient._get_check_definitions()
+        assert first is second, \
+            "Second call must return the exact same cached object (no re-load)"
+
+    def test_unknown_doc_type_uses_generic_fallback(self):
+        """verify_document() must return the generic DOC-GEN checks for unknown doc types."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        unknown_checks = defs.get("__completely_unknown_doc_type__")
+        # Unknown types are NOT in the derived definitions dict — the generic fallback
+        # is applied inline in verify_document() via .get(doc_type, [...generic...])
+        assert unknown_checks is None, \
+            "Unknown doc types must not be present in derived definitions"
+
+        # Verify the inline fallback list in verify_document() uses DOC-GEN- prefixed IDs.
+        # Inspect the method source to find the hardcoded fallback list.
+        import inspect
+        source = inspect.getsource(ClaudeClient.verify_document)
+        assert "DOC-GEN-01" in source, "verify_document must use DOC-GEN-01 in generic fallback"
+        assert "DOC-GEN-02" in source, "verify_document must use DOC-GEN-02 in generic fallback"
+        assert "DOC-GEN-03" in source, "verify_document must use DOC-GEN-03 in generic fallback"

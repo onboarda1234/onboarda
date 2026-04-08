@@ -1583,7 +1583,7 @@ CRITICAL REQUIREMENTS:
                     converted.append({
                         "id": c["id"],
                         "label": c["label"],
-                        "type": c.get("rule_type") or c.get("classification", "content"),
+                        "type": c.get("rule_type") if c.get("rule_type") else c.get("classification", "content"),
                         "rule": rule_text,
                         "classification": c.get("classification", "rule"),
                     })

@@ -46,10 +46,15 @@ class TestControlIDs:
         """Control IDs must follow the canonical format (e.g. DOC-01, DOC-06A, DOC-MA-01, LIC-GATE, GATE-01)."""
         from claude_client import ClaudeClient
         import re
-        # Canonical pattern: prefix (DOC/CERT/LIC/GATE) dash identifier
-        # Identifiers may be numeric (DOC-01), alpha-numeric (DOC-06A),
-        # text-numeric (DOC-MA-01), or text-only (LIC-GATE).
-        pattern = re.compile(r'^(DOC|CERT|LIC|GATE)-[A-Z0-9]+(-[A-Z0-9]+)*$')
+        # Canonical formats in use:
+        #   DOC-01     (numeric, e.g. DOC-05)
+        #   DOC-06A    (numeric + letter suffix, e.g. DOC-06A, DOC-49A)
+        #   DOC-MA-01  (text infix + numeric, e.g. DOC-MA-01)
+        #   LIC-GATE   (prefix + text word, e.g. LIC-GATE)
+        #   GATE-01    (prefix + numeric, e.g. GATE-01)
+        #   CERT-01    (prefix + numeric, e.g. CERT-01)
+        # Pattern: PREFIX-SEGMENT with up to one additional -SEGMENT (DOC-MA-01).
+        pattern = re.compile(r'^(DOC|CERT|LIC|GATE)-[A-Z0-9]+(?:-[A-Z0-9]+)?$')
         for doc_type, checks in ClaudeClient._get_check_definitions().items():
             for check in checks:
                 assert pattern.match(check["id"]), \
