@@ -623,3 +623,150 @@ class TestCompletedStubs:
         own_checks = [r for r in results if r.get("id") == "DOC-28"]
         assert len(own_checks) == 1
         assert own_checks[0]["result"] == CheckStatus.PASS
+
+
+# ── Register alignment: claude_client derived definitions must match matrix ────
+
+class TestClaudeClientCheckDefinitionAlignment:
+    """
+    Verifies that ClaudeClient._get_check_definitions() produces check IDs
+    that are identical to the canonical verification_matrix.py IDs.
+
+    This ensures the fallback path (when ai_checks DB is empty or unavailable)
+    uses the same check IDs as the production seeded path, maintaining
+    regulator-grade provenance regardless of which code path is active.
+    """
+
+    def test_derived_definitions_loaded(self):
+        """_get_check_definitions() must return a non-empty dict."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        assert isinstance(defs, dict), "Derived definitions must be a dict"
+        assert len(defs) > 0, "Derived definitions must not be empty"
+
+    def test_derived_ids_match_matrix_for_all_doc_types(self):
+        """
+        For every doc type in ALL_DOC_CHECKS, every non-CERT-01 check ID in
+        the matrix must appear in the derived definitions under the same doc_type.
+        """
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+
+        # Build matrix IDs grouped by doc_type (direct matrix keys, no alias transformation)
+        missing = []
+        for matrix_key, entry in ALL_DOC_CHECKS.items():
+            if entry.get("retired"):
+                continue
+            derived_ids = {c["id"] for c in defs.get(matrix_key, [])}
+            for c in entry.get("checks", []):
+                cid = c["id"]
+                if cid == "CERT-01":
+                    continue  # cross-cutting check, present by re-use — not a mismatch
+                if cid not in derived_ids:
+                    missing.append(f"{matrix_key}/{cid} ({c['label']})")
+        assert missing == [], (
+            f"Check IDs in verification_matrix missing from derived definitions:\n"
+            + "\n".join(f"  {m}" for m in missing)
+        )
+
+    def test_no_phantom_ids_in_derived(self):
+        """
+        No check ID in the derived definitions should be absent from the matrix
+        (i.e., no stale/phantom IDs that could mislead audit trail).
+        """
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+
+        # Collect all canonical IDs from matrix
+        canonical_ids = set()
+        for entry in ALL_DOC_CHECKS.values():
+            for c in entry.get("checks", []):
+                canonical_ids.add(c["id"])
+        for c in GATE_CHECKS:
+            canonical_ids.add(c["id"])
+
+        phantom = []
+        for doc_type, checks in defs.items():
+            for c in checks:
+                cid = c.get("id", "")
+                if cid and cid not in canonical_ids and not cid.startswith("DOC-GEN-"):
+                    phantom.append(f"{doc_type}/{cid}")
+
+        assert phantom == [], (
+            f"Phantom check IDs in derived definitions (not in matrix):\n"
+            + "\n".join(f"  {p}" for p in phantom)
+        )
+
+    def test_cert_inc_critical_ids_present(self):
+        """cert_inc must have DOC-06A and DOC-07A (not legacy DOC-11/12/DOC-07)."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        ids = {c["id"] for c in defs.get("cert_inc", [])}
+        assert "DOC-06A" in ids, "cert_inc missing DOC-06A (Date of Incorporation)"
+        assert "DOC-07A" in ids, "cert_inc missing DOC-07A (Document Clarity)"
+        assert "DOC-11" not in ids, "cert_inc must not have stale ID DOC-11"
+        assert "DOC-12" not in ids, "cert_inc must not have stale ID DOC-12"
+
+    def test_passport_critical_ids_present(self):
+        """passport must have DOC-49, DOC-49A, DOC-50, DOC-51, DOC-52 (not legacy DOC-48/62/63)."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        ids = {c["id"] for c in defs.get("passport", [])}
+        for required in ("DOC-49", "DOC-49A", "DOC-50", "DOC-51", "DOC-52"):
+            assert required in ids, f"passport missing {required}"
+        for stale in ("DOC-48", "DOC-62", "DOC-63"):
+            assert stale not in ids, f"passport must not have stale ID {stale}"
+
+    def test_memarts_has_doc_ma01(self):
+        """memarts must have DOC-MA-01 (Business Objects) not legacy DOC-13."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        ids = {c["id"] for c in defs.get("memarts", [])}
+        assert "DOC-MA-01" in ids, "memarts missing DOC-MA-01 (Business Objects)"
+        assert "DOC-13" in ids, "memarts missing DOC-13 (Authorised Share Capital)"
+        assert "DOC-16" not in ids, "memarts must not have stale ID DOC-16"
+
+    def test_reg_sh_uses_doc15a_doc15b(self):
+        """reg_sh must have DOC-15A and DOC-15B (not legacy DOC-22/DOC-23)."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        ids = {c["id"] for c in defs.get("reg_sh", [])}
+        assert "DOC-15A" in ids, "reg_sh missing DOC-15A"
+        assert "DOC-15B" in ids, "reg_sh missing DOC-15B"
+        assert "DOC-22" not in ids, "reg_sh must not have stale ID DOC-22"
+        assert "DOC-23" not in ids, "reg_sh must not have stale ID DOC-23"
+
+    def test_no_cross_doc_type_id_conflicts(self):
+        """
+        IDs used by the derived definitions must not conflict with IDs from
+        different doc types in the matrix (e.g., DOC-61 used for fin_stmt
+        would conflict with its canonical assignment to poa_person).
+        """
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+
+        # Build canonical id -> doc_type map (excluding CERT-01, using direct matrix keys)
+        canonical_map = {}
+        for matrix_key, entry in ALL_DOC_CHECKS.items():
+            for c in entry.get("checks", []):
+                cid = c["id"]
+                if cid == "CERT-01":
+                    continue
+                if cid not in canonical_map:
+                    canonical_map[cid] = matrix_key
+
+        conflicts = []
+        for derived_doc_type, checks in defs.items():
+            for c in checks:
+                cid = c.get("id", "")
+                if not cid or cid == "CERT-01" or cid.startswith("DOC-GEN-"):
+                    continue
+                if cid in canonical_map and canonical_map[cid] != derived_doc_type:
+                    conflicts.append(
+                        f"{cid} in derived/{derived_doc_type} but canonical/{canonical_map[cid]}"
+                    )
+
+        assert conflicts == [], (
+            f"Cross-doc-type ID conflicts in derived definitions:\n"
+            + "\n".join(f"  {c}" for c in conflicts)
+        )

@@ -1551,132 +1551,55 @@ CRITICAL REQUIREMENTS:
     # Single source of truth — MUST align exactly with ENTITY_DOC_CHECKS and PERSON_DOC_CHECKS in back office.
     # BOOTSTRAP DEFAULTS ONLY — runtime loads from ai_checks DB table via check_overrides parameter.
     # These definitions are used ONLY when DB lookup fails or returns empty.
-    # The canonical source of truth is the ai_checks database table, editable via back office.
-    #
-    # Claude evaluates each check — it does NOT decide what checks to run.
-    # Keys: type (used for matching in UI), label (display name), rule (what Claude must verify)
-    _DOC_CHECK_DEFINITIONS = {
-        # ── Corporate Entity Documents (aligned with ENTITY_DOC_CHECKS in backoffice) ──
-        "poa": [
-            {"id": "DOC-01", "type": "age", "label": "Document Date", "rule": "Must be dated within the last 3 months. PASS if dated within 3 months. WARN if dated 3-6 months ago. FAIL if older than 6 months or undated."},
-            {"id": "DOC-02", "type": "name", "label": "Entity Name Match", "rule": "Entity name on document must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-04", "type": "content", "label": "Address Match", "rule": "Address must match registered office address on application. PASS if address matches. WARN if partial match. FAIL if mismatch or missing."},
-            {"id": "DOC-03", "type": "quality", "label": "Document Clarity", "rule": "Document must be legible and unredacted. PASS if fully legible. WARN if partially legible. FAIL if illegible or blank."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        "cert_inc": [
-            {"id": "DOC-05", "type": "name", "label": "Entity Name Match", "rule": "Company name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-06", "type": "content", "label": "Registration Number Match", "rule": "Registration number must match the number declared in pre-screening. PASS if present and matches. WARN if partially legible. FAIL if missing or mismatch."},
-            {"id": "DOC-11", "type": "age", "label": "Date of Incorporation Match", "rule": "Date of incorporation must match pre-screening declaration. PASS if date matches. WARN if date differs by less than 6 months. FAIL if mismatch or missing."},
-            {"id": "DOC-12", "type": "content", "label": "Jurisdiction Match", "rule": "Jurisdiction/country of incorporation must match pre-screening. PASS if jurisdiction matches. WARN if abbreviation/variant used. FAIL if mismatch or missing."},
-            {"id": "DOC-07", "type": "quality", "label": "Document Clarity", "rule": "Document must be legible, certified copy if applicable. PASS if legible. WARN if partially legible. FAIL if illegible or blank."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        "memarts": [
-            {"id": "DOC-08", "type": "name", "label": "Entity Name Match", "rule": "Company name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-16", "type": "content", "label": "Authorised Share Capital", "rule": "Authorised share capital must match the amount declared in pre-screening. PASS if capital matches. WARN if minor discrepancy. FAIL if mismatch or missing."},
-            {"id": "DOC-09", "type": "quality", "label": "Completeness", "rule": "All pages must be present and legible. PASS if complete and legible. WARN if minor pages missing. FAIL if key pages missing or illegible."},
-            {"id": "DOC-13", "type": "ai", "label": "Business Objects / Activities", "rule": "Declared business activities must fall within the objects clause of the MoA. PASS if activities within objects. WARN if partial overlap. FAIL if activities clearly outside objects. ESCALATE if uncertain."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        # cert_reg retired — no checks. Doc type preserved for historical records only.
-        "cert_reg": [],
-        "reg_sh": [
-            {"id": "DOC-14", "type": "name", "label": "Shareholder Name Match", "rule": "Shareholder names must match those declared in pre-screening. PASS if all names match (fuzzy > 90%). WARN if minor name variations. FAIL if names cannot be matched or are missing."},
-            {"id": "DOC-15", "type": "content", "label": "Shareholding Percentages Match", "rule": "Shareholding percentages must match those declared in pre-screening. PASS if all percentages match. WARN if minor discrepancies (< 5%). FAIL if major discrepancies or missing."},
-            {"id": "DOC-22", "type": "content", "label": "Total Shares Sum to 100%", "rule": "Total shareholdings must sum to 100%. PASS if totals 100%. WARN if totals 95-100% (rounding). FAIL if < 95% or > 100%."},
-            {"id": "DOC-23", "type": "content", "label": "UBO Identification (\u226525%)", "rule": "Any shareholder holding \u2265 25% must be identified as a declared UBO. PASS if all \u226525% shareholders are declared UBOs. WARN if borderline (24-26%). FAIL if \u226525% shareholder not declared as UBO."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        "reg_dir": [
-            {"id": "DOC-17", "type": "name", "label": "Director Name Match", "rule": "Directors must match those declared in pre-screening. PASS if all directors match (fuzzy > 90%). WARN if minor name variations. FAIL if directors missing or undeclared directors present."},
-            {"id": "DOC-18", "type": "content", "label": "Completeness", "rule": "All current directors must be listed. PASS if all listed. WARN if count uncertain. FAIL if directors clearly missing."},
-            {"id": "DOC-19", "type": "quality", "label": "Document Clarity", "rule": "Must be legible. PASS if legible. WARN if partially legible. FAIL if illegible."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        "fin_stmt": [
-            {"id": "DOC-20", "type": "age", "label": "Financial Period", "rule": "Must be for most recent financial year (or forecast if < 1 year old). PASS if within last 18 months. WARN if 18-24 months old. FAIL if older than 24 months."},
-            {"id": "DOC-21", "type": "name", "label": "Entity Name Match", "rule": "Company name on statements must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-61", "type": "content", "label": "Revenue / Turnover Consistency", "rule": "Revenue or turnover figures must be broadly consistent with the annual turnover declared in pre-screening. PASS if within 20%. WARN if 20-50% variance. FAIL if > 50% variance or figures missing."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        "board_res": [
-            {"id": "DOC-24", "type": "name", "label": "Signatory Match", "rule": "Authorised signatory must be a declared director. PASS if signatory is a declared director. WARN if name variation. FAIL if signatory not a director."},
-            {"id": "DOC-25", "type": "age", "label": "Resolution Date", "rule": "Must be dated and reasonably current. PASS if dated within 12 months. WARN if 12-24 months old. FAIL if undated or older than 24 months."},
-            {"id": "DOC-26", "type": "ai", "label": "Scope of Authority", "rule": "Resolution must explicitly authorise the signatory to open a bank/payment account or engage the relevant service provider. PASS if explicit authorisation present. WARN if implicit only. FAIL if authorisation not found. ESCALATE if legal language is ambiguous."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        "structure_chart": [
-            {"id": "DOC-27", "type": "content", "label": "UBO Chain", "rule": "Must trace ownership to ultimate beneficial owners. PASS if UBO chain complete. WARN if chain incomplete but UBOs identifiable. FAIL if UBOs not identifiable."},
-            {"id": "DOC-28", "type": "content", "label": "Ownership Match", "rule": "Shareholdings must match shareholder register. PASS if percentages match. WARN if minor discrepancies. FAIL if major discrepancies."},
-            {"id": "DOC-29", "type": "quality", "label": "Legibility", "rule": "Diagram must be clear and readable. PASS if legible. WARN if partially legible. FAIL if illegible."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        "bankref": [
-            {"id": "DOC-30", "type": "quality", "label": "Bank Letterhead", "rule": "Must be on official bank letterhead. PASS if on letterhead. WARN if letterhead unclear. FAIL if no letterhead."},
-            {"id": "DOC-31", "type": "age", "label": "Date", "rule": "Must be dated within the last 3 months. PASS if within 3 months. WARN if 3-6 months. FAIL if older than 6 months or undated."},
-            {"id": "DOC-32", "type": "name", "label": "Entity Name Match", "rule": "Entity name must match application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        "licence": [
-            {"id": "DOC-33", "type": "name", "label": "Entity Name Match", "rule": "Entity name must match. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-34", "type": "expiry", "label": "Licence Validity", "rule": "Licence must be current and not expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired."},
-            {"id": "DOC-35", "type": "ai", "label": "Licence Scope", "rule": "Licence must cover the business activities declared in the application. PASS if scope covers activities. WARN if partial coverage. FAIL if activities fall outside licence scope. ESCALATE if scope is ambiguous."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        # ── Additional entity docs (portal-only, no backoffice config yet) ──
-        "contracts": [
-            {"id": "DOC-36", "type": "name", "label": "Name Match", "rule": "Entity name must appear in the contract. PASS if name present and matches. WARN if partial match. FAIL if not present."},
-            {"id": "DOC-37", "type": "content", "label": "Relevance", "rule": "Contract must be relevant to the declared business activity. PASS if relevant. WARN if tangentially related. FAIL if unrelated."},
-            {"id": "DOC-38", "type": "quality", "label": "Clarity", "rule": "Document must be legible. PASS if legible. WARN if partially legible. FAIL if illegible."},
-        ],
-        "aml_policy": [
-            {"id": "DOC-39", "type": "content", "label": "Completeness", "rule": "Must cover key AML areas (CDD, sanctions screening, reporting). PASS if all key areas covered. WARN if minor gaps. FAIL if major areas missing."},
-            {"id": "DOC-40", "type": "age", "label": "Date", "rule": "Policy must be dated and reviewed within last 12 months. PASS if within 12 months. WARN if 12-24 months. FAIL if older or undated."},
-            {"id": "DOC-41", "type": "content2", "label": "Relevance", "rule": "Must be relevant to the entity's business activities. PASS if relevant. WARN if generic. FAIL if irrelevant."},
-        ],
-        "source_wealth": [
-            {"id": "DOC-42", "type": "content", "label": "Consistency", "rule": "Must be consistent with declared source of wealth in application. PASS if consistent. WARN if minor gaps. FAIL if contradicts declaration."},
-            {"id": "DOC-43", "type": "quality", "label": "Clarity", "rule": "Document must be legible and credible. PASS if legible and credible. WARN if partially legible. FAIL if illegible or not credible."},
-        ],
-        "source_funds": [
-            {"id": "DOC-44", "type": "content", "label": "Consistency", "rule": "Must be consistent with declared source of funds in application. PASS if consistent. WARN if minor gaps. FAIL if contradicts declaration."},
-            {"id": "DOC-45", "type": "quality", "label": "Clarity", "rule": "Document must be legible and credible. PASS if legible and credible. WARN if partially legible. FAIL if illegible or not credible."},
-        ],
-        "bank_statements": [
-            {"id": "DOC-71", "type": "age", "label": "Period", "rule": "Must cover a recent period (within last 6 months). PASS if within 6 months. WARN if 6-12 months. FAIL if older than 12 months."},
-            {"id": "DOC-72", "type": "name", "label": "Name Match", "rule": "Account holder name must match the declared entity or person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-73", "type": "quality", "label": "Completeness", "rule": "All pages must be present. PASS if complete. WARN if minor pages missing. FAIL if key pages missing."},
-        ],
-        # ── KYC Person Documents (aligned with PERSON_DOC_CHECKS in backoffice) ──
-        "passport": [
-            {"id": "DOC-48", "type": "expiry", "label": "Document Expiry", "rule": "Passport must not be expired. PASS if > 6 months validity remaining. WARN if 1-6 months remaining. FAIL if expired."},
-            {"id": "DOC-50", "type": "name", "label": "Name Match", "rule": "Name must match the person declared in the application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-62", "type": "content", "label": "Date of Birth Match", "rule": "Date of birth must match the date declared in pre-screening. PASS if date matches. WARN if format variation only. FAIL if mismatch or missing."},
-            {"id": "DOC-63", "type": "content", "label": "Nationality Match", "rule": "Nationality must match declared nationality. PASS if matches. WARN if not clearly visible. FAIL if mismatch."},
-            {"id": "DOC-49", "type": "quality", "label": "Photo Quality", "rule": "Photo must be clear and identifiable. PASS if clear. WARN if partially obscured. FAIL if unidentifiable."},
-            {"id": "CERT-01", "type": "quality", "label": "Certification", "rule": "Must be certified by a notary, lawyer, or accountant. PASS if certified. WARN if signed but uncertified. FAIL if no signature or certification."},
-        ],
-        "national_id": [
-            {"id": "DOC-53", "type": "expiry", "label": "Document Expiry", "rule": "Must not be expired. PASS if valid. WARN if expiring within 30 days. FAIL if expired."},
-            {"id": "DOC-54", "type": "quality", "label": "Photo Quality", "rule": "Photo must be clear and identifiable. PASS if clear. WARN if partially obscured. FAIL if unidentifiable."},
-            {"id": "DOC-55", "type": "name", "label": "Name Match", "rule": "Name must match the person declared in the application. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-56", "type": "content", "label": "Nationality Match", "rule": "Nationality must match declared nationality. PASS if matches. WARN if not clearly visible. FAIL if mismatch."},
-        ],
-        "cv": [
-            {"id": "DOC-57", "type": "name", "label": "Name Match", "rule": "Name on CV/profile must match declared identity. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-58", "type": "content", "label": "Employment History \u2014 Presence", "rule": "CV must include employment history section. PASS if history present. WARN if limited entries. FAIL if no employment history."},
-            {"id": "DOC-65", "type": "ai", "label": "Employment History \u2014 Relevance", "rule": "Employment background must be relevant to the declared role and business activity. PASS if background is relevant. WARN if tangentially related. FAIL if no relevant experience. ESCALATE if background appears inconsistent with declared role."},
-        ],
-        "sow": [
-            {"id": "DOC-59", "type": "name", "label": "Name Match", "rule": "Name must match the declared person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-            {"id": "DOC-60", "type": "ai", "label": "Source of Wealth Evidence", "rule": "Document must contain credible evidence supporting the declared source of wealth. PASS if credible evidence present. WARN if evidence weak or indirect. FAIL if no evidence. ESCALATE if declared source appears implausible."},
-            {"id": "DOC-66", "type": "ai", "label": "Consistency / Plausibility", "rule": "Declared wealth, function, and source of funds must be internally consistent and plausible. PASS if consistent and plausible. WARN if minor inconsistencies. FAIL if major inconsistencies. ESCALATE for compliance officer review."},
-        ],
-    }
+    # Check definitions are derived from the canonical verification_matrix module.
+    # This ensures the fallback always uses the same check IDs and classifications
+    # as the DB-seeded ai_checks table, eliminating ID drift.
+    # The canonical source of truth is verification_matrix.py → ALL_DOC_CHECKS.
 
-    # Legacy text rules (kept for backward compatibility)
-    _DOC_VERIFICATION_RULES = {k: " ".join(f"({i+1}) {c['rule']}" for i, c in enumerate(v)) for k, v in _DOC_CHECK_DEFINITIONS.items()}
+    _check_definitions_cache: dict = None  # populated lazily on first use
+
+    @classmethod
+    def _load_check_definitions_from_matrix(cls) -> dict:
+        """Derive check definitions from verification_matrix (single canonical source).
+
+        Iterates ALL_DOC_CHECKS directly (preserving original matrix keys such as
+        "poa_person", "pep_declaration", "bankref_pep") so that every matrix key is
+        accessible as a fallback without the doc_type alias transformations applied
+        by build_ai_checks_seed().
+
+        Uses ai_prompt_hint as the rule text for AI/hybrid checks (outcome-oriented);
+        falls back to logic text for rule-only checks.
+        """
+        try:
+            from verification_matrix import ALL_DOC_CHECKS
+            defs: dict = {}
+            for matrix_key, entry in ALL_DOC_CHECKS.items():
+                if entry.get("retired"):
+                    continue
+                converted = []
+                for c in entry.get("checks", []):
+                    # Prefer ai_prompt_hint (written for AI guidance) over logic text.
+                    rule_text = c.get("ai_prompt_hint") or c.get("logic", "")
+                    converted.append({
+                        "id": c["id"],
+                        "label": c["label"],
+                        "type": c.get("rule_type") or c.get("classification", "content"),
+                        "rule": rule_text,
+                        "classification": c.get("classification", "rule"),
+                    })
+                defs[matrix_key] = converted
+            return defs
+        except Exception as e:
+            logger.error(f"Failed to load check definitions from verification_matrix: {e}")
+            return {}
+
+    @classmethod
+    def _get_check_definitions(cls) -> dict:
+        """Return the canonically-derived check definitions (lazily loaded, cached)."""
+        if cls._check_definitions_cache is None:
+            cls._check_definitions_cache = cls._load_check_definitions_from_matrix()
+        return cls._check_definitions_cache
+
 
     # Field extraction schemas: doc_type → fields Claude should extract
     _EXTRACTION_SCHEMAS = {
@@ -1784,7 +1707,7 @@ CRITICAL REQUIREMENTS:
             doc_category: Category of document (identity, company, kyc, address, etc)
             file_path: Path to the actual file on disk (optional, enables vision analysis)
             check_overrides: Optional list of check dicts from ai_checks DB table.
-                           If provided, used instead of _DOC_CHECK_DEFINITIONS.
+                           If provided, takes priority over the matrix-derived definitions.
             entity_name: Registered entity/company name from pre-screening (optional)
             directors: List of declared director full names (optional)
             ubos: List of declared UBO full names (optional)
@@ -1826,15 +1749,18 @@ CRITICAL REQUIREMENTS:
             else:
                 logger.warning(f"Could not read file for vision, falling back to metadata: {file_path}")
 
-        # Get deterministic check definitions for this doc type
-        # check_overrides (from ai_checks DB table) take priority over hardcoded _DOC_CHECK_DEFINITIONS
+        # Get deterministic check definitions for this doc type.
+        # Priority order:
+        #   1. check_overrides — provided by caller from ai_checks DB table (canonical, seeded from matrix)
+        #   2. _get_check_definitions() — derived lazily from verification_matrix (same IDs as DB seed)
+        #   3. Generic fallback — for unknown/custom doc types not yet in the matrix
         if check_overrides:
             check_defs = check_overrides
         else:
-            check_defs = self._DOC_CHECK_DEFINITIONS.get(doc_type, [
-                {"type": "doc_type_match", "label": "Document Type Match", "rule": "Verify document matches claimed type"},
-                {"type": "quality", "label": "Document Quality", "rule": "Document must be legible and complete"},
-                {"type": "name", "label": "Name Match", "rule": "Name must match declared person or entity"},
+            check_defs = self._get_check_definitions().get(doc_type, [
+                {"id": "DOC-GEN-01", "type": "doc_type_match", "label": "Document Type Match", "rule": "Verify document matches claimed type"},
+                {"id": "DOC-GEN-02", "type": "quality", "label": "Document Quality", "rule": "Document must be legible and complete"},
+                {"id": "DOC-GEN-03", "type": "name", "label": "Name Match", "rule": "Name must match declared person or entity"},
             ])
 
         has_vision = len(file_content_blocks) > 0

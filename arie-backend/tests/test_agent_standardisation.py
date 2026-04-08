@@ -20,13 +20,14 @@ class TestControlIDs:
     """Every check definition must have a unique control ID."""
 
     def test_all_doc_check_definitions_have_ids(self):
-        """Every check in _DOC_CHECK_DEFINITIONS must have an 'id' field."""
+        """Every check in the derived check definitions must have an 'id' field."""
         from claude_client import ClaudeClient
-        for doc_type, checks in ClaudeClient._DOC_CHECK_DEFINITIONS.items():
+        for doc_type, checks in ClaudeClient._get_check_definitions().items():
             for check in checks:
                 assert "id" in check, f"Check '{check.get('label')}' in doc_type '{doc_type}' missing 'id'"
-                assert check["id"].startswith("DOC-") or check["id"].startswith("CERT-"), \
-                    f"Check ID '{check['id']}' must start with 'DOC-' or 'CERT-'"
+                assert (check["id"].startswith("DOC-") or check["id"].startswith("CERT-")
+                        or check["id"].startswith("LIC-") or check["id"].startswith("GATE-")), \
+                    f"Check ID '{check['id']}' must start with 'DOC-', 'CERT-', 'LIC-', or 'GATE-'"
 
     def test_control_ids_are_unique(self):
         """All control IDs across all doc types must be unique (CERT-01 is an allowed cross-cutting exception)."""
@@ -35,20 +36,24 @@ class TestControlIDs:
         # Certification check — exclude it from the uniqueness check.
         ALLOWED_CROSS_CUTTING = {"CERT-01"}
         all_ids = []
-        for doc_type, checks in ClaudeClient._DOC_CHECK_DEFINITIONS.items():
+        for doc_type, checks in ClaudeClient._get_check_definitions().items():
             for check in checks:
                 if check["id"] not in ALLOWED_CROSS_CUTTING:
                     all_ids.append(check["id"])
         assert len(all_ids) == len(set(all_ids)), f"Duplicate control IDs found: {[x for x in all_ids if all_ids.count(x) > 1]}"
 
     def test_control_id_format(self):
-        """Control IDs must follow DOC-XX or CERT-XX format."""
+        """Control IDs must follow the canonical format (e.g. DOC-01, DOC-06A, DOC-MA-01, LIC-GATE, GATE-01)."""
         from claude_client import ClaudeClient
         import re
-        for doc_type, checks in ClaudeClient._DOC_CHECK_DEFINITIONS.items():
+        # Canonical pattern: prefix (DOC/CERT/LIC/GATE) dash identifier
+        # Identifiers may be numeric (DOC-01), alpha-numeric (DOC-06A),
+        # text-numeric (DOC-MA-01), or text-only (LIC-GATE).
+        pattern = re.compile(r'^(DOC|CERT|LIC|GATE)-[A-Z0-9]+(-[A-Z0-9]+)*$')
+        for doc_type, checks in ClaudeClient._get_check_definitions().items():
             for check in checks:
-                assert re.match(r'^(DOC|CERT)-\d{2}$', check["id"]), \
-                    f"Control ID '{check['id']}' doesn't match DOC-XX or CERT-XX format"
+                assert pattern.match(check["id"]), \
+                    f"Control ID '{check['id']}' in '{doc_type}' doesn't match canonical ID format"
 
     def test_mock_verify_document_has_ids(self):
         """Mock verify_document response must include control IDs."""
@@ -146,10 +151,16 @@ class TestRuleBasedChecks:
     """Check definitions must contain explicit PASS/WARN/FAIL criteria."""
 
     def test_rules_contain_pass_warn_fail(self):
-        """Every rule in _DOC_CHECK_DEFINITIONS must contain PASS, WARN, and FAIL criteria."""
+        """AI and hybrid check definitions must contain explicit PASS, WARN, and FAIL criteria
+        in their ai_prompt_hint / rule text so Claude can make the right decision.
+        Pure rule-only checks are excluded as they run deterministically without AI."""
         from claude_client import ClaudeClient
-        for doc_type, checks in ClaudeClient._DOC_CHECK_DEFINITIONS.items():
+        from verification_matrix import CheckClassification
+        for doc_type, checks in ClaudeClient._get_check_definitions().items():
             for check in checks:
+                # Only AI and hybrid checks require PASS/WARN/FAIL in their rule guidance.
+                if check.get("classification") not in (CheckClassification.AI, CheckClassification.HYBRID):
+                    continue
                 rule = check.get("rule", "")
                 assert "PASS" in rule, f"Check '{check['id']}' ({doc_type}) rule missing PASS criteria"
                 assert "WARN" in rule or "warn" in rule.lower(), \

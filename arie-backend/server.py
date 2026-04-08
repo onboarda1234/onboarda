@@ -3353,6 +3353,39 @@ class DocumentAIVerifyHandler(BaseHandler):
                     except Exception:
                         pass
 
+        # Load check_overrides and prescreening_context from DB so that the helper path
+        # uses the same canonical check IDs as the authoritative DocumentVerifyHandler.
+        check_overrides = None
+        prescreening_context = {}
+        if app_id:
+            try:
+                db3 = get_db()
+                check_category = "entity" if doc_category in ("company", "entity") else "person"
+                ai_check_row = db3.execute(
+                    "SELECT checks FROM ai_checks WHERE doc_type=? AND category=?",
+                    (doc_type, check_category)
+                ).fetchone()
+                if ai_check_row and ai_check_row.get("checks"):
+                    loaded = safe_json_loads(ai_check_row["checks"])
+                    if loaded:
+                        check_overrides = loaded
+
+                # Build minimal prescreening context from declared values
+                ps_row = db3.execute(
+                    "SELECT prescreening_data, company_name FROM applications WHERE id=?",
+                    (app_id,)
+                ).fetchone()
+                if ps_row:
+                    stored_ps = parse_json_field(ps_row.get("prescreening_data"), {})
+                    if isinstance(stored_ps, dict):
+                        prescreening_context = {
+                            k: v for k, v in stored_ps.items()
+                            if v not in (None, "", [], {})
+                        }
+                db3.close()
+            except Exception as _e:
+                logger.warning(f"[ai-verify] Could not load check_overrides/prescreening for app {app_id}: {_e}")
+
         # Initialize Claude client
         if not HAS_CLAUDE_CLIENT:
             logger.warning("Claude client not available — returning flagged response for manual review")
@@ -3384,6 +3417,8 @@ class DocumentAIVerifyHandler(BaseHandler):
                 entity_name=entity_name,
                 directors=directors,
                 ubos=ubos,
+                check_overrides=check_overrides or None,
+                prescreening_context=prescreening_context or None,
             )
 
             # P0-2: Guard against rejected/invalid AI responses
