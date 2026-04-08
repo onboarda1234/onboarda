@@ -6060,16 +6060,15 @@ class SumsubWebhookHandler(BaseHandler):
         signature = self.request.headers.get("X-App-Access-Sig", "")
 
         # Staging-safe diagnostic logging — partial values only, never full secrets
-        from config import ENVIRONMENT as _CFG_ENV
         _header_names = list(self.request.headers.keys())
         _sig_present = "X-App-Access-Sig" in self.request.headers
         logger.info(
             "Sumsub webhook diagnostic: env=%s body_len=%d "
             "sig_header_present=%s sig_empty=%s header_names=%s",
-            _CFG_ENV,
+            ENVIRONMENT,
             len(body),
             _sig_present,
-            not signature,
+            signature == "",
             _header_names,
         )
         if signature:
