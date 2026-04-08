@@ -3844,6 +3844,7 @@
       </div>
 
       <!-- Actions -->
+      <div id="review-submit-note" style="display:none;margin-top:16px;padding:12px 14px;border-radius:10px;border:1px solid rgba(217,119,6,0.3);background:rgba(245,158,11,0.08);font-size:12px;color:#92400e;"></div>
       <div style="display:flex;gap:12px;margin-top:20px;">
         <button class="btn btn-outline" onclick="showView('onboarding')">← Back to Documents</button>
         <button class="btn btn-primary" id="btn-final-submit" onclick="finalSubmitFromReview()">🔒 Confirm & Submit Application</button>
@@ -3897,17 +3898,17 @@
 
       <div class="status-hero">
         <div class="status-icon-lg pending">🔍</div>
-        <h2>Documents Under Review</h2>
-        <p>All documents have been submitted. Our AI and compliance team are conducting final due diligence. You'll receive a decision within 24–48 hours.</p>
+        <h2 id="docs-review-title">Documents Under Review</h2>
+        <p id="docs-review-subtitle">All documents have been submitted. Our AI and compliance team are conducting final due diligence. You'll receive a decision within 24–48 hours.</p>
       </div>
 
       <div class="card" style="border-color:var(--brand-dim);background:rgba(43,47,143,0.04);">
         <div style="display:flex;gap:14px;align-items:flex-start;">
           <div style="font-size:28px;flex-shrink:0;">📋</div>
           <div>
-            <div class="font-semibold" style="margin-bottom:6px;">Documents Received — Final Review in Progress</div>
-            <p style="font-size:13px;color:var(--text2);line-height:1.7;">All your documents have been received and are being reviewed by our compliance team. You will receive an email notification with the outcome within 24–48 hours. No further action is required from you at this stage.</p>
-            <p style="font-size:12px;color:var(--text3);margin-top:10px;">If we require any additional information, our team will contact you directly at the email address provided in your application.</p>
+            <div class="font-semibold" style="margin-bottom:6px;" id="docs-review-card-title">Documents Received — Final Review in Progress</div>
+            <p style="font-size:13px;color:var(--text2);line-height:1.7;" id="docs-review-card-body">All your documents have been received and are being reviewed by our compliance team. You will receive an email notification with the outcome within 24–48 hours. No further action is required from you at this stage.</p>
+            <p style="font-size:12px;color:var(--text3);margin-top:10px;" id="docs-review-card-footnote">If we require any additional information, our team will contact you directly at the email address provided in your application.</p>
           </div>
         </div>
       </div>
@@ -7049,6 +7050,7 @@ var SECTION_C_DOCS = [
 
 var SECTION_D_DOCS = [];
 var sectionDCounter = 0;
+var lastReviewSummaryState = null;
 
 function _gfv(id) {
   var el = document.getElementById(id);
@@ -7203,6 +7205,35 @@ function buildPrescreeningSummary() {
   container.innerHTML = html;
 }
 
+function updateDocsReviewMessaging(summary) {
+  var title = document.getElementById('docs-review-title');
+  var subtitle = document.getElementById('docs-review-subtitle');
+  var cardTitle = document.getElementById('docs-review-card-title');
+  var cardBody = document.getElementById('docs-review-card-body');
+  var cardFootnote = document.getElementById('docs-review-card-footnote');
+  if (!title || !subtitle || !cardTitle || !cardBody || !cardFootnote) return;
+
+  var missingCount = Number(summary && summary.missingCount || 0);
+  var warningCount = Number(summary && summary.warningCount || 0);
+  if (missingCount > 0 || warningCount > 0) {
+    var parts = [];
+    if (missingCount > 0) parts.push(missingCount + ' required item(s) are still missing');
+    if (warningCount > 0) parts.push(warningCount + ' uploaded document(s) still show warnings');
+    title.textContent = 'Submitted for Review — Issues Visible';
+    subtitle.textContent = 'Your application has been submitted for compliance review. The current missing items and warning-state documents remain visible to the compliance team and may trigger follow-up requests.';
+    cardTitle.textContent = 'Incomplete / Warning-State Submission Logged';
+    cardBody.textContent = 'This submission remains reviewable, but it is not treated as clean. ' + parts.join(' and ') + '. A compliance officer will review the case with these issues visible in the back office.';
+    cardFootnote.textContent = 'If we require additional information or missing documents, our team will contact you directly at the email address provided in your application.';
+    return;
+  }
+
+  title.textContent = 'Documents Under Review';
+  subtitle.textContent = 'All submitted documents are under review by our AI and compliance team. You\'ll receive a decision within 24–48 hours.';
+  cardTitle.textContent = 'Documents Received — Final Review in Progress';
+  cardBody.textContent = 'All submitted documents have been received and are being reviewed by our compliance team. You will receive an email notification with the outcome within 24–48 hours.';
+  cardFootnote.textContent = 'If we require any additional information, our team will contact you directly at the email address provided in your application.';
+}
+
 function buildReviewScreen() {
   buildPrescreeningSummary();
   var isHighRisk = (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH');
@@ -7342,20 +7373,37 @@ function buildReviewScreen() {
   document.getElementById('review-missing-count').textContent = missingCount;
   document.getElementById('review-warning-count').textContent = warningCount;
   document.getElementById('review-persons-count').textContent = personsVerified;
+  lastReviewSummaryState = {
+    uploadedCount: uploadedCount,
+    missingCount: missingCount,
+    warningCount: warningCount,
+    personsVerified: personsVerified
+  };
+  updateDocsReviewMessaging(lastReviewSummaryState);
 
-  // Disable submit if required docs missing
+  // Keep missing/warning items visible, but allow submission for compliance review testing/workflow progression
   var btn = document.getElementById('btn-final-submit');
+  var reviewSubmitNote = document.getElementById('review-submit-note');
   if (btn) {
-    if (missingCount > 0) {
-      btn.disabled = true;
-      btn.style.opacity = '0.5';
-      btn.style.cursor = 'not-allowed';
-      btn.textContent = '⚠️ ' + missingCount + ' Required Item(s) Missing';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.style.cursor = 'pointer';
+    if (missingCount > 0 || warningCount > 0) {
+      btn.textContent = '⚠️ Submit for Compliance Review';
     } else {
-      btn.disabled = false;
-      btn.style.opacity = '1';
-      btn.style.cursor = 'pointer';
       btn.textContent = '🔒 Confirm & Submit Application';
+    }
+  }
+  if (reviewSubmitNote) {
+    if (missingCount > 0 || warningCount > 0) {
+      var noteParts = [];
+      if (missingCount > 0) noteParts.push(missingCount + ' required item(s) are still missing');
+      if (warningCount > 0) noteParts.push(warningCount + ' uploaded document(s) still show warnings');
+      reviewSubmitNote.style.display = 'block';
+      reviewSubmitNote.innerHTML = '<strong>Incomplete / warning-state submission:</strong> ' + escapeHtml(noteParts.join(' and ')) + '. The application can still be submitted for compliance review, and these issues will remain visible to the back office.';
+    } else {
+      reviewSubmitNote.style.display = 'none';
+      reviewSubmitNote.textContent = '';
     }
   }
 }
@@ -7373,6 +7421,7 @@ async function finalSubmitFromReview() {
     return;
   }
   generateComplianceMemo();
+  updateDocsReviewMessaging(lastReviewSummaryState);
   showView('docs-review');
   showToast('info', 'Submitted for Compliance Review', 'Your KYC documents have been submitted. A compliance officer will review your application and you will be notified by email.');
   // Clear the draft
@@ -9071,6 +9120,7 @@ async function resumeApplication(ref, stage) {
         try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on resume:', e); }
       }
       syncPersistedApplicationDocuments(app);
+      buildReviewScreen();
     }
   } catch (err) {
     console.error('Failed to load application detail for resume:', err);

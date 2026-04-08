@@ -287,3 +287,108 @@ def test_portal_license_toggle_and_review_summary_cleanup_are_present():
     assert 'id="f-is-licensed"' in src
     assert 'id="licence-fields-group"' in src
     assert 'id="review-ai-summary"' not in src
+    assert 'id="review-submit-note"' in src
+    assert "btn.textContent = '⚠️ Submit for Compliance Review';" in src
+    assert "Submitted for Review — Issues Visible" in src
+    assert "Incomplete / Warning-State Submission Logged" in src
+
+
+def test_backoffice_incomplete_submission_banner_is_present():
+    backoffice_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-backoffice.html")
+    with open(backoffice_path, "r", encoding="utf-8") as handle:
+        src = handle.read()
+
+    assert "function computeDocumentReadinessSummary(app)" in src
+    assert "⚠ Incomplete / Warning-State" in src
+    assert "This case is reviewable but should not be treated as clean." in src
+
+
+def test_kyc_submit_allows_incomplete_documents_with_at_least_one_upload(api_server):
+    from auth import create_token
+    from db import get_db
+
+    temp_dir = tempfile.mkdtemp(prefix="portal-submit-")
+    file_path = os.path.join(temp_dir, "coi.pdf")
+    with open(file_path, "wb") as handle:
+        handle.write(b"certificate")
+
+    conn = get_db()
+    _ensure_client(conn)
+    conn.execute(
+        """
+        INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("submit_incomplete", "ARF-SUBMIT-INCOMPLETE", "portalclient001", "Submit Incomplete Ltd", "Mauritius", "pricing_review", json.dumps({
+            "registered_entity_name": "Submit Incomplete Ltd",
+            "country_of_incorporation": "Mauritius"
+        })),
+    )
+    conn.execute(
+        """
+        INSERT INTO directors (id, application_id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration, date_of_birth)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("dir_submit_incomplete", "submit_incomplete", "dir1", "Jane", "Director", "Jane Director", "Mauritius", "No", "{}", "1985-01-01"),
+    )
+    conn.execute(
+        """
+        INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, verification_status, verification_results)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("doc_submit_incomplete", "submit_incomplete", "cert_inc", "coi.pdf", file_path, "flagged", json.dumps({"warnings": ["Name mismatch"]})),
+    )
+    conn.commit()
+    conn.close()
+
+    token = create_token("portalclient001", "client", "Portal Client", "client")
+    resp = http_requests.post(
+        f"{api_server}/api/applications/ARF-SUBMIT-INCOMPLETE/submit-kyc",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=3,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "kyc_submitted"
+    assert body["documents_uploaded"] == 1
+
+    conn = get_db()
+    row = conn.execute("SELECT status FROM applications WHERE id=?", ("submit_incomplete",)).fetchone()
+    conn.close()
+    assert row["status"] == "kyc_submitted"
+
+
+def test_kyc_submit_still_blocks_when_no_documents_uploaded(api_server):
+    from auth import create_token
+    from db import get_db
+
+    conn = get_db()
+    _ensure_client(conn)
+    conn.execute(
+        """
+        INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("submit_no_docs", "ARF-SUBMIT-NO-DOCS", "portalclient001", "Submit No Docs Ltd", "Mauritius", "pricing_review", json.dumps({
+            "registered_entity_name": "Submit No Docs Ltd",
+            "country_of_incorporation": "Mauritius"
+        })),
+    )
+    conn.execute(
+        """
+        INSERT INTO directors (id, application_id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration, date_of_birth)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("dir_submit_no_docs", "submit_no_docs", "dir1", "Jane", "Director", "Jane Director", "Mauritius", "No", "{}", "1985-01-01"),
+    )
+    conn.commit()
+    conn.close()
+
+    token = create_token("portalclient001", "client", "Portal Client", "client")
+    resp = http_requests.post(
+        f"{api_server}/api/applications/ARF-SUBMIT-NO-DOCS/submit-kyc",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=3,
+    )
+    assert resp.status_code == 400
+    assert "upload at least one document" in resp.json()["error"].lower()
