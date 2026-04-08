@@ -28,6 +28,13 @@ need() {
 need openssl
 need python3
 
+# Verify the cryptography package is available (needed for Fernet key generation)
+python3 -c "from cryptography.fernet import Fernet" 2>/dev/null || {
+  echo "ERROR: Python 'cryptography' package is required but not installed." >&2
+  echo "  Install with:  pip install cryptography" >&2
+  exit 1
+}
+
 # ── generators ────────────────────────────────────────────────────────────
 
 # 64-byte hex string (512-bit) for JWT / HMAC signing
