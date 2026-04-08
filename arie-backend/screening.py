@@ -482,6 +482,16 @@ def sumsub_verify_webhook(body_bytes, signature_header):
         body_bytes,
         hashlib.sha256
     ).hexdigest()
+
+    # Staging-safe diagnostic — partial values only, never full secrets
+    logger.info(
+        "Sumsub webhook HMAC: body_len=%d computed_prefix=%s received_prefix=%s match=%s",
+        len(body_bytes),
+        expected[:8],
+        (signature_header or "")[:8],
+        expected == (signature_header or ""),
+    )
+
     return hmac.compare_digest(expected, signature_header or "")
 
 
