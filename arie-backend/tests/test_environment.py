@@ -187,16 +187,28 @@ class TestGetDatabaseUrl:
         monkeypatch.setenv("ENVIRONMENT", "demo")
         monkeypatch.delenv("DEMO_DATABASE_URL", raising=False)
         monkeypatch.delenv("DATABASE_URL", raising=False)
-        from environment import get_database_url
-        url = get_database_url()
-        assert "sqlite" in url
+        import importlib
+        import environment as env_mod
+        importlib.reload(env_mod)
+        try:
+            url = env_mod.get_database_url()
+            assert "sqlite" in url
+        finally:
+            os.environ["ENVIRONMENT"] = "testing"
+            importlib.reload(env_mod)
 
     def test_demo_with_env_var(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "demo")
         monkeypatch.setenv("DEMO_DATABASE_URL", "postgresql://demo:5432/demo")
-        from environment import get_database_url
-        url = get_database_url()
-        assert url == "postgresql://demo:5432/demo"
+        import importlib
+        import environment as env_mod
+        importlib.reload(env_mod)
+        try:
+            url = env_mod.get_database_url()
+            assert url == "postgresql://demo:5432/demo"
+        finally:
+            os.environ["ENVIRONMENT"] = "testing"
+            importlib.reload(env_mod)
 
     def test_staging_fallback(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "staging")
@@ -214,17 +226,29 @@ class TestGetJwtSecret:
         monkeypatch.setenv("ENVIRONMENT", "demo")
         monkeypatch.delenv("JWT_SECRET_DEMO", raising=False)
         monkeypatch.delenv("JWT_SECRET", raising=False)
-        from environment import get_jwt_secret
-        secret = get_jwt_secret()
-        assert secret.startswith("demo-fallback-")
-        assert len(secret) > 20
+        import importlib
+        import environment as env_mod
+        importlib.reload(env_mod)
+        try:
+            secret = env_mod.get_jwt_secret()
+            assert secret.startswith("demo-fallback-")
+            assert len(secret) > 20
+        finally:
+            os.environ["ENVIRONMENT"] = "testing"
+            importlib.reload(env_mod)
 
     def test_demo_with_env_uses_provided(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "demo")
         monkeypatch.setenv("JWT_SECRET_DEMO", "my-demo-secret-key")
-        from environment import get_jwt_secret
-        secret = get_jwt_secret()
-        assert secret == "my-demo-secret-key"
+        import importlib
+        import environment as env_mod
+        importlib.reload(env_mod)
+        try:
+            secret = env_mod.get_jwt_secret()
+            assert secret == "my-demo-secret-key"
+        finally:
+            os.environ["ENVIRONMENT"] = "testing"
+            importlib.reload(env_mod)
 
     def test_staging_without_env_generates_fallback(self, monkeypatch):
         """Staging fallback requires ENV=staging at module level; test the fallback path logic."""
@@ -282,9 +306,15 @@ class TestGetCorsOrigin:
     def test_demo_default(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "demo")
         monkeypatch.delenv("CORS_ORIGIN_DEMO", raising=False)
-        from environment import get_cors_origin
-        origin = get_cors_origin()
-        assert "demo" in origin
+        import importlib
+        import environment as env_mod
+        importlib.reload(env_mod)
+        try:
+            origin = env_mod.get_cors_origin()
+            assert "demo" in origin
+        finally:
+            os.environ["ENVIRONMENT"] = "testing"
+            importlib.reload(env_mod)
 
     def test_production_default(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "production")

@@ -149,7 +149,7 @@ class FeatureFlags:
 
     def __init__(self, env: str = None):
         self._env = env or ENV
-        self._defaults = _DEFAULT_FLAGS.get(self._env, _DEFAULT_FLAGS["development"])
+        self._defaults = _DEFAULT_FLAGS.get(self._env, _DEFAULT_FLAGS["demo"])
         self._cache = {}
         self._load_all()
 

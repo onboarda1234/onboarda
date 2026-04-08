@@ -544,7 +544,11 @@ def load_saved_session_prescreening(db, app_record) -> dict:
         ).fetchone()
     if not session:
         return {}
-    return normalize_saved_session_prescreening(session.get("form_data"))
+    if hasattr(session, "keys"):
+        form_data = session["form_data"]
+    else:
+        form_data = session.get("form_data")
+    return normalize_saved_session_prescreening(form_data)
 
 
 def resolve_application_company_name(data: dict, prescreening_data: dict, fallback="") -> str:

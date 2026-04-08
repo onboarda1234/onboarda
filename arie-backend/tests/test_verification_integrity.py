@@ -591,8 +591,8 @@ class TestVerificationContextResolution:
             json.dumps({
                 "registered_entity_name": "Parent Corp",
                 "country_of_incorporation": "Mauritius",
-                "directors": ["Parent Director"],
-                "ubos": ["Parent UBO"]
+                "directors": [{"full_name": "Parent Director"}],
+                "ubos": [{"full_name": "Parent UBO", "ownership_pct": 100}]
             })
         ))
         db.execute("""
