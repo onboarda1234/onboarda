@@ -2167,10 +2167,11 @@ def _run_migrations(db: DBConnection):
             except Exception:
                 pass
 
-    # Migration v2.13: Purge test/demo applications for "1947 OIL & GAS PLC"
-    # These records were seeded during testing and must be removed from all environments.
-    # Uses an exact case-insensitive normalised match on applications.company_name only.
-    # Idempotent: silently exits if no matching rows are found.
+    # Migration v2.13: Purge test/demo applications for "1947 OIL & GAS PLC".
+    # These records were created during testing and must not persist in any environment.
+    # Runs on every startup but is effectively a no-op after the first successful pass
+    # because no matching rows will remain.  The UPPER(TRIM()) normalisation guards
+    # against case/whitespace variants of the same company name.
     try:
         target_name = "1947 OIL & GAS PLC"
         rows = db.execute(
@@ -2184,26 +2185,30 @@ def _run_migrations(db: DBConnection):
                 app_ref = row["ref"] if isinstance(row, dict) else row[1]
                 app_name = row["company_name"] if isinstance(row, dict) else row[2]
 
-                # Collect local document file paths before deletion
+                # Remove local document files; failures are non-fatal (files may already
+                # be absent or hosted on S3) but are logged for manual follow-up.
                 docs = db.execute(
                     "SELECT file_path FROM documents WHERE application_id = ?", (app_id,)
                 ).fetchall()
                 for doc in docs:
-                    fp = (doc["file_path"] if isinstance(doc, dict) else doc[0])
+                    fp = doc["file_path"] if isinstance(doc, dict) else doc[0]
                     if fp:
                         try:
-                            import os as _os
-                            if _os.path.exists(fp):
-                                _os.remove(fp)
+                            if os.path.exists(fp):
+                                os.remove(fp)
                         except OSError as _e:
-                            logger.warning("Migration v2.13: could not remove file %s: %s", fp, _e)
+                            logger.warning(
+                                "Migration v2.13: could not remove local file %s – "
+                                "manual cleanup may be required: %s", fp, _e
+                            )
 
-                # Delete tables without ON DELETE CASCADE on application_id
+                # edd_cases and compliance_memos lack ON DELETE CASCADE on application_id,
+                # so they must be explicitly deleted before removing the parent row.
                 db.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
                 db.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
-                # decision_records FK is application_ref, not application_id
+                # decision_records uses application_ref (not application_id) as the FK.
                 db.execute("DELETE FROM decision_records WHERE application_ref = ?", (app_ref,))
-                # Delete the parent row; all other child tables have ON DELETE CASCADE
+                # Deleting the parent cascades to all remaining child tables.
                 db.execute("DELETE FROM applications WHERE id = ?", (app_id,))
                 ids_deleted.append({"id": app_id, "ref": app_ref, "company_name": app_name})
 
