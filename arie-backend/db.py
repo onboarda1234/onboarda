@@ -2167,6 +2167,67 @@ def _run_migrations(db: DBConnection):
             except Exception:
                 pass
 
+    # Migration v2.13: Purge test/demo applications for "1947 OIL & GAS PLC".
+    # These records were created during testing and must not persist in any environment.
+    # Runs on every startup but is effectively a no-op after the first successful pass
+    # because no matching rows will remain.  The UPPER(TRIM()) normalisation guards
+    # against case/whitespace variants of the same company name.
+    try:
+        target_name = "1947 OIL & GAS PLC"
+        rows = db.execute(
+            "SELECT id, ref, company_name FROM applications WHERE UPPER(TRIM(company_name)) = ?",
+            (target_name.upper(),),
+        ).fetchall()
+        if rows:
+            ids_deleted = []
+            for row in rows:
+                app_id = row["id"] if isinstance(row, dict) else row[0]
+                app_ref = row["ref"] if isinstance(row, dict) else row[1]
+                app_name = row["company_name"] if isinstance(row, dict) else row[2]
+
+                # Remove local document files; failures are non-fatal (files may already
+                # be absent or hosted on S3) but are logged for manual follow-up.
+                docs = db.execute(
+                    "SELECT file_path FROM documents WHERE application_id = ?", (app_id,)
+                ).fetchall()
+                for doc in docs:
+                    fp = doc["file_path"] if isinstance(doc, dict) else doc[0]
+                    if fp:
+                        try:
+                            if os.path.exists(fp):
+                                os.remove(fp)
+                        except OSError as _e:
+                            logger.warning(
+                                "Migration v2.13: could not remove local file %s – "
+                                "manual cleanup may be required: %s", fp, _e
+                            )
+
+                # edd_cases and compliance_memos lack ON DELETE CASCADE on application_id,
+                # so they must be explicitly deleted before removing the parent row.
+                db.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+                db.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+                # decision_records uses application_ref (not application_id) as the FK.
+                db.execute("DELETE FROM decision_records WHERE application_ref = ?", (app_ref,))
+                # Deleting the parent cascades to all remaining child tables.
+                db.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+                ids_deleted.append({"id": app_id, "ref": app_ref, "company_name": app_name})
+
+            db.commit()
+            logger.info(
+                "Migration v2.13: Purged %d application(s) for '%s': %s",
+                len(ids_deleted),
+                target_name,
+                [r["ref"] for r in ids_deleted],
+            )
+        else:
+            logger.debug("Migration v2.13: No '%s' applications found – nothing to purge.", target_name)
+    except Exception as e:
+        logger.error("Migration v2.13 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _populate_default_scoring_config(db: 'DBConnection'):
     """Populate default country/sector/entity scores for existing risk_config rows."""
