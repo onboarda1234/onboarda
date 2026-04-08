@@ -625,6 +625,26 @@ def _validate_date_of_birth(dob_str):
     return parsed.isoformat()  # Normalize to YYYY-MM-DD
 
 
+def _check_dob_not_future(dob_str):
+    """Raise ValueError if dob_str parses as a valid date that is in the future."""
+    if not dob_str or not isinstance(dob_str, str):
+        return
+    dob_str = dob_str.strip()
+    if not dob_str:
+        return
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y"):
+        try:
+            parsed = datetime.strptime(dob_str, fmt).date()
+            today = datetime.now(timezone.utc).date()
+            if parsed > today:
+                raise ValueError(f"Date of birth cannot be in the future: {dob_str!r}")
+            return
+        except ValueError as exc:
+            if "future" in str(exc):
+                raise
+            continue
+
+
 def store_application_parties(db, application_id, directors=None, ubos=None, intermediaries=None):
     """Store party records with validation of DOB and ownership_pct."""
     if directors is not None:
@@ -636,6 +656,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             # Validate DOB if provided
             dob = director.get("date_of_birth", "")
             if dob:
+                _check_dob_not_future(dob)
                 dob = _validate_date_of_birth(dob)
             # W2-6: Normalize nationality if canonical lookup is available
             raw_nat = director.get("nationality", "")
@@ -670,6 +691,7 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             # Validate DOB if provided
             dob = ubo.get("date_of_birth", "")
             if dob:
+                _check_dob_not_future(dob)
                 dob = _validate_date_of_birth(dob)
             # Validate ownership_pct range (0–100)
             raw_pct = ubo.get("ownership_pct", 0)
@@ -1697,13 +1719,17 @@ class ApplicationsHandler(BaseHandler):
             "draft"
         ))
 
-        store_application_parties(
-            db,
-            app_id,
-            directors=data.get("directors"),
-            ubos=data.get("ubos"),
-            intermediaries=data.get("intermediaries")
-        )
+        try:
+            store_application_parties(
+                db,
+                app_id,
+                directors=data.get("directors"),
+                ubos=data.get("ubos"),
+                intermediaries=data.get("intermediaries")
+            )
+        except ValueError as exc:
+            db.close()
+            return self.error(str(exc), 400)
 
         db.commit()
         db.close()
@@ -1910,13 +1936,17 @@ class ApplicationDetailHandler(BaseHandler):
                     f"to reopen the case if changes are required and reopening is allowed.",
                     403
                 )
-            store_application_parties(
-                db,
-                real_id,
-                directors=data["directors"] if "directors" in data else None,
-                ubos=data["ubos"] if "ubos" in data else None,
-                intermediaries=data["intermediaries"] if "intermediaries" in data else None
-            )
+            try:
+                store_application_parties(
+                    db,
+                    real_id,
+                    directors=data["directors"] if "directors" in data else None,
+                    ubos=data["ubos"] if "ubos" in data else None,
+                    intermediaries=data["intermediaries"] if "intermediaries" in data else None
+                )
+            except ValueError as exc:
+                db.close()
+                return self.error(str(exc), 400)
 
         # ── Risk recomputation on material field edits ──
         # If any risk-relevant field changed, recompute the canonical risk score.
