@@ -160,6 +160,12 @@ class TestRoutingFunctions:
 # ── Licence applicability gate ─────────────────────────────────────
 
 class TestLicenceApplicability:
+    def test_explicit_is_licensed_false(self):
+        assert is_licence_applicable({"is_licensed": False, "regulatory_licences": "FCA authorised PI"}) is False
+
+    def test_explicit_is_licensed_true(self):
+        assert is_licence_applicable({"is_licensed": True, "regulatory_licences": ""}) is True
+
     def test_explicit_none(self):
         assert is_licence_applicable({"regulatory_licences": "None"}) is False
 
@@ -320,7 +326,7 @@ class TestVerifyDocumentLayered:
             file_path=None,
             file_size=0,
             mime_type="",
-            prescreening_data={"regulatory_licences": "None"},
+            prescreening_data={"is_licensed": False, "regulatory_licences": "None"},
             risk_level="LOW",
             existing_hashes=[],
             claude_client=None,
@@ -336,7 +342,7 @@ class TestVerifyDocumentLayered:
             file_path=None,
             file_size=0,
             mime_type="",
-            prescreening_data={"regulatory_licences": "FCA PI licence ref 12345"},
+            prescreening_data={"is_licensed": True, "regulatory_licences": "FCA PI licence ref 12345"},
             risk_level="LOW",
             existing_hashes=[],
             claude_client=None,

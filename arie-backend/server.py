@@ -1712,6 +1712,52 @@ class ApplicationsHandler(BaseHandler):
         self.success({"id": app_id, "ref": ref, "status": "draft", "status_label": get_status_label("draft")}, 201)
 
 
+def cleanup_application_delete_artifacts(db, application_id, application_ref):
+    """Delete uploaded document artifacts and non-cascading child rows before app hard delete."""
+    documents = db.execute(
+        "SELECT id, file_path, s3_key FROM documents WHERE application_id=?",
+        (application_id,)
+    ).fetchall()
+
+    for doc in documents:
+        file_path = doc["file_path"]
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                logger.warning("Failed to remove draft document file %s: %s", file_path, exc)
+
+        if doc.get("s3_key") and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                deleted, message = s3.delete_document(doc["s3_key"])
+                if not deleted:
+                    logger.warning("S3 deletion failed for draft application doc %s: %s", doc["s3_key"], message)
+            except Exception as exc:
+                logger.warning("S3 deletion failed for draft application doc %s: %s", doc["s3_key"], exc)
+
+    for table in (
+        "client_sessions",
+        "documents",
+        "client_notifications",
+        "monitoring_alerts",
+        "periodic_reviews",
+        "sar_reports",
+        "compliance_memos",
+        "edd_cases",
+        "directors",
+        "ubos",
+        "intermediaries",
+        "transactions",
+        "agent_executions",
+        "sumsub_applicant_mappings",
+        "supervisor_pipeline_results",
+        "supervisor_audit_log",
+    ):
+        db.execute(f"DELETE FROM {table} WHERE application_id=?", (application_id,))
+    db.execute("DELETE FROM decision_records WHERE application_ref=?", (application_ref,))
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -2084,7 +2130,7 @@ class ApplicationDetailHandler(BaseHandler):
             db.close()
             return self.error("Only draft applications can be deleted.", 403)
 
-        db.execute("DELETE FROM client_sessions WHERE application_id=?", (app["id"],))
+        cleanup_application_delete_artifacts(db, app["id"], app["ref"])
         db.execute("DELETE FROM applications WHERE id=?", (app["id"],))
         self.log_audit(user, "Delete", app["ref"], f"Draft application deleted by client: {app['company_name']}", db=db)
         db.commit()

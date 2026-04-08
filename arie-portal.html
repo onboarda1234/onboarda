@@ -4738,7 +4738,7 @@ var PRESCREENING_FIELD_BINDINGS = {
   'f-phone-code': 'entity_contact_phone_code',
   'f-mobile': 'entity_contact_mobile',
   'f-website': 'website',
-  'f-is-licensed': 'has_licence',
+  'f-is-licensed': 'is_licensed',
   'f-licences': 'regulatory_licences',
   'f-licence-number': 'licence_number',
   'f-licence-authority': 'licence_authority',
@@ -4925,7 +4925,8 @@ function startNewApplication() {
 
 function buildDraftDataFromApplication(app) {
   var ps = app && app.prescreening_data ? app.prescreening_data : {};
-  var derivedLicensed = ps.has_licence;
+  var derivedLicensed = ps.is_licensed;
+  if (derivedLicensed == null) derivedLicensed = ps.has_licence;
   if (derivedLicensed == null) {
     var licenceText = String(ps.regulatory_licences || '').trim().toLowerCase();
     if (licenceText) derivedLicensed = ['none', 'n/a', 'na', 'no'].indexOf(licenceText) === -1;
@@ -5886,6 +5887,7 @@ async function submitPrescreening(e) {
       entity_contact_phone_code: getFieldValue('f-phone-code'),
       entity_contact_mobile: getFieldValue('f-mobile'),
       website: getFieldValue('f-website'),
+      is_licensed: licensed,
       has_licence: licensed,
       regulatory_licences: licensed ? getFieldValue('f-licences') : '',
       licence_number: licensed ? getFieldValue('f-licence-number') : '',

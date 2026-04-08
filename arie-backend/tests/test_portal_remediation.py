@@ -178,6 +178,73 @@ def test_client_can_delete_draft_application(api_server):
     conn.close()
 
 
+def test_client_delete_cleans_child_rows_and_document_artifacts(api_server):
+    from auth import create_token
+    from db import get_db
+
+    temp_dir = tempfile.mkdtemp(prefix="portal-delete-")
+    file_path = os.path.join(temp_dir, "draft-doc.pdf")
+    with open(file_path, "wb") as handle:
+        handle.write(b"draft document")
+
+    conn = get_db()
+    _ensure_client(conn)
+    conn.execute(
+        """
+        INSERT INTO applications (id, ref, client_id, company_name, country, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("delete_children", "ARF-DELETE-CHILDREN", "portalclient001", "Delete Children Ltd", "Mauritius", "draft"),
+    )
+    conn.execute(
+        """
+        INSERT INTO documents (id, application_id, doc_type, doc_name, file_path)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("doc_delete_children", "delete_children", "cert_inc", "draft-doc.pdf", file_path),
+    )
+    conn.execute(
+        """
+        INSERT INTO client_sessions (client_id, application_id, form_data, last_step)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("portalclient001", "delete_children", json.dumps({"prescreening": {"f-reg-name": "Delete Children Ltd"}}), 0),
+    )
+    conn.execute(
+        """
+        INSERT INTO client_notifications (application_id, client_id, notification_type, title, message)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("delete_children", "portalclient001", "info", "Draft notice", "Draft cleanup"),
+    )
+    conn.execute(
+        """
+        INSERT INTO periodic_reviews (application_id, client_name, status)
+        VALUES (?, ?, ?)
+        """,
+        ("delete_children", "Delete Children Ltd", "pending"),
+    )
+    conn.commit()
+    conn.close()
+
+    token = create_token("portalclient001", "client", "Portal Client", "client")
+    resp = http_requests.delete(
+        f"{api_server}/api/applications/ARF-DELETE-CHILDREN",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=3,
+    )
+    assert resp.status_code == 200
+
+    conn = get_db()
+    assert conn.execute("SELECT id FROM applications WHERE id=?", ("delete_children",)).fetchone() is None
+    assert conn.execute("SELECT id FROM documents WHERE application_id=?", ("delete_children",)).fetchone() is None
+    assert conn.execute("SELECT id FROM client_sessions WHERE application_id=?", ("delete_children",)).fetchone() is None
+    assert conn.execute("SELECT id FROM client_notifications WHERE application_id=?", ("delete_children",)).fetchone() is None
+    assert conn.execute("SELECT id FROM periodic_reviews WHERE application_id=?", ("delete_children",)).fetchone() is None
+    conn.close()
+    assert not os.path.exists(file_path)
+
+
 def test_client_cannot_delete_submitted_application(api_server):
     from auth import create_token
     from db import get_db
