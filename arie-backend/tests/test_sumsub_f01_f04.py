@@ -220,10 +220,16 @@ class TestF03PortalHonestMessaging:
         )
 
     def test_registered_text_present(self):
-        """The honest 'Applicant registered' messaging must be present."""
+        """The honest 'Applicant registered' messaging must be present in the sendKYCLink function."""
         src = self._portal_src()
-        assert "Applicant registered" in src or "registered" in src.lower(), (
-            "F-03: new honest 'registered' messaging not found in portal"
+        fn_start = src.find("async function sendKYCLink")
+        fn_end = src.find("\nasync function ", fn_start + 10)
+        if fn_end == -1:
+            fn_end = src.find("\nfunction ", fn_start + 10)
+        fn_code = src[fn_start:fn_end]
+
+        assert "Applicant registered" in fn_code, (
+            "F-03: 'Applicant registered' messaging not found in sendKYCLink function body"
         )
 
 

@@ -8731,8 +8731,9 @@ async function sendKYCLink(personId) {
     const sentDiv = document.getElementById('kyc-sent-' + personId);
     if (sentDiv) {
       sentDiv.style.display = 'flex';
-      // Update text to reflect the real outcome (not a sent email)
-      sentDiv.innerHTML = '&#10003; Applicant registered' + (applicantId ? ' (ID: <code>' + applicantId + '</code>)' : '') + '. Your compliance officer will coordinate document submission.';
+      // Use textContent-safe construction to avoid XSS with applicantId
+      const safeSuffix = applicantId ? ' (ID: ' + escapeHtml(applicantId) + ')' : '';
+      sentDiv.textContent = '✓ Applicant registered' + safeSuffix + '. Your compliance officer will coordinate document submission.';
     }
 
     const badge = document.getElementById('kyc-badge-' + personId);
