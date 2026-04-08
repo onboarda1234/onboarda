@@ -93,6 +93,19 @@ def _derive_has_licence(legacy_text):
     return True
 
 
+def _coerce_boolish(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in ("yes", "true", "1"):
+        return True
+    if text in ("no", "false", "0"):
+        return False
+    return None
+
+
 def _derive_cross_border_expected(transaction):
     if transaction.get("cross_border_expected") is True:
         return True
@@ -368,6 +381,15 @@ def normalize_prescreening_data(data, existing=None):
     for key in ("entity_type", "ownership_structure", "sector", "brn"):
         if payload.get(key):
             merged[key] = payload.get(key)
+
+    coerced_has_licence = _coerce_boolish(merged.get("has_licence"))
+    if coerced_has_licence is not None:
+        merged["has_licence"] = coerced_has_licence
+        if not coerced_has_licence:
+            merged["regulatory_licences"] = ""
+            merged["licence_number"] = ""
+            merged["licence_authority"] = ""
+            merged["licence_type"] = ""
 
     if payload.get("directors") is not None:
         merged["directors"] = _copy_list(payload.get("directors"))

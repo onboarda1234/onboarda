@@ -4549,7 +4549,11 @@ function renderAuthoritativeAppDetail(app, options) {
     { label: 'Registration / BRN', value: detailValueFromAliases(psData, ['brn', 'registration_number', 'incorporation_number']) },
     { label: 'Website', value: detailValueFromAliases(psData, ['website']) },
     // ── Licences ──
+    { label: 'Licensed', value: psData.has_licence === true ? 'Yes' : psData.has_licence === false ? 'No' : '' },
     { label: 'Licences', value: detailValueFromAliases(psData, ['regulatory_licences', 'licenses', 'licences']) },
+    { label: 'Licence Number', value: detailValueFromAliases(psData, ['licence_number']) },
+    { label: 'Licence Authority', value: detailValueFromAliases(psData, ['licence_authority']) },
+    { label: 'Licence Type', value: detailValueFromAliases(psData, ['licence_type']) },
     // ── Business Operations ──
     { label: 'Business Overview', value: firstMeaningfulDetailValue(detailValueFromAliases(psData, ['business_overview', 'business_description']), '') },
     { label: 'Services Required', value: detailValueFromAliases(psData, ['services_required']) },

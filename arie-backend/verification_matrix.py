@@ -1180,6 +1180,9 @@ def is_licence_applicable(prescreening_data: dict) -> bool:
     """
     if not prescreening_data:
         return False
+    has_licence = prescreening_data.get("has_licence")
+    if isinstance(has_licence, bool):
+        return has_licence
     val = prescreening_data.get(PSField.HOLDS_LICENCE, "")
     if not val:
         return False

@@ -530,17 +530,11 @@ def merge_prescreening_sources(primary, fallback) -> dict:
 def load_saved_session_prescreening(db, app_record) -> dict:
     """Load the latest saved portal form snapshot for an application, if any."""
     app_id = app_record.get("id") if isinstance(app_record, dict) else None
-    client_id = app_record.get("client_id") if isinstance(app_record, dict) else None
     session = None
     if app_id:
         session = db.execute(
             "SELECT form_data FROM client_sessions WHERE application_id=? ORDER BY updated_at DESC LIMIT 1",
             (app_id,)
-        ).fetchone()
-    if not session and client_id:
-        session = db.execute(
-            "SELECT form_data FROM client_sessions WHERE client_id=? ORDER BY updated_at DESC LIMIT 1",
-            (client_id,)
         ).fetchone()
     if not session:
         return {}
@@ -2065,6 +2059,37 @@ class ApplicationDetailHandler(BaseHandler):
         db.commit()
         db.close()
         self.success({"status": "updated"})
+
+    def delete(self, app_id):
+        """Delete a draft application for the owning client."""
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        if user.get("type") != "client":
+            db.close()
+            return self.error("Only portal clients can delete applications.", 403)
+
+        if app["status"] != "draft":
+            db.close()
+            return self.error("Only draft applications can be deleted.", 403)
+
+        db.execute("DELETE FROM client_sessions WHERE application_id=?", (app["id"],))
+        db.execute("DELETE FROM applications WHERE id=?", (app["id"],))
+        self.log_audit(user, "Delete", app["ref"], f"Draft application deleted by client: {app['company_name']}", db=db)
+        db.commit()
+        db.close()
+        self.success({"status": "deleted", "id": app["id"], "ref": app["ref"]})
 
 
 class SubmitApplicationHandler(BaseHandler):
@@ -5273,14 +5298,12 @@ class SaveResumeHandler(BaseHandler):
         db = get_db()
         # Support filtering by specific application_id
         app_id = self.get_argument("application_id", None)
-        if app_id:
-            session = db.execute(
-                "SELECT * FROM client_sessions WHERE client_id=? AND application_id=? ORDER BY updated_at DESC LIMIT 1",
-                (user["sub"], app_id)).fetchone()
-        else:
-            session = db.execute(
-                "SELECT * FROM client_sessions WHERE client_id=? ORDER BY updated_at DESC LIMIT 1",
-                (user["sub"],)).fetchone()
+        if not app_id:
+            db.close()
+            return self.success({"form_data": {}, "last_step": 0})
+        session = db.execute(
+            "SELECT * FROM client_sessions WHERE client_id=? AND application_id=? ORDER BY updated_at DESC LIMIT 1",
+            (user["sub"], app_id)).fetchone()
         db.close()
         if session:
             self.success({"form_data": safe_json_loads(session["form_data"]),
@@ -5296,20 +5319,17 @@ class SaveResumeHandler(BaseHandler):
         data = self.get_json()
         db = get_db()
         app_id = data.get("application_id")
-        if app_id:
-            existing = db.execute(
-                "SELECT id FROM client_sessions WHERE client_id=? AND application_id=?",
-                (user["sub"], app_id)
-            ).fetchone()
-        else:
-            existing = db.execute(
-                "SELECT id FROM client_sessions WHERE client_id=? AND application_id IS NULL",
-                (user["sub"],)
-            ).fetchone()
+        if not app_id:
+            db.close()
+            return self.error("application_id required", 400)
+        existing = db.execute(
+            "SELECT id FROM client_sessions WHERE client_id=? AND application_id=?",
+            (user["sub"], app_id)
+        ).fetchone()
         if existing:
             db.execute("UPDATE client_sessions SET form_data=?, last_step=?, application_id=?, updated_at=datetime('now') WHERE id=?",
                        (json.dumps(data.get("form_data",{})), data.get("last_step",0),
-                        data.get("application_id"), existing["id"]))
+                         data.get("application_id"), existing["id"]))
         else:
             db.execute("INSERT INTO client_sessions (client_id, application_id, form_data, last_step) VALUES (?,?,?,?)",
                        (user["sub"], data.get("application_id"), json.dumps(data.get("form_data",{})), data.get("last_step",0)))
