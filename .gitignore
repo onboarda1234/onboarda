@@ -49,6 +49,8 @@ arie-backend/=2.0.0
 
 # ── Build/generator scripts (not product code) ──
 scripts/
+# Track operational maintenance scripts (cleanup tooling)
+!arie-backend/scripts/cleanup_named_application.py
 
 # ── Archive (old ARIE-branded files) ──
 archive/
