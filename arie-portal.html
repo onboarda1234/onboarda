@@ -4726,6 +4726,7 @@ function clearAuth() {
 let appRef = '';
 let uploadedDocs = new Set();
 var TOTAL_REQUIRED_DOCS = 11;
+var APP_TABLE_COLSPAN = 7;
 var PRESCREENING_FIELD_BINDINGS = {
   'f-reg-name': 'registered_entity_name',
   'f-trade-name': 'trading_name',
@@ -5069,7 +5070,7 @@ async function loadMyApplications() {
     if (!tbody) return;
 
     if (apps.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:#999;">No applications yet. Click "Start Application" to begin.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="' + APP_TABLE_COLSPAN + '" style="text-align:center;padding:2rem;color:#999;">No applications yet. Click "Start Application" to begin.</td></tr>';
       return;
     }
 
@@ -5108,7 +5109,7 @@ async function loadMyApplications() {
     console.error('Failed to load applications:', e);
     var tbody = document.getElementById('my-apps-tbody');
     if (tbody) {
-      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--red);">Unable to load your applications. Please check your connection and <a href="#" onclick="loadMyApplications();return false;" style="color:var(--brand);font-weight:600;">try again</a>.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="' + APP_TABLE_COLSPAN + '" style="text-align:center;padding:2rem;color:var(--red);">Unable to load your applications. Please check your connection and <a href="#" onclick="loadMyApplications();return false;" style="color:var(--brand);font-weight:600;">try again</a>.</td></tr>';
     }
   }
 }
@@ -5770,8 +5771,9 @@ async function submitPrescreening(e) {
   var fWebEl = document.getElementById('f-website');
   if (fWebEl) fWebEl.style.borderColor = '';
 
+  var licenceSelection = _gfv('f-is-licensed');
   var licensed = isCompanyLicensed();
-  if (!licensed && _gfv('f-is-licensed') !== 'No') {
+  if (!licenceSelection) {
     btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
     showToast('error', 'Licence Status Required', 'Please confirm whether the company is licensed.');
     return;
@@ -8999,8 +9001,8 @@ async function resumeApplication(ref, stage) {
   var restoredFields = false;
   try {
     if (AUTH_TOKEN && ref) {
-      resetPortalApplicationState();
       var app = await apiCall('GET', '/applications/' + encodeURIComponent(ref));
+      resetPortalApplicationState();
       currentApplicationId = app.id || '';
       appRef = app.ref || ref;
       computedRiskLevel = app.risk_level || 'LOW';
@@ -9017,6 +9019,7 @@ async function resumeApplication(ref, stage) {
       try {
         var savedSession = await apiCall('GET', '/save-resume?application_id=' + encodeURIComponent(currentApplicationId));
         if (savedSession && savedSession.form_data && typeof savedSession.form_data === 'object') {
+          // App-specific saved session is the most recent authoritative client draft overlay.
           restoredFields = restoreDraftFromData(savedSession.form_data) || restoredFields;
         }
       } catch (resumeErr) {

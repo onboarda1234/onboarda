@@ -23,17 +23,21 @@ def _find_free_port():
 def api_server():
     db_path = os.path.join(tempfile.gettempdir(), f"onboarda_test_{os.getpid()}.db")
     os.environ["DB_PATH"] = db_path
+    try:
+        os.unlink(db_path)
+    except OSError:
+        pass
 
     from db import get_db, init_db, seed_initial_data
 
     init_db()
     try:
-      conn = get_db()
-      seed_initial_data(conn)
-      conn.commit()
-      conn.close()
-    except Exception:
-      pass
+        conn = get_db()
+        seed_initial_data(conn)
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to seed remediation test database: {exc}") from exc
 
     from server import make_app
 

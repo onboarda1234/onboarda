@@ -5300,7 +5300,7 @@ class SaveResumeHandler(BaseHandler):
         app_id = self.get_argument("application_id", None)
         if not app_id:
             db.close()
-            return self.success({"form_data": {}, "last_step": 0})
+            return self.error("application_id required", 400)
         session = db.execute(
             "SELECT * FROM client_sessions WHERE client_id=? AND application_id=? ORDER BY updated_at DESC LIMIT 1",
             (user["sub"], app_id)).fetchone()
