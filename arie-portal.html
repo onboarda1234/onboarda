@@ -4921,43 +4921,8 @@ function triggerRegistryVerification() {
 
 // ─── B. Real-time Identity Verification on Document Upload ────────────────────
 function runRealtimePassportValidation(docId, fileName) {
-  // Find or create validation status element for this document
-  let statusEl = document.getElementById(docId + '-realtime-status');
-  if (!statusEl) {
-    const uploadArea = document.getElementById(docId);
-    if (uploadArea) {
-      statusEl = document.createElement('div');
-      statusEl.id = docId + '-realtime-status';
-      statusEl.style.cssText = 'margin-top:8px;font-size:11px;';
-      uploadArea.parentElement.appendChild(statusEl);
-    }
-  }
-
-  if (!statusEl) return;
-
-  // Show loading
-  statusEl.innerHTML = '<div style="padding:8px;background:var(--blue-dim);border-radius:6px;color:var(--blue);"><strong>🔍 AI Verification Running...</strong></div>';
-
-  // Simulate checks with staggered delays
-  const checks = [
-    { label: 'Facial match', delay: 400 },
-    { label: 'Liveness check', delay: 800 },
-    { label: 'Document authenticity', delay: 1200 }
-  ];
-
-  let checkResults = [];
-
-  checks.forEach((check) => {
-    setTimeout(() => {
-      // Show each check as "in progress" then resolve to pending review (no random simulation)
-      checkResults.push(`<div style="color:#3b82f6;font-size:11px;margin:4px 0;">&#9203; ${check.label}: Verification in progress</div>`);
-
-      // Show final result after all checks
-      if (checkResults.length === checks.length) {
-        statusEl.innerHTML = `<div style="padding:8px;background:rgba(59,130,246,0.08);border:1px solid #3b82f6;border-radius:6px;color:#3b82f6;"><strong>&#9203; Pending review</strong><br/>${checkResults.join('')}<div style="margin-top:4px;font-size:10px;color:#64748b;">Document verification will be completed during compliance review.</div></div>`;
-      }
-    }, check.delay);
-  });
+  // Deprecated on purpose: portal now renders only persisted backend verification results.
+  return;
 }
 
 // ─── C. Real-time UBO Mapping during Shareholder Entry ────────────────────
@@ -5058,62 +5023,8 @@ function runRealtimeUBOMappingAnalysis(inputEl) {
 
 // ─── F. Real-time Document Integrity Check ────────────────────
 async function runRealtimeDocumentIntegrityCheck(docId, fileName) {
-  // Find or create validation status element for this document
-  let statusEl = document.getElementById(docId + '-integrity-status');
-  if (!statusEl) {
-    const uploadArea = document.getElementById(docId);
-    if (uploadArea) {
-      statusEl = document.createElement('div');
-      statusEl.id = docId + '-integrity-status';
-      statusEl.style.cssText = 'margin-top:8px;font-size:11px;';
-      uploadArea.parentElement.appendChild(statusEl);
-    }
-  }
-
-  if (!statusEl) return;
-
-  // Show loading state
-  statusEl.innerHTML = '<div style="padding:8px;background:var(--blue-dim);border-radius:6px;color:var(--blue);"><strong>📄 Checking document integrity...</strong></div>';
-
-  try {
-    // Normalize doc_type from HTML ID to canonical backend type
-    var apiDocType = (typeof DOC_TYPE_MAP !== 'undefined' && DOC_TYPE_MAP[docId]) ? DOC_TYPE_MAP[docId] : docId;
-    // Call API to verify document
-    const response = await apiCall('POST', '/documents/ai-verify', {
-      doc_type: apiDocType,
-      file_name: fileName,
-      person_name: '',
-      doc_category: 'company'
-    });
-
-    // Process API response
-    let allPass = true;
-    let checkResults = [];
-    const checks = response.checks || [];
-
-    // Render each check result
-    checks.forEach((check) => {
-      const passed = check.result === 'pass';
-      allPass = allPass && passed;
-      const icon = passed ? '✅' : '⚠️';
-      const color = passed ? 'var(--green)' : 'var(--amber)';
-      let message = escapeHtml(check.label);
-      if (check.message) {
-        message += ' — ' + escapeHtml(check.message);
-      }
-      checkResults.push(`<div style="color:${color};font-size:11px;margin:4px 0;">${icon} ${message}</div>`);
-    });
-
-    // Show final result
-    const finalColor = allPass ? 'var(--green-dim)' : 'var(--amber-dim)';
-    const finalBorder = allPass ? 'var(--green)' : 'var(--amber)';
-    const finalText = allPass ? 'All checks passed' : 'Document review required';
-    statusEl.innerHTML = `<div style="padding:8px;background:${finalColor};border:1px solid ${finalBorder};border-radius:6px;color:${finalBorder};"><strong>${allPass ? '✓' : '⚠️'} ${finalText}</strong><br/>${checkResults.join('')}</div>`;
-
-  } catch (err) {
-    console.error('Document verification error:', err);
-    statusEl.innerHTML = '<div style="padding:8px;background:var(--amber-dim);border-radius:6px;color:var(--amber);"><strong>⚠️ Verification unavailable</strong><br/><span style="font-size:10px;">Could not complete verification. Please try again.</span></div>';
-  }
+  // Deprecated on purpose: portal now renders only persisted backend verification results.
+  return;
 }
 
 // ─── Director / UBO rows ──────────────────────────────────
@@ -6324,207 +6235,114 @@ var KYC_PERSON_DOC_RULES = {
   }
 };
 
-// Simulate AI verification with realistic delays
-async function runAIDocVerification(docId, fileName, uploadedDocId) {
-  var rules = DOC_RULES[docId];
-  if (!rules) return;
-
-  // Create or get the verification results container for this doc
-  var item = document.getElementById(docId);
-  var existing = item.querySelector('.doc-verify-results');
-  if (existing) existing.remove();
-
-  var resultsDiv = document.createElement('div');
-  resultsDiv.className = 'doc-verify-results';
-  resultsDiv.style.cssText = 'margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--surface3);font-size:12px;';
-  resultsDiv.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;"><span class="spinner-sm"></span><span style="font-weight:600;color:var(--text2);">AI Verifying: ' + escapeHtml(rules.name) + '...</span></div>';
-  item.appendChild(resultsDiv);
-
-  try {
-    // Normalize doc_type from HTML ID to canonical backend type
-    var apiDocType = DOC_TYPE_MAP[docId] || docId;
-
-    // Call real AI verification API with full context
-    var payload = {
-      doc_type: apiDocType,
-      file_name: fileName,
-      person_name: '',
-      doc_category: 'company',
-      application_id: currentApplicationId || ''
-    };
-    if (uploadedDocId) payload.doc_id = uploadedDocId;
-    var response = await apiCall('POST', '/documents/ai-verify', payload);
-
-    var apiChecks = response.checks || [];
-    var fails = 0;
-    var warns = 0;
-
-    // Remove spinner
-    var spinner = resultsDiv.querySelector('.spinner-sm');
-    if (spinner) spinner.parentElement.remove();
-
-    // Match API response checks against local rule definitions for display
-    rules.checks.forEach(function(ruleCheck) {
-      var apiCheck = apiChecks.find(function(c) { return c.type === ruleCheck.type; }) || {};
-      var passed = apiCheck.result === 'pass' || apiCheck.result === undefined;
-      var severity = apiCheck.result || 'pass';
-      var message = apiCheck.message || '';
-
-      if (!passed) {
-        if (severity === 'fail') fails++;
-        else warns++;
-      }
-
-      var icon = passed ? '✅' : (severity === 'fail' ? '❌' : '⚠️');
-      var color = passed ? 'var(--green)' : (severity === 'fail' ? 'var(--red)' : '#d97706');
-      var resultHTML = '<div class="doc-verify-row" style="display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-top:1px solid var(--border1);">' +
-        '<span>' + icon + '</span>' +
-        '<div style="flex:1;">' +
-          '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(ruleCheck.label) + '</div>' +
-          '<div style="color:var(--text3);font-size:11px;">' + escapeHtml(ruleCheck.rule) + '</div>' +
-          (message ? '<div style="color:' + color + ';font-size:11px;margin-top:2px;font-weight:500;">' + escapeHtml(message) + '</div>' : '') +
-        '</div>' +
-      '</div>';
-      resultsDiv.insertAdjacentHTML('beforeend', resultHTML);
-    });
-
-    // Also render any extra checks returned by the API that aren't in local rules
-    apiChecks.forEach(function(apiCheck) {
-      var hasLocal = rules.checks.some(function(r) { return r.type === apiCheck.type; });
-      if (!hasLocal) {
-        var passed = apiCheck.result === 'pass';
-        if (!passed) {
-          if (apiCheck.result === 'fail') fails++;
-          else warns++;
-        }
-        var icon = passed ? '✅' : (apiCheck.result === 'fail' ? '❌' : '⚠️');
-        var color = passed ? 'var(--green)' : (apiCheck.result === 'fail' ? 'var(--red)' : '#d97706');
-        var resultHTML = '<div class="doc-verify-row" style="display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-top:1px solid var(--border1);">' +
-          '<span>' + icon + '</span>' +
-          '<div style="flex:1;">' +
-            '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(apiCheck.label) + '</div>' +
-            (apiCheck.message ? '<div style="color:' + color + ';font-size:11px;margin-top:2px;">' + escapeHtml(apiCheck.message) + '</div>' : '') +
-          '</div>' +
-        '</div>';
-        resultsDiv.insertAdjacentHTML('beforeend', resultHTML);
-      }
-    });
-
-    // Add summary at top
-    var summaryColor = fails > 0 ? 'var(--red)' : (warns > 0 ? '#d97706' : 'var(--green)');
-    var summaryText = fails > 0 ? '❌ Issues found — action required' : (warns > 0 ? '⚠️ Warnings — please review' : '✅ All checks passed');
-    resultsDiv.insertAdjacentHTML('afterbegin', '<div style="font-weight:600;color:' + summaryColor + ';margin-bottom:6px;">' + summaryText + '</div>');
-
-    // Show red flags if any
-    if (response.red_flags && response.red_flags.length > 0) {
-      var flagsHTML = '<div style="margin-top:6px;padding:6px 8px;background:var(--red-dim,#fff5f5);border:1px solid var(--red);border-radius:4px;font-size:11px;color:var(--red);">' +
-        '<strong>Red Flags:</strong> ' + response.red_flags.map(function(f) { return escapeHtml(f); }).join('; ') + '</div>';
-      resultsDiv.insertAdjacentHTML('beforeend', flagsHTML);
-    }
-
-    if (fails > 0 || warns > 0) {
-      showToast('warn', 'Document Review', 'AI flagged issues with ' + rules.name + '. Please review the comments below the document.');
-    }
-
-  } catch (err) {
-    // Fallback: remove spinner and show error
-    var spinner = resultsDiv.querySelector('.spinner-sm');
-    if (spinner) spinner.parentElement.remove();
-    resultsDiv.innerHTML = '<div style="font-weight:600;color:#d97706;margin-bottom:6px;">⚠️ Verification unavailable</div>' +
-      '<div style="color:var(--text3);font-size:11px;">Could not complete AI verification. Please try again or contact support.</div>';
-  }
+function getVerificationSummary(status, results) {
+  var normalized = String(status || '').toLowerCase();
+  if (normalized === 'verified') return { color: 'var(--green)', text: '✅ Verified' };
+  var redFlags = Array.isArray(results && results.red_flags) ? results.red_flags.length : 0;
+  var warnings = Array.isArray(results && results.warnings) ? results.warnings.length : 0;
+  if (redFlags > 0) return { color: 'var(--red)', text: '❌ Review required' };
+  if (warnings > 0 || normalized === 'flagged') return { color: '#d97706', text: '⚠️ Review required' };
+  return { color: 'var(--text2)', text: '⏳ Pending verification' };
 }
 
-async function runAIPersonDocVerification(personId, docType, fileName, uploadedDocId) {
-  var rules = KYC_PERSON_DOC_RULES[docType];
-  if (!rules) return;
+function ensureVerificationList(targetEl) {
+  if (!targetEl) return null;
+  var list = targetEl.querySelector('.doc-verify-results-list');
+  if (!list) {
+    list = document.createElement('div');
+    list.className = 'doc-verify-results-list';
+    list.style.cssText = 'margin-top:10px;display:flex;flex-direction:column;gap:8px;';
+    targetEl.appendChild(list);
+  }
+  return list;
+}
 
-  // docType uses underscores (cert_inc) but HTML IDs use hyphens (kyc-cert-inc-area-)
-  var docKey = docType.replace(/_/g, '-');
-  var areaId = 'kyc-' + docKey + '-area-' + personId;
-  var area = document.getElementById(areaId);
-  if (!area) return;
+function renderPersistedVerification(targetEl, documentRecord) {
+  if (!targetEl || !documentRecord || !documentRecord.id) return;
+  var list = ensureVerificationList(targetEl);
+  if (!list) return;
 
-  var parent = area.parentElement;
-  var existing = parent.querySelector('.doc-verify-results');
+  var existing = list.querySelector('[data-doc-id="' + documentRecord.id + '"]');
   if (existing) existing.remove();
 
-  var resultsDiv = document.createElement('div');
-  resultsDiv.className = 'doc-verify-results';
-  resultsDiv.style.cssText = 'margin-top:6px;padding:8px 10px;border-radius:8px;background:var(--surface3);font-size:12px;';
-  resultsDiv.innerHTML = '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><span class="spinner-sm"></span><span style="font-weight:600;color:var(--text2);">Verifying ' + escapeHtml(rules.name) + '...</span></div>';
-  parent.appendChild(resultsDiv);
+  var results = documentRecord.verification_results || {};
+  var checks = Array.isArray(results.checks) ? results.checks : [];
+  var summary = getVerificationSummary(documentRecord.verification_status, results);
+  var card = document.createElement('div');
+  card.className = 'doc-verify-results';
+  card.setAttribute('data-doc-id', documentRecord.id);
+  card.style.cssText = 'padding:10px 12px;border-radius:8px;background:var(--surface3);font-size:12px;';
 
-  try {
-    // Extract person name from KYC card header if available
-    var personName = '';
-    var cardHeader = parent.closest('[data-person-name]');
-    if (cardHeader) {
-      personName = cardHeader.getAttribute('data-person-name') || '';
-    }
+  var meta = '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap;">' +
+    '<div>' +
+      '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(documentRecord.doc_name || documentRecord.doc_type || 'Uploaded document') + '</div>' +
+      '<div style="font-size:11px;color:' + summary.color + ';margin-top:2px;">' + summary.text + '</div>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text3);text-align:right;">' +
+      (results.verified_at ? '<div>Verified: ' + escapeHtml(results.verified_at) + '</div>' : '') +
+      (results.ai_source ? '<div>Source: ' + escapeHtml(results.ai_source) + '</div>' : '') +
+      (results.confidence != null ? '<div>Confidence: ' + escapeHtml(String(Math.round(Number(results.confidence) * 100))) + '%</div>' : '') +
+    '</div>' +
+  '</div>';
 
-    // Call API to verify document with full application context
-    var payload = {
-      doc_type: docType,
-      file_name: fileName,
-      person_name: personName,
-      doc_category: 'kyc',
-      application_id: currentApplicationId || ''
-    };
-    if (uploadedDocId) payload.doc_id = uploadedDocId;
-    var response = await apiCall('POST', '/documents/ai-verify', payload);
-
-    // Process API response
-    var apiChecks = response.checks || [];
-    var fails = 0;
-    var warns = 0;
-
-    // Render check results using API response but display labels from KYC_PERSON_DOC_RULES
-    rules.checks.forEach(function(ruleCheck, idx) {
-      var apiCheck = apiChecks.find(function(c) { return c.type === ruleCheck.type; }) || {};
-      var passed = apiCheck.result === 'pass' || apiCheck.result === undefined;
-      var severity = apiCheck.result || (passed ? 'pass' : 'warn');
-      var message = apiCheck.message || '';
-
-      if (!passed) {
-        if (severity === 'fail') fails++;
-        else warns++;
-      }
-
-      var icon = passed ? '✅' : (severity === 'fail' ? '❌' : '⚠️');
-      var color = passed ? 'var(--green)' : (severity === 'fail' ? 'var(--red)' : '#d97706');
-      var resultHTML = '<div style="display:flex;align-items:flex-start;gap:6px;padding:3px 0;border-top:1px solid var(--border1);">' +
-        '<span style="font-size:11px;">' + icon + '</span>' +
-        '<div style="flex:1;">' +
-          '<span style="font-weight:600;color:var(--text1);font-size:11px;">' + escapeHtml(ruleCheck.label) + '</span>' +
-          (message ? '<div style="color:' + color + ';font-size:11px;margin-top:1px;">' + escapeHtml(message) + '</div>' : '') +
-        '</div>' +
-      '</div>';
-
-      resultsDiv.insertAdjacentHTML('beforeend', resultHTML);
-    });
-
-    // Remove spinner
-    var spinner = resultsDiv.querySelector('.spinner-sm');
-    if (spinner) spinner.parentElement.remove();
-
-    // Add summary
-    var summaryColor = fails > 0 ? 'var(--red)' : (warns > 0 ? '#d97706' : 'var(--green)');
-    var summaryText = fails > 0 ? '❌ Issues found' : (warns > 0 ? '⚠️ Please review' : '✅ Verified');
-    resultsDiv.insertAdjacentHTML('afterbegin', '<div style="font-weight:500;color:' + summaryColor + ';margin-bottom:4px;font-size:11px;">' + summaryText + '</div>');
-
-    if (fails > 0) {
-      showToast('error', 'Document Issue', 'Your ' + rules.name + ' has issues that need attention. Please review and re-upload if needed.');
-    } else if (warns > 0) {
-      showToast('warn', 'Document Warning', 'Your ' + rules.name + ' has warnings. Please review the comments.');
-    }
-
-  } catch (err) {
-    console.error('Document verification error:', err);
-    var spinner = resultsDiv.querySelector('.spinner-sm');
-    if (spinner) spinner.parentElement.remove();
-    resultsDiv.insertAdjacentHTML('beforeend', '<div style="padding:8px;color:var(--amber);font-size:11px;"><strong>⚠️ Verification unavailable</strong><br/>Could not complete verification. Please try again.</div>');
+  var banners = '';
+  if (Array.isArray(results.red_flags) && results.red_flags.length) {
+    banners += '<div style="margin-top:8px;padding:6px 8px;background:var(--red-dim,#fff5f5);border:1px solid var(--red);border-radius:6px;font-size:11px;color:var(--red);"><strong>Red flags:</strong> ' + results.red_flags.map(function(flag) { return escapeHtml(flag); }).join('; ') + '</div>';
   }
+  if (Array.isArray(results.warnings) && results.warnings.length) {
+    banners += '<div style="margin-top:8px;padding:6px 8px;background:var(--amber-dim,#fffbeb);border:1px solid #d97706;border-radius:6px;font-size:11px;color:#b45309;"><strong>Warnings:</strong> ' + results.warnings.map(function(flag) { return escapeHtml(flag); }).join('; ') + '</div>';
+  }
+
+  var checksHtml = checks.length ? checks.map(function(check) {
+    var result = String(check && check.result || '').toLowerCase();
+    var icon = result === 'pass' ? '✅' : result === 'fail' ? '❌' : result === 'warn' ? '⚠️' : '➖';
+    var color = result === 'pass' ? 'var(--green)' : result === 'fail' ? 'var(--red)' : result === 'warn' ? '#d97706' : 'var(--text3)';
+    var badges = '';
+    if (check && check.classification) {
+      badges += '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + color + '22;color:' + color + ';border:1px solid ' + color + '44;margin-left:4px;">' + escapeHtml(String(check.classification)) + '</span>';
+    }
+    if (check && check.source) {
+      badges += '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--surface);color:var(--text3);border:1px solid var(--border1);margin-left:4px;">' + escapeHtml(String(check.source)) + '</span>';
+    }
+    return '<div class="doc-verify-row" style="display:flex;align-items:flex-start;gap:6px;padding:6px 0;border-top:1px solid var(--border1);">' +
+      '<span>' + icon + '</span>' +
+      '<div style="flex:1;">' +
+        '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(check.label || check.name || 'Check') + badges + '</div>' +
+        (check.message ? '<div style="color:' + color + ';font-size:11px;margin-top:2px;">' + escapeHtml(check.message) + '</div>' : '') +
+        ((check.ps_field && (check.ps_value != null || check.extracted_value != null))
+          ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Declared <em>' + escapeHtml(String(check.ps_field)) + '</em>: <strong>' + escapeHtml(String(check.ps_value == null ? '—' : check.ps_value)) + '</strong>' + (check.extracted_value != null ? ' → extracted: <strong>' + escapeHtml(String(check.extracted_value)) + '</strong>' : '') + '</div>'
+          : '') +
+      '</div>' +
+    '</div>';
+  }).join('') : '<div style="margin-top:8px;font-size:11px;color:var(--text3);">No persisted verification checks are stored for this document yet.</div>';
+
+  card.innerHTML = meta + banners + checksHtml;
+  list.appendChild(card);
+}
+
+function renderCompanyVerification(docId, verificationResponse) {
+  var item = document.getElementById(docId);
+  if (!item || !verificationResponse) return;
+  renderPersistedVerification(item, {
+    id: verificationResponse.doc_id || verificationResponse.id,
+    doc_name: verificationResponse.doc_name,
+    doc_type: verificationResponse.doc_type,
+    verification_status: verificationResponse.verification_status || verificationResponse.status,
+    verification_results: verificationResponse.verification_results || {}
+  });
+}
+
+function renderPersonVerification(personId, docType, verificationResponse) {
+  var docKey = docType.replace(/_/g, '-');
+  var area = document.getElementById('kyc-' + docKey + '-area-' + personId);
+  if (!area || !verificationResponse) return;
+  renderPersistedVerification(area.parentElement, {
+    id: verificationResponse.doc_id || verificationResponse.id,
+    doc_name: verificationResponse.doc_name,
+    doc_type: verificationResponse.doc_type || docType,
+    verification_status: verificationResponse.verification_status || verificationResponse.status,
+    verification_results: verificationResponse.verification_results || {}
+  });
 }
 
 
@@ -6690,9 +6508,6 @@ function restoreDraftFromData(data) {
 
     if (data.appRef) appRef = data.appRef;
     if (data.computedRiskLevel) computedRiskLevel = data.computedRiskLevel;
-    if (data.uploadedDocs && Array.isArray(data.uploadedDocs)) {
-      data.uploadedDocs.forEach(function(d) { uploadedDocs.add(d); });
-    }
 
     // Restore simple form fields by element ID
     if (data.prescreening && typeof data.prescreening === 'object') {
@@ -7388,6 +7203,10 @@ function clearUploadedDocument(docId) {
     label.textContent = originalText;
   }
   if (item) item.classList.remove('uploaded');
+  if (item) {
+    var verificationList = item.querySelector('.doc-verify-results-list');
+    if (verificationList) verificationList.remove();
+  }
   if (fileInput) fileInput.value = '';
   uploadedDocs.delete(docId);
   updateProgress();
@@ -7433,41 +7252,40 @@ function handleUpload(docId, input) {
 
   // Upload to API if authenticated
   if (AUTH_TOKEN && currentApplicationId) {
-    Promise.all(Array.from(files).map(async function(file) {
+    Promise.allSettled(Array.from(files).map(async function(file) {
       var apiDocType = DOC_TYPE_MAP[docId] || docId;
       var fd = new FormData();
       fd.append('file', file);
       fd.append('doc_type', apiDocType);
       var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(apiDocType), fd, true);
-      if (resp.id) {
-        try { await apiCall('POST', '/documents/' + resp.id + '/verify'); } catch(e) {}
-      }
-      return resp;
+      if (!resp.id) throw new Error('Document upload failed. Please try again or contact support.');
+      var verification = await apiCall('POST', '/documents/' + resp.id + '/verify');
+      verification.doc_id = verification.doc_id || resp.id;
+      verification.doc_name = resp.doc_name || file.name;
+      verification.doc_type = resp.doc_type || apiDocType;
+      return verification;
     })).then(function(results) {
-      label.textContent = '✓ ' + names;
+      var successes = results.filter(function(result) { return result.status === 'fulfilled'; }).map(function(result) { return result.value; });
+      var failures = results.filter(function(result) { return result.status === 'rejected'; });
+
+      if (!successes.length) {
+        throw (failures[0] && failures[0].reason) || new Error('Could not upload this document. Please try again.');
+      }
+
+      label.textContent = '✓ ' + successes.map(function(result) { return result.doc_name || result.doc_id; }).join(', ');
       item.classList.add('uploaded');
       uploadedDocs.add(docId);
       updateProgress();
 
-      // Store backend doc IDs for deletion support
-      uploadedDocIds[docId] = results.filter(function(r) { return r && r.id; }).map(function(r) { return r.id; });
+      uploadedDocIds[docId] = successes.map(function(result) { return result.doc_id; });
       addClearButton(docId);
-
-      const checks = document.getElementById('doc-ai-checks');
-      if (checks) checks.style.display = 'grid';
-
-      // Extract doc_id from the first successful upload response
-      var uploadedDocId = (results && results[0] && results[0].id) ? results[0].id : '';
-
-      showToast('success', 'File Uploaded', 'Verification started for: ' + names);
-      runAIDocVerification(docId, names, uploadedDocId);
-
-      if (docId.includes('passport') || docId.includes('kyc-passport') || docId.includes('identity')) {
-        runRealtimePassportValidation(docId, names);
-      }
-
-      if (docId.includes('proof-address') || docId.includes('poa')) {
-        runRealtimeDocumentIntegrityCheck(docId, names);
+      successes.forEach(function(result) {
+        renderCompanyVerification(docId, result);
+      });
+      if (failures.length) {
+        showToast('warn', 'Partial Upload', successes.length + ' document(s) stored and verified, ' + failures.length + ' failed.');
+      } else {
+        showToast('success', 'File Uploaded', 'Stored and verified: ' + names);
       }
     }).catch(function(err) {
       console.error('API upload failed for', docId, err);
@@ -7478,20 +7296,10 @@ function handleUpload(docId, input) {
     });
     return;
   }
-
-  if (APP_ENV !== 'demo') {
-    label.textContent = 'Click to upload';
-    input.value = '';
-    showToast('error', 'Authentication Required', 'Please sign in before uploading documents.');
-    return;
-  }
-
-  label.textContent = '✓ ' + names;
-  item.classList.add('uploaded');
-  uploadedDocs.add(docId);
-  updateProgress();
-  addClearButton(docId);
-  showToast('success', 'File Uploaded', 'Document saved in demo mode: ' + names);
+  label.textContent = 'Click to upload';
+  input.value = '';
+  item.classList.remove('uploaded');
+  showToast('error', 'Authentication Required', 'Please sign in before uploading documents.');
 }
 
 function updateProgress() {
@@ -8445,9 +8253,8 @@ function handleKYCUpload(personId, docType, input) {
   const lbl = document.getElementById('kyc-' + docKey + '-lbl-' + personId);
   const area = document.getElementById('kyc-' + docKey + '-area-' + personId);
   var fileName = input.files.length === 1 ? input.files[0].name : input.files.length + ' files selected';
-  if (lbl) lbl.textContent = fileName;
-  if (area) { area.style.borderColor = 'var(--green)'; area.style.color = 'var(--green)'; }
-  updateKYCBadge(personId);
+  if (lbl) lbl.textContent = '⏳ Uploading ' + fileName;
+  if (area) { area.style.borderColor = 'var(--amber)'; area.style.color = 'var(--amber)'; }
 
   // Upload to backend if authenticated
   if (AUTH_TOKEN && currentApplicationId && input.files[0]) {
@@ -8459,25 +8266,39 @@ function handleKYCUpload(personId, docType, input) {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN },
       body: formData
-    }).then(function(r) { return r.json(); }).then(function(resp) {
-      if (resp.id) {
-        // Trigger document verification
-        fetch(API_BASE + '/documents/' + resp.id + '/verify', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN, 'Content-Type': 'application/json' }
-        }).catch(function() {});
-        // Run real-time AI verification with doc_id context
-        runAIPersonDocVerification(personId, docType, fileName, resp.id);
-      } else {
-        runAIPersonDocVerification(personId, docType, fileName, '');
-      }
+    }).then(function(r) {
+      if (!r.ok) throw new Error('Upload failed');
+      return r.json();
+    }).then(function(resp) {
+      if (!resp.id) throw new Error('Document upload failed. Please try again or contact support.');
+      return fetch(API_BASE + '/documents/' + resp.id + '/verify', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN, 'Content-Type': 'application/json' }
+      }).then(function(r) {
+        if (!r.ok) throw new Error('Verification failed');
+        return r.json();
+      }).then(function(verification) {
+        verification.doc_id = verification.doc_id || resp.id;
+        verification.doc_name = resp.doc_name || fileName;
+        verification.doc_type = resp.doc_type || docType;
+        if (lbl) lbl.textContent = fileName;
+        if (area) { area.style.borderColor = 'var(--green)'; area.style.color = 'var(--green)'; }
+        updateKYCBadge(personId);
+        renderPersonVerification(personId, docType, verification);
+        showToast('success', 'Document Uploaded', 'Stored and verified: ' + fileName);
+      });
     }).catch(function(err) {
-      console.warn('Intermediary doc upload error:', err);
-      runAIPersonDocVerification(personId, docType, fileName, '');
+      console.warn('KYC doc upload error:', err);
+      if (lbl) lbl.textContent = 'Click to upload';
+      if (area) { area.style.borderColor = ''; area.style.color = ''; }
+      if (input) input.value = '';
+      showToast('error', 'Upload Failed', 'Could not store and verify this document. Please try again.');
     });
   } else {
-    // No auth — run verification without doc_id
-    runAIPersonDocVerification(personId, docType, fileName, '');
+    if (lbl) lbl.textContent = 'Click to upload';
+    if (area) { area.style.borderColor = ''; area.style.color = ''; }
+    if (input) input.value = '';
+    showToast('error', 'Authentication Required', 'Please sign in before uploading documents.');
   }
 }
 
@@ -8823,6 +8644,79 @@ function getApplicationView(status) {
   return stageMap[status] || 'pending';
 }
 
+function resetPortalDocumentState() {
+  uploadedDocIds = {};
+  uploadedDocs.clear();
+  document.querySelectorAll('.doc-item').forEach(function(item) {
+    item.classList.remove('uploaded');
+    var label = item.querySelector('[id$="-label"]');
+    if (label) label.textContent = label.getAttribute('data-original-label') || 'Click to upload';
+    var clearBtn = item.querySelector('[id^="clear-"]');
+    if (clearBtn) clearBtn.remove();
+  });
+  document.querySelectorAll('.doc-verify-results-list').forEach(function(list) { list.remove(); });
+  document.querySelectorAll('.kyc-person-card .doc-upload-area').forEach(function(area) {
+    area.style.borderColor = '';
+    area.style.color = '';
+  });
+  document.querySelectorAll('.kyc-person-card [id*="-lbl-"]').forEach(function(label) {
+    if (label.id.indexOf('kyc-') === 0) label.textContent = 'Click to upload';
+  });
+}
+
+function findPortalDocumentSlot(docType) {
+  if (document.getElementById(docType)) return docType;
+  for (var key in DOC_TYPE_MAP) {
+    if (DOC_TYPE_MAP[key] === docType && document.getElementById(key)) return key;
+  }
+  return '';
+}
+
+function syncPersistedApplicationDocuments(app) {
+  resetPortalDocumentState();
+  if (!app || !Array.isArray(app.documents)) {
+    updateProgress();
+    return;
+  }
+
+  var docsByPerson = {};
+  app.documents.forEach(function(doc) {
+    if (doc.person_id) {
+      docsByPerson[doc.person_id] = docsByPerson[doc.person_id] || [];
+      docsByPerson[doc.person_id].push(doc);
+      var docKey = String(doc.doc_type || '').replace(/_/g, '-');
+      var area = document.getElementById('kyc-' + docKey + '-area-' + doc.person_id);
+      var lbl = document.getElementById('kyc-' + docKey + '-lbl-' + doc.person_id);
+      if (lbl) lbl.textContent = doc.doc_name || 'Previously uploaded';
+      if (area) { area.style.borderColor = 'var(--green)'; area.style.color = 'var(--green)'; }
+      renderPersistedVerification(area ? area.parentElement : null, doc);
+    } else {
+      var slotId = findPortalDocumentSlot(doc.doc_type);
+      if (!slotId) return;
+      var item = document.getElementById(slotId);
+      var label = document.getElementById(slotId + '-label');
+      if (item) item.classList.add('uploaded');
+      if (label) label.textContent = '✓ ' + (doc.doc_name || 'Previously uploaded');
+      uploadedDocs.add(slotId);
+      uploadedDocIds[slotId] = uploadedDocIds[slotId] || [];
+      uploadedDocIds[slotId].push(doc.id);
+      addClearButton(slotId);
+      renderPersistedVerification(item, doc);
+    }
+  });
+
+  Object.keys(docsByPerson).forEach(function(personId) {
+    var badge = document.getElementById('kyc-badge-' + personId);
+    if (!badge) return;
+    var personDocs = docsByPerson[personId];
+    var hasFlagged = personDocs.some(function(doc) { return String(doc.verification_status || '').toLowerCase() !== 'verified'; });
+    badge.className = 'kyc-status-badge ' + (hasFlagged ? 'warning' : 'uploaded');
+    badge.innerHTML = hasFlagged ? '⚠️ Review required' : '✅ Uploaded';
+  });
+
+  updateProgress();
+}
+
 async function resumeApplication(ref, stage) {
   var target = getApplicationView(stage);
   try {
@@ -8893,6 +8787,7 @@ async function resumeApplication(ref, stage) {
       if (typeof checkPEPAndShowDeclaration === 'function') {
         try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on resume:', e); }
       }
+      syncPersistedApplicationDocuments(app);
     }
   } catch (err) {
     console.error('Failed to load application detail for resume:', err);

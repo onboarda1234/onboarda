@@ -14,7 +14,7 @@ logger = logging.getLogger("arie.environment")
 # 1. ENVIRONMENT DETECTION
 # ══════════════════════════════════════════════════════════════
 
-VALID_ENVIRONMENTS = ("development", "demo", "staging", "production")
+VALID_ENVIRONMENTS = ("development", "testing", "demo", "staging", "production")
 
 def get_environment() -> str:
     """Get current environment from ENV variable. Defaults to 'demo'."""
@@ -28,6 +28,11 @@ ENV = get_environment()
 
 def is_development() -> bool:
     return ENV == "development"
+
+
+def is_testing() -> bool:
+    """Returns True when running automated tests with ENVIRONMENT=testing."""
+    return ENV == "testing"
 
 def is_demo() -> bool:
     return ENV == "demo"
@@ -130,6 +135,8 @@ _DEFAULT_FLAGS = {
         "ENABLE_SHORTCUT_LOGIN": False,
     },
 }
+
+_DEFAULT_FLAGS["testing"] = dict(_DEFAULT_FLAGS["development"])
 
 
 class FeatureFlags:
@@ -306,6 +313,8 @@ def get_database_url() -> str:
         return url
     elif is_staging():
         return os.environ.get("STAGING_DATABASE_URL", os.environ.get("DATABASE_URL", "sqlite:///arie_staging.db"))
+    elif is_testing():
+        return os.environ.get("TEST_DATABASE_URL", os.environ.get("DATABASE_URL", "sqlite:///arie_test.db"))
     else:
         return os.environ.get("DEMO_DATABASE_URL", os.environ.get("DATABASE_URL", "sqlite:///arie_demo.db"))
 
@@ -316,6 +325,8 @@ def get_s3_bucket() -> str:
         return os.environ.get("S3_BUCKET", "arie-production-documents")
     elif is_staging():
         return os.environ.get("S3_BUCKET_STAGING", "arie-staging-documents")
+    elif is_testing():
+        return os.environ.get("S3_BUCKET_TESTING", "arie-testing-documents")
     else:
         return os.environ.get("S3_BUCKET_DEMO", "arie-demo-documents")
 
@@ -342,6 +353,12 @@ def get_jwt_secret() -> str:
         if not secret:
             _jwt_logger.warning("JWT_SECRET not set for staging — using generated fallback. Set JWT_SECRET env var.")
             secret = "staging-fallback-" + os.urandom(16).hex()
+        return secret
+    elif is_testing():
+        secret = os.environ.get("JWT_SECRET_TESTING", os.environ.get("JWT_SECRET", ""))
+        if not secret:
+            _jwt_logger.warning("JWT_SECRET not set for testing — using generated fallback. Set JWT_SECRET env var.")
+            secret = "testing-fallback-" + os.urandom(16).hex()
         return secret
     else:
         secret = os.environ.get("JWT_SECRET_DEMO", os.environ.get("JWT_SECRET", ""))
@@ -378,6 +395,8 @@ def get_cors_origin() -> str:
         return os.environ.get("CORS_ORIGIN", "https://app.ariefinance.mu")
     elif is_staging():
         return os.environ.get("CORS_ORIGIN_STAGING", "https://staging.ariefinance.mu")
+    elif is_testing():
+        return os.environ.get("CORS_ORIGIN_TESTING", "http://localhost:3000")
     else:
         return os.environ.get("CORS_ORIGIN_DEMO", "https://demo.ariefinance.mu")
 

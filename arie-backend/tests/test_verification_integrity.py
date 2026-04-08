@@ -530,3 +530,121 @@ class TestTruthfulnessSafeguards:
 
         results = json.loads(verified_doc["verification_results"])
         assert len(results["checks"]) > 0, "Verified document must have at least one check"
+
+
+class TestVerificationContextResolution:
+    def test_effective_declared_data_uses_saved_session_backfill(self, temp_db):
+        from server import build_document_verification_context
+        from db import get_db
+
+        db = get_db()
+
+        db.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "ctx_app",
+            "ARF-CTX-1",
+            "ctx_client",
+            "Context Corp",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "draft",
+            json.dumps({})
+        ))
+        db.execute("""
+            INSERT INTO client_sessions (id, client_id, application_id, form_data, last_step)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            "ctx_session",
+            "ctx_client",
+            "ctx_app",
+            json.dumps({"f-reg-name": "Overlay Corp", "f-inc-country": "BVI"}),
+            3
+        ))
+        db.commit()
+
+        app = dict(db.execute("SELECT * FROM applications WHERE id = ?", ("ctx_app",)).fetchone())
+        context = build_document_verification_context(db, app, {"doc_type": "cert_inc"})
+
+        assert context["prescreening_data"]["registered_entity_name"] == "Overlay Corp"
+        assert context["prescreening_data"]["country_of_incorporation"] == "BVI"
+        assert context["entity_name"] == "Context Corp"
+        db.close()
+
+    def test_intermediary_company_documents_resolve_intermediary_subject(self, temp_db):
+        from server import build_document_verification_context
+        from db import get_db
+
+        db = get_db()
+
+        db.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "int_app",
+            "ARF-INT-1",
+            "int_client",
+            "Parent Corp",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "draft",
+            json.dumps({
+                "registered_entity_name": "Parent Corp",
+                "country_of_incorporation": "Mauritius",
+                "directors": [{"full_name": "Parent Director"}],
+                "ubos": [{"full_name": "Parent UBO", "ownership_pct": 100}]
+            })
+        ))
+        db.execute("""
+            INSERT INTO intermediaries (id, application_id, person_key, entity_name, jurisdiction, ownership_pct)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, ("int_row_1", "int_app", "int1", "Intermediary HoldCo", "BVI", 100))
+        db.commit()
+
+        app = dict(db.execute("SELECT * FROM applications WHERE id = ?", ("int_app",)).fetchone())
+        context = build_document_verification_context(db, app, {"doc_type": "cert_inc", "person_id": "int1"})
+
+        assert context["doc_category"] == "company"
+        assert context["subject_type"] == "intermediary_company"
+        assert context["entity_name"] == "Intermediary HoldCo"
+        assert context["prescreening_data"]["registered_entity_name"] == "Intermediary HoldCo"
+        assert context["prescreening_data"]["country_of_incorporation"] == "BVI"
+        assert "directors" not in context["prescreening_data"]
+        assert "ubos" not in context["prescreening_data"]
+        assert context["directors_list"] == []
+        assert context["ubos_list"] == []
+        db.close()
+
+
+class TestPortalAuthoritativeSource:
+    def test_portal_removes_transient_ai_verify_route(self):
+        portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
+        with open(portal_path) as f:
+            src = f.read()
+        assert "/documents/ai-verify" not in src
+
+    def test_portal_renders_persisted_document_truth(self):
+        portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
+        with open(portal_path) as f:
+            src = f.read()
+        assert "renderPersistedVerification" in src
+        assert "verification_results" in src
+        assert "verification_status" in src
+        assert "syncPersistedApplicationDocuments" in src
+
+
+class TestVerificationStartupGuards:
+    def test_verification_critical_seed_failure_raises(self, monkeypatch):
+        import db as db_module
+        import server
+
+        def boom(_db):
+            raise RuntimeError("seed failed")
+
+        monkeypatch.setattr(db_module, "seed_initial_data", boom)
+
+        with pytest.raises(RuntimeError, match="Verification-critical startup initialization failed"):
+            server.init_db()
