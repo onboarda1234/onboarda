@@ -5878,11 +5878,8 @@ class SumsubDocumentHandler(BaseHandler):
         self.success(result)
 
 
-class SumsubWebhookHandler(tornado.web.RequestHandler):
+class SumsubWebhookHandler(BaseHandler):
     """POST /api/kyc/webhook — Receive Sumsub verification webhooks"""
-
-    def set_default_headers(self):
-        self.set_header("Content-Type", "application/json")
 
     def post(self):
         body = self.request.body
