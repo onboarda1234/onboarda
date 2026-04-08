@@ -6,6 +6,8 @@
 # ── Environment & secrets ──
 .env
 .env.*
+generated_secrets.env
+*_secrets.env
 
 # ── Python ──
 __pycache__/
