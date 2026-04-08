@@ -56,6 +56,7 @@ class TestEnvironmentBooleans:
     def test_valid_environments_list(self):
         from environment import VALID_ENVIRONMENTS
         assert "development" in VALID_ENVIRONMENTS
+        assert "testing" in VALID_ENVIRONMENTS
         assert "demo" in VALID_ENVIRONMENTS
         assert "staging" in VALID_ENVIRONMENTS
         assert "production" in VALID_ENVIRONMENTS
@@ -231,8 +232,7 @@ class TestGetJwtSecret:
         monkeypatch.delenv("JWT_SECRET", raising=False)
         from environment import get_jwt_secret
         secret = get_jwt_secret()
-        # In test environment (conftest sets ENVIRONMENT=testing → resolves to demo)
-        # the fallback should start with "demo-fallback-" or "staging-fallback-"
+        # In test environment (conftest sets ENVIRONMENT=testing), use the explicit testing fallback
         assert "fallback-" in secret
         assert len(secret) > 20
 
@@ -302,7 +302,7 @@ class TestGetS3Bucket:
         monkeypatch.delenv("S3_BUCKET_DEMO", raising=False)
         from environment import get_s3_bucket
         bucket = get_s3_bucket()
-        # Module-level ENV is set at import time (conftest → testing/demo)
+        # Module-level ENV is set at import time (conftest → testing)
         assert isinstance(bucket, str)
         assert len(bucket) > 0
 
@@ -310,7 +310,7 @@ class TestGetS3Bucket:
         monkeypatch.setenv("S3_BUCKET_DEMO", "my-custom-bucket")
         from environment import get_s3_bucket
         bucket = get_s3_bucket()
-        # get_s3_bucket checks module-level ENV; in test it's demo
+        # get_s3_bucket checks module-level ENV; in test it's testing
         assert isinstance(bucket, str)
 
     def test_s3_bucket_returns_string(self):

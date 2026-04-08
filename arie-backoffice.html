@@ -4139,12 +4139,14 @@ function buildVerificationResultsHtml(results) {
                   : '⚠ System Issue: ' + sysWarn;
       items.push('<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:#92400e;font-weight:600;">' + escapeHtml(warnMsg) + '</div>');
     }
-    pushItem('Overall Result', firstMeaningfulDetailValue(results.overall_result, results.result, results.status));
+    pushItem('Overall Result', firstMeaningfulDetailValue(results.overall, results.overall_result, results.result, results.status));
     pushItem('Summary', firstMeaningfulDetailValue(results.summary, results.reason, results.message));
     pushItem('Confidence', results.confidence != null ? Math.round(Number(results.confidence) * 100) + '%' : '');
     pushItem('Extracted Fields', Array.isArray(results.extracted_fields) ? results.extracted_fields.join(', ') : '');
     pushItem('Flags', Array.isArray(results.flags) ? results.flags.join(', ') : '');
     pushItem('Issues', Array.isArray(results.issues) ? results.issues.join(', ') : '');
+    pushItem('Warnings', Array.isArray(results.warnings) ? results.warnings.join(', ') : '');
+    pushItem('Red Flags', Array.isArray(results.red_flags) ? results.red_flags.join(', ') : '');
     pushItem('Checks Run', Array.isArray(results.checks_run) ? results.checks_run.join(', ') : '');
     if (Array.isArray(results.checks)) {
       var classColors = { rule: '#16a34a', hybrid: '#d97706', ai: '#7c3aed' };

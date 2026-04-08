@@ -38,10 +38,11 @@ class ConfigError(Exception):
 # ══════════════════════════════════════════════════════════════
 
 ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("ENV", "development"))
+IS_TESTING = ENVIRONMENT == "testing"
 IS_DEMO = ENVIRONMENT == "demo"
 IS_STAGING = ENVIRONMENT == "staging"
 IS_PRODUCTION = ENVIRONMENT == "production"
-IS_DEVELOPMENT = ENVIRONMENT == "development"
+IS_DEVELOPMENT = ENVIRONMENT in ("development", "testing")
 
 
 # ══════════════════════════════════════════════════════════════

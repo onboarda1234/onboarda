@@ -352,6 +352,70 @@ class TestAuthenticatedAccess:
         assert data["prescreening_data"]["introduction_method"] == "Introduced by partner"
         assert data["prescreening_data"]["management_overview"] == "Founder-led management team"
 
+    def test_document_verify_returns_persisted_authoritative_contract(self, api_server):
+        """POST /api/documents/:id/verify should return the persisted verification payload the portal/back office reload later consume."""
+        from auth import create_token
+        from db import get_db
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as handle:
+            handle.write(b"%PDF-1.4 authoritative verification test")
+            file_path = handle.name
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "app_doc_verify",
+            "ARF-2026-DOCVERIFY",
+            "testclient001",
+            "Verify Corp Ltd",
+            "Mauritius",
+            "draft",
+            json.dumps({"registered_entity_name": "Verify Corp Ltd", "country_of_incorporation": "Mauritius"})
+        ))
+        conn.execute("""
+            INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, file_size, mime_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_verify_1",
+            "app_doc_verify",
+            "cert_inc",
+            "verify.pdf",
+            file_path,
+            os.path.getsize(file_path),
+            "application/pdf"
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/documents/doc_verify_1/verify",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["verification_status"] in ("verified", "flagged")
+        assert isinstance(body["verification_results"]["checks"], list)
+        assert body["verification_results"]["overall"] == body["verification_status"]
+        assert body["verification_results"]["subject_type"] in ("application_company", "director", "ubo", "intermediary_company", "person")
+        assert body["verified_at"]
+
+        conn = get_db()
+        stored = conn.execute("""
+            SELECT verification_status, verification_results, verified_at
+            FROM documents WHERE id = ?
+        """, ("doc_verify_1",)).fetchone()
+        conn.close()
+
+        stored_results = json.loads(stored["verification_results"])
+        assert stored["verification_status"] == body["verification_status"]
+        assert stored_results == body["verification_results"]
+        assert stored["verified_at"]
+
 
 # ═══════════════════════════════════════════════════════════
 # 4. Security Headers — must be present on every response

@@ -766,6 +766,132 @@ def resolve_application_person(db, application_id, person_ref):
     return None
 
 
+def resolve_document_subject_context(db, app, doc):
+    person_record = None
+    if app and doc.get("person_id"):
+        person_record = resolve_application_person(db, app["id"], doc["person_id"])
+    if not person_record and app:
+        dir_match = re.search(r'_dir(\d+)$', doc.get("doc_type", ""))
+        ubo_match = re.search(r'_ubo(\d+)$', doc.get("doc_type", ""))
+        int_match = re.search(r'_int(\d+)$', doc.get("doc_type", ""))
+        if dir_match:
+            idx = int(dir_match.group(1)) - 1
+            directors = get_application_parties(db, app["id"])[0]
+            if 0 <= idx < len(directors):
+                person_record = directors[idx]
+                person_record["person_type"] = "director"
+                person_record["entity_type"] = "Person"
+        elif ubo_match:
+            idx = int(ubo_match.group(1)) - 1
+            ubos = get_application_parties(db, app["id"])[1]
+            if 0 <= idx < len(ubos):
+                person_record = ubos[idx]
+                person_record["person_type"] = "ubo"
+                person_record["entity_type"] = "Person"
+        elif int_match:
+            idx = int(int_match.group(1)) - 1
+            intermediaries = get_application_parties(db, app["id"])[2]
+            if 0 <= idx < len(intermediaries):
+                person_record = intermediaries[idx]
+                person_record["person_type"] = "intermediary"
+                person_record["entity_type"] = "Company"
+
+    raw_doc_type = doc.get("doc_type", "general")
+    base_doc_type = raw_doc_type
+    if base_doc_type.startswith("intermediary_"):
+        base_doc_type = base_doc_type[len("intermediary_"):]
+    base_doc_type = re.sub(r'_(dir|ubo|inter)\d+$', '', base_doc_type)
+
+    company_doc_types = {
+        "cert_inc", "memarts", "reg_sh", "reg_dir", "fin_stmt", "board_res",
+        "structure_chart", "poa", "bankref", "licence", "contracts",
+        "source_wealth", "source_funds", "bank_statements", "aml_policy",
+    }
+    if person_record and person_record.get("person_type") == "intermediary":
+        doc_category = "company"
+        subject_type = "intermediary_company"
+    elif person_record and person_record.get("person_type") in ("director", "ubo"):
+        doc_category = "kyc"
+        subject_type = person_record.get("person_type")
+    else:
+        doc_category = "company" if raw_doc_type in company_doc_types else "kyc"
+        subject_type = "application_company" if doc_category == "company" else "person"
+
+    return {
+        "person_record": person_record,
+        "raw_doc_type": raw_doc_type,
+        "base_doc_type": base_doc_type,
+        "doc_category": doc_category,
+        "subject_type": subject_type,
+    }
+
+
+def build_document_verification_context(db, app, doc):
+    context = resolve_document_subject_context(db, app, doc)
+    person_record = context["person_record"]
+    doc_category = context["doc_category"]
+
+    stored_prescreening = parse_json_field(app.get("prescreening_data") if app else None, {})
+    saved_session_prescreening = load_saved_session_prescreening(db, app) if app else {}
+    prescreening_data = merge_prescreening_sources(stored_prescreening, saved_session_prescreening)
+    if not isinstance(prescreening_data, dict):
+        prescreening_data = {}
+
+    entity_name = app.get("company_name", "") if app else ""
+    person_name = ""
+    directors_list = []
+    ubos_list = []
+
+    if app and context["subject_type"] == "application_company":
+        dir_rows = db.execute("SELECT full_name FROM directors WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
+        directors_list = [r["full_name"] for r in dir_rows if r.get("full_name")]
+        ubo_rows = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
+        ubos_list = [r["full_name"] for r in ubo_rows if r.get("full_name")]
+
+    if person_record and doc_category == "kyc":
+        prescreening_data = dict(prescreening_data)
+        pep_decl = parse_json_field(person_record.get("pep_declaration"), {}) or {}
+        person_name = person_record.get("full_name", "")
+        person_fields = {
+            "full_name": person_name,
+            "date_of_birth": person_record.get("date_of_birth", ""),
+            "nationality": person_record.get("nationality", ""),
+            "residential_address": person_record.get("residential_address", ""),
+            "role": person_record.get("person_type", ""),
+            "source_of_wealth_detail": pep_decl.get("source_of_wealth_detail", ""),
+            "pep_function": pep_decl.get("public_function", ""),
+            "pep_net_worth": pep_decl.get("estimated_assets_usd", ""),
+            "pep_source_of_funds": pep_decl.get("source_of_wealth_detail", ""),
+        }
+        for key, value in person_fields.items():
+            if value not in (None, "", {}, []):
+                prescreening_data[key] = value
+    elif person_record and person_record.get("person_type") == "intermediary":
+        prescreening_data = dict(prescreening_data)
+        entity_name = first_non_empty(person_record.get("entity_name"), person_record.get("full_name"), entity_name)
+        intermediary_fields = {
+            "registered_entity_name": entity_name,
+            "company_name": entity_name,
+            "country_of_incorporation": person_record.get("jurisdiction", ""),
+            "jurisdiction": person_record.get("jurisdiction", ""),
+            "ownership_pct": person_record.get("ownership_pct", ""),
+        }
+        for key, value in intermediary_fields.items():
+            if value not in (None, "", {}, []):
+                prescreening_data[key] = value
+        for key in ("shareholders", "directors", "ubos"):
+            prescreening_data.pop(key, None)
+
+    context.update({
+        "prescreening_data": prescreening_data,
+        "entity_name": entity_name,
+        "person_name": person_name,
+        "directors_list": directors_list,
+        "ubos_list": ubos_list,
+    })
+    return context
+
+
 def resolve_user_display_name(db, user_id):
     if not user_id:
         return ""
@@ -954,6 +1080,7 @@ def init_db():
         sync_ai_checks_from_seed(db)
     except Exception as e:
         logging.error(f"Seed error: {e}", exc_info=True)
+        raise RuntimeError("Verification-critical startup initialization failed") from e
     finally:
         db.close()
 
@@ -2716,70 +2843,16 @@ class DocumentVerifyHandler(BaseHandler):
             except Exception as s3_err:
                 logger.error(f"[verify] doc={doc_id} S3 fallback error: {s3_err}")
 
-        # Get person / entity names for verification cross-checks
-        person_name = ""
-        person_record = None
-        entity_name = app.get("company_name", "") if app else ""
-        if doc.get("person_id"):
-            person_record = resolve_application_person(db, app["id"], doc["person_id"]) if app else None
-            if person_record:
-                person_name = person_record.get("full_name", "")
-
-        # If no person_id, try to resolve person from doc_type suffix (e.g., intermediary_passport_dir1 → 1st director)
-        if not person_name and app:
-            import re as _re2
-            doc_type_raw = doc.get("doc_type", "")
-            dir_match = _re2.search(r'_dir(\d+)$', doc_type_raw)
-            ubo_match = _re2.search(r'_ubo(\d+)$', doc_type_raw)
-            int_match = _re2.search(r'_int(\d+)$', doc_type_raw)
-            if dir_match:
-                idx = int(dir_match.group(1)) - 1  # dir1 = index 0
-                directors = db.execute("SELECT full_name FROM directors WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
-                if 0 <= idx < len(directors):
-                    person_name = directors[idx].get("full_name", "")
-            elif ubo_match:
-                idx = int(ubo_match.group(1)) - 1
-                ubos = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
-                if 0 <= idx < len(ubos):
-                    person_name = ubos[idx].get("full_name", "")
-            elif int_match:
-                idx = int(int_match.group(1)) - 1
-                intermediaries = db.execute("SELECT entity_name FROM intermediaries WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
-                if 0 <= idx < len(intermediaries):
-                    person_name = intermediaries[idx].get("entity_name", "")
-
-        # Determine doc_category based on doc_type
-        # cert_reg retired — removed from company_doc_types (historical records preserved)
-        company_doc_types = ["cert_inc", "memarts", "reg_sh", "reg_dir", "fin_stmt",
-                             "board_res", "structure_chart", "poa", "bankref", "licence",
-                             "contracts", "source_wealth", "source_funds", "bank_statements", "aml_policy"]
-        raw_doc_type = doc.get("doc_type", "general")
-        if person_record and person_record.get("person_type") == "intermediary":
-            doc_category = "company"
-        elif person_record and person_record.get("person_type") in ("director", "ubo"):
-            doc_category = "kyc"
-        else:
-            doc_category = "company" if raw_doc_type in company_doc_types else "kyc"
-
-        # Extract base doc_type (strip intermediary_ prefix and person suffix)
-        base_doc_type = raw_doc_type
-        if base_doc_type.startswith("intermediary_"):
-            base_doc_type = base_doc_type[len("intermediary_"):]
-        # Remove trailing _dir1, _ubo1, etc.
-        import re as _re
-        base_doc_type = _re.sub(r'_(dir|ubo|inter)\d+$', '', base_doc_type)
-
-        # Look up declared directors and UBOs for cross-referencing
-        directors_list = []
-        ubos_list = []
-        if app:
-            dir_rows = db.execute("SELECT full_name FROM directors WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
-            directors_list = [r["full_name"] for r in dir_rows if r.get("full_name")]
-            ubo_rows = db.execute("SELECT full_name FROM ubos WHERE application_id=? ORDER BY id", (app["id"],)).fetchall()
-            ubos_list = [r["full_name"] for r in ubo_rows if r.get("full_name")]
-
-        # For company docs, pass the relevant company entity; for KYC docs, pass person name
-        verify_name = (person_name if person_record and person_record.get("person_type") == "intermediary" else entity_name) if doc_category == "company" else person_name
+        verification_context = build_document_verification_context(db, app, doc)
+        person_record = verification_context["person_record"]
+        raw_doc_type = verification_context["raw_doc_type"]
+        base_doc_type = verification_context["base_doc_type"]
+        doc_category = verification_context["doc_category"]
+        entity_name = verification_context["entity_name"]
+        person_name = verification_context["person_name"]
+        directors_list = verification_context["directors_list"]
+        ubos_list = verification_context["ubos_list"]
+        verify_name = entity_name if doc_category == "company" else person_name
 
         # Diagnostic logging for verification context
         logger.info(
@@ -2807,30 +2880,9 @@ class DocumentVerifyHandler(BaseHandler):
         except Exception as e:
             logger.warning(f"Could not load ai_checks for {base_doc_type}: {e}. Using matrix fallback.")
 
-        # Build prescreening_data and risk_level from application record
-        prescreening_data = safe_json_loads(app.get("prescreening_data") if app else None) or {}
+        # Build effective declared-data context from stored application data + save/resume overlay
+        prescreening_data = verification_context["prescreening_data"]
         risk_level = (app.get("risk_level") or "MEDIUM") if app else "MEDIUM"
-
-        # Inject person-level fields into prescreening_data for person-category verification.
-        # The verification engine uses ps_get() to look up flat keys like full_name, nationality,
-        # date_of_birth — these must come from the resolved person record, not the application blob.
-        if person_record and doc_category == "kyc":
-            prescreening_data = dict(prescreening_data)  # shallow copy — don't mutate original
-            pep_decl = parse_json_field(person_record.get("pep_declaration"), {}) or {}
-            person_fields = {
-                "full_name": person_record.get("full_name", ""),
-                "date_of_birth": person_record.get("date_of_birth", ""),
-                "nationality": person_record.get("nationality", ""),
-                "residential_address": person_record.get("residential_address", ""),
-                "role": person_record.get("person_type", ""),
-                "source_of_wealth_detail": pep_decl.get("source_of_wealth_detail", ""),
-                "pep_function": pep_decl.get("public_function", ""),
-                "pep_net_worth": pep_decl.get("estimated_assets_usd", ""),
-                "pep_source_of_funds": pep_decl.get("source_of_wealth_detail", ""),
-            }
-            for k, v in person_fields.items():
-                if v not in (None, "", {}, []):
-                    prescreening_data[k] = v
 
         # Compute SHA-256 hashes of other documents already uploaded for this application
         # Used by GATE-03 duplicate detection
@@ -2985,15 +3037,23 @@ class DocumentVerifyHandler(BaseHandler):
         elif not verify_name and doc_category == "company":
             system_warning = "entity_context_missing"
 
-        results = json.dumps({
+        layered_results = to_legacy_result(ai_result or {"checks": checks, "overall": status}) if to_legacy_result else {
             "checks": checks,
             "overall": status,
+        }
+        layered_results.update({
+            "overall": status,
+            "checks": checks,
             "ai_source": ai_source,
             "file_source": file_source,
             "system_warning": system_warning,
             "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-            "sanctions_screening": sanctions_result
-        }, default=str)
+            "sanctions_screening": sanctions_result,
+            "doc_category": doc_category,
+            "subject_id": doc.get("person_id") or (app.get("id") if app else ""),
+            "subject_type": verification_context["subject_type"],
+        })
+        results = json.dumps(layered_results, default=str)
 
         db.execute("UPDATE documents SET verification_status=?, verification_results=?, verified_at=datetime('now') WHERE id=?",
                    (status, results, doc_id))
@@ -3016,7 +3076,14 @@ class DocumentVerifyHandler(BaseHandler):
         except Exception as e:
             logger.debug(f"Agent execution logging failed: {e}")
 
-        self.success({"doc_id": doc_id, "status": status, "checks": checks})
+        self.success({
+            "doc_id": doc_id,
+            "status": status,
+            "verification_status": status,
+            "checks": checks,
+            "verification_results": layered_results,
+            "verified_at": layered_results.get("verified_at"),
+        })
 
 
 class DocumentReviewHandler(BaseHandler):
@@ -3188,7 +3255,8 @@ class DocumentAIVerifyHandler(BaseHandler):
                 ],
                 "overall": "flagged",
                 "confidence": 0.0,
-                "ai_source": "unavailable"
+                "ai_source": "unavailable",
+                "authoritative": False,
             })
 
         try:
@@ -3222,6 +3290,7 @@ class DocumentAIVerifyHandler(BaseHandler):
                                      "message": "No verification checks returned — manual review required"}]
                 result["overall"] = "flagged"
 
+            result["authoritative"] = False
             self.success(result)
         except Exception as e:
             logger.error(f"Document AI verification failed: {e}")
