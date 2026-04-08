@@ -4921,6 +4921,7 @@ function triggerRegistryVerification() {
 
 // ─── B. Real-time Identity Verification on Document Upload ────────────────────
 function runRealtimePassportValidation(docId, fileName) {
+  // Deprecated on purpose: portal now renders only persisted backend verification results.
   return;
 }
 
@@ -5022,6 +5023,7 @@ function runRealtimeUBOMappingAnalysis(inputEl) {
 
 // ─── F. Real-time Document Integrity Check ────────────────────
 async function runRealtimeDocumentIntegrityCheck(docId, fileName) {
+  // Deprecated on purpose: portal now renders only persisted backend verification results.
   return;
 }
 
@@ -7256,7 +7258,7 @@ function handleUpload(docId, input) {
       fd.append('file', file);
       fd.append('doc_type', apiDocType);
       var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(apiDocType), fd, true);
-      if (!resp.id) throw new Error('Document upload did not return a persisted document ID.');
+      if (!resp.id) throw new Error('Document upload failed. Please try again or contact support.');
       var verification = await apiCall('POST', '/documents/' + resp.id + '/verify');
       verification.doc_id = verification.doc_id || resp.id;
       verification.doc_name = resp.doc_name || file.name;
@@ -8268,7 +8270,7 @@ function handleKYCUpload(personId, docType, input) {
       if (!r.ok) throw new Error('Upload failed');
       return r.json();
     }).then(function(resp) {
-      if (!resp.id) throw new Error('Document upload did not return a persisted document ID.');
+      if (!resp.id) throw new Error('Document upload failed. Please try again or contact support.');
       return fetch(API_BASE + '/documents/' + resp.id + '/verify', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN, 'Content-Type': 'application/json' }

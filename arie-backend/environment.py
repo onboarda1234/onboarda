@@ -31,6 +31,7 @@ def is_development() -> bool:
 
 
 def is_testing() -> bool:
+    """Returns True when running automated tests with ENVIRONMENT=testing."""
     return ENV == "testing"
 
 def is_demo() -> bool:

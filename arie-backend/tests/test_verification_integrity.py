@@ -533,11 +533,12 @@ class TestTruthfulnessSafeguards:
 
 
 class TestVerificationContextResolution:
-    def test_effective_declared_data_uses_saved_session_backfill(self, db):
+    def test_effective_declared_data_uses_saved_session_backfill(self, temp_db):
         from server import build_document_verification_context
+        from db import get_db
 
-        db.execute("INSERT INTO clients (id, email, password_hash, company_name) VALUES (?, ?, ?, ?)",
-                   ("ctx_client", "ctx@example.com", "hash", "Context Corp"))
+        db = get_db()
+
         db.execute("""
             INSERT INTO applications (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -570,12 +571,14 @@ class TestVerificationContextResolution:
         assert context["prescreening_data"]["registered_entity_name"] == "Overlay Corp"
         assert context["prescreening_data"]["country_of_incorporation"] == "BVI"
         assert context["entity_name"] == "Context Corp"
+        db.close()
 
-    def test_intermediary_company_documents_resolve_intermediary_subject(self, db):
+    def test_intermediary_company_documents_resolve_intermediary_subject(self, temp_db):
         from server import build_document_verification_context
+        from db import get_db
 
-        db.execute("INSERT INTO clients (id, email, password_hash, company_name) VALUES (?, ?, ?, ?)",
-                   ("int_client", "int@example.com", "hash", "Parent Corp"))
+        db = get_db()
+
         db.execute("""
             INSERT INTO applications (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -613,6 +616,7 @@ class TestVerificationContextResolution:
         assert "ubos" not in context["prescreening_data"]
         assert context["directors_list"] == []
         assert context["ubos_list"] == []
+        db.close()
 
 
 class TestPortalAuthoritativeSource:

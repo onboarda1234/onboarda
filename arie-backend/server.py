@@ -544,10 +544,10 @@ def load_saved_session_prescreening(db, app_record) -> dict:
         ).fetchone()
     if not session:
         return {}
-    if hasattr(session, "keys"):
-        form_data = session["form_data"]
-    else:
+    if isinstance(session, dict):
         form_data = session.get("form_data")
+    else:
+        form_data = session["form_data"]
     return normalize_saved_session_prescreening(form_data)
 
 
@@ -1084,7 +1084,10 @@ def init_db():
         sync_ai_checks_from_seed(db)
     except Exception as e:
         logging.error(f"Seed error: {e}", exc_info=True)
-        raise RuntimeError("Verification-critical startup initialization failed") from e
+        raise RuntimeError(
+            "Verification-critical startup initialization failed. "
+            "Check database connectivity and Agent 1 seed/ai_checks data integrity."
+        ) from e
     finally:
         db.close()
 
@@ -3260,6 +3263,7 @@ class DocumentAIVerifyHandler(BaseHandler):
                 "overall": "flagged",
                 "confidence": 0.0,
                 "ai_source": "unavailable",
+                # /api/documents/ai-verify is helper-only; persisted /api/documents/:id/verify stays authoritative.
                 "authoritative": False,
             })
 
@@ -3294,6 +3298,7 @@ class DocumentAIVerifyHandler(BaseHandler):
                                      "message": "No verification checks returned — manual review required"}]
                 result["overall"] = "flagged"
 
+            # /api/documents/ai-verify is helper-only; persisted /api/documents/:id/verify stays authoritative.
             result["authoritative"] = False
             self.success(result)
         except Exception as e:
