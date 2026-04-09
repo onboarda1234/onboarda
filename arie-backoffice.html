@@ -4550,6 +4550,7 @@ function renderAuthoritativeAppDetail(app, options) {
   var psData = app.prescreeningData || {};
   var documentReadiness = computeDocumentReadinessSummary(app);
   currentApp = app;
+  decisionRecordsLoadedFor = null;
   window._currentDetailApp = app;
   currentScreeningReviewFocus = options.screeningFocus || null;
 
@@ -6025,8 +6026,11 @@ function switchDetailTab(tab) {
   if (tab === 'activity') loadDecisionRecords();
 }
 
+var decisionRecordsLoadedFor = null;
+
 async function loadDecisionRecords() {
   if (!currentApp) return;
+  if (decisionRecordsLoadedFor === currentApp.id) return;
   var container = document.getElementById('detail-decision-records');
   if (!container) return;
   container.innerHTML = '<span style="color:var(--text3);">Loading decision records…</span>';
@@ -6051,6 +6055,7 @@ async function loadDecisionRecords() {
     });
     html += '</tbody></table>';
     container.innerHTML = html;
+    decisionRecordsLoadedFor = currentApp.id;
   } catch (err) {
     container.innerHTML = '<span style="color:var(--red);">Failed to load decision records: ' + escapeHtml(err.message || 'Unknown error') + '</span>';
   }
@@ -6157,6 +6162,12 @@ async function confirmDecision() {
 
 var pendingNotificationType = '';
 
+var NOTIF_TYPE_MAP = {
+  'Approve': 'approved',
+  'Reject': 'rejected',
+  'Request Docs': 'documents_required'
+};
+
 function showClientNotificationModal(decision) {
   var templates = {
     'Approve': 'Dear [Company Name],\n\nWe are pleased to inform you that your application for an account with Onboarda has been APPROVED.\n\nYour account will be activated within 24 hours. You will receive separate correspondence with your account details and next steps.\n\nThank you for choosing Onboarda.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind',
@@ -6164,12 +6175,7 @@ function showClientNotificationModal(decision) {
     'EDD': 'Dear [Company Name],\n\nThank you for your application. Our compliance team requires additional documentation to complete our Enhanced Due Diligence review.\n\nPlease provide the following within 10 business days:\n- Enhanced beneficial ownership documentation\n- Bank references\n- Regulatory compliance certifications\n\nPlease reply to this email with the requested documents.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind'
   };
 
-  var notifTypeMap = {
-    'Approve': 'approved',
-    'Reject': 'rejected',
-    'Request Docs': 'documents_required'
-  };
-  pendingNotificationType = notifTypeMap[decision] || 'approved';
+  pendingNotificationType = NOTIF_TYPE_MAP[decision] || 'approved';
 
   document.getElementById('notification-message').value = templates[decision] || 'Dear Client,\\n\\nThank you for your application.\\n\\nBest regards,\\nCompliance Team\\nOnboarda\\nPowered by RegMind';
   document.getElementById('modal-client-notification').classList.add('open');

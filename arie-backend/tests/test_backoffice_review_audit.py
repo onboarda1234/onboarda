@@ -39,7 +39,7 @@ class TestNotificationTypeFrontend:
     def test_notification_type_maps_to_valid_values(self):
         """Frontend maps decisions to backend-valid notification_type values."""
         src = self._read_backoffice()
-        # Check that notifTypeMap exists and maps to valid backend values
+        # Check that NOTIF_TYPE_MAP exists and maps to valid backend values
         assert "'Approve': 'approved'" in src
         assert "'Reject': 'rejected'" in src
         assert "'Request Docs': 'documents_required'" in src
@@ -104,9 +104,8 @@ class TestNotificationClientIdValidation:
         with open(server_path, "r") as f:
             src = f.read()
 
-        # Find the ClientNotificationHandler class
+        # Find the ClientNotificationHandler class and check for client_id validation
         handler_start = src.index("class ClientNotificationHandler")
-        # Look within ~100 lines for client_id validation
         handler_section = src[handler_start:handler_start + 3000]
         assert 'client_id' in handler_section and 'Cannot send notification' in handler_section, (
             "ClientNotificationHandler must validate client_id is present before inserting notification"
@@ -172,7 +171,7 @@ class TestDecisionRecordsDisplay:
     def test_decision_records_renders_table(self):
         """loadDecisionRecords must render decision data in a table."""
         src = self._read_backoffice()
-        func_start = src.index("function loadDecisionRecords()")
+        func_start = src.index("async function loadDecisionRecords()")
         func_section = src[func_start:func_start + 2000]
         assert "Decision" in func_section
         assert "Risk Level" in func_section
