@@ -990,7 +990,6 @@ SECTION_B_CHECKS = {
         "doc_name": "PEP Declaration Form",
         "category": "person",
         "conditional": None,
-        "doc_type_alias": "pep-declaration",
         "checks": [
             _check(
                 id_="DOC-70",

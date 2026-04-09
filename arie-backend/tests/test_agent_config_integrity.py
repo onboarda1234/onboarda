@@ -356,8 +356,8 @@ class TestCheckIDsPresent:
                 assert "id" in check, (
                     f"Check in {row['category']}/{row['doc_type']} missing 'id' field: {check.get('label', 'unknown')}"
                 )
-                assert check["id"].startswith("DOC-") or check["id"].startswith("CERT-"), (
-                    f"Check id should start with DOC- or CERT-: got {check['id']} in {row['doc_type']}"
+                assert check["id"].startswith("DOC-") or check["id"].startswith("CERT-") or check["id"].startswith("LIC-") or check["id"].startswith("GATE-"), (
+                    f"Check id should start with DOC-, CERT-, LIC-, or GATE-: got {check['id']} in {row['doc_type']}"
                 )
         db.close()
 

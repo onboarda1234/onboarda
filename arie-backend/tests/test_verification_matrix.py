@@ -802,3 +802,130 @@ class TestClaudeClientCheckDefinitionAlignment:
         assert "DOC-GEN-01" in source, "verify_document must use DOC-GEN-01 in generic fallback"
         assert "DOC-GEN-02" in source, "verify_document must use DOC-GEN-02 in generic fallback"
         assert "DOC-GEN-03" in source, "verify_document must use DOC-GEN-03 in generic fallback"
+
+
+class TestDbSeedAlignmentWithMatrix:
+    """
+    Prove that the DB seed used by sync_ai_checks_from_seed() is always
+    derived from verification_matrix.build_ai_checks_seed() — no hardcoded drift.
+    """
+
+    def _get_db_seed(self):
+        """Return the seed that sync_ai_checks_from_seed uses."""
+        from db import _SUPPLEMENTARY_AI_CHECKS_SEED
+        from verification_matrix import build_ai_checks_seed
+        return build_ai_checks_seed() + _SUPPLEMENTARY_AI_CHECKS_SEED
+
+    def test_matrix_doc_types_all_present_in_db_seed(self):
+        """Every non-retired matrix entry must be represented in the db seed."""
+        from verification_matrix import build_ai_checks_seed
+        import json
+        seed_entries = {(cat, dt) for cat, dt, _, _ in self._get_db_seed()}
+        for cat, dt, _, _ in build_ai_checks_seed():
+            assert (cat, dt) in seed_entries, \
+                f"Matrix entry {cat}/{dt} missing from DB seed"
+
+    def test_pep_declaration_uses_underscore_in_db_seed(self):
+        """DB seed must use pep_declaration (underscore) not pep-declaration (hyphen)."""
+        doc_types = {dt for _, dt, _, _ in self._get_db_seed()}
+        assert "pep_declaration" in doc_types, \
+            "pep_declaration (underscore) must be in the DB seed"
+        assert "pep-declaration" not in doc_types, \
+            "pep-declaration (hyphen) must NOT be in the DB seed"
+
+    def test_matrix_check_ids_match_db_seed_ids(self):
+        """For every matrix doc type, check IDs in DB seed must exactly match matrix IDs."""
+        import json
+        from verification_matrix import build_ai_checks_seed, ALL_DOC_CHECKS
+
+        matrix_ids = {}
+        for key, entry in ALL_DOC_CHECKS.items():
+            if entry.get("retired"):
+                continue
+            dt = entry.get("doc_type_alias") or key
+            # poa_person maps to 'poa' in db but is identified by matrix key 'poa_person'
+            cat = entry.get("category", "entity")
+            ids = {c["id"] for c in entry.get("checks", [])}
+            matrix_ids[(cat, dt)] = ids
+
+        seed_ids = {}
+        for cat, dt, _, checks_json in build_ai_checks_seed():
+            checks = json.loads(checks_json)
+            seed_ids[(cat, dt)] = {c["id"] for c in checks}
+
+        for key_tuple, expected_ids in matrix_ids.items():
+            if not expected_ids:
+                continue  # skip retired/empty
+            assert key_tuple in seed_ids, \
+                f"Matrix entry {key_tuple} missing from build_ai_checks_seed()"
+            actual_ids = seed_ids[key_tuple]
+            missing = expected_ids - actual_ids
+            extra = actual_ids - expected_ids
+            assert not missing, \
+                f"{key_tuple}: check IDs in seed missing from matrix: {missing}"
+            assert not extra, \
+                f"{key_tuple}: extra check IDs in seed not in matrix: {extra}"
+
+    def test_db_seed_passport_uses_canonical_ids(self):
+        """Regression: passport must use DOC-49/49A/50/51/52 not old DOC-48/62/63."""
+        import json
+        seed = {(c, dt): json.loads(ch) for c, dt, _, ch in self._get_db_seed()}
+        passport_checks = seed.get(("person", "passport"), [])
+        passport_ids = {c["id"] for c in passport_checks}
+        # Old wrong IDs that must NOT be present
+        old_wrong = {"DOC-48", "DOC-62", "DOC-63"}
+        assert not (passport_ids & old_wrong), \
+            f"Passport seed contains old wrong IDs: {passport_ids & old_wrong}"
+        # Canonical IDs that must be present
+        canonical = {"DOC-49", "DOC-49A", "DOC-50", "DOC-51", "DOC-52"}
+        assert canonical.issubset(passport_ids), \
+            f"Passport seed missing canonical IDs: {canonical - passport_ids}"
+
+    def test_db_seed_cert_inc_uses_canonical_ids(self):
+        """Regression: cert_inc must use DOC-06A/07/07A not old DOC-11/12."""
+        import json
+        seed = {(c, dt): json.loads(ch) for c, dt, _, ch in self._get_db_seed()}
+        cert_checks = seed.get(("entity", "cert_inc"), [])
+        cert_ids = {c["id"] for c in cert_checks}
+        old_wrong = {"DOC-11", "DOC-12"}
+        assert not (cert_ids & old_wrong), \
+            f"cert_inc seed contains old wrong IDs: {cert_ids & old_wrong}"
+        canonical = {"DOC-06A", "DOC-07", "DOC-07A"}
+        assert canonical.issubset(cert_ids), \
+            f"cert_inc seed missing canonical IDs: {canonical - cert_ids}"
+
+    def test_no_id_conflicts_within_same_doc_type(self):
+        """Each doc_type/category pair must have unique check IDs."""
+        import json
+        for cat, dt, doc_name, checks_json in self._get_db_seed():
+            checks = json.loads(checks_json)
+            ids = [c["id"] for c in checks]
+            assert len(ids) == len(set(ids)), \
+                f"Duplicate check IDs within {cat}/{dt}: {[i for i in ids if ids.count(i) > 1]}"
+
+    def test_db_init_seeds_pep_declaration_not_hyphenated(self):
+        """After sync_ai_checks_from_seed(), ai_checks must have pep_declaration not pep-declaration."""
+        import sqlite3, json
+        from db import DBConnection, sync_ai_checks_from_seed
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE ai_checks ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "category TEXT NOT NULL, "
+            "doc_type TEXT NOT NULL, "
+            "doc_name TEXT, "
+            "checks TEXT DEFAULT '[]', "
+            "updated_at TEXT DEFAULT (datetime('now')), "
+            "UNIQUE(doc_type, category))"
+        )
+        conn.commit()
+        db = DBConnection(conn, is_postgres=False)
+        sync_ai_checks_from_seed(db)
+        rows = conn.execute("SELECT doc_type FROM ai_checks WHERE category='person'").fetchall()
+        doc_types = {r[0] for r in rows}
+        assert "pep_declaration" in doc_types, \
+            "pep_declaration must be seeded into ai_checks"
+        assert "pep-declaration" not in doc_types, \
+            "pep-declaration (hyphen) must not be in ai_checks after sync"
+        conn.close()
