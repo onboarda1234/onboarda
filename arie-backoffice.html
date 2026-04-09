@@ -4628,6 +4628,13 @@ function renderAuthoritativeAppDetail(app, options) {
     { label: 'Country of Incorporation', value: detailValueFromAliases(psData, ['country_of_incorporation', 'country']) },
     { label: 'Registration / BRN', value: detailValueFromAliases(psData, ['brn', 'registration_number', 'incorporation_number']) },
     { label: 'Website', value: detailValueFromAliases(psData, ['website']) },
+    { label: 'Authorised Share Capital', value: (function() {
+        var v = detailValueFromAliases(psData, ['authorised_share_capital']);
+        if (!v) return '';
+        var n = Number(String(v).replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(n) ? n.toLocaleString() : v;
+      })()
+    },
     // ── Licences ──
     { label: 'Licensed', value: psData.is_licensed === true ? 'Yes' : psData.is_licensed === false ? 'No' : (psData.has_licence === true ? 'Yes' : psData.has_licence === false ? 'No' : '') },
     { label: 'Licences', value: detailValueFromAliases(psData, ['regulatory_licences', 'licenses', 'licences']) },

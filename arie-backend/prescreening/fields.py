@@ -49,6 +49,7 @@ SESSION_PRESCREENING_FIELD_MAP = {
     "f-mgmt": "management_overview",
     "f-intro-method": "introduction_method",
     "f-referrer-name": "referrer_name",
+    "f-authorised-share-capital": "authorised_share_capital",
 }
 
 

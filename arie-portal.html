@@ -2274,81 +2274,6 @@
               <label>Country of Incorporation <span class="req">*</span></label>
               <select id="f-inc-country" required onchange="checkSanctionedCountry(this)">
                 <option value="">Select country…</option>
-                <option>Afghanistan</option><option>Albania</option><option>Algeria</option>
-                <option>Andorra</option><option>Angola</option><option>Antigua and Barbuda</option>
-                <option>Argentina</option><option>Armenia</option><option>Australia</option>
-                <option>Austria</option><option>Azerbaijan</option><option>Bahamas</option>
-                <option>Bahrain</option><option>Bangladesh</option><option>Barbados</option>
-                <option>Belarus</option><option>Belgium</option><option>Belize</option>
-                <option>Benin</option><option>Bhutan</option><option>Bolivia</option>
-                <option>Bosnia and Herzegovina</option><option>Botswana</option><option>Brazil</option>
-                <option>Brunei</option><option>Bulgaria</option><option>Burkina Faso</option>
-                <option>Burundi</option><option>Cabo Verde</option><option>Cambodia</option>
-                <option>Cameroon</option><option>Canada</option><option>Central African Republic</option>
-                <option>Chad</option><option>Chile</option><option>China</option>
-                <option>Colombia</option><option>Comoros</option><option>Congo (Brazzaville)</option>
-                <option>Congo (DRC)</option><option>Costa Rica</option><option>Croatia</option>
-                <option>Cuba</option><option>Cyprus</option><option>Czech Republic</option>
-                <option>Denmark</option><option>Djibouti</option><option>Dominica</option>
-                <option>Dominican Republic</option><option>Ecuador</option><option>Egypt</option>
-                <option>El Salvador</option><option>Equatorial Guinea</option><option>Eritrea</option>
-                <option>Estonia</option><option>Eswatini</option><option>Ethiopia</option>
-                <option>Fiji</option><option>Finland</option><option>France</option>
-                <option>Gabon</option><option>Gambia</option><option>Georgia</option>
-                <option>Germany</option><option>Ghana</option><option>Greece</option>
-                <option>Grenada</option><option>Guatemala</option><option>Guinea</option>
-                <option>Guinea-Bissau</option><option>Guyana</option><option>Haiti</option>
-                <option>Honduras</option><option>Hong Kong SAR</option><option>Hungary</option>
-                <option>Iceland</option><option>India</option><option>Indonesia</option>
-                <option>Iran</option><option>Iraq</option><option>Ireland</option>
-                <option>Israel</option><option>Italy</option><option>Jamaica</option>
-                <option>Japan</option><option>Jordan</option><option>Kazakhstan</option>
-                <option>Kenya</option><option>Kiribati</option><option>Kuwait</option>
-                <option>Kyrgyzstan</option><option>Laos</option><option>Latvia</option>
-                <option>Lebanon</option><option>Lesotho</option><option>Liberia</option>
-                <option>Libya</option><option>Liechtenstein</option><option>Lithuania</option>
-                <option>Luxembourg</option><option>Madagascar</option><option>Malawi</option>
-                <option>Malaysia</option><option>Maldives</option><option>Mali</option>
-                <option>Malta</option><option>Marshall Islands</option><option>Mauritania</option>
-                <option>Mauritius</option><option>Mexico</option><option>Micronesia</option>
-                <option>Moldova</option><option>Monaco</option><option>Mongolia</option>
-                <option>Montenegro</option><option>Morocco</option><option>Mozambique</option>
-                <option>Myanmar</option><option>Namibia</option><option>Nauru</option>
-                <option>Nepal</option><option>Netherlands</option><option>New Zealand</option>
-                <option>Nicaragua</option><option>Niger</option><option>Nigeria</option>
-                <option>North Korea</option><option>North Macedonia</option><option>Norway</option>
-                <option>Oman</option><option>Pakistan</option><option>Palau</option>
-                <option>Panama</option><option>Papua New Guinea</option><option>Paraguay</option>
-                <option>Peru</option><option>Philippines</option><option>Poland</option>
-                <option>Portugal</option><option>Qatar</option><option>Romania</option>
-                <option>Russia</option><option>Rwanda</option><option>Saint Kitts and Nevis</option>
-                <option>Saint Lucia</option><option>Saint Vincent and the Grenadines</option>
-                <option>Samoa</option><option>San Marino</option><option>Sao Tome and Principe</option>
-                <option>Saudi Arabia</option><option>Senegal</option><option>Serbia</option>
-                <option>Seychelles</option><option>Sierra Leone</option><option>Singapore</option>
-                <option>Slovakia</option><option>Slovenia</option><option>Solomon Islands</option>
-                <option>Somalia</option><option>South Africa</option><option>South Korea</option>
-                <option>South Sudan</option><option>Spain</option><option>Sri Lanka</option>
-                <option>Sudan</option><option>Suriname</option><option>Sweden</option>
-                <option>Switzerland</option><option>Syria</option><option>Taiwan</option>
-                <option>Tajikistan</option><option>Tanzania</option><option>Thailand</option>
-                <option>Timor-Leste</option><option>Togo</option><option>Tonga</option>
-                <option>Trinidad and Tobago</option><option>Tunisia</option><option>Turkey</option>
-                <option>Turkmenistan</option><option>Tuvalu</option><option>Uganda</option>
-                <option>Ukraine</option><option>United Arab Emirates</option>
-                <option>United Kingdom</option><option>United States</option>
-                <option>Uruguay</option><option>Uzbekistan</option><option>Vanuatu</option>
-                <option>Vatican City</option><option>Venezuela</option><option>Vietnam</option>
-                <option>Yemen</option><option>Zambia</option><option>Zimbabwe</option>
-                <optgroup label="── Territories / Offshore ──">
-                <option>British Virgin Islands</option><option>Cayman Islands</option>
-                <option>Bermuda</option><option>Gibraltar</option><option>Isle of Man</option>
-                <option>Jersey</option><option>Guernsey</option><option>Liechtenstein</option>
-                <option>Andorra</option><option>Turks and Caicos Islands</option>
-                <option>Anguilla</option><option>Belize (Offshore)</option>
-                <option>Marshall Islands</option><option>Labuan (Malaysia)</option>
-                <option>Vanuatu</option>
-                </optgroup>
               </select>
             </div>
             <div class="form-group">
@@ -2357,7 +2282,7 @@
             </div>
             <div class="form-group">
               <label>Authorised Share Capital</label>
-              <input type="text" id="f-authorised-share-capital" placeholder="e.g. 100,000 USD" />
+              <input type="text" inputmode="numeric" id="f-authorised-share-capital" placeholder="e.g. 100,000" oninput="formatCurrencyInput(this)" />
             </div>
 
             <div class="form-group span-3">
@@ -2809,21 +2734,21 @@
               <tbody>
                 <tr>
                   <td style="padding:8px 10px;color:var(--text2);font-size:12px;">Revenue (USD)</td>
-                  <td><input type="text" inputmode="numeric" id="f-rev1" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
-                  <td><input type="text" inputmode="numeric" id="f-rev2" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
-                  <td><input type="text" inputmode="numeric" id="f-rev3" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-rev1" placeholder="0" oninput="formatCurrencyInput(this); updateProfitRow();" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-rev2" placeholder="0" oninput="formatCurrencyInput(this); updateProfitRow();" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-rev3" placeholder="0" oninput="formatCurrencyInput(this); updateProfitRow();" /></td>
                 </tr>
                 <tr>
                   <td style="padding:8px 10px;color:var(--text2);font-size:12px;">Cost of Sales (USD)</td>
-                  <td><input type="text" inputmode="numeric" id="f-cos1" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
-                  <td><input type="text" inputmode="numeric" id="f-cos2" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
-                  <td><input type="text" inputmode="numeric" id="f-cos3" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-cos1" placeholder="0" oninput="formatCurrencyInput(this); updateProfitRow();" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-cos2" placeholder="0" oninput="formatCurrencyInput(this); updateProfitRow();" /></td>
+                  <td><input type="text" inputmode="numeric" id="f-cos3" placeholder="0" oninput="formatCurrencyInput(this); updateProfitRow();" /></td>
                 </tr>
                 <tr>
                   <td style="padding:8px 10px;color:var(--text2);font-size:12px;">Profit (USD)</td>
-                  <td><input type="text" inputmode="numeric" id="f-profit1" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
-                  <td><input type="text" inputmode="numeric" id="f-profit2" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
-                  <td><input type="text" inputmode="numeric" id="f-profit3" placeholder="0" oninput="formatCurrencyInput(this)" /></td>
+                  <td><input type="text" id="f-profit1" placeholder="0" readonly tabindex="-1" style="background:#f5f5f5;color:var(--text2);" /></td>
+                  <td><input type="text" id="f-profit2" placeholder="0" readonly tabindex="-1" style="background:#f5f5f5;color:var(--text2);" /></td>
+                  <td><input type="text" id="f-profit3" placeholder="0" readonly tabindex="-1" style="background:#f5f5f5;color:var(--text2);" /></td>
                 </tr>
               </tbody>
             </table>
@@ -4751,7 +4676,8 @@ var PRESCREENING_FIELD_BINDINGS = {
   'f-source-ongoing': 'source_of_funds_ongoing_detail',
   'f-mgmt': 'management_overview',
   'f-intro-method': 'introduction_method',
-  'f-referrer-name': 'referrer_name'
+  'f-referrer-name': 'referrer_name',
+  'f-authorised-share-capital': 'authorised_share_capital'
 };
 
 function isCompanyLicensed() {
@@ -5147,6 +5073,24 @@ function getCurrencyFieldValue(id) {
   var el = document.getElementById(id);
   if (!el) return '';
   return (el.value || '').replace(/,/g, '').trim();
+}
+
+// ─── Auto-compute Profit = Revenue - Cost of Sales ─────────
+function updateProfitRow() {
+  for (var yr = 1; yr <= 3; yr++) {
+    var revRaw = getCurrencyFieldValue('f-rev' + yr);
+    var cosRaw = getCurrencyFieldValue('f-cos' + yr);
+    var rev = revRaw === '' ? 0 : Number(revRaw);
+    var cos = cosRaw === '' ? 0 : Number(cosRaw);
+    var profitEl = document.getElementById('f-profit' + yr);
+    if (!profitEl) continue;
+    if (revRaw === '' && cosRaw === '') {
+      profitEl.value = '';
+    } else {
+      var profit = (Number.isFinite(rev) ? rev : 0) - (Number.isFinite(cos) ? cos : 0);
+      profitEl.value = profit.toLocaleString('en-US');
+    }
+  }
 }
 
 // ─── A. Real-time Registry Verification ────────────────────
@@ -5888,7 +5832,7 @@ async function submitPrescreening(e) {
       licence_number: licensed ? getFieldValue('f-licence-number') : '',
       licence_authority: licensed ? getFieldValue('f-licence-authority') : '',
       licence_type: licensed ? getFieldValue('f-licence-type') : '',
-      authorised_share_capital: getFieldValue('f-authorised-share-capital'),
+      authorised_share_capital: getCurrencyFieldValue('f-authorised-share-capital'),
       services_required: getCheckboxValues('service-grid'),
       monthly_volume: getFieldValue('f-monthly-volume'),
       expected_volume: getFieldValue('f-monthly-volume'),
@@ -6875,6 +6819,13 @@ function restoreDraftFromData(data) {
     }
     syncConditionalFormState();
 
+    // Recalculate auto-computed profit from restored revenue/cost values
+    if (typeof updateProfitRow === 'function') updateProfitRow();
+
+    // Format restored share capital value with commas
+    var scEl = document.getElementById('f-authorised-share-capital');
+    if (scEl && scEl.value) formatCurrencyInput(scEl);
+
     // Mark uploaded docs visually
     uploadedDocs.forEach(function(docId) {
       var item = document.getElementById(docId);
@@ -7837,6 +7788,9 @@ const ALL_COUNTRIES = [
   'Trinidad and Tobago','Tunisia','Turkey','Turkmenistan','Tuvalu','Uganda','Ukraine',
   'United Arab Emirates','United Kingdom','United States','Uruguay','Uzbekistan','Vanuatu',
   'Vatican City','Venezuela','Vietnam','Yemen','Zambia','Zimbabwe',
+  '── Territories / Offshore ──',
+  'Anguilla','Belize (Offshore)','Bermuda','British Virgin Islands','Cayman Islands',
+  'Gibraltar','Guernsey','Isle of Man','Jersey','Labuan (Malaysia)','Turks and Caicos Islands',
   '── Regions ──',
   'Africa','East Africa','West Africa','Southern Africa','North Africa',
   'Middle East','Gulf Region (GCC)','Asia Pacific','Southeast Asia','South Asia',
@@ -7992,6 +7946,7 @@ document.addEventListener('DOMContentLoaded', () => {
   populateNationalitySelects();
   setDobMaxToday();
   populateLookupCountry();
+  populateIncCountry();
   syncConditionalFormState();
   // Set incorporation date max to today
   var incDateEl = document.getElementById('f-inc-date');
@@ -8014,6 +7969,24 @@ function populateLookupCountry() {
   const sel = document.getElementById('lu-country');
   if (!sel) return;
   ALL_COUNTRIES.forEach(c => {
+    const opt = document.createElement('option');
+    if (c.startsWith('──')) {
+      opt.disabled = true; opt.textContent = c; opt.style.color = '#999';
+    } else {
+      opt.value = c; opt.textContent = c;
+    }
+    sel.appendChild(opt);
+  });
+}
+
+// ─── Populate Country of Incorporation dropdown from ALL_COUNTRIES ──
+function populateIncCountry() {
+  const sel = document.getElementById('f-inc-country');
+  if (!sel || sel.options.length > 1) return;
+  // Filter: include individual countries and territories, exclude region-only entries
+  const regionsIdx = ALL_COUNTRIES.indexOf('── Regions ──');
+  ALL_COUNTRIES.forEach((c, i) => {
+    if (regionsIdx >= 0 && i >= regionsIdx) return; // skip regions section
     const opt = document.createElement('option');
     if (c.startsWith('──')) {
       opt.disabled = true; opt.textContent = c; opt.style.color = '#999';

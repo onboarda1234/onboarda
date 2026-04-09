@@ -352,6 +352,61 @@ def _project_compatibility_aliases(merged, canonical):
     return merged
 
 
+def _safe_number(val):
+    """Convert a value to float, stripping commas and whitespace. Returns None on failure."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        import re
+        cleaned = re.sub(r"[^\d.\-]", "", val.strip())
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _derive_financial_forecast_profit(merged):
+    """Ensure financial_forecast.profit is derived from revenue - cost_of_sales."""
+    forecast = merged.get("financial_forecast")
+    if not isinstance(forecast, dict):
+        return
+    revenue = forecast.get("revenue") or {}
+    cost = forecast.get("cost_of_sales") or {}
+    if not isinstance(revenue, dict) and not isinstance(cost, dict):
+        return
+    if not isinstance(revenue, dict):
+        revenue = {}
+    if not isinstance(cost, dict):
+        cost = {}
+    profit = {}
+    for year_key in ("year_1", "year_2", "year_3"):
+        rev_val = _safe_number(revenue.get(year_key))
+        cos_val = _safe_number(cost.get(year_key))
+        if rev_val is not None or cos_val is not None:
+            profit[year_key] = (rev_val or 0) - (cos_val or 0)
+    # Only overwrite profit if we have at least revenue or cost data
+    if profit:
+        forecast["profit"] = profit
+    merged["financial_forecast"] = forecast
+
+
+def _normalize_share_capital(merged):
+    """Normalize authorised_share_capital to a plain numeric string for consistency."""
+    raw = merged.get("authorised_share_capital")
+    if raw is None:
+        return
+    val = _safe_number(raw)
+    if val is not None:
+        # Store as integer string if it's a whole number, otherwise keep decimals
+        merged["authorised_share_capital"] = str(int(val)) if val == int(val) else str(val)
+    # If the value is a non-numeric string (legacy data), preserve it as-is
+
+
 def normalize_prescreening_data(data, existing=None):
     merged = {}
     current = safe_json_loads(existing)
@@ -401,6 +456,12 @@ def normalize_prescreening_data(data, existing=None):
         merged["intermediaries"] = _copy_list(payload.get("intermediaries"))
     if payload.get("intermediary_shareholders") is not None:
         merged["intermediary_shareholders"] = _copy_list(payload.get("intermediary_shareholders"))
+
+    # ── Derive profit from revenue and cost_of_sales in financial_forecast ──
+    _derive_financial_forecast_profit(merged)
+
+    # ── Normalize authorised_share_capital to plain numeric string ──
+    _normalize_share_capital(merged)
 
     canonical = _populate_canonical(merged)
     return _project_compatibility_aliases(merged, canonical)
