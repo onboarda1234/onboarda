@@ -1256,6 +1256,10 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 
   <!-- Tab: Activity Log (hidden by default) -->
   <div id="detail-tab-activity" style="display:none;">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-title" style="margin-bottom:12px;">📜 Decision History</div>
+      <div id="detail-decision-records" style="font-size:13px;color:var(--text3);">Loading decision records…</div>
+    </div>
     <div class="card">
       <div class="card-title" style="margin-bottom:12px;">Activity Log</div>
       <div id="detail-activity"></div>
@@ -6018,6 +6022,38 @@ function switchDetailTab(tab) {
     }
   });
   if (tab === 'supervisor') loadSupervisorForApp();
+  if (tab === 'activity') loadDecisionRecords();
+}
+
+async function loadDecisionRecords() {
+  if (!currentApp) return;
+  var container = document.getElementById('detail-decision-records');
+  if (!container) return;
+  container.innerHTML = '<span style="color:var(--text3);">Loading decision records…</span>';
+  try {
+    var resp = await boApiCall('GET', '/applications/' + currentApp.id + '/decision-records');
+    var records = (resp && resp.records) || [];
+    if (!records.length) {
+      container.innerHTML = '<span style="color:var(--text3);">No decision records found for this application.</span>';
+      return;
+    }
+    var html = '<table class="data-table" style="width:100%;"><thead><tr>' +
+      '<th>Date</th><th>Decision</th><th>Risk Level</th><th>Source</th><th>Actor</th><th>Flags</th><th>Override</th>' +
+      '</tr></thead><tbody>';
+    records.forEach(function(r) {
+      var ts = r.timestamp ? r.timestamp.replace('T', ' ').slice(0, 16) : '—';
+      var decisionBadge = statusBadge(r.decision_type || '—');
+      var riskBadge = r.risk_level ? ('<span class="badge ' + (r.risk_level || '').toLowerCase() + '">' + escapeHtml(r.risk_level) + '</span>') : '—';
+      var actor = r.actor ? escapeHtml((r.actor.role || '') + (r.actor.user_id ? ' (' + r.actor.user_id + ')' : '')) : '—';
+      var flags = (r.key_flags && r.key_flags.length) ? r.key_flags.map(function(f) { return '<span class="badge" style="font-size:10px;margin:1px;">' + escapeHtml(f) + '</span>'; }).join(' ') : '—';
+      var override = r.override_flag ? ('⚠️ ' + escapeHtml(r.override_reason || 'Yes')) : '—';
+      html += '<tr><td>' + escapeHtml(ts) + '</td><td>' + decisionBadge + '</td><td>' + riskBadge + '</td><td>' + escapeHtml(r.source || '—') + '</td><td>' + actor + '</td><td>' + flags + '</td><td>' + override + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = '<span style="color:var(--red);">Failed to load decision records: ' + escapeHtml(err.message || 'Unknown error') + '</span>';
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -6119,12 +6155,21 @@ async function confirmDecision() {
   }
 }
 
+var pendingNotificationType = '';
+
 function showClientNotificationModal(decision) {
   var templates = {
     'Approve': 'Dear [Company Name],\n\nWe are pleased to inform you that your application for an account with Onboarda has been APPROVED.\n\nYour account will be activated within 24 hours. You will receive separate correspondence with your account details and next steps.\n\nThank you for choosing Onboarda.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind',
     'Reject': 'Dear [Company Name],\n\nAfter careful review of your application, we regret to inform you that we are unable to proceed at this time.\n\nThis decision is final and based on our risk assessment and compliance requirements. Should you have any questions, please contact our compliance department.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind',
     'EDD': 'Dear [Company Name],\n\nThank you for your application. Our compliance team requires additional documentation to complete our Enhanced Due Diligence review.\n\nPlease provide the following within 10 business days:\n- Enhanced beneficial ownership documentation\n- Bank references\n- Regulatory compliance certifications\n\nPlease reply to this email with the requested documents.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind'
   };
+
+  var notifTypeMap = {
+    'Approve': 'approved',
+    'Reject': 'rejected',
+    'Request Docs': 'documents_required'
+  };
+  pendingNotificationType = notifTypeMap[decision] || 'approved';
 
   document.getElementById('notification-message').value = templates[decision] || 'Dear Client,\\n\\nThank you for your application.\\n\\nBest regards,\\nCompliance Team\\nOnboarda\\nPowered by RegMind';
   document.getElementById('modal-client-notification').classList.add('open');
@@ -6140,7 +6185,7 @@ async function sendClientNotification() {
   try {
     await boApiCall('POST', '/applications/' + currentApp.id + '/notify', {
       message: message,
-      notification_type: 'officer_message'
+      notification_type: pendingNotificationType || 'approved'
     });
     closeModal('modal-client-notification');
     showToast('Client notification sent for ' + currentApp.ref);
@@ -7568,7 +7613,9 @@ function renderAgentsPipeline() {
               '<option' + (agent.stage==='Screening'?' selected':'') + '>Screening</option>' +
               '<option' + (agent.stage==='Risk Scoring'?' selected':'') + '>Risk Scoring</option>' +
               '<option' + (agent.stage==='Post-Scoring'?' selected':'') + '>Post-Scoring</option>' +
+              '<option' + (agent.stage==='Onboarding'?' selected':'') + '>Onboarding</option>' +
               '<option' + (agent.stage==='Post-Approval'?' selected':'') + '>Post-Approval</option>' +
+              '<option' + (agent.stage==='Monitoring'?' selected':'') + '>Monitoring</option>' +
             '</select></div>' +
           '<div class="form-group" style="width:60px;margin-bottom:0;"><div class="form-label">Icon</div><input class="form-input agent-icon-input" value="' + agent.icon + '" data-agent="' + ai + '" style="text-align:center;font-size:18px;" /></div>' +
         '</div>' +

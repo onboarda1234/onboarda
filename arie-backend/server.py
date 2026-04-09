@@ -7238,6 +7238,10 @@ class ClientNotificationHandler(BaseHandler):
             db.close()
             return self.error("message is required", 400)
 
+        if not app.get("client_id"):
+            db.close()
+            return self.error("Cannot send notification: no client associated with this application", 400)
+
         # Create notification
         title_map = {
             "approved": "Application Approved",
