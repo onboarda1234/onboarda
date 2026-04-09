@@ -162,17 +162,25 @@ class TestDuplicateCheckIntegration(unittest.TestCase):
     """Integration tests using a real database to verify duplicate check logic."""
 
     def setUp(self):
-        """Create a temporary database with schema."""
+        """Create a temporary database with minimal schema."""
         import tempfile
-        self.db_path = os.path.join(tempfile.gettempdir(), f"dup_test_{os.getpid()}_{uuid.uuid4().hex[:6]}.db")
-        os.environ["DB_PATH"] = self.db_path
-        # Remove stale DB
-        try:
-            os.unlink(self.db_path)
-        except OSError:
-            pass
-        from db import init_db
-        init_db()
+        self.db_path = os.path.join(tempfile.gettempdir(), f"dup_test_{uuid.uuid4().hex}.db")
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS applications (
+                id TEXT PRIMARY KEY,
+                ref TEXT UNIQUE NOT NULL,
+                client_id TEXT,
+                company_name TEXT NOT NULL,
+                country TEXT,
+                sector TEXT,
+                entity_type TEXT,
+                status TEXT DEFAULT 'draft'
+            )
+        """)
+        conn.commit()
+        conn.close()
 
     def tearDown(self):
         try:
@@ -181,8 +189,9 @@ class TestDuplicateCheckIntegration(unittest.TestCase):
             pass
 
     def _get_db(self):
-        from db import get_db
-        return get_db()
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
 
     def _insert_app(self, db, app_id, ref, client_id, company_name, status="draft"):
         db.execute("""
@@ -206,7 +215,7 @@ class TestDuplicateCheckIntegration(unittest.TestCase):
         ).fetchall()
         dup = next((e for e in existing
                      if re.sub(r'\s+', ' ', (e['company_name'] or '').strip()).lower() == normalized_name
-                     and e['id'] != None), None)  # No exclusion
+                     and e['id'] is not None), None)  # No exclusion
         db.close()
         assert dup is not None, "True duplicate must be detected"
         assert dup['ref'] == "ARF-2026-001"
@@ -282,7 +291,7 @@ class TestDuplicateCheckIntegration(unittest.TestCase):
         ).fetchall()
         dup = next((e for e in existing
                      if re.sub(r'\s+', ' ', (e['company_name'] or '').strip()).lower() == normalized_name
-                     and e['id'] != None), None)
+                     and e['id'] is not None), None)
         db.close()
         assert dup is not None, "Case-insensitive duplicate must be detected"
 
@@ -300,7 +309,7 @@ class TestDuplicateCheckIntegration(unittest.TestCase):
         ).fetchall()
         dup = next((e for e in existing
                      if re.sub(r'\s+', ' ', (e['company_name'] or '').strip()).lower() == normalized_name
-                     and e['id'] != None), None)
+                     and e['id'] is not None), None)
         db.close()
         assert dup is not None, "Whitespace-normalized duplicate must be detected"
 
