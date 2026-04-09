@@ -3228,7 +3228,7 @@ _SUPPLEMENTARY_AI_CHECKS_SEED = [
          "rule": "Must cover a recent period (within last 6 months). PASS if within 6 months. WARN if 6-12 months. FAIL if older than 12 months."},
         {"id": "DOC-47", "label": "Name Match", "type": "name", "classification": "rule",
          "rule": "Account holder name must match the declared entity or person. PASS if names match exactly or fuzzy match > 90%. WARN if fuzzy match 70-90%. FAIL if < 70% or missing."},
-        {"id": "DOC-48B", "label": "Completeness", "type": "quality", "classification": "rule",
+        {"id": "DOC-74", "label": "Completeness", "type": "quality", "classification": "rule",
          "rule": "All pages must be present. PASS if complete. WARN if minor pages missing. FAIL if key pages missing."},
     ])),
 ]

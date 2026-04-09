@@ -843,7 +843,9 @@ class TestDbSeedAlignmentWithMatrix:
             if entry.get("retired"):
                 continue
             dt = entry.get("doc_type_alias") or key
-            # poa_person maps to 'poa' in db but is identified by matrix key 'poa_person'
+            # doc_type_alias maps matrix keys to their DB storage alias (e.g. poa_person→poa).
+            # pep_declaration no longer has a doc_type_alias (removed in this PR);
+            # other aliases (poa_person→poa, bankref_pep→bankref) are still valid.
             cat = entry.get("category", "entity")
             ids = {c["id"] for c in entry.get("checks", [])}
             matrix_ids[(cat, dt)] = ids
