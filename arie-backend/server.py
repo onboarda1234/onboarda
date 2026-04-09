@@ -5072,7 +5072,7 @@ class ApplicationAuditLogHandler(BaseHandler):
             db.close()
             return self.error("Application not found", 404)
         limit = min(int(self.get_argument("limit", "200")), 500)
-        offset = int(self.get_argument("offset", "0"))
+        offset = max(0, int(self.get_argument("offset", "0")))
         rows = db.execute(
             "SELECT * FROM audit_log WHERE target = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
             (app["ref"], limit, offset)
@@ -6544,7 +6544,7 @@ class ComplianceMemoHandler(BaseHandler):
         app["expected_volume"] = ps.get("expected_volume") or ps.get("monthly_volume", "")
         # Enrich with operating countries and incorporation date for memo narrative
         app["operating_countries"] = ps.get("operating_countries") or ps.get("countries_of_operation") or ps.get("target_markets") or ""
-        app["incorporation_date"] = ps.get("incorporation_date") or app.get("incorporation_date") or ""
+        app["incorporation_date"] = ps.get("incorporation_date") or ""
         app["business_activity"] = ps.get("business_activity") or ps.get("business_description") or ""
 
         # Build compliance memo (pure computation — extracted to memo_handler.py)
