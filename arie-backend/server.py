@@ -1842,9 +1842,17 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_dict.pop("memo_data", None)
             result["latest_memo"] = latest_memo_dict
             result["latest_memo_data"] = latest_memo_data
+            # Memo staleness detection: compare memo creation vs application last update
+            memo_created = latest_memo_dict.get("created_at", "")
+            app_updated = result.get("updated_at", "")
+            if memo_created and app_updated:
+                result["memo_is_stale"] = str(app_updated) > str(memo_created)
+            else:
+                result["memo_is_stale"] = False
         else:
             result["latest_memo"] = None
             result["latest_memo_data"] = None
+            result["memo_is_stale"] = False
         db.close()
 
         self.success(result)
@@ -2124,13 +2132,20 @@ class ApplicationDetailHandler(BaseHandler):
             if new_status in ("approved", "rejected"):
                 db.execute("UPDATE applications SET decided_at=datetime('now'), decision_by=?, decision_notes=? WHERE id=?",
                            (user["sub"], data.get("notes",""), real_id))
-            self.log_audit(user, new_status.replace("_"," ").title(), app["ref"], f"Status → {new_status}", db=db)
+            self.log_audit(user, "Status Change", app["ref"],
+                           f"Status: {current_status} → {new_status}", db=db)
 
-        # Handle assignment
+        # Handle assignment — only admin, sco, co can reassign
         if "assigned_to" in data:
+            if user.get("role") not in ("admin", "sco", "co"):
+                db.close()
+                return self.error("Only Admin, Senior Compliance Officer, or Compliance Officer can reassign applications", 403)
+            old_assigned = app.get("assigned_to") or "Unassigned"
+            new_assigned = data["assigned_to"] or "Unassigned"
             db.execute("UPDATE applications SET assigned_to=?, updated_at=datetime('now') WHERE id=?",
                        (data["assigned_to"], real_id))
-            self.log_audit(user, "Assign", app["ref"], f"Assigned to {data['assigned_to']}", db=db)
+            self.log_audit(user, "Reassign", app["ref"],
+                           f"Reassigned from {old_assigned} to {new_assigned}", db=db)
 
         db.commit()
         db.close()
@@ -5045,6 +5060,77 @@ class AuditHandler(BaseHandler):
         self.success({"entries": [dict(r) for r in rows], "total": total})
 
 
+class ApplicationAuditLogHandler(BaseHandler):
+    """GET /api/applications/:id/audit-log — audit trail for a single application."""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        db = get_db()
+        app = db.execute("SELECT id, ref FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        limit = min(int(self.get_argument("limit", "200")), 500)
+        offset = int(self.get_argument("offset", "0"))
+        rows = db.execute(
+            "SELECT * FROM audit_log WHERE target = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (app["ref"], limit, offset)
+        ).fetchall()
+        total = db.execute("SELECT COUNT(*) as c FROM audit_log WHERE target = ?", (app["ref"],)).fetchone()["c"]
+        db.close()
+        self.success({"entries": [dict(r) for r in rows], "total": total})
+
+
+class ApplicationNotesHandler(BaseHandler):
+    """GET/POST /api/applications/:id/notes — internal officer notes."""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        db = get_db()
+        app = db.execute("SELECT id, ref FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        rows = db.execute(
+            "SELECT * FROM application_notes WHERE application_id = ? ORDER BY created_at DESC",
+            (app["id"],)
+        ).fetchall()
+        db.close()
+        self.success({"notes": [dict(r) for r in rows]})
+
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        data = self.get_json()
+        content = (data.get("content") or "").strip()
+        if not content:
+            return self.error("Note content is required", 400)
+        if len(content) > 5000:
+            return self.error("Note content exceeds maximum length (5000 characters)", 400)
+
+        db = get_db()
+        app = db.execute("SELECT id, ref FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        db.execute(
+            "INSERT INTO application_notes (application_id, user_id, user_name, user_role, content) VALUES (?, ?, ?, ?, ?)",
+            (app["id"], user.get("sub", ""), user.get("name", ""), user.get("role", ""), content)
+        )
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            (user.get("sub", ""), user.get("name", ""), user.get("role", ""), "Add Note", app["ref"],
+             "Internal note added (" + str(len(content)) + " chars)", self.get_client_ip())
+        )
+        db.commit()
+        db.close()
+        self.success({"status": "ok"}, 201)
+
+
 class AuditExportHandler(BaseHandler):
     """GET /api/audit/export — export audit_log entries as JSON or CSV."""
 
@@ -6456,6 +6542,10 @@ class ComplianceMemoHandler(BaseHandler):
             sof = "; ".join(sof_parts)
         app["source_of_funds"] = sof
         app["expected_volume"] = ps.get("expected_volume") or ps.get("monthly_volume", "")
+        # Enrich with operating countries and incorporation date for memo narrative
+        app["operating_countries"] = ps.get("operating_countries") or ps.get("countries_of_operation") or ps.get("target_markets") or ""
+        app["incorporation_date"] = ps.get("incorporation_date") or app.get("incorporation_date") or ""
+        app["business_activity"] = ps.get("business_activity") or ps.get("business_description") or ""
 
         # Build compliance memo (pure computation — extracted to memo_handler.py)
         memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(app, directors, ubos, documents)
@@ -8277,6 +8367,8 @@ def make_app():
         (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
         (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
         (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),
+        (r"/api/applications/([^/]+)/audit-log", ApplicationAuditLogHandler),
+        (r"/api/applications/([^/]+)/notes", ApplicationNotesHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/documents/([^/]+)", DocumentDeleteHandler),
         (r"/api/applications/([^/]+)/documents", DocumentUploadHandler),

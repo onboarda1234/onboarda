@@ -82,6 +82,9 @@ def build_compliance_memo(app, directors, ubos, documents):
     sof = app.get("source_of_funds") or "Information not provided"
     exp_vol = app.get("expected_volume") or "Information not provided"
     own_struct = app.get("ownership_structure") or "Information not provided"
+    operating_countries = app.get("operating_countries") or "Information not provided"
+    incorporation_date = app.get("incorporation_date") or "Information not provided"
+    business_activity = app.get("business_activity") or "Information not provided"
 
     # Build risk sub-section ratings based on app risk
     risk_level = app["risk_level"] or "MEDIUM"
@@ -350,8 +353,12 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "title": "Client Overview",
                 "content": (
                     f"Entity Name: {app['company_name']}. Business Registration Number: {app['brn']}. "
-                    f"Jurisdiction of Incorporation: {country}. Entity Type: {entity_type}. "
+                    f"Jurisdiction of Incorporation: {country}. "
+                    f"Date of Incorporation: {incorporation_date}. "
+                    f"Entity Type: {entity_type}. "
                     f"Sector: {sector}. Application Reference: {app['ref']}. "
+                    f"Operating Countries: {operating_countries}. "
+                    f"Business Activity: {business_activity}. "
                     f"Ownership Structure: {own_struct}. "
                     f"Source of Funds: {sof}"
                     + (". The stated source of funds " + ("appears consistent with the entity's business profile" if sof != "Information not provided" else "— this data gap prevents assessment of fund origin legitimacy and elevates residual risk") + ". ")
