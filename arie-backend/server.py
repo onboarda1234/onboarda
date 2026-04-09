@@ -256,14 +256,14 @@ def hash_reset_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _revoke_all_client_sessions(db, client_id):
+def _revoke_all_client_sessions(db, user_id):
     """
-    Best-effort revocation helper: invalidate any JWT that was issued for *client_id*.
+    Best-effort revocation helper: invalidate any JWT that was issued for *user_id*.
 
     Since JWTs are stateless the only mechanism we have is the token revocation
     list, which tracks individual JTI values.  We don't store issued tokens
     server-side, so there is nothing to iterate over.  Instead this function
-    records a "user-level" revocation entry keyed on the client_id itself.
+    records a "user-level" revocation entry keyed on the user_id itself.
     ``decode_token`` already validates the per-JTI revocation list, and by
     also checking the per-user key we can block all tokens for a given user
     after a password reset / change.
@@ -276,7 +276,7 @@ def _revoke_all_client_sessions(db, client_id):
     expires_at = _time.time() + TOKEN_EXPIRY_HOURS * 3600
     # Use a synthetic JTI that encode_token never generates but that the
     # revocation list can match on via the helper below.
-    user_jti = f"user:{client_id}"
+    user_jti = f"user:{user_id}"
     token_revocation_list.revoke(user_jti, expires_at)
 
 
@@ -1489,7 +1489,7 @@ class ForgotPasswordHandler(BaseHandler):
             return self.error("Too many reset attempts. Please try again later.", 429)
 
         # Per-email rate limit: prevent enumeration via repeated requests for the same address
-        email_rl_key = f"forgot_pw:email:{hashlib.sha256(email.encode()).hexdigest()[:16]}"
+        email_rl_key = f"forgot_pw:email:{hashlib.sha256(email.encode()).hexdigest()}"
         if rate_limiter.is_limited(email_rl_key, max_attempts=3, window_seconds=1800):
             # Return identical success message to prevent email enumeration
             return self.success({"message": "If that email is registered, a reset link has been sent."})

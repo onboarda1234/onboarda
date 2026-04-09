@@ -86,7 +86,7 @@ def decode_token(token):
             if iat is not None:
                 # The user-level entry's expiry = revocation_time + TOKEN_EXPIRY_HOURS*3600
                 # So revocation_time = entry_expiry - TOKEN_EXPIRY_HOURS*3600
-                entry_expiry = revocation._revoked.get(user_jti, 0)
+                entry_expiry = revocation.get_expiry(user_jti)
                 revocation_time = entry_expiry - TOKEN_EXPIRY_HOURS * 3600
                 # JWT iat is an int (seconds), revocation_time is a float.
                 # Floor revocation_time to avoid false positives from sub-second precision.

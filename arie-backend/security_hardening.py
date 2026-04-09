@@ -1273,6 +1273,19 @@ class TokenRevocationList:
             'last_cleanup': self._last_cleanup,
         }
 
+    def get_expiry(self, jti: str) -> float:
+        """
+        Get the expiry timestamp for a revoked JTI entry.
+
+        Args:
+            jti: JWT ID or user-level JTI to look up
+
+        Returns:
+            Expiry timestamp (Unix time), or 0 if not found
+        """
+        self._db_load_all()
+        return self._revoked.get(jti, 0)
+
 
 # Global instance for use across the application
 token_revocation_list = TokenRevocationList()
