@@ -6057,22 +6057,41 @@ class SumsubWebhookHandler(BaseHandler):
 
     def post(self):
         body = self.request.body
-        signature = self.request.headers.get("X-App-Access-Sig", "")
+
+        # Support both signature header formats safely:
+        # Primary: X-App-Access-Sig (original Sumsub format)
+        # Fallback: X-Payload-Digest (observed on staging — digest-style format)
+        _primary_sig = self.request.headers.get("X-App-Access-Sig", "")
+        _digest_sig = self.request.headers.get("X-Payload-Digest", "")
+        _digest_alg = self.request.headers.get("X-Payload-Digest-Alg", "")
+
+        if _primary_sig:
+            signature = _primary_sig
+            _sig_source = "X-App-Access-Sig"
+        elif _digest_sig:
+            signature = _digest_sig
+            _sig_source = "X-Payload-Digest"
+        else:
+            signature = ""
+            _sig_source = "none"
 
         # Staging-safe diagnostic logging — partial values only, never full secrets
         _header_names = list(self.request.headers.keys())
-        _sig_present = "X-App-Access-Sig" in self.request.headers
+        _sig_present = bool(signature)
         logger.info(
             "Sumsub webhook diagnostic: env=%s body_len=%d "
-            "sig_header_present=%s sig_empty=%s header_names=%s",
+            "sig_header_present=%s sig_source=%s sig_empty=%s "
+            "digest_alg=%s header_names=%s",
             ENVIRONMENT,
             len(body),
             _sig_present,
+            _sig_source,
             signature == "",
+            _digest_alg or "n/a",
             _header_names,
         )
         if signature:
-            logger.info("Sumsub webhook: received sig prefix=%s", signature[:8])
+            logger.info("Sumsub webhook: received sig prefix=%s source=%s", signature[:8], _sig_source)
 
         # Verify webhook signature — always verify, never skip (Finding S-16)
         if not sumsub_verify_webhook(body, signature):

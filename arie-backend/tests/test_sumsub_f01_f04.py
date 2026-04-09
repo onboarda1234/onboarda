@@ -1,7 +1,7 @@
 """
 Targeted regression tests for Sumsub blocker findings F-01 to F-04.
 
-F-01 — Webhook handler must read X-App-Access-Sig (not X-Payload-Digest)
+F-01 — Webhook handler supports both X-App-Access-Sig (primary) and X-Payload-Digest (fallback)
 F-02 — sumsub_verify_webhook must reject when secret is missing in staging AND production
 F-03 — Portal must not contain misleading "email sent" messaging
 F-04 — Portal must send application_id in applicant creation; backend must persist mapping
@@ -19,10 +19,10 @@ import sys
 # ═══════════════════════════════════════════════════════════════════
 
 class TestF01WebhookHeader:
-    """Webhook handler reads the correct Sumsub signature header: X-App-Access-Sig."""
+    """Webhook handler reads X-App-Access-Sig (primary) with X-Payload-Digest fallback."""
 
-    def test_webhook_handler_reads_correct_header(self):
-        """server.py SumsubWebhookHandler must read X-App-Access-Sig, not X-Payload-Digest."""
+    def test_webhook_handler_reads_primary_header(self):
+        """server.py SumsubWebhookHandler must read X-App-Access-Sig as primary header."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
         with open(server_path) as f:
             src = f.read()
@@ -32,16 +32,27 @@ class TestF01WebhookHeader:
         wh_end = src.find("\nclass ", wh_start + 10)
         wh_code = src[wh_start:wh_end]
 
-        assert "X-Payload-Digest" not in wh_code, (
-            "SumsubWebhookHandler still reads X-Payload-Digest — "
-            "F-01 NOT fixed. Sumsub sends X-App-Access-Sig."
-        )
         assert "X-App-Access-Sig" in wh_code, (
-            "SumsubWebhookHandler must read X-App-Access-Sig header"
+            "SumsubWebhookHandler must read X-App-Access-Sig header (primary)"
         )
 
-    def test_webhook_handler_correct_header_comes_before_verify(self):
-        """The correct header must be read before calling sumsub_verify_webhook."""
+    def test_webhook_handler_reads_fallback_header(self):
+        """server.py SumsubWebhookHandler must also support X-Payload-Digest as fallback."""
+        server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
+        with open(server_path) as f:
+            src = f.read()
+
+        wh_start = src.find("class SumsubWebhookHandler")
+        assert wh_start != -1, "SumsubWebhookHandler class not found"
+        wh_end = src.find("\nclass ", wh_start + 10)
+        wh_code = src[wh_start:wh_end]
+
+        assert "X-Payload-Digest" in wh_code, (
+            "SumsubWebhookHandler must support X-Payload-Digest header (fallback for staging)"
+        )
+
+    def test_webhook_handler_primary_header_comes_before_verify(self):
+        """The primary header must be read before calling sumsub_verify_webhook."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
         with open(server_path) as f:
             src = f.read()
@@ -56,15 +67,21 @@ class TestF01WebhookHeader:
             "X-App-Access-Sig header read must appear before sumsub_verify_webhook call"
         )
 
-    def test_no_x_payload_digest_anywhere_in_webhook_path(self):
-        """Neither server.py nor screening.py should reference X-Payload-Digest."""
-        for filename in ("server.py", "screening.py"):
-            path = os.path.join(os.path.dirname(__file__), "..", filename)
-            with open(path) as f:
-                src = f.read()
-            assert "X-Payload-Digest" not in src, (
-                f"{filename} still references X-Payload-Digest — remove or update to X-App-Access-Sig"
-            )
+    def test_webhook_handler_fallback_header_comes_before_verify(self):
+        """The fallback header must also be read before calling sumsub_verify_webhook."""
+        server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
+        with open(server_path) as f:
+            src = f.read()
+
+        wh_start = src.find("class SumsubWebhookHandler")
+        wh_end = src.find("\nclass ", wh_start + 10)
+        wh_code = src[wh_start:wh_end]
+
+        digest_pos = wh_code.find("X-Payload-Digest")
+        verify_pos = wh_code.find("sumsub_verify_webhook")
+        assert digest_pos < verify_pos, (
+            "X-Payload-Digest header read must appear before sumsub_verify_webhook call"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════
