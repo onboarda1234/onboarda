@@ -5987,6 +5987,25 @@ class SumsubApplicantHandler(BaseHandler):
                 """, (application_id, applicant_id, external_user_id,
                       (data.get("first_name", "") + " " + data.get("last_name", "")).strip(),
                       data.get("person_type", "")))
+
+                # Also store applicant_id in prescreening_data so the legacy fallback
+                # substring scan in the webhook handler can find it even if the
+                # mapping table lookup fails (e.g. pre-migration or missing row).
+                # Use id OR ref lookup since the caller may supply either.
+                app_row = db.execute(
+                    "SELECT id, prescreening_data FROM applications WHERE id=? OR ref=?",
+                    (application_id, application_id)
+                ).fetchone()
+                if app_row:
+                    pdict = safe_json_loads(app_row["prescreening_data"] or "{}")
+                    if "sumsub_applicant_ids" not in pdict:
+                        pdict["sumsub_applicant_ids"] = {}
+                    pdict["sumsub_applicant_ids"][external_user_id] = applicant_id
+                    db.execute(
+                        "UPDATE applications SET prescreening_data=? WHERE id=?",
+                        (json.dumps(pdict), app_row["id"])
+                    )
+
                 db.commit()
             except Exception as e:
                 logger.debug(f"Applicant mapping insert: {e}")
@@ -6196,7 +6215,11 @@ class SumsubWebhookHandler(BaseHandler):
                 # Update matched applications
                 for app_id in matched_app_ids:
                     try:
-                        row = db.execute("SELECT prescreening_data FROM applications WHERE id = ?", (app_id,)).fetchone()
+                        # app_id from the mapping table may be a ref or an id
+                        row = db.execute(
+                            "SELECT id, prescreening_data FROM applications WHERE id=? OR ref=?",
+                            (app_id, app_id)
+                        ).fetchone()
                         if not row:
                             continue
                         pdict = safe_json_loads(row["prescreening_data"] or "{}")
@@ -6213,8 +6236,8 @@ class SumsubWebhookHandler(BaseHandler):
                             pdict["screening_report"]["overall_flags"] = flags
 
                         db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
-                                  (json.dumps(pdict), app_id))
-                        logger.info(f"Sumsub webhook: Updated application {app_id}")
+                                  (json.dumps(pdict), row["id"]))
+                        logger.info(f"Sumsub webhook: Updated application {row['id']}")
                     except Exception as e:
                         logger.error(f"Failed to update application {app_id}: {e}")
 

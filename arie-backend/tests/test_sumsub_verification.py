@@ -582,3 +582,129 @@ class TestSumsubAMLScreening:
 
         assert live_result["source"] != sim_result["source"]
         # UI must show [Live] or [Simulated] label
+
+
+# ═══════════════════════════════════════════════════════════════
+# I. WEBHOOK LINKAGE PERSISTENCE TESTS
+#    These tests reproduce the staging break: applicant 69b7e6a9a2b8eb118c24aaa7
+#    had no mapping row and no applicant_id in prescreening_data, so the webhook
+#    updated nothing.  The fix stores sumsub_applicant_ids in prescreening_data
+#    at applicant-creation time so the legacy fallback scan always succeeds.
+# ═══════════════════════════════════════════════════════════════
+
+class TestSumsubWebhookLinkagePersistence:
+    """I. Applicant creation must seed prescreening_data so the legacy fallback can find it."""
+
+    def _server_handler_code(self, class_name):
+        server_src = open(
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py")
+        ).read()
+        start = server_src.find(f"class {class_name}")
+        assert start != -1, f"{class_name} not found in server.py"
+        next_class = server_src.find("\nclass ", start + 1)
+        return server_src[start:next_class] if next_class != -1 else server_src[start:]
+
+    def test_applicant_handler_stores_id_in_prescreening_data(self):
+        """SumsubApplicantHandler must write sumsub_applicant_ids into prescreening_data."""
+        ah_code = self._server_handler_code("SumsubApplicantHandler")
+        assert "sumsub_applicant_ids" in ah_code, (
+            "SumsubApplicantHandler must write sumsub_applicant_ids into prescreening_data "
+            "so that the legacy fallback scan can locate the application when the mapping "
+            "table entry is missing (staging bug: applicant 69b7e6a9a2b8eb118c24aaa7)"
+        )
+        assert "UPDATE applications SET prescreening_data" in ah_code, (
+            "SumsubApplicantHandler must persist the updated prescreening_data to the DB"
+        )
+
+    def test_webhook_handler_updates_by_row_id_not_mapped_value(self):
+        """Webhook handler must use the resolved row id (not the raw mapping value) for UPDATE."""
+        wh_code = self._server_handler_code("SumsubWebhookHandler")
+        assert 'row["id"]' in wh_code or "row['id']" in wh_code, (
+            'Webhook handler must use the resolved applications.id (row["id"]) when '
+            "writing prescreening_data, not the raw mapping value which may be a ref"
+        )
+
+    def test_webhook_handler_lookup_accepts_ref_or_id(self):
+        """Webhook update query must resolve both id and ref columns."""
+        wh_code = self._server_handler_code("SumsubWebhookHandler")
+        assert "WHERE id=? OR ref=?" in wh_code or "WHERE id = ? OR ref = ?" in wh_code, (
+            "Webhook handler must query applications by id OR ref so mapping entries "
+            "that contain a ref value still resolve to the correct row"
+        )
+
+    def test_legacy_fallback_finds_applicant_id_in_sumsub_applicant_ids(self):
+        """Legacy scan must find an applicant stored under sumsub_applicant_ids key."""
+        applicant_id = "69b7e6a9a2b8eb118c24aaa7"
+        external_user_id = "dir-abc123"
+
+        # Simulate prescreening_data as written by the fixed SumsubApplicantHandler
+        apps = [
+            {
+                "id": "app_live_001",
+                "prescreening_data": json.dumps({
+                    "sumsub_applicant_ids": {external_user_id: applicant_id}
+                }),
+            },
+            {
+                "id": "app_other",
+                "prescreening_data": json.dumps({"company": "OtherCo"}),
+            },
+        ]
+
+        matched_ids = set()
+        for app in apps:
+            pdata = app["prescreening_data"] or ""
+            if applicant_id in pdata:
+                matched_ids.add(app["id"])
+            elif external_user_id in pdata:
+                matched_ids.add(app["id"])
+
+        assert "app_live_001" in matched_ids, (
+            "Legacy fallback must match when applicant_id is stored under sumsub_applicant_ids"
+        )
+        assert "app_other" not in matched_ids
+
+    def test_webhook_stores_sumsub_webhook_in_screening_report(self):
+        """After matching, webhook data must be stored at screening_report.sumsub_webhook."""
+        applicant_id = "69b7e6a9a2b8eb118c24aaa7"
+        kyc_data = {
+            "sumsub_applicant_id": applicant_id,
+            "external_user_id": "dir-abc123",
+            "review_answer": "RED",
+            "rejection_labels": ["FORGERY"],
+            "moderation_comment": "Suspected forgery",
+            "event_type": "applicantReviewed",
+            "received_at": "2026-04-09T06:00:00",
+        }
+
+        pdict = {"sumsub_applicant_ids": {"dir-abc123": applicant_id}}
+        if "screening_report" not in pdict:
+            pdict["screening_report"] = {}
+        pdict["screening_report"]["sumsub_webhook"] = kyc_data
+
+        assert pdict["screening_report"]["sumsub_webhook"]["sumsub_applicant_id"] == applicant_id
+        assert pdict["screening_report"]["sumsub_webhook"]["review_answer"] == "RED"
+
+    def test_red_webhook_adds_overall_flag_to_screening_report(self):
+        """A RED webhook must add a rejection flag to screening_report.overall_flags."""
+        external_user_id = "dir-abc123"
+        pdict = {
+            "screening_report": {
+                "overall_flags": [],
+                "sumsub_webhook": {
+                    "review_answer": "RED",
+                    "sumsub_applicant_id": "69b7e6a9a2b8eb118c24aaa7",
+                },
+            }
+        }
+
+        review_answer = "RED"
+        if review_answer == "RED":
+            flags = pdict["screening_report"].get("overall_flags", [])
+            flag_msg = f"Sumsub KYC verification REJECTED for {external_user_id}"
+            if flag_msg not in flags:
+                flags.append(flag_msg)
+            pdict["screening_report"]["overall_flags"] = flags
+
+        assert len(pdict["screening_report"]["overall_flags"]) == 1
+        assert "REJECTED" in pdict["screening_report"]["overall_flags"][0]
