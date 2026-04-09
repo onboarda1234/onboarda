@@ -5898,9 +5898,15 @@ async function submitPrescreening(e) {
   };
 
   try {
-    var createResp = await apiCall('POST', '/applications', payload);
-    currentApplicationId = createResp.id;
-    appRef = createResp.ref;
+    if (currentApplicationId) {
+      // Resume flow: update existing draft application instead of creating a new one
+      await apiCall('PUT', '/applications/' + currentApplicationId, payload);
+    } else {
+      // New application: create
+      var createResp = await apiCall('POST', '/applications', payload);
+      currentApplicationId = createResp.id;
+      appRef = createResp.ref;
+    }
 
     var submitResp = await apiCall('POST', '/applications/' + currentApplicationId + '/submit');
     if (!submitResp || !submitResp.risk_level) {
