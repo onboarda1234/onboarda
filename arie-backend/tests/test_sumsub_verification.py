@@ -596,9 +596,11 @@ class TestSumsubWebhookLinkagePersistence:
     """I. Applicant creation must seed prescreening_data so the legacy fallback can find it."""
 
     def _server_handler_code(self, class_name):
-        server_src = open(
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py")
-        ).read()
+        server_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"
+        )
+        with open(server_path) as f:
+            server_src = f.read()
         start = server_src.find(f"class {class_name}")
         assert start != -1, f"{class_name} not found in server.py"
         next_class = server_src.find("\nclass ", start + 1)

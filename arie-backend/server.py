@@ -5991,7 +5991,8 @@ class SumsubApplicantHandler(BaseHandler):
                 # Also store applicant_id in prescreening_data so the legacy fallback
                 # substring scan in the webhook handler can find it even if the
                 # mapping table lookup fails (e.g. pre-migration or missing row).
-                # Use id OR ref lookup since the caller may supply either.
+                # application_id may be a primary-key id (sent by the portal) or a
+                # ref string (sent by the back office), so we resolve both.
                 app_row = db.execute(
                     "SELECT id, prescreening_data FROM applications WHERE id=? OR ref=?",
                     (application_id, application_id)
