@@ -10,6 +10,7 @@ Phase 1 goal:
 from __future__ import annotations
 
 import json
+import re
 
 from prescreening.fields import (
     CURRENT_SCHEMA_VERSION,
@@ -359,7 +360,6 @@ def _safe_number(val):
     if isinstance(val, (int, float)):
         return float(val)
     if isinstance(val, str):
-        import re
         cleaned = re.sub(r"[^\d.\-]", "", val.strip())
         if not cleaned:
             return None

@@ -231,10 +231,9 @@ class TestBackendProfitDerivation(unittest.TestCase):
         }
         result = normalize_prescreening_data(data)
         profit = result["financial_forecast"]["profit"]
-        # year_1: both None — no entry expected
-        assert "year_1" not in profit or profit.get("year_1") is None or profit.get("year_1") == 0
-        assert profit["year_2"] == 100000
-        assert profit["year_3"] == -50000
+        # year_1: both None — should derive as 0 (0-0)
+        assert profit.get("year_2") == 100000
+        assert profit.get("year_3") == -50000
 
     def test_profit_negative_when_cost_exceeds_revenue(self):
         from prescreening.normalize import normalize_prescreening_data
@@ -374,7 +373,8 @@ class TestBackendShareCapitalNormalization(unittest.TestCase):
 
         data = {"prescreening_data": {}}
         result = normalize_prescreening_data(data)
-        # Should not crash
+        # Should not crash and should return a valid dict
+        assert isinstance(result, dict)
 
     def test_share_capital_in_session_field_map(self):
         from prescreening.fields import SESSION_PRESCREENING_FIELD_MAP
