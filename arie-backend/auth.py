@@ -72,10 +72,32 @@ def decode_token(token):
         decoded = jwt.decode(token, SECRET_KEY, algorithms=["HS256"],
                           issuer="arie-finance",
                           options={"require": ["exp", "iat", "sub"]})
-        # Check token revocation
-        if _get_revocation_list().is_revoked(decoded.get("jti", "")):
+        revocation = _get_revocation_list()
+        # Check per-token revocation (individual logout)
+        if revocation.is_revoked(decoded.get("jti", "")):
             logger.debug("Token revoked")
             return None
+        # Check per-user revocation (password change/reset invalidates all sessions)
+        user_jti = f"user:{decoded.get('sub', '')}"
+        if revocation.is_revoked(user_jti):
+            # Only revoke if token was issued BEFORE the user-level revocation was recorded.
+            # This allows new tokens issued after password change to still work.
+            iat = decoded.get("iat")
+            if iat is not None:
+                # The user-level entry's expiry = revocation_time + TOKEN_EXPIRY_HOURS*3600
+                # So revocation_time = entry_expiry - TOKEN_EXPIRY_HOURS*3600
+                entry_expiry = revocation._revoked.get(user_jti, 0)
+                revocation_time = entry_expiry - TOKEN_EXPIRY_HOURS * 3600
+                # JWT iat is an int (seconds), revocation_time is a float.
+                # Floor revocation_time to avoid false positives from sub-second precision.
+                # Use <= because a token issued in the same second as the revocation
+                # cannot be distinguished from one issued just before it.
+                if isinstance(iat, (int, float)) and iat <= int(revocation_time):
+                    logger.debug("Token revoked by user-level password change")
+                    return None
+            else:
+                logger.debug("Token revoked by user-level password change")
+                return None
         return decoded
     except jwt.ExpiredSignatureError:
         logger.debug("Token expired")

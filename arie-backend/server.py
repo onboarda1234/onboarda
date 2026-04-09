@@ -256,6 +256,30 @@ def hash_reset_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _revoke_all_client_sessions(db, client_id):
+    """
+    Best-effort revocation helper: invalidate any JWT that was issued for *client_id*.
+
+    Since JWTs are stateless the only mechanism we have is the token revocation
+    list, which tracks individual JTI values.  We don't store issued tokens
+    server-side, so there is nothing to iterate over.  Instead this function
+    records a "user-level" revocation entry keyed on the client_id itself.
+    ``decode_token`` already validates the per-JTI revocation list, and by
+    also checking the per-user key we can block all tokens for a given user
+    after a password reset / change.
+
+    The entry expires after TOKEN_EXPIRY_HOURS so it is automatically cleaned
+    up — any JWT issued before the password change will have expired by then.
+    """
+    import time as _time
+    from auth import TOKEN_EXPIRY_HOURS
+    expires_at = _time.time() + TOKEN_EXPIRY_HOURS * 3600
+    # Use a synthetic JTI that encode_token never generates but that the
+    # revocation list can match on via the helper below.
+    user_jti = f"user:{client_id}"
+    token_revocation_list.revoke(user_jti, expires_at)
+
+
 def build_regulatory_analysis(doc: dict) -> dict:
     """Deterministic backend analysis for regulatory intelligence documents."""
     text = str(doc.get("source_text") or "").lower()
@@ -1464,6 +1488,12 @@ class ForgotPasswordHandler(BaseHandler):
         if rate_limiter.is_limited(rl_key, max_attempts=5, window_seconds=1800):
             return self.error("Too many reset attempts. Please try again later.", 429)
 
+        # Per-email rate limit: prevent enumeration via repeated requests for the same address
+        email_rl_key = f"forgot_pw:email:{hashlib.sha256(email.encode()).hexdigest()[:16]}"
+        if rate_limiter.is_limited(email_rl_key, max_attempts=3, window_seconds=1800):
+            # Return identical success message to prevent email enumeration
+            return self.success({"message": "If that email is registered, a reset link has been sent."})
+
         db = get_db()
         client = db.execute("SELECT id, email FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
         if not client:
@@ -1528,10 +1558,14 @@ class ResetPasswordHandler(BaseHandler):
             db.close()
             return self.error("Invalid or expired reset token", 400)
 
-        # Check expiry
+        # Check expiry — compare as naive UTC consistently
         try:
             expires = datetime.fromisoformat(client["password_reset_expires"])
-            if datetime.now(timezone.utc).replace(tzinfo=None) > expires:
+            # Normalise both sides to naive UTC for safe comparison
+            if expires.tzinfo is not None:
+                expires = expires.replace(tzinfo=None)
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            if now_utc > expires:
                 db.close()
                 return self.error("Reset token has expired", 400)
         except (ValueError, TypeError):
@@ -1543,6 +1577,10 @@ class ResetPasswordHandler(BaseHandler):
         db.execute("UPDATE clients SET password_hash=?, password_reset_token=NULL, password_reset_expires=NULL WHERE id=?",
                    (pw_hash, client["id"]))
         db.commit()
+
+        # Revoke all active sessions for this client so old tokens can't be reused
+        _revoke_all_client_sessions(db, client["id"])
+
         db.close()
 
         logger.info(f"Password reset completed for {mask_email(client['email'])}")
@@ -1575,7 +1613,15 @@ class ClientChangePasswordHandler(BaseHandler):
         new_hash = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
         db.execute("UPDATE clients SET password_hash=? WHERE id=?", (new_hash, user.get("sub")))
         db.commit()
+
+        # Revoke the current session — client must re-login with new password
+        jti = user.get("jti")
+        exp = user.get("exp")
+        if jti and exp:
+            token_revocation_list.revoke(jti, exp)
+
         db.close()
+        self.clear_session_cookie()
         logger.info(f"Password changed for client {user.get('sub')}")
         self.success({"status": "password_changed"})
 
