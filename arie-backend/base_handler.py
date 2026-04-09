@@ -135,6 +135,7 @@ class BaseHandler(tornado.web.RequestHandler):
             secure=(ENVIRONMENT == "production"),
             samesite="Strict",
             path="/",
+            expires_days=1,  # Match JWT 24h expiry
         )
         return csrf_token
 
