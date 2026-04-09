@@ -266,13 +266,13 @@ class TestRuntimeUsesDBChecks:
         db.close()
 
     def test_no_hardcoded_fallback_when_db_has_data(self, temp_db):
-        """If DB has checks, _DOC_CHECK_DEFINITIONS should NOT be used.
+        """If DB has checks, the matrix-derived definitions are NOT used (check_overrides take priority).
         The runtime code uses check_overrides when present."""
         from claude_client import ClaudeClient
 
-        # _DOC_CHECK_DEFINITIONS is the hardcoded fallback
-        hardcoded = ClaudeClient._DOC_CHECK_DEFINITIONS
-        assert "passport" in hardcoded, "Hardcoded should have passport"
+        # Derived definitions (canonical fallback) include passport
+        derived = ClaudeClient._get_check_definitions()
+        assert "passport" in derived, "Derived definitions should have passport"
 
         from db import get_db
         db = get_db()
@@ -288,8 +288,8 @@ class TestRuntimeUsesDBChecks:
         db.close()
 
     def test_fallback_warning_logged(self, temp_db):
-        """If DB has no checks for a doc_type, hardcoded fallback is used.
-        The server now logs a warning when falling back to hardcoded defaults."""
+        """If DB has no checks for a doc_type, the matrix-derived fallback is used.
+        The server logs a warning when falling back to defaults."""
         from claude_client import ClaudeClient
 
         # doc_type 'some_unknown_type' won't be in DB
@@ -300,9 +300,9 @@ class TestRuntimeUsesDBChecks:
         ).fetchone()
         assert row is None, "Unknown doc type should not be in DB"
 
-        # Hardcoded also won't have it - will fall back to generic checks
-        hardcoded = ClaudeClient._DOC_CHECK_DEFINITIONS.get("some_unknown_type")
-        assert hardcoded is None, "Unknown type not in hardcoded either"
+        # Derived definitions also won't have it — will fall back to generic checks
+        derived = ClaudeClient._get_check_definitions().get("some_unknown_type")
+        assert derived is None, "Unknown type not in derived definitions either"
         db.close()
 
 
@@ -356,18 +356,18 @@ class TestCheckIDsPresent:
                 assert "id" in check, (
                     f"Check in {row['category']}/{row['doc_type']} missing 'id' field: {check.get('label', 'unknown')}"
                 )
-                assert check["id"].startswith("DOC-") or check["id"].startswith("CERT-"), (
-                    f"Check id should start with DOC- or CERT-: got {check['id']} in {row['doc_type']}"
+                assert check["id"].startswith("DOC-") or check["id"].startswith("CERT-") or check["id"].startswith("LIC-") or check["id"].startswith("GATE-"), (
+                    f"Check id should start with DOC-, CERT-, LIC-, or GATE-: got {check['id']} in {row['doc_type']}"
                 )
         db.close()
 
     def test_all_hardcoded_checks_have_ids(self):
-        """Every check in _DOC_CHECK_DEFINITIONS must have an 'id' field."""
+        """Every check in the derived (matrix-sourced) definitions must have an 'id' field."""
         from claude_client import ClaudeClient
-        for doc_type, checks in ClaudeClient._DOC_CHECK_DEFINITIONS.items():
+        for doc_type, checks in ClaudeClient._get_check_definitions().items():
             for check in checks:
                 assert "id" in check, (
-                    f"Hardcoded check in {doc_type} missing 'id': {check.get('label', 'unknown')}"
+                    f"Derived check in {doc_type} missing 'id': {check.get('label', 'unknown')}"
                 )
 
 
@@ -616,18 +616,22 @@ class TestDocCheckAlignment:
         db.close()
 
     def test_hardcoded_doc_types_in_db(self, temp_db):
-        """All doc types in _DOC_CHECK_DEFINITIONS should also exist in DB ai_checks."""
-        from claude_client import ClaudeClient
+        """All doc types in the derived (matrix-sourced) definitions should also exist in DB ai_checks.
+        The ai_checks DB is seeded via build_ai_checks_seed() which applies doc_type_alias transforms
+        (e.g. pep_declaration → pep-declaration, bankref_pep → bankref, poa_person → poa).
+        Comparison is done against the alias-resolved doc_type values that the seed actually writes."""
+        from verification_matrix import build_ai_checks_seed
         from db import get_db
         db = get_db()
 
-        hardcoded_types = set(ClaudeClient._DOC_CHECK_DEFINITIONS.keys())
+        # Alias-resolved doc_type values that build_ai_checks_seed() writes to the DB
+        seed_types = set(doc_type for _, doc_type, _, _ in build_ai_checks_seed())
         db_rows = db.execute("SELECT DISTINCT doc_type FROM ai_checks").fetchall()
         db_types = set(r["doc_type"] for r in db_rows)
 
-        missing_from_db = hardcoded_types - db_types
+        missing_from_db = seed_types - db_types
         assert len(missing_from_db) == 0, (
-            f"These hardcoded doc types are missing from DB: {missing_from_db}"
+            f"These seed doc types are missing from DB: {missing_from_db}"
         )
         db.close()
 

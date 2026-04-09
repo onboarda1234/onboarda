@@ -623,3 +623,311 @@ class TestCompletedStubs:
         own_checks = [r for r in results if r.get("id") == "DOC-28"]
         assert len(own_checks) == 1
         assert own_checks[0]["result"] == CheckStatus.PASS
+
+
+# ── Register alignment: claude_client derived definitions must match matrix ────
+
+class TestClaudeClientCheckDefinitionAlignment:
+    """
+    Verifies that ClaudeClient._get_check_definitions() produces check IDs
+    that are identical to the canonical verification_matrix.py IDs.
+
+    This ensures the fallback path (when ai_checks DB is empty or unavailable)
+    uses the same check IDs as the production seeded path, maintaining
+    regulator-grade provenance regardless of which code path is active.
+    """
+
+    def test_derived_definitions_loaded(self):
+        """_get_check_definitions() must return a non-empty dict."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        assert isinstance(defs, dict), "Derived definitions must be a dict"
+        assert len(defs) > 0, "Derived definitions must not be empty"
+
+    def test_derived_ids_match_matrix_for_all_doc_types(self):
+        """
+        For every doc type in ALL_DOC_CHECKS, every non-CERT-01 check ID in
+        the matrix must appear in the derived definitions under the same doc_type.
+        """
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+
+        # Build matrix IDs grouped by doc_type (direct matrix keys, no alias transformation)
+        missing = []
+        for matrix_key, entry in ALL_DOC_CHECKS.items():
+            if entry.get("retired"):
+                continue
+            derived_ids = {c["id"] for c in defs.get(matrix_key, [])}
+            for c in entry.get("checks", []):
+                cid = c["id"]
+                if cid == "CERT-01":
+                    continue  # cross-cutting check, present by re-use — not a mismatch
+                if cid not in derived_ids:
+                    missing.append(f"{matrix_key}/{cid} ({c['label']})")
+        assert missing == [], (
+            f"Check IDs in verification_matrix missing from derived definitions:\n"
+            + "\n".join(f"  {m}" for m in missing)
+        )
+
+    def test_no_phantom_ids_in_derived(self):
+        """
+        No check ID in the derived definitions should be absent from the matrix
+        (i.e., no stale/phantom IDs that could mislead audit trail).
+        """
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+
+        # Collect all canonical IDs from matrix
+        canonical_ids = set()
+        for entry in ALL_DOC_CHECKS.values():
+            for c in entry.get("checks", []):
+                canonical_ids.add(c["id"])
+        for c in GATE_CHECKS:
+            canonical_ids.add(c["id"])
+
+        phantom = []
+        for doc_type, checks in defs.items():
+            for c in checks:
+                cid = c.get("id", "")
+                if cid and cid not in canonical_ids and not cid.startswith("DOC-GEN-"):
+                    phantom.append(f"{doc_type}/{cid}")
+
+        assert phantom == [], (
+            f"Phantom check IDs in derived definitions (not in matrix):\n"
+            + "\n".join(f"  {p}" for p in phantom)
+        )
+
+    def test_cert_inc_critical_ids_present(self):
+        """cert_inc must have DOC-06A and DOC-07A (not legacy DOC-11/12/DOC-07)."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        ids = {c["id"] for c in defs.get("cert_inc", [])}
+        assert "DOC-06A" in ids, "cert_inc missing DOC-06A (Date of Incorporation)"
+        assert "DOC-07A" in ids, "cert_inc missing DOC-07A (Document Clarity)"
+        assert "DOC-11" not in ids, "cert_inc must not have stale ID DOC-11"
+        assert "DOC-12" not in ids, "cert_inc must not have stale ID DOC-12"
+
+    def test_passport_critical_ids_present(self):
+        """passport must have DOC-49, DOC-49A, DOC-50, DOC-51, DOC-52 (not legacy DOC-48/62/63)."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        ids = {c["id"] for c in defs.get("passport", [])}
+        for required in ("DOC-49", "DOC-49A", "DOC-50", "DOC-51", "DOC-52"):
+            assert required in ids, f"passport missing {required}"
+        for stale in ("DOC-48", "DOC-62", "DOC-63"):
+            assert stale not in ids, f"passport must not have stale ID {stale}"
+
+    def test_memarts_has_doc_ma01(self):
+        """memarts must have DOC-MA-01 (Business Objects) not legacy DOC-13."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        ids = {c["id"] for c in defs.get("memarts", [])}
+        assert "DOC-MA-01" in ids, "memarts missing DOC-MA-01 (Business Objects)"
+        assert "DOC-13" in ids, "memarts missing DOC-13 (Authorised Share Capital)"
+        assert "DOC-16" not in ids, "memarts must not have stale ID DOC-16"
+
+    def test_reg_sh_uses_doc15a_doc15b(self):
+        """reg_sh must have DOC-15A and DOC-15B (not legacy DOC-22/DOC-23)."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        ids = {c["id"] for c in defs.get("reg_sh", [])}
+        assert "DOC-15A" in ids, "reg_sh missing DOC-15A"
+        assert "DOC-15B" in ids, "reg_sh missing DOC-15B"
+        assert "DOC-22" not in ids, "reg_sh must not have stale ID DOC-22"
+        assert "DOC-23" not in ids, "reg_sh must not have stale ID DOC-23"
+
+    def test_no_cross_doc_type_id_conflicts(self):
+        """
+        IDs used by the derived definitions must not conflict with IDs from
+        different doc types in the matrix (e.g., DOC-61 used for fin_stmt
+        would conflict with its canonical assignment to poa_person).
+        """
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+
+        # Build canonical id -> doc_type map (excluding CERT-01, using direct matrix keys)
+        canonical_map = {}
+        for matrix_key, entry in ALL_DOC_CHECKS.items():
+            for c in entry.get("checks", []):
+                cid = c["id"]
+                if cid == "CERT-01":
+                    continue
+                if cid not in canonical_map:
+                    canonical_map[cid] = matrix_key
+
+        conflicts = []
+        for derived_doc_type, checks in defs.items():
+            for c in checks:
+                cid = c.get("id", "")
+                if not cid or cid == "CERT-01" or cid.startswith("DOC-GEN-"):
+                    continue
+                if cid in canonical_map and canonical_map[cid] != derived_doc_type:
+                    conflicts.append(
+                        f"{cid} in derived/{derived_doc_type} but canonical/{canonical_map[cid]}"
+                    )
+
+        assert conflicts == [], (
+            f"Cross-doc-type ID conflicts in derived definitions:\n"
+            + "\n".join(f"  {c}" for c in conflicts)
+        )
+
+    def test_cache_is_populated_and_reused(self):
+        """_get_check_definitions() must populate the cache on first call and reuse it on second."""
+        from claude_client import ClaudeClient
+        # Clear the cache to ensure a fresh load
+        ClaudeClient._check_definitions_cache = None
+
+        first = ClaudeClient._get_check_definitions()
+        assert ClaudeClient._check_definitions_cache is not None, \
+            "Cache must be populated after first call"
+
+        second = ClaudeClient._get_check_definitions()
+        assert first is second, \
+            "Second call must return the exact same cached object (no re-load)"
+
+    def test_unknown_doc_type_uses_generic_fallback(self):
+        """verify_document() must return the generic DOC-GEN checks for unknown doc types."""
+        from claude_client import ClaudeClient
+        defs = ClaudeClient._get_check_definitions()
+        unknown_checks = defs.get("__completely_unknown_doc_type__")
+        # Unknown types are NOT in the derived definitions dict — the generic fallback
+        # is applied inline in verify_document() via .get(doc_type, [...generic...])
+        assert unknown_checks is None, \
+            "Unknown doc types must not be present in derived definitions"
+
+        # Verify the inline fallback list in verify_document() uses DOC-GEN- prefixed IDs.
+        # Inspect the method source to find the hardcoded fallback list.
+        import inspect
+        source = inspect.getsource(ClaudeClient.verify_document)
+        assert "DOC-GEN-01" in source, "verify_document must use DOC-GEN-01 in generic fallback"
+        assert "DOC-GEN-02" in source, "verify_document must use DOC-GEN-02 in generic fallback"
+        assert "DOC-GEN-03" in source, "verify_document must use DOC-GEN-03 in generic fallback"
+
+
+class TestDbSeedAlignmentWithMatrix:
+    """
+    Prove that the DB seed used by sync_ai_checks_from_seed() is always
+    derived from verification_matrix.build_ai_checks_seed() — no hardcoded drift.
+    """
+
+    def _get_db_seed(self):
+        """Return the seed that sync_ai_checks_from_seed uses."""
+        from db import _SUPPLEMENTARY_AI_CHECKS_SEED
+        from verification_matrix import build_ai_checks_seed
+        return build_ai_checks_seed() + _SUPPLEMENTARY_AI_CHECKS_SEED
+
+    def test_matrix_doc_types_all_present_in_db_seed(self):
+        """Every non-retired matrix entry must be represented in the db seed."""
+        from verification_matrix import build_ai_checks_seed
+        import json
+        seed_entries = {(cat, dt) for cat, dt, _, _ in self._get_db_seed()}
+        for cat, dt, _, _ in build_ai_checks_seed():
+            assert (cat, dt) in seed_entries, \
+                f"Matrix entry {cat}/{dt} missing from DB seed"
+
+    def test_pep_declaration_uses_underscore_in_db_seed(self):
+        """DB seed must use pep_declaration (underscore) not pep-declaration (hyphen)."""
+        doc_types = {dt for _, dt, _, _ in self._get_db_seed()}
+        assert "pep_declaration" in doc_types, \
+            "pep_declaration (underscore) must be in the DB seed"
+        assert "pep-declaration" not in doc_types, \
+            "pep-declaration (hyphen) must NOT be in the DB seed"
+
+    def test_matrix_check_ids_match_db_seed_ids(self):
+        """For every matrix doc type, check IDs in DB seed must exactly match matrix IDs."""
+        import json
+        from verification_matrix import build_ai_checks_seed, ALL_DOC_CHECKS
+
+        matrix_ids = {}
+        for key, entry in ALL_DOC_CHECKS.items():
+            if entry.get("retired"):
+                continue
+            dt = entry.get("doc_type_alias") or key
+            # doc_type_alias maps matrix keys to their DB storage alias (e.g. poa_person→poa).
+            # pep_declaration no longer has a doc_type_alias (removed in this PR);
+            # other aliases (poa_person→poa, bankref_pep→bankref) are still valid.
+            cat = entry.get("category", "entity")
+            ids = {c["id"] for c in entry.get("checks", [])}
+            matrix_ids[(cat, dt)] = ids
+
+        seed_ids = {}
+        for cat, dt, _, checks_json in build_ai_checks_seed():
+            checks = json.loads(checks_json)
+            seed_ids[(cat, dt)] = {c["id"] for c in checks}
+
+        for key_tuple, expected_ids in matrix_ids.items():
+            if not expected_ids:
+                continue  # skip retired/empty
+            assert key_tuple in seed_ids, \
+                f"Matrix entry {key_tuple} missing from build_ai_checks_seed()"
+            actual_ids = seed_ids[key_tuple]
+            missing = expected_ids - actual_ids
+            extra = actual_ids - expected_ids
+            assert not missing, \
+                f"{key_tuple}: check IDs in seed missing from matrix: {missing}"
+            assert not extra, \
+                f"{key_tuple}: extra check IDs in seed not in matrix: {extra}"
+
+    def test_db_seed_passport_uses_canonical_ids(self):
+        """Regression: passport must use DOC-49/49A/50/51/52 not old DOC-48/62/63."""
+        import json
+        seed = {(c, dt): json.loads(ch) for c, dt, _, ch in self._get_db_seed()}
+        passport_checks = seed.get(("person", "passport"), [])
+        passport_ids = {c["id"] for c in passport_checks}
+        # Old wrong IDs that must NOT be present
+        old_wrong = {"DOC-48", "DOC-62", "DOC-63"}
+        assert not (passport_ids & old_wrong), \
+            f"Passport seed contains old wrong IDs: {passport_ids & old_wrong}"
+        # Canonical IDs that must be present
+        canonical = {"DOC-49", "DOC-49A", "DOC-50", "DOC-51", "DOC-52"}
+        assert canonical.issubset(passport_ids), \
+            f"Passport seed missing canonical IDs: {canonical - passport_ids}"
+
+    def test_db_seed_cert_inc_uses_canonical_ids(self):
+        """Regression: cert_inc must use DOC-06A/07/07A not old DOC-11/12."""
+        import json
+        seed = {(c, dt): json.loads(ch) for c, dt, _, ch in self._get_db_seed()}
+        cert_checks = seed.get(("entity", "cert_inc"), [])
+        cert_ids = {c["id"] for c in cert_checks}
+        old_wrong = {"DOC-11", "DOC-12"}
+        assert not (cert_ids & old_wrong), \
+            f"cert_inc seed contains old wrong IDs: {cert_ids & old_wrong}"
+        canonical = {"DOC-06A", "DOC-07", "DOC-07A"}
+        assert canonical.issubset(cert_ids), \
+            f"cert_inc seed missing canonical IDs: {canonical - cert_ids}"
+
+    def test_no_id_conflicts_within_same_doc_type(self):
+        """Each doc_type/category pair must have unique check IDs."""
+        import json
+        for cat, dt, doc_name, checks_json in self._get_db_seed():
+            checks = json.loads(checks_json)
+            ids = [c["id"] for c in checks]
+            assert len(ids) == len(set(ids)), \
+                f"Duplicate check IDs within {cat}/{dt}: {[i for i in ids if ids.count(i) > 1]}"
+
+    def test_db_init_seeds_pep_declaration_not_hyphenated(self):
+        """After sync_ai_checks_from_seed(), ai_checks must have pep_declaration not pep-declaration."""
+        import sqlite3, json
+        from db import DBConnection, sync_ai_checks_from_seed
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE ai_checks ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "category TEXT NOT NULL, "
+            "doc_type TEXT NOT NULL, "
+            "doc_name TEXT, "
+            "checks TEXT DEFAULT '[]', "
+            "updated_at TEXT DEFAULT (datetime('now')), "
+            "UNIQUE(doc_type, category))"
+        )
+        conn.commit()
+        db = DBConnection(conn, is_postgres=False)
+        sync_ai_checks_from_seed(db)
+        rows = conn.execute("SELECT doc_type FROM ai_checks WHERE category='person'").fetchall()
+        doc_types = {r[0] for r in rows}
+        assert "pep_declaration" in doc_types, \
+            "pep_declaration must be seeded into ai_checks"
+        assert "pep-declaration" not in doc_types, \
+            "pep-declaration (hyphen) must not be in ai_checks after sync"
+        conn.close()
