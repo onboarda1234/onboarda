@@ -144,35 +144,51 @@ class TestOfficerLoginErrorHandling:
         )
         assert resp.status_code == 400
 
-    def test_db_failure_returns_503(self, temp_db):
+    def test_db_failure_returns_503(self, api_server):
         """DB failure during login should return 503, not 401."""
-        from server import OfficerLoginHandler
-        import tornado.web
-        import tornado.testing
+        # Temporarily break get_db to simulate DB unavailability
+        import server as srv_mod
+        original_get_db = srv_mod.get_db
 
-        handler = MagicMock(spec=OfficerLoginHandler)
-        handler.get_json = MagicMock(return_value={"email": "test@test.com", "password": "pass123"})
-        handler.get_client_ip = MagicMock(return_value="127.0.0.1")
-        handler.error = MagicMock()
-        handler.set_status = MagicMock()
-        handler.write = MagicMock()
+        def broken_get_db():
+            raise Exception("Simulated DB connection failure")
 
-        # Verify handler has try/except for DB
-        import inspect
-        source = inspect.getsource(OfficerLoginHandler.post)
-        assert "try:" in source, "OfficerLoginHandler.post should have try/except"
-        assert "503" in source, "OfficerLoginHandler.post should return 503 on DB failure"
-        assert "Service temporarily unavailable" in source
+        srv_mod.get_db = broken_get_db
+        try:
+            resp = http_requests.post(
+                f"{api_server}/api/auth/officer/login",
+                json={"email": "admin@test.com", "password": "somepassword"},
+                timeout=5
+            )
+            assert resp.status_code == 503, f"Expected 503, got {resp.status_code}"
+            data = resp.json()
+            assert "Service temporarily unavailable" in data.get("error", "")
+            # Should not leak DB error details
+            assert "Simulated DB" not in data.get("error", "")
+        finally:
+            srv_mod.get_db = original_get_db
 
-    def test_db_error_response_does_not_leak_details(self, temp_db):
+    def test_db_error_response_does_not_leak_details(self, api_server):
         """Error response on DB failure should not expose internal details."""
-        import inspect
-        from server import OfficerLoginHandler
-        source = inspect.getsource(OfficerLoginHandler.post)
-        # Should not include traceback/stack info in response
-        assert "Service temporarily unavailable" in source
-        # Should log the real error
-        assert "logger.error" in source
+        import server as srv_mod
+        original_get_db = srv_mod.get_db
+
+        def broken_get_db():
+            raise Exception("psycopg2.OperationalError: connection refused")
+
+        srv_mod.get_db = broken_get_db
+        try:
+            resp = http_requests.post(
+                f"{api_server}/api/auth/officer/login",
+                json={"email": "admin@test.com", "password": "pass"},
+                timeout=5
+            )
+            data = resp.json()
+            # Should not expose DB error internals
+            assert "psycopg2" not in data.get("error", "")
+            assert "connection refused" not in data.get("error", "")
+        finally:
+            srv_mod.get_db = original_get_db
 
 
 class TestClientLoginErrorHandling:
@@ -199,22 +215,47 @@ class TestClientLoginErrorHandling:
         )
         assert resp.status_code == 400
 
-    def test_db_failure_returns_503(self, temp_db):
+    def test_db_failure_returns_503(self, api_server):
         """DB failure during client login should return 503, not 401."""
-        import inspect
-        from server import ClientLoginHandler
-        source = inspect.getsource(ClientLoginHandler.post)
-        assert "try:" in source, "ClientLoginHandler.post should have try/except"
-        assert "503" in source, "ClientLoginHandler.post should return 503 on DB failure"
-        assert "Service temporarily unavailable" in source
+        import server as srv_mod
+        original_get_db = srv_mod.get_db
 
-    def test_db_error_response_does_not_leak_details(self, temp_db):
+        def broken_get_db():
+            raise Exception("Simulated DB connection failure")
+
+        srv_mod.get_db = broken_get_db
+        try:
+            resp = http_requests.post(
+                f"{api_server}/api/auth/client/login",
+                json={"email": "test@test.com", "password": "somepassword"},
+                timeout=5
+            )
+            assert resp.status_code == 503, f"Expected 503, got {resp.status_code}"
+            data = resp.json()
+            assert "Service temporarily unavailable" in data.get("error", "")
+        finally:
+            srv_mod.get_db = original_get_db
+
+    def test_db_error_response_does_not_leak_details(self, api_server):
         """Error response on DB failure should not expose internal details."""
-        import inspect
-        from server import ClientLoginHandler
-        source = inspect.getsource(ClientLoginHandler.post)
-        assert "Service temporarily unavailable" in source
-        assert "logger.error" in source
+        import server as srv_mod
+        original_get_db = srv_mod.get_db
+
+        def broken_get_db():
+            raise Exception("psycopg2.OperationalError: connection refused")
+
+        srv_mod.get_db = broken_get_db
+        try:
+            resp = http_requests.post(
+                f"{api_server}/api/auth/client/login",
+                json={"email": "test@test.com", "password": "pass"},
+                timeout=5
+            )
+            data = resp.json()
+            assert "psycopg2" not in data.get("error", "")
+            assert "connection refused" not in data.get("error", "")
+        finally:
+            srv_mod.get_db = original_get_db
 
 
 # ══════════════════════════════════════════════════════════
@@ -226,12 +267,15 @@ class TestPIIEncryptionKeySafety:
 
     def test_staging_blocks_auto_generated_key(self, temp_db):
         """Staging environment must not silently auto-generate encryption key."""
+        # Verify the server.py PII init code includes staging in the blocked environments
         import inspect
-        # Check server.py PII init code blocks staging
         import server
         source = inspect.getsource(server)
-        # The init block should include "staging" in the environments that exit
+        # The init block should include "staging" in the environments that trigger sys.exit(1)
+        # Check that staging is listed alongside production
         assert '"staging"' in source or "'staging'" in source
+        # Verify the exit call exists for staging
+        assert "sys.exit(1)" in source
 
     def test_production_blocks_auto_generated_key(self, temp_db):
         """Production environment must require PII_ENCRYPTION_KEY."""
