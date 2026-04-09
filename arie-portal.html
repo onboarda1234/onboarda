@@ -4600,7 +4600,11 @@ async function apiCall(method, path, body, isFormData) {
       showView('login');
       throw new Error('Session expired');
     }
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) {
+      var apiError = new Error(data.error || 'Request failed');
+      apiError.status = res.status;
+      throw apiError;
+    }
     return data;
   } catch (err) {
     console.error('API Error:', method, path, err);
@@ -8224,7 +8228,17 @@ async function submitLogin(e) {
     showToast('success', isOffline ? 'Demo Mode' : 'Welcome back!', isOffline ? 'Signed in offline — explore the portal demo.' : 'Pick up where you left off.');
   } catch (err) {
     btn.disabled = false; btn.textContent = '🔒 Sign In';
-    showToast('error', 'Login Failed', 'Invalid credentials. Please check your email and password.');
+    if (err.status && err.status >= 500) {
+      showToast('error', 'Service Unavailable', 'Our service is temporarily unavailable. Please try again shortly.');
+    } else if (err.status === 401 || err.status === 400) {
+      showToast('error', 'Login Failed', 'Invalid credentials. Please check your email and password.');
+    } else if (err.status === 429) {
+      showToast('error', 'Too Many Attempts', err.message || 'Please try again later.');
+    } else if (!err.status && (err.message === 'Failed to fetch' || err.name === 'TypeError')) {
+      showToast('error', 'Connection Error', 'Cannot reach the server. Please check your internet connection and try again.');
+    } else {
+      showToast('error', 'Login Failed', 'Invalid credentials. Please check your email and password.');
+    }
   }
 }
 

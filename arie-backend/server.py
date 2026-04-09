@@ -496,24 +496,29 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 # ── C-02: PII Encryption Initialization ──────────────────────
 # Initialize PIIEncryptor singleton for encrypting sensitive data at rest.
-# In demo/dev mode, auto-generate a key if not set.
-# In production, PII_ENCRYPTION_KEY MUST be set (PIIEncryptor enforces this).
+# In development/testing mode ONLY, auto-generate a key if not set.
+# In staging/production, PII_ENCRYPTION_KEY MUST be set.
 _pii_encryptor = None
 try:
     _pii_encryptor = PIIEncryptor()
     logger.info("PIIEncryptor initialized — field-level encryption active")
 except (RuntimeError, ValueError) as e:
-    if ENVIRONMENT in ("production", "prod"):
-        logger.critical(f"FATAL: PIIEncryptor failed in production: {e}")
+    if ENVIRONMENT in ("production", "prod", "staging"):
+        logger.critical(
+            "FATAL: PIIEncryptor failed in %s: %s — "
+            "Set PII_ENCRYPTION_KEY env var. Generate with: "
+            'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"',
+            ENVIRONMENT, e
+        )
         sys.exit(1)
     else:
-        # In demo/dev, generate a transient key for testing
+        # In demo/dev/testing, generate a transient key for local development
         from cryptography.fernet import Fernet as _Fernet
         _auto_key = _Fernet.generate_key().decode()
         os.environ["PII_ENCRYPTION_KEY"] = _auto_key
         try:
             _pii_encryptor = PIIEncryptor(_auto_key)
-            logger.warning("PIIEncryptor: auto-generated key for development (NOT for production)")
+            logger.warning("PIIEncryptor: auto-generated key for development (NOT for staging/production)")
         except Exception as e2:
             logger.error(f"PIIEncryptor initialization failed even with auto key: {e2}")
 
@@ -1290,6 +1295,14 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
 
 
 # ── Health Check ──
+class LivenessHandler(tornado.web.RequestHandler):
+    """GET /healthz — Lightweight liveness probe for ALB/ECS.
+    Returns 200 if process is alive. Does NOT check DB or dependencies."""
+    def get(self):
+        self.set_header("Content-Type", "application/json")
+        self.write({"status": "alive"})
+
+
 class HealthHandler(BaseHandler):
     def get(self):
         """Enhanced health check with database connectivity and dependency status."""
@@ -1370,9 +1383,21 @@ class OfficerLoginHandler(BaseHandler):
             logger.warning(f"Rate limited officer login from {ip} for {mask_email(email)}")
             return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
-        db = get_db()
-        user = db.execute("SELECT * FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
-        db.close()
+        db = None
+        try:
+            db = get_db()
+            user = db.execute("SELECT * FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
+        except Exception as e:
+            logger.error("OfficerLoginHandler DB error for %s: %s", mask_email(email), e)
+            self.set_status(503)
+            self.write({"error": "Service temporarily unavailable. Please try again shortly."})
+            return
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
         if not user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
             return self.error("Invalid credentials", 401)
@@ -1406,9 +1431,21 @@ class ClientLoginHandler(BaseHandler):
             logger.warning(f"Rate limited client login from {ip} for {mask_email(email)}")
             return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
-        db = get_db()
-        client = db.execute("SELECT * FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
-        db.close()
+        db = None
+        try:
+            db = get_db()
+            client = db.execute("SELECT * FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
+        except Exception as e:
+            logger.error("ClientLoginHandler DB error for %s: %s", mask_email(email), e)
+            self.set_status(503)
+            self.write({"error": "Service temporarily unavailable. Please try again shortly."})
+            return
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
         if not client or not bcrypt.checkpw(password.encode(), client["password_hash"].encode()):
             return self.error("Invalid credentials", 401)
@@ -8288,6 +8325,8 @@ class AIAssistantHandler(BaseHandler):
 def make_app():
     routes = [
         # Health
+        # Health / Liveness
+        (r"/healthz", LivenessHandler),
         (r"/api/health", HealthHandler),
         (r"/api/admin/reset-db", AdminResetDBHandler),
         (r"/api/admin/reset-password", AdminResetPasswordHandler),
@@ -8455,14 +8494,14 @@ if __name__ == "__main__":
 
     init_db()
 
-    # Run database migrations
+    # Run database migrations (non-critical — log and continue)
     try:
         from migrations.runner import run_all_migrations
         run_all_migrations()
     except Exception as e:
         logger.warning("Migration runner unavailable: %s", e)
 
-    # Initialize supervisor framework
+    # Initialize supervisor framework (non-critical — log and continue)
     if SUPERVISOR_AVAILABLE:
         try:
             supervisor_instance = setup_supervisor(DB_PATH)
@@ -8485,8 +8524,9 @@ if __name__ == "__main__":
     # Enforce startup safety checks
     enforce_startup_safety()
 
-    # Bind to 0.0.0.0 for cloud deployment (Railway, Render, etc.)
+    # ── Start accepting connections ASAP so health checks pass ──
     app.listen(PORT, address="0.0.0.0")
+    logger.info("Server listening on 0.0.0.0:%s (liveness endpoint /healthz ready)", PORT)
 
     # API integration status
     sanctions_status = "LIVE" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "SIMULATED"

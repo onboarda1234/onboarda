@@ -18,7 +18,7 @@ services:
     rootDir: .
     buildCommand: "cp arie-portal.html arie-backend/arie-portal.html && cp arie-backoffice.html arie-backend/arie-backoffice.html && pip install -r arie-backend/requirements.txt"
     startCommand: cd arie-backend && python3 server.py
-    healthCheckPath: /api/health
+    healthCheckPath: /healthz
     autoDeploy: true           # Auto-deploy on push (CI gates merges to main)
     disk:
       name: arie-data-live
@@ -38,6 +38,8 @@ services:
       - key: UPLOAD_DIR
         value: /data/uploads
       # ── Required secrets (set manually in Render dashboard) ──
+      - key: PII_ENCRYPTION_KEY
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ALLOWED_ORIGIN
@@ -107,7 +109,7 @@ services:
     rootDir: .
     buildCommand: "cp arie-portal.html arie-backend/arie-portal.html && cp arie-backoffice.html arie-backend/arie-backoffice.html && pip install -r arie-backend/requirements.txt"
     startCommand: cd arie-backend && python3 server.py
-    healthCheckPath: /api/health
+    healthCheckPath: /healthz
     autoDeploy: true           # Auto-deploy on push for demo
     disk:
       name: arie-data-demo

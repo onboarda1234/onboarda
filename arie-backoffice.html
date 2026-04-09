@@ -2732,7 +2732,11 @@ async function boApiCall(method, path, body) {
       showLoginScreen();
       throw new Error('Session expired');
     }
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    if (!res.ok) {
+      var apiError = new Error(data.error || 'Request failed');
+      apiError.status = res.status;
+      throw apiError;
+    }
     return data;
   } catch (err) {
     console.error('BO API Error:', method, path, err);
@@ -8057,7 +8061,15 @@ async function handleLogin(e) {
     hideLoginScreen();
     showToast(isOffline ? 'Demo Mode — Welcome, ' + currentUser.name : 'Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
-    errText.textContent = 'Invalid email or password.';
+    if (err.status && err.status >= 500) {
+      errText.textContent = 'Service temporarily unavailable. Please try again shortly.';
+    } else if (err.status === 429) {
+      errText.textContent = err.message || 'Too many login attempts. Please try again later.';
+    } else if (!err.status && (err.message === 'Failed to fetch' || err.name === 'TypeError')) {
+      errText.textContent = 'Cannot reach the server. Please check your connection and try again.';
+    } else {
+      errText.textContent = 'Invalid email or password.';
+    }
     errEl.classList.add('show');
   } finally {
     submitBtn.disabled = false;

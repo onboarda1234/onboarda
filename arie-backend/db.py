@@ -56,11 +56,13 @@ def init_pg_pool():
                 "Install it with: pip install psycopg2-binary --break-system-packages"
             )
         _pg_pool = psycopg2.pool.ThreadedConnectionPool(
-            1, 5,
+            2, 15,
             DATABASE_URL,
-            sslmode='require'
+            sslmode='require',
+            connect_timeout=5,
+            options='-c statement_timeout=30000',
         )
-        logger.info("PostgreSQL connection pool initialized (minconn=1, maxconn=5)")
+        logger.info("PostgreSQL connection pool initialized (minconn=2, maxconn=15)")
 
 
 def close_pg_pool():
@@ -231,6 +233,20 @@ def get_db() -> DBConnection:
     if USE_POSTGRESQL:
         init_pg_pool()
         conn = _pg_pool.getconn()
+        # Validate connection is alive; reset if stale/broken
+        try:
+            conn.isolation_level  # access to check if connection is open
+            if conn.closed:
+                raise Exception("Connection is closed")
+            # Quick liveness check — reset any aborted transaction state
+            conn.rollback()
+        except Exception:
+            # Connection is stale/broken — discard and get a new one
+            try:
+                _pg_pool.putconn(conn, close=True)
+            except Exception:
+                pass
+            conn = _pg_pool.getconn()
         return DBConnection(conn, is_postgres=True)
     else:
         # C-07: Block SQLite in production — this is a CRITICAL safety guard

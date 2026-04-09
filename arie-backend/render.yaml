@@ -6,7 +6,7 @@ services:
     plan: starter  # starter plan supports persistent disk
     buildCommand: pip install -r requirements.txt
     startCommand: python3 server.py
-    healthCheckPath: /api/health
+    healthCheckPath: /healthz
     # Persistent disk for SQLite database (survives deploys)
     disk:
       name: onboarda-data
