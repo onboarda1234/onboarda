@@ -1138,16 +1138,24 @@ def get_db():
 def init_db():
     """Initialize database schema and seed initial data."""
     from db import seed_initial_data, sync_ai_checks_from_seed, normalize_legacy_doc_types
+    logger.info("startup: entering db_init_db (schema + pool)")
     db_init_db()
+    logger.info("startup: db_init_db completed")
     db = get_db()
     try:
+        logger.info("startup: entering seed_initial_data")
         seed_initial_data(db)
         db.commit()
+        logger.info("startup: completed seed_initial_data")
         # Normalize any legacy portal-style doc_type values in documents table
+        logger.info("startup: entering normalize_legacy_doc_types")
         normalize_legacy_doc_types(db)
+        logger.info("startup: completed normalize_legacy_doc_types")
         # Upsert canonical ai_checks on every startup so stale rows on
         # existing databases (staging/prod) are always brought up to date.
+        logger.info("startup: entering sync_ai_checks_from_seed")
         sync_ai_checks_from_seed(db)
+        logger.info("startup: completed sync_ai_checks_from_seed")
     except Exception as e:
         logging.error(f"Seed error: {e}", exc_info=True)
         raise RuntimeError(
@@ -8635,46 +8643,72 @@ def make_app():
 
 
 if __name__ == "__main__":
+    import time as _time
+
+    _t0 = _time.monotonic()
+
+    def _elapsed():
+        return f"{_time.monotonic() - _t0:.2f}s"
+
+    logger.info("startup: begin (+%s)", _elapsed())
+
     # Validate unified configuration before starting
+    logger.info("startup: entering validate_config (+%s)", _elapsed())
     validate_config()
+    logger.info("startup: completed validate_config (+%s)", _elapsed())
 
     # Validate environment before starting
+    logger.info("startup: entering validate_environment (+%s)", _elapsed())
     validate_environment()
+    logger.info("startup: completed validate_environment (+%s)", _elapsed())
 
+    logger.info("startup: entering init_db (+%s)", _elapsed())
     init_db()
+    logger.info("startup: completed init_db (+%s)", _elapsed())
 
     # Run database migrations
+    logger.info("startup: entering run_all_migrations (+%s)", _elapsed())
     try:
         from migrations.runner import run_all_migrations
         run_all_migrations()
     except Exception as e:
         logger.warning("Migration runner unavailable: %s", e)
+    logger.info("startup: completed run_all_migrations (+%s)", _elapsed())
 
     # Initialize supervisor framework
     if SUPERVISOR_AVAILABLE:
+        logger.info("startup: entering setup_supervisor (+%s)", _elapsed())
         try:
             supervisor_instance = setup_supervisor(DB_PATH)
             register_all_executors(supervisor_instance, DB_PATH)
-            logger.info("✅ Supervisor framework initialized with %d agent executors", 10)
+            logger.info("startup: completed setup_supervisor — %d agent executors (+%s)", 10, _elapsed())
         except Exception as e:
             logger.error("Failed to initialize supervisor: %s", e)
             SUPERVISOR_AVAILABLE = False
 
+    logger.info("startup: entering make_app (+%s)", _elapsed())
     app = make_app()
+    logger.info("startup: completed make_app (+%s)", _elapsed())
 
     # Validate production environment (mandatory)
+    logger.info("startup: entering validate_production_environment (+%s)", _elapsed())
     try:
         validate_production_environment()
     except RuntimeError as e:
         logging.critical(f"PRODUCTION ENVIRONMENT VALIDATION FAILED: {e}")
         if ENVIRONMENT == "production":
             sys.exit(1)
+    logger.info("startup: completed validate_production_environment (+%s)", _elapsed())
 
     # Enforce startup safety checks
+    logger.info("startup: entering enforce_startup_safety (+%s)", _elapsed())
     enforce_startup_safety()
+    logger.info("startup: completed enforce_startup_safety (+%s)", _elapsed())
 
     # Bind to 0.0.0.0 for cloud deployment (Railway, Render, etc.)
+    logger.info("startup: binding to 0.0.0.0:%s (+%s)", PORT, _elapsed())
     app.listen(PORT, address="0.0.0.0")
+    logger.info("startup: listener bound — server READY (+%s)", _elapsed())
 
     # API integration status
     sanctions_status = "LIVE" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "SIMULATED"

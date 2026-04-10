@@ -47,7 +47,14 @@ _pg_pool = None  # Optional[pool.ThreadedConnectionPool]
 # ============================================================================
 
 def init_pg_pool():
-    """Initialize PostgreSQL connection pool."""
+    """Initialize PostgreSQL connection pool with production-safe timeouts.
+
+    Timeouts prevent indefinite hangs during blue-green deploys when the old
+    revision still holds database locks:
+      connect_timeout  — TCP + auth handshake (seconds)
+      statement_timeout — per-statement wall-clock limit (milliseconds)
+      lock_timeout      — max wait for row/table locks (milliseconds)
+    """
     global _pg_pool
     if _pg_pool is None and USE_POSTGRESQL:
         if not PSYCOPG2_AVAILABLE:
@@ -58,9 +65,12 @@ def init_pg_pool():
         _pg_pool = psycopg2.pool.ThreadedConnectionPool(
             1, 5,
             DATABASE_URL,
-            sslmode='require'
+            sslmode='require',
+            connect_timeout=10,
+            options='-c statement_timeout=30000 -c lock_timeout=10000',
         )
-        logger.info("PostgreSQL connection pool initialized (minconn=1, maxconn=5)")
+        logger.info("PostgreSQL connection pool initialized (minconn=1, maxconn=5, "
+                     "connect_timeout=10s, statement_timeout=30s, lock_timeout=10s)")
 
 
 def close_pg_pool():
@@ -1496,27 +1506,35 @@ def log_agent_execution(
 
 def init_db():
     """Initialize database schema (creates tables if they don't exist)."""
+    logger.info("startup: entering init_db (schema + inline migrations)")
     db = get_db()
     try:
         if USE_POSTGRESQL:
             schema = _get_postgres_schema()
         else:
             schema = _get_sqlite_schema()
+        logger.info("startup: executing schema DDL (%d chars)…", len(schema))
         db.executescript(schema)
         db.commit()
-        logger.info("Database schema initialized")
+        logger.info("startup: schema DDL committed — Database schema initialized")
 
         # ── Migration: Add pre-approval columns if missing (v2.1) ──
+        logger.info("startup: entering _run_migrations (inline)")
         _run_migrations(db)
         db.commit()
+        logger.info("startup: completed _run_migrations (inline)")
 
         # Ensure built-in resources exist for the back-office reference library.
+        logger.info("startup: entering _ensure_default_compliance_resources")
         _ensure_default_compliance_resources(db)
         db.commit()
+        logger.info("startup: completed _ensure_default_compliance_resources")
 
         # Ensure system settings row exists for configuration-backed settings.
+        logger.info("startup: entering _ensure_default_system_settings")
         _ensure_default_system_settings(db)
         db.commit()
+        logger.info("startup: completed _ensure_default_system_settings")
 
         # ── H-2: Ensure demo application stubs exist (run in init_db for reliability) ──
         # Use both config.IS_DEMO and environment.is_demo() for robustness
@@ -1631,12 +1649,49 @@ def _ensure_default_system_settings(db: DBConnection):
         logger.debug("Default system settings seed skipped: %s", e)
 
 
+def _safe_column_exists(db: DBConnection, table: str, column: str) -> bool:
+    """Check if a column exists without aborting the PostgreSQL transaction.
+
+    On PostgreSQL a failed ``SELECT col`` puts the connection into an error
+    state, so we use ``information_schema`` instead.  SQLite falls back to a
+    PRAGMA lookup.
+    """
+    if db.is_postgres:
+        row = db.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = ? AND column_name = ?",
+            (table, column),
+        ).fetchone()
+        return row is not None
+    else:
+        try:
+            db.execute(f"SELECT {column} FROM {table} LIMIT 1")
+            return True
+        except Exception:
+            return False
+
+
+def _safe_table_exists(db: DBConnection, table: str) -> bool:
+    """Check if a table exists without aborting the PostgreSQL transaction."""
+    if db.is_postgres:
+        row = db.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = ?",
+            (table,),
+        ).fetchone()
+        return row is not None
+    else:
+        try:
+            db.execute(f"SELECT 1 FROM {table} LIMIT 1")
+            return True
+        except Exception:
+            return False
+
+
 def _run_migrations(db: DBConnection):
     """Run incremental schema migrations for existing databases."""
     # Check if pre_approval columns exist on applications table
-    try:
-        db.execute("SELECT pre_approval_decision FROM applications LIMIT 1")
-    except Exception:
+    if not _safe_column_exists(db, "applications", "pre_approval_decision"):
         logger.info("Migration v2.1: Adding pre-approval columns to applications table")
         migration_cols = [
             "ALTER TABLE applications ADD COLUMN pre_approval_decision TEXT",
@@ -1652,9 +1707,7 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.1: Pre-approval columns added")
 
     # Migration: Add password reset columns to clients table
-    try:
-        db.execute("SELECT password_reset_token FROM clients LIMIT 1")
-    except Exception:
+    if not _safe_column_exists(db, "clients", "password_reset_token"):
         logger.info("Migration: Adding password reset columns to clients table")
         for col in ["password_reset_token TEXT", "password_reset_expires TEXT"]:
             try:
@@ -1664,9 +1717,7 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration: Password reset columns added")
 
     # Migration v2.2: Add scoring config columns to risk_config
-    try:
-        db.execute("SELECT country_risk_scores FROM risk_config LIMIT 1")
-    except Exception:
+    if not _safe_column_exists(db, "risk_config", "country_risk_scores"):
         logger.info("Migration v2.2: Adding scoring config columns to risk_config")
         for col in ["country_risk_scores", "sector_risk_scores", "entity_type_scores"]:
             try:
@@ -1681,9 +1732,7 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.2: Scoring config columns added")
 
     # Migration v2.3: Add s3_key column to documents table
-    try:
-        db.execute("SELECT s3_key FROM documents LIMIT 1")
-    except Exception:
+    if not _safe_column_exists(db, "documents", "s3_key"):
         logger.info("Migration v2.3: Adding s3_key column to documents table")
         try:
             db.execute("ALTER TABLE documents ADD COLUMN s3_key TEXT")
@@ -1706,18 +1755,14 @@ def _run_migrations(db: DBConnection):
     }
     for table_name, columns in ownership_column_checks.items():
         for column_name, column_type in columns:
-            try:
-                db.execute(f"SELECT {column_name} FROM {table_name} LIMIT 1")
-            except Exception:
+            if not _safe_column_exists(db, table_name, column_name):
                 logger.info("Migration v2.5: Adding %s.%s", table_name, column_name)
                 try:
                     db.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
                 except Exception as e:
                     logger.debug("Migration column %s.%s may already exist: %s", table_name, column_name, e)
 
-    try:
-        db.execute("SELECT person_key FROM intermediaries LIMIT 1")
-    except Exception:
+    if not _safe_table_exists(db, "intermediaries"):
         logger.info("Migration v2.5: Creating intermediaries table")
         if USE_POSTGRESQL:
             db.executescript("""
@@ -1752,9 +1797,7 @@ def _run_migrations(db: DBConnection):
         ("reviewed_at", "TEXT" if not USE_POSTGRESQL else "TIMESTAMP"),
     ]
     for column_name, column_type in document_review_columns:
-        try:
-            db.execute(f"SELECT {column_name} FROM documents LIMIT 1")
-        except Exception:
+        if not _safe_column_exists(db, "documents", column_name):
             logger.info("Migration v2.7: Adding documents.%s", column_name)
             try:
                 db.execute(f"ALTER TABLE documents ADD COLUMN {column_name} {column_type}")
@@ -1762,9 +1805,7 @@ def _run_migrations(db: DBConnection):
                 logger.debug("Migration documents.%s may already exist: %s", column_name, e)
 
     # Migration v2.4: Add compliance_resources table for back-office reference materials
-    try:
-        db.execute("SELECT slug FROM compliance_resources LIMIT 1")
-    except Exception:
+    if not _safe_table_exists(db, "compliance_resources"):
         logger.info("Migration v2.4: Creating compliance_resources table")
         if USE_POSTGRESQL:
             db.executescript("""
@@ -1811,9 +1852,7 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.4: compliance_resources table ready")
 
     # Migration v2.5: Add system_settings table for persisted back-office settings
-    try:
-        db.execute("SELECT company_name FROM system_settings LIMIT 1")
-    except Exception:
+    if not _safe_table_exists(db, "system_settings"):
         logger.info("Migration v2.5: Creating system_settings table")
         if USE_POSTGRESQL:
             db.executescript("""
@@ -1844,9 +1883,7 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.5: system_settings table ready")
 
     # Migration v2.6: Add regulatory_documents table for regulatory intelligence workflow
-    try:
-        db.execute("SELECT regulator FROM regulatory_documents LIMIT 1")
-    except Exception:
+    if not _safe_table_exists(db, "regulatory_documents"):
         logger.info("Migration v2.6: Creating regulatory_documents table")
         if USE_POSTGRESQL:
             db.executescript("""
@@ -1905,9 +1942,7 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.6: regulatory_documents table ready")
 
     # Migration v2.8: Add sumsub_applicant_mappings table for deterministic webhook linking (Finding 12)
-    try:
-        db.execute("SELECT applicant_id FROM sumsub_applicant_mappings LIMIT 1")
-    except Exception:
+    if not _safe_table_exists(db, "sumsub_applicant_mappings"):
         logger.info("Migration v2.8: Creating sumsub_applicant_mappings table")
         if USE_POSTGRESQL:
             db.execute("""
@@ -1941,9 +1976,7 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.8: sumsub_applicant_mappings table ready")
 
     # Migration v2.9: Add supervisor pipeline results and audit log tables
-    try:
-        db.execute("SELECT pipeline_id FROM supervisor_pipeline_results LIMIT 1")
-    except Exception:
+    if not _safe_table_exists(db, "supervisor_pipeline_results"):
         logger.info("Migration v2.9: Creating supervisor_pipeline_results table")
         if USE_POSTGRESQL:
             db.executescript("""
@@ -1983,9 +2016,7 @@ def _run_migrations(db: DBConnection):
             """)
         logger.info("Migration v2.9: supervisor_pipeline_results table ready")
 
-    try:
-        db.execute("SELECT entry_hash FROM supervisor_audit_log LIMIT 1")
-    except Exception:
+    if not _safe_column_exists(db, "supervisor_audit_log", "entry_hash"):
         logger.info("Migration v2.9: Creating supervisor_audit_log table")
         if USE_POSTGRESQL:
             db.executescript("""
@@ -2044,9 +2075,7 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.9: supervisor_audit_log table ready")
 
     # Migration v2.10: Add decision_records table (normalized decision audit layer)
-    try:
-        db.execute("SELECT id FROM decision_records LIMIT 1")
-    except Exception:
+    if not _safe_table_exists(db, "decision_records"):
         logger.info("Migration v2.10: Creating decision_records table")
         if USE_POSTGRESQL:
             db.executescript("""
