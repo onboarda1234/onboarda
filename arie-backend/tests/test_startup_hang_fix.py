@@ -29,7 +29,12 @@ from unittest.mock import MagicMock, patch
 # Ensure arie-backend is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import db as db_module
+
+def _get_db_module():
+    """Lazy-import db module to avoid triggering config.DB_PATH evaluation
+    before conftest.py's temp_db fixture sets the DB_PATH env var."""
+    import db as _db
+    return _db
 
 
 # ---------------------------------------------------------------------------
@@ -40,68 +45,72 @@ class TestPoolTimeouts(unittest.TestCase):
     """Verify that init_pg_pool() passes connect_timeout, statement_timeout,
     and lock_timeout to psycopg2."""
 
-    @patch.object(db_module, "PSYCOPG2_AVAILABLE", True)
-    @patch.object(db_module, "USE_POSTGRESQL", True)
-    @patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db")
     def test_pool_includes_connect_timeout(self):
         """Pool must pass connect_timeout to psycopg2."""
-        db_module._pg_pool = None  # reset
-        with patch("db.psycopg2.pool.ThreadedConnectionPool") as mock_pool:
-            mock_pool.return_value = MagicMock()
-            db_module.init_pg_pool()
-            args, kwargs = mock_pool.call_args
-            self.assertIn("connect_timeout", kwargs)
-            self.assertGreater(kwargs["connect_timeout"], 0)
-        db_module._pg_pool = None  # cleanup
+        db_module = _get_db_module()
+        with patch.object(db_module, "PSYCOPG2_AVAILABLE", True), \
+             patch.object(db_module, "USE_POSTGRESQL", True), \
+             patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db"):
+            db_module._pg_pool = None  # reset
+            with patch("db.psycopg2.pool.ThreadedConnectionPool") as mock_pool:
+                mock_pool.return_value = MagicMock()
+                db_module.init_pg_pool()
+                args, kwargs = mock_pool.call_args
+                self.assertIn("connect_timeout", kwargs)
+                self.assertGreater(kwargs["connect_timeout"], 0)
+            db_module._pg_pool = None  # cleanup
 
-    @patch.object(db_module, "PSYCOPG2_AVAILABLE", True)
-    @patch.object(db_module, "USE_POSTGRESQL", True)
-    @patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db")
     def test_pool_includes_statement_and_lock_timeout(self):
         """Pool must set statement_timeout and lock_timeout via options."""
-        db_module._pg_pool = None
-        with patch("db.psycopg2.pool.ThreadedConnectionPool") as mock_pool:
-            mock_pool.return_value = MagicMock()
-            db_module.init_pg_pool()
-            args, kwargs = mock_pool.call_args
-            options = kwargs.get("options", "")
-            self.assertIn("statement_timeout", options)
-            self.assertIn("lock_timeout", options)
-        db_module._pg_pool = None
+        db_module = _get_db_module()
+        with patch.object(db_module, "PSYCOPG2_AVAILABLE", True), \
+             patch.object(db_module, "USE_POSTGRESQL", True), \
+             patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db"):
+            db_module._pg_pool = None
+            with patch("db.psycopg2.pool.ThreadedConnectionPool") as mock_pool:
+                mock_pool.return_value = MagicMock()
+                db_module.init_pg_pool()
+                args, kwargs = mock_pool.call_args
+                options = kwargs.get("options", "")
+                self.assertIn("statement_timeout", options)
+                self.assertIn("lock_timeout", options)
+            db_module._pg_pool = None
 
-    @patch.object(db_module, "PSYCOPG2_AVAILABLE", True)
-    @patch.object(db_module, "USE_POSTGRESQL", True)
-    @patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db")
     def test_statement_timeout_is_reasonable(self):
         """statement_timeout must be between 5 and 120 seconds (in ms)."""
-        db_module._pg_pool = None
-        with patch("db.psycopg2.pool.ThreadedConnectionPool") as mock_pool:
-            mock_pool.return_value = MagicMock()
-            db_module.init_pg_pool()
-            options = mock_pool.call_args[1].get("options", "")
-            match = re.search(r"statement_timeout=(\d+)", options)
-            self.assertIsNotNone(match, "statement_timeout not found in options")
-            timeout_ms = int(match.group(1))
-            self.assertGreaterEqual(timeout_ms, 5000)
-            self.assertLessEqual(timeout_ms, 120000)
-        db_module._pg_pool = None
+        db_module = _get_db_module()
+        with patch.object(db_module, "PSYCOPG2_AVAILABLE", True), \
+             patch.object(db_module, "USE_POSTGRESQL", True), \
+             patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db"):
+            db_module._pg_pool = None
+            with patch("db.psycopg2.pool.ThreadedConnectionPool") as mock_pool:
+                mock_pool.return_value = MagicMock()
+                db_module.init_pg_pool()
+                options = mock_pool.call_args[1].get("options", "")
+                match = re.search(r"statement_timeout=(\d+)", options)
+                self.assertIsNotNone(match, "statement_timeout not found in options")
+                timeout_ms = int(match.group(1))
+                self.assertGreaterEqual(timeout_ms, 5000)
+                self.assertLessEqual(timeout_ms, 120000)
+            db_module._pg_pool = None
 
-    @patch.object(db_module, "PSYCOPG2_AVAILABLE", True)
-    @patch.object(db_module, "USE_POSTGRESQL", True)
-    @patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db")
     def test_lock_timeout_is_reasonable(self):
         """lock_timeout must be between 1 and 60 seconds (in ms)."""
-        db_module._pg_pool = None
-        with patch("db.psycopg2.pool.ThreadedConnectionPool") as mock_pool:
-            mock_pool.return_value = MagicMock()
-            db_module.init_pg_pool()
-            options = mock_pool.call_args[1].get("options", "")
-            match = re.search(r"lock_timeout=(\d+)", options)
-            self.assertIsNotNone(match, "lock_timeout not found in options")
-            timeout_ms = int(match.group(1))
-            self.assertGreaterEqual(timeout_ms, 1000)
-            self.assertLessEqual(timeout_ms, 60000)
-        db_module._pg_pool = None
+        db_module = _get_db_module()
+        with patch.object(db_module, "PSYCOPG2_AVAILABLE", True), \
+             patch.object(db_module, "USE_POSTGRESQL", True), \
+             patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db"):
+            db_module._pg_pool = None
+            with patch("db.psycopg2.pool.ThreadedConnectionPool") as mock_pool:
+                mock_pool.return_value = MagicMock()
+                db_module.init_pg_pool()
+                options = mock_pool.call_args[1].get("options", "")
+                match = re.search(r"lock_timeout=(\d+)", options)
+                self.assertIsNotNone(match, "lock_timeout not found in options")
+                timeout_ms = int(match.group(1))
+                self.assertGreaterEqual(timeout_ms, 1000)
+                self.assertLessEqual(timeout_ms, 60000)
+            db_module._pg_pool = None
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +121,7 @@ class TestSafeSchemaHelpers(unittest.TestCase):
     """Verify that the safe schema helpers work for SQLite."""
 
     def _make_db(self):
+        db_module = _get_db_module()
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.execute("CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT)")
@@ -119,18 +129,22 @@ class TestSafeSchemaHelpers(unittest.TestCase):
         return db_module.DBConnection(conn, is_postgres=False)
 
     def test_safe_column_exists_true(self):
+        db_module = _get_db_module()
         dbc = self._make_db()
         self.assertTrue(db_module._safe_column_exists(dbc, "test_table", "name"))
 
     def test_safe_column_exists_false(self):
+        db_module = _get_db_module()
         dbc = self._make_db()
         self.assertFalse(db_module._safe_column_exists(dbc, "test_table", "nonexistent"))
 
     def test_safe_table_exists_true(self):
+        db_module = _get_db_module()
         dbc = self._make_db()
         self.assertTrue(db_module._safe_table_exists(dbc, "test_table"))
 
     def test_safe_table_exists_false(self):
+        db_module = _get_db_module()
         dbc = self._make_db()
         self.assertFalse(db_module._safe_table_exists(dbc, "no_such_table"))
 
@@ -147,6 +161,7 @@ class TestMigrationsNoTryExceptSelect(unittest.TestCase):
     def test_run_migrations_source_has_no_bare_select_try(self):
         """_run_migrations must not contain ``try: db.execute('SELECT ... FROM
         <table> LIMIT 1')`` checks — these abort the PG transaction."""
+        db_module = _get_db_module()
         src = inspect.getsource(db_module._run_migrations)
         # Look for the old pattern: SELECT <col> FROM <table> LIMIT 1 inside except
         # Allow the information_schema queries which are correct
@@ -176,6 +191,7 @@ class TestInitDbCompletes(unittest.TestCase):
 
     def test_init_db_completes_within_timeout(self):
         """init_db() must complete within 10 seconds on SQLite."""
+        db_module = _get_db_module()
         import time
         import tempfile, shutil
 
@@ -212,6 +228,7 @@ class TestStartupLogging(unittest.TestCase):
 
     def test_init_db_has_startup_logging(self):
         """db.init_db must log startup progress markers."""
+        db_module = _get_db_module()
         src = inspect.getsource(db_module.init_db)
         self.assertIn("startup:", src)
         self.assertIn("schema DDL", src)
@@ -243,18 +260,19 @@ class TestFailFastOnTimeout(unittest.TestCase):
     """Verify that a connection/statement timeout raises immediately
     instead of blocking indefinitely."""
 
-    @patch.object(db_module, "PSYCOPG2_AVAILABLE", True)
-    @patch.object(db_module, "USE_POSTGRESQL", True)
-    @patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db")
     def test_pool_creation_failure_raises(self):
         """If the pool can't connect (timeout), it must raise, not hang."""
-        db_module._pg_pool = None
-        with patch("db.psycopg2.pool.ThreadedConnectionPool",
-                   side_effect=Exception("connection timed out")):
-            with self.assertRaises(Exception) as ctx:
-                db_module.init_pg_pool()
-            self.assertIn("timed out", str(ctx.exception))
-        db_module._pg_pool = None
+        db_module = _get_db_module()
+        with patch.object(db_module, "PSYCOPG2_AVAILABLE", True), \
+             patch.object(db_module, "USE_POSTGRESQL", True), \
+             patch.object(db_module, "DATABASE_URL", "postgresql://user:pass@host/db"):
+            db_module._pg_pool = None
+            with patch("db.psycopg2.pool.ThreadedConnectionPool",
+                       side_effect=Exception("connection timed out")):
+                with self.assertRaises(Exception) as ctx:
+                    db_module.init_pg_pool()
+                self.assertIn("timed out", str(ctx.exception))
+            db_module._pg_pool = None
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +284,7 @@ class TestRunMigrationsIdempotent(unittest.TestCase):
 
     def test_double_run_does_not_error(self):
         """Running _run_migrations twice on the same DB should not raise."""
+        db_module = _get_db_module()
         import tempfile, shutil
         tmpdir = tempfile.mkdtemp()
         test_db = os.path.join(tmpdir, "test_mig.db")
