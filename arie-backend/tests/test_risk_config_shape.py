@@ -19,7 +19,6 @@ import logging
 import os
 import sys
 import pytest
-from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -292,35 +291,22 @@ class TestLoadRiskConfigShapeValidation:
         }
         return row
 
-    @patch("rule_engine.load_risk_config.__module__", "rule_engine")
-    def test_list_entity_scores_set_to_none(self, caplog):
-        """entity_type_scores stored as list → load_risk_config returns None for it."""
+    def test_list_entity_scores_set_to_none(self):
+        """entity_type_scores stored as list → shape validation sets it to None."""
+        from rule_engine import safe_json_loads
         mock_row = self._make_mock_row(entity_scores=[{"sme": 2}])
-
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = mock_row
-        mock_db = MagicMock()
-        mock_db.execute.return_value = mock_cursor
-
-        with patch("rule_engine.get_db", return_value=mock_db, create=True):
-            # Need to patch inside the function's local import
-            with patch.dict("sys.modules", {}):
-                import importlib
-                # Direct test: simulate what load_risk_config does
-                from rule_engine import safe_json_loads
-                result = {}
-                for key in ("dimensions", "thresholds", "country_risk_scores",
-                            "sector_risk_scores", "entity_type_scores"):
-                    val = mock_row.get(key)
-                    result[key] = safe_json_loads(val) if val else None
-
-                # Manually apply shape validation
-                for col in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
-                    v = result.get(col)
-                    if v is not None and not isinstance(v, dict):
-                        result[col] = None
-
-                assert result["entity_type_scores"] is None
+        # Simulate the parsing + shape validation that load_risk_config performs
+        result = {}
+        for key in ("dimensions", "thresholds", "country_risk_scores",
+                     "sector_risk_scores", "entity_type_scores"):
+            val = mock_row.get(key)
+            result[key] = safe_json_loads(val) if val else None
+        # Shape validation: non-dict score columns → None
+        for col in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+            v = result.get(col)
+            if v is not None and not isinstance(v, dict):
+                result[col] = None
+        assert result["entity_type_scores"] is None
 
     def test_dict_entity_scores_preserved(self):
         """entity_type_scores stored as dict → should be preserved."""

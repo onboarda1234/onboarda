@@ -187,8 +187,8 @@ def load_risk_config():
                     result[key] = None
 
             # ── Shape validation: score-mapping columns must be dicts ──
-            _DICT_COLUMNS = ("country_risk_scores", "sector_risk_scores", "entity_type_scores")
-            for col in _DICT_COLUMNS:
+            score_mapping_columns = ("country_risk_scores", "sector_risk_scores", "entity_type_scores")
+            for col in score_mapping_columns:
                 v = result.get(col)
                 if v is not None and not isinstance(v, dict):
                     logger.error(
