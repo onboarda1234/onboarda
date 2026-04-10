@@ -587,12 +587,15 @@ class TestRepairMigration:
 
     def test_repair_no_row_does_not_crash(self, temp_db):
         """Repair on empty table should not crash."""
-        from db import get_db, _repair_risk_config_shapes
+        from db import get_db, _repair_risk_config_shapes, seed_initial_data
         db = get_db()
         db.execute("DELETE FROM risk_config")
         db.commit()
         # Should not raise
         _repair_risk_config_shapes(db)
+        # Restore the seeded row so subsequent tests are not affected
+        seed_initial_data(db)
+        db.commit()
         db.close()
 
 
