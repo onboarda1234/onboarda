@@ -12,10 +12,6 @@ import uuid
 class TestPersonLevelDocumentUpload:
     """Tests for person-level (Director/UBO) document upload and verification."""
 
-    def _get_db(self):
-        from db import get_db
-        return get_db()
-
     def _create_director(self, db, app_id, person_key="dir1", first_name="John", last_name="Doe", nationality="GB"):
         """Create a director record with a person_key."""
         db.execute("""
@@ -211,7 +207,7 @@ class TestPersonLevelDocumentUpload:
 
     # ── Test 16: Sanctions screening safe when person has empty full_name ──
     def test_sanctions_safe_empty_name(self, temp_db, db, sample_application, mock_screening):
-        """Sanctions screening should not crash when person full_name is empty."""
+        """Sanctions screening should be skipped (not crash) when person full_name is empty."""
         # Create director with empty names
         db.execute("""
             INSERT INTO directors (application_id, person_key, first_name, last_name, full_name, nationality)
@@ -220,9 +216,18 @@ class TestPersonLevelDocumentUpload:
         db.commit()
         from server import resolve_application_person
         person = resolve_application_person(db, sample_application, "dir_empty")
-        # Person resolved but full_name is empty — screening should be skipped per our fix
         assert person is not None
         assert person["full_name"] == ""
+
+        # Verify that build_document_verification_context doesn't crash with empty name
+        doc_id = self._upload_document(db, sample_application, doc_type="passport", person_id="dir_empty")
+        doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+        app = db.execute("SELECT * FROM applications WHERE id=?", (sample_application,)).fetchone()
+        from server import build_document_verification_context
+        # This should not crash even though full_name is empty
+        ctx = build_document_verification_context(db, dict(app), dict(doc))
+        assert ctx is not None
+        assert ctx["person_name"] == ""
 
     # ── Test 17: Document with passport doc_type correctly identified as ID doc ──
     def test_passport_identified_as_id_doc(self, temp_db, db, sample_application):
