@@ -17,11 +17,11 @@ logger = logging.getLogger("arie.environment")
 VALID_ENVIRONMENTS = ("development", "testing", "demo", "staging", "production")
 
 def get_environment() -> str:
-    """Get current environment from ENV variable. Defaults to 'demo'."""
-    env = (os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or "demo").lower().strip()
+    """Get current environment from ENV variable. Defaults to 'development' for safety."""
+    env = (os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or "development").lower().strip()
     if env not in VALID_ENVIRONMENTS:
-        logger.warning(f"Invalid ENV='{env}' — defaulting to 'demo'")
-        env = "demo"
+        logger.error(f"REJECTED: Invalid ENVIRONMENT='{env}' — not in {VALID_ENVIRONMENTS}. Defaulting to 'development'.")
+        env = "development"
     return env
 
 ENV = get_environment()
@@ -260,6 +260,13 @@ def validate_environment() -> list:
         if flags.is_enabled("ENABLE_MOCK_FALLBACKS"):
             warnings.append("WARNING: ENABLE_MOCK_FALLBACKS is on in staging.")
 
+        # Staging must have PII encryption key — fail closed
+        if not os.environ.get("PII_ENCRYPTION_KEY"):
+            errors.append(
+                "CRITICAL: PII_ENCRYPTION_KEY is not set in staging. "
+                "Staging must behave like production for encryption."
+            )
+
         # Staging should have real API keys
         for var in _PRODUCTION_REQUIRED_VARS:
             if not os.environ.get(var):
@@ -291,7 +298,11 @@ def enforce_startup_safety():
         logger.critical("Fix the configuration above before starting in production.")
         sys.exit(1)
     elif errors and is_staging():
-        logger.warning(f"Staging has {len(errors)} configuration issues (non-blocking)")
+        logger.critical("═══ STARTUP BLOCKED — UNSAFE STAGING CONFIGURATION ═══")
+        for e in errors:
+            logger.critical(e)
+        logger.critical("Fix the configuration above before starting in staging.")
+        sys.exit(1)
 
     # Log active flags summary
     enabled = [k for k, v in flags.get_all().items() if v]

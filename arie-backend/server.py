@@ -496,26 +496,52 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 # ── C-02: PII Encryption Initialization ──────────────────────
 # Initialize PIIEncryptor singleton for encrypting sensitive data at rest.
-# In demo/dev mode, auto-generate a key if not set.
-# In production, PII_ENCRYPTION_KEY MUST be set (PIIEncryptor enforces this).
+# In production/staging: PII_ENCRYPTION_KEY MUST be set — fail closed.
+# In development/testing/demo only: auto-generate a transient key.
 _pii_encryptor = None
+_pii_encryption_ok = False
 try:
     _pii_encryptor = PIIEncryptor()
+    _pii_encryption_ok = True
     logger.info("PIIEncryptor initialized — field-level encryption active")
 except (RuntimeError, ValueError) as e:
-    if ENVIRONMENT in ("production", "prod"):
-        logger.critical(f"FATAL: PIIEncryptor failed in production: {e}")
+    if ENVIRONMENT in ("production", "prod", "staging"):
+        logger.critical(f"FATAL: PIIEncryptor failed in {ENVIRONMENT}: {e}")
         sys.exit(1)
-    else:
-        # In demo/dev, generate a transient key for testing
+    elif ENVIRONMENT in ("development", "testing", "demo"):
+        # Only local/dev/testing/demo environments may auto-generate a transient key
         from cryptography.fernet import Fernet as _Fernet
         _auto_key = _Fernet.generate_key().decode()
         os.environ["PII_ENCRYPTION_KEY"] = _auto_key
         try:
             _pii_encryptor = PIIEncryptor(_auto_key)
-            logger.warning("PIIEncryptor: auto-generated key for development (NOT for production)")
+            _pii_encryption_ok = True
+            logger.warning("PIIEncryptor: auto-generated transient key for %s (NOT for production/staging)", ENVIRONMENT)
         except Exception as e2:
             logger.error(f"PIIEncryptor initialization failed even with auto key: {e2}")
+    else:
+        # Unknown environment — fail closed
+        logger.critical(f"FATAL: PIIEncryptor failed in unrecognised environment '{ENVIRONMENT}': {e}")
+        sys.exit(1)
+
+# Boot-time encryption self-test: encrypt → decrypt → compare
+if _pii_encryptor is not None:
+    try:
+        _canary = "pii-selftest-canary-" + secrets.token_hex(8)
+        _encrypted_canary = _pii_encryptor.encrypt(_canary)
+        _decrypted_canary = _pii_encryptor.decrypt(_encrypted_canary)
+        if _decrypted_canary != _canary:
+            logger.critical("FATAL: PII encryption self-test FAILED — decrypt mismatch")
+            if ENVIRONMENT in ("production", "prod", "staging"):
+                sys.exit(1)
+            _pii_encryption_ok = False
+        else:
+            logger.info("PII encryption self-test passed (encrypt/decrypt canary OK)")
+    except Exception as _st_err:
+        logger.critical(f"FATAL: PII encryption self-test exception: {_st_err}")
+        if ENVIRONMENT in ("production", "prod", "staging"):
+            sys.exit(1)
+        _pii_encryption_ok = False
 
 
 def safe_json_loads(val):
@@ -1337,6 +1363,66 @@ class HealthHandler(BaseHandler):
         status_code = 200 if health["status"] == "ok" else 503
         self.set_status(status_code)
         self.write(json.dumps(health, default=str))
+
+
+class ReadinessHandler(tornado.web.RequestHandler):
+    """GET /api/readiness — Deep readiness probe for load balancers and orchestrators.
+
+    Returns 200 only when ALL critical subsystems are operational:
+    - PII encryption initialised and self-test passed
+    - Database reachable
+    - Required secrets/config present for the current environment
+    """
+
+    def get(self):
+        checks = {}
+        ready = True
+
+        # 1. PII encryption init status
+        if _pii_encryption_ok and _pii_encryptor is not None:
+            checks["encryption"] = {"status": "ok"}
+        else:
+            checks["encryption"] = {"status": "failed", "detail": "PIIEncryptor not initialised or self-test failed"}
+            ready = False
+
+        # 2. Database connectivity
+        db = None
+        try:
+            db = get_db()
+            db.execute("SELECT 1")
+            checks["database"] = {"status": "ok"}
+        except Exception as e:
+            checks["database"] = {"status": "failed", "detail": str(e)}
+            ready = False
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+        # 3. Required config present (environment-specific)
+        missing_config = []
+        if ENVIRONMENT in ("staging", "production", "prod"):
+            if not os.environ.get("PII_ENCRYPTION_KEY"):
+                missing_config.append("PII_ENCRYPTION_KEY")
+            if not SECRET_KEY:
+                missing_config.append("SECRET_KEY/JWT_SECRET")
+        if missing_config:
+            checks["config"] = {"status": "failed", "missing": missing_config}
+            ready = False
+        else:
+            checks["config"] = {"status": "ok"}
+
+        status_code = 200 if ready else 503
+        self.set_status(status_code)
+        self.set_header("Content-Type", "application/json")
+        self.write(json.dumps({
+            "ready": ready,
+            "environment": ENVIRONMENT,
+            "checks": checks,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }, default=str))
 
 
 class MetricsHandler(tornado.web.RequestHandler):
@@ -8386,8 +8472,9 @@ class AIAssistantHandler(BaseHandler):
 
 def make_app():
     routes = [
-        # Health
+        # Health & Readiness
         (r"/api/health", HealthHandler),
+        (r"/api/readiness", ReadinessHandler),
         (r"/api/admin/reset-db", AdminResetDBHandler),
         (r"/api/admin/reset-password", AdminResetPasswordHandler),
         (r"/api/admin/officer-reset-password", AdminOfficerPasswordResetHandler),

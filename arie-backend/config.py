@@ -167,10 +167,10 @@ def validate_config():
             warnings.append("DATABASE_URL not set — using SQLite (not recommended for production)")
         if not SUMSUB_APP_TOKEN or not SUMSUB_SECRET_KEY:
             warnings.append("SUMSUB credentials not set — KYC verification will be unavailable")
+        if not PII_ENCRYPTION_KEY:
+            errors.append("PII_ENCRYPTION_KEY is required in staging and production")
 
     if IS_PRODUCTION:
-        if not PII_ENCRYPTION_KEY:
-            errors.append("PII_ENCRYPTION_KEY is required in production")
         if not S3_BUCKET or S3_BUCKET == "arie-documents":
             errors.append("S3_BUCKET must be explicitly configured in production")
         if not os.environ.get("SMTP_HOST") or not os.environ.get("SMTP_USER"):

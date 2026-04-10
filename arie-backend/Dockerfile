@@ -46,9 +46,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 8080
 
-# Health check — hit /api/health every 30s
+# Health check — hit /api/readiness every 30s (deep readiness probe)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import requests; r=requests.get('http://localhost:8080/api/health', timeout=3); exit(0 if r.status_code==200 else 1)"
+    CMD python -c "import requests; r=requests.get('http://localhost:8080/api/readiness', timeout=3); exit(0 if r.status_code==200 else 1)"
 
 # ── Entrypoint ──
 CMD ["python", "server.py"]
