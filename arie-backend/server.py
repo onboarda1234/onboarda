@@ -3055,6 +3055,22 @@ class DocumentUploadHandler(BaseHandler):
         }
         doc_type = _DOC_TYPE_NORMALIZE.get(doc_type, doc_type)
 
+        # Validate person_id refers to an existing person if provided
+        person_resolved = None
+        if person_id:
+            person_resolved = resolve_application_person(db, app["id"], person_id)
+            if not person_resolved:
+                logger.warning(
+                    f"[doc-upload] person_id={person_id!r} not found in application={app['id']} "
+                    f"doc_type={doc_type} file={filename} — storing document with unresolved person_id"
+                )
+
+        logger.info(
+            f"[doc-upload] app={app['id']} doc_id={doc_id} doc_type={doc_type} "
+            f"person_id={person_id!r} person_resolved={'yes' if person_resolved else 'no'} "
+            f"file={filename} size={len(body)} s3={'yes' if s3_key else 'no'}"
+        )
+
         db.execute("""
             INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, s3_key, file_size, mime_type)
             VALUES (?,?,?,?,?,?,?,?,?)
@@ -3062,7 +3078,7 @@ class DocumentUploadHandler(BaseHandler):
         db.commit()
         db.close()
 
-        self.log_audit(user, "Upload", app["ref"], f"Document uploaded: {filename} ({doc_type})")
+        self.log_audit(user, "Upload", app["ref"], f"Document uploaded: {filename} ({doc_type})" + (f" person_id={person_id}" if person_id else ""))
         self.success({"id": doc_id, "doc_name": filename, "doc_type": doc_type, "file_size": len(body), "s3_key": s3_key}, 201)
 
 
@@ -3155,6 +3171,9 @@ class DocumentVerifyHandler(BaseHandler):
 
         # Get the related application and person for screening
         app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found for document", 404)
 
         # ── AI Document Verification (real vision analysis) ──
         checks = []
@@ -3335,33 +3354,51 @@ class DocumentVerifyHandler(BaseHandler):
         sanctions_result = None
         id_doc_types = ["passport", "national_id", "id_card", "drivers_license", "director_id", "ubo_id"]
         if doc["doc_type"] in id_doc_types and doc["person_id"]:
-            person = resolve_application_person(db, doc["application_id"], doc["person_id"])
-            if person:
-                sanctions_result = screen_sumsub_aml(
-                    person["full_name"],
-                    nationality=person["nationality"],
-                    entity_type="Person"
-                )
-                if sanctions_result["matched"]:
-                    all_passed = False
-                    checks.append({
-                        "label": "Sanctions/PEP Screening",
-                        "type": "sanctions",
-                        "rule": "Screened against Sumsub AML watchlists and PEP databases",
-                        "result": "fail",
-                        "message": f"MATCH FOUND — {len(sanctions_result['results'])} hit(s) on sanctions/PEP lists",
-                        "details": sanctions_result["results"],
-                        "source": sanctions_result["source"]
-                    })
+            try:
+                person = resolve_application_person(db, doc["application_id"], doc["person_id"])
+                if person:
+                    person_name = person.get("full_name") or ""
+                    if not person_name:
+                        logger.warning(f"[verify] doc={doc_id} person_id={doc['person_id']} resolved but full_name is empty — skipping sanctions screening")
+                    else:
+                        sanctions_result = screen_sumsub_aml(
+                            person_name,
+                            nationality=person.get("nationality"),
+                            entity_type="Person"
+                        )
+                        if sanctions_result["matched"]:
+                            all_passed = False
+                            checks.append({
+                                "label": "Sanctions/PEP Screening",
+                                "type": "sanctions",
+                                "rule": "Screened against Sumsub AML watchlists and PEP databases",
+                                "result": "fail",
+                                "message": f"MATCH FOUND — {len(sanctions_result['results'])} hit(s) on sanctions/PEP lists",
+                                "details": sanctions_result["results"],
+                                "source": sanctions_result["source"]
+                            })
+                        else:
+                            checks.append({
+                                "label": "Sanctions/PEP Screening",
+                                "type": "sanctions",
+                                "rule": "Screened against Sumsub AML watchlists and PEP databases",
+                                "result": "pass",
+                                "message": "No matches found on sanctions or PEP lists",
+                                "source": sanctions_result["source"]
+                            })
                 else:
-                    checks.append({
-                        "label": "Sanctions/PEP Screening",
-                        "type": "sanctions",
-                        "rule": "Screened against Sumsub AML watchlists and PEP databases",
-                        "result": "pass",
-                        "message": "No matches found on sanctions or PEP lists",
-                        "source": sanctions_result["source"]
-                    })
+                    logger.warning(
+                        f"[verify] doc={doc_id} person_id={doc['person_id']} not found in application={doc['application_id']} — skipping sanctions screening"
+                    )
+            except Exception as screening_err:
+                logger.error(f"[verify] Sanctions screening failed for doc={doc_id} person_id={doc.get('person_id')}: {screening_err}")
+                checks.append({
+                    "label": "Sanctions/PEP Screening",
+                    "type": "sanctions",
+                    "result": "warn",
+                    "message": f"Screening error: {str(screening_err)[:100]}. Manual review required."
+                })
+                all_passed = False
 
         status = "verified" if all_passed else "flagged"
 
