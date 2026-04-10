@@ -160,6 +160,167 @@ RISK_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
 
 
 # ══════════════════════════════════════════════════════════
+# RISK CONFIG SCHEMA VALIDATION
+# ══════════════════════════════════════════════════════════
+
+def _normalize_score_map(value):
+    """Attempt to normalize a malformed score map into a canonical dict.
+
+    Handles the known corruption pattern where a list-of-dicts was stored
+    instead of a flat dict.  E.g. [{"sme": 2}, {"shell": 4}] → {"sme": 2, "shell": 4}.
+
+    Returns the dict on success, or None if normalization is not possible.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        # Try to merge list-of-dicts into a single dict
+        merged = {}
+        for item in value:
+            if isinstance(item, dict):
+                merged.update(item)
+            else:
+                return None  # Cannot normalize: list contains non-dict items
+        if merged:
+            return merged
+    return None
+
+
+def validate_score_map(value, column_name):
+    """Validate that a score-mapping column is a dict {str → int/float}.
+
+    Returns (valid_dict, errors) where valid_dict is the validated/normalized
+    dict (or None if invalid) and errors is a list of error messages.
+    """
+    errors = []
+    if value is None:
+        return None, []
+
+    if not isinstance(value, dict):
+        # Attempt normalization (e.g. list-of-dicts → flat dict)
+        normalized = _normalize_score_map(value)
+        if normalized is not None:
+            logger.warning(
+                "risk_config %s: normalized %s to dict (%d entries)",
+                column_name, type(value).__name__, len(normalized),
+            )
+            value = normalized
+        else:
+            errors.append(
+                f"{column_name}: expected dict, got {type(value).__name__}"
+            )
+            return None, errors
+
+    # Validate entries: keys must be strings, values must be numeric
+    bad_entries = []
+    for k, v in value.items():
+        if not isinstance(k, str):
+            bad_entries.append(f"key {k!r} is not a string")
+        if not isinstance(v, (int, float)):
+            bad_entries.append(f"value for {k!r} is {type(v).__name__}, expected int/float")
+    if bad_entries:
+        errors.append(f"{column_name}: invalid entries: {'; '.join(bad_entries[:5])}")
+
+    return value, errors
+
+
+def validate_dimensions(value):
+    """Validate that dimensions is a list of objects with id, name, weight, subcriteria.
+
+    Returns (valid_list, errors).
+    """
+    errors = []
+    if value is None:
+        return None, []
+
+    if not isinstance(value, list):
+        errors.append(f"dimensions: expected list, got {type(value).__name__}")
+        return None, errors
+
+    for i, dim in enumerate(value):
+        if not isinstance(dim, dict):
+            errors.append(f"dimensions[{i}]: expected dict, got {type(dim).__name__}")
+            continue
+        for required_key in ("id", "name", "weight"):
+            if required_key not in dim:
+                errors.append(f"dimensions[{i}]: missing required key '{required_key}'")
+        if "weight" in dim and not isinstance(dim["weight"], (int, float)):
+            errors.append(f"dimensions[{i}].weight: expected number, got {type(dim['weight']).__name__}")
+        if "subcriteria" in dim:
+            if not isinstance(dim["subcriteria"], list):
+                errors.append(f"dimensions[{i}].subcriteria: expected list, got {type(dim['subcriteria']).__name__}")
+            else:
+                for j, sub in enumerate(dim["subcriteria"]):
+                    if not isinstance(sub, dict):
+                        errors.append(f"dimensions[{i}].subcriteria[{j}]: expected dict")
+                    elif "name" not in sub or "weight" not in sub:
+                        errors.append(f"dimensions[{i}].subcriteria[{j}]: missing name or weight")
+
+    return value, errors
+
+
+def validate_thresholds(value):
+    """Validate that thresholds is a list of {level, min, max} objects.
+
+    Returns (valid_list, errors).
+    """
+    errors = []
+    if value is None:
+        return None, []
+
+    if not isinstance(value, list):
+        errors.append(f"thresholds: expected list, got {type(value).__name__}")
+        return None, errors
+
+    required_levels = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
+    found_levels = set()
+    for i, t in enumerate(value):
+        if not isinstance(t, dict):
+            errors.append(f"thresholds[{i}]: expected dict, got {type(t).__name__}")
+            continue
+        for required_key in ("level", "min", "max"):
+            if required_key not in t:
+                errors.append(f"thresholds[{i}]: missing required key '{required_key}'")
+        level = t.get("level")
+        if level:
+            found_levels.add(level)
+
+    missing = required_levels - found_levels
+    if missing and value:
+        errors.append(f"thresholds: missing levels: {sorted(missing)}")
+
+    return value, errors
+
+
+def validate_risk_config(config):
+    """Validate the full risk_config dict.
+
+    Returns (validated_config, all_errors) where validated_config has
+    malformed score maps normalized where possible and set to None where not.
+    """
+    all_errors = []
+    validated = dict(config) if config else {}
+
+    # Validate dimensions
+    dims, errs = validate_dimensions(validated.get("dimensions"))
+    validated["dimensions"] = dims
+    all_errors.extend(errs)
+
+    # Validate thresholds
+    thresh, errs = validate_thresholds(validated.get("thresholds"))
+    validated["thresholds"] = thresh
+    all_errors.extend(errs)
+
+    # Validate score maps
+    for col in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+        val, errs = validate_score_map(validated.get(col), col)
+        validated[col] = val
+        all_errors.extend(errs)
+
+    return validated, all_errors
+
+
+# ══════════════════════════════════════════════════════════
 # RISK CONFIG LOADING (DB is canonical, hardcoded = fallback)
 # ══════════════════════════════════════════════════════════
 
@@ -170,6 +331,8 @@ def load_risk_config():
     entity_type_scores) are dicts after JSON parsing.  If any column is malformed
     (e.g. stored as a list or scalar), it is logged and set to None so that the
     hardcoded fallback in the scoring functions takes over.
+
+    Attempts normalization of list-of-dicts → flat dict before rejecting.
     """
     try:
         from db import get_db
@@ -186,19 +349,12 @@ def load_risk_config():
                 except (KeyError, IndexError):
                     result[key] = None
 
-            # ── Shape validation: score-mapping columns must be dicts ──
-            score_mapping_columns = ("country_risk_scores", "sector_risk_scores", "entity_type_scores")
-            for col in score_mapping_columns:
-                v = result.get(col)
-                if v is not None and not isinstance(v, dict):
-                    logger.error(
-                        "risk_config shape error: column=%s expected=dict actual_type=%s value=%s — "
-                        "falling back to hardcoded defaults for this field",
-                        col, type(v).__name__, repr(v)[:200],
-                    )
-                    result[col] = None
+            # ── Full schema validation with normalization ──
+            validated, errors = validate_risk_config(result)
+            for err in errors:
+                logger.error("risk_config validation: %s", err)
 
-            return result
+            return validated
     except Exception as e:
         logger.warning(f"Failed to load risk config from DB: {e}. Using hardcoded defaults.")
     return None

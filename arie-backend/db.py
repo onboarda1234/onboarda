@@ -2313,6 +2313,97 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.16: Repair malformed risk_config scoring columns
+    # Fixes the known corruption where score maps were stored as lists-of-dicts
+    # instead of flat dicts (e.g. [{"sme": 2}] → {"sme": 2}).
+    try:
+        _repair_risk_config_shapes(db)
+    except Exception as e:
+        logger.error("Migration v2.16 (risk_config repair) failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _repair_risk_config_shapes(db: 'DBConnection'):
+    """Migration v2.16: Repair malformed risk_config scoring columns.
+
+    Detects and fixes the known corruption pattern where score-mapping columns
+    (country_risk_scores, sector_risk_scores, entity_type_scores) were stored as
+    lists-of-dicts instead of flat dicts.  Also re-seeds from defaults if columns
+    are empty/null.
+    """
+    row = db.execute(
+        "SELECT country_risk_scores, sector_risk_scores, entity_type_scores "
+        "FROM risk_config WHERE id=1"
+    ).fetchone()
+    if not row:
+        return  # No risk_config row — will be seeded separately
+
+    needs_update = False
+    repaired = {}
+
+    for col in ("country_risk_scores", "sector_risk_scores", "entity_type_scores"):
+        raw = row[col]
+        if not raw or raw == '{}':
+            continue  # Empty — will be filled by _populate_default_scoring_config
+
+        # Parse the stored JSON
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Migration v2.16: %s is unparseable, will re-seed", col)
+            repaired[col] = '{}'
+            needs_update = True
+            continue
+
+        if isinstance(parsed, dict):
+            continue  # Already correct shape
+
+        # Attempt normalization: list-of-dicts → flat dict
+        if isinstance(parsed, list):
+            merged = {}
+            for item in parsed:
+                if isinstance(item, dict):
+                    merged.update(item)
+            if merged:
+                logger.info(
+                    "Migration v2.16: repaired %s from list-of-dicts to dict (%d entries)",
+                    col, len(merged),
+                )
+                repaired[col] = json.dumps(merged)
+                needs_update = True
+            else:
+                logger.warning(
+                    "Migration v2.16: %s is malformed list (not list-of-dicts), resetting to empty",
+                    col,
+                )
+                repaired[col] = '{}'
+                needs_update = True
+        else:
+            logger.warning(
+                "Migration v2.16: %s has unexpected type %s, resetting to empty",
+                col, type(parsed).__name__,
+            )
+            repaired[col] = '{}'
+            needs_update = True
+
+    if needs_update:
+        # Build SET clause for only the columns that need repair
+        set_parts = []
+        params = []
+        for col, val in repaired.items():
+            set_parts.append(f"{col}=?")
+            params.append(val)
+        if set_parts:
+            sql = f"UPDATE risk_config SET {', '.join(set_parts)} WHERE id=1"
+            db.execute(sql, params)
+            db.commit()
+            logger.info("Migration v2.16: risk_config scoring columns repaired")
+    else:
+        logger.debug("Migration v2.16: risk_config scoring columns are already well-formed")
+
 
 def _populate_default_scoring_config(db: 'DBConnection'):
     """Populate default country/sector/entity scores for existing risk_config rows."""
