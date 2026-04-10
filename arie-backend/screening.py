@@ -559,10 +559,42 @@ def _simulate_sumsub_status(applicant_id, note="No Sumsub credentials configured
     }
 
 
+class ScreeningProviderError(Exception):
+    """Raised when a critical screening provider fails and the submission cannot proceed."""
+    pass
+
+
+def _safe_future_result(future, timeout, source_label, company_name=""):
+    """
+    Safely collect a future result with bounded timeout.
+    Returns (result, error_info) — error_info is None on success.
+    On failure returns a degraded marker dict and the error string.
+    """
+    try:
+        result = future.result(timeout=timeout)
+        return result, None
+    except Exception as e:
+        logger.error(
+            "Screening source '%s' failed: %s (company=%s)",
+            source_label, str(e)[:300], company_name,
+        )
+        degraded = {
+            "source": source_label,
+            "api_status": "unavailable",
+            "error": f"Provider temporarily unavailable: {str(e)[:200]}",
+            "degraded": True,
+        }
+        return degraded, str(e)[:300]
+
+
 def run_full_screening(application_data, directors, ubos, client_ip=None):
     """
     Run all screening agents in parallel against an application.
     Uses ThreadPoolExecutor for concurrent HTTP API calls.
+
+    Resilience: individual provider failures are caught per-source and
+    recorded as degraded markers.  Only a complete inability to produce
+    any screening data raises ScreeningProviderError.
     """
     company_name = application_data.get("company_name", "")
     country = application_data.get("country", "")
@@ -575,6 +607,7 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
         "ip_geolocation": {},
         "overall_flags": [],
         "total_hits": 0,
+        "degraded_sources": [],
     }
 
     # Map jurisdiction
@@ -645,29 +678,50 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
             seen_person_keys[dedup_key] = (person, ptype, p_name, f)
             kyc_futures.append((person, ptype, p_name, f))
 
-        # ── Collect results ──
-        report["company_screening"] = company_future.result(timeout=30)
-        if not report["company_screening"]["found"]:
-            report["overall_flags"].append(f"Company '{company_name}' not found in corporate registry")
+        # ── Collect results with per-source error handling ──
 
-        company_sanctions = company_sanctions_future.result(timeout=30)
-        report["company_screening"]["sanctions"] = company_sanctions
-        if company_sanctions["matched"]:
-            report["overall_flags"].append(f"Company '{company_name}' has sanctions/watchlist matches")
-            report["total_hits"] += len(company_sanctions["results"])
+        # Company registry lookup (non-critical — degrade gracefully)
+        company_result, company_err = _safe_future_result(
+            company_future, timeout=30, source_label="opencorporates", company_name=company_name)
+        if company_err:
+            report["degraded_sources"].append("opencorporates")
+            report["overall_flags"].append(f"Company registry lookup unavailable: {company_err[:100]}")
+            report["company_screening"] = {"found": False, "source": "unavailable", "degraded": True}
+        else:
+            report["company_screening"] = company_result
+            if not company_result.get("found"):
+                report["overall_flags"].append(f"Company '{company_name}' not found in corporate registry")
+
+        # Company sanctions (non-critical — degrade gracefully)
+        company_sanctions, sanctions_err = _safe_future_result(
+            company_sanctions_future, timeout=30, source_label="sumsub_company_sanctions", company_name=company_name)
+        if sanctions_err:
+            report["degraded_sources"].append("sumsub_company_sanctions")
+            report["overall_flags"].append(f"Company sanctions screening unavailable: {sanctions_err[:100]}")
+            report["company_screening"]["sanctions"] = {"matched": False, "results": [], "source": "unavailable", "degraded": True}
+        else:
+            report["company_screening"]["sanctions"] = company_sanctions
+            if company_sanctions.get("matched"):
+                report["overall_flags"].append(f"Company '{company_name}' has sanctions/watchlist matches")
+                report["total_hits"] += len(company_sanctions.get("results", []))
 
         for d, f in director_futures:
             d_name = d.get("full_name", "")
-            screening = f.result(timeout=30)
+            screening, d_err = _safe_future_result(
+                f, timeout=30, source_label=f"sumsub_director_{d_name}", company_name=company_name)
+            if d_err:
+                report["degraded_sources"].append(f"director_screening:{d_name}")
+                screening = {"matched": False, "results": [], "source": "unavailable", "degraded": True}
+                report["overall_flags"].append(f"Director '{d_name}' screening unavailable: {d_err[:100]}")
             result = {
                 "person_name": d_name, "person_type": "director",
                 "nationality": d.get("nationality", ""), "declared_pep": d.get("is_pep", "No"),
                 "screening": screening,
             }
-            if screening["matched"]:
+            if screening.get("matched"):
                 report["overall_flags"].append(f"Director '{d_name}' has sanctions/PEP matches")
-                report["total_hits"] += len(screening["results"])
-                for hit in screening["results"]:
+                report["total_hits"] += len(screening.get("results", []))
+                for hit in screening.get("results", []):
                     if hit.get("is_pep") and d.get("is_pep", "No") != "Yes":
                         result["undeclared_pep"] = True
                         report["overall_flags"].append(f"Director '{d_name}' may be undeclared PEP")
@@ -675,36 +729,51 @@ def run_full_screening(application_data, directors, ubos, client_ip=None):
 
         for u, f in ubo_futures:
             u_name = u.get("full_name", "")
-            screening = f.result(timeout=30)
+            screening, u_err = _safe_future_result(
+                f, timeout=30, source_label=f"sumsub_ubo_{u_name}", company_name=company_name)
+            if u_err:
+                report["degraded_sources"].append(f"ubo_screening:{u_name}")
+                screening = {"matched": False, "results": [], "source": "unavailable", "degraded": True}
+                report["overall_flags"].append(f"UBO '{u_name}' screening unavailable: {u_err[:100]}")
             result = {
                 "person_name": u_name, "person_type": "ubo",
                 "nationality": u.get("nationality", ""), "ownership_pct": u.get("ownership_pct", 0),
                 "declared_pep": u.get("is_pep", "No"), "screening": screening,
             }
-            if screening["matched"]:
+            if screening.get("matched"):
                 report["overall_flags"].append(f"UBO '{u_name}' has sanctions/PEP matches")
-                report["total_hits"] += len(screening["results"])
-                for hit in screening["results"]:
+                report["total_hits"] += len(screening.get("results", []))
+                for hit in screening.get("results", []):
                     if hit.get("is_pep") and u.get("is_pep", "No") != "Yes":
                         result["undeclared_pep"] = True
                         report["overall_flags"].append(f"UBO '{u_name}' may be undeclared PEP")
             report["ubo_screenings"].append(result)
 
         if ip_future:
-            report["ip_geolocation"] = ip_future.result(timeout=30)
-            ip_geo = report["ip_geolocation"]
-            if ip_geo.get("risk_level") in ("HIGH", "VERY_HIGH"):
-                report["overall_flags"].append(f"Client IP geolocated to high-risk jurisdiction: {ip_geo.get('country')}")
-            if ip_geo.get("is_vpn"):
-                report["overall_flags"].append("Client IP detected as VPN")
-            if ip_geo.get("is_proxy"):
-                report["overall_flags"].append("Client IP detected as proxy")
-            if ip_geo.get("is_tor"):
-                report["overall_flags"].append("Client IP detected as Tor exit node")
+            ip_result, ip_err = _safe_future_result(
+                ip_future, timeout=30, source_label="ip_geolocation", company_name=company_name)
+            if ip_err:
+                report["degraded_sources"].append("ip_geolocation")
+                report["ip_geolocation"] = {"source": "unavailable", "degraded": True}
+            else:
+                report["ip_geolocation"] = ip_result
+                ip_geo = report["ip_geolocation"]
+                if ip_geo.get("risk_level") in ("HIGH", "VERY_HIGH"):
+                    report["overall_flags"].append(f"Client IP geolocated to high-risk jurisdiction: {ip_geo.get('country')}")
+                if ip_geo.get("is_vpn"):
+                    report["overall_flags"].append("Client IP detected as VPN")
+                if ip_geo.get("is_proxy"):
+                    report["overall_flags"].append("Client IP detected as proxy")
+                if ip_geo.get("is_tor"):
+                    report["overall_flags"].append("Client IP detected as Tor exit node")
 
         report["kyc_applicants"] = []
         for person, ptype, p_name, f in kyc_futures:
-            applicant = f.result(timeout=30)
+            applicant, kyc_err = _safe_future_result(
+                f, timeout=30, source_label=f"sumsub_kyc_{p_name}", company_name=company_name)
+            if kyc_err:
+                report["degraded_sources"].append(f"kyc:{p_name}")
+                applicant = {"source": "unavailable", "degraded": True}
             applicant["person_name"] = p_name
             applicant["person_type"] = ptype
             report["kyc_applicants"].append(applicant)
