@@ -34,8 +34,9 @@ class TestPersonLevelDocumentUpload:
 
     def _upload_document(self, db, app_id, doc_type="passport", person_id="dir1", filename="passport.pdf"):
         """Simulate a document upload by inserting directly into the DB."""
+        import tempfile
         doc_id = uuid.uuid4().hex[:16]
-        file_path = f"/tmp/test_{doc_id}.pdf"
+        file_path = os.path.join(tempfile.gettempdir(), f"test_{doc_id}.pdf")
         # Create a minimal test file
         with open(file_path, "wb") as f:
             f.write(b"%PDF-1.4 test content")

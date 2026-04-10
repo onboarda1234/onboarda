@@ -3078,7 +3078,10 @@ class DocumentUploadHandler(BaseHandler):
         db.commit()
         db.close()
 
-        self.log_audit(user, "Upload", app["ref"], f"Document uploaded: {filename} ({doc_type})" + (f" person_id={person_id}" if person_id else ""))
+        audit_detail = f"Document uploaded: {filename} ({doc_type})"
+        if person_id:
+            audit_detail += f" person_id={person_id}"
+        self.log_audit(user, "Upload", app["ref"], audit_detail)
         self.success({"id": doc_id, "doc_name": filename, "doc_type": doc_type, "file_size": len(body), "s3_key": s3_key}, 201)
 
 
@@ -3396,7 +3399,7 @@ class DocumentVerifyHandler(BaseHandler):
                     "label": "Sanctions/PEP Screening",
                     "type": "sanctions",
                     "result": "warn",
-                    "message": f"Screening error: {str(screening_err)[:100]}. Manual review required."
+                    "message": "Screening temporarily unavailable. Manual review required."
                 })
                 all_passed = False
 

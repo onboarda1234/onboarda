@@ -8577,14 +8577,19 @@ function handleKYCUpload(personId, docType, input) {
   const lbl = document.getElementById('kyc-' + docKey + '-lbl-' + personId);
   const area = document.getElementById('kyc-' + docKey + '-area-' + personId);
   var fileName = input.files.length === 1 ? input.files[0].name : input.files.length + ' files selected';
+
+  function resetUploadUI() {
+    if (lbl) lbl.textContent = 'Click to upload';
+    if (area) { area.style.borderColor = ''; area.style.color = ''; }
+    if (input) input.value = '';
+  }
+
   if (lbl) lbl.textContent = '⏳ Uploading ' + fileName;
   if (area) { area.style.borderColor = 'var(--amber)'; area.style.color = 'var(--amber)'; }
 
   // Pre-flight validation
   if (!personId) {
-    if (lbl) lbl.textContent = 'Click to upload';
-    if (area) { area.style.borderColor = ''; area.style.color = ''; }
-    if (input) input.value = '';
+    resetUploadUI();
     showToast('error', 'Upload Error', 'Person identifier is missing. Please refresh the page and try again.');
     return;
   }
@@ -8634,9 +8639,7 @@ function handleKYCUpload(personId, docType, input) {
       });
     }).catch(function(err) {
       console.warn('KYC doc upload error:', err);
-      if (lbl) lbl.textContent = 'Click to upload';
-      if (area) { area.style.borderColor = ''; area.style.color = ''; }
-      if (input) input.value = '';
+      resetUploadUI();
       var msg = err.message || '';
       if (msg.indexOf('_VERIFY_FAIL_:') === 0) {
         // Upload succeeded but verification failed — document is stored
@@ -8648,9 +8651,7 @@ function handleKYCUpload(personId, docType, input) {
       }
     });
   } else {
-    if (lbl) lbl.textContent = 'Click to upload';
-    if (area) { area.style.borderColor = ''; area.style.color = ''; }
-    if (input) input.value = '';
+    resetUploadUI();
     showToast('error', 'Authentication Required', 'Please sign in before uploading documents.');
   }
 }
