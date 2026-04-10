@@ -242,7 +242,6 @@ class TestNoRandomFallbackStaging:
         We verify by checking that ENVIRONMENT=staging is in the fatal exit path.
         """
         # This is a design-level test: confirm the code checks for staging in the exit path
-        import ast
         server_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py")
         with open(server_path) as f:
             source = f.read()
