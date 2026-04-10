@@ -9,14 +9,14 @@ import pytest
 class TestGetEnvironment:
     """Test get_environment() environment detection logic."""
 
-    def test_defaults_to_demo(self, monkeypatch):
+    def test_defaults_to_development(self, monkeypatch):
         monkeypatch.delenv("ENVIRONMENT", raising=False)
         monkeypatch.delenv("ENV", raising=False)
         # Re-import to trigger fresh get_environment()
         import importlib
         import environment
         result = environment.get_environment()
-        assert result == "demo"
+        assert result == "development"
 
     def test_reads_environment_var(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "production")
@@ -31,11 +31,11 @@ class TestGetEnvironment:
         result = environment.get_environment()
         assert result == "staging"
 
-    def test_invalid_env_defaults_to_demo(self, monkeypatch):
+    def test_invalid_env_defaults_to_development(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "invalid_env_name")
         import environment
         result = environment.get_environment()
-        assert result == "demo"
+        assert result == "development"
 
     def test_strips_whitespace(self, monkeypatch):
         monkeypatch.setenv("ENVIRONMENT", "  demo  ")

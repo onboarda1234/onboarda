@@ -15,16 +15,27 @@ export DEBUG="${DEBUG:-0}"
 export ENVIRONMENT="${ENVIRONMENT:-development}"
 
 # ── SECRET_KEY Handling ──────────────────────────────────
-# PRODUCTION: SECRET_KEY must be explicitly set — fails if missing.
+# PRODUCTION/STAGING: SECRET_KEY must be explicitly set — fails if missing.
 # DEVELOPMENT: Auto-generates a random key if not provided.
-if [ "$ENVIRONMENT" = "production" ]; then
+if [ "$ENVIRONMENT" = "production" ] || [ "$ENVIRONMENT" = "staging" ]; then
     if [ -z "$SECRET_KEY" ]; then
         echo ""
         echo "╔══════════════════════════════════════════════════╗"
-        echo "║  FATAL: SECRET_KEY not set in production mode    ║"
+        echo "║  FATAL: SECRET_KEY not set in $ENVIRONMENT mode  ║"
         echo "║  Set SECRET_KEY env var before starting.         ║"
         echo "║  Example: export SECRET_KEY=\$(openssl rand -hex 64)║"
         echo "╚══════════════════════════════════════════════════╝"
+        echo ""
+        exit 1
+    fi
+    if [ -z "$PII_ENCRYPTION_KEY" ]; then
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════╗"
+        echo "║  FATAL: PII_ENCRYPTION_KEY not set in $ENVIRONMENT mode ║"
+        echo "║  Generate one with:                                      ║"
+        echo "║  python3 -c 'from cryptography.fernet import Fernet;     ║"
+        echo "║              print(Fernet.generate_key().decode())'      ║"
+        echo "╚══════════════════════════════════════════════════════════╝"
         echo ""
         exit 1
     fi
@@ -65,15 +76,16 @@ echo ""
 # ── Check Python dependencies ───────────────────────────
 # ── Environment Validation ────────────────────────────────
 echo "→ Validating environment..."
-if [ "$ENVIRONMENT" = "production" ]; then
+if [ "$ENVIRONMENT" = "production" ] || [ "$ENVIRONMENT" = "staging" ]; then
     MISSING=""
     [ -z "$SECRET_KEY" ] && MISSING="$MISSING SECRET_KEY"
+    [ -z "$PII_ENCRYPTION_KEY" ] && MISSING="$MISSING PII_ENCRYPTION_KEY"
     [ -z "$ALLOWED_ORIGIN" ] && echo "  ⚠️  ALLOWED_ORIGIN not set — CORS will default to same-origin only"
     if [ -n "$MISSING" ]; then
-        echo "  ❌ Missing required production variables:$MISSING"
+        echo "  ❌ Missing required $ENVIRONMENT variables:$MISSING"
         exit 1
     fi
-    echo "  ✅ Production environment validated"
+    echo "  ✅ $ENVIRONMENT environment validated"
 else
     echo "  ℹ️  Running in development mode"
 fi

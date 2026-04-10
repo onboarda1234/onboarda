@@ -39,7 +39,7 @@
 | **Load balancer** | AWS ALB with HTTPS (ACM certificate), ports 80 + 443 |
 | **DNS** | `staging.regmind.co` → ALB CNAME via GoDaddy |
 | **Logs** | AWS CloudWatch (`/ecs/regmind-staging`) |
-| **Health endpoints** | `GET /api/health`, `GET /api/config/environment` |
+| **Health endpoints** | `GET /api/health` (liveness), `GET /api/readiness` (deep readiness), `GET /api/config/environment` |
 | **AI engine** | Claude API via `anthropic` SDK. Fail-closed in staging/production. |
 | **KYC/AML** | Sumsub API (live credentials). Level name requires admin verification. |
 | **PII encryption** | Fernet AES-128-CBC. Key pinned in Secrets Manager. |
@@ -115,26 +115,35 @@ Must use `--platform linux/amd64` (dev machine is ARM, ECS runs amd64).
 
 ### Step 3: Tag and push to ECR
 ```bash
+GIT_SHA=$(git rev-parse HEAD)
+docker tag regmind-backend:latest 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:$GIT_SHA
 docker tag regmind-backend:latest 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:latest
 
 aws ecr get-login-password --region af-south-1 | docker login --username AWS \
   --password-stdin 782913119880.dkr.ecr.af-south-1.amazonaws.com
 
+docker push 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:$GIT_SHA
 docker push 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:latest
 ```
 If push returns `403 Forbidden`, re-run the login command.
 
-### Step 4: Deploy to ECS
+> **Note:** Always push both a SHA-tagged image AND `:latest`. The SHA tag enables deterministic rollback.
+
+### Step 4: Register new task definition and deploy to ECS
+
+The CI/CD workflow now registers a new task definition with the SHA-pinned image automatically.
+For manual deployment:
 ```bash
+# Get current task def and update image
+TASK_DEF=$(aws ecs describe-task-definition --task-definition regmind-staging \
+  --region af-south-1 --query 'taskDefinition' --output json)
+
+# Update container image to SHA-tagged version (use python or jq)
+# Then register and deploy:
 aws ecs update-service --cluster regmind-staging --service regmind-backend \
-  --desired-count 0 --region af-south-1 > /dev/null
-sleep 30
-aws ecs update-service --cluster regmind-staging --service regmind-backend \
-  --task-definition regmind-staging:3 --desired-count 1 \
-  --force-new-deployment --region af-south-1 \
-  --query 'service.deployments[0].status' --output text
+  --task-definition <NEW_TASK_DEF_ARN> \
+  --force-new-deployment --region af-south-1
 ```
-Expected: `PRIMARY`
 
 ### Step 5: Wait for stabilisation
 ```bash
@@ -142,6 +151,12 @@ sleep 120
 ```
 
 ### Step 6: Verify health
+```bash
+curl -s https://staging.regmind.co/api/readiness | python3 -m json.tool
+```
+Expected: `"ready": true`, database `"status": "ok"`, encryption `"status": "ok"`
+
+Also check liveness:
 ```bash
 curl -s https://staging.regmind.co/api/health | python3 -m json.tool
 ```
@@ -186,9 +201,9 @@ Check for: `connection pool exhausted`, `falling back to mock mode`, `Sumsub cre
 
 ## 6. Rollback Procedure
 
-> **WARNING:** Rollback reliability is limited while using the `:latest` image tag. When a new image is pushed as `:latest`, the previous image is overwritten in ECR. Rolling back to an older task definition revision will still pull `:latest`, which is now the broken image — not the previous working image. Rollback via task definition revision is only effective if the underlying image in ECR has not been replaced.
+> **Rollback is now reliable:** With SHA-tagged images (introduced in CI/CD improvements), each deployment creates a uniquely-tagged image in ECR that is not overwritten. Rolling back to a previous task definition revision will use the correct image.
 >
-> **To enable reliable rollback:** Use versioned image tags (e.g., `:v1.7.1`) instead of `:latest`. This is listed as a recommended future improvement.
+> **Note:** Database migrations are NOT rolled back. If a migration was applied during the failed deploy, the old code may encounter schema mismatches. Assess backward compatibility before rolling back.
 
 ### If a previous image is still available in ECR
 
@@ -233,7 +248,7 @@ curl -s https://staging.regmind.co/api/health | python3 -m json.tool
 | **In-memory rate limiter resets** | Certain | Brute-force protection absent briefly | Acceptable for pilot. Redis is future. |
 | **In-memory token revocation resets** | Certain | Revoked tokens valid until natural 24h expiry | Acceptable for pilot. Redis is future. |
 | **Single-container failure** | Low | ~2 min downtime during ECS restart | Production should have min 2 tasks. |
-| **`:latest` tag prevents reliable rollback** | Certain | Cannot roll back to previous image | Use versioned tags (future improvement). |
+| **`:latest` tag prevents reliable rollback** | Mitigated | Cannot roll back to previous image | SHA-tagged images now pushed alongside `:latest`. Rollback is reliable. |
 
 ---
 
@@ -310,17 +325,17 @@ DEPLOY
 [ ] sleep 120
 
 VERIFY
+[ ] /api/readiness → ready: true, encryption: ok, database: ok
 [ ] /api/health → ok, connected, postgresql
 [ ] /api/config/environment → staging, is_demo: false
 [ ] python3.11 tests/test_staging_e2e.py → 16/17+ pass
 [ ] Browser: dashboard shows "—" not demo stats
 [ ] Logs: no "mock mode" or "connection pool exhausted"
 
-ROLLBACK (if needed — limited reliability with :latest tag)
+ROLLBACK (if needed — reliable with SHA-tagged images)
 [ ] aws ecs update-service --task-definition regmind-staging:___ (previous revision)
 [ ] sleep 120
 [ ] Verify health
-[ ] If image overwritten: rebuild from previous git commit, push, redeploy
 ```
 
 ---
@@ -331,7 +346,7 @@ ROLLBACK (if needed — limited reliability with :latest tag)
 
 | Improvement | Benefit | Effort |
 |---|---|---|
-| **Versioned image tags** (`:v1.7.1` not `:latest`) | Reliable rollback | 1 hour |
+| **Versioned image tags** (`:$GIT_SHA` alongside `:latest`) | Reliable rollback | ✅ Done |
 | **Blue-green deployment** | Zero-downtime, automatic rollback | 1 day |
 | **Redis-backed rate limiter + token revocation** | Survives restarts, scales | 1 day |
 | **Automated E2E in CI/CD post-deploy step** | Catches deploy regressions automatically | 2 hours |
