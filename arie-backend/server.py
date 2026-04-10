@@ -1185,7 +1185,7 @@ from screening import (
     sumsub_generate_access_token, sumsub_get_applicant_status,
     sumsub_add_document, sumsub_verify_webhook,
     _simulate_sumsub_applicant, _simulate_sumsub_token, _simulate_sumsub_status,
-    run_full_screening,
+    run_full_screening, ScreeningProviderError,
 )
 
 # Sprint 3.5: BaseHandler extracted to base_handler.py to reduce server.py concentration risk
@@ -2339,13 +2339,37 @@ class SubmitApplicationHandler(BaseHandler):
             return
 
         db = get_db()
+        try:
+            return self._do_submit(db, user, app_id)
+        except Exception as exc:
+            # ── Outer defence-in-depth handler ──
+            # Guarantee no unhandled exception leaks as Tornado's default 500.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "SubmitApplicationHandler unhandled error: app_id=%s user=%s ip=%s error=%s",
+                app_id,
+                user.get("sub", "unknown") if user else "unknown",
+                self.get_client_ip(),
+                str(exc)[:500],
+                exc_info=True,
+            )
+            return self.error("An unexpected error occurred while processing your submission. Please try again.", 500)
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    def _do_submit(self, db, user, app_id):
+        """Core submit logic, separated for clean error handling."""
         app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
         if not app:
-            db.close()
             return self.error("Application not found", 404)
 
         if not self.check_app_ownership(user, app):
-            db.close()
             return
 
         real_id = app["id"]
@@ -2360,7 +2384,6 @@ class SubmitApplicationHandler(BaseHandler):
                 from datetime import date
                 parsed_date = datetime.strptime(inc_date, "%Y-%m-%d").date()
                 if parsed_date > datetime.now(timezone.utc).date():
-                    db.close()
                     return self.error("Incorporation date cannot be in the future.", 400)
             except ValueError:
                 pass  # Non-standard date format, allow through
@@ -2368,7 +2391,6 @@ class SubmitApplicationHandler(BaseHandler):
         # Validate country is not sanctioned
         country = (app.get("country") or "").lower().strip()
         if country in SANCTIONED_COUNTRIES_FULL:
-            db.close()
             return self.error(
                 f"{BRAND['portal_name']} cannot onboard clients involved in sanctioned or prohibited jurisdictions.",
                 403
@@ -2379,34 +2401,29 @@ class SubmitApplicationHandler(BaseHandler):
         # Validate currency
         currency = prescreening_raw.get("currency", "")
         if currency and currency not in ALLOWED_CURRENCIES:
-            db.close()
             return self.error(f"Currency '{currency}' not supported. Allowed: {', '.join(ALLOWED_CURRENCIES)}", 400)
 
         # ── v2.3: Validate contact fields (email, phone, website) ──
         contact_email = prescreening_raw.get("entity_contact_email", "")
         if contact_email:
             if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', contact_email):
-                db.close()
                 return self.error("Invalid email format. Please provide a valid email address.", 400)
 
         contact_phone = prescreening_raw.get("entity_contact_mobile", "")
         if contact_phone:
             stripped_phone = re.sub(r'[\s\-()]', '', contact_phone)
             if not re.match(r'^[0-9]{4,15}$', stripped_phone):
-                db.close()
                 return self.error("Invalid phone number. Please enter 4-15 digits.", 400)
 
         website = prescreening_raw.get("website", "")
         if website:
             if not re.match(r'^(https?://)?([a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(/.*)?$', website):
-                db.close()
                 return self.error("Invalid website URL. Please enter a valid domain (e.g. www.company.com).", 400)
 
         directors, ubos, intermediaries = get_application_parties(db, real_id)
 
         # W2-2: Require at least one director before submission
         if not directors:
-            db.close()
             return self.error("At least one director is required before submitting the application.", 400)
 
         prescreening = safe_json_loads(app["prescreening_data"])
@@ -2420,14 +2437,44 @@ class SubmitApplicationHandler(BaseHandler):
 
         # ── Run real screening (Agents 1, 2, 3, 5) ──
         client_ip = self.get_client_ip()
-        screening_report = run_full_screening(
-            scoring_input, directors, ubos, client_ip=client_ip
-        )
+        try:
+            screening_report = run_full_screening(
+                scoring_input, directors, ubos, client_ip=client_ip
+            )
+        except ScreeningProviderError as spe:
+            logger.error(
+                "Screening provider critical failure: app_id=%s ref=%s user=%s ip=%s stage=run_full_screening error=%s",
+                real_id, app.get("ref", ""), user.get("sub", ""), client_ip, str(spe)[:300],
+                exc_info=True,
+            )
+            return self.error(
+                "Screening provider temporarily unavailable. Please retry in a moment.", 503
+            )
+        except Exception as screening_exc:
+            logger.error(
+                "Screening failed: app_id=%s ref=%s user=%s ip=%s stage=run_full_screening error=%s",
+                real_id, app.get("ref", ""), user.get("sub", ""), client_ip, str(screening_exc)[:300],
+                exc_info=True,
+            )
+            return self.error(
+                "Screening provider temporarily unavailable. Please retry in a moment.", 503
+            )
 
-        # Track screening mode (live vs simulated) — mandatory
-        screening_mode = determine_screening_mode(screening_report)
-        store_screening_mode(db, real_id, screening_mode)
-        screening_report["screening_mode"] = screening_mode
+        # Track screening mode (live vs simulated)
+        try:
+            screening_mode = determine_screening_mode(screening_report)
+            if not store_screening_mode(db, real_id, screening_mode):
+                logger.warning(
+                    "store_screening_mode returned False: app_id=%s mode=%s", real_id, screening_mode
+                )
+            screening_report["screening_mode"] = screening_mode
+        except Exception as mode_exc:
+            logger.error(
+                "Screening mode storage failed: app_id=%s ref=%s stage=store_screening_mode error=%s",
+                real_id, app.get("ref", ""), str(mode_exc)[:300],
+                exc_info=True,
+            )
+            screening_report["screening_mode"] = "unknown"
 
         # Compute risk score
         risk = compute_risk_score(scoring_input)
@@ -2442,61 +2489,75 @@ class SubmitApplicationHandler(BaseHandler):
             risk["screening_elevated"] = True
             risk["screening_hits"] = screening_report["total_hits"]
 
-        # Store screening report in prescreening_data
-        prescreening["screening_report"] = screening_report
-        db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
-                   (json.dumps(prescreening, default=str), real_id))
+        # ── DB write path: store screening results and update application ──
+        try:
+            # Store screening report in prescreening_data
+            prescreening["screening_report"] = screening_report
+            db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
+                       (json.dumps(prescreening, default=str), real_id))
 
-        # Sync undeclared PEP detections back to director/UBO records
-        for ds in screening_report.get("director_screenings", []):
-            if ds.get("undeclared_pep"):
-                db.execute(
-                    "UPDATE directors SET is_pep='Yes' WHERE application_id=? AND full_name=?",
-                    (real_id, ds.get("person_name", ""))
-                )
-        for us in screening_report.get("ubo_screenings", []):
-            if us.get("undeclared_pep"):
-                db.execute(
-                    "UPDATE ubos SET is_pep='Yes' WHERE application_id=? AND full_name=?",
-                    (real_id, us.get("person_name", ""))
-                )
+            # Sync undeclared PEP detections back to director/UBO records
+            for ds in screening_report.get("director_screenings", []):
+                if ds.get("undeclared_pep"):
+                    db.execute(
+                        "UPDATE directors SET is_pep='Yes' WHERE application_id=? AND full_name=?",
+                        (real_id, ds.get("person_name", ""))
+                    )
+            for us in screening_report.get("ubo_screenings", []):
+                if us.get("undeclared_pep"):
+                    db.execute(
+                        "UPDATE ubos SET is_pep='Yes' WHERE application_id=? AND full_name=?",
+                        (real_id, us.get("person_name", ""))
+                    )
 
-        db.execute("""
-            UPDATE applications SET
-                status='submitted', submitted_at=datetime('now'),
-                risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
-                pre_approval_decision=NULL, pre_approval_notes=NULL,
-                pre_approval_officer_id=NULL, pre_approval_timestamp=NULL,
-                updated_at=datetime('now')
-            WHERE id=?
-        """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"], real_id))
+            db.execute("""
+                UPDATE applications SET
+                    status='submitted', submitted_at=datetime('now'),
+                    risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                    pre_approval_decision=NULL, pre_approval_notes=NULL,
+                    pre_approval_officer_id=NULL, pre_approval_timestamp=NULL,
+                    updated_at=datetime('now')
+                WHERE id=?
+            """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"], real_id))
 
-        # After pre-screening: ALL risk levels see pricing first
-        # Routing to pre-approval (HIGH/VERY_HIGH) happens after pricing acceptance
-        db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
+            # After pre-screening: ALL risk levels see pricing first
+            # Routing to pre-approval (HIGH/VERY_HIGH) happens after pricing acceptance
+            db.execute("UPDATE applications SET status='pricing_review' WHERE id=?", (real_id,))
 
-        # Get pricing for this risk level
-        pricing = PRICING_TIERS.get(risk["level"], PRICING_TIERS["MEDIUM"])
+            # Get pricing for this risk level
+            pricing = PRICING_TIERS.get(risk["level"], PRICING_TIERS["MEDIUM"])
 
-        # Store pricing in prescreening data
-        prescreening["pricing"] = pricing
-        prescreening["pricing"]["risk_level"] = risk["level"]
-        db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
-                   (json.dumps(prescreening, default=str), real_id))
+            # Store pricing in prescreening data
+            prescreening["pricing"] = pricing
+            prescreening["pricing"]["risk_level"] = risk["level"]
+            db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
+                       (json.dumps(prescreening, default=str), real_id))
 
-        # Notify compliance team for HIGH/VERY_HIGH risk — requires pre-approval
-        if risk["level"] in ("HIGH", "VERY_HIGH"):
-            compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
-            for cu in compliance_users:
-                db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
-                          (cu["id"], f"PRE-APPROVAL REQUIRED: {risk['level']}-Risk Application {app['ref']}",
-                           f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}). "
-                           f"This application requires pre-approval before the client can proceed to KYC. "
-                           f"Review pre-screening data and screening results in the Pre-Approval Queue."))
+            # Notify compliance team for HIGH/VERY_HIGH risk — requires pre-approval
+            if risk["level"] in ("HIGH", "VERY_HIGH"):
+                compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
+                for cu in compliance_users:
+                    db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                              (cu["id"], f"PRE-APPROVAL REQUIRED: {risk['level']}-Risk Application {app['ref']}",
+                               f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}). "
+                               f"This application requires pre-approval before the client can proceed to KYC. "
+                               f"Review pre-screening data and screening results in the Pre-Approval Queue."))
+                db.commit()
+
             db.commit()
-
-        db.commit()
-        db.close()
+        except Exception as db_exc:
+            logger.error(
+                "DB write failed after screening: app_id=%s ref=%s user=%s stage=post_screening_db_write error=%s",
+                real_id, app.get("ref", ""), user.get("sub", ""), str(db_exc)[:300],
+                exc_info=True,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return self.error(
+                "Failed to save screening results. Please retry your submission.", 500
+            )
 
         flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
         self.log_audit(user, "Pre-Screening Submitted", app["ref"],
@@ -2515,6 +2576,7 @@ class SubmitApplicationHandler(BaseHandler):
             "screening": {
                 "total_hits": screening_report["total_hits"],
                 "flags": screening_report["overall_flags"],
+                "degraded_sources": screening_report.get("degraded_sources", []),
                 "api_sources": {
                     "sanctions": screening_report.get("director_screenings", [{}])[0].get("screening", {}).get("source", "none") if screening_report.get("director_screenings") else "none",
                     "corporate_registry": screening_report["company_screening"].get("source", "none"),
