@@ -164,7 +164,13 @@ RISK_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
 # ══════════════════════════════════════════════════════════
 
 def load_risk_config():
-    """Load live risk scoring configuration from DB. Falls back to None if DB unavailable."""
+    """Load live risk scoring configuration from DB. Falls back to None if DB unavailable.
+
+    Validates that score-mapping columns (country_risk_scores, sector_risk_scores,
+    entity_type_scores) are dicts after JSON parsing.  If any column is malformed
+    (e.g. stored as a list or scalar), it is logged and set to None so that the
+    hardcoded fallback in the scoring functions takes over.
+    """
     try:
         from db import get_db
         db = get_db()
@@ -179,6 +185,19 @@ def load_risk_config():
                     result[key] = safe_json_loads(val) if val else None
                 except (KeyError, IndexError):
                     result[key] = None
+
+            # ── Shape validation: score-mapping columns must be dicts ──
+            _DICT_COLUMNS = ("country_risk_scores", "sector_risk_scores", "entity_type_scores")
+            for col in _DICT_COLUMNS:
+                v = result.get(col)
+                if v is not None and not isinstance(v, dict):
+                    logger.error(
+                        "risk_config shape error: column=%s expected=dict actual_type=%s value=%s — "
+                        "falling back to hardcoded defaults for this field",
+                        col, type(v).__name__, repr(v)[:200],
+                    )
+                    result[col] = None
+
             return result
     except Exception as e:
         logger.warning(f"Failed to load risk config from DB: {e}. Using hardcoded defaults.")
@@ -214,6 +233,14 @@ def classify_country(country_name, config_country_scores=None):
         "hk": "hong kong", "sg": "singapore",
     }
     c = _ALIASES.get(c, c)
+
+    # Type guard: if config is not a dict, discard it and log
+    if config_country_scores is not None and not isinstance(config_country_scores, dict):
+        logger.error(
+            "classify_country received non-dict config_country_scores: type=%s — using hardcoded FATF lists",
+            type(config_country_scores).__name__,
+        )
+        config_country_scores = None
 
     def _lookup(name):
         """Check name against all risk lists. Returns score or None."""
@@ -252,6 +279,13 @@ def score_sector(sector_name, config_sector_scores=None):
     if not sector_name:
         return 2
     s = sector_name.lower()
+    # Type guard: if config is not a dict, discard it and log
+    if config_sector_scores is not None and not isinstance(config_sector_scores, dict):
+        logger.error(
+            "score_sector received non-dict config_sector_scores: type=%s — using hardcoded SECTOR_SCORES",
+            type(config_sector_scores).__name__,
+        )
+        config_sector_scores = None
     # DB config lookup (canonical source)
     scores = config_sector_scores if config_sector_scores else SECTOR_SCORES
     for key, score in scores.items():
@@ -274,6 +308,13 @@ def _score_entity_type(entity_type_str, config_entity_scores=None):
         "ngo": 3, "non-profit": 3,
         "unregulated fund": 4, "shell": 4,
     }
+    # Type guard: if config is not a dict, discard it and log
+    if config_entity_scores is not None and not isinstance(config_entity_scores, dict):
+        logger.error(
+            "_score_entity_type received non-dict config_entity_scores: type=%s — using hardcoded entity_map",
+            type(config_entity_scores).__name__,
+        )
+        config_entity_scores = None
     scores = config_entity_scores if config_entity_scores else _default_entity_map
     for k, v in scores.items():
         if k in et:
