@@ -116,6 +116,7 @@ from rule_engine import (
     HIGH_RISK_COUNTRIES, ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
     RISK_WEIGHTS, RISK_RANK,
     classify_country, score_sector, compute_risk_score, classify_risk_level,
+    validate_risk_config,
 )
 from validation_engine import (
     validate_compliance_memo,
@@ -4485,14 +4486,36 @@ class RiskConfigHandler(BaseHandler):
         if not user:
             return
         data = self.get_json()
+
+        # Schema-validate before saving — reject malformed config
+        config_to_validate = {
+            "dimensions": data.get("dimensions", []),
+            "thresholds": data.get("thresholds", []),
+            "country_risk_scores": data.get("country_risk_scores", {}),
+            "sector_risk_scores": data.get("sector_risk_scores", {}),
+            "entity_type_scores": data.get("entity_type_scores", {}),
+        }
+        validated, errors = validate_risk_config(config_to_validate)
+        if errors:
+            # Sanitize error messages — they may contain user-supplied type names
+            safe_errors = [str(e)[:200] for e in errors]
+            self.set_status(400)
+            self.set_header("Content-Type", "application/json")
+            self.write(json.dumps({
+                "status": "error",
+                "message": "Risk config validation failed",
+                "errors": safe_errors,
+            }))
+            return
+
         db = get_db()
         db.execute(
             "UPDATE risk_config SET dimensions=?, thresholds=?, country_risk_scores=?, sector_risk_scores=?, entity_type_scores=?, updated_by=?, updated_at=datetime('now') WHERE id=1",
-            (json.dumps(data.get("dimensions", [])),
-             json.dumps(data.get("thresholds", [])),
-             json.dumps(data.get("country_risk_scores", {})),
-             json.dumps(data.get("sector_risk_scores", {})),
-             json.dumps(data.get("entity_type_scores", {})),
+            (json.dumps(validated.get("dimensions", [])),
+             json.dumps(validated.get("thresholds", [])),
+             json.dumps(validated.get("country_risk_scores", {})),
+             json.dumps(validated.get("sector_risk_scores", {})),
+             json.dumps(validated.get("entity_type_scores", {})),
              user["sub"]))
         db.commit()
         db.close()
