@@ -113,6 +113,7 @@ a { color:var(--brand); text-decoration:none; }
 .badge.kyc-submitted { background:rgba(99,102,241,0.1); color:#6366f1; }
 .badge.compliance-review { background:rgba(245,158,11,0.1); color:#f59e0b; }
 .badge.in-review { background:var(--blue-bg); color:var(--blue); }
+.badge.under-review { background:rgba(139,92,246,0.1); color:#7c3aed; }
 .badge.edd-required { background:rgba(124,58,237,0.1); color:#7c3aed; }
 .badge.approved { background:var(--green-bg); color:var(--green); }
 .badge.rejected { background:var(--red-bg); color:var(--red); }
@@ -982,16 +983,23 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     </select>
     <select class="form-select" style="width:auto;" id="filter-status" onchange="filterApplications()">
       <option value="">All Statuses</option>
-      <option value="Pre-Screening Submitted">Pre-Screening Submitted</option>
-      <option value="Pre-Approval Review">Pre-Approval Review</option>
-      <option value="Pre-Approved">Pre-Approved</option>
-      <option value="Pricing Review">Pricing Review</option>
-      <option value="KYC & Documents">KYC & Documents</option>
-      <option value="Compliance Review">Compliance Review</option>
-      <option value="In Review">In Review</option>
-      <option value="EDD Required">EDD Required</option>
-      <option value="Approved">Approved</option>
-      <option value="Rejected">Rejected</option>
+      <option value="draft">Application Started</option>
+      <option value="submitted">Application Submitted</option>
+      <option value="prescreening_submitted">Pre-Screening in Progress</option>
+      <option value="pricing_review">Pricing Under Review</option>
+      <option value="pricing_accepted">Pricing Accepted</option>
+      <option value="pre_approval_review">Pre-Approval Under Review</option>
+      <option value="pre_approved">Pre-Approved</option>
+      <option value="kyc_documents">KYC Documents Required</option>
+      <option value="kyc_submitted">KYC Documents Submitted</option>
+      <option value="compliance_review">Compliance Review in Progress</option>
+      <option value="in_review">Verification Ongoing</option>
+      <option value="under_review">Under Compliance Review</option>
+      <option value="edd_required">Enhanced Due Diligence Required</option>
+      <option value="approved">Approved</option>
+      <option value="rejected">Declined</option>
+      <option value="rmi_sent">Further Info Requested</option>
+      <option value="withdrawn">Withdrawn</option>
     </select>
     <select class="form-select" style="width:auto;" id="filter-assigned" onchange="filterApplications()">
       <option value="">All Officers</option>
@@ -1256,8 +1264,16 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 
   <!-- Tab: Activity Log (hidden by default) -->
   <div id="detail-tab-activity" style="display:none;">
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-title" style="margin-bottom:12px;">📜 Decision History</div>
+      <div id="detail-decision-records" style="font-size:13px;color:var(--text3);">Loading decision records…</div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-title" style="margin-bottom:12px;">💬 Internal Notes</div>
+      <div id="detail-notes-list" style="font-size:13px;color:var(--text3);max-height:300px;overflow-y:auto;">Loading notes…</div>
+    </div>
     <div class="card">
-      <div class="card-title" style="margin-bottom:12px;">Activity Log</div>
+      <div class="card-title" style="margin-bottom:12px;">📋 Audit Trail</div>
       <div id="detail-activity"></div>
     </div>
   </div>
@@ -2779,6 +2795,7 @@ async function loadFromAPI() {
           risk: a.risk_level || 'LOW',
           score: a.risk_score || 0,
           lane: a.onboarding_lane || 'Standard Review',
+          statusRaw: a.status || '',
           status: formatStatus(a.status),
           assignedId: a.assigned_to || '',
           assigned: a.assigned_name || a.assigned_to || 'Unassigned',
@@ -3324,7 +3341,8 @@ function statusBadge(status) {
     'KYC Submitted':'kyc-submitted', 'kyc_submitted':'kyc-submitted',
     'Compliance Review':'compliance-review', 'compliance_review':'compliance-review',
     'In Review':'in-review', 'in_review':'in-review',
-    'Under Review':'in-review', 'under_review':'in-review',
+    'Under Review':'under-review', 'under_review':'under-review',
+    'Under Compliance Review':'under-review',
     'EDD Required':'edd-required', 'edd_required':'edd-required',
     'Approved':'approved', 'approved':'approved',
     'Rejected':'rejected', 'rejected':'rejected',
@@ -4015,7 +4033,7 @@ function renderApplications() {
   tbody.innerHTML = '';
   APPLICATIONS.forEach(function(app) {
     if (riskFilter && app.risk !== riskFilter) return;
-    if (statusFilter && app.status !== statusFilter) return;
+    if (statusFilter && (app.statusRaw || '') !== statusFilter) return;
     if (assignedFilter) {
       var normalizedAssigned = app.assignedId || 'Unassigned';
       if (normalizedAssigned !== assignedFilter) return;
@@ -4536,6 +4554,7 @@ async function fetchApplicationDetail(ref) {
     prescreeningData: psData,
     latestMemoMeta: detail.latest_memo || null,
     latestMemo: detail.latest_memo_data || null,
+    memoIsStale: detail.memo_is_stale || false,
     updated_at: detail.updated_at || '',
     last_document_upload: detail.last_document_upload || '',
     screening_updated_at: detail.screening_updated_at || ''
@@ -4546,6 +4565,7 @@ function renderAuthoritativeAppDetail(app, options) {
   var psData = app.prescreeningData || {};
   var documentReadiness = computeDocumentReadinessSummary(app);
   currentApp = app;
+  decisionRecordsLoadedFor = null;
   window._currentDetailApp = app;
   currentScreeningReviewFocus = options.screeningFocus || null;
 
@@ -4755,7 +4775,11 @@ function renderAuthoritativeAppDetail(app, options) {
   var memoEl = document.getElementById('detail-memo');
   if (app.latestMemo && app.latestMemo.sections) {
     window._currentMemoData = app.latestMemo;
-    memoEl.innerHTML = renderMemoSections(app.latestMemo);
+    var staleBanner = '';
+    if (app.memoIsStale) {
+      staleBanner = '<div style="margin-bottom:12px;padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;">⚠️ This compliance memo may be outdated — application data has been updated since the memo was generated. Consider regenerating the memo.</div>';
+    }
+    memoEl.innerHTML = staleBanner + renderMemoSections(app.latestMemo);
     showValidationPanelIfMemoExists();
     if ((app.latestMemo.review_status || '').toLowerCase() === 'approved') {
       setMemoStatusBadge('Approved', 'approved');
@@ -4823,15 +4847,9 @@ function renderAuthoritativeAppDetail(app, options) {
   document.getElementById('detail-documents').innerHTML = docsHtml;
   document.getElementById('detail-docs-with-verification').innerHTML = docsHtml;
 
-  var activityItems = [];
-  activityItems.push({ text: 'Application record created', time: app.createdAt || app.date });
-  if (app.submittedAt) activityItems.push({ text: 'Application submitted', time: app.submittedAt });
-  if (screeningSummary.screened_at) activityItems.push({ text: 'Screening run recorded', time: screeningSummary.screened_at });
-  if (app.latestMemoMeta && app.latestMemoMeta.created_at) activityItems.push({ text: 'Compliance memo generated', time: app.latestMemoMeta.created_at });
-  if (app.decidedAt) activityItems.push({ text: 'Application decision recorded', time: app.decidedAt });
-  document.getElementById('detail-activity').innerHTML = activityItems.map(function(item) {
-    return '<div class="activity-item"><div class="activity-dot system"></div><div class="activity-content"><div class="activity-text">' + escapeHtml(item.text) + '</div><div class="activity-time">' + escapeHtml(normalizeDetailValue(item.time)) + '</div></div></div>';
-  }).join('');
+  // Activity log: load from real audit trail API
+  document.getElementById('detail-activity').innerHTML = '<div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading audit trail…</div>';
+  loadActivityLog(app);
 
   var isPreApproval = (app.statusRaw === 'pre_approval_review' || app.status === 'Pre-Approval Review');
   var preApprovalCard = document.getElementById('pre-approval-actions-topbar');
@@ -6025,6 +6043,119 @@ function switchDetailTab(tab) {
     }
   });
   if (tab === 'supervisor') loadSupervisorForApp();
+  if (tab === 'activity') { loadDecisionRecords(); loadActivityLog(); loadNotes(); }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ACTIVITY LOG — Real audit trail from backend
+// ═══════════════════════════════════════════════════════════
+async function loadActivityLog(appOverride) {
+  var app = appOverride || currentApp;
+  if (!app || !app.id) return;
+  var container = document.getElementById('detail-activity');
+  if (!container) return;
+  if (!BO_AUTH_TOKEN) {
+    container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Sign in to view audit trail.</div>';
+    return;
+  }
+  container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading audit trail…</div>';
+  try {
+    var data = await boApiCall('GET', '/applications/' + app.id + '/audit-log?limit=100');
+    var entries = data.entries || [];
+    if (entries.length === 0) {
+      container.innerHTML = '<div style="padding:32px;text-align:center;"><div style="font-size:24px;margin-bottom:8px;">📋</div><div style="font-size:13px;color:var(--text2);">No audit trail entries yet</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">Actions taken on this application will appear here.</div></div>';
+      return;
+    }
+    var html = entries.map(function(e) {
+      var icon = '🔵';
+      var action = e.action || '';
+      if (action.indexOf('Status') >= 0) icon = '🔄';
+      else if (action.indexOf('Assign') >= 0 || action.indexOf('Reassign') >= 0) icon = '👤';
+      else if (action.indexOf('Memo') >= 0 || action.indexOf('Generate') >= 0) icon = '📝';
+      else if (action.indexOf('Approve') >= 0) icon = '✅';
+      else if (action.indexOf('Reject') >= 0) icon = '❌';
+      else if (action.indexOf('Note') >= 0) icon = '💬';
+      else if (action.indexOf('Document') >= 0 || action.indexOf('Upload') >= 0) icon = '📄';
+      var ts = (e.timestamp || '').replace('T', ' ').slice(0, 19);
+      var actor = e.user_name || e.user_id || 'System';
+      var role = e.user_role ? ' (' + escapeHtml(e.user_role) + ')' : '';
+      return '<div class="activity-item" style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border1);">' +
+        '<div style="font-size:16px;flex-shrink:0;width:24px;text-align:center;">' + icon + '</div>' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div style="font-size:12px;font-weight:600;color:var(--text1);">' + escapeHtml(action) + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(e.detail || '') + '</div>' +
+          '<div style="font-size:10px;color:var(--text3);margin-top:3px;">' + escapeHtml(actor) + role + ' · ' + escapeHtml(ts) + '</div>' +
+        '</div></div>';
+    }).join('');
+    container.innerHTML = html;
+  } catch (err) {
+    container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--red);font-size:12px;">Failed to load audit trail: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// NOTES — Internal officer notes from backend
+// ═══════════════════════════════════════════════════════════
+async function loadNotes() {
+  var app = currentApp;
+  if (!app || !app.id || !BO_AUTH_TOKEN) return;
+  var container = document.getElementById('detail-notes-list');
+  if (!container) return;
+  container.innerHTML = '<div style="padding:8px;text-align:center;color:var(--text3);font-size:11px;">Loading notes…</div>';
+  try {
+    var data = await boApiCall('GET', '/applications/' + app.id + '/notes');
+    var notes = data.notes || [];
+    if (notes.length === 0) {
+      container.innerHTML = '<div style="padding:16px;text-align:center;font-size:12px;color:var(--text3);">No internal notes yet.</div>';
+      return;
+    }
+    container.innerHTML = notes.map(function(n) {
+      var ts = (n.created_at || '').replace('T', ' ').slice(0, 19);
+      return '<div style="padding:8px 12px;border-bottom:1px solid var(--border1);font-size:12px;">' +
+        '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(n.user_name || n.user_id || 'Officer') +
+        ' <span style="font-weight:400;color:var(--text3);">' + escapeHtml(n.user_role || '') + '</span></div>' +
+        '<div style="margin-top:4px;color:var(--text2);white-space:pre-wrap;">' + escapeHtml(n.content) + '</div>' +
+        '<div style="margin-top:3px;font-size:10px;color:var(--text3);">' + escapeHtml(ts) + '</div>' +
+      '</div>';
+    }).join('');
+  } catch (err) {
+    container.innerHTML = '<div style="padding:8px;text-align:center;color:var(--red);font-size:11px;">Failed to load notes.</div>';
+  }
+}
+
+var decisionRecordsLoadedFor = null;
+
+async function loadDecisionRecords() {
+  if (!currentApp) return;
+  if (decisionRecordsLoadedFor === currentApp.id) return;
+  var container = document.getElementById('detail-decision-records');
+  if (!container) return;
+  container.innerHTML = '<span style="color:var(--text3);">Loading decision records…</span>';
+  try {
+    var resp = await boApiCall('GET', '/applications/' + currentApp.id + '/decision-records');
+    var records = (resp && resp.records) || [];
+    if (!records.length) {
+      container.innerHTML = '<span style="color:var(--text3);">No decision records found for this application.</span>';
+      return;
+    }
+    var html = '<table class="data-table" style="width:100%;"><thead><tr>' +
+      '<th>Date</th><th>Decision</th><th>Risk Level</th><th>Source</th><th>Actor</th><th>Flags</th><th>Override</th>' +
+      '</tr></thead><tbody>';
+    records.forEach(function(r) {
+      var ts = r.timestamp ? r.timestamp.replace('T', ' ').slice(0, 16) : '—';
+      var decisionBadge = statusBadge(r.decision_type || '—');
+      var riskBadge = r.risk_level ? ('<span class="badge ' + (r.risk_level || '').toLowerCase() + '">' + escapeHtml(r.risk_level) + '</span>') : '—';
+      var actor = r.actor ? escapeHtml((r.actor.role || '') + (r.actor.user_id ? ' (' + r.actor.user_id + ')' : '')) : '—';
+      var flags = (r.key_flags && r.key_flags.length) ? r.key_flags.map(function(f) { return '<span class="badge" style="font-size:10px;margin:1px;">' + escapeHtml(f) + '</span>'; }).join(' ') : '—';
+      var override = r.override_flag ? ('⚠️ ' + escapeHtml(r.override_reason || 'Yes')) : '—';
+      html += '<tr><td>' + escapeHtml(ts) + '</td><td>' + decisionBadge + '</td><td>' + riskBadge + '</td><td>' + escapeHtml(r.source || '—') + '</td><td>' + actor + '</td><td>' + flags + '</td><td>' + override + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+    decisionRecordsLoadedFor = currentApp.id;
+  } catch (err) {
+    container.innerHTML = '<span style="color:var(--red);">Failed to load decision records: ' + escapeHtml(err.message || 'Unknown error') + '</span>';
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -6126,12 +6257,22 @@ async function confirmDecision() {
   }
 }
 
+var pendingNotificationType = '';
+
+var NOTIF_TYPE_MAP = {
+  'Approve': 'approved',
+  'Reject': 'rejected',
+  'Request Docs': 'documents_required'
+};
+
 function showClientNotificationModal(decision) {
   var templates = {
     'Approve': 'Dear [Company Name],\n\nWe are pleased to inform you that your application for an account with Onboarda has been APPROVED.\n\nYour account will be activated within 24 hours. You will receive separate correspondence with your account details and next steps.\n\nThank you for choosing Onboarda.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind',
     'Reject': 'Dear [Company Name],\n\nAfter careful review of your application, we regret to inform you that we are unable to proceed at this time.\n\nThis decision is final and based on our risk assessment and compliance requirements. Should you have any questions, please contact our compliance department.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind',
     'EDD': 'Dear [Company Name],\n\nThank you for your application. Our compliance team requires additional documentation to complete our Enhanced Due Diligence review.\n\nPlease provide the following within 10 business days:\n- Enhanced beneficial ownership documentation\n- Bank references\n- Regulatory compliance certifications\n\nPlease reply to this email with the requested documents.\n\nBest regards,\nCompliance Team\nOnboarda\nPowered by RegMind'
   };
+
+  pendingNotificationType = NOTIF_TYPE_MAP[decision] || 'approved';
 
   document.getElementById('notification-message').value = templates[decision] || 'Dear Client,\\n\\nThank you for your application.\\n\\nBest regards,\\nCompliance Team\\nOnboarda\\nPowered by RegMind';
   document.getElementById('modal-client-notification').classList.add('open');
@@ -6147,7 +6288,7 @@ async function sendClientNotification() {
   try {
     await boApiCall('POST', '/applications/' + currentApp.id + '/notify', {
       message: message,
-      notification_type: 'officer_message'
+      notification_type: pendingNotificationType || 'approved'
     });
     closeModal('modal-client-notification');
     showToast('Client notification sent for ' + currentApp.ref);
@@ -6223,15 +6364,25 @@ async function confirmReassign() {
   var to = document.getElementById('reassign-to').value;
   var assignUser = USERS.find(function(u) { return u.id === to; });
   var assigneeLabel = assignUser ? assignUser.name : 'Unassigned';
-  currentApp.assignedId = assignUser ? assignUser.id : '';
-  currentApp.assigned = assigneeLabel;
-  AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Assign', target:currentApp.ref, detail:'Reassigned to ' + assigneeLabel, ip:'client' });
   if (BO_AUTH_TOKEN && currentApp.id) {
-    try { await boApiCall('PATCH', '/applications/' + currentApp.id, { assigned_to: assignUser ? assignUser.id : '' }); } catch(e) {}
+    try {
+      await boApiCall('PATCH', '/applications/' + currentApp.id, { assigned_to: assignUser ? assignUser.id : '' });
+      currentApp.assignedId = assignUser ? assignUser.id : '';
+      currentApp.assigned = assigneeLabel;
+      closeModal('modal-reassign');
+      showToast('Case reassigned to ' + assigneeLabel);
+      openAppDetail(currentApp.ref);
+    } catch(e) {
+      var msg = (e && e.message) ? e.message : 'Reassignment failed. You may not have permission.';
+      showToast(msg, 'error');
+    }
+  } else {
+    currentApp.assignedId = assignUser ? assignUser.id : '';
+    currentApp.assigned = assigneeLabel;
+    closeModal('modal-reassign');
+    showToast('Case reassigned to ' + assigneeLabel);
+    openAppDetail(currentApp.ref);
   }
-  closeModal('modal-reassign');
-  showToast('Case reassigned to ' + assigneeLabel);
-  openAppDetail(currentApp.ref);
 }
 
 async function escalateCase() {
@@ -6244,7 +6395,26 @@ async function escalateCase() {
 }
 
 function addNote() {
-  showToast('Internal notes are not yet persisted to the backend. This feature will be available in a future release.', 'warn');
+  if (!currentApp || !currentApp.id || !BO_AUTH_TOKEN) {
+    showToast('Cannot add note — no application selected or not signed in.', 'warn');
+    return;
+  }
+  var noteText = prompt('Enter internal note:');
+  if (!noteText || !noteText.trim()) return;
+  noteText = noteText.trim();
+  if (noteText.length > 5000) {
+    showToast('Note exceeds maximum length (5000 characters).', 'error');
+    return;
+  }
+  boApiCall('POST', '/applications/' + currentApp.id + '/notes', { content: noteText })
+    .then(function() {
+      showToast('Note added successfully.');
+      loadNotes();
+      loadActivityLog();
+    })
+    .catch(function(err) {
+      showToast('Failed to add note: ' + (err.message || 'Unknown error'), 'error');
+    });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -7575,7 +7745,9 @@ function renderAgentsPipeline() {
               '<option' + (agent.stage==='Screening'?' selected':'') + '>Screening</option>' +
               '<option' + (agent.stage==='Risk Scoring'?' selected':'') + '>Risk Scoring</option>' +
               '<option' + (agent.stage==='Post-Scoring'?' selected':'') + '>Post-Scoring</option>' +
+              '<option' + (agent.stage==='Onboarding'?' selected':'') + '>Onboarding</option>' +
               '<option' + (agent.stage==='Post-Approval'?' selected':'') + '>Post-Approval</option>' +
+              '<option' + (agent.stage==='Monitoring'?' selected':'') + '>Monitoring</option>' +
             '</select></div>' +
           '<div class="form-group" style="width:60px;margin-bottom:0;"><div class="form-label">Icon</div><input class="form-input agent-icon-input" value="' + agent.icon + '" data-agent="' + ai + '" style="text-align:center;font-size:18px;" /></div>' +
         '</div>' +
@@ -9631,8 +9803,9 @@ function renderSupervisorResults(result) {
   if (!statusBadge) return;
   var st = result.status || 'unknown';
   var stColors = { completed: ['#dcfce7','#166534'], awaiting_review: ['#fef3c7','#92400e'], completed_with_errors: ['#fee2e2','#991b1b'], failed: ['#991b1b','#fff'] };
+  var stLabels = { completed: 'COMPLETED', awaiting_review: 'REQUIRES HUMAN REVIEW', completed_with_errors: 'COMPLETED WITH ERRORS', failed: 'FAILED' };
   var sc = stColors[st] || ['#e0e7ff','#3730a3'];
-  statusBadge.textContent = st.replace(/_/g,' ').toUpperCase();
+  statusBadge.textContent = stLabels[st] || st.replace(/_/g,' ').toUpperCase();
   statusBadge.style.background = sc[0]; statusBadge.style.color = sc[1];
 
   var svResultsPanel = document.getElementById('sv-pipeline-results');
@@ -9812,7 +9985,8 @@ async function refreshSupervisorDashboard() {
       pHtml += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border1);">';
       pHtml += '<span style="font-size:11px;font-family:monospace;color:var(--text3);">' + (p.pipeline_id || '').substring(0, 8) + '</span>';
       pHtml += '<span style="font-size:11px;font-weight:600;">' + (p.application_id || '').substring(0, 12) + '</span>';
-      pHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + stColor + ';color:white;font-weight:600;">' + (p.status || '').replace(/_/g,' ').toUpperCase() + '</span>';
+      var stLabel = p.status === 'awaiting_review' ? 'REQUIRES HUMAN REVIEW' : (p.status || '').replace(/_/g,' ').toUpperCase();
+      pHtml += '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + stColor + ';color:white;font-weight:600;">' + stLabel + '</span>';
       pHtml += '<span style="font-size:10px;color:var(--text3);">' + (p.agent_count || 0) + ' agents, ' + (p.contradiction_count || 0) + ' contradictions</span>';
       pHtml += '</div>';
     });

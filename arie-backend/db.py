@@ -2247,6 +2247,43 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.15: Create application_notes table for internal officer notes
+    try:
+        if db.is_postgres:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS application_notes (
+                    id SERIAL PRIMARY KEY,
+                    application_id TEXT NOT NULL REFERENCES applications(id),
+                    user_id TEXT NOT NULL,
+                    user_name TEXT,
+                    user_role TEXT,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_app_notes_app_id ON application_notes (application_id)")
+        else:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS application_notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    application_id TEXT NOT NULL REFERENCES applications(id),
+                    user_id TEXT NOT NULL,
+                    user_name TEXT,
+                    user_role TEXT,
+                    content TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_app_notes_app_id ON application_notes (application_id)")
+        db.commit()
+        logger.info("Migration v2.15: created application_notes table")
+    except Exception as e:
+        logger.error("Migration v2.15 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _populate_default_scoring_config(db: 'DBConnection'):
     """Populate default country/sector/entity scores for existing risk_config rows."""
