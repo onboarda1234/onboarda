@@ -2339,6 +2339,7 @@ class SubmitApplicationHandler(BaseHandler):
             return
 
         db = get_db()
+        stage = "init"
         try:
             return self._do_submit(db, user, app_id)
         except Exception as exc:
@@ -2348,11 +2349,25 @@ class SubmitApplicationHandler(BaseHandler):
                 db.rollback()
             except Exception:
                 pass
+            # Attempt to identify the failing stage from the traceback
+            import traceback
+            tb_text = traceback.format_exc()
+            if "compute_risk_score" in tb_text or "_score_entity_type" in tb_text:
+                stage = "compute_risk_score"
+            elif "run_full_screening" in tb_text:
+                stage = "run_full_screening"
+            elif "build_prescreening_risk_input" in tb_text:
+                stage = "build_prescreening_risk_input"
+            elif "classify_risk_level" in tb_text:
+                stage = "classify_risk_level"
+            else:
+                stage = "unknown"
             logger.error(
-                "SubmitApplicationHandler unhandled error: app_id=%s user=%s ip=%s error=%s",
+                "SubmitApplicationHandler unhandled error: app_id=%s user=%s ip=%s stage=%s error=%s",
                 app_id,
                 user.get("sub", "unknown") if user else "unknown",
                 self.get_client_ip(),
+                stage,
                 str(exc)[:500],
                 exc_info=True,
             )
