@@ -584,7 +584,7 @@ def _safe_future_result(future, timeout, source_label, company_name=""):
             "error": f"Provider temporarily unavailable: {str(e)[:200]}",
             "degraded": True,
         }
-        return degraded, str(e)
+        return degraded, str(e)[:300]
 
 
 def run_full_screening(application_data, directors, ubos, client_ip=None):

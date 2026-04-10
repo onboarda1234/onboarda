@@ -186,9 +186,7 @@ class TestDegradedScreeningPath:
         """If director AML screening fails, director entry is degraded."""
         screening = _get_screening_module()
 
-        call_count = [0]
         def mock_aml_fail_director(name, birth_date=None, nationality=None, entity_type="Person"):
-            call_count[0] += 1
             if entity_type == "Person":
                 raise TimeoutError("Sumsub AML timeout")
             return {"matched": False, "results": [], "source": "mocked", "api_status": "mocked"}

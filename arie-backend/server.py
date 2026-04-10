@@ -2542,7 +2542,6 @@ class SubmitApplicationHandler(BaseHandler):
                                f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}). "
                                f"This application requires pre-approval before the client can proceed to KYC. "
                                f"Review pre-screening data and screening results in the Pre-Approval Queue."))
-                db.commit()
 
             db.commit()
         except Exception as db_exc:
