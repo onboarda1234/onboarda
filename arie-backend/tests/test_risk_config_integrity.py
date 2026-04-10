@@ -569,8 +569,8 @@ class TestRepairMigration:
         parsed = json.loads(row["country_risk_scores"])
         assert parsed == original
 
-    def test_repair_resets_unparseable_data(self, temp_db):
-        """Completely unparseable data should be reset to empty."""
+    def test_repair_resets_unparsable_data(self, temp_db):
+        """Completely unparsable data should be reset to empty."""
         from db import get_db, _repair_risk_config_shapes
         db = get_db()
         db.execute(

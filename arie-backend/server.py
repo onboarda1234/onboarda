@@ -4497,11 +4497,14 @@ class RiskConfigHandler(BaseHandler):
         }
         validated, errors = validate_risk_config(config_to_validate)
         if errors:
+            # Sanitize error messages — they may contain user-supplied type names
+            safe_errors = [str(e)[:200] for e in errors]
             self.set_status(400)
+            self.set_header("Content-Type", "application/json")
             self.write(json.dumps({
                 "status": "error",
                 "message": "Risk config validation failed",
-                "errors": errors,
+                "errors": safe_errors,
             }))
             return
 

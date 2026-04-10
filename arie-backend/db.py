@@ -2353,7 +2353,7 @@ def _repair_risk_config_shapes(db: 'DBConnection'):
         try:
             parsed = json.loads(raw) if isinstance(raw, str) else raw
         except (json.JSONDecodeError, TypeError):
-            logger.warning("Migration v2.16: %s is unparseable, will re-seed", col)
+            logger.warning("Migration v2.16: %s is unparsable, will re-seed", col)
             repaired[col] = '{}'
             needs_update = True
             continue
