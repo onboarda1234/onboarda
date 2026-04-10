@@ -279,7 +279,11 @@ DEMO_SCENARIOS = [
 def seed_demo_client(db):
     """Create a demo client account for pilot demonstrations."""
     import bcrypt
-    demo_client_pw = os.environ.get("DEMO_CLIENT_PASSWORD", "DemoPass2026!")
+    demo_client_pw = os.environ.get("DEMO_CLIENT_PASSWORD", "")
+    if not demo_client_pw:
+        logger.warning("DEMO_CLIENT_PASSWORD not set — generating random demo password")
+        import secrets as _secrets
+        demo_client_pw = _secrets.token_urlsafe(16)
     demo_pw = bcrypt.hashpw(demo_client_pw.encode(), bcrypt.gensalt()).decode()
     db.execute(
         "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name, status) VALUES (?,?,?,?,?)",

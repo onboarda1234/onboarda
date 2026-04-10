@@ -145,6 +145,11 @@ jobs:
           echo "Health response: $HEALTH"
           echo "$HEALTH" | python3 -c "import sys,json; json.load(sys.stdin); print('PASS: Valid JSON response')"
 
+          # Verify readiness endpoint
+          READINESS=$(curl -sf http://localhost:8080/api/readiness)
+          echo "Readiness response: $READINESS"
+          echo "$READINESS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('ready') is True, f'Readiness not ready: {d}'; print('PASS: Readiness endpoint ok')"
+
           # Verify security headers present
           HEADERS=$(curl -sI http://localhost:8080/api/health)
           echo "$HEADERS" | grep -qi "X-Content-Type-Options" && echo "PASS: Security headers present"
