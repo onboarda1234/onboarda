@@ -1733,13 +1733,18 @@ class ApplicationsHandler(BaseHandler):
         # W3/GATE-03: Prevent duplicate active applications for same client + company
         # Normalize company_name for comparison to prevent bypass via case/whitespace variants
         client_id = user["sub"] if user["type"] == "client" else data.get("client_id")
+        # Defence-in-depth: if caller supplies an existing application_id, exclude
+        # it from the duplicate check so a self-update is never blocked.
+        exclude_app_id = data.get("application_id") or None
         if client_id and company_name:
             normalized_name = re.sub(r'\s+', ' ', company_name.strip()).lower()
             existing = db.execute(
-                "SELECT ref, company_name FROM applications WHERE client_id=? AND status NOT IN ('rejected','withdrawn')",
+                "SELECT id, ref, company_name FROM applications WHERE client_id=? AND status NOT IN ('rejected','withdrawn')",
                 (client_id,)
             ).fetchall()
-            dup = next((e for e in existing if re.sub(r'\s+', ' ', (e['company_name'] or '').strip()).lower() == normalized_name), None)
+            dup = next((e for e in existing
+                        if re.sub(r'\s+', ' ', (e['company_name'] or '').strip()).lower() == normalized_name
+                        and e['id'] != exclude_app_id), None)
             existing = dup
             if existing:
                 db.close()
