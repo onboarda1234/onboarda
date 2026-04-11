@@ -6481,8 +6481,9 @@ class SumsubWebhookHandler(BaseHandler):
     """POST /api/kyc/webhook — Receive Sumsub verification webhooks.
 
     PR 14 hardening (Rev 3):
-      * F-2  Digest algorithm allowlist — X-Payload-Digest-Alg is honored and
-             passed through to ``sumsub_verify_webhook`` where it is gated
+      * F-2  Digest algorithm allowlist — when X-App-Access-Sig is absent and
+             X-Payload-Digest with X-Payload-Digest-Alg is used, the algorithm
+             is passed through to ``sumsub_verify_webhook`` where it is gated
              fail-closed against a known set. Unknown algorithms are rejected.
       * F-7  Legacy substring scan removed. Unmatched deliveries (no row in
              ``sumsub_applicant_mappings``) are routed to the
