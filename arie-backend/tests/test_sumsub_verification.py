@@ -191,26 +191,69 @@ class TestSumsubWebhookProcessing:
         except (json.JSONDecodeError, ValueError):
             pass  # Expected
 
-    def test_webhook_for_unknown_applicant_does_not_corrupt(self):
-        """A webhook with an unknown applicant_id must not update any application."""
-        payload = self._make_webhook_payload(
-            applicant_id="unknown_applicant_xyz",
-            external_user_id="unknown@nobody.com"
+    def test_webhook_for_unknown_applicant_does_not_corrupt(self, temp_db):
+        """PR 14 (F-7): A webhook whose applicant has no mapping must not
+        mutate any application row. With the legacy substring scan removed,
+        the delivery MUST route to the sumsub_unmatched_webhooks DLQ
+        instead — never back-door into applications via substring match.
+
+        This test was previously a tautology that ran its own substring
+        algorithm in the test body and asserted the shape. It now drives
+        the real SumsubWebhookHandler end-to-end.
+        """
+        import sqlite3
+        from tests.test_sumsub_hardening_pr14 import (
+            _call_handler, _make_payload, _open_real_db,
         )
 
-        # Simulate the search: no application contains this applicant_id
-        mock_apps = [
-            {"id": "app1", "prescreening_data": '{"screening_report":{}}'},
-            {"id": "app2", "prescreening_data": '{"company":"TestCo"}'},
-        ]
+        # Seed an application whose prescreening_data contains the applicant
+        # id as a raw substring. The pre-F-7 handler would have falsely
+        # cross-linked it. The post-F-7 handler must leave it alone.
+        # NOTE: We must seed into db.DB_PATH (which is frozen at import time)
+        # rather than the temp_db fixture path — the handler opens db.DB_PATH
+        # directly and ignores the env var re-point in the fixture.
+        unknown_applicant = "cafebabefeedface" + "0011223344556677"
+        poisoned = json.dumps({
+            "note": f"historical mention of {unknown_applicant} in free text"
+        })
+        conn = _open_real_db()
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("DELETE FROM applications WHERE id=?",
+                         ("app_unknown_victim",))
+            conn.execute("DELETE FROM applications WHERE ref=?",
+                         ("ARF-VERIF-UNK",))
+            conn.execute(
+                "INSERT INTO applications (id, ref, client_id, company_name, "
+                "country, sector, entity_type, status, risk_level, risk_score, "
+                "prescreening_data) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("app_unknown_victim", "ARF-VERIF-UNK", "clientX",
+                 "Victim Co", "Mauritius", "Technology", "SME",
+                 "draft", "LOW", 10, poisoned),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
-        matched = []
-        for app in mock_apps:
-            pdata = app["prescreening_data"] or ""
-            if payload["applicantId"] in pdata or payload["externalUserId"] in pdata:
-                matched.append(app["id"])
+        body = _make_payload(applicant_id=unknown_applicant,
+                             external_user_id="nobody@nowhere.test")
+        handler = _call_handler(body)
+        assert handler._status_code == 200
 
-        assert len(matched) == 0, "Unknown applicant should not match any application"
+        # The poisoned row MUST NOT carry a sumsub_webhook mutation.
+        conn = _open_real_db()
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT prescreening_data FROM applications WHERE id=?",
+                ("app_unknown_victim",),
+            ).fetchone()
+        finally:
+            conn.close()
+        pdict = json.loads(row["prescreening_data"] or "{}")
+        screening_report = pdict.get("screening_report", {})
+        assert "sumsub_webhook" not in screening_report, \
+            "Unknown applicant leaked into an application row via substring scan"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -312,18 +355,80 @@ class TestSumsubMappingIntegrity:
         assert matched_ids == ["app_target"]
         assert "app_other" not in matched_ids
 
-    def test_two_applicants_never_cross_link(self):
-        """Results for applicant A must never appear in applicant B's application."""
-        app_a = {"id": "app_a", "prescreening_data": json.dumps({"sumsub_applicant_id": "applicant_A"})}
-        app_b = {"id": "app_b", "prescreening_data": json.dumps({"sumsub_applicant_id": "applicant_B"})}
+    def test_two_applicants_never_cross_link(self, temp_db):
+        """PR 14 (F-7): Driving the real handler, results for applicant A
+        must never be written onto applicant B's application — even if
+        applicant A's id happens to appear as a raw substring of B's
+        prescreening_data (the exact vector the legacy substring scan
+        created).
 
-        # Webhook for applicant_A
-        webhook_applicant = "applicant_A"
+        This replaces the prior tautology that asserted string containment
+        against two hand-built dicts without ever touching the handler.
+        """
+        import sqlite3
+        from tests.test_sumsub_hardening_pr14 import (
+            _call_handler, _make_payload, _open_real_db,
+        )
 
-        # Check app_a matches
-        assert webhook_applicant in app_a["prescreening_data"]
-        # Check app_b does NOT match
-        assert webhook_applicant not in app_b["prescreening_data"]
+        applicant_a = "aaaaaaaabbbbbbbb" + "ccccccccdddddddd"
+
+        # Row B has applicant A's id embedded in a free-text note.
+        # Pre-F-7, the legacy scan would write applicant A's webhook onto B.
+        # Post-F-7, it must not.
+        # NOTE: seed into db.DB_PATH (frozen) — same reason as the previous
+        # test. The temp_db fixture's env-var re-point is ignored by db.py.
+        row_b_pdata = json.dumps({
+            "note": f"accidentally references {applicant_a} in comment"
+        })
+        row_a_pdata = json.dumps({"company": "Applicant A Corp"})
+
+        conn = _open_real_db()
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("DELETE FROM applications WHERE id IN (?, ?)",
+                         ("verif_cross_a", "verif_cross_b"))
+            conn.execute("DELETE FROM applications WHERE ref IN (?, ?)",
+                         ("ARF-XL-A", "ARF-XL-B"))
+            conn.execute(
+                "INSERT INTO applications (id, ref, client_id, company_name, "
+                "country, sector, entity_type, status, risk_level, risk_score, "
+                "prescreening_data) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("verif_cross_a", "ARF-XL-A", "clientA", "A Corp",
+                 "Mauritius", "Technology", "SME", "draft", "LOW", 10, row_a_pdata),
+            )
+            conn.execute(
+                "INSERT INTO applications (id, ref, client_id, company_name, "
+                "country, sector, entity_type, status, risk_level, risk_score, "
+                "prescreening_data) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("verif_cross_b", "ARF-XL-B", "clientB", "B Corp",
+                 "Mauritius", "Technology", "SME", "draft", "LOW", 10, row_b_pdata),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Send the real webhook for applicant A. Neither row has a mapping,
+        # so the handler must route to DLQ without touching either app.
+        body = _make_payload(applicant_id=applicant_a,
+                             external_user_id="a@corp.test")
+        handler = _call_handler(body)
+        assert handler._status_code == 200
+
+        conn = _open_real_db()
+        conn.row_factory = sqlite3.Row
+        try:
+            for row_id in ("verif_cross_a", "verif_cross_b"):
+                row = conn.execute(
+                    "SELECT prescreening_data FROM applications WHERE id=?",
+                    (row_id,),
+                ).fetchone()
+                pdict = json.loads(row["prescreening_data"] or "{}")
+                screening_report = pdict.get("screening_report", {})
+                assert "sumsub_webhook" not in screening_report, (
+                    f"Row {row_id} was cross-linked to applicant A's webhook"
+                )
+        finally:
+            conn.close()
 
     def test_webhook_data_structure_matches_schema(self):
         """Stored webhook data must have all required audit fields."""
