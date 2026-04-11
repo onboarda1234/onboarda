@@ -2327,6 +2327,53 @@ def _run_migrations(db: DBConnection):
 
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
+    # Migration v2.17: Add sumsub_unmatched_webhooks table (DLQ for unmatched Sumsub webhooks)
+    try:
+        if not _safe_table_exists(db, "sumsub_unmatched_webhooks"):
+            logger.info("Migration v2.17: Creating sumsub_unmatched_webhooks table")
+            if USE_POSTGRESQL:
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS sumsub_unmatched_webhooks (
+                        id SERIAL PRIMARY KEY,
+                        applicant_id TEXT NOT NULL,
+                        external_user_id TEXT,
+                        event_type TEXT NOT NULL,
+                        review_answer TEXT,
+                        payload TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        resolution_note TEXT,
+                        resolved_by TEXT,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        resolved_at TIMESTAMP
+                    )
+                """)
+            else:
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS sumsub_unmatched_webhooks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        applicant_id TEXT NOT NULL,
+                        external_user_id TEXT,
+                        event_type TEXT NOT NULL,
+                        review_answer TEXT,
+                        payload TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        resolution_note TEXT,
+                        resolved_by TEXT,
+                        received_at TEXT DEFAULT (datetime('now')),
+                        resolved_at TEXT
+                    )
+                """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_suw_status ON sumsub_unmatched_webhooks(status)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_suw_applicant ON sumsub_unmatched_webhooks(applicant_id)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_suw_received ON sumsub_unmatched_webhooks(received_at)")
+            db.commit()
+            logger.info("Migration v2.17: created sumsub_unmatched_webhooks table")
+    except Exception as e:
+        logger.error("Migration v2.17 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
     """Migration v2.16: Repair malformed risk_config scoring columns.
 
     Detects and fixes the known corruption pattern where score-mapping columns

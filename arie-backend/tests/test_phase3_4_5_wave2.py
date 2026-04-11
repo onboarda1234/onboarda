@@ -153,16 +153,33 @@ class TestFinding12_WebhookLinking:
         assert "idx_sam_external" in src, "Missing index on external_user_id"
         assert "idx_sam_app" in src, "Missing index on application_id"
 
-    def test_webhook_handler_has_legacy_fallback(self):
-        """Webhook handler must fall back to legacy scan for old records."""
+    def test_webhook_handler_legacy_scan_removed(self):
+        """PR 14 (F-7): The legacy substring scan MUST be removed. Its
+        replacement is the sumsub_unmatched_webhooks DLQ path.
+
+        Rationale: the legacy scan ran a full-table SELECT over
+        `applications` and matched rows whose `prescreening_data`
+        contained the applicant_id as a raw substring. This was a silent
+        multi-tenancy hazard — any historical free-text mention of an
+        applicant id would cause cross-record mutation. PR 14 removes
+        the scan and routes unmapped deliveries to a DLQ for manual
+        triage. This test inverts the previous assertion and fails loudly
+        if the scan is re-introduced.
+        """
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
         with open(server_path) as f:
             src = f.read()
         wh_start = src.find("class SumsubWebhookHandler")
         wh_end = src.find("\nclass ", wh_start + 10)
         wh_code = src[wh_start:wh_end]
-        assert "legacy" in wh_code.lower() or "fallback" in wh_code.lower(), \
-            "Webhook handler missing legacy fallback for old records"
+
+        assert "falling back to legacy scan" not in wh_code, (
+            "Legacy substring scan fallback must be removed (F-7)"
+        )
+        # The DLQ path must be present in its place.
+        assert "sumsub_unmatched_webhooks" in wh_code, (
+            "DLQ path (sumsub_unmatched_webhooks) missing from handler"
+        )
 
     def test_mapping_table_created_on_init(self):
         """The migration must actually run successfully."""

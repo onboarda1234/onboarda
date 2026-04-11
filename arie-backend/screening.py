@@ -465,8 +465,29 @@ def sumsub_add_document(applicant_id, doc_type, country, file_path=None, file_da
     )
 
 
-def sumsub_verify_webhook(body_bytes, signature_header):
-    """Verify a Sumsub webhook signature (HMAC-SHA256)."""
+def sumsub_verify_webhook(body_bytes, signature_header, digest_alg=None):
+    """Verify a Sumsub webhook signature against an algorithm allowlist.
+
+    PR 14 (F-2): Sumsub signs webhooks with one of a known set of HMAC
+    algorithms and advertises which via the ``X-Payload-Digest-Alg`` header
+    (e.g. ``HMAC_SHA256_HEX`` or ``HMAC_SHA512_HEX``). The caller (webhook
+    handler) is expected to pass this header value as ``digest_alg``. We
+    hard-gate to an allowlist so that:
+
+      1. Unknown or missing algorithms are rejected fail-closed rather than
+         silently falling back to SHA256 — an attacker cannot downgrade or
+         strip the header to force a weaker comparison.
+      2. Adding a new algorithm is an explicit, reviewable code change — not
+         an implicit fallthrough.
+
+    For backward compatibility with deliveries that do not carry the header
+    (older Sumsub payloads, internal test fixtures), ``digest_alg=None`` is
+    treated as ``HMAC_SHA256_HEX``. This preserves existing behaviour for
+    legacy callers while enabling strict gating for new ones.
+    """
+    # Lazy import to avoid a circular dependency at module-import time.
+    from utils.sumsub_validation import ALLOWED_DIGEST_ALGS
+
     if not SUMSUB_WEBHOOK_SECRET:
         if ENVIRONMENT in ("production", "staging"):
             logger.error(
@@ -477,16 +498,31 @@ def sumsub_verify_webhook(body_bytes, signature_header):
         logger.warning("Sumsub webhook secret not configured — accepting in dev/demo mode only")
         return True
 
+    # Resolve the hash constructor from the allowlist. Default to SHA256 for
+    # deliveries with no ``X-Payload-Digest-Alg`` header (preserves legacy
+    # behaviour). Unknown algorithms are rejected fail-closed.
+    _alg_key = digest_alg or "HMAC_SHA256_HEX"
+    _hash_ctor = ALLOWED_DIGEST_ALGS.get(_alg_key)
+    if _hash_ctor is None:
+        logger.warning(
+            "Sumsub webhook: unknown digest algorithm %r — rejecting fail-closed. "
+            "Allowed: %s",
+            _alg_key,
+            sorted(ALLOWED_DIGEST_ALGS.keys()),
+        )
+        return False
+
     expected = hmac.new(
         SUMSUB_WEBHOOK_SECRET.encode("utf-8"),
         body_bytes,
-        hashlib.sha256
+        _hash_ctor,
     ).hexdigest()
 
     # Staging-safe diagnostic — partial values only, never full secrets
     logger.info(
-        "Sumsub webhook HMAC: body_len=%d computed_prefix=%s received_prefix=%s match=%s",
+        "Sumsub webhook HMAC: body_len=%d alg=%s computed_prefix=%s received_prefix=%s match=%s",
         len(body_bytes),
+        _alg_key,
         expected[:8],
         (signature_header or "")[:8],
         expected == (signature_header or ""),
