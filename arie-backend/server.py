@@ -6478,9 +6478,41 @@ class SumsubDocumentHandler(BaseHandler):
 
 
 class SumsubWebhookHandler(BaseHandler):
-    """POST /api/kyc/webhook — Receive Sumsub verification webhooks"""
+    """POST /api/kyc/webhook — Receive Sumsub verification webhooks.
+
+    PR 14 hardening (Rev 3):
+      * F-2  Digest algorithm allowlist — when X-App-Access-Sig is absent and
+             X-Payload-Digest with X-Payload-Digest-Alg is used, the algorithm
+             is passed through to ``sumsub_verify_webhook`` where it is gated
+             fail-closed against a known set. Unknown algorithms are rejected.
+      * F-7  Legacy substring scan removed. Unmatched deliveries (no row in
+             ``sumsub_applicant_mappings``) are routed to the
+             ``sumsub_unmatched_webhooks`` dead-letter queue for manual
+             triage. The scan could cross-link records whose prescreening_data
+             happened to contain the applicant_id as a substring — a silent
+             multi-tenancy break.
+      * F-8  Applicant ID format validation. Sumsub IDs are hex strings; we
+             reject anything outside ``[0-9a-fA-F]{16,64}`` with 400 before
+             any DB open, and mask the value in all log lines.
+      * Event-type gate. ``applicantReviewed`` is the only event we treat as
+             mutating. Other known events are acknowledged with INFO and a
+             200. Unknown event types are acknowledged with WARN and a 200.
+             Both non-mutating branches short-circuit BEFORE the DB is opened
+             — no audit_log row is written for them (see
+             utils/sumsub_validation.py for the rationale; tested in T14/T14b).
+      * DLQ insert failure returns 503. If we cannot persist an unmatched
+             delivery to the DLQ, Sumsub must retry — we never silently drop.
+    """
 
     def post(self):
+        # Lazy import to avoid circular dependency at module-import time.
+        from utils.sumsub_validation import (
+            validate_applicant_id,
+            mask_applicant_id,
+            SUMSUB_MUTATING_EVENT_TYPES,
+            SUMSUB_ACKNOWLEDGED_EVENT_TYPES,
+        )
+
         body = self.request.body
 
         # Support both signature header formats safely:
@@ -6518,8 +6550,10 @@ class SumsubWebhookHandler(BaseHandler):
         if signature:
             logger.info("Sumsub webhook: received sig prefix=%s source=%s", signature[:8], _sig_source)
 
-        # Verify webhook signature — always verify, never skip (Finding S-16)
-        if not sumsub_verify_webhook(body, signature):
+        # Verify webhook signature — always verify, never skip (Finding S-16).
+        # F-2: pass the advertised algorithm through to the verifier, which
+        # hard-gates against ALLOWED_DIGEST_ALGS fail-closed.
+        if not sumsub_verify_webhook(body, signature, digest_alg=_digest_alg or None):
             logger.warning("Sumsub webhook: Invalid or missing signature")
             return self.error("Invalid signature", 401)
 
@@ -6534,90 +6568,167 @@ class SumsubWebhookHandler(BaseHandler):
         review_result = payload.get("reviewResult", {})
         review_answer = review_result.get("reviewAnswer", "")
 
-        logger.info(f"Sumsub webhook: {event_type} — applicant={applicant_id}, answer={review_answer}")
+        # F-8: validate applicant_id format BEFORE any DB open or log line that
+        # would include it. Rejects hex-format violations and guards against
+        # log-poisoning / SQL-context injection via the identifier.
+        if not validate_applicant_id(applicant_id):
+            logger.warning(
+                "Sumsub webhook: malformed applicant_id rejected (event_type=%s, sig_source=%s)",
+                event_type,
+                _sig_source,
+            )
+            return self.error("Invalid applicantId", 400)
 
-        # Handle applicantReviewed event
-        if event_type == "applicantReviewed":
-            db = get_db()
+        _masked_id = mask_applicant_id(applicant_id)
+        logger.info(
+            "Sumsub webhook: event=%s applicant=%s answer=%s",
+            event_type,
+            _masked_id,
+            review_answer,
+        )
+
+        # ── Event-type gate ──────────────────────────────────────────────
+        # Unknown events and known-but-non-mutating events short-circuit here,
+        # BEFORE we open the database. No audit_log row is written. The
+        # audit trail for these deliveries is this log line. See
+        # utils/sumsub_validation.py for the Rev 3 rationale.
+        if event_type not in SUMSUB_MUTATING_EVENT_TYPES:
+            if event_type in SUMSUB_ACKNOWLEDGED_EVENT_TYPES:
+                logger.info(
+                    "Sumsub webhook: acknowledged non-mutating event=%s applicant=%s — no DB write",
+                    event_type,
+                    _masked_id,
+                )
+            else:
+                logger.warning(
+                    "Sumsub webhook: unknown event_type=%r applicant=%s — acknowledged, no DB write",
+                    event_type,
+                    _masked_id,
+                )
+            self.set_status(200)
+            self.write(json.dumps({"status": "ok"}))
+            return
+
+        # ── Mutating path (applicantReviewed) ────────────────────────────
+        db = get_db()
+        try:
+            kyc_data = json.dumps({
+                "sumsub_applicant_id": applicant_id,
+                "external_user_id": external_user_id,
+                "review_answer": review_answer,
+                "rejection_labels": review_result.get("rejectLabels", []),
+                "moderation_comment": review_result.get("moderationComment", ""),
+                "event_type": event_type,
+                "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            })
+
+            # Audit log — mutating branch only (Rev 3: audit_log is a
+            # state-change record, not a webhook-arrival record).
+            db.execute("""
+                INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, ("system", "Sumsub Webhook", "system", f"KYC {event_type}: {review_answer}", applicant_id, kyc_data))
+
+            # Finding 12: Deterministic applicant→application lookup via mapping table.
+            # F-7: the legacy substring scan has been removed — unmatched
+            # deliveries go to the DLQ for manual triage.
+            matched_app_ids = set()
+            mapping_lookup_failed = False
+
             try:
-                # Find the application linked to this external user
-                # The external user ID may be a client email or director ID
-                kyc_data = json.dumps({
-                    "sumsub_applicant_id": applicant_id,
-                    "external_user_id": external_user_id,
-                    "review_answer": review_answer,
-                    "rejection_labels": review_result.get("rejectLabels", []),
-                    "moderation_comment": review_result.get("moderationComment", ""),
-                    "event_type": event_type,
-                    "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-                })
+                mappings = db.execute(
+                    "SELECT application_id FROM sumsub_applicant_mappings WHERE applicant_id = ? OR external_user_id = ?",
+                    (applicant_id, external_user_id)
+                ).fetchall()
+                for m in mappings:
+                    matched_app_ids.add(m["application_id"])
+            except Exception as e:
+                # Don't silently swallow — route this delivery to the DLQ with
+                # a diagnostic resolution_note so an operator can investigate.
+                logger.error(
+                    "Sumsub webhook: mapping table lookup failed for applicant=%s — routing to DLQ: %s",
+                    _masked_id, e,
+                )
+                mapping_lookup_failed = True
 
-                # Store webhook data in audit log
-                db.execute("""
-                    INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, ("system", "Sumsub Webhook", "system", f"KYC {event_type}: {review_answer}", applicant_id, kyc_data))
-
-                # Finding 12: Deterministic applicant→application lookup via mapping table
-                matched_app_ids = set()
-
-                # Primary path: indexed lookup in sumsub_applicant_mappings
+            if not matched_app_ids:
+                # ── Dead-letter queue path ──────────────────────────────
+                resolution_note = (
+                    "auto:mapping_lookup_failed" if mapping_lookup_failed
+                    else "auto:no_mapping_found"
+                )
                 try:
-                    mappings = db.execute(
-                        "SELECT application_id FROM sumsub_applicant_mappings WHERE applicant_id = ? OR external_user_id = ?",
-                        (applicant_id, external_user_id)
-                    ).fetchall()
-                    for m in mappings:
-                        matched_app_ids.add(m["application_id"])
-                except Exception as e:
-                    logger.debug(f"Mapping table lookup failed (may not exist yet): {e}")
-
-                # Legacy fallback: substring scan for old records without mapping entries
-                if not matched_app_ids:
-                    logger.info("Sumsub webhook: No mapping found — falling back to legacy scan")
-                    apps = db.execute("SELECT id, prescreening_data FROM applications").fetchall()
-                    for app in apps:
-                        pdata = app["prescreening_data"] or ""
-                        if applicant_id and applicant_id in pdata:
-                            matched_app_ids.add(app["id"])
-                        elif external_user_id and external_user_id in pdata:
-                            matched_app_ids.add(app["id"])
-
-                # Update matched applications
-                for app_id in matched_app_ids:
+                    db.execute("""
+                        INSERT INTO sumsub_unmatched_webhooks
+                            (applicant_id, external_user_id, event_type, review_answer,
+                             payload, status, resolution_note, received_at)
+                        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+                    """, (
+                        applicant_id,
+                        external_user_id,
+                        event_type,
+                        review_answer,
+                        kyc_data,
+                        resolution_note,
+                        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                    ))
+                    db.commit()
+                    logger.warning(
+                        "Sumsub webhook: unmatched delivery queued to DLQ applicant=%s note=%s",
+                        _masked_id, resolution_note,
+                    )
+                    self.set_status(200)
+                    self.write(json.dumps({"status": "queued"}))
+                    return
+                except Exception as dlq_err:
+                    # DLQ insert failure must NOT be silently swallowed.
+                    # Return 503 so Sumsub retries the delivery.
                     try:
-                        # app_id from the mapping table may be a ref or an id
-                        row = db.execute(
-                            "SELECT id, prescreening_data FROM applications WHERE id=? OR ref=?",
-                            (app_id, app_id)
-                        ).fetchone()
-                        if not row:
-                            continue
-                        pdict = safe_json_loads(row["prescreening_data"] or "{}")
-                        if "screening_report" not in pdict:
-                            pdict["screening_report"] = {}
-                        pdict["screening_report"]["sumsub_webhook"] = safe_json_loads(kyc_data)
+                        db.rollback()
+                    except Exception:
+                        pass
+                    logger.error(
+                        "Sumsub webhook: DLQ insert FAILED for applicant=%s — returning 503: %s",
+                        _masked_id, dlq_err,
+                    )
+                    return self.error("Webhook persistence failure", 503)
 
-                        # If verification failed, add a flag
-                        if review_answer == "RED":
-                            flags = pdict["screening_report"].get("overall_flags", [])
-                            flag_msg = f"Sumsub KYC verification REJECTED for {external_user_id}"
-                            if flag_msg not in flags:
-                                flags.append(flag_msg)
-                            pdict["screening_report"]["overall_flags"] = flags
+            # Update matched applications
+            for app_id in matched_app_ids:
+                try:
+                    # app_id from the mapping table may be a ref or an id
+                    row = db.execute(
+                        "SELECT id, prescreening_data FROM applications WHERE id=? OR ref=?",
+                        (app_id, app_id)
+                    ).fetchone()
+                    if not row:
+                        continue
+                    pdict = safe_json_loads(row["prescreening_data"] or "{}")
+                    if "screening_report" not in pdict:
+                        pdict["screening_report"] = {}
+                    pdict["screening_report"]["sumsub_webhook"] = safe_json_loads(kyc_data)
 
-                        db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
-                                  (json.dumps(pdict), row["id"]))
-                        logger.info(f"Sumsub webhook: Updated application {row['id']}")
-                    except Exception as e:
-                        logger.error(f"Failed to update application {app_id}: {e}")
+                    # If verification failed, add a flag
+                    if review_answer == "RED":
+                        flags = pdict["screening_report"].get("overall_flags", [])
+                        flag_msg = f"Sumsub KYC verification REJECTED for {external_user_id}"
+                        if flag_msg not in flags:
+                            flags.append(flag_msg)
+                        pdict["screening_report"]["overall_flags"] = flags
 
-                db.commit()
-            finally:
-                db.close()
+                    db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
+                              (json.dumps(pdict), row["id"]))
+                    logger.info("Sumsub webhook: updated application id=%s applicant=%s",
+                                row["id"], _masked_id)
+                except Exception as e:
+                    logger.error(
+                        "Sumsub webhook: failed to update application %s applicant=%s: %s",
+                        app_id, _masked_id, e,
+                    )
 
-        elif event_type == "applicantPending":
-            logger.info(f"Sumsub: Applicant {applicant_id} pending review")
+            db.commit()
+        finally:
+            db.close()
 
         self.set_status(200)
         self.write(json.dumps({"status": "ok"}))
