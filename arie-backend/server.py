@@ -7625,7 +7625,6 @@ class ApplicationDecisionHandler(BaseHandler):
                                 "First Approval (Pending Second)", app["ref"],
                                 f"Decision: approve | Reason: {decision_reason} | Awaiting second approver",
                                 self.get_client_ip(), _safe_json(_before), _safe_json(_first_after)))
-                                self.get_client_ip()))
                     db.commit()
                     db.close()
                     return self.success({"status": "first_approval_recorded", "message": dual_error}, 202)

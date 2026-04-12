@@ -38,7 +38,7 @@ def _safe_json(obj):
     if obj is None:
         return None
     try:
-        return json.dumps(obj, default=str)
+        return json.dumps(obj, default=str, allow_nan=False)
     except (TypeError, ValueError, OverflowError):
         return None
 
