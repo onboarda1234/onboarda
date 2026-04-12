@@ -1451,6 +1451,9 @@
   <button type="button" class="dash-nav-item" onclick="showView('status-lookup')">
     <span class="dash-nav-icon">🔍</span> Track by Reference
   </button>
+  <button type="button" class="dash-nav-item" onclick="showView('portal-changes')">
+    <span class="dash-nav-icon">📝</span> Change Requests
+  </button>
   <button type="button" class="dash-nav-item" onclick="showView('account-security')">
     <span class="dash-nav-icon">🔐</span> Security
   </button>
@@ -1724,6 +1727,80 @@
             </div>
           </div>
           <button type="submit" class="btn-submit" id="change-password-btn">🔒 Change Password</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════
+       VIEW: CHANGE REQUESTS (client portal)
+  ══════════════════════════════════════ -->
+  <div id="view-portal-changes" class="hidden">
+    <div class="page" style="max-width:860px;">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon blue">📝</div>
+          <div>
+            <div class="card-title">Change Requests</div>
+            <div class="card-sub">Request changes to your approved entity profile. All changes are reviewed by our compliance team before implementation.</div>
+          </div>
+        </div>
+        <div style="margin-top:16px;display:flex;justify-content:flex-end;">
+          <button class="btn-submit" onclick="showPortalChangeRequestForm()" style="padding:8px 16px;font-size:13px;">+ Request a Change</button>
+        </div>
+        <div id="portal-changes-list" style="margin-top:16px;"></div>
+      </div>
+
+      <!-- New Change Request Form (hidden by default) -->
+      <div id="portal-change-form" class="card" style="display:none;margin-top:16px;">
+        <div class="card-header">
+          <div class="card-icon amber">✏️</div>
+          <div>
+            <div class="card-title">Submit Change Request</div>
+            <div class="card-sub">Describe the change you need to make.</div>
+          </div>
+        </div>
+        <form onsubmit="submitPortalChangeRequest(event)" style="margin-top:16px;">
+          <div class="form-group mb-2">
+            <label>Application <span class="req">*</span></label>
+            <select id="portal-cr-app" required style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-size:14px;"></select>
+          </div>
+          <div class="form-group mb-2">
+            <label>What needs to change? <span class="req">*</span></label>
+            <select id="portal-cr-type" required style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-size:14px;">
+              <option value="company_details">Company Details</option>
+              <option value="director_add">Add a Director</option>
+              <option value="director_remove">Remove a Director</option>
+              <option value="ubo_add">Add a UBO</option>
+              <option value="ubo_remove">Remove a UBO</option>
+              <option value="address_change">Change Address</option>
+              <option value="contact_detail_update">Update Contact Details</option>
+              <option value="business_activity_change">Change Business Activity</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="form-group mb-2">
+            <label>Reason for Change <span class="req">*</span></label>
+            <textarea id="portal-cr-reason" rows="3" required placeholder="Please describe what changed and why…" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-size:14px;resize:vertical;"></textarea>
+          </div>
+          <div class="form-group mb-2">
+            <label>Field (if applicable)</label>
+            <input id="portal-cr-field" type="text" placeholder="e.g. company_name, registered_address" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-size:14px;">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;" class="mb-2">
+            <div class="form-group">
+              <label>Current Value</label>
+              <input id="portal-cr-old" type="text" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-size:14px;">
+            </div>
+            <div class="form-group">
+              <label>New Value</label>
+              <input id="portal-cr-new" type="text" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);font-size:14px;">
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+            <button type="button" class="btn-outline" onclick="document.getElementById('portal-change-form').style.display='none'" style="padding:8px 16px;font-size:13px;">Cancel</button>
+            <button type="submit" class="btn-submit" style="padding:8px 16px;font-size:13px;">Submit Request</button>
+          </div>
         </form>
       </div>
     </div>
@@ -4914,7 +4991,7 @@ function showLicenceDocs() {
 
 // ─── View switching ───────────────────────────────────────
 // Views where the persistent client sidebar is shown
-const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','withdrawn','client-notifications','account-security'];
+const SIDEBAR_VIEWS = ['my-apps','prescreening','pending','pricing','pre-approval-hold','compliance-hold','onboarding','submission-review','docs-review','approved','rejected','withdrawn','client-notifications','account-security','portal-changes'];
 
 function showView(name) {
   document.querySelectorAll('[id^="view-"]').forEach(v => v.classList.add('hidden'));
@@ -8318,6 +8395,90 @@ async function submitChangePassword(e) {
     showToast('error', 'Update Failed', err.message || 'Could not change your password.');
   }
 }
+
+// ─── Portal Change Requests ───────────────────────────────────────────
+function showPortalChangeRequestForm() {
+  document.getElementById('portal-change-form').style.display = '';
+  // Load applications for the dropdown
+  loadPortalChangeApps();
+}
+
+async function loadPortalChangeApps() {
+  try {
+    var resp = await apiCall('GET', '/api/portal/applications');
+    var apps = resp.applications || [];
+    var sel = document.getElementById('portal-cr-app');
+    sel.innerHTML = '<option value="">Select application…</option>';
+    apps.forEach(function(a) {
+      var opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = (a.company_name || a.ref || a.id) + ' (' + (a.status || '') + ')';
+      sel.appendChild(opt);
+    });
+  } catch(e) {}
+}
+
+async function submitPortalChangeRequest(e) {
+  e.preventDefault();
+  var appId = document.getElementById('portal-cr-app').value;
+  if (!appId) { showToast('error', 'Missing', 'Please select an application.'); return; }
+  var changeType = document.getElementById('portal-cr-type').value;
+  var items = [{
+    change_type: changeType,
+    field_name: document.getElementById('portal-cr-field').value || null,
+    old_value: document.getElementById('portal-cr-old').value || null,
+    new_value: document.getElementById('portal-cr-new').value || null
+  }];
+  try {
+    var resp = await apiCall('POST', '/api/portal/change-requests', {
+      application_id: appId,
+      reason: document.getElementById('portal-cr-reason').value,
+      items: items
+    });
+    showToast('success', 'Request Submitted', 'Your change request ' + (resp.id || '') + ' has been submitted for review.');
+    document.getElementById('portal-change-form').style.display = 'none';
+    document.getElementById('portal-cr-reason').value = '';
+    document.getElementById('portal-cr-field').value = '';
+    document.getElementById('portal-cr-old').value = '';
+    document.getElementById('portal-cr-new').value = '';
+    loadPortalChangeRequests();
+  } catch(err) {
+    showToast('error', 'Failed', err.message || 'Could not submit change request.');
+  }
+}
+
+async function loadPortalChangeRequests() {
+  try {
+    var resp = await apiCall('GET', '/api/portal/change-requests');
+    var reqs = resp.requests || [];
+    var container = document.getElementById('portal-changes-list');
+    if (reqs.length === 0) {
+      container.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text-dim);">No change requests yet. Use the button above to request a change to your entity profile.</div>';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+      + '<thead><tr style="border-bottom:2px solid var(--border);"><th style="padding:8px;text-align:left;">ID</th><th style="padding:8px;text-align:left;">Reason</th><th style="padding:8px;text-align:left;">Status</th><th style="padding:8px;text-align:left;">Created</th></tr></thead><tbody>';
+    reqs.forEach(function(r) {
+      var statusColors = { draft:'#6c757d', submitted:'#0d6efd', approved:'#198754', rejected:'#dc3545', implemented:'#20c997' };
+      var sColor = statusColors[r.status] || '#6c757d';
+      html += '<tr style="border-bottom:1px solid var(--border);"><td style="padding:8px;font-family:monospace;font-size:11px;">' + (r.id||'').substring(0,12) + '</td>'
+        + '<td style="padding:8px;">' + (r.reason||'—') + '</td>'
+        + '<td style="padding:8px;"><span style="background:' + sColor + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">' + (r.status||'').replace(/_/g,' ') + '</span></td>'
+        + '<td style="padding:8px;font-size:11px;">' + (r.created_at||'').substring(0,10) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch(e) {
+    document.getElementById('portal-changes-list').innerHTML = '<div style="text-align:center;padding:16px;color:var(--red);">Failed to load change requests.</div>';
+  }
+}
+
+// Load portal changes when that view is shown
+var _originalShowView = showView;
+showView = function(name) {
+  _originalShowView(name);
+  if (name === 'portal-changes') loadPortalChangeRequests();
+};
 
 // ─── Password helpers ────────────────────────────────────────
 function togglePwd(id, btn) {

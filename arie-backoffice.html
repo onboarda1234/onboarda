@@ -778,6 +778,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     <div class="snav-item" onclick="showView('screening',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span> Screening Queue</div>
     <div class="snav-item" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Ongoing Monitoring</div>
     <div class="snav-item" onclick="showView('edd',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span> EDD Pipeline</div>
+    <div class="snav-item" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
     <div class="snav-item" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
     <div class="snav-item" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span> Regulatory Intelligence</div>
     <div class="snav-section">Compliance Supervisor</div>
@@ -1501,6 +1502,207 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
   <div id="monitoring-agents-tab" style="display:none;">
     <div class="stats-grid" style="grid-template-columns:repeat(1,1fr);max-width:600px;">
       <div id="agents-status-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ CHANGE MANAGEMENT ═══════════════ -->
+<div class="view" id="view-change-mgmt">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;">
+    <div>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Change Management</h3>
+      <p style="font-size:13px;color:var(--text3);">Manage change alerts and formal change requests for entity profiles. All material changes require review and approval before live implementation.</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn" onclick="showChangeMgmtTab('alerts')" id="cm-tab-alerts" style="font-size:12px;">Change Alerts</button>
+      <button class="btn btn-outline" onclick="showChangeMgmtTab('requests')" id="cm-tab-requests" style="font-size:12px;">Change Requests</button>
+      <button class="btn btn-outline" onclick="showChangeMgmtTab('stats')" id="cm-tab-stats" style="font-size:12px;">Stats</button>
+    </div>
+  </div>
+  <!-- Alerts Tab -->
+  <div id="cm-alerts-tab">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="display:flex;gap:8px;">
+        <select id="cm-alert-status-filter" onchange="loadChangeAlerts()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border1);font-size:12px;background:var(--surface);">
+          <option value="">All Statuses</option>
+          <option value="new">New</option>
+          <option value="under_review">Under Review</option>
+          <option value="awaiting_client_confirmation">Awaiting Client</option>
+          <option value="converted_to_change_request">Converted</option>
+          <option value="dismissed">Dismissed</option>
+          <option value="escalated">Escalated</option>
+        </select>
+      </div>
+      <button class="btn" onclick="showCreateAlertModal()" style="font-size:12px;">+ New Alert</button>
+    </div>
+    <div id="cm-alerts-list" style="background:var(--surface);border-radius:10px;border:1px solid var(--border1);overflow:hidden;">
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:var(--bg2);border-bottom:1px solid var(--border1);">
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">ID</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Type</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Entity</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Summary</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Materiality</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Source</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Status</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Created</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Actions</th>
+        </tr></thead>
+        <tbody id="cm-alerts-tbody"></tbody>
+      </table>
+      <div id="cm-alerts-empty" style="padding:40px;text-align:center;color:var(--text3);display:none;">No change alerts found.</div>
+    </div>
+  </div>
+  <!-- Requests Tab -->
+  <div id="cm-requests-tab" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="display:flex;gap:8px;">
+        <select id="cm-request-status-filter" onchange="loadChangeRequests()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border1);font-size:12px;background:var(--surface);">
+          <option value="">All Statuses</option>
+          <option value="draft">Draft</option>
+          <option value="submitted">Submitted</option>
+          <option value="triage_in_progress">Triage</option>
+          <option value="approval_pending">Approval Pending</option>
+          <option value="approved">Approved</option>
+          <option value="implemented">Implemented</option>
+          <option value="rejected">Rejected</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <select id="cm-request-materiality-filter" onchange="loadChangeRequests()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border1);font-size:12px;background:var(--surface);">
+          <option value="">All Tiers</option>
+          <option value="tier1">Tier 1 — Material</option>
+          <option value="tier2">Tier 2 — Moderate</option>
+          <option value="tier3">Tier 3 — Minor</option>
+        </select>
+      </div>
+      <button class="btn" onclick="showCreateRequestModal()" style="font-size:12px;">+ New Request</button>
+    </div>
+    <div id="cm-requests-list" style="background:var(--surface);border-radius:10px;border:1px solid var(--border1);overflow:hidden;">
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:var(--bg2);border-bottom:1px solid var(--border1);">
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">ID</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Entity</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Source</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Reason</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Materiality</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Status</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Flags</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Created</th>
+          <th style="padding:10px 14px;text-align:left;font-weight:600;">Actions</th>
+        </tr></thead>
+        <tbody id="cm-requests-tbody"></tbody>
+      </table>
+      <div id="cm-requests-empty" style="padding:40px;text-align:center;color:var(--text3);display:none;">No change requests found.</div>
+    </div>
+  </div>
+  <!-- Stats Tab -->
+  <div id="cm-stats-tab" style="display:none;">
+    <div id="cm-stats-content" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;"></div>
+  </div>
+</div>
+
+<!-- Change Alert Detail Modal -->
+<div id="cm-alert-detail-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2000;overflow-y:auto;">
+  <div style="max-width:700px;margin:40px auto;background:var(--surface);border-radius:12px;padding:28px;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h3 style="font-size:16px;font-weight:700;">Change Alert Detail</h3>
+      <button onclick="document.getElementById('cm-alert-detail-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
+    </div>
+    <div id="cm-alert-detail-content"></div>
+  </div>
+</div>
+
+<!-- Change Request Detail Modal -->
+<div id="cm-request-detail-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2000;overflow-y:auto;">
+  <div style="max-width:800px;margin:40px auto;background:var(--surface);border-radius:12px;padding:28px;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h3 style="font-size:16px;font-weight:700;">Change Request Detail</h3>
+      <button onclick="document.getElementById('cm-request-detail-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
+    </div>
+    <div id="cm-request-detail-content"></div>
+  </div>
+</div>
+
+<!-- Create Alert Modal -->
+<div id="cm-create-alert-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2000;overflow-y:auto;">
+  <div style="max-width:550px;margin:60px auto;background:var(--surface);border-radius:12px;padding:28px;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h3 style="font-size:16px;font-weight:700;">Create Change Alert</h3>
+      <button onclick="document.getElementById('cm-create-alert-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Application ID</label>
+        <select id="cm-alert-app-id" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;"></select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Alert Type</label>
+        <select id="cm-alert-type" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;">
+          <option value="director_change">Director Change</option>
+          <option value="ubo_change">UBO Change</option>
+          <option value="shareholding_change">Shareholding Change</option>
+          <option value="legal_name_change">Legal Name Change</option>
+          <option value="address_change">Address Change</option>
+          <option value="business_activity_change">Business Activity Change</option>
+          <option value="licensing_change">Licensing/Regulatory Change</option>
+          <option value="other">Other</option>
+        </select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Source</label>
+        <select id="cm-alert-source" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;">
+          <option value="companies_house">Companies House</option>
+          <option value="open_corporates">OpenCorporates</option>
+          <option value="registry_api">Registry API</option>
+          <option value="backoffice">Back Office (manual)</option>
+          <option value="ongoing_monitoring">Ongoing Monitoring</option>
+          <option value="other">Other</option>
+        </select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Summary</label>
+        <textarea id="cm-alert-summary" rows="3" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;resize:vertical;"></textarea></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Source Reference (URL/ID)</label>
+        <input id="cm-alert-source-ref" type="text" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;">
+        <button class="btn btn-outline" onclick="document.getElementById('cm-create-alert-modal').style.display='none'" style="font-size:12px;">Cancel</button>
+        <button class="btn" onclick="submitCreateAlert()" style="font-size:12px;">Create Alert</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Create Request Modal -->
+<div id="cm-create-request-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2000;overflow-y:auto;">
+  <div style="max-width:600px;margin:60px auto;background:var(--surface);border-radius:12px;padding:28px;box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h3 style="font-size:16px;font-weight:700;">Create Change Request</h3>
+      <button onclick="document.getElementById('cm-create-request-modal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text2);">&times;</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Application</label>
+        <select id="cm-req-app-id" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;"></select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Reason for Change</label>
+        <textarea id="cm-req-reason" rows="3" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;resize:vertical;" placeholder="Describe the change request..."></textarea></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Change Type</label>
+        <select id="cm-req-change-type" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;">
+          <option value="company_details">Company Details Change</option>
+          <option value="director_add">Add Director</option>
+          <option value="director_remove">Remove Director</option>
+          <option value="ubo_add">Add UBO</option>
+          <option value="ubo_remove">Remove UBO</option>
+          <option value="director_change">Director Change (Update)</option>
+          <option value="ubo_change">UBO Change (Update)</option>
+          <option value="address_change">Address Change</option>
+          <option value="business_activity_change">Business Activity</option>
+          <option value="contact_detail_update">Contact Update</option>
+          <option value="other">Other</option>
+        </select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Field Name (if applicable)</label>
+        <input id="cm-req-field" type="text" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;" placeholder="e.g. company_name, registered_address"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Current Value</label>
+          <input id="cm-req-old-val" type="text" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;"></div>
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Proposed Value</label>
+          <input id="cm-req-new-val" type="text" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border1);font-size:13px;"></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;">
+        <button class="btn btn-outline" onclick="document.getElementById('cm-create-request-modal').style.display='none'" style="font-size:12px;">Cancel</button>
+        <button class="btn" onclick="submitCreateRequest()" style="font-size:12px;">Create Request</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3290,7 +3492,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', edd:'EDD Pipeline', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', edd:'EDD Pipeline', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
 
   // Close mobile menu on navigation
@@ -3304,6 +3506,7 @@ function showView(name, navItem) {
   if (name === 'screening') renderScreening();
   if (name === 'monitoring') renderMonitoring();
   if (name === 'edd') renderEDD();
+  if (name === 'change-mgmt') renderChangeMgmt();
   if (name === 'cases') renderCases();
   if (name === 'kpis') renderKPIDashboard();
   if (name === 'reg-intel') renderRegIntel();
@@ -5517,6 +5720,398 @@ async function advanceEDDStage(caseId, newStage) {
   } catch(err) {
     showToast('Failed to update EDD case: ' + (err.message || 'Unknown error'), 'error');
   }
+}
+
+// ═══════════════ CHANGE MANAGEMENT ═══════════════
+
+function renderChangeMgmt() {
+  loadChangeAlerts();
+  loadCMApplications();
+}
+
+function showChangeMgmtTab(tab) {
+  document.getElementById('cm-alerts-tab').style.display = (tab === 'alerts') ? '' : 'none';
+  document.getElementById('cm-requests-tab').style.display = (tab === 'requests') ? '' : 'none';
+  document.getElementById('cm-stats-tab').style.display = (tab === 'stats') ? '' : 'none';
+  ['alerts','requests','stats'].forEach(function(t) {
+    var btn = document.getElementById('cm-tab-' + t);
+    if (btn) { btn.className = (t === tab) ? 'btn' : 'btn btn-outline'; }
+  });
+  if (tab === 'alerts') loadChangeAlerts();
+  if (tab === 'requests') loadChangeRequests();
+  if (tab === 'stats') loadCMStats();
+}
+
+function loadCMApplications() {
+  apiFetch('/api/applications').then(function(r) {
+    var apps = r.applications || [];
+    var opts = apps.map(function(a) {
+      return '<option value="' + a.id + '">' + (a.company_name || a.ref || a.id) + '</option>';
+    }).join('');
+    var selects = ['cm-alert-app-id', 'cm-req-app-id'];
+    selects.forEach(function(sid) {
+      var el = document.getElementById(sid);
+      if (el) el.innerHTML = '<option value="">Select application…</option>' + opts;
+    });
+  }).catch(function() {});
+}
+
+function cmMaterialityBadge(m) {
+  if (!m) return '<span style="color:var(--text3);font-size:11px;">—</span>';
+  var colors = { tier1: '#dc3545', tier2: '#fd7e14', tier3: '#28a745' };
+  var labels = { tier1: 'Tier 1', tier2: 'Tier 2', tier3: 'Tier 3' };
+  return '<span style="background:' + (colors[m]||'#6c757d') + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">' + (labels[m]||m) + '</span>';
+}
+
+function cmStatusBadge(s) {
+  if (!s) return '';
+  var colors = { new:'#0d6efd', under_review:'#fd7e14', dismissed:'#6c757d', converted_to_change_request:'#198754',
+    escalated:'#dc3545', draft:'#6c757d', submitted:'#0d6efd', triage_in_progress:'#fd7e14',
+    approval_pending:'#ffc107', approved:'#198754', rejected:'#dc3545', implemented:'#20c997',
+    cancelled:'#6c757d', superseded:'#6c757d' };
+  var label = s.replace(/_/g, ' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
+  return '<span style="background:' + (colors[s]||'#6c757d') + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;">' + label + '</span>';
+}
+
+function loadChangeAlerts() {
+  var status = document.getElementById('cm-alert-status-filter').value;
+  var url = '/api/change-management/alerts';
+  if (status) url += '?status=' + status;
+  apiFetch(url).then(function(r) {
+    var alerts = r.alerts || [];
+    var tbody = document.getElementById('cm-alerts-tbody');
+    var empty = document.getElementById('cm-alerts-empty');
+    tbody.innerHTML = '';
+    if (alerts.length === 0) { empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    alerts.forEach(function(a) {
+      var tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border1);cursor:pointer;';
+      tr.onclick = function() { viewAlertDetail(a.id); };
+      tr.innerHTML = '<td style="padding:10px 14px;font-family:monospace;font-size:11px;">' + (a.id||'').substring(0,12) + '</td>'
+        + '<td style="padding:10px 14px;">' + (a.alert_type||'').replace(/_/g,' ') + '</td>'
+        + '<td style="padding:10px 14px;">' + (a.application_id||'').substring(0,10) + '</td>'
+        + '<td style="padding:10px 14px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (a.summary||'') + '</td>'
+        + '<td style="padding:10px 14px;">' + cmMaterialityBadge(a.materiality) + '</td>'
+        + '<td style="padding:10px 14px;font-size:11px;">' + (a.source_channel||'') + '</td>'
+        + '<td style="padding:10px 14px;">' + cmStatusBadge(a.status) + '</td>'
+        + '<td style="padding:10px 14px;font-size:11px;">' + (a.created_at||'').substring(0,10) + '</td>'
+        + '<td style="padding:10px 14px;"><button class="btn btn-outline" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();viewAlertDetail(\'' + a.id + '\')">View</button></td>';
+      tbody.appendChild(tr);
+    });
+  }).catch(function(e) { showToast('Failed to load alerts: ' + e.message, 'error'); });
+}
+
+function viewAlertDetail(alertId) {
+  apiFetch('/api/change-management/alerts/' + alertId).then(function(a) {
+    var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">'
+      + '<div><span style="font-size:11px;color:var(--text3);">Alert ID</span><br><strong style="font-family:monospace;">' + a.id + '</strong></div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Status</span><br>' + cmStatusBadge(a.status) + '</div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Type</span><br>' + (a.alert_type||'').replace(/_/g,' ') + '</div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Materiality</span><br>' + cmMaterialityBadge(a.materiality) + '</div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Source</span><br>' + (a.source_channel||'') + '</div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Confidence</span><br>' + (a.confidence ? (a.confidence*100).toFixed(0)+'%' : '—') + '</div>'
+      + '</div>'
+      + '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);">Summary</span><br><p style="font-size:13px;margin-top:4px;">' + (a.summary||'—') + '</p></div>';
+
+    if (a.detected_changes) {
+      try {
+        var changes = typeof a.detected_changes === 'string' ? JSON.parse(a.detected_changes) : a.detected_changes;
+        html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);">Detected Changes</span><pre style="background:var(--bg2);padding:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:200px;">' + JSON.stringify(changes, null, 2) + '</pre></div>';
+      } catch(e) {}
+    }
+
+    if (a.source_reference) {
+      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);">Source Reference</span><br><span style="font-size:12px;">' + a.source_reference + '</span></div>';
+    }
+
+    // Actions
+    if (a.status !== 'dismissed' && a.status !== 'converted_to_change_request' && a.status !== 'resolved_no_change') {
+      html += '<div style="border-top:1px solid var(--border1);padding-top:16px;margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">';
+      if (a.status === 'new') {
+        html += '<button class="btn" style="font-size:12px;" onclick="updateAlertStatus(\'' + a.id + '\',\'under_review\')">Begin Review</button>';
+        html += '<button class="btn btn-outline" style="font-size:12px;" onclick="updateAlertStatus(\'' + a.id + '\',\'dismissed\')">Dismiss</button>';
+      }
+      if (a.status === 'under_review' || a.status === 'awaiting_client_confirmation') {
+        html += '<button class="btn" style="font-size:12px;" onclick="convertAlertToRequest(\'' + a.id + '\')">Convert to Request</button>';
+        html += '<button class="btn btn-outline" style="font-size:12px;" onclick="updateAlertStatus(\'' + a.id + '\',\'dismissed\')">Dismiss</button>';
+        html += '<button class="btn btn-outline" style="font-size:12px;border-color:#dc3545;color:#dc3545;" onclick="updateAlertStatus(\'' + a.id + '\',\'escalated\')">Escalate</button>';
+      }
+      html += '</div>';
+    }
+
+    document.getElementById('cm-alert-detail-content').innerHTML = html;
+    document.getElementById('cm-alert-detail-modal').style.display = '';
+  }).catch(function(e) { showToast('Failed to load alert detail: ' + e.message, 'error'); });
+}
+
+function updateAlertStatus(alertId, newStatus) {
+  var notes = '';
+  if (newStatus === 'dismissed') notes = prompt('Reason for dismissal:', '') || '';
+  apiFetch('/api/change-management/alerts/' + alertId, {
+    method: 'PATCH', body: JSON.stringify({ status: newStatus, notes: notes })
+  }).then(function() {
+    showToast('Alert status updated to ' + newStatus.replace(/_/g,' '), 'success');
+    document.getElementById('cm-alert-detail-modal').style.display = 'none';
+    loadChangeAlerts();
+  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+function convertAlertToRequest(alertId) {
+  if (!confirm('Convert this alert into a formal change request?')) return;
+  apiFetch('/api/change-management/alerts/' + alertId + '/convert', {
+    method: 'POST', body: JSON.stringify({})
+  }).then(function(r) {
+    showToast('Alert converted to request ' + (r.id||''), 'success');
+    document.getElementById('cm-alert-detail-modal').style.display = 'none';
+    loadChangeAlerts();
+  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+function loadChangeRequests() {
+  var status = document.getElementById('cm-request-status-filter').value;
+  var materiality = document.getElementById('cm-request-materiality-filter').value;
+  var url = '/api/change-management/requests?';
+  if (status) url += 'status=' + status + '&';
+  if (materiality) url += 'materiality=' + materiality + '&';
+  apiFetch(url).then(function(r) {
+    var reqs = r.requests || [];
+    var tbody = document.getElementById('cm-requests-tbody');
+    var empty = document.getElementById('cm-requests-empty');
+    tbody.innerHTML = '';
+    if (reqs.length === 0) { empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    reqs.forEach(function(req) {
+      var flags = [];
+      if (req.screening_required) flags.push('🔍');
+      if (req.risk_review_required) flags.push('⚠️');
+      if (req.edd_review_required) flags.push('📋');
+      var tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border1);cursor:pointer;';
+      tr.onclick = function() { viewRequestDetail(req.id); };
+      tr.innerHTML = '<td style="padding:10px 14px;font-family:monospace;font-size:11px;">' + (req.id||'').substring(0,12) + '</td>'
+        + '<td style="padding:10px 14px;">' + (req.application_id||'').substring(0,10) + '</td>'
+        + '<td style="padding:10px 14px;font-size:11px;">' + (req.source||'').replace(/_/g,' ') + '</td>'
+        + '<td style="padding:10px 14px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + (req.reason||'—') + '</td>'
+        + '<td style="padding:10px 14px;">' + cmMaterialityBadge(req.materiality) + '</td>'
+        + '<td style="padding:10px 14px;">' + cmStatusBadge(req.status) + '</td>'
+        + '<td style="padding:10px 14px;">' + flags.join(' ') + '</td>'
+        + '<td style="padding:10px 14px;font-size:11px;">' + (req.created_at||'').substring(0,10) + '</td>'
+        + '<td style="padding:10px 14px;"><button class="btn btn-outline" style="font-size:10px;padding:4px 8px;" onclick="event.stopPropagation();viewRequestDetail(\'' + req.id + '\')">View</button></td>';
+      tbody.appendChild(tr);
+    });
+  }).catch(function(e) { showToast('Failed to load requests: ' + e.message, 'error'); });
+}
+
+function viewRequestDetail(reqId) {
+  apiFetch('/api/change-management/requests/' + reqId).then(function(r) {
+    var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">'
+      + '<div><span style="font-size:11px;color:var(--text3);">Request ID</span><br><strong style="font-family:monospace;">' + r.id + '</strong></div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Status</span><br>' + cmStatusBadge(r.status) + '</div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Source</span><br>' + (r.source||'').replace(/_/g,' ') + '</div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Materiality</span><br>' + cmMaterialityBadge(r.materiality) + '</div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Screening</span><br>' + (r.screening_required ? '🔍 Required' : '—') + '</div>'
+      + '<div><span style="font-size:11px;color:var(--text3);">Risk Review</span><br>' + (r.risk_review_required ? '⚠️ Required' : '—') + '</div>'
+      + '</div>';
+
+    html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);">Reason</span><br><p style="font-size:13px;margin-top:4px;">' + (r.reason||'—') + '</p></div>';
+
+    // Items
+    if (r.items && r.items.length > 0) {
+      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Change Items (' + r.items.length + ')</span>'
+        + '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;border:1px solid var(--border1);border-radius:6px;">'
+        + '<thead><tr style="background:var(--bg2);"><th style="padding:6px 8px;text-align:left;">Type</th><th style="padding:6px 8px;text-align:left;">Field</th><th style="padding:6px 8px;text-align:left;">Old</th><th style="padding:6px 8px;text-align:left;">New</th><th style="padding:6px 8px;">Tier</th></tr></thead><tbody>';
+      r.items.forEach(function(item) {
+        html += '<tr style="border-top:1px solid var(--border1);"><td style="padding:6px 8px;">' + (item.change_type||'').replace(/_/g,' ') + '</td>'
+          + '<td style="padding:6px 8px;font-family:monospace;font-size:11px;">' + (item.field_name||'—') + '</td>'
+          + '<td style="padding:6px 8px;">' + (item.old_value||'—') + '</td>'
+          + '<td style="padding:6px 8px;">' + (item.new_value||'—') + '</td>'
+          + '<td style="padding:6px 8px;text-align:center;">' + cmMaterialityBadge(item.materiality) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+
+    // Documents
+    if (r.documents && r.documents.length > 0) {
+      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Supporting Documents (' + r.documents.length + ')</span><ul style="margin-top:4px;">';
+      r.documents.forEach(function(d) { html += '<li style="font-size:12px;">' + d.doc_name + ' <span style="color:var(--text3);">(' + (d.doc_type||'') + ')</span></li>'; });
+      html += '</ul></div>';
+    }
+
+    // Reviews
+    if (r.reviews && r.reviews.length > 0) {
+      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Reviews</span>';
+      r.reviews.forEach(function(rev) {
+        var decColor = rev.decision === 'approved' ? '#198754' : rev.decision === 'rejected' ? '#dc3545' : '#fd7e14';
+        html += '<div style="background:var(--bg2);padding:10px;border-radius:6px;margin-top:6px;">'
+          + '<span style="color:' + decColor + ';font-weight:600;font-size:12px;">' + (rev.decision||'').toUpperCase() + '</span>'
+          + ' by ' + (rev.reviewer_role||'') + ' at ' + (rev.reviewed_at||'').substring(0,16)
+          + (rev.decision_notes ? '<br><span style="font-size:11px;color:var(--text3);">' + rev.decision_notes + '</span>' : '')
+          + '</div>';
+      });
+      html += '</div>';
+    }
+
+    // Risk info
+    if (r.pre_change_risk_level || r.post_change_risk_level) {
+      html += '<div style="margin-bottom:16px;"><span style="font-size:11px;color:var(--text3);font-weight:600;">Risk Impact</span>'
+        + '<div style="display:flex;gap:20px;margin-top:6px;">'
+        + '<div><span style="font-size:11px;">Pre-change:</span> <strong>' + (r.pre_change_risk_level||'—') + '</strong></div>'
+        + '<div><span style="font-size:11px;">Post-change:</span> <strong>' + (r.post_change_risk_level||'—') + '</strong></div>'
+        + '</div></div>';
+    }
+
+    // Actions
+    var actions = [];
+    if (r.status === 'draft') {
+      actions.push('<button class="btn" style="font-size:12px;" onclick="submitChangeRequest(\'' + r.id + '\')">Submit</button>');
+      actions.push('<button class="btn btn-outline" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'cancelled\')">Cancel</button>');
+    }
+    if (r.status === 'submitted') {
+      actions.push('<button class="btn" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'triage_in_progress\')">Begin Triage</button>');
+    }
+    if (r.status === 'triage_in_progress') {
+      actions.push('<button class="btn" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'ready_for_review\')">Mark Ready for Review</button>');
+      actions.push('<button class="btn btn-outline" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'pending_information\')">Request Info</button>');
+    }
+    if (r.status === 'ready_for_review') {
+      actions.push('<button class="btn" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'approval_pending\')">Send for Approval</button>');
+    }
+    if (r.status === 'approval_pending') {
+      actions.push('<button class="btn" style="font-size:12px;background:#198754;" onclick="approveRequest(\'' + r.id + '\')">Approve</button>');
+      actions.push('<button class="btn" style="font-size:12px;background:#dc3545;" onclick="rejectRequest(\'' + r.id + '\')">Reject</button>');
+    }
+    if (r.status === 'approved') {
+      actions.push('<button class="btn" style="font-size:12px;background:#20c997;" onclick="implementRequest(\'' + r.id + '\')">Implement Changes</button>');
+    }
+
+    if (actions.length > 0) {
+      html += '<div style="border-top:1px solid var(--border1);padding-top:16px;margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">' + actions.join('') + '</div>';
+    }
+
+    document.getElementById('cm-request-detail-content').innerHTML = html;
+    document.getElementById('cm-request-detail-modal').style.display = '';
+  }).catch(function(e) { showToast('Failed to load request: ' + e.message, 'error'); });
+}
+
+function submitChangeRequest(reqId) {
+  apiFetch('/api/change-management/requests/' + reqId + '/submit', { method: 'POST' }).then(function() {
+    showToast('Request submitted', 'success');
+    document.getElementById('cm-request-detail-modal').style.display = 'none';
+    loadChangeRequests();
+  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+function updateRequestStatus(reqId, status) {
+  apiFetch('/api/change-management/requests/' + reqId, {
+    method: 'PATCH', body: JSON.stringify({ status: status })
+  }).then(function() {
+    showToast('Status updated', 'success');
+    document.getElementById('cm-request-detail-modal').style.display = 'none';
+    loadChangeRequests();
+  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+function approveRequest(reqId) {
+  var notes = prompt('Approval notes (optional):', '') || '';
+  apiFetch('/api/change-management/requests/' + reqId + '/approve', {
+    method: 'POST', body: JSON.stringify({ decision_notes: notes })
+  }).then(function() {
+    showToast('Request approved', 'success');
+    document.getElementById('cm-request-detail-modal').style.display = 'none';
+    loadChangeRequests();
+  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+function rejectRequest(reqId) {
+  var notes = prompt('Rejection reason:', '');
+  if (!notes) { showToast('Rejection reason required', 'error'); return; }
+  apiFetch('/api/change-management/requests/' + reqId + '/reject', {
+    method: 'POST', body: JSON.stringify({ decision_notes: notes })
+  }).then(function() {
+    showToast('Request rejected', 'success');
+    document.getElementById('cm-request-detail-modal').style.display = 'none';
+    loadChangeRequests();
+  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+function implementRequest(reqId) {
+  if (!confirm('Implement approved changes to the live entity profile? This action cannot be undone.')) return;
+  apiFetch('/api/change-management/requests/' + reqId + '/implement', { method: 'POST' }).then(function(r) {
+    showToast('Changes implemented successfully. Profile version: ' + (r.profile_version_id||''), 'success');
+    document.getElementById('cm-request-detail-modal').style.display = 'none';
+    loadChangeRequests();
+  }).catch(function(e) { showToast('Implementation failed: ' + e.message, 'error'); });
+}
+
+function showCreateAlertModal() {
+  document.getElementById('cm-create-alert-modal').style.display = '';
+}
+
+function submitCreateAlert() {
+  var appId = document.getElementById('cm-alert-app-id').value;
+  if (!appId) { showToast('Please select an application', 'error'); return; }
+  var payload = {
+    application_id: appId,
+    alert_type: document.getElementById('cm-alert-type').value,
+    source_channel: document.getElementById('cm-alert-source').value,
+    summary: document.getElementById('cm-alert-summary').value,
+    source_reference: document.getElementById('cm-alert-source-ref').value
+  };
+  apiFetch('/api/change-management/alerts', { method: 'POST', body: JSON.stringify(payload) }).then(function(r) {
+    showToast('Alert created: ' + r.id, 'success');
+    document.getElementById('cm-create-alert-modal').style.display = 'none';
+    loadChangeAlerts();
+  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+function showCreateRequestModal() {
+  document.getElementById('cm-create-request-modal').style.display = '';
+}
+
+function submitCreateRequest() {
+  var appId = document.getElementById('cm-req-app-id').value;
+  if (!appId) { showToast('Please select an application', 'error'); return; }
+  var changeType = document.getElementById('cm-req-change-type').value;
+  var items = [{
+    change_type: changeType,
+    field_name: document.getElementById('cm-req-field').value || null,
+    old_value: document.getElementById('cm-req-old-val').value || null,
+    new_value: document.getElementById('cm-req-new-val').value || null
+  }];
+  var payload = {
+    application_id: appId,
+    source: 'backoffice_manual',
+    source_channel: 'backoffice',
+    reason: document.getElementById('cm-req-reason').value,
+    items: items
+  };
+  apiFetch('/api/change-management/requests', { method: 'POST', body: JSON.stringify(payload) }).then(function(r) {
+    showToast('Request created: ' + r.id, 'success');
+    document.getElementById('cm-create-request-modal').style.display = 'none';
+    showChangeMgmtTab('requests');
+  }).catch(function(e) { showToast('Failed: ' + e.message, 'error'); });
+}
+
+function loadCMStats() {
+  apiFetch('/api/change-management/stats').then(function(s) {
+    var html = '<div style="background:var(--surface);padding:20px;border-radius:10px;border:1px solid var(--border1);">'
+      + '<h4 style="margin-bottom:4px;">Alerts Overview</h4>'
+      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">'
+      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;">' + s.alerts.total + '</div><div style="font-size:11px;color:var(--text3);">Total</div></div>'
+      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#0d6efd;">' + (s.alerts.by_status.new||0) + '</div><div style="font-size:11px;color:var(--text3);">New</div></div>'
+      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#fd7e14;">' + (s.alerts.by_status.under_review||0) + '</div><div style="font-size:11px;color:var(--text3);">Under Review</div></div>'
+      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#198754;">' + (s.alerts.by_status.converted_to_change_request||0) + '</div><div style="font-size:11px;color:var(--text3);">Converted</div></div>'
+      + '</div>'
+      + '<h4 style="margin-bottom:4px;">Requests Overview</h4>'
+      + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">'
+      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;">' + s.requests.total + '</div><div style="font-size:11px;color:var(--text3);">Total</div></div>'
+      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#ffc107;">' + (s.requests.by_status.approval_pending||0) + '</div><div style="font-size:11px;color:var(--text3);">Pending Approval</div></div>'
+      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#198754;">' + (s.requests.by_status.approved||0) + '</div><div style="font-size:11px;color:var(--text3);">Approved</div></div>'
+      + '<div style="background:var(--bg2);padding:14px;border-radius:8px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#20c997;">' + (s.requests.by_status.implemented||0) + '</div><div style="font-size:11px;color:var(--text3);">Implemented</div></div>'
+      + '</div></div>';
+    document.getElementById('cm-stats-content').innerHTML = html;
+  }).catch(function(e) { showToast('Failed to load stats: ' + e.message, 'error'); });
 }
 
 var activeCaseTab = 'my-cases';
