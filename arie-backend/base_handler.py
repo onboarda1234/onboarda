@@ -33,6 +33,41 @@ def get_db():
     return db_get_db()
 
 
+def _safe_json(obj):
+    """Serialize obj to JSON string safely. Returns None if obj is None or not serializable."""
+    if obj is None:
+        return None
+    try:
+        return json.dumps(obj, default=str)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def snapshot_app_state(app):
+    """Extract a non-PII workflow-focused snapshot from an application row.
+
+    Returns a dict with only status/risk/decision fields — no personal data.
+    Safe for audit_log before_state / after_state columns.
+    """
+    if app is None:
+        return None
+    fields = ("status", "risk_level", "risk_score", "pre_approval_decision",
+              "decided_at", "decision_by", "onboarding_lane")
+    return {f: app.get(f) if hasattr(app, "get") else app[f]
+            for f in fields
+            if (hasattr(app, "get") and app.get(f) is not None) or
+               (not hasattr(app, "get") and _col_exists(app, f))}
+
+
+def _col_exists(row, col):
+    """Check if a sqlite3.Row has a column without raising."""
+    try:
+        _ = row[col]
+        return True
+    except (IndexError, KeyError):
+        return False
+
+
 class BaseHandler(tornado.web.RequestHandler):
     def prepare(self):
         """Enforce HTTPS in production via X-Forwarded-Proto from reverse proxy."""
@@ -246,13 +281,15 @@ class BaseHandler(tornado.web.RequestHandler):
         self.set_status(status)
         self.write({"error": message})
 
-    def log_audit(self, user, action, target, detail, db=None):
+    def log_audit(self, user, action, target, detail, db=None,
+                  before_state=None, after_state=None):
         own_db = db is None
         if own_db:
             db = get_db()
         db.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-            (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip())
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
+            (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip(),
+             _safe_json(before_state), _safe_json(after_state))
         )
         db.commit()
         if own_db:
