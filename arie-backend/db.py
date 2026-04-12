@@ -2373,6 +2373,28 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.18: Add before_state and after_state columns to audit_log
+    # Enables structured before/after snapshots for critical workflow changes.
+    try:
+        added = False
+        if not _safe_column_exists(db, "audit_log", "before_state"):
+            logger.info("Migration v2.18: Adding audit_log.before_state")
+            db.execute("ALTER TABLE audit_log ADD COLUMN before_state TEXT")
+            added = True
+        if not _safe_column_exists(db, "audit_log", "after_state"):
+            logger.info("Migration v2.18: Adding audit_log.after_state")
+            db.execute("ALTER TABLE audit_log ADD COLUMN after_state TEXT")
+            added = True
+        if added:
+            db.commit()
+            logger.info("Migration v2.18: audit_log before/after state columns added")
+    except Exception as e:
+        logger.error("Migration v2.18 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.

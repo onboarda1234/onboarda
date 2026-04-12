@@ -1190,7 +1190,7 @@ from screening import (
 )
 
 # Sprint 3.5: BaseHandler extracted to base_handler.py to reduce server.py concentration risk
-from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db  # noqa: F401
+from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db, snapshot_app_state, _safe_json  # noqa: F401
 
 # Public API v1 — versioned external endpoints
 from public_api import (
@@ -2390,6 +2390,9 @@ class SubmitApplicationHandler(BaseHandler):
 
         real_id = app["id"]
 
+        # EX-05: Capture before-state for audit trail
+        _before = snapshot_app_state(app)
+
         # ── v2.2: Pre-screening validation ──────────────────────────
         prescreening_raw = safe_json_loads(app["prescreening_data"])
 
@@ -2575,8 +2578,11 @@ class SubmitApplicationHandler(BaseHandler):
             )
 
         flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
+        _after = {"status": "pricing_review", "risk_score": risk["score"],
+                  "risk_level": risk["level"], "onboarding_lane": risk["lane"]}
         self.log_audit(user, "Pre-Screening Submitted", app["ref"],
-                       f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}")
+                       f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}",
+                       before_state=_before, after_state=_after)
 
         result_status = "pricing_review"
         self.success({
@@ -2770,6 +2776,9 @@ class PreApprovalDecisionHandler(BaseHandler):
 
         real_id = app["id"]
 
+        # EX-05: Capture before-state for audit trail
+        _before = snapshot_app_state(app)
+
         # Enforce: only allowed when status = pre_approval_review
         if app["status"] != "pre_approval_review":
             db.close()
@@ -2875,13 +2884,14 @@ class PreApprovalDecisionHandler(BaseHandler):
                            f"Please update your pre-screening data and resubmit. Officer notes: {notes}",
                            "pre_approval_rmi"))
 
-        # Audit trail
-        db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
-                     VALUES (?,?,?,?,?,?,?)""",
+        # Audit trail — authoritative in-transaction record carries before/after state
+        _after = {"status": new_status, "pre_approval_decision": decision}
+        db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state)
+                     VALUES (?,?,?,?,?,?,?,?,?)""",
                    (user.get("sub",""), user.get("name",""), user.get("role",""),
                     f"Pre-Approval: {decision}", app["ref"],
                     f"Pre-approval decision: {decision} | Risk: {app['risk_level']} (Score: {app['risk_score']}) | Notes: {notes}",
-                    self.get_client_ip()))
+                    self.get_client_ip(), _safe_json(_before), _safe_json(_after)))
 
         db.commit()
         db.close()
@@ -3173,6 +3183,10 @@ class DocumentVerifyHandler(BaseHandler):
             db.close()
             return self.error("Document not found", 404)
 
+        # EX-05: Capture before-state for audit trail (new audit event for document verification)
+        _doc_before = {"verification_status": doc.get("verification_status"),
+                       "doc_name": doc.get("doc_name"), "doc_type": doc.get("doc_type")}
+
         # Get the related application and person for screening
         app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
         if not app:
@@ -3444,6 +3458,13 @@ class DocumentVerifyHandler(BaseHandler):
                    (status, results, doc_id))
         db.commit()
         db.close()
+
+        # EX-05: New audit event — log document verification with before/after state
+        _doc_after = {"verification_status": status, "checks_count": len(checks),
+                      "doc_name": doc.get("doc_name"), "doc_type": doc.get("doc_type")}
+        self.log_audit(user, "Document Verified", app["ref"],
+                       f"Document '{doc.get('doc_name', doc_id)}' verification: {status} ({len(checks)} checks)",
+                       before_state=_doc_before, after_state=_doc_after)
 
         # Improvement 8: Log agent execution for traceability
         try:
@@ -4549,6 +4570,22 @@ class RiskConfigHandler(BaseHandler):
             return
 
         db = get_db()
+
+        # EX-05: Capture full before-state of risk config for audit trail
+        _risk_before = None
+        try:
+            old_cfg = db.execute("SELECT dimensions, thresholds, country_risk_scores, sector_risk_scores, entity_type_scores FROM risk_config WHERE id=1").fetchone()
+            if old_cfg:
+                _risk_before = {
+                    "dimensions": safe_json_loads(old_cfg["dimensions"]),
+                    "thresholds": safe_json_loads(old_cfg["thresholds"]),
+                    "country_risk_scores": safe_json_loads(old_cfg["country_risk_scores"]) if old_cfg["country_risk_scores"] else {},
+                    "sector_risk_scores": safe_json_loads(old_cfg["sector_risk_scores"]) if old_cfg["sector_risk_scores"] else {},
+                    "entity_type_scores": safe_json_loads(old_cfg["entity_type_scores"]) if old_cfg["entity_type_scores"] else {},
+                }
+        except Exception:
+            pass  # Non-critical: proceed without before-state
+
         db.execute(
             "UPDATE risk_config SET dimensions=?, thresholds=?, country_risk_scores=?, sector_risk_scores=?, entity_type_scores=?, updated_by=?, updated_at=datetime('now') WHERE id=1",
             (json.dumps(validated.get("dimensions", [])),
@@ -4559,7 +4596,16 @@ class RiskConfigHandler(BaseHandler):
              user["sub"]))
         db.commit()
         db.close()
-        self.log_audit(user, "Config", "Risk Model", "Risk scoring model updated")
+
+        _risk_after = {
+            "dimensions": validated.get("dimensions", []),
+            "thresholds": validated.get("thresholds", []),
+            "country_risk_scores": validated.get("country_risk_scores", {}),
+            "sector_risk_scores": validated.get("sector_risk_scores", {}),
+            "entity_type_scores": validated.get("entity_type_scores", {}),
+        }
+        self.log_audit(user, "Config", "Risk Model", "Risk scoring model updated",
+                       before_state=_risk_before, after_state=_risk_after)
         self.success({"status": "saved"})
 
 
@@ -7507,6 +7553,9 @@ class ApplicationDecisionHandler(BaseHandler):
 
         real_id = app["id"]
 
+        # EX-05: Capture before-state for audit trail
+        _before = snapshot_app_state(app)
+
         # ── C-03 FIX: Prevent decision replay on terminal-state applications ──
         terminal_states = ("approved", "rejected")
         if app["status"] in terminal_states:
@@ -7569,12 +7618,13 @@ class ApplicationDecisionHandler(BaseHandler):
                 can_approve, dual_error = ApprovalGateValidator.validate_high_risk_dual_approval(app, user, db)
                 if not can_approve:
                     # Record first approval but don't change status
-                    db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
-                                 VALUES (?,?,?,?,?,?,?)""",
+                    _first_after = {"status": app["status"], "decision": "approve", "note": "awaiting_second_approver"}
+                    db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state)
+                                 VALUES (?,?,?,?,?,?,?,?,?)""",
                                (user.get("sub",""), user.get("name",""), user.get("role",""),
                                 "First Approval (Pending Second)", app["ref"],
                                 f"Decision: approve | Reason: {decision_reason} | Awaiting second approver",
-                                self.get_client_ip()))
+                                self.get_client_ip(), _safe_json(_before), _safe_json(_first_after)))
                     db.commit()
                     db.close()
                     return self.success({"status": "first_approval_recorded", "message": dual_error}, 202)
@@ -7616,8 +7666,11 @@ class ApplicationDecisionHandler(BaseHandler):
         if required_documents:
             audit_detail += f" | Documents Required: {', '.join(required_documents)}"
 
-        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip()))
+        _after = {"status": new_status, "decision": decision, "decision_reason": decision_reason,
+                  "override_ai": override_ai}
+        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
+                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip(),
+                    _safe_json(_before), _safe_json(_after)))
 
         # ── Record normalized decision record ──
         try:
