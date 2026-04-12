@@ -8814,6 +8814,589 @@ class AIAssistantHandler(BaseHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# CHANGE MANAGEMENT ENDPOINTS
+# ══════════════════════════════════════════════════════════
+
+# Import change management module (safe — additive only)
+try:
+    import change_management as cm
+    HAS_CHANGE_MANAGEMENT = True
+except ImportError:
+    HAS_CHANGE_MANAGEMENT = False
+    cm = None
+
+
+class ChangeAlertsListHandler(BaseHandler):
+    """GET/POST /api/change-management/alerts — List and create change alerts"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        application_id = self.get_argument("application_id", None)
+        status = self.get_argument("status", None)
+        limit = int(self.get_argument("limit", "50"))
+        offset = int(self.get_argument("offset", "0"))
+
+        db = get_db()
+        try:
+            alerts = cm.list_change_alerts(db, application_id=application_id,
+                                           status=status, limit=limit, offset=offset)
+            self.success({"alerts": alerts, "total": len(alerts)})
+        finally:
+            db.close()
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        allowed, err = cm.check_role_permission(user.get("role", ""), "create_alert")
+        if not allowed:
+            self.error(err, 403)
+            return
+
+        data = self.get_json()
+        application_id = data.get("application_id")
+        if not application_id:
+            self.error("application_id is required", 400)
+            return
+
+        db = get_db()
+        try:
+            # Verify application exists
+            app = db.execute("SELECT id FROM applications WHERE id = ?", (application_id,)).fetchone()
+            if not app:
+                self.error("Application not found", 404)
+                return
+
+            alert = cm.create_change_alert(
+                db=db,
+                application_id=application_id,
+                alert_type=data.get("alert_type", "other"),
+                source_channel=data.get("source_channel", "backoffice"),
+                summary=data.get("summary", ""),
+                detected_changes=data.get("detected_changes", {}),
+                confidence=data.get("confidence"),
+                source_reference=data.get("source_reference"),
+                source_payload=data.get("source_payload"),
+                detected_by=data.get("detected_by", user.get("name")),
+                user=user,
+                log_audit_fn=self.log_audit,
+            )
+            self.success(alert, 201)
+        finally:
+            db.close()
+
+
+class ChangeAlertDetailHandler(BaseHandler):
+    """GET/PATCH /api/change-management/alerts/:id — Alert detail and status update"""
+    def get(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            alert = cm.get_change_alert_detail(db, alert_id)
+            if not alert:
+                self.error("Alert not found", 404)
+                return
+            self.success(alert)
+        finally:
+            db.close()
+
+    def patch(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json()
+        new_status = data.get("status")
+        if not new_status:
+            self.error("status is required", 400)
+            return
+
+        db = get_db()
+        try:
+            success, err = cm.update_change_alert_status(
+                db, alert_id, new_status, user,
+                notes=data.get("notes"),
+                log_audit_fn=self.log_audit,
+            )
+            if not success:
+                self.error(err, 400)
+                return
+            self.success({"status": "updated", "new_status": new_status})
+        finally:
+            db.close()
+
+
+class ChangeAlertConvertHandler(BaseHandler):
+    """POST /api/change-management/alerts/:id/convert — Convert alert to request"""
+    def post(self, alert_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        allowed, err = cm.check_role_permission(user.get("role", ""), "convert_alert")
+        if not allowed:
+            self.error(err, 403)
+            return
+
+        data = self.get_json() if self.request.body else {}
+
+        db = get_db()
+        try:
+            request, err = cm.convert_alert_to_request(
+                db, alert_id, user,
+                additional_notes=data.get("notes"),
+                log_audit_fn=self.log_audit,
+            )
+            if not request:
+                self.error(err, 400)
+                return
+            self.success(request, 201)
+        finally:
+            db.close()
+
+
+class ChangeRequestsListHandler(BaseHandler):
+    """GET/POST /api/change-management/requests — List and create change requests"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        application_id = self.get_argument("application_id", None)
+        status = self.get_argument("status", None)
+        materiality = self.get_argument("materiality", None)
+        source = self.get_argument("source", None)
+        limit = int(self.get_argument("limit", "50"))
+        offset = int(self.get_argument("offset", "0"))
+
+        db = get_db()
+        try:
+            requests_list = cm.list_change_requests(
+                db, application_id=application_id, status=status,
+                materiality=materiality, source=source,
+                limit=limit, offset=offset,
+            )
+            self.success({"requests": requests_list, "total": len(requests_list)})
+        finally:
+            db.close()
+
+    def post(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        allowed, err = cm.check_role_permission(user.get("role", ""), "create_request")
+        if not allowed:
+            self.error(err, 403)
+            return
+
+        data = self.get_json()
+        application_id = data.get("application_id")
+        if not application_id:
+            self.error("application_id is required", 400)
+            return
+
+        db = get_db()
+        try:
+            app = db.execute("SELECT id FROM applications WHERE id = ?", (application_id,)).fetchone()
+            if not app:
+                self.error("Application not found", 404)
+                return
+
+            items = data.get("items", [])
+            request = cm.create_change_request(
+                db=db,
+                application_id=application_id,
+                source=data.get("source", "backoffice_manual"),
+                source_channel=data.get("source_channel", "backoffice"),
+                reason=data.get("reason", ""),
+                items=items,
+                user=user,
+                log_audit_fn=self.log_audit,
+            )
+            self.success(request, 201)
+        finally:
+            db.close()
+
+
+class ChangeRequestDetailHandler(BaseHandler):
+    """GET/PATCH /api/change-management/requests/:id — Request detail and status"""
+    def get(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            detail = cm.get_change_request_detail(db, request_id)
+            if not detail:
+                self.error("Request not found", 404)
+                return
+            self.success(detail)
+        finally:
+            db.close()
+
+    def patch(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json()
+        new_status = data.get("status")
+        if not new_status:
+            self.error("status is required", 400)
+            return
+
+        db = get_db()
+        try:
+            success, err = cm.update_change_request_status(
+                db, request_id, new_status, user,
+                notes=data.get("notes"),
+                log_audit_fn=self.log_audit,
+            )
+            if not success:
+                self.error(err, 400)
+                return
+            self.success({"status": "updated", "new_status": new_status})
+        finally:
+            db.close()
+
+
+class ChangeRequestSubmitHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/submit — Submit a draft request"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            success, err = cm.submit_change_request(
+                db, request_id, user, log_audit_fn=self.log_audit,
+            )
+            if not success:
+                self.error(err, 400)
+                return
+            self.success({"status": "submitted"})
+        finally:
+            db.close()
+
+
+class ChangeRequestApproveHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/approve — Approve a request"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json() if self.request.body else {}
+
+        db = get_db()
+        try:
+            success, err = cm.approve_change_request(
+                db, request_id, user,
+                decision_notes=data.get("decision_notes"),
+                log_audit_fn=self.log_audit,
+            )
+            if not success:
+                self.error(err, 400 if "not found" not in err.lower() else 404)
+                return
+            self.success({"status": "approved"})
+        finally:
+            db.close()
+
+
+class ChangeRequestRejectHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/reject — Reject a request"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json() if self.request.body else {}
+
+        db = get_db()
+        try:
+            success, err = cm.reject_change_request(
+                db, request_id, user,
+                decision_notes=data.get("decision_notes"),
+                log_audit_fn=self.log_audit,
+            )
+            if not success:
+                self.error(err, 400 if "not found" not in err.lower() else 404)
+                return
+            self.success({"status": "rejected"})
+        finally:
+            db.close()
+
+
+class ChangeRequestImplementHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/implement — Implement approved changes"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        # Import risk recomputation function
+        recompute_risk_fn = None
+        try:
+            from rule_engine import recompute_risk
+            recompute_risk_fn = recompute_risk
+        except ImportError:
+            pass
+
+        db = get_db()
+        try:
+            success, err, version_id = cm.implement_change_request(
+                db, request_id, user,
+                log_audit_fn=self.log_audit,
+                recompute_risk_fn=recompute_risk_fn,
+            )
+            if not success:
+                status_code = 409 if "stale" in err.lower() or "conflict" in err.lower() or "version" in err.lower() else 400
+                self.error(err, status_code)
+                return
+            self.success({"status": "implemented", "profile_version_id": version_id})
+        finally:
+            db.close()
+
+
+class ChangeRequestDocumentHandler(BaseHandler):
+    """POST /api/change-management/requests/:id/documents — Upload supporting doc"""
+    def post(self, request_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            # Verify request exists
+            row = db.execute("SELECT id FROM change_requests WHERE id = ?", (request_id,)).fetchone()
+            if not row:
+                self.error("Request not found", 404)
+                return
+
+            files = self.request.files.get("file", [])
+            if not files:
+                self.error("No file uploaded", 400)
+                return
+
+            uploaded = files[0]
+            doc_type = self.get_argument("doc_type", "supporting_document")
+            item_id = self.get_argument("item_id", None)
+
+            # Validate file
+            if HAS_SECURITY_HARDENING:
+                valid, validation_err = FileUploadValidator.validate_upload(
+                    uploaded["filename"], uploaded["body"]
+                )
+                if not valid:
+                    self.error(validation_err, 400)
+                    return
+
+            # Save file
+            upload_dir = Path(_CFG_UPLOAD_DIR) / "change_requests" / request_id
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            file_path = upload_dir / uploaded["filename"]
+            with open(file_path, "wb") as f:
+                f.write(uploaded["body"])
+
+            doc = cm.attach_document_to_request(
+                db, request_id, uploaded["filename"], doc_type,
+                str(file_path), item_id=item_id,
+                uploaded_by=user.get("sub"),
+            )
+
+            self.log_audit(user, "Change Request Document Uploaded", request_id,
+                          f"Document: {uploaded['filename']}, type: {doc_type}")
+            self.success(doc, 201)
+        finally:
+            db.close()
+
+
+class ChangeManagementStatsHandler(BaseHandler):
+    """GET /api/change-management/stats — Dashboard statistics"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            stats = cm.get_change_management_stats(db)
+            self.success(stats)
+        finally:
+            db.close()
+
+
+class EntityProfileVersionsHandler(BaseHandler):
+    """GET /api/applications/:id/profile-versions — List profile versions"""
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            versions = cm.get_profile_versions(db, app_id)
+            self.success({"versions": versions, "total": len(versions)})
+        finally:
+            db.close()
+
+
+class EntityProfileVersionDetailHandler(BaseHandler):
+    """GET /api/profile-versions/:id — Get profile version detail with snapshot"""
+    def get(self, version_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            version = cm.get_profile_version_detail(db, version_id)
+            if not version:
+                self.error("Version not found", 404)
+                return
+            self.success(version)
+        finally:
+            db.close()
+
+
+class PortalChangeRequestHandler(BaseHandler):
+    """POST /api/portal/change-requests — Client creates a change request from portal"""
+    def get(self):
+        """List client's own change requests."""
+        user = self.require_auth()
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            # Get client's applications
+            client_id = user.get("sub")
+            apps = db.execute(
+                "SELECT id FROM applications WHERE client_id = ?", (client_id,)
+            ).fetchall()
+            app_ids = [a["id"] for a in apps]
+
+            all_requests = []
+            for app_id in app_ids:
+                reqs = cm.list_change_requests(db, application_id=app_id)
+                all_requests.extend(reqs)
+
+            self.success({"requests": all_requests, "total": len(all_requests)})
+        finally:
+            db.close()
+
+    def post(self):
+        """Client creates a new change request."""
+        user = self.require_auth()
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        data = self.get_json()
+        application_id = data.get("application_id")
+        if not application_id:
+            self.error("application_id is required", 400)
+            return
+
+        db = get_db()
+        try:
+            # Verify client owns this application
+            client_id = user.get("sub")
+            app = db.execute(
+                "SELECT id, status FROM applications WHERE id = ? AND client_id = ?",
+                (application_id, client_id),
+            ).fetchone()
+            if not app:
+                self.error("Application not found or access denied", 404)
+                return
+
+            items = data.get("items", [])
+            request = cm.create_change_request(
+                db=db,
+                application_id=application_id,
+                source="portal_client",
+                source_channel="portal",
+                reason=data.get("reason", ""),
+                items=items,
+                user=user,
+                log_audit_fn=self.log_audit,
+            )
+
+            # Auto-submit portal requests
+            cm.submit_change_request(db, request["id"], user, log_audit_fn=self.log_audit)
+            request["status"] = "submitted"
+
+            self.success(request, 201)
+        finally:
+            db.close()
+
+
+# ══════════════════════════════════════════════════════════
 # APP SETUP & ROUTES
 # ══════════════════════════════════════════════════════════
 
@@ -8949,6 +9532,22 @@ def make_app():
 
         # Save & Resume
         (r"/api/save-resume", SaveResumeHandler),
+
+        # Change Management
+        (r"/api/change-management/alerts/([^/]+)/convert", ChangeAlertConvertHandler),
+        (r"/api/change-management/alerts/([^/]+)", ChangeAlertDetailHandler),
+        (r"/api/change-management/alerts", ChangeAlertsListHandler),
+        (r"/api/change-management/requests/([^/]+)/submit", ChangeRequestSubmitHandler),
+        (r"/api/change-management/requests/([^/]+)/approve", ChangeRequestApproveHandler),
+        (r"/api/change-management/requests/([^/]+)/reject", ChangeRequestRejectHandler),
+        (r"/api/change-management/requests/([^/]+)/implement", ChangeRequestImplementHandler),
+        (r"/api/change-management/requests/([^/]+)/documents", ChangeRequestDocumentHandler),
+        (r"/api/change-management/requests/([^/]+)", ChangeRequestDetailHandler),
+        (r"/api/change-management/requests", ChangeRequestsListHandler),
+        (r"/api/change-management/stats", ChangeManagementStatsHandler),
+        (r"/api/applications/([^/]+)/profile-versions", EntityProfileVersionsHandler),
+        (r"/api/profile-versions/([^/]+)", EntityProfileVersionDetailHandler),
+        (r"/api/portal/change-requests", PortalChangeRequestHandler),
 
         # ── Public API v1 ─────────────────────────────────────
         (r"/api/v1/health", PublicHealthHandler),
