@@ -7546,7 +7546,25 @@ class ApplicationDecisionHandler(BaseHandler):
         data = self.get_json()
         db = get_db()
 
-        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        # ── EX-06: Row-level locking for approval path ──
+        # PostgreSQL: SELECT ... FOR UPDATE serializes concurrent approval attempts.
+        # SQLite: BEGIN IMMEDIATE acquires a write lock before the read.
+        if db.is_postgres:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ? FOR UPDATE",
+                (app_id, app_id)
+            ).fetchone()
+        else:
+            # SQLite: acquire write lock early to prevent TOCTOU race
+            try:
+                db.execute("BEGIN IMMEDIATE")
+            except Exception:
+                pass  # Already in a transaction
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id)
+            ).fetchone()
+
         if not app:
             db.close()
             return self.error("Application not found", 404)
@@ -7613,12 +7631,27 @@ class ApplicationDecisionHandler(BaseHandler):
                 db.close()
                 return self.error(f"Approval blocked: {gate_error}", 400)
 
-            # Check dual-approval for high-risk cases
+            # ── EX-06: Dual-approval for high-risk cases using structured fields ──
             if app["risk_level"] in ("HIGH", "VERY_HIGH"):
                 can_approve, dual_error = ApprovalGateValidator.validate_high_risk_dual_approval(app, user, db)
                 if not can_approve:
-                    # Record first approval but don't change status
-                    _first_after = {"status": app["status"], "decision": "approve", "note": "awaiting_second_approver"}
+                    # Distinguish: same-officer retry vs genuine first approval
+                    if dual_error == "DUAL_SAME_OFFICER":
+                        db.close()
+                        return self.error(
+                            "Dual-approval conflict: you already recorded the first approval. "
+                            "A different authorized officer must complete the second approval.",
+                            409
+                        )
+                    # Record first approval in structured application fields
+                    db.execute(
+                        "UPDATE applications SET first_approver_id = ?, first_approved_at = datetime('now'), "
+                        "updated_at = datetime('now') WHERE id = ?",
+                        (user.get("sub", ""), real_id)
+                    )
+                    _first_after = {"status": app["status"], "decision": "approve",
+                                    "note": "awaiting_second_approver",
+                                    "first_approver_id": user.get("sub", "")}
                     db.execute("""INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state)
                                  VALUES (?,?,?,?,?,?,?,?,?)""",
                                (user.get("sub",""), user.get("name",""), user.get("role",""),
@@ -7655,7 +7688,9 @@ class ApplicationDecisionHandler(BaseHandler):
 
         db.execute("""
             UPDATE applications SET
-                status=?, decided_at=datetime('now'), decision_by=?, decision_notes=?, updated_at=datetime('now')
+                status=?, decided_at=datetime('now'), decision_by=?, decision_notes=?,
+                first_approver_id=NULL, first_approved_at=NULL,
+                updated_at=datetime('now')
             WHERE id=?
         """, (new_status, user["sub"], json.dumps(detail_info), real_id))
 

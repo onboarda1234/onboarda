@@ -283,16 +283,13 @@ class ApprovalGateValidator:
         db
     ) -> Tuple[bool, str]:
         """
-        For HIGH/VERY_HIGH risk applications: validates that a different compliance officer
-        has already recorded a first approval in the audit log.
-
-        Args:
-            app: Application dictionary with risk_level
-            current_user: Current user (approval officer) making the approval
-            db: Database connection (required — reads from audit_log table)
+        For HIGH/VERY_HIGH risk applications: validates dual-approval eligibility
+        using structured application fields (first_approver_id, first_approved_at).
 
         Returns:
-            Tuple of (can_approve: bool, error_message: str)
+            Tuple of (can_approve: bool, error_or_info: str)
+            - (False, msg) when this is the first approval (caller should record it)
+            - (True, "") when a different officer already recorded first approval
         """
         try:
             risk_level = app.get('risk_level', '').upper()
@@ -307,29 +304,30 @@ class ApprovalGateValidator:
             if not db or not app_ref:
                 return (False, "Database connection and application reference required for dual approval check")
 
-            # Check audit_log for a prior "First Approval" by a DIFFERENT officer
-            prior_approvals = db.execute(
-                "SELECT user_id, user_name FROM audit_log "
-                "WHERE target = ? AND action = 'First Approval (Pending Second)' "
-                "ORDER BY timestamp DESC",
-                (app_ref,)
-            ).fetchall()
+            # Read structured first_approver_id from the application row
+            first_approver_id = app.get('first_approver_id')
 
-            # Find approvals by other officers
-            other_approvals = [a for a in prior_approvals if a['user_id'] != current_user_id]
-
-            if not other_approvals:
+            if not first_approver_id:
+                # No first approval yet — caller must record it
                 return (
                     False,
                     "HIGH/VERY_HIGH risk application requires dual approval. "
                     "Another compliance officer must approve first."
                 )
 
-            first_approver = other_approvals[0]['user_name']
+            # Same officer cannot perform both approvals
+            if first_approver_id == current_user_id:
+                return (
+                    False,
+                    "DUAL_SAME_OFFICER"
+                )
+
+            # Different officer has already given first approval — allow second
             logger.info(
                 f"Application {app_ref} ({risk_level}) passed dual approval check: "
-                f"first approver={first_approver}, second approver={current_user_id}"
+                f"first approver={first_approver_id}, second approver={current_user_id}"
             )
+            return (True, "")
             return (True, "")
 
         except Exception as e:
