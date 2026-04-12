@@ -1081,6 +1081,11 @@ def _apply_person_change(db, application_id: str, table: str, action: str,
                          snapshot: Optional[Dict], field_name: Optional[str],
                          new_value: Optional[str]) -> None:
     """Apply a director or UBO change."""
+    # Whitelist validation: table must be a known safe table name
+    _ALLOWED_PERSON_TABLES = {"directors", "ubos"}
+    if table not in _ALLOWED_PERSON_TABLES:
+        logger.warning("Blocked person change to unknown table: %s", table)
+        return
     now = datetime.now(timezone.utc).isoformat()
 
     if action == "add" and snapshot:
@@ -1516,32 +1521,30 @@ def attach_document_to_request(
 def get_change_management_stats(db) -> Dict[str, Any]:
     """Get summary statistics for change management dashboard."""
     stats = {
-        "alerts": {"total": 0, "new": 0, "under_review": 0, "escalated": 0},
+        "alerts": {"total": 0, "new": 0, "under_review": 0, "escalated": 0, "by_status": {}},
         "requests": {"total": 0, "draft": 0, "submitted": 0, "approval_pending": 0,
-                      "approved": 0, "implemented": 0},
+                      "approved": 0, "implemented": 0, "by_status": {}},
     }
     try:
-        # Alert counts
-        for status in ("new", "under_review", "escalated"):
-            row = db.execute(
-                "SELECT COUNT(*) as cnt FROM change_alerts WHERE status = ?", (status,)
-            ).fetchone()
-            stats["alerts"][status] = row["cnt"] if row else 0
-            stats["alerts"]["total"] += stats["alerts"][status]
+        # Alert counts — single GROUP BY query
+        for row in db.execute(
+            "SELECT status, COUNT(*) as cnt FROM change_alerts GROUP BY status"
+        ).fetchall():
+            s = row["status"]
+            stats["alerts"]["by_status"][s] = row["cnt"]
+            stats["alerts"]["total"] += row["cnt"]
+            if s in stats["alerts"]:
+                stats["alerts"][s] = row["cnt"]
 
-        # Add other alert statuses to total
-        row = db.execute("SELECT COUNT(*) as cnt FROM change_alerts").fetchone()
-        stats["alerts"]["total"] = row["cnt"] if row else 0
-
-        # Request counts
-        for status in ("draft", "submitted", "approval_pending", "approved", "implemented"):
-            row = db.execute(
-                "SELECT COUNT(*) as cnt FROM change_requests WHERE status = ?", (status,)
-            ).fetchone()
-            stats["requests"][status] = row["cnt"] if row else 0
-
-        row = db.execute("SELECT COUNT(*) as cnt FROM change_requests").fetchone()
-        stats["requests"]["total"] = row["cnt"] if row else 0
+        # Request counts — single GROUP BY query
+        for row in db.execute(
+            "SELECT status, COUNT(*) as cnt FROM change_requests GROUP BY status"
+        ).fetchall():
+            s = row["status"]
+            stats["requests"]["by_status"][s] = row["cnt"]
+            stats["requests"]["total"] += row["cnt"]
+            if s in stats["requests"]:
+                stats["requests"][s] = row["cnt"]
 
     except Exception as e:
         logger.error("Failed to get change management stats: %s", e)
@@ -1558,8 +1561,7 @@ def _highest_materiality(tiers: List[str]) -> str:
     priority = {"tier1": 1, "tier2": 2, "tier3": 3}
     if not tiers:
         return "tier2"
-    sorted_tiers = sorted(tiers, key=lambda t: priority.get(t, 2))
-    return sorted_tiers[0]
+    return min(tiers, key=lambda t: priority.get(t, 2))
 
 
 def _safe_snapshot_summary(snapshot: Dict) -> Dict:

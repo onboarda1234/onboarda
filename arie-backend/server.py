@@ -9242,10 +9242,21 @@ class ChangeRequestDocumentHandler(BaseHandler):
                     self.error(validation_err, 400)
                     return
 
-            # Save file
-            upload_dir = Path(_CFG_UPLOAD_DIR) / "change_requests" / request_id
+            # Save file — sanitize path components to prevent path traversal
+            import re as _re
+            safe_request_id = _re.sub(r'[^a-zA-Z0-9\-_]', '', request_id)
+            safe_filename = Path(uploaded["filename"]).name  # strip directory components
+            safe_filename = _re.sub(r'[^a-zA-Z0-9\-_.]', '_', safe_filename)
+            if not safe_filename or safe_filename.startswith('.'):
+                self.error("Invalid filename", 400)
+                return
+            upload_dir = Path(_CFG_UPLOAD_DIR) / "change_requests" / safe_request_id
             upload_dir.mkdir(parents=True, exist_ok=True)
-            file_path = upload_dir / uploaded["filename"]
+            file_path = upload_dir / safe_filename
+            # Verify resolved path is under upload_dir
+            if not str(file_path.resolve()).startswith(str(upload_dir.resolve())):
+                self.error("Invalid file path", 400)
+                return
             with open(file_path, "wb") as f:
                 f.write(uploaded["body"])
 
