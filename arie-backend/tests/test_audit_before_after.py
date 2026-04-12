@@ -50,8 +50,10 @@ class TestSafeJson:
         result = _safe_json({1, 2, 3})
         # Result is a JSON string (set converted via str()), not None
         assert result is not None
-        # Must be valid JSON
-        json.loads(result)
+        # Must be valid JSON — the set is serialized as its string repr
+        parsed = json.loads(result)
+        assert isinstance(parsed, str)
+        assert "1" in parsed and "2" in parsed and "3" in parsed
 
 
 class TestSnapshotAppState:

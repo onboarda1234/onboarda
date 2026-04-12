@@ -48,24 +48,21 @@ def snapshot_app_state(app):
 
     Returns a dict with only status/risk/decision fields — no personal data.
     Safe for audit_log before_state / after_state columns.
+    Works with both dict and sqlite3.Row objects.
     """
     if app is None:
         return None
     fields = ("status", "risk_level", "risk_score", "pre_approval_decision",
               "decided_at", "decision_by", "onboarding_lane")
-    return {f: app.get(f) if hasattr(app, "get") else app[f]
-            for f in fields
-            if (hasattr(app, "get") and app.get(f) is not None) or
-               (not hasattr(app, "get") and _col_exists(app, f))}
-
-
-def _col_exists(row, col):
-    """Check if a sqlite3.Row has a column without raising."""
-    try:
-        _ = row[col]
-        return True
-    except (IndexError, KeyError):
-        return False
+    result = {}
+    for f in fields:
+        try:
+            val = app.get(f) if hasattr(app, "get") else app[f]
+        except (IndexError, KeyError):
+            continue
+        if val is not None:
+            result[f] = val
+    return result
 
 
 class BaseHandler(tornado.web.RequestHandler):
