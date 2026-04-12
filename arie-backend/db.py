@@ -2418,6 +2418,29 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.20: Add risk recomputation tracking columns to applications (EX-09).
+    # risk_computed_at records when risk was last computed/recomputed.
+    # risk_config_version records which config version produced the current risk result.
+    try:
+        added = False
+        if not _safe_column_exists(db, "applications", "risk_computed_at"):
+            logger.info("Migration v2.20: Adding applications.risk_computed_at")
+            db.execute("ALTER TABLE applications ADD COLUMN risk_computed_at TIMESTAMP")
+            added = True
+        if not _safe_column_exists(db, "applications", "risk_config_version"):
+            logger.info("Migration v2.20: Adding applications.risk_config_version")
+            db.execute("ALTER TABLE applications ADD COLUMN risk_config_version TEXT")
+            added = True
+        if added:
+            db.commit()
+            logger.info("Migration v2.20: risk recomputation tracking columns added")
+    except Exception as e:
+        logger.error("Migration v2.20 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.

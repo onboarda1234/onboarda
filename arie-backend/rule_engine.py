@@ -8,9 +8,11 @@ Provides:
     - Composite risk score computation (D1-D5 dimensions)
     - Rule 4A-4E constants for pre-generation enforcement
     - Risk aggregation weights and ranks
+    - Reusable risk recomputation helper (EX-09)
 """
 import json
 import logging
+from datetime import datetime, timezone
 
 logger = logging.getLogger("arie")
 
@@ -878,3 +880,178 @@ def compute_risk_score(app_data, config_override=None):
         "escalations": escalations,
         "requires_compliance_approval": requires_compliance_approval,
     }
+
+
+# ══════════════════════════════════════════════════════════
+# EX-09: REUSABLE RISK RECOMPUTATION HELPER
+# ══════════════════════════════════════════════════════════
+
+def _get_risk_config_version(db):
+    """Return the risk_config updated_at timestamp as a version identifier."""
+    try:
+        row = db.execute("SELECT updated_at FROM risk_config WHERE id=1").fetchone()
+        if row and row["updated_at"]:
+            return str(row["updated_at"])
+    except Exception:
+        pass
+    return None
+
+
+def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None):
+    """Recompute risk score for a single application and persist the result.
+
+    Args:
+        db: Active database connection (caller manages commit/close).
+        app_id: Application ID (primary key).
+        reason: Human-readable reason for recomputation (for audit trail).
+        user: Optional user dict (for audit logging).
+        log_audit_fn: Optional callable(user, action, target, detail, **kwargs)
+                      for audit logging. If None, audit is skipped.
+
+    Returns:
+        dict with keys:
+            recomputed (bool): Whether risk was actually recomputed.
+            old_score (float|None): Previous risk score.
+            old_level (str|None): Previous risk level.
+            new_score (float|None): New risk score (None if not recomputed).
+            new_level (str|None): New risk level (None if not recomputed).
+            changed (bool): Whether score or level changed.
+    """
+    from prescreening.risk_inputs import build_prescreening_risk_input
+
+    result = {
+        "recomputed": False,
+        "old_score": None, "old_level": None,
+        "new_score": None, "new_level": None,
+        "changed": False,
+    }
+
+    try:
+        app = db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone()
+        if not app:
+            logger.warning("recompute_risk: app_id=%s not found", app_id)
+            return result
+
+        # Only recompute if the app has been scored at least once
+        if app.get("risk_score") is None:
+            return result
+
+        old_score = app["risk_score"]
+        old_level = app["risk_level"]
+        result["old_score"] = old_score
+        result["old_level"] = old_level
+
+        # Build scorer input from current app data
+        prescreening = safe_json_loads(app["prescreening_data"])
+
+        # Lazy import to avoid circular dependency
+        try:
+            from server import get_application_parties
+            directors, ubos, intermediaries = get_application_parties(db, app_id)
+        except ImportError:
+            directors = [dict(d) for d in db.execute(
+                "SELECT * FROM directors WHERE application_id=?", (app_id,)).fetchall()]
+            ubos = [dict(u) for u in db.execute(
+                "SELECT * FROM ubos WHERE application_id=?", (app_id,)).fetchall()]
+            intermediaries = []
+            for row in db.execute(
+                    "SELECT * FROM intermediaries WHERE application_id=?", (app_id,)).fetchall():
+                item = dict(row)
+                item["full_name"] = item.get("entity_name", "")
+                intermediaries.append(item)
+
+        scoring_input = build_prescreening_risk_input(
+            application=app,
+            prescreening_data=prescreening,
+            directors=directors,
+            ubos=ubos,
+            intermediaries=intermediaries,
+        )
+        new_risk = compute_risk_score(scoring_input)
+
+        new_score = new_risk["score"]
+        new_level = new_risk["level"]
+        result["new_score"] = new_score
+        result["new_level"] = new_level
+        result["recomputed"] = True
+        result["changed"] = (old_score != new_score or old_level != new_level)
+
+        # Get risk config version
+        config_version = _get_risk_config_version(db)
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        db.execute(
+            """UPDATE applications SET
+                risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                risk_computed_at=?, risk_config_version=?,
+                updated_at=datetime('now') WHERE id=?""",
+            (new_score, new_level,
+             json.dumps(new_risk.get("dimensions", {})),
+             new_risk.get("lane", "Standard Review"),
+             now_ts, config_version, app_id))
+
+        if result["changed"]:
+            logger.info(
+                "RISK RECOMPUTED: app_id=%s reason=%s score %s→%s, level %s→%s",
+                app_id, reason, old_score, new_score, old_level, new_level)
+        else:
+            logger.info(
+                "RISK RECOMPUTED (no change): app_id=%s reason=%s score=%s level=%s",
+                app_id, reason, new_score, new_level)
+
+        # Audit trail
+        if log_audit_fn and user:
+            before_state = {
+                "risk_score": old_score, "risk_level": old_level,
+            }
+            after_state = {
+                "risk_score": new_score, "risk_level": new_level,
+                "risk_computed_at": now_ts,
+                "risk_config_version": config_version,
+            }
+            detail = (
+                f"Reason: {reason}. "
+                f"Score: {old_score}→{new_score}, Level: {old_level}→{new_level}"
+            )
+            try:
+                log_audit_fn(user, "Risk Recomputed", app.get("ref", app_id), detail,
+                             db=db, before_state=before_state, after_state=after_state)
+            except Exception as e:
+                logger.warning("recompute_risk audit log failed: %s", e)
+
+    except Exception as e:
+        logger.warning("recompute_risk failed for app_id=%s: %s", app_id, e)
+
+    return result
+
+
+def recompute_risk_for_active_apps(db, reason, user=None, log_audit_fn=None):
+    """Recompute risk for all non-terminal applications.
+
+    Used when risk config changes — all active apps need rescoring against new config.
+    Terminal statuses (approved, rejected, withdrawn) are excluded.
+
+    Returns:
+        list of dicts — one per recomputed application.
+    """
+    TERMINAL_STATUSES = ("approved", "rejected", "withdrawn")
+    try:
+        rows = db.execute(
+            "SELECT id FROM applications WHERE risk_score IS NOT NULL AND status NOT IN (?,?,?)",
+            TERMINAL_STATUSES
+        ).fetchall()
+    except Exception as e:
+        logger.warning("recompute_risk_for_active_apps: failed to list apps: %s", e)
+        return []
+
+    results = []
+    for row in rows:
+        r = recompute_risk(db, row["id"], reason, user=user, log_audit_fn=log_audit_fn)
+        results.append({"app_id": row["id"], **r})
+
+    changed_count = sum(1 for r in results if r.get("changed"))
+    logger.info(
+        "Bulk risk recomputation: reason=%s, apps=%d, changed=%d",
+        reason, len(results), changed_count)
+
+    return results

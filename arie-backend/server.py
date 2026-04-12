@@ -117,6 +117,7 @@ from rule_engine import (
     RISK_WEIGHTS, RISK_RANK,
     classify_country, score_sector, compute_risk_score, classify_risk_level,
     validate_risk_config,
+    recompute_risk, recompute_risk_for_active_apps,
 )
 from validation_engine import (
     validate_compliance_memo,
@@ -2125,37 +2126,9 @@ class ApplicationDetailHandler(BaseHandler):
 
         risk_recomputed = False
         if risk_changed and app.get("risk_score") is not None:
-            try:
-                # Reload to get updated field values
-                updated_app = db.execute("SELECT * FROM applications WHERE id=?", (real_id,)).fetchone()
-                prescreening_data = safe_json_loads(updated_app["prescreening_data"])
-                directors, ubos, intermediaries = get_application_parties(db, real_id)
-                scoring_input = build_prescreening_risk_input(
-                    application=updated_app,
-                    prescreening_data=prescreening_data,
-                    directors=directors,
-                    ubos=ubos,
-                    intermediaries=intermediaries,
-                )
-                new_risk = compute_risk_score(scoring_input)
-                old_score = app.get("risk_score")
-                old_level = app.get("risk_level")
-                db.execute("""UPDATE applications SET
-                    risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
-                    updated_at=datetime('now') WHERE id=?""",
-                    (new_risk["score"], new_risk["level"],
-                     json.dumps(new_risk.get("dimensions", {})),
-                     new_risk.get("lane", "Standard Review"), real_id))
-                risk_recomputed = True
-                if old_score != new_risk["score"] or old_level != new_risk["level"]:
-                    logger.info(
-                        "RISK RECOMPUTED on edit: app_id=%s "
-                        "score %s→%s, level %s→%s",
-                        real_id, old_score, new_risk["score"],
-                        old_level, new_risk["level"]
-                    )
-            except Exception as e:
-                logger.warning("Risk recomputation on edit failed for app_id=%s: %s", real_id, e)
+            rr = recompute_risk(db, real_id, "application_edit", user=user,
+                                log_audit_fn=self.log_audit)
+            risk_recomputed = rr.get("recomputed", False)
 
         db.commit()
         db.close()
@@ -2498,6 +2471,13 @@ class SubmitApplicationHandler(BaseHandler):
         # Compute risk score
         risk = compute_risk_score(scoring_input)
 
+        # EX-09: Capture risk config version at computation time
+        try:
+            from rule_engine import _get_risk_config_version
+            risk["_config_version"] = _get_risk_config_version(db) or ""
+        except Exception:
+            risk["_config_version"] = ""
+
         # Elevate risk if screening found hits
         if screening_report["total_hits"] > 0:
             risk_bump = min(screening_report["total_hits"] * 8, 25)  # Up to +25 points
@@ -2533,11 +2513,15 @@ class SubmitApplicationHandler(BaseHandler):
                 UPDATE applications SET
                     status='submitted', submitted_at=datetime('now'),
                     risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
+                    risk_computed_at=?, risk_config_version=?,
                     pre_approval_decision=NULL, pre_approval_notes=NULL,
                     pre_approval_officer_id=NULL, pre_approval_timestamp=NULL,
                     updated_at=datetime('now')
                 WHERE id=?
-            """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"], real_id))
+            """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"],
+                  datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  str(risk.get("_config_version", "")),
+                  real_id))
 
             # After pre-screening: ALL risk levels see pricing first
             # Routing to pre-approval (HIGH/VERY_HIGH) happens after pricing acceptance
@@ -2694,27 +2678,11 @@ class KYCSubmitHandler(BaseHandler):
         # Always recompute risk at KYC submission — data may have changed since pre-screening
         risk_score = app["risk_score"] or 0
         risk_level = app["risk_level"] or "MEDIUM"
-        try:
-            prescreening = safe_json_loads(app["prescreening_data"])
-            directors, ubos, intermediaries = get_application_parties(db, real_id)
-            scoring_input = build_prescreening_risk_input(
-                application=app,
-                prescreening_data=prescreening,
-                directors=directors,
-                ubos=ubos,
-                intermediaries=intermediaries,
-            )
-            score_result = compute_risk_score(scoring_input)
-            risk_score = score_result["score"]
-            risk_level = score_result["level"]
-            db.execute("""UPDATE applications SET
-                risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
-                updated_at=datetime('now') WHERE id=?""",
-                (score_result["score"], score_result["level"],
-                 json.dumps(score_result.get("dimensions", {})),
-                 score_result.get("lane", "Standard Review"), real_id))
-        except Exception as e:
-            logger.warning(f"Risk scoring at KYC submit failed for {app['ref']}: {e}")
+        rr = recompute_risk(db, real_id, "kyc_submission", user=user,
+                            log_audit_fn=self.log_audit)
+        if rr.get("recomputed"):
+            risk_score = rr["new_score"]
+            risk_level = rr["new_level"]
 
         # W2-4: Set status to kyc_submitted (previously dead state, now active)
         db.execute("""
@@ -4595,6 +4563,13 @@ class RiskConfigHandler(BaseHandler):
              json.dumps(validated.get("entity_type_scores", {})),
              user["sub"]))
         db.commit()
+
+        # EX-09: Recompute risk for all active applications after config change
+        recomp_results = recompute_risk_for_active_apps(
+            db, "risk_config_updated", user=user, log_audit_fn=self.log_audit)
+        if recomp_results:
+            db.commit()
+
         db.close()
 
         _risk_after = {
@@ -4606,7 +4581,13 @@ class RiskConfigHandler(BaseHandler):
         }
         self.log_audit(user, "Config", "Risk Model", "Risk scoring model updated",
                        before_state=_risk_before, after_state=_risk_after)
-        self.success({"status": "saved"})
+
+        changed_count = sum(1 for r in recomp_results if r.get("changed"))
+        self.success({
+            "status": "saved",
+            "risk_recomputed_apps": len(recomp_results),
+            "risk_changed_apps": changed_count,
+        })
 
 
 class EnvironmentInfoHandler(BaseHandler):
@@ -6189,6 +6170,14 @@ class ScreeningReviewHandler(BaseHandler):
             user["sub"],
             user.get("name") or user.get("full_name") or user["sub"],
         )
+
+        # EX-09: Recompute risk when screening review indicates escalation
+        risk_recomputed = False
+        if disposition == "escalated":
+            rr = recompute_risk(db, app["id"], "screening_review_escalated",
+                                user=user, log_audit_fn=self.log_audit)
+            risk_recomputed = rr.get("recomputed", False)
+
         db.commit()
 
         disposition_label = disposition.replace("_", " ")
@@ -6201,7 +6190,10 @@ class ScreeningReviewHandler(BaseHandler):
             (app["id"], subject_type, subject_name),
         ).fetchone())
         db.close()
-        self.success({"review": review})
+        response = {"review": review}
+        if risk_recomputed:
+            response["risk_recomputed"] = True
+        self.success(response)
 
 
 class ScreeningHandler(BaseHandler):
@@ -6264,13 +6256,22 @@ class ScreeningHandler(BaseHandler):
         prescreening["screened_by"] = user["sub"]
         db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now') WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
+
+        # EX-09: Recompute risk after screening re-run — screening hits affect risk score
+        rr = recompute_risk(db, real_id, "screening_rerun", user=user,
+                            log_audit_fn=self.log_audit)
+        risk_recomputed = rr.get("recomputed", False)
+
         db.commit()
         db.close()
 
         self.log_audit(user, "Screening", app["ref"],
                        f"Full screening run — {report['total_hits']} hit(s), {len(report['overall_flags'])} flag(s)")
 
-        self.success(report)
+        response = dict(report)
+        if risk_recomputed:
+            response["risk_recomputed"] = True
+        self.success(response)
 
 
 class SanctionsCheckHandler(BaseHandler):
