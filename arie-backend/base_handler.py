@@ -53,7 +53,8 @@ def snapshot_app_state(app):
     if app is None:
         return None
     fields = ("status", "risk_level", "risk_score", "pre_approval_decision",
-              "decided_at", "decision_by", "onboarding_lane")
+              "decided_at", "decision_by", "onboarding_lane",
+              "first_approver_id", "first_approved_at")
     result = {}
     for f in fields:
         try:

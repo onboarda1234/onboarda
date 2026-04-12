@@ -2395,6 +2395,29 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.19: Add structured dual-approval tracking columns to applications.
+    # Moves approval truth out of audit_log free text into proper application fields
+    # to eliminate the dual-approval race condition (EX-06).
+    try:
+        added = False
+        if not _safe_column_exists(db, "applications", "first_approver_id"):
+            logger.info("Migration v2.19: Adding applications.first_approver_id")
+            db.execute("ALTER TABLE applications ADD COLUMN first_approver_id TEXT")
+            added = True
+        if not _safe_column_exists(db, "applications", "first_approved_at"):
+            logger.info("Migration v2.19: Adding applications.first_approved_at")
+            db.execute("ALTER TABLE applications ADD COLUMN first_approved_at TIMESTAMP")
+            added = True
+        if added:
+            db.commit()
+            logger.info("Migration v2.19: dual-approval tracking columns added")
+    except Exception as e:
+        logger.error("Migration v2.19 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.
