@@ -328,7 +328,6 @@ class ApprovalGateValidator:
                 f"first approver={first_approver_id}, second approver={current_user_id}"
             )
             return (True, "")
-            return (True, "")
 
         except Exception as e:
             logger.error(f"Error in dual approval validation: {e}", exc_info=True)

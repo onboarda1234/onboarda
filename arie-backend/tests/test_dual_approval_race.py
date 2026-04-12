@@ -440,11 +440,15 @@ class TestDualApprovalAuditConsistency:
         """Migration v2.19 columns exist in the applications table."""
         db = _get_db()
         try:
-            # Verify columns exist by selecting them
+            # Insert a row so we can verify columns are accessible with data
+            app = _insert_high_risk_app(db)
             row = db.execute(
-                "SELECT first_approver_id, first_approved_at FROM applications LIMIT 1"
+                "SELECT first_approver_id, first_approved_at FROM applications WHERE id = ?",
+                (app["id"],)
             ).fetchone()
-            # If we get here without exception, columns exist
-            assert True
+            row = dict(row)
+            # Columns exist and are NULL by default for new applications
+            assert row["first_approver_id"] is None
+            assert row["first_approved_at"] is None
         finally:
             db.close()
