@@ -2759,6 +2759,32 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.23: Add risk elevation tracking columns to applications.
+    # Stores base_risk_level (score-based), final_risk_level (post-elevation),
+    # and elevation_reason_text (human-readable explanation of any elevation).
+    try:
+        cols_added = []
+        if not _safe_column_exists(db, "applications", "base_risk_level"):
+            db.execute("ALTER TABLE applications ADD COLUMN base_risk_level TEXT")
+            cols_added.append("base_risk_level")
+        if not _safe_column_exists(db, "applications", "final_risk_level"):
+            db.execute("ALTER TABLE applications ADD COLUMN final_risk_level TEXT")
+            cols_added.append("final_risk_level")
+        if not _safe_column_exists(db, "applications", "elevation_reason_text"):
+            db.execute("ALTER TABLE applications ADD COLUMN elevation_reason_text TEXT DEFAULT ''")
+            cols_added.append("elevation_reason_text")
+        if cols_added:
+            db.commit()
+            logger.info("Migration v2.23: Added columns %s to applications", cols_added)
+        else:
+            logger.info("Migration v2.23: elevation tracking columns already exist")
+    except Exception as e:
+        logger.error("Migration v2.23 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.

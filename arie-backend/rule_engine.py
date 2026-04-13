@@ -104,6 +104,19 @@ SECTOR_SCORES = {
 
 HIGH_RISK_SECTORS = ("Cryptocurrency", "Money Services", "Gaming", "Arms", "Precious Metals")
 
+# Sectors that score 4 (very-high risk) — used by elevation logic
+HIGH_RISK_SECTOR_KEYWORDS = {
+    "crypto", "virtual asset", "digital asset", "gambling", "gaming", "betting",
+    "arms", "defence", "military", "shell company", "nominee",
+    "adult", "adult entertainment",
+}
+
+# Keywords indicating opaque / shell-like / materially complex ownership
+OPAQUE_OWNERSHIP_KEYWORDS = {
+    "complex", "shell", "opaque", "nominee", "bearer", "multi-layered",
+    "layered", "trust", "3+", "undisclosed",
+}
+
 MINIMUM_MEDIUM_SECTORS = ("Remittance", "Money Transfer", "Payment Services", "E-Money", "Virtual Assets", "MVTS")
 
 MEDIUM_RISK_SECTORS = ("Financial Services", "Real Estate", "Legal Services", "Trust Services", "Art Dealing")
@@ -497,6 +510,87 @@ CANONICAL_THRESHOLDS = [
 ]
 
 
+def _is_elevated_jurisdiction(country_name, country_scores=None):
+    """Return True if country is FATF grey-list or elevated (score >= 3)."""
+    if not country_name:
+        return False
+    c = country_name.lower().strip()
+    if c in FATF_GREY:
+        return True
+    # Also check score >= 3 from DB config
+    score = classify_country(c, country_scores)
+    return score >= 3
+
+
+def _is_high_risk_sector(sector_name, sector_scores=None):
+    """Return True if sector scores 4 (very-high risk) or matches high-risk keywords."""
+    if not sector_name:
+        return False
+    s = sector_name.lower()
+    # Check keywords
+    for kw in HIGH_RISK_SECTOR_KEYWORDS:
+        if kw in s:
+            return True
+    # Check scored value
+    actual_score = score_sector(sector_name, sector_scores)
+    return actual_score >= 4
+
+
+def _is_opaque_ownership(ownership_structure):
+    """Return True if ownership structure is opaque, shell-like, or materially complex."""
+    if not ownership_structure:
+        return False
+    os_val = ownership_structure.lower()
+    for kw in OPAQUE_OWNERSHIP_KEYWORDS:
+        if kw in os_val:
+            return True
+    return False
+
+
+def _has_material_screening_concern(app_data):
+    """Return True and a reason string if screening data indicates a material unresolved concern.
+
+    Material concerns: serious PEP hit, adverse media, sanctions-adjacent match,
+    or equivalent escalation signal requiring enhanced review.
+    """
+    reasons = []
+
+    # Check adverse media
+    adverse_media_data = app_data.get("adverse_media") or (
+        app_data.get("screening_results", {}).get("adverse_media") if isinstance(app_data.get("screening_results"), dict) else None
+    )
+    if adverse_media_data:
+        am_status = (adverse_media_data if isinstance(adverse_media_data, str) else
+                     adverse_media_data.get("status", "") if isinstance(adverse_media_data, dict) else "").lower()
+        if any(kw in am_status for kw in ("confirmed", "regulatory", "criminal", "serious", "material")):
+            reasons.append("adverse_media:" + am_status)
+
+    # Check screening results for sanctions-adjacent / unresolved PEP
+    screening = app_data.get("screening_results") or {}
+    if isinstance(screening, dict):
+        sanctions = screening.get("sanctions") or screening.get("sanctions_screening") or {}
+        if isinstance(sanctions, dict):
+            s_status = (sanctions.get("status") or sanctions.get("result") or "").lower()
+            if any(kw in s_status for kw in ("match", "hit", "positive", "adjacent", "unresolved")):
+                reasons.append("sanctions_concern:" + s_status)
+
+        pep = screening.get("pep") or screening.get("pep_screening") or {}
+        if isinstance(pep, dict):
+            p_status = (pep.get("status") or pep.get("result") or "").lower()
+            if any(kw in p_status for kw in ("confirmed", "material", "serious", "high", "unresolved")):
+                reasons.append("pep_concern:" + p_status)
+
+    # Check for explicit screening_concern flag
+    if app_data.get("screening_concern"):
+        concern = app_data["screening_concern"]
+        if isinstance(concern, str) and concern.lower() not in ("none", "clear", "no", "false", ""):
+            reasons.append("screening_concern:" + concern.lower())
+        elif isinstance(concern, bool) and concern:
+            reasons.append("screening_concern:flagged")
+
+    return (bool(reasons), reasons)
+
+
 def classify_risk_level(composite_score, config=None):
     """
     Canonical score-to-band mapping.  ONE function, called from ONE place.
@@ -530,10 +624,13 @@ def compute_risk_score(app_data, config_override=None):
 
     Returns: {
         score: float (0-100),
-        level: str (LOW|MEDIUM|HIGH|VERY_HIGH),
+        level: str (LOW|MEDIUM|HIGH|VERY_HIGH),          # final risk level (post-elevation)
+        base_risk_level: str,                             # score-based level before elevation
+        final_risk_level: str,                            # same as level (explicit alias)
         dimensions: {d1..d5},
         lane: str,
         escalations: list[str],
+        elevation_reason_text: str,                       # human-readable elevation reason
         requires_compliance_approval: bool,
     }
     """
@@ -812,10 +909,12 @@ def compute_risk_score(app_data, config_override=None):
     composite = round((weighted_avg - 1) / 3 * 100, 1)
 
     # ── Classify risk level from score (single canonical mapping) ──
-    level = classify_risk_level(composite, config)
+    base_level = classify_risk_level(composite, config)
+    level = base_level  # will be elevated below if conditions met
 
     # ── Collect escalation flags ──
     escalations = []
+    elevation_reasons = []
 
     # ── FLOOR RULE 1: Sanctioned / FATF_BLACK incorporation country → force VERY_HIGH ──
     # If the incorporation country is sanctioned or FATF blacklisted,
@@ -827,6 +926,7 @@ def compute_risk_score(app_data, config_override=None):
         level = "VERY_HIGH"
         composite = max(composite, 70.0)
         escalations.append(f"floor_rule_sanctioned_country:{inc_country}")
+        elevation_reasons.append(f"Sanctioned/FATF-blacklisted country: {inc_country}")
 
     # ── FLOOR RULE 2: UBO/Director sanctioned nationality → force VERY_HIGH ──
     # If any UBO or director holds nationality of a sanctioned/FATF_BLACK country,
@@ -843,7 +943,76 @@ def compute_risk_score(app_data, config_override=None):
                 level = "VERY_HIGH"
                 composite = max(composite, 70.0)
                 escalations.append(f"floor_rule_sanctioned_nationality:{mapped}")
+                elevation_reasons.append(f"UBO/Director nationality sanctioned: {mapped}")
                 break  # One match is sufficient
+
+    # ── Extract scoring lookups for elevation checks ──
+    country_scores_cfg = (config.get("country_risk_scores") if config else None) or None
+    sector_scores_cfg = (config.get("sector_risk_scores") if config else None) or None
+
+    # ── ELEVATION RULE 1: MEDIUM + FATF grey-list + high-risk sector + opaque structure → HIGH ──
+    # Narrow combination: all three conditions must be true simultaneously.
+    if level == "MEDIUM":
+        is_grey = _is_elevated_jurisdiction(data.get("country"), country_scores_cfg)
+        is_hr_sector = _is_high_risk_sector(data.get("sector"), sector_scores_cfg)
+        is_opaque = _is_opaque_ownership(data.get("ownership_structure"))
+
+        if is_grey and is_hr_sector and is_opaque:
+            logger.info(
+                "ELEVATION RULE 1: MEDIUM + FATF grey-list + high-risk sector + opaque structure → HIGH "
+                "(country=%s, sector=%s, ownership=%s, score=%s)",
+                data.get("country"), data.get("sector"), data.get("ownership_structure"), composite
+            )
+            level = "HIGH"
+            escalations.append("elevation_grey_sector_opaque")
+            elevation_reasons.append(
+                f"Combination elevation: FATF grey-list jurisdiction ({data.get('country')}), "
+                f"high-risk sector ({data.get('sector')}), opaque ownership structure"
+            )
+
+    # ── ELEVATION RULE 2: Screening-driven elevation ──
+    # If screening identifies a material unresolved concern, elevate at least to HIGH.
+    has_screening_concern, screening_reasons = _has_material_screening_concern(data)
+    if has_screening_concern:
+        if RISK_RANK.get(level, 0) < RISK_RANK.get("HIGH", 3):
+            logger.info(
+                "ELEVATION RULE 2: Material screening concern → at least HIGH "
+                "(was %s, score=%s, reasons=%s)",
+                level, composite, screening_reasons
+            )
+            level = "HIGH"
+            escalations.append("elevation_screening_concern")
+            elevation_reasons.append(
+                f"Screening-driven elevation to HIGH: {', '.join(screening_reasons)}"
+            )
+
+        # ── ELEVATION RULE 3: Severe combination → VERY_HIGH ──
+        # High-risk sector + elevated jurisdiction + material screening concern,
+        # or multiple material escalation signals together.
+        is_hr_sector_severe = _is_high_risk_sector(data.get("sector"), sector_scores_cfg)
+        is_elevated_jur = _is_elevated_jurisdiction(data.get("country"), country_scores_cfg)
+
+        severe_signals = sum([
+            is_hr_sector_severe,
+            is_elevated_jur,
+            len(screening_reasons) >= 1,
+        ])
+
+        if (is_hr_sector_severe and is_elevated_jur and has_screening_concern) or len(screening_reasons) >= 2:
+            if level != "VERY_HIGH":
+                logger.info(
+                    "ELEVATION RULE 3: Severe combination → VERY_HIGH "
+                    "(sector_hr=%s, jurisdiction_elevated=%s, screening_reasons=%s, was %s)",
+                    is_hr_sector_severe, is_elevated_jur, screening_reasons, level
+                )
+            level = "VERY_HIGH"
+            composite = max(composite, 70.0)
+            escalations.append("elevation_severe_combination")
+            elevation_reasons.append(
+                f"Severe-case elevation to VERY_HIGH: "
+                f"{'high-risk sector + elevated jurisdiction + ' if is_hr_sector_severe and is_elevated_jur else ''}"
+                f"screening concerns ({', '.join(screening_reasons)})"
+            )
 
     # ── ESCALATION RULE A: Any sub-factor scores 4 → mandatory compliance approval ──
     # Per Excel Methodology: "Compliance approval is MANDATORY when any individual
@@ -870,14 +1039,19 @@ def compute_risk_score(app_data, config_override=None):
 
     requires_compliance_approval = len(escalations) > 0
 
+    elevation_reason_text = "; ".join(elevation_reasons) if elevation_reasons else ""
+
     lane_map = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}
 
     return {
         "score": composite,
         "level": level,
+        "base_risk_level": base_level,
+        "final_risk_level": level,
         "dimensions": {"d1": round(d1, 2), "d2": round(d2, 2), "d3": round(d3, 2), "d4": round(d4, 2), "d5": round(d5, 2)},
         "lane": lane_map.get(level, "Standard Review"),
         "escalations": escalations,
+        "elevation_reason_text": elevation_reason_text,
         "requires_compliance_approval": requires_compliance_approval,
     }
 
@@ -974,12 +1148,16 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None):
                 risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
                 risk_computed_at=?, risk_config_version=?,
                 risk_escalations=?,
+                base_risk_level=?, final_risk_level=?, elevation_reason_text=?,
                 updated_at=datetime('now') WHERE id=?""",
             (new_score, new_level,
              json.dumps(new_risk.get("dimensions", {})),
              new_risk.get("lane", "Standard Review"),
              now_ts, config_version,
              json.dumps(new_risk.get("escalations", [])),
+             new_risk.get("base_risk_level", new_level),
+             new_risk.get("final_risk_level", new_level),
+             new_risk.get("elevation_reason_text", ""),
              app_id))
 
         if result["changed"]:
