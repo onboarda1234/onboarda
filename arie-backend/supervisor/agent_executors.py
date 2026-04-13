@@ -122,9 +122,9 @@ def _get_app_data(db_path: str, application_id: str) -> Dict[str, Any]:
         app_dict = dict(app)
         real_id = app_dict["id"]
 
-        # C-02: decrypt PII fields on read (graceful — skip if server module unavailable)
+        # C-02: decrypt PII fields on read (from neutral party_utils module)
         try:
-            from server import decrypt_pii_fields, PII_FIELDS_DIRECTORS, PII_FIELDS_UBOS
+            from party_utils import decrypt_pii_fields, PII_FIELDS_DIRECTORS, PII_FIELDS_UBOS
             directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute(
                 "SELECT * FROM directors WHERE application_id=?", (real_id,)
             ).fetchall()]
