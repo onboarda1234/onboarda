@@ -8189,19 +8189,6 @@ function checkSanctionedCountry(selectEl) {
   return true;
 }
 
-// ─── Demo-only: company data for demo prefill (not used in production) ───────────
-const MOCK_COMPANY_DATA = {
-  regName:     '',   // populated from form input
-  tradeName:   '',
-  regAddress:  '',
-  incDate:     '',
-  incCountry:  '',
-  brn:         '',
-  website:     '',
-  directors: [],
-  ubos: []
-};
-
 // ─── Register ────────────────────────────────────────────────
 function submitRegister(e) {
   e.preventDefault();
@@ -8288,7 +8275,7 @@ async function submitLogin(e) {
     } catch(apiErr) {
       // Backend not running — demo/offline mode (only allowed in demo environment)
       var demoPw = (DEMO_CREDENTIALS || {}).portal_password || '';
-      if (APP_ENV === 'demo' && demoPw && (password === demoPw || password === 'demo123')) {
+      if (APP_ENV === 'demo' && demoPw && password === demoPw) {
         isOffline = true;
         const demoName = email.split('@')[0].replace(/[._]/g,' ').replace(/\b\w/g, c => c.toUpperCase());
         resp = {
@@ -8523,173 +8510,28 @@ function checkPasswordStrength(val) {
 
 // ─── Company Lookup ───────────────────────────────────────────
 function startCompanyLookup() {
-  // In non-demo environments, no registry integration exists — redirect to manual entry
-  if (APP_ENV !== 'demo') {
-    showToast('info', 'Manual Entry', 'Company details can be entered directly in the application form.');
-    showView('prescreening');
-    return;
-  }
-
-  // Demo-only: simulated lookup for demonstration purposes
-  const name = document.getElementById('lu-name').value.trim();
-  const reg  = document.getElementById('lu-reg').value.trim();
-  const country = document.getElementById('lu-country').value;
-  if (!name || !country) {
-    showToast('warn', 'Missing fields', 'Please enter company name and country of incorporation.');
-    return;
-  }
-  // Store for demo prefill only
-  MOCK_COMPANY_DATA.regName    = name;
-  MOCK_COMPANY_DATA.brn        = reg || 'DEMO-' + Math.floor(Math.random()*9000000+1000000);
-  MOCK_COMPANY_DATA.incCountry = country;
-  const now = new Date(); now.setFullYear(now.getFullYear()-5);
-  MOCK_COMPANY_DATA.incDate    = now.toISOString().split('T')[0];
-  MOCK_COMPANY_DATA.regAddress = '14 Business Park Avenue, ' + country;
-  MOCK_COMPANY_DATA.website    = 'https://www.' + name.toLowerCase().replace(/[^a-z]/g,'').slice(0,12) + '.com';
-  MOCK_COMPANY_DATA.tradeName  = name.split(' ')[0];
-
-  document.getElementById('lookup-idle').style.display    = 'none';
-  document.getElementById('lookup-loading').style.display = 'block';
-  document.getElementById('lookup-result').style.display  = 'none';
-
-  // Animate steps (demo only)
-  const steps = ['ls1','ls2','ls3','ls4','ls5','ls6'];
-  let i = 0;
-  function nextStep() {
-    if (i > 0) {
-      document.getElementById(steps[i-1]).classList.remove('active');
-      document.getElementById(steps[i-1]).classList.add('done');
-      document.getElementById(steps[i-1]).querySelector('.step-icon').classList.add('done');
-    }
-    if (i < steps.length) {
-      const el = document.getElementById(steps[i]);
-      el.classList.remove('waiting'); el.classList.add('active');
-      i++;
-      setTimeout(nextStep, 600 + Math.random()*300);
-    } else {
-      setTimeout(() => showLookupResult(true), 400);
-    }
-  }
-  document.querySelectorAll('#lookup-steps li').forEach(li => {
-    li.classList.remove('done','active'); li.classList.add('waiting');
-  });
-  setTimeout(nextStep, 400);
+  // No registry integration — redirect to manual entry for all environments
+  showToast('info', 'Manual Entry', 'Company details can be entered directly in the application form.');
+  showView('prescreening');
 }
 
 function showLookupResult(found) {
   document.getElementById('lookup-loading').style.display  = 'none';
   document.getElementById('lookup-result').style.display   = found ? 'block' : 'none';
   document.getElementById('lookup-notfound').style.display = found ? 'none' : 'block';
-  if (!found) return;
-
-  // Render prefill preview
-  const d = MOCK_COMPANY_DATA;
-  const preview = document.getElementById('prefill-preview');
-  preview.innerHTML = [
-    { label:'Registered Name', val: d.regName },
-    { label:'Registration No.', val: d.brn },
-    { label:'Country', val: d.incCountry },
-    { label:'Incorporated', val: d.incDate },
-    { label:'Registered Address', val: d.regAddress },
-    { label:'Website', val: d.website },
-    { label:'Directors Found', val: d.directors.length > 0 ? d.directors.map(x=>x.first+' '+x.last).join(', ') : 'Please enter manually' },
-    { label:'UBOs Found', val: d.ubos.length > 0 ? d.ubos.map(x=>x.first+' '+x.last+' ('+x.pct+'%)').join(', ') : 'Please enter manually' }
-  ].map(r => `<div class="prefill-row"><div class="prefill-label">${escapeHtml(r.label)}</div><div class="prefill-val">${escapeHtml(r.val)}</div></div>`).join('');
 }
 
 function proceedToPreScreening() {
   resetPortalApplicationState();
-  prefillApplicationForm();
   showView('prescreening');
   showToast('success', 'Application Ready', 'Please complete your application form.');
 }
 
 function prefillApplicationForm() {
-  const d = MOCK_COMPANY_DATA;
-  const set = (id, val) => { const el = document.getElementById(id); if (el && val) { el.value = val; el.classList.add('prefilled-field'); } };
-  set('f-reg-name',   d.regName);
-  set('f-trade-name', d.tradeName);
-  set('f-reg-address',d.regAddress);
-  set('f-inc-date',   d.incDate);
-  set('f-brn',        d.brn);
-  set('f-website',    d.website);
+  // No-op — mock prefill logic removed (EX-03).
+  // When real registry integration is added, this function can populate
+  // form fields from the fetched data.
   updateKYCPersonNames();
-  // Country of incorporation
-  const sel = document.getElementById('f-inc-country');
-  if (sel) {
-    for (let i=0; i<sel.options.length; i++) {
-      if (sel.options[i].text === d.incCountry || sel.options[i].value === d.incCountry) {
-        sel.selectedIndex = i; sel.classList.add('prefilled-field'); break;
-      }
-    }
-  }
-  // Directors — if mock data has directors, prefill; otherwise leave one empty row
-  const dirBody = document.getElementById('directors-body');
-  if (dirBody) {
-    if (d.directors && d.directors.length > 0) {
-      dirBody.innerHTML = '';
-      d.directors.forEach(dir => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td><input type="text" value="${escapeHtml(dir.first)}" class="prefilled-field"/></td>
-          <td><input type="text" value="${escapeHtml(dir.last)}" class="prefilled-field"/></td>
-          <td><select class="nat-select prefilled-field"><option value="">Nationality</option></select></td>
-          <td><select class="pep-select prefilled-field" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-          <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
-        `;
-        dirBody.appendChild(tr);
-      });
-      populateNationalitySelects();
-      setTimeout(() => {
-        dirBody.querySelectorAll('.nat-select').forEach((sel,i) => {
-          const nat = d.directors[i] ? d.directors[i].nat : '';
-          for (let j=0; j<sel.options.length; j++) {
-            if (sel.options[j].text === nat) { sel.selectedIndex=j; break; }
-          }
-        });
-      }, 100);
-    } else {
-      // Ensure at least one empty row for manual entry
-      if (dirBody.querySelectorAll('tr').length === 0) {
-        addDirectorRow();
-      }
-      populateNationalitySelects();
-    }
-  }
-  // UBOs — if mock data has UBOs, prefill; otherwise leave one empty row
-  const uboBody = document.getElementById('ubos-body');
-  if (uboBody) {
-    if (d.ubos && d.ubos.length > 0) {
-      uboBody.innerHTML = '';
-      d.ubos.forEach(ubo => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td><input type="text" value="${escapeHtml(ubo.first)}" class="prefilled-field"/></td>
-          <td><input type="text" value="${escapeHtml(ubo.last)}" class="prefilled-field"/></td>
-          <td><select class="nat-select prefilled-field"><option value="">Nationality</option></select></td>
-          <td><input type="number" value="${escapeHtml(String(ubo.pct))}" class="prefilled-field" placeholder="% Ownership" min="0" max="100"/></td>
-          <td><select class="pep-select prefilled-field" style="min-width:80px;"><option value="No">No</option><option value="Yes">Yes</option></select></td>
-          <td><button type="button" class="btn-icon" onclick="removeRow(this)">✕</button></td>
-        `;
-        uboBody.appendChild(tr);
-      });
-      populateNationalitySelects();
-      setTimeout(() => {
-        uboBody.querySelectorAll('.nat-select').forEach((sel,i) => {
-          const nat = d.ubos[i] ? d.ubos[i].nat : '';
-          for (let j=0; j<sel.options.length; j++) {
-            if (sel.options[j].text === nat) { sel.selectedIndex=j; break; }
-          }
-        });
-      }, 100);
-    } else {
-      // Ensure at least one empty row for manual entry
-      if (uboBody.querySelectorAll('tr').length === 0) {
-        addUBORow();
-      }
-      populateNationalitySelects();
-    }
-  }
 }
 
 

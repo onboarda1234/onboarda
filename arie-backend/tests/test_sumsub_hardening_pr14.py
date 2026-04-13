@@ -229,7 +229,7 @@ class TestApplicantIdValidation:
 
     def test_valid_hex_applicant_id_accepted(self, temp_db):
         """A well-formed hex applicantId must pass validation (may still 200 via DLQ)."""
-        body = _make_payload(applicant_id="aabbccddeeff00112233445566778899")
+        body = _make_payload(applicant_id="aabbccddeeff00112233445566778800")
         handler = _call_handler(body)
         assert handler._status_code == 200
 
@@ -320,7 +320,8 @@ class TestEventTypeGate:
     def test_mutating_event_writes_audit_row(self, temp_db):
         """Sanity: applicantReviewed must still land in audit_log."""
         before = _count_audit_rows(temp_db)
-        body = _make_payload(event_type="applicantReviewed")
+        body = _make_payload(event_type="applicantReviewed",
+                             applicant_id="ee00ff11aa22bb3344556677889900dd")
         handler = _call_handler(body)
         assert handler._status_code == 200
         # Goes to DLQ (no mapping) but audit_log row MUST exist for the mutating
