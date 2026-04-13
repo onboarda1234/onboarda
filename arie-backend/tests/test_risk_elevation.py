@@ -141,13 +141,11 @@ class TestNormalMediumStaysMedium:
         assert "elevation_grey_sector_opaque" not in result["escalations"]
 
     def test_grey_list_without_crypto_stays_medium(self):
-        """FATF grey-list country but standard sector — not elevated."""
+        """FATF grey-list country but standard sector — not elevated by combination rule."""
         result = compute_risk_score(_base_medium_app(country="nigeria"))
-        # Must not elevate — only one condition met (grey-list), not all three
-        assert result["final_risk_level"] in ("MEDIUM", "HIGH")
-        # If HIGH, it should be from score, not from our elevation rule
-        if result["final_risk_level"] == "MEDIUM":
-            assert "elevation_grey_sector_opaque" not in result["escalations"]
+        # Combination elevation requires all 3: grey-list + high-risk sector + opaque.
+        # Only grey-list is met here, so combination rule must not fire.
+        assert "elevation_grey_sector_opaque" not in result["escalations"]
 
     def test_crypto_without_grey_list_not_elevated_by_combination(self):
         """Crypto sector but low-risk country — combination rule doesn't fire."""
@@ -523,9 +521,9 @@ class TestMigrationV223:
 
     def test_migration_adds_columns(self):
         """Migration v2.23 adds base_risk_level, final_risk_level, elevation_reason_text."""
-        import tempfile
         # Create a minimal SQLite DB with just the applications table
-        path = tempfile.mktemp(suffix='_test_v223.db')
+        with tempfile.NamedTemporaryFile(suffix='_test_v223.db', delete=False) as f:
+            path = f.name
         conn = sqlite3.connect(path)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS applications (

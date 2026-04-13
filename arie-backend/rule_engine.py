@@ -992,12 +992,6 @@ def compute_risk_score(app_data, config_override=None):
         is_hr_sector_severe = _is_high_risk_sector(data.get("sector"), sector_scores_cfg)
         is_elevated_jur = _is_elevated_jurisdiction(data.get("country"), country_scores_cfg)
 
-        severe_signals = sum([
-            is_hr_sector_severe,
-            is_elevated_jur,
-            len(screening_reasons) >= 1,
-        ])
-
         if (is_hr_sector_severe and is_elevated_jur and has_screening_concern) or len(screening_reasons) >= 2:
             if level != "VERY_HIGH":
                 logger.info(
