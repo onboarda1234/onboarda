@@ -39,7 +39,7 @@ def safe_json_loads(val):
 # Grey list = score 3 (FATF monitored jurisdictions)
 FATF_GREY = {"algeria", "burkina faso", "cameroon", "democratic republic of congo",
              "haiti", "kenya", "laos", "lebanon", "mali", "monaco", "mozambique",
-             "nigeria", "philippines", "senegal", "south africa", "south sudan",
+             "nigeria", "pakistan", "philippines", "senegal", "south africa", "south sudan",
              "tanzania", "venezuela", "vietnam", "yemen",
              # Offshore/secrecy jurisdictions scored 3 (not FATF grey but high risk)
              "bermuda", "vanuatu", "samoa", "marshall islands", "iraq"}
