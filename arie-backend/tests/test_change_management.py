@@ -638,3 +638,46 @@ class TestDBIntegration:
         cm._apply_field_change(wdb, app_id, "status", "rejected")
         assert db.execute("SELECT status FROM applications WHERE id = ?",
                           (app_id,)).fetchone()["status"] == "approved"
+
+    def test_director_ownership_pct_blocked(self, db):
+        """Directors table has no ownership_pct — update must be silently blocked."""
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+
+        # Get the test director's person_key
+        d = db.execute("SELECT person_key, full_name FROM directors WHERE application_id = ?",
+                       (app_id,)).fetchone()
+        assert d is not None
+
+        # Attempt to update ownership_pct on a director — should be blocked
+        cm._apply_person_change(
+            wdb, app_id, "directors", "update",
+            {"person_key": d["person_key"]},
+            "ownership_pct", "25.0",
+        )
+        # Director should be unchanged — no SQL error
+        d2 = db.execute("SELECT full_name FROM directors WHERE application_id = ? AND person_key = ?",
+                        (app_id, d["person_key"])).fetchone()
+        assert d2 is not None
+        assert d2["full_name"] == d["full_name"]
+
+    def test_ubo_ownership_pct_allowed(self, db):
+        """UBOs table has ownership_pct — update must be allowed."""
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, _ = _setup_test_data(db)
+
+        u = db.execute("SELECT person_key FROM ubos WHERE application_id = ?",
+                       (app_id,)).fetchone()
+        assert u is not None
+
+        cm._apply_person_change(
+            wdb, app_id, "ubos", "update",
+            {"person_key": u["person_key"]},
+            "ownership_pct", "50.0",
+        )
+        wdb.commit()
+        u2 = db.execute("SELECT ownership_pct FROM ubos WHERE application_id = ? AND person_key = ?",
+                        (app_id, u["person_key"])).fetchone()
+        assert float(u2["ownership_pct"]) == 50.0

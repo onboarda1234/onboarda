@@ -1139,9 +1139,14 @@ def _apply_person_change(db, application_id: str, table: str, action: str,
     elif action == "update" and snapshot:
         person_key = snapshot.get("person_key")
         if person_key and field_name and new_value is not None:
-            # Only update safe fields
-            safe_fields = {"full_name", "first_name", "last_name", "nationality",
-                           "date_of_birth", "is_pep", "pep_declaration", "ownership_pct"}
+            # Only update safe fields — table-specific to match actual schema
+            _PERSON_SAFE_FIELDS = {
+                "directors": {"full_name", "first_name", "last_name", "nationality",
+                              "date_of_birth", "is_pep", "pep_declaration"},
+                "ubos": {"full_name", "first_name", "last_name", "nationality",
+                         "date_of_birth", "is_pep", "pep_declaration", "ownership_pct"},
+            }
+            safe_fields = _PERSON_SAFE_FIELDS.get(table, set())
             if field_name in safe_fields:
                 db.execute(
                     f"UPDATE {table} SET {field_name} = ? WHERE application_id = ? AND person_key = ?",
