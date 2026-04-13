@@ -239,7 +239,7 @@ class TestNoRandomFallbackStaging:
     def test_server_pii_init_would_exit_in_staging(self, monkeypatch):
         """
         PII init block (now in party_utils.py) should sys.exit(1) when key
-        is missing in staging.  We verify by checking that ENVIRONMENT=staging
+        is missing in staging. We verify by checking that ENVIRONMENT=staging
         is in the fatal exit path.
         """
         # PII initialization has been moved to party_utils.py
