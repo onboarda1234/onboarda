@@ -2785,6 +2785,48 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.24: Webhook idempotency guard table (EX-04).
+    # Prevents duplicate processing of Sumsub webhook deliveries by recording
+    # a canonical event key on first receipt.  A UNIQUE constraint on event_digest
+    # ensures that re-deliveries are safely short-circuited before any mutating
+    # logic (audit_log, application update, DLQ) runs.
+    try:
+        if not _safe_table_exists(db, "webhook_processed_events"):
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE webhook_processed_events (
+                        id          SERIAL PRIMARY KEY,
+                        event_digest TEXT NOT NULL UNIQUE,
+                        event_type  TEXT NOT NULL DEFAULT '',
+                        applicant_id TEXT NOT NULL DEFAULT '',
+                        external_user_id TEXT NOT NULL DEFAULT '',
+                        review_answer TEXT NOT NULL DEFAULT '',
+                        received_at TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+            else:
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS webhook_processed_events (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        event_digest TEXT NOT NULL UNIQUE,
+                        event_type  TEXT NOT NULL DEFAULT '',
+                        applicant_id TEXT NOT NULL DEFAULT '',
+                        external_user_id TEXT NOT NULL DEFAULT '',
+                        review_answer TEXT NOT NULL DEFAULT '',
+                        received_at TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+            db.commit()
+            logger.info("Migration v2.24: Created webhook_processed_events table")
+        else:
+            logger.info("Migration v2.24: webhook_processed_events already exists")
+    except Exception as e:
+        logger.error("Migration v2.24 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.

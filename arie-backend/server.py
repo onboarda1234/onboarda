@@ -1072,6 +1072,9 @@ from public_api import (
 class AdminResetDBHandler(BaseHandler):
     def post(self):
         """One-time staging database reset. Drops all data and re-seeds."""
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
         from config import IS_PRODUCTION
         if IS_PRODUCTION:
             self.error("Cannot reset production database", 403)
@@ -6533,6 +6536,39 @@ class SumsubWebhookHandler(BaseHandler):
         # ── Mutating path (applicantReviewed) ────────────────────────────
         db = get_db()
         try:
+            # ── EX-04: Idempotency guard ────────────────────────────────
+            # Derive a canonical dedup key from immutable payload fields.
+            # Sumsub does not provide a stable unique event ID; the most
+            # reliable combination is (applicantId, type, reviewAnswer,
+            # createdAtMs). createdAtMs is the millisecond epoch timestamp
+            # assigned by Sumsub when the event was created — it is stable
+            # across retries of the same event.
+            _created_at_ms = str(payload.get("createdAtMs", ""))
+            _dedup_input = f"{applicant_id}:{event_type}:{review_answer}:{_created_at_ms}"
+            _event_digest = hashlib.sha256(_dedup_input.encode("utf-8")).hexdigest()
+
+            _now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            try:
+                db.execute("""
+                    INSERT INTO webhook_processed_events
+                        (event_digest, event_type, applicant_id, external_user_id, review_answer, received_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (_event_digest, event_type, applicant_id, external_user_id, review_answer, _now_utc))
+            except Exception:
+                # UNIQUE constraint violation — this event was already processed.
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                logger.info(
+                    "Sumsub webhook: duplicate delivery skipped (already processed) "
+                    "applicant=%s event=%s digest=%s",
+                    _masked_id, event_type, _event_digest[:16],
+                )
+                self.set_status(200)
+                self.write(json.dumps({"status": "already_processed"}))
+                return
+
             kyc_data = json.dumps({
                 "sumsub_applicant_id": applicant_id,
                 "external_user_id": external_user_id,
