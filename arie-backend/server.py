@@ -2985,7 +2985,8 @@ class DocumentUploadHandler(BaseHandler):
                     client_id=app["id"],
                     doc_type=self.get_argument("doc_type", "general"),
                     filename=safe_name,
-                    metadata={"content_type": file_info["content_type"], "original_name": filename}
+                    content_type=content_type,
+                    metadata={"original_name": filename}
                 )
                 if success:
                     s3_key = key_or_error
@@ -3053,7 +3054,7 @@ class DocumentUploadHandler(BaseHandler):
         db.execute("""
             INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, s3_key, file_size, mime_type)
             VALUES (?,?,?,?,?,?,?,?,?)
-        """, (doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key, len(body), file_info["content_type"]))
+        """, (doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key, len(body), content_type))
         db.commit()
         db.close()
 

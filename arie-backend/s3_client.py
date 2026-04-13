@@ -15,6 +15,7 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Tuple, Union
+from urllib.parse import quote as _url_quote
 import boto3
 from botocore.exceptions import ClientError
 import logging
@@ -33,10 +34,19 @@ class S3Client:
         default credential chain (IAM role, instance profile, etc.).
 
         Args:
-            bucket_name (str): S3 bucket name (default: S3_BUCKET env var)
+            bucket_name (str): S3 bucket name (resolved via get_s3_bucket() by default)
             region (str): AWS region (default: AWS_DEFAULT_REGION env var or af-south-1)
         """
-        self.bucket_name = bucket_name or os.getenv('S3_BUCKET', 'regmind-documents-staging')
+        if bucket_name:
+            self.bucket_name = bucket_name
+        else:
+            # Use environment-aware bucket resolution from environment.py,
+            # falling back to S3_BUCKET env var for backward compatibility.
+            try:
+                from environment import get_s3_bucket
+                self.bucket_name = get_s3_bucket()
+            except ImportError:
+                self.bucket_name = os.getenv('S3_BUCKET', 'arie-documents')
         self.region = region or os.getenv('AWS_DEFAULT_REGION', 'af-south-1')
 
         # Use explicit credentials if available, otherwise boto3 default chain (IAM role)
@@ -60,6 +70,7 @@ class S3Client:
         client_id: str,
         doc_type: str,
         filename: str,
+        content_type: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None
     ) -> Tuple[bool, str]:
         """
@@ -70,6 +81,7 @@ class S3Client:
             client_id (str): Client identifier for organizing documents
             doc_type (str): Type of document (kyc, identity, proof_of_address, etc.)
             filename (str): Original filename
+            content_type (str, optional): MIME type (default: application/octet-stream)
             metadata (dict, optional): Additional metadata key-value pairs
 
         Returns:
@@ -81,6 +93,7 @@ class S3Client:
                 client_id="client_123",
                 doc_type="kyc",
                 filename="kyc_form.pdf",
+                content_type="application/pdf",
                 metadata={"source": "web_upload"}
             )
         """
@@ -101,13 +114,22 @@ class S3Client:
                 for meta_key, meta_value in metadata.items():
                     tags_list.append({'Key': meta_key, 'Value': str(meta_value)[:255]})
 
+            # URL-encode tag values for S3 Tagging header format
+            tagging_str = '&'.join([
+                f"{_url_quote(str(tag['Key']), safe='')}={_url_quote(str(tag['Value']), safe='')}"
+                for tag in tags_list
+            ])
+
+            resolved_content_type = content_type or "application/octet-stream"
+
             # Upload with tags and encryption
             self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=key,
                 Body=file_data,
+                ContentType=resolved_content_type,
                 ServerSideEncryption='AES256',
-                Tagging='&'.join([f"{tag['Key']}={tag['Value']}" for tag in tags_list]),
+                Tagging=tagging_str,
                 Metadata={
                     'client-id': client_id,
                     'doc-type': doc_type,
@@ -118,10 +140,13 @@ class S3Client:
             return True, key
 
         except ClientError as e:
-            error_msg = f"Failed to upload {filename}: {e.response['Error']['Message']}"
+            error_msg = f"Failed to upload {filename} to bucket '{self.bucket_name}': {e.response['Error']['Message']}"
+            logger.error(f"S3 ClientError during upload: {error_msg}")
             return False, error_msg
         except Exception as e:
-            return False, f"Unexpected error uploading document: {str(e)}"
+            error_msg = f"Unexpected error uploading document to bucket '{self.bucket_name}': {str(e)}"
+            logger.error(f"S3 upload exception: {error_msg}")
+            return False, error_msg
 
     def download_document(self, key: str) -> Tuple[bool, bytes | str]:
         """
