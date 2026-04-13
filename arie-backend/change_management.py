@@ -244,6 +244,15 @@ ROLE_PERMISSIONS = {
     "convert_alert": ("admin", "sco", "co"),
 }
 
+# Whitelists for person change operations — validated before any SQL construction
+_ALLOWED_PERSON_TABLES = {"directors", "ubos"}
+_PERSON_SAFE_FIELDS = {
+    "directors": {"full_name", "first_name", "last_name", "nationality",
+                  "date_of_birth", "is_pep", "pep_declaration"},
+    "ubos": {"full_name", "first_name", "last_name", "nationality",
+             "date_of_birth", "is_pep", "pep_declaration", "ownership_pct"},
+}
+
 
 # ============================================================================
 # ID Generation
@@ -1080,9 +1089,11 @@ def _apply_change_item(db, application_id: str, item: Dict) -> None:
 def _apply_person_change(db, application_id: str, table: str, action: str,
                          snapshot: Optional[Dict], field_name: Optional[str],
                          new_value: Optional[str]) -> None:
-    """Apply a director or UBO change."""
-    # Whitelist validation: table must be a known safe table name
-    _ALLOWED_PERSON_TABLES = {"directors", "ubos"}
+    """Apply a director or UBO change.
+
+    Table and field names are validated against module-level whitelists
+    (_ALLOWED_PERSON_TABLES, _PERSON_SAFE_FIELDS) before any SQL construction.
+    """
     if table not in _ALLOWED_PERSON_TABLES:
         logger.warning("Blocked person change to unknown table: %s", table)
         return
@@ -1139,13 +1150,6 @@ def _apply_person_change(db, application_id: str, table: str, action: str,
     elif action == "update" and snapshot:
         person_key = snapshot.get("person_key")
         if person_key and field_name and new_value is not None:
-            # Only update safe fields — table-specific to match actual schema
-            _PERSON_SAFE_FIELDS = {
-                "directors": {"full_name", "first_name", "last_name", "nationality",
-                              "date_of_birth", "is_pep", "pep_declaration"},
-                "ubos": {"full_name", "first_name", "last_name", "nationality",
-                         "date_of_birth", "is_pep", "pep_declaration", "ownership_pct"},
-            }
             safe_fields = _PERSON_SAFE_FIELDS.get(table, set())
             if field_name in safe_fields:
                 db.execute(
