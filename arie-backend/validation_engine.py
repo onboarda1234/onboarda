@@ -143,16 +143,47 @@ def validate_compliance_memo(memo_data):
     if sub_ratings:
         avg_sub_risk = sum(sub_ratings) / len(sub_ratings)
         overall_rank = RISK_RANK.get(overall_rating, 2)
+        divergence = abs(overall_rank - avg_sub_risk)
 
-        # Check if overall risk diverges significantly from sub-ratings
-        if abs(overall_rank - avg_sub_risk) > 1.5:
-            issues.append({"category": "risk_consistency", "severity": "critical", "description": f"Overall risk rating ({overall_rating}) significantly diverges from average sub-section risk ({avg_sub_risk:.1f}/4). This contradiction would not withstand regulatory scrutiny.", "fix": "Reconcile overall risk rating with individual risk dimension assessments."})
-            scores["risk_consistency"] = 0.5
-        elif abs(overall_rank - avg_sub_risk) > 0.8:
-            issues.append({"category": "risk_consistency", "severity": "warning", "description": f"Overall risk rating ({overall_rating}) moderately diverges from sub-section ratings. Ensure the memo explains why.", "fix": "Add explicit justification for the overall rating in the executive summary."})
-            scores["risk_consistency"] = 1.5
+        # Detect legitimate risk elevation: overall rating was pushed above
+        # the original (pre-floor-rule) level by floor rules or screening hits.
+        # When this occurs, divergence between the elevated overall and the
+        # bottom-up sub-section averages is expected and must not be treated
+        # as a contradiction.
+        original_risk_level = metadata.get("original_risk_level")
+        risk_was_elevated = (
+            original_risk_level
+            and overall_rating
+            and RISK_RANK.get(overall_rating, 2) > RISK_RANK.get(original_risk_level, 2)
+        )
+
+        if risk_was_elevated:
+            # Elevated path: wider thresholds to accommodate floor-rule gaps,
+            # but still catches extreme contradictions (e.g. VERY_HIGH with all-LOW subs).
+            critical_threshold = 2.2
+            warning_threshold = 1.2
+
+            if divergence > critical_threshold:
+                issues.append({"category": "risk_consistency", "severity": "critical", "description": f"Overall risk rating ({overall_rating}) significantly diverges from average sub-section risk ({avg_sub_risk:.1f}/4) even after accounting for legitimate risk elevation from {original_risk_level}. This gap exceeds what floor rules or screening can explain.", "fix": "Reconcile overall risk rating with individual risk dimension assessments."})
+                scores["risk_consistency"] = 0.5
+            elif divergence > warning_threshold:
+                issues.append({"category": "risk_consistency", "severity": "warning", "description": f"Overall risk rating ({overall_rating}) moderately diverges from sub-section ratings. Divergence is partially explained by risk elevation from {original_risk_level} but explicit justification should be documented.", "fix": "Add explicit justification for the overall rating in the executive summary."})
+                scores["risk_consistency"] = 1.5
+            else:
+                # Divergence within expected range for elevated applications.
+                # Log explicitly so the tolerance is visible in validation output.
+                issues.append({"category": "risk_consistency", "severity": "info", "description": f"Overall risk rating ({overall_rating}) diverges from sub-section average ({avg_sub_risk:.1f}/4), but this is consistent with legitimate risk elevation from {original_risk_level} — floor rules or screening escalation applied. No contradiction detected.", "fix": "No action required — divergence explained by risk elevation."})
+                scores["risk_consistency"] = 2.0
         else:
-            scores["risk_consistency"] = 2.0
+            # Non-elevated path: original thresholds, unchanged.
+            if divergence > 1.5:
+                issues.append({"category": "risk_consistency", "severity": "critical", "description": f"Overall risk rating ({overall_rating}) significantly diverges from average sub-section risk ({avg_sub_risk:.1f}/4). This contradiction would not withstand regulatory scrutiny.", "fix": "Reconcile overall risk rating with individual risk dimension assessments."})
+                scores["risk_consistency"] = 0.5
+            elif divergence > 0.8:
+                issues.append({"category": "risk_consistency", "severity": "warning", "description": f"Overall risk rating ({overall_rating}) moderately diverges from sub-section ratings. Ensure the memo explains why.", "fix": "Add explicit justification for the overall rating in the executive summary."})
+                scores["risk_consistency"] = 1.5
+            else:
+                scores["risk_consistency"] = 2.0
     else:
         scores["risk_consistency"] = 0
 

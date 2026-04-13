@@ -2740,6 +2740,25 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.22: Add risk_escalations column to applications.
+    # Stores JSON array of escalation reasons from compute_risk_score()
+    # (e.g. ["floor_rule_sanctioned_country:iran", "sub_factor_score_4"]).
+    # Used by validation_engine to distinguish legitimate risk elevation
+    # from genuine memo/risk contradictions.
+    try:
+        if not _safe_column_exists(db, "applications", "risk_escalations"):
+            db.execute("ALTER TABLE applications ADD COLUMN risk_escalations TEXT DEFAULT '[]'")
+            db.commit()
+            logger.info("Migration v2.22: Added risk_escalations column to applications")
+        else:
+            logger.info("Migration v2.22: risk_escalations column already exists")
+    except Exception as e:
+        logger.error("Migration v2.22 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.

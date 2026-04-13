@@ -2514,6 +2514,7 @@ class SubmitApplicationHandler(BaseHandler):
                     status='submitted', submitted_at=datetime('now'),
                     risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
                     risk_computed_at=?, risk_config_version=?,
+                    risk_escalations=?,
                     pre_approval_decision=NULL, pre_approval_notes=NULL,
                     pre_approval_officer_id=NULL, pre_approval_timestamp=NULL,
                     updated_at=datetime('now')
@@ -2521,6 +2522,7 @@ class SubmitApplicationHandler(BaseHandler):
             """, (risk["score"], risk["level"], json.dumps(risk["dimensions"]), risk["lane"],
                   datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                   str(risk.get("_config_version", "")),
+                  json.dumps(risk.get("escalations", [])),
                   real_id))
 
             # After pre-screening: ALL risk levels see pricing first
