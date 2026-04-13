@@ -944,21 +944,10 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None):
         # Build scorer input from current app data
         prescreening = safe_json_loads(app["prescreening_data"])
 
-        # Lazy import to avoid circular dependency
-        try:
-            from server import get_application_parties
-            directors, ubos, intermediaries = get_application_parties(db, app_id)
-        except ImportError:
-            directors = [dict(d) for d in db.execute(
-                "SELECT * FROM directors WHERE application_id=?", (app_id,)).fetchall()]
-            ubos = [dict(u) for u in db.execute(
-                "SELECT * FROM ubos WHERE application_id=?", (app_id,)).fetchall()]
-            intermediaries = []
-            for row in db.execute(
-                    "SELECT * FROM intermediaries WHERE application_id=?", (app_id,)).fetchall():
-                item = dict(row)
-                item["full_name"] = item.get("entity_name", "")
-                intermediaries.append(item)
+        # Import from neutral shared module to avoid circular dependency
+        # (importing from server.py would re-trigger Prometheus registration)
+        from party_utils import get_application_parties
+        directors, ubos, intermediaries = get_application_parties(db, app_id)
 
         scoring_input = build_prescreening_risk_input(
             application=app,

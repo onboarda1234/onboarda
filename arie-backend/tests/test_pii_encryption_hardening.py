@@ -238,12 +238,13 @@ class TestNoRandomFallbackStaging:
 
     def test_server_pii_init_would_exit_in_staging(self, monkeypatch):
         """
-        In staging, server.py's PII init block should sys.exit(1) when key is missing.
-        We verify by checking that ENVIRONMENT=staging is in the fatal exit path.
+        PII init block (now in party_utils.py) should sys.exit(1) when key
+        is missing in staging. We verify by checking that ENVIRONMENT=staging
+        is in the fatal exit path.
         """
-        # This is a design-level test: confirm the code checks for staging in the exit path
-        server_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py")
-        with open(server_path) as f:
+        # PII initialization has been moved to party_utils.py
+        party_utils_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "party_utils.py")
+        with open(party_utils_path) as f:
             source = f.read()
         # The critical guard: staging must be in the same branch as sys.exit(1)
         assert '"staging"' in source or "'staging'" in source
@@ -269,10 +270,10 @@ class TestBootTimeSelfTest:
         decrypted = enc.decrypt(encrypted)
         assert decrypted == canary, "Self-test mismatch: decrypt did not return original canary"
 
-    def test_selftest_code_exists_in_server(self):
-        """Verify server.py contains the self-test pattern."""
-        server_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py")
-        with open(server_path) as f:
+    def test_selftest_code_exists_in_party_utils(self):
+        """Verify party_utils.py contains the self-test pattern."""
+        party_utils_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "party_utils.py")
+        with open(party_utils_path) as f:
             source = f.read()
         assert "pii-selftest-canary-" in source
         assert "_encrypted_canary" in source
@@ -281,8 +282,8 @@ class TestBootTimeSelfTest:
 
     def test_selftest_exits_on_failure_in_staging(self):
         """Verify the self-test failure path calls sys.exit for staging."""
-        server_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py")
-        with open(server_path) as f:
+        party_utils_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "party_utils.py")
+        with open(party_utils_path) as f:
             source = f.read()
         # After "self-test FAILED" there should be a staging check and sys.exit
         idx_fail = source.find("self-test FAILED")

@@ -133,6 +133,12 @@ from decision_model import (
     get_decision_records,
 )
 from branding import BRAND, get_status_label
+from party_utils import (
+    _pii_encryptor, _pii_encryption_ok,
+    extract_fernet_token, encrypt_pii_fields, decrypt_pii_fields,
+    PII_FIELDS_DIRECTORS, PII_FIELDS_UBOS, PII_FIELDS_APPLICATIONS,
+    parse_json_field, hydrate_party_record, get_application_parties,
+)
 from prescreening.normalize import (
     compose_source_of_funds_summary as _compose_source_of_funds_summary,
     first_non_empty as _first_non_empty,
@@ -496,54 +502,10 @@ os.makedirs(RESOURCE_UPLOAD_DIR, exist_ok=True)
 os.makedirs(REGULATORY_UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-# ── C-02: PII Encryption Initialization ──────────────────────
-# Initialize PIIEncryptor singleton for encrypting sensitive data at rest.
-# In production/staging: PII_ENCRYPTION_KEY MUST be set — fail closed.
-# In development/testing/demo only: auto-generate a transient key.
-_pii_encryptor = None
-_pii_encryption_ok = False
-try:
-    _pii_encryptor = PIIEncryptor()
-    _pii_encryption_ok = True
-    logger.info("PIIEncryptor initialized — field-level encryption active")
-except (RuntimeError, ValueError) as e:
-    if ENVIRONMENT in ("production", "prod", "staging"):
-        logger.critical(f"FATAL: PIIEncryptor failed in {ENVIRONMENT}: {e}")
-        sys.exit(1)
-    elif ENVIRONMENT in ("development", "testing", "demo"):
-        # Only local/dev/testing/demo environments may auto-generate a transient key
-        from cryptography.fernet import Fernet as _Fernet
-        _auto_key = _Fernet.generate_key().decode()
-        os.environ["PII_ENCRYPTION_KEY"] = _auto_key
-        try:
-            _pii_encryptor = PIIEncryptor(_auto_key)
-            _pii_encryption_ok = True
-            logger.warning("PIIEncryptor: auto-generated transient key for %s (NOT for production/staging)", ENVIRONMENT)
-        except Exception as e2:
-            logger.error(f"PIIEncryptor initialization failed even with auto key: {e2}")
-    else:
-        # Unknown environment — fail closed
-        logger.critical(f"FATAL: PIIEncryptor failed in unrecognised environment '{ENVIRONMENT}': {e}")
-        sys.exit(1)
-
-# Boot-time encryption self-test: encrypt → decrypt → compare
-if _pii_encryptor is not None:
-    try:
-        _canary = "pii-selftest-canary-" + secrets.token_hex(8)
-        _encrypted_canary = _pii_encryptor.encrypt(_canary)
-        _decrypted_canary = _pii_encryptor.decrypt(_encrypted_canary)
-        if _decrypted_canary != _canary:
-            logger.critical("FATAL: PII encryption self-test FAILED — decrypt mismatch")
-            if ENVIRONMENT in ("production", "prod", "staging"):
-                sys.exit(1)
-            _pii_encryption_ok = False
-        else:
-            logger.info("PII encryption self-test passed (encrypt/decrypt canary OK)")
-    except Exception as _st_err:
-        logger.critical(f"FATAL: PII encryption self-test exception: {_st_err}")
-        if ENVIRONMENT in ("production", "prod", "staging"):
-            sys.exit(1)
-        _pii_encryption_ok = False
+# ── C-02: PII Encryption ─────────────────────────────────────
+# PII encryptor, field constants, encrypt/decrypt helpers, and
+# party-query utilities now live in party_utils.py (imported above)
+# to avoid circular imports (rule_engine → server → Prometheus clash).
 
 
 def safe_json_loads(val):
@@ -613,37 +575,6 @@ def build_full_name(record: dict) -> str:
 def normalize_is_pep(value, default="No") -> str:
     normalized = first_non_empty(value, default)
     return "Yes" if str(normalized).strip().lower() in ("yes", "true", "1") else "No"
-
-
-def parse_json_field(value, fallback):
-    parsed = safe_json_loads(value)
-    return parsed if isinstance(parsed, type(fallback)) else fallback
-
-
-def hydrate_party_record(record: dict, pii_fields=None, name_key="full_name") -> dict:
-    result = dict(record)
-    if pii_fields:
-        result = decrypt_pii_fields(result, pii_fields)
-    result["pep_declaration"] = parse_json_field(result.get("pep_declaration"), {})
-    result["full_name"] = result.get(name_key) or result.get("full_name") or ""
-    return result
-
-
-def get_application_parties(db, application_id):
-    directors = [
-        hydrate_party_record(d, PII_FIELDS_DIRECTORS)
-        for d in db.execute("SELECT * FROM directors WHERE application_id = ?", (application_id,)).fetchall()
-    ]
-    ubos = [
-        hydrate_party_record(u, PII_FIELDS_UBOS)
-        for u in db.execute("SELECT * FROM ubos WHERE application_id = ?", (application_id,)).fetchall()
-    ]
-    intermediaries = []
-    for row in db.execute("SELECT * FROM intermediaries WHERE application_id = ?", (application_id,)).fetchall():
-        item = dict(row)
-        item["full_name"] = item.get("entity_name", "")
-        intermediaries.append(item)
-    return directors, ubos, intermediaries
 
 
 def _validate_date_of_birth(dob_str):
@@ -972,71 +903,6 @@ def resolve_user_display_name(db, user_id):
         return str(user_id)
     return row.get("full_name") or row.get("email") or str(user_id)
 
-
-def encrypt_pii_fields(record: dict, field_names: list) -> dict:
-    """Encrypt specified PII fields in a record before database write."""
-    if not _pii_encryptor:
-        return record
-    encrypted = dict(record)
-    for field in field_names:
-        if field in encrypted and encrypted[field]:
-            val = str(encrypted[field])
-            if val and not extract_fernet_token(val):  # Don't double-encrypt Fernet tokens
-                encrypted[field] = _pii_encryptor.encrypt(val)
-    return encrypted
-
-
-def extract_fernet_token(value) -> str:
-    """Return ciphertext normalized to the format expected by PIIEncryptor.decrypt()."""
-    if value in (None, ""):
-        return ""
-    raw = value.decode("utf-8", "ignore") if isinstance(value, (bytes, bytearray)) else str(value)
-    for _ in range(4):
-        if raw.startswith("gAAAAA"):
-            return base64.b64encode(raw.encode("utf-8")).decode("utf-8")
-        padded = raw + ("=" * (-len(raw) % 4))
-        decoded_next = None
-        for decoder in (base64.b64decode, base64.urlsafe_b64decode):
-            try:
-                decoded = decoder(padded.encode("utf-8"))
-            except Exception:
-                continue
-            try:
-                decoded_str = decoded.decode("utf-8")
-            except Exception:
-                continue
-            decoded_next = decoded_str
-            if decoded_str.startswith("gAAAAA"):
-                return base64.b64encode(decoded_str.encode("utf-8")).decode("utf-8")
-            break
-        if not decoded_next or decoded_next == raw:
-            break
-        raw = decoded_next
-    return ""
-
-
-def decrypt_pii_fields(record: dict, field_names: list) -> dict:
-    """Decrypt specified PII fields in a record after database read."""
-    if not _pii_encryptor:
-        return record
-    decrypted = dict(record)
-    for field in field_names:
-        if field in decrypted and decrypted[field]:
-            val = str(decrypted[field])
-            token = extract_fernet_token(val)
-            if token:
-                try:
-                    decrypted[field] = _pii_encryptor.decrypt(token)
-                except Exception as e:
-                    logger.warning(f"PII decryption failed for field '{field}': {e}")
-                    decrypted[field] = None  # Clear encrypted blob — show as missing, not gibberish
-    return decrypted
-
-
-# PII field definitions for each entity type
-PII_FIELDS_DIRECTORS = ["passport_number", "nationality", "id_number"]
-PII_FIELDS_UBOS = ["passport_number", "nationality"]
-PII_FIELDS_APPLICATIONS = ["pep_flags"]
 
 # ── Prometheus Metrics (optional) ──────────────────────────
 try:
