@@ -153,8 +153,10 @@ def validate_compliance_memo(memo_data):
         original_risk_level = metadata.get("original_risk_level")
         risk_was_elevated = (
             original_risk_level
+            and original_risk_level in RISK_RANK
             and overall_rating
-            and RISK_RANK.get(overall_rating, 2) > RISK_RANK.get(original_risk_level, 2)
+            and overall_rating in RISK_RANK
+            and RISK_RANK[overall_rating] > RISK_RANK[original_risk_level]
         )
 
         if risk_was_elevated:

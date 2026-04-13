@@ -322,10 +322,13 @@ class TestMigrationV222:
     """Verify migration v2.22 adds risk_escalations column."""
 
     def test_migration_v2_22_adds_column(self, temp_db):
-        """risk_escalations column must exist after migration."""
+        """risk_escalations column must exist after migration with correct default."""
         import sqlite3
         conn = sqlite3.connect(temp_db)
         conn.row_factory = sqlite3.Row
         cols = {r[1] for r in conn.execute("PRAGMA table_info(applications)").fetchall()}
-        conn.close()
         assert "risk_escalations" in cols, f"risk_escalations column missing. Columns: {cols}"
+        # Verify default value
+        col_info = [r for r in conn.execute("PRAGMA table_info(applications)").fetchall() if r[1] == "risk_escalations"]
+        assert col_info[0][4] == "'[]'", f"Default should be '[]', got: {col_info[0][4]}"
+        conn.close()
