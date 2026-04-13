@@ -602,3 +602,68 @@ class TestNoGenericElevation:
             ownership_structure="simple",
         ))
         assert "elevation_grey_sector_opaque" not in result["escalations"]
+
+
+# ═══════════════════════════════════════════════════════════════
+# TEST: EX-06 Pakistan FATF grey-list hotfix
+# ═══════════════════════════════════════════════════════════════
+
+class TestPakistanElevation:
+    """Pakistan must be treated as FATF grey-list so the combination elevation rule fires."""
+
+    def test_pakistan_in_fatf_grey_constant(self):
+        """Pakistan must be present in the FATF_GREY set in rule_engine.py."""
+        assert "pakistan" in FATF_GREY
+
+    def test_pakistan_in_jurisdiction_config(self):
+        """Pakistan must be present in jurisdiction_config.json fatf_grey countries."""
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "jurisdiction_config.json",
+        )
+        with open(config_path) as f:
+            config = json.load(f)
+        grey_countries = config["risk_classifications"]["fatf_grey"]["countries"]
+        assert "pakistan" in grey_countries
+
+    def test_pakistan_is_elevated_jurisdiction(self):
+        """_is_elevated_jurisdiction must return True for Pakistan."""
+        assert _is_elevated_jurisdiction("pakistan") is True
+        assert _is_elevated_jurisdiction("Pakistan") is True
+
+    def test_pakistan_crypto_shell_elevates_medium_to_high(self):
+        """EX-06 test case: Pakistan + crypto + shell/opaque → combination elevation fires."""
+        result = compute_risk_score(_grey_crypto_shell_app(
+            country="pakistan",
+            directors=[{"full_name": "Test Person", "nationality": "pakistani",
+                        "is_pep": "Yes", "pep_type": "domestic"}],
+            ubos=[{"full_name": "Test Person", "nationality": "pakistani",
+                   "ownership_pct": "100"}],
+        ))
+        assert result["final_risk_level"] in ("HIGH", "VERY_HIGH")
+        assert "elevation_grey_sector_opaque" in result["escalations"]
+
+    def test_pakistan_without_crypto_stays_medium(self):
+        """Pakistan + non-high-risk sector → no combination elevation, stays MEDIUM."""
+        result = compute_risk_score(_base_medium_app(
+            country="pakistan",
+            sector="import",
+            ownership_structure="simple",
+        ))
+        assert result["final_risk_level"] == "MEDIUM"
+        assert "elevation_grey_sector_opaque" not in result["escalations"]
+
+    def test_pakistan_without_opaque_stays_medium(self):
+        """Pakistan + crypto but simple ownership → no combination elevation."""
+        result = compute_risk_score(_base_medium_app(
+            country="pakistan",
+            sector="crypto",
+            ownership_structure="simple",
+        ))
+        assert "elevation_grey_sector_opaque" not in result["escalations"]
+
+    def test_unrelated_medium_still_medium(self):
+        """Mauritius + import + simple → stays MEDIUM (no regression)."""
+        result = compute_risk_score(_base_medium_app())
+        assert result["final_risk_level"] == "MEDIUM"
+        assert "elevation_grey_sector_opaque" not in result["escalations"]
