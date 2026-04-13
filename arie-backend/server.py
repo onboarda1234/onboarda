@@ -2350,6 +2350,7 @@ class SubmitApplicationHandler(BaseHandler):
             risk["score"] = min(100, risk["score"] + risk_bump)
             # Re-classify level using CANONICAL thresholds (single source of truth)
             risk["level"] = classify_risk_level(risk["score"])
+            risk["final_risk_level"] = risk["level"]
             risk["lane"] = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}[risk["level"]]
             risk["screening_elevated"] = True
             risk["screening_hits"] = screening_report["total_hits"]
@@ -2381,6 +2382,7 @@ class SubmitApplicationHandler(BaseHandler):
                     risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
                     risk_computed_at=?, risk_config_version=?,
                     risk_escalations=?,
+                    base_risk_level=?, final_risk_level=?, elevation_reason_text=?,
                     pre_approval_decision=NULL, pre_approval_notes=NULL,
                     pre_approval_officer_id=NULL, pre_approval_timestamp=NULL,
                     updated_at=datetime('now')
@@ -2389,6 +2391,9 @@ class SubmitApplicationHandler(BaseHandler):
                   datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                   str(risk.get("_config_version", "")),
                   json.dumps(risk.get("escalations", [])),
+                  risk.get("base_risk_level", risk["level"]),
+                  risk.get("final_risk_level", risk["level"]),
+                  risk.get("elevation_reason_text", ""),
                   real_id))
 
             # After pre-screening: ALL risk levels see pricing first
