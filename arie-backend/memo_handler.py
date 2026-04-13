@@ -17,6 +17,7 @@ from rule_engine import (
     ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
     RISK_WEIGHTS, RISK_RANK,
     SANCTIONED, FATF_BLACK,
+    classify_risk_level,
 )
 from environment import ENV, is_demo
 
@@ -89,6 +90,30 @@ def build_compliance_memo(app, directors, ubos, documents):
     # Build risk sub-section ratings based on app risk
     risk_level = app["risk_level"] or "MEDIUM"
     risk_score = app["risk_score"] or 50
+
+    # ── Fix Option C: Derive pre-elevation/original risk level from risk_escalations ──
+    # When floor rules or escalation rules elevated the risk level beyond what the
+    # composite score alone would produce, the stored risk_level is already elevated.
+    # We must pass the true pre-elevation level to validation so it can distinguish
+    # legitimate elevation from genuine memo inconsistency.
+    pre_elevation_risk_level = risk_level  # default: assume no elevation
+    try:
+        raw_escalations = app.get("risk_escalations") or "[]"
+        escalations_list = json.loads(raw_escalations) if isinstance(raw_escalations, str) else (raw_escalations or [])
+        if escalations_list:
+            # Escalations present — derive the score-based level (before floor rules)
+            score_based_level = classify_risk_level(risk_score)
+            if RISK_RANK.get(score_based_level, 2) < RISK_RANK.get(risk_level, 2):
+                pre_elevation_risk_level = score_based_level
+                logger.info(
+                    "Memo metadata: risk elevated from %s (score-based) to %s (stored) — "
+                    "escalations: %s. Using %s as original_risk_level.",
+                    score_based_level, risk_level, escalations_list, score_based_level)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        # Safe fallback: if escalations data is corrupt, use stored risk_level
+        logger.warning("Could not parse risk_escalations for app %s — using stored risk_level as original",
+                        app.get("id", "unknown"))
+
     doc_confidence = round(len(verified_docs) / max(len(documents), 1) * 100) if has_documents else 0
 
     # Jurisdiction risk classification with reasoning
@@ -615,7 +640,7 @@ def build_compliance_memo(app, directors, ubos, documents):
         "metadata": {
             "risk_rating": aggregated_risk,
             "risk_score": risk_score,
-            "original_risk_level": risk_level,
+            "original_risk_level": pre_elevation_risk_level,
             "aggregated_risk": aggregated_risk,
             "weighted_risk_score": round(weighted_risk, 2),
             "confidence_level": model_confidence / 100,
