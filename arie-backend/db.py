@@ -2441,6 +2441,305 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.21: Change Management module tables.
+    # Creates: change_alerts, change_requests, change_request_items,
+    # change_request_documents, change_request_reviews, entity_profile_versions.
+    try:
+        tables_created = []
+
+        if not _safe_table_exists(db, "change_alerts"):
+            logger.info("Migration v2.21: Creating change_alerts table")
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE change_alerts (
+                        id TEXT PRIMARY KEY,
+                        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
+                        alert_type TEXT NOT NULL,
+                        source_channel TEXT,
+                        summary TEXT,
+                        detected_changes TEXT,
+                        materiality TEXT CHECK(materiality IS NULL OR materiality IN ('tier1','tier2','tier3')),
+                        confidence REAL,
+                        source_reference TEXT,
+                        source_payload TEXT,
+                        detected_by TEXT,
+                        status TEXT NOT NULL DEFAULT 'new'
+                            CHECK(status IN ('new','under_review','awaiting_client_confirmation',
+                                             'converted_to_change_request','dismissed',
+                                             'resolved_no_change','escalated')),
+                        reviewer_id TEXT REFERENCES users(id),
+                        reviewer_notes TEXT,
+                        reviewed_at TIMESTAMP,
+                        converted_request_id TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_change_alerts_app ON change_alerts(application_id)")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_change_alerts_status ON change_alerts(status)")
+            else:
+                db.execute("""
+                    CREATE TABLE change_alerts (
+                        id TEXT PRIMARY KEY,
+                        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
+                        alert_type TEXT NOT NULL,
+                        source_channel TEXT,
+                        summary TEXT,
+                        detected_changes TEXT,
+                        materiality TEXT CHECK(materiality IS NULL OR materiality IN ('tier1','tier2','tier3')),
+                        confidence REAL,
+                        source_reference TEXT,
+                        source_payload TEXT,
+                        detected_by TEXT,
+                        status TEXT NOT NULL DEFAULT 'new'
+                            CHECK(status IN ('new','under_review','awaiting_client_confirmation',
+                                             'converted_to_change_request','dismissed',
+                                             'resolved_no_change','escalated')),
+                        reviewer_id TEXT REFERENCES users(id),
+                        reviewer_notes TEXT,
+                        reviewed_at TEXT,
+                        converted_request_id TEXT,
+                        created_at TEXT DEFAULT (datetime('now')),
+                        updated_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_change_alerts_app ON change_alerts(application_id)")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_change_alerts_status ON change_alerts(status)")
+            tables_created.append("change_alerts")
+
+        if not _safe_table_exists(db, "change_requests"):
+            logger.info("Migration v2.21: Creating change_requests table")
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE change_requests (
+                        id TEXT PRIMARY KEY,
+                        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
+                        source TEXT CHECK(source IS NULL OR source IN
+                            ('portal_client','backoffice_manual','periodic_review',
+                             'ongoing_monitoring','external_alert_conversion','system_admin')),
+                        source_channel TEXT,
+                        source_alert_id TEXT REFERENCES change_alerts(id),
+                        reason TEXT,
+                        materiality TEXT CHECK(materiality IS NULL OR materiality IN ('tier1','tier2','tier3')),
+                        status TEXT NOT NULL DEFAULT 'draft'
+                            CHECK(status IN ('draft','submitted','triage_in_progress',
+                                             'pending_information','ready_for_review',
+                                             'screening_in_progress','risk_review_required',
+                                             'approval_pending','approved','rejected',
+                                             'partially_approved','implemented',
+                                             'cancelled','superseded')),
+                        base_profile_version_id TEXT,
+                        result_profile_version_id TEXT,
+                        screening_required BOOLEAN DEFAULT FALSE,
+                        risk_review_required BOOLEAN DEFAULT FALSE,
+                        edd_review_required BOOLEAN DEFAULT FALSE,
+                        memo_addendum_hook BOOLEAN DEFAULT FALSE,
+                        periodic_review_acceleration_hook BOOLEAN DEFAULT FALSE,
+                        pre_change_risk_level TEXT,
+                        post_change_risk_level TEXT,
+                        created_by TEXT REFERENCES users(id),
+                        submitted_at TIMESTAMP,
+                        approved_by TEXT REFERENCES users(id),
+                        approved_at TIMESTAMP,
+                        decision_notes TEXT,
+                        implemented_by TEXT REFERENCES users(id),
+                        implemented_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_app ON change_requests(application_id)")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_status ON change_requests(status)")
+            else:
+                db.execute("""
+                    CREATE TABLE change_requests (
+                        id TEXT PRIMARY KEY,
+                        application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
+                        source TEXT CHECK(source IS NULL OR source IN
+                            ('portal_client','backoffice_manual','periodic_review',
+                             'ongoing_monitoring','external_alert_conversion','system_admin')),
+                        source_channel TEXT,
+                        source_alert_id TEXT REFERENCES change_alerts(id),
+                        reason TEXT,
+                        materiality TEXT CHECK(materiality IS NULL OR materiality IN ('tier1','tier2','tier3')),
+                        status TEXT NOT NULL DEFAULT 'draft'
+                            CHECK(status IN ('draft','submitted','triage_in_progress',
+                                             'pending_information','ready_for_review',
+                                             'screening_in_progress','risk_review_required',
+                                             'approval_pending','approved','rejected',
+                                             'partially_approved','implemented',
+                                             'cancelled','superseded')),
+                        base_profile_version_id TEXT,
+                        result_profile_version_id TEXT,
+                        screening_required INTEGER DEFAULT 0,
+                        risk_review_required INTEGER DEFAULT 0,
+                        edd_review_required INTEGER DEFAULT 0,
+                        memo_addendum_hook INTEGER DEFAULT 0,
+                        periodic_review_acceleration_hook INTEGER DEFAULT 0,
+                        pre_change_risk_level TEXT,
+                        post_change_risk_level TEXT,
+                        created_by TEXT REFERENCES users(id),
+                        submitted_at TEXT,
+                        approved_by TEXT REFERENCES users(id),
+                        approved_at TEXT,
+                        decision_notes TEXT,
+                        implemented_by TEXT REFERENCES users(id),
+                        implemented_at TEXT,
+                        created_at TEXT DEFAULT (datetime('now')),
+                        updated_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_app ON change_requests(application_id)")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_change_requests_status ON change_requests(status)")
+            tables_created.append("change_requests")
+
+        if not _safe_table_exists(db, "change_request_items"):
+            logger.info("Migration v2.21: Creating change_request_items table")
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE change_request_items (
+                        id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+                        change_type TEXT NOT NULL,
+                        field_name TEXT,
+                        old_value TEXT,
+                        new_value TEXT,
+                        materiality TEXT CHECK(materiality IS NULL OR materiality IN ('tier1','tier2','tier3')),
+                        person_action TEXT CHECK(person_action IS NULL OR person_action IN ('add','remove','update')),
+                        person_snapshot TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_cr_items_request ON change_request_items(request_id)")
+            else:
+                db.execute("""
+                    CREATE TABLE change_request_items (
+                        id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+                        change_type TEXT NOT NULL,
+                        field_name TEXT,
+                        old_value TEXT,
+                        new_value TEXT,
+                        materiality TEXT CHECK(materiality IS NULL OR materiality IN ('tier1','tier2','tier3')),
+                        person_action TEXT CHECK(person_action IS NULL OR person_action IN ('add','remove','update')),
+                        person_snapshot TEXT,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_cr_items_request ON change_request_items(request_id)")
+            tables_created.append("change_request_items")
+
+        if not _safe_table_exists(db, "change_request_documents"):
+            logger.info("Migration v2.21: Creating change_request_documents table")
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE change_request_documents (
+                        id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+                        item_id TEXT REFERENCES change_request_items(id),
+                        doc_name TEXT NOT NULL,
+                        doc_type TEXT,
+                        file_path TEXT NOT NULL,
+                        s3_key TEXT,
+                        uploaded_by TEXT REFERENCES users(id),
+                        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_cr_docs_request ON change_request_documents(request_id)")
+            else:
+                db.execute("""
+                    CREATE TABLE change_request_documents (
+                        id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+                        item_id TEXT REFERENCES change_request_items(id),
+                        doc_name TEXT NOT NULL,
+                        doc_type TEXT,
+                        file_path TEXT NOT NULL,
+                        s3_key TEXT,
+                        uploaded_by TEXT REFERENCES users(id),
+                        uploaded_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_cr_docs_request ON change_request_documents(request_id)")
+            tables_created.append("change_request_documents")
+
+        if not _safe_table_exists(db, "change_request_reviews"):
+            logger.info("Migration v2.21: Creating change_request_reviews table")
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE change_request_reviews (
+                        id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+                        reviewer_id TEXT REFERENCES users(id),
+                        reviewer_role TEXT,
+                        decision TEXT NOT NULL CHECK(decision IN ('approved','rejected','request_info','escalate')),
+                        decision_notes TEXT,
+                        reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_cr_reviews_request ON change_request_reviews(request_id)")
+            else:
+                db.execute("""
+                    CREATE TABLE change_request_reviews (
+                        id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL REFERENCES change_requests(id) ON DELETE CASCADE,
+                        reviewer_id TEXT REFERENCES users(id),
+                        reviewer_role TEXT,
+                        decision TEXT NOT NULL CHECK(decision IN ('approved','rejected','request_info','escalate')),
+                        decision_notes TEXT,
+                        reviewed_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_cr_reviews_request ON change_request_reviews(request_id)")
+            tables_created.append("change_request_reviews")
+
+        if not _safe_table_exists(db, "entity_profile_versions"):
+            logger.info("Migration v2.21: Creating entity_profile_versions table")
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE entity_profile_versions (
+                        id TEXT PRIMARY KEY,
+                        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                        version_number INTEGER NOT NULL DEFAULT 1,
+                        is_current BOOLEAN DEFAULT TRUE,
+                        profile_snapshot TEXT NOT NULL,
+                        change_request_id TEXT REFERENCES change_requests(id),
+                        created_by TEXT REFERENCES users(id),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_epv_app ON entity_profile_versions(application_id)")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_epv_current ON entity_profile_versions(application_id, is_current)")
+            else:
+                db.execute("""
+                    CREATE TABLE entity_profile_versions (
+                        id TEXT PRIMARY KEY,
+                        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                        version_number INTEGER NOT NULL DEFAULT 1,
+                        is_current INTEGER DEFAULT 1,
+                        profile_snapshot TEXT NOT NULL,
+                        change_request_id TEXT REFERENCES change_requests(id),
+                        created_by TEXT REFERENCES users(id),
+                        created_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                db.execute("CREATE INDEX IF NOT EXISTS idx_epv_app ON entity_profile_versions(application_id)")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_epv_current ON entity_profile_versions(application_id, is_current)")
+            tables_created.append("entity_profile_versions")
+
+        if tables_created:
+            db.commit()
+            logger.info("Migration v2.21: Change Management tables created: %s", ", ".join(tables_created))
+        else:
+            logger.info("Migration v2.21: All Change Management tables already exist")
+
+    except Exception as e:
+        logger.error("Migration v2.21 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.
