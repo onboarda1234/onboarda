@@ -984,11 +984,14 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None):
             """UPDATE applications SET
                 risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?,
                 risk_computed_at=?, risk_config_version=?,
+                risk_escalations=?,
                 updated_at=datetime('now') WHERE id=?""",
             (new_score, new_level,
              json.dumps(new_risk.get("dimensions", {})),
              new_risk.get("lane", "Standard Review"),
-             now_ts, config_version, app_id))
+             now_ts, config_version,
+             json.dumps(new_risk.get("escalations", [])),
+             app_id))
 
         if result["changed"]:
             logger.info(
