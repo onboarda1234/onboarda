@@ -320,7 +320,10 @@ class TestEventTypeGate:
     def test_mutating_event_writes_audit_row(self, temp_db):
         """Sanity: applicantReviewed must still land in audit_log."""
         before = _count_audit_rows(temp_db)
-        body = _make_payload(event_type="applicantReviewed")
+        # Use a unique applicant_id to avoid idempotency-guard collision with
+        # earlier tests that send the default payload (EX-04 dedup guard).
+        body = _make_payload(event_type="applicantReviewed",
+                             applicant_id="ee00ff11aa22bb3344556677889900dd")
         handler = _call_handler(body)
         assert handler._status_code == 200
         # Goes to DLQ (no mapping) but audit_log row MUST exist for the mutating

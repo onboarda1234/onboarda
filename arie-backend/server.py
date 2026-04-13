@@ -6553,7 +6553,6 @@ class SumsubWebhookHandler(BaseHandler):
                     "Sumsub webhook: duplicate delivery skipped applicant=%s digest=%s",
                     _masked_id, event_digest[:16],
                 )
-                db.close()
                 self.set_status(200)
                 self.write(json.dumps({"status": "already_processed"}))
                 return
