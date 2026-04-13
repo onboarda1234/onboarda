@@ -1072,6 +1072,9 @@ from public_api import (
 class AdminResetDBHandler(BaseHandler):
     def post(self):
         """One-time staging database reset. Drops all data and re-seeds."""
+        user = self.require_auth(roles=["admin"])
+        if not user:
+            return
         from config import IS_PRODUCTION
         if IS_PRODUCTION:
             self.error("Cannot reset production database", 403)
@@ -6528,6 +6531,33 @@ class SumsubWebhookHandler(BaseHandler):
         # ── Mutating path (applicantReviewed) ────────────────────────────
         db = get_db()
         try:
+            # EX-04: Idempotency guard — compute a digest of the immutable
+            # payload fields and reject duplicate deliveries before any
+            # state-changing write.  Sumsub can re-deliver the same event;
+            # without this guard each delivery would insert duplicate
+            # audit_log rows and redundantly update application records.
+            _created_at = payload.get("createdAtMs", payload.get("createdAt", ""))
+            event_digest = hashlib.sha256(
+                f"{applicant_id}:{event_type}:{review_answer}:{_created_at}".encode()
+            ).hexdigest()
+
+            try:
+                db.execute("""
+                    INSERT INTO webhook_processed_events
+                        (event_digest, event_type, applicant_id, external_user_id, review_answer)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (event_digest, event_type, applicant_id, external_user_id, review_answer))
+            except Exception:
+                # UNIQUE constraint violation → already processed
+                logger.info(
+                    "Sumsub webhook: duplicate delivery skipped applicant=%s digest=%s",
+                    _masked_id, event_digest[:16],
+                )
+                db.close()
+                self.set_status(200)
+                self.write(json.dumps({"status": "already_processed"}))
+                return
+
             kyc_data = json.dumps({
                 "sumsub_applicant_id": applicant_id,
                 "external_user_id": external_user_id,

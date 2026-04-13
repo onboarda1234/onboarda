@@ -2759,6 +2759,49 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.23: Add webhook_processed_events table for idempotency guard (EX-04).
+    # Prevents duplicate processing of Sumsub webhook deliveries by tracking a
+    # SHA-256 digest of each mutating event's key fields.
+    try:
+        if not _safe_table_exists(db, "webhook_processed_events"):
+            logger.info("Migration v2.23: Creating webhook_processed_events table")
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS webhook_processed_events (
+                        id SERIAL PRIMARY KEY,
+                        event_digest TEXT NOT NULL UNIQUE,
+                        event_type TEXT NOT NULL,
+                        applicant_id TEXT NOT NULL,
+                        external_user_id TEXT,
+                        review_answer TEXT,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            else:
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS webhook_processed_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        event_digest TEXT NOT NULL UNIQUE,
+                        event_type TEXT NOT NULL,
+                        applicant_id TEXT NOT NULL,
+                        external_user_id TEXT,
+                        review_answer TEXT,
+                        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_wpe_digest ON webhook_processed_events(event_digest)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_wpe_applicant ON webhook_processed_events(applicant_id)")
+            db.commit()
+            logger.info("Migration v2.23: webhook_processed_events table ready")
+        else:
+            logger.info("Migration v2.23: webhook_processed_events table already exists")
+    except Exception as e:
+        logger.error("Migration v2.23 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.
