@@ -9554,7 +9554,8 @@ class PortalChangeRequestHandler(BaseHandler):
                         user, "portal_change_request_denied",
                         application_id,
                         json.dumps({"reason": "not_owner", "client_id": client_id,
-                                    "attempted_application_id": application_id}),
+                                    "attempted_application_id": application_id,
+                                    "actual_owner": app.get("client_id")}),
                         db=db,
                     )
                 except Exception:
