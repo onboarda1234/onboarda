@@ -213,6 +213,8 @@ class ApprovalGateValidator:
             # 5. Check screening report for any simulated or degraded provider statuses
             #    Required checks (Sumsub AML/KYC/sanctions) block approval if simulated.
             #    Enrichment checks (company_registry, ip_geolocation) warn but do not block.
+            #    company_watchlist with api_status="not_configured" warns but does not block
+            #    (no Sumsub company/KYB level provisioned).
             screening_evidence = _collect_screening_provider_evidence(screening_report)
             if screening_evidence:
                 for item in screening_evidence:
@@ -220,6 +222,7 @@ class ApprovalGateValidator:
                     source = (item.get("source") or "").lower()
                     is_simulated = api_status in ("simulated", "mocked") or source in ("simulated", "mocked")
                     is_error = api_status in ("error", "blocked")
+                    is_not_configured = api_status == "not_configured"
 
                     if not item.get("is_required", True):
                         # Enrichment source — log warning but do not block approval
@@ -228,6 +231,15 @@ class ApprovalGateValidator:
                                 f"Enrichment screening '{item.get('name', 'unknown')}' used simulated data. "
                                 "This is non-blocking enrichment — approval proceeds."
                             )
+                        continue
+
+                    # company_watchlist with not_configured — Sumsub company/KYB level
+                    # is not provisioned.  Warn but allow approval to proceed.
+                    if is_not_configured and item.get("name") == "company_watchlist":
+                        logger.warning(
+                            "company_watchlist screening is not configured "
+                            "(no Sumsub company KYB level) — approval proceeds with warning."
+                        )
                         continue
 
                     # Required screening — block if simulated or errored
@@ -477,6 +489,9 @@ def determine_screening_mode(screening_report: Dict) -> str:
                     continue
                 api_status = (item.get("api_status") or "").lower()
                 source_name = (item.get("source") or "").lower()
+                # not_configured company_watchlist is acceptable — skip it
+                if api_status == "not_configured":
+                    continue
                 if api_status in ("simulated", "mocked") or any(tag in source_name for tag in ("simulated", "mock", "demo")):
                     logger.warning(f"Screening contains simulated source: {item}")
                     return 'simulated'

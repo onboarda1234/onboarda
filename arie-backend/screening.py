@@ -32,7 +32,8 @@ from sumsub_client import get_sumsub_client
 from environment import (
     ENV, is_production, is_staging, is_demo,
     get_sumsub_base_url, get_sumsub_app_token, get_sumsub_secret_key,
-    get_sumsub_level_name, get_opencorporates_api_key, get_ip_geolocation_api_key,
+    get_sumsub_level_name, get_sumsub_individual_level_name, get_sumsub_company_level_name,
+    get_opencorporates_api_key, get_ip_geolocation_api_key,
 )
 
 logger = logging.getLogger("arie")
@@ -47,12 +48,31 @@ SUMSUB_APP_TOKEN = get_sumsub_app_token()
 SUMSUB_SECRET_KEY = get_sumsub_secret_key()
 SUMSUB_BASE_URL = get_sumsub_base_url()
 SUMSUB_LEVEL_NAME = get_sumsub_level_name()
+SUMSUB_INDIVIDUAL_LEVEL_NAME = get_sumsub_individual_level_name()
+SUMSUB_COMPANY_LEVEL_NAME = get_sumsub_company_level_name()
 
 def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Person"):
     """
     Screen a person or entity against Sumsub AML (sanctions, PEP, watchlists).
     Returns: { matched: bool, results: [...], source: "sumsub"|"simulated"|"error" }
+
+    For entity_type="Company": if SUMSUB_COMPANY_LEVEL_NAME is not configured,
+    returns api_status="not_configured" instead of pretending a check ran.
     """
+    # ── Company screening: short-circuit when no company/KYB level exists ──
+    if entity_type == "Company" and not get_sumsub_company_level_name():
+        logger.info(
+            "Sumsub company KYB level not configured — returning not_configured for '%s'", name
+        )
+        return {
+            "matched": False,
+            "results": [],
+            "source": "sumsub",
+            "api_status": "not_configured",
+            "reason": "Sumsub company KYB level not configured",
+            "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+
     try:
         # First create/retrieve a Sumsub applicant
         import hashlib
@@ -61,12 +81,19 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
         first = parts[0] if parts else ""
         last = parts[1] if len(parts) > 1 else ""
 
+        # Use entity-appropriate Sumsub level
+        if entity_type == "Company":
+            level = get_sumsub_company_level_name()
+        else:
+            level = get_sumsub_individual_level_name()
+
         applicant_result = sumsub_create_applicant(
             external_user_id=ext_id,
             first_name=first,
             last_name=last,
             dob=birth_date,
-            country=nationality
+            country=nationality,
+            level_name=level,
         )
 
         if not applicant_result.get("applicant_id"):
