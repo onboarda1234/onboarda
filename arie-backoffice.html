@@ -5733,7 +5733,7 @@ function apiFetch(url, opts) {
   if (path.indexOf('/api') === 0) path = path.substring(4);
   var body = null;
   if (opts && opts.body) {
-    try { body = JSON.parse(opts.body); } catch(e) { body = opts.body; }
+    try { body = JSON.parse(opts.body); } catch(e) { console.warn('apiFetch: body is not JSON, passing raw', e.message); body = opts.body; }
   }
   return boApiCall(method, path, body);
 }

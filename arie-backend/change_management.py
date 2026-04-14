@@ -17,7 +17,7 @@ This module provides:
 import json
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -356,7 +356,7 @@ def _json_safe_value(val: Any) -> Any:
     """
     if isinstance(val, datetime):
         return val.isoformat()
-    if hasattr(val, 'isoformat'):  # date objects
+    if isinstance(val, date):
         return val.isoformat()
     return val
 
