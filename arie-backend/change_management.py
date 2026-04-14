@@ -731,6 +731,30 @@ def create_change_request(
     if not allowed:
         raise PermissionError(role_err)
 
+    # --- Defence-in-depth: portal ownership enforcement ---
+    # When the request originates from the portal, verify that the
+    # authenticated client actually owns the target application.
+    # The handler layer SHOULD already enforce this, but this guard
+    # provides a second barrier against cross-tenant mutations.
+    if source_channel == "portal":
+        client_id = user.get("sub")
+        app_row = db.execute(
+            "SELECT client_id FROM applications WHERE id = ?",
+            (application_id,),
+        ).fetchone()
+        if not app_row:
+            raise PermissionError(
+                "Application not found. Cannot create portal change request."
+            )
+        if app_row["client_id"] != client_id:
+            logger.warning(
+                "Defence-in-depth: portal CR blocked | client=%s app=%s owner=%s",
+                client_id, application_id, app_row["client_id"],
+            )
+            raise PermissionError(
+                "You do not own this application. Portal change request denied."
+            )
+
     # --- Reject zero-item creates (prevents orphan requests with no actionable content) ---
     if not items:
         raise ValueError(

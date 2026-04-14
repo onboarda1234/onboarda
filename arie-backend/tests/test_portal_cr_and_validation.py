@@ -178,8 +178,8 @@ class TestChangeTypeValidationAtCreate:
     def test_invalid_change_type_rejected_on_portal_create(self, db):
         cm = _get_cm()
         wdb = _DBWrapper(db)
-        app_id, _ = _setup_test_data(db)
-        user = {"sub": "c1", "name": "Client", "role": "client"}
+        app_id, client_id = _setup_test_data(db)
+        user = {"sub": client_id, "name": "Client", "role": "client"}
 
         items = [{"change_type": "made_up_type"}]
         with pytest.raises(ValueError, match="made_up_type"):

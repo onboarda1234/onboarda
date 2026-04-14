@@ -576,12 +576,13 @@ class TestDBIntegration:
     def test_list_requests(self, db):
         cm = _get_cm()
         wdb = _DBWrapper(db)
-        app_id, _ = _setup_test_data(db)
+        app_id, client_id = _setup_test_data(db)
         user = {"sub": "u1", "name": "User", "role": "co"}
+        client_user = {"sub": client_id, "name": "Client", "role": "client"}
 
         _items = [{"change_type": "other", "field_name": "note", "new_value": "test"}]
         cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "R1", _items, user)
-        cm.create_change_request(wdb, app_id, "portal_client", "portal", "R2", _items, user)
+        cm.create_change_request(wdb, app_id, "portal_client", "portal", "R2", _items, client_user)
 
         reqs = cm.list_change_requests(wdb, application_id=app_id)
         assert len(reqs) >= 2
