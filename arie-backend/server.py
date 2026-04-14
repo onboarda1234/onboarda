@@ -9518,14 +9518,48 @@ class PortalChangeRequestHandler(BaseHandler):
 
         db = get_db()
         try:
-            # Verify client owns this application
             client_id = user.get("sub")
+
+            # Step 1: Check application exists
             app = db.execute(
-                "SELECT id, status FROM applications WHERE id = ? AND client_id = ?",
-                (application_id, client_id),
+                "SELECT id, status, client_id FROM applications WHERE id = ?",
+                (application_id,),
             ).fetchone()
             if not app:
-                self.error("Application not found or access denied", 404)
+                logger.warning(
+                    "Portal CR denied: app not found | client=%s app=%s",
+                    client_id, application_id,
+                )
+                try:
+                    self.log_audit(
+                        user, "portal_change_request_denied",
+                        application_id,
+                        json.dumps({"reason": "not_found", "client_id": client_id,
+                                    "attempted_application_id": application_id}),
+                        db=db,
+                    )
+                except Exception:
+                    pass  # audit best-effort
+                self.error("Application not found", 404)
+                return
+
+            # Step 2: Verify client owns this application
+            if app["client_id"] != client_id:
+                logger.warning(
+                    "Portal CR denied: not owner | client=%s app=%s owner=%s",
+                    client_id, application_id, app.get("client_id"),
+                )
+                try:
+                    self.log_audit(
+                        user, "portal_change_request_denied",
+                        application_id,
+                        json.dumps({"reason": "not_owner", "client_id": client_id,
+                                    "attempted_application_id": application_id}),
+                        db=db,
+                    )
+                except Exception:
+                    pass  # audit best-effort
+                self.error("You do not have permission to create a change request for this application", 403)
                 return
 
             items = data.get("items", [])
