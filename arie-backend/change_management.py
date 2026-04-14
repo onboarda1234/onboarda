@@ -1291,7 +1291,7 @@ def _create_profile_version(
         next_version = 1
 
     # Mark all existing versions as not current
-    # Use parameterized boolean for PostgreSQL BOOLEAN / SQLite INTEGER compat
+    # Use parameterized boolean for PostgreSQL BOOLEAN / SQLite INTEGER compatibility
     try:
         db.execute(
             "UPDATE entity_profile_versions SET is_current = ? WHERE application_id = ?",
