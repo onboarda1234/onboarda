@@ -9544,18 +9544,20 @@ class PortalChangeRequestHandler(BaseHandler):
                 return
 
             # Step 2: Verify client owns this application
+            # Same ownership predicate as GET /api/portal/applications:
+            #   WHERE client_id = <authenticated_client_id>
             if app["client_id"] != client_id:
                 logger.warning(
                     "Portal CR denied: not owner | client=%s app=%s owner=%s",
-                    client_id, application_id, app.get("client_id"),
+                    client_id, application_id, app["client_id"],
                 )
                 try:
                     self.log_audit(
-                        user, "portal_change_request_denied",
+                        user, "portal_cr_denied_not_owner",
                         application_id,
                         json.dumps({"reason": "not_owner", "client_id": client_id,
                                     "attempted_application_id": application_id,
-                                    "actual_owner": app.get("client_id")}),
+                                    "actual_owner": app["client_id"]}),
                         db=db,
                     )
                 except Exception:
