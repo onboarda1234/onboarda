@@ -731,11 +731,17 @@ def create_change_request(
     if not allowed:
         raise PermissionError(role_err)
 
+    # --- Reject zero-item creates (prevents orphan requests with no actionable content) ---
+    if not items:
+        raise ValueError(
+            "At least one change item is required. "
+            "Provide an 'items' array with change_type, field_name, and new_value."
+        )
+
     # --- Validate change_type values before creating anything ---
-    if items:
-        valid, ct_err = validate_change_types(items)
-        if not valid:
-            raise ValueError(ct_err)
+    valid, ct_err = validate_change_types(items)
+    if not valid:
+        raise ValueError(ct_err)
 
     request_id = generate_change_request_id()
     now = datetime.now(timezone.utc).isoformat()
