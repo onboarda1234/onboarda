@@ -222,6 +222,7 @@ class ApprovalGateValidator:
                     source = (item.get("source") or "").lower()
                     is_simulated = api_status in ("simulated", "mocked") or source in ("simulated", "mocked")
                     is_error = api_status in ("error", "blocked")
+                    is_pending = api_status == "pending"
                     is_not_configured = api_status == "not_configured"
 
                     if not item.get("is_required", True):
@@ -254,6 +255,12 @@ class ApprovalGateValidator:
                             False,
                             f"Screening check '{item.get('name', 'unknown')}' is not in a live usable state "
                             f"(api_status={api_status or 'unknown'}).",
+                        )
+                    if is_pending:
+                        return (
+                            False,
+                            f"Screening check '{item.get('name', 'unknown')}' is still pending "
+                            f"(api_status=pending). Wait for screening to complete before approval.",
                         )
             else:
                 for check_name in ('sanctions', 'kyc'):
@@ -495,7 +502,7 @@ def determine_screening_mode(screening_report: Dict) -> str:
                 if api_status in ("simulated", "mocked") or any(tag in source_name for tag in ("simulated", "mock", "demo")):
                     logger.warning(f"Screening contains simulated source: {item}")
                     return 'simulated'
-                if api_status in ("error", "blocked"):
+                if api_status in ("error", "blocked", "pending"):
                     logger.warning(f"Screening contains non-live provider state: {item}")
                     return 'unknown'
                 if api_status == "live" or source_name in ("sumsub", "opencorporates", "ipapi", "local"):

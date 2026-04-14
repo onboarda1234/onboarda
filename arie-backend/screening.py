@@ -32,7 +32,8 @@ from sumsub_client import get_sumsub_client
 from environment import (
     ENV, is_production, is_staging, is_demo,
     get_sumsub_base_url, get_sumsub_app_token, get_sumsub_secret_key,
-    get_sumsub_level_name, get_sumsub_individual_level_name, get_sumsub_company_level_name,
+    get_sumsub_level_name, get_sumsub_individual_level_name,
+    get_sumsub_company_level_name, get_sumsub_aml_level_name,
     get_opencorporates_api_key, get_ip_geolocation_api_key,
 )
 
@@ -50,14 +51,27 @@ SUMSUB_BASE_URL = get_sumsub_base_url()
 SUMSUB_LEVEL_NAME = get_sumsub_level_name()
 SUMSUB_INDIVIDUAL_LEVEL_NAME = get_sumsub_individual_level_name()
 SUMSUB_COMPANY_LEVEL_NAME = get_sumsub_company_level_name()
+SUMSUB_AML_LEVEL_NAME = get_sumsub_aml_level_name()
 
 def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Person"):
     """
     Screen a person or entity against Sumsub AML (sanctions, PEP, watchlists).
-    Returns: { matched: bool, results: [...], source: "sumsub"|"simulated"|"error" }
 
-    For entity_type="Company": if SUMSUB_COMPANY_LEVEL_NAME is not configured,
-    returns api_status="not_configured" instead of pretending a check ran.
+    **Person AML** (directors / UBOs):
+        Uses the ``aml-screening`` level (``SUMSUB_AML_LEVEL_NAME``).
+        1. Create applicant with fixedInfo (firstName, lastName, dob).
+        2. Trigger the check:  ``POST /resources/applicants/{id}/status/pending``
+        3. Poll the review:    ``GET  /resources/applicants/{id}/one``
+        4. Map ``reviewAnswer``:
+           - GREEN  → ``api_status=live, matched=false``
+           - RED    → ``api_status=live, matched=true``
+           - still running → ``api_status=pending``
+           - API failure   → ``api_status=error``
+
+    **Company screening**: unchanged — short-circuits to ``not_configured``
+    when no company KYB level is provisioned.
+
+    Returns: { matched: bool, results: [...], source: str, api_status: str }
     """
     # ── Company screening: short-circuit when no company/KYB level exists ──
     company_level = get_sumsub_company_level_name() if entity_type == "Company" else ""
@@ -75,16 +89,20 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
         }
 
     try:
-        # First create/retrieve a Sumsub applicant
-        import hashlib
-        ext_id = f"{entity_type}_{hashlib.md5(name.encode()).hexdigest()[:12]}"
+        import hashlib as _hashlib
+        ext_id = f"{entity_type}_{_hashlib.md5(name.encode()).hexdigest()[:12]}"
         parts = name.strip().split(" ", 1)
         first = parts[0] if parts else ""
         last = parts[1] if len(parts) > 1 else ""
 
-        # Use entity-appropriate Sumsub level
-        level = company_level if entity_type == "Company" else get_sumsub_individual_level_name()
+        # ── Choose the Sumsub level ──
+        if entity_type == "Company":
+            level = company_level
+        else:
+            # Person AML: use the dedicated AML-only level
+            level = get_sumsub_aml_level_name()
 
+        # Step 1: Create / retrieve applicant on the AML level
         applicant_result = sumsub_create_applicant(
             external_user_id=ext_id,
             first_name=first,
@@ -95,8 +113,7 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
         )
 
         if not applicant_result.get("applicant_id"):
-            logger.warning(f"Sumsub AML: Failed to create/retrieve applicant for '{name}'")
-            # S-02 fix: if Sumsub is configured but returned an error, propagate it honestly
+            logger.warning("Sumsub AML: Failed to create/retrieve applicant for '%s'", name)
             if applicant_result.get("api_status") == "error":
                 return {
                     "matched": False,
@@ -110,60 +127,90 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
 
         applicant_id = applicant_result["applicant_id"]
 
-        # Get AML screening results
-        from sumsub_client import get_sumsub_client
         client = get_sumsub_client()
-        aml_result = client.get_aml_screening(applicant_id)
 
-        # S-02 fix: if AML API returned an error, propagate it honestly
-        if aml_result.get("api_status") == "error":
+        # Step 2: Trigger the check (POST .../status/pending)
+        trigger_result = client.request_check(applicant_id)
+        if trigger_result.get("api_status") == "error":
             return {
                 "matched": False,
                 "results": [],
                 "source": "sumsub",
                 "api_status": "error",
-                "error": aml_result.get("error", "AML screening failed"),
+                "error": trigger_result.get("error", "request_check failed"),
                 "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
             }
 
-        if aml_result.get("source") == "simulated":
-            # API not configured, return simulated
+        # Step 3: Poll the review status (GET .../one)
+        review = client.get_applicant_review_status(applicant_id)
+
+        if review.get("api_status") == "error":
+            return {
+                "matched": False,
+                "results": [],
+                "source": "sumsub",
+                "api_status": "error",
+                "error": review.get("error", "get_applicant_review_status failed"),
+                "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+
+        if review.get("source") == "simulated":
             return _simulate_aml_screen(name)
 
-        # Parse AML check results into our standard format
-        aml_checks = aml_result.get("aml_checks", [])
-        hits = []
+        # Step 4: Map the review answer
+        review_answer = (review.get("review_answer") or "").upper()
+        review_api_status = review.get("api_status", "pending")
 
-        for check in aml_checks:
-            check_data = check.get("data", {})
-            if check_data.get("matches"):
-                for match in check_data.get("matches", []):
-                    hits.append({
-                        "match_score": round(float(match.get("matchScore", 0)) * 100, 1),
-                        "matched_name": match.get("name", name),
-                        "datasets": [check.get("checkType", "AML")],
-                        "schema": entity_type,
-                        "topics": match.get("topics", []),
-                        "countries": match.get("countries", []),
-                        "sanctions_list": match.get("list", ""),
-                        "is_pep": "pep" in match.get("topics", []) or match.get("isPep", False),
-                        "is_sanctioned": "sanction" in match.get("topics", []) or match.get("isSanctioned", False),
-                    })
+        if review_api_status == "pending":
+            return {
+                "matched": False,
+                "results": [],
+                "source": "sumsub",
+                "api_status": "pending",
+                "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            }
 
-        return {
-            "matched": len(hits) > 0,
-            "results": hits,
-            "source": "sumsub",
-            "api_status": "live",
-            "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-        }
+        # Completed review
+        if review_answer == "GREEN":
+            return {
+                "matched": False,
+                "results": [],
+                "source": "sumsub",
+                "api_status": "live",
+                "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+        elif review_answer == "RED":
+            return {
+                "matched": True,
+                "results": [{
+                    "match_score": 100.0,
+                    "matched_name": name,
+                    "datasets": ["AML"],
+                    "schema": entity_type,
+                    "topics": [],
+                    "countries": [],
+                    "sanctions_list": "",
+                    "is_pep": False,
+                    "is_sanctioned": False,
+                }],
+                "source": "sumsub",
+                "api_status": "live",
+                "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+        else:
+            # Unknown review answer — treat as pending
+            return {
+                "matched": False,
+                "results": [],
+                "source": "sumsub",
+                "api_status": "pending",
+                "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            }
 
     except Exception as e:
-        logger.error(f"Sumsub AML screening error: {e}")
-        # S-02 fix: if Sumsub is configured, do not silently fall back to simulation
+        logger.error("Sumsub AML screening error: %s", e)
         client = None
         try:
-            from sumsub_client import get_sumsub_client
             client = get_sumsub_client()
         except Exception:
             pass

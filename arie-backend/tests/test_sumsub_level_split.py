@@ -95,8 +95,8 @@ def test_company_screening_does_not_shortcircuit_when_level_set(monkeypatch):
 
 
 def test_individual_level_passed_to_create_applicant(monkeypatch):
-    """Verify individual screening passes the individual level to create_applicant."""
-    monkeypatch.setenv("SUMSUB_INDIVIDUAL_LEVEL_NAME", "id-and-liveness")
+    """Verify individual screening passes the AML level to create_applicant."""
+    monkeypatch.setenv("SUMSUB_AML_LEVEL_NAME", "aml-screening")
     monkeypatch.delenv("SUMSUB_COMPANY_LEVEL_NAME", raising=False)
 
     captured = {}
@@ -117,15 +117,20 @@ def test_individual_level_passed_to_create_applicant(monkeypatch):
     try:
         from unittest.mock import MagicMock, patch
         mock_client = MagicMock()
-        mock_client.get_aml_screening.return_value = {
-            "aml_checks": [],
+        mock_client.request_check.return_value = {
+            "ok": True, "source": "sumsub", "api_status": "live",
+        }
+        mock_client.get_applicant_review_status.return_value = {
+            "applicant_id": "fake_id",
+            "review_status": "completed",
+            "review_answer": "GREEN",
             "source": "sumsub",
             "api_status": "live",
         }
         with patch("screening.get_sumsub_client", return_value=mock_client):
             screening.screen_sumsub_aml("John Doe", entity_type="Person")
 
-        assert captured.get("level_name") == "id-and-liveness"
+        assert captured.get("level_name") == "aml-screening"
     finally:
         screening.sumsub_create_applicant = original
 

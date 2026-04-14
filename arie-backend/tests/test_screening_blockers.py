@@ -187,27 +187,29 @@ class TestS02ScreenSumsubAmlHardened:
         assert "error" in result
 
     def test_error_aml_screening_propagates_error(self):
-        """When get_aml_screening returns error (configured), must propagate, not simulate."""
+        """When get_applicant_review_status returns error (configured), must propagate, not simulate."""
         good_applicant = {
             "applicant_id": "test-abc-123",
             "status": "init",
             "source": "sumsub",
             "api_status": "live",
         }
-        aml_error = {
+
+        mock_client = MagicMock()
+        mock_client.request_check.return_value = {
+            "ok": True, "source": "sumsub", "api_status": "live",
+        }
+        mock_client.get_applicant_review_status.return_value = {
             "applicant_id": "test-abc-123",
             "status": "error",
             "source": "sumsub",
             "api_status": "error",
-            "error": "get_aml_screening failed: API returned 500",
-            "note": "API returned 500",
+            "error": "get_applicant_review_status failed: API returned 500",
         }
-
-        mock_client = MagicMock()
-        mock_client.get_aml_screening.return_value = aml_error
         mock_client.is_configured = True
 
         with patch("screening.sumsub_create_applicant", return_value=good_applicant), \
+             patch("screening.get_sumsub_client", return_value=mock_client), \
              patch("sumsub_client.get_sumsub_client", return_value=mock_client), \
              patch("sumsub_client._sumsub_client_instance", mock_client):
             from screening import screen_sumsub_aml
@@ -249,42 +251,29 @@ class TestS02ScreenSumsubAmlHardened:
             "When Sumsub is not configured, simulation fallback is still allowed"
 
     def test_successful_aml_screening_still_works(self):
-        """Happy path: successful AML screening result still returned correctly."""
+        """Happy path: successful AML screening (RED) returns matched=True."""
         good_applicant = {
             "applicant_id": "test-abc-123",
             "status": "init",
             "source": "sumsub",
             "api_status": "live",
         }
-        aml_success = {
+
+        mock_client = MagicMock()
+        mock_client.request_check.return_value = {
+            "ok": True, "source": "sumsub", "api_status": "live",
+        }
+        mock_client.get_applicant_review_status.return_value = {
             "applicant_id": "test-abc-123",
-            "aml_checks": [
-                {
-                    "checkType": "AML",
-                    "data": {
-                        "matches": [
-                            {
-                                "matchScore": 0.95,
-                                "name": "Test Person",
-                                "topics": ["sanction"],
-                                "countries": ["IR"],
-                                "list": "OFAC SDN",
-                                "isPep": False,
-                                "isSanctioned": True,
-                            }
-                        ]
-                    }
-                }
-            ],
+            "review_status": "completed",
+            "review_answer": "RED",
             "source": "sumsub",
             "api_status": "live",
         }
-
-        mock_client = MagicMock()
-        mock_client.get_aml_screening.return_value = aml_success
         mock_client.is_configured = True
 
         with patch("screening.sumsub_create_applicant", return_value=good_applicant), \
+             patch("screening.get_sumsub_client", return_value=mock_client), \
              patch("sumsub_client.get_sumsub_client", return_value=mock_client), \
              patch("sumsub_client._sumsub_client_instance", mock_client):
             from screening import screen_sumsub_aml
@@ -293,30 +282,32 @@ class TestS02ScreenSumsubAmlHardened:
         assert result["matched"] is True
         assert result["source"] == "sumsub"
         assert result["api_status"] == "live"
-        assert len(result["results"]) == 1
-        assert result["results"][0]["match_score"] == 95.0
+        assert len(result["results"]) >= 1
 
     def test_simulated_aml_result_triggers_simulation(self):
-        """When AML result is simulated (not configured), return simulation."""
+        """When review result is simulated (not configured), return simulation."""
         good_applicant = {
             "applicant_id": "test-abc-123",
             "status": "init",
             "source": "sumsub",
             "api_status": "live",
         }
-        simulated_aml = {
-            "applicant_id": "test-abc-123",
-            "aml_checks": [],
-            "source": "simulated",
-            "api_status": "simulated",
-            "note": "No Sumsub credentials configured",
-        }
 
         mock_client = MagicMock()
-        mock_client.get_aml_screening.return_value = simulated_aml
+        mock_client.request_check.return_value = {
+            "ok": True, "source": "simulated", "api_status": "simulated",
+        }
+        mock_client.get_applicant_review_status.return_value = {
+            "applicant_id": "test-abc-123",
+            "review_status": "completed",
+            "review_answer": "GREEN",
+            "source": "simulated",
+            "api_status": "simulated",
+        }
         mock_client.is_configured = False
 
         with patch("screening.sumsub_create_applicant", return_value=good_applicant), \
+             patch("screening.get_sumsub_client", return_value=mock_client), \
              patch("sumsub_client.get_sumsub_client", return_value=mock_client), \
              patch("sumsub_client._sumsub_client_instance", mock_client):
             from screening import screen_sumsub_aml

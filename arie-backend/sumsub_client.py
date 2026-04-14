@@ -658,9 +658,126 @@ class SumsubClient:
                                           applicant_id=applicant_id)
             return self._simulate_verification_result(applicant_id, note=str(e)[:100])
 
+    def request_check(self, applicant_id: str) -> Dict[str, Any]:
+        """
+        Trigger a verification check for an applicant by moving them to
+        ``pending`` status.
+
+        Endpoint: ``POST /resources/applicants/{applicant_id}/status/pending``
+
+        For AML-only levels (no ID doc / liveness), this kicks off the AML
+        screening immediately.  The caller should then poll
+        :meth:`get_applicant_review_status` until the review completes.
+
+        Returns:
+            Dict with ``ok: True`` on success, or ``api_status: "error"``
+            on failure.
+        """
+        if not self.is_configured:
+            logger.info(
+                "Sumsub not configured — simulating request_check for '%s'",
+                applicant_id,
+            )
+            return {"ok": True, "source": "simulated", "api_status": "simulated"}
+
+        try:
+            url_path = f"/resources/applicants/{applicant_id}/status/pending"
+            status, data, error_msg = self._request_with_retry(
+                "POST", url_path, body=b"{}", operation="request_check"
+            )
+
+            if 200 <= status < 300:
+                logger.info("Sumsub: Requested check for applicant %s", applicant_id)
+                return {"ok": True, "source": "sumsub", "api_status": "live"}
+
+            logger.warning(
+                "Sumsub request_check failed for %s: %s — %s",
+                applicant_id, status, error_msg,
+            )
+            return self._error_result(
+                "request_check", f"API returned {status}",
+                applicant_id=applicant_id,
+            )
+
+        except (SumsubRetryError, Timeout, RequestException) as e:
+            logger.error("Sumsub request_check error: %s", e)
+            return self._error_result(
+                "request_check", str(e)[:100], applicant_id=applicant_id
+            )
+
+    def get_applicant_review_status(self, applicant_id: str) -> Dict[str, Any]:
+        """
+        Retrieve the current review status of an applicant.
+
+        Endpoint: ``GET /resources/applicants/{applicant_id}/one``
+
+        Returns a dict with:
+            - ``review_status`` – e.g. ``"completed"``, ``"pending"``, ``"init"``
+            - ``review_answer`` – ``"GREEN"`` / ``"RED"`` when completed
+            - ``api_status``   – ``"live"`` | ``"pending"`` | ``"error"``
+            - ``source``       – ``"sumsub"`` | ``"simulated"``
+        """
+        if not self.is_configured:
+            return {
+                "applicant_id": applicant_id,
+                "review_status": "completed",
+                "review_answer": "GREEN",
+                "source": "simulated",
+                "api_status": "simulated",
+            }
+
+        try:
+            url_path = f"/resources/applicants/{applicant_id}/one"
+            status, data, error_msg = self._request_with_retry(
+                "GET", url_path, operation="get_applicant_review_status"
+            )
+
+            if status == 200:
+                review = data.get("review") or {}
+                review_status = review.get("reviewStatus", "init")
+                review_result = review.get("reviewResult") or {}
+                review_answer = review_result.get("reviewAnswer", "")
+
+                if review_status == "completed":
+                    api_status = "live"
+                elif review_status in ("pending", "queued", "onHold"):
+                    api_status = "pending"
+                else:
+                    # init or other — still not started / no result yet
+                    api_status = "pending"
+
+                return {
+                    "applicant_id": applicant_id,
+                    "review_status": review_status,
+                    "review_answer": review_answer,
+                    "source": "sumsub",
+                    "api_status": api_status,
+                }
+
+            logger.warning(
+                "Sumsub get_applicant_review_status failed: %s — %s",
+                status, error_msg,
+            )
+            return self._error_result(
+                "get_applicant_review_status", f"API returned {status}",
+                applicant_id=applicant_id,
+            )
+
+        except (SumsubRetryError, Timeout, RequestException) as e:
+            logger.error("Sumsub get_applicant_review_status error: %s", e)
+            return self._error_result(
+                "get_applicant_review_status", str(e)[:100],
+                applicant_id=applicant_id,
+            )
+
     def get_aml_screening(self, applicant_id: str) -> Dict[str, Any]:
         """
         Get AML/PEP screening results for an applicant.
+
+        .. deprecated::
+            Legacy endpoint ``/resources/applicants/{id}/checkSteps`` returns
+            404 for AML-only levels.  New code should use
+            :meth:`request_check` + :meth:`get_applicant_review_status`.
 
         Args:
             applicant_id: Sumsub applicant ID.
