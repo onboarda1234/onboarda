@@ -339,7 +339,14 @@ class TestPersonFieldPropagation:
         assert str(ubo_after["ownership_pct"]) == "60.0"
 
     def test_director_unsupported_field_does_not_crash(self, db):
-        """Director update with unsupported field skips safely and does not cause SQL error."""
+        """Director update with unsupported field skips safely and does not cause SQL error.
+
+        ownership_pct is NOT in _PERSON_SAFE_FIELDS['directors'], so
+        _apply_person_change silently skips the SQL update.  However,
+        _apply_change_item still returns (True, ...) because the person
+        change function ran without error — the safe-field guard is inside
+        _apply_person_change, not in _apply_change_item.
+        """
         cm = _get_cm()
         wdb = _DBWrapper(db)
         app_id, _ = _setup_test_data(db)
@@ -355,9 +362,9 @@ class TestPersonFieldPropagation:
         )
         _approve_request(cm, wdb, req["id"])
 
-        # Should succeed (person change is applied but field skipped via safe_fields check)
-        # The director change is "applied" in the sense that the function runs,
-        # but ownership_pct is not in directors safe_fields so no SQL runs.
+        # Implementation succeeds because _apply_change_item returns True for
+        # any director_* change_type (the safe-field guard is inside
+        # _apply_person_change and simply skips the SQL for unsupported fields).
         success, err, _ = cm.implement_change_request(wdb, req["id"], ADMIN_USER)
         assert success, f"Implement failed: {err}"
 
