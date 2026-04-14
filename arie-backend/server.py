@@ -3352,7 +3352,10 @@ class DocumentReviewHandler(BaseHandler):
             return self.error("Invalid document review status", 400)
 
         db = get_db()
-        doc = db.execute("SELECT id, application_id, doc_name FROM documents WHERE id=?", (doc_id,)).fetchone()
+        doc = db.execute(
+            "SELECT id, application_id, doc_name, doc_type, verification_status, review_status, review_comment, reviewed_by "
+            "FROM documents WHERE id=?", (doc_id,)
+        ).fetchone()
         if not doc:
             db.close()
             return self.error("Document not found", 404)
@@ -3366,26 +3369,76 @@ class DocumentReviewHandler(BaseHandler):
             db.close()
             return
 
+        user_role = (user.get("role") or "").lower()
+
+        # Senior-officer override gate for flagged documents (EX-06):
+        # Only admin/sco may accept a flagged document, and a non-empty reason
+        # (review_comment) is mandatory.  Non-senior roles are rejected outright.
+        is_flagged = (doc.get("verification_status") or "").lower() == "flagged"
+        if is_flagged and review_status == "accepted":
+            if user_role not in ("admin", "sco"):
+                db.close()
+                return self.error(
+                    "Only senior compliance officers (admin/sco) may accept flagged documents", 403
+                )
+            if not review_comment:
+                db.close()
+                return self.error(
+                    "A documented reason is required when accepting a flagged document", 400
+                )
+
+        # Capture before-state for audit trail
+        _before = {
+            "verification_status": doc.get("verification_status"),
+            "review_status": doc.get("review_status"),
+            "review_comment": doc.get("review_comment"),
+            "reviewed_by": doc.get("reviewed_by"),
+        }
+
         db.execute("""
             UPDATE documents
-            SET review_status = ?, review_comment = ?, reviewed_by = ?, reviewed_at = datetime('now')
+            SET review_status = ?, review_comment = ?, reviewed_by = ?, reviewer_role = ?, reviewed_at = datetime('now')
             WHERE id = ?
-        """, (review_status, review_comment, user.get("sub", ""), doc_id))
+        """, (review_status, review_comment, user.get("sub", ""), user_role, doc_id))
         db.commit()
 
         reviewed_doc = db.execute("""
-            SELECT id, review_status, review_comment, reviewed_by, reviewed_at
+            SELECT id, review_status, review_comment, reviewed_by, reviewed_at, reviewer_role
             FROM documents WHERE id = ?
         """, (doc_id,)).fetchone()
         result = dict(reviewed_doc)
         result["reviewed_by_name"] = resolve_user_display_name(db, result.get("reviewed_by"))
         db.close()
 
+        # Audit trail — enhanced for flagged-document override
+        _after = {
+            "verification_status": doc.get("verification_status"),
+            "review_status": review_status,
+            "review_comment": review_comment,
+            "reviewed_by": user.get("sub", ""),
+            "reviewer_role": user_role,
+        }
+        if is_flagged and review_status == "accepted":
+            audit_action = "Document Accepted With Findings"
+            audit_detail = (
+                f"Senior override: flagged document '{doc['doc_name']}' (type={doc.get('doc_type')}) "
+                f"accepted by {user.get('name', '')} (role={user_role}). "
+                f"Reason: {review_comment}"
+            )
+        else:
+            audit_action = "Document Review"
+            audit_detail = (
+                f"Document {doc['doc_name']} marked {review_status}"
+                + (f" — {review_comment}" if review_comment else "")
+            )
+
         self.log_audit(
             user,
-            "Document Review",
+            audit_action,
             app["ref"],
-            f"Document {doc['doc_name']} marked {review_status}" + (f" — {review_comment}" if review_comment else "")
+            audit_detail,
+            before_state=_before,
+            after_state=_after,
         )
         self.success(result)
 
