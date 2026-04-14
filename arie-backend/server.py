@@ -9257,7 +9257,12 @@ class ChangeRequestImplementHandler(BaseHandler):
                 recompute_risk_fn=recompute_risk_fn,
             )
             if not success:
-                status_code = 409 if "stale" in err.lower() or "conflict" in err.lower() or "version" in err.lower() else 400
+                if "not permitted" in err.lower() or "not authorized" in err.lower():
+                    status_code = 403
+                elif "stale" in err.lower() or "conflict" in err.lower() or "version" in err.lower():
+                    status_code = 409
+                else:
+                    status_code = 400
                 self.error(err, status_code)
                 return
             self.success({"status": "implemented", "profile_version_id": version_id})

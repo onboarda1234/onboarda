@@ -998,6 +998,11 @@ def implement_change_request(
 
     Returns (success, error_message, new_version_id).
     """
+    # Permission check FIRST — before any DB queries (defense in depth)
+    allowed, role_err = check_role_permission(user.get("role", ""), "implement_change")
+    if not allowed:
+        return False, role_err, None
+
     row = db.execute(
         "SELECT * FROM change_requests WHERE id = ?", (request_id,)
     ).fetchone()
@@ -1007,11 +1012,6 @@ def implement_change_request(
     request = dict(row)
     if request["status"] != "approved":
         return False, f"Request must be approved before implementation (current: {request['status']})", None
-
-    # Permission check
-    allowed, role_err = check_role_permission(user.get("role", ""), "implement_change")
-    if not allowed:
-        return False, role_err, None
 
     application_id = request["application_id"]
 
@@ -1259,9 +1259,9 @@ def _get_current_profile_version_id(db, application_id: str) -> Optional[str]:
     try:
         row = db.execute(
             """SELECT id FROM entity_profile_versions
-               WHERE application_id = ? AND is_current = 1
+               WHERE application_id = ? AND is_current = ?
                ORDER BY version_number DESC LIMIT 1""",
-            (application_id,),
+            (application_id, True),
         ).fetchone()
         return row["id"] if row else None
     except Exception:
@@ -1291,10 +1291,11 @@ def _create_profile_version(
         next_version = 1
 
     # Mark all existing versions as not current
+    # Use parameterized boolean for PostgreSQL BOOLEAN / SQLite INTEGER compatibility
     try:
         db.execute(
-            "UPDATE entity_profile_versions SET is_current = 0 WHERE application_id = ?",
-            (application_id,),
+            "UPDATE entity_profile_versions SET is_current = ? WHERE application_id = ?",
+            (False, application_id),
         )
     except Exception:
         pass
@@ -1304,9 +1305,10 @@ def _create_profile_version(
            (id, application_id, version_number, is_current,
             profile_snapshot, change_request_id,
             created_by, created_at)
-           VALUES (?, ?, ?, 1, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             version_id, application_id, next_version,
+            True,
             json.dumps(after_snapshot, default=str),
             request_id,
             user.get("sub"),
