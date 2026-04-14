@@ -202,7 +202,9 @@ class TestRolePermissions:
 
     def test_analyst_can_create(self):
         cm = _get_cm()
-        assert cm.check_role_permission("analyst", "create_request") == (True, "")
+        v, e = cm.check_role_permission("analyst", "create_request")
+        assert v is True
+        assert e == ""
 
     def test_co_cannot_implement(self):
         cm = _get_cm()
