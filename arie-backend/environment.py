@@ -404,6 +404,19 @@ def get_sumsub_individual_level_name() -> str:
         or "id-and-liveness"
     )
 
+def get_sumsub_aml_level_name() -> str:
+    """AML-only screening level for director/UBO person AML.
+
+    This level requires only first name, last name, and date of birth —
+    no ID document, no liveness, no phone.  AML screening runs automatically
+    once the applicant is moved to ``pending``.
+
+    Resolution order:
+      1. SUMSUB_AML_LEVEL_NAME  (explicit override)
+      2. 'aml-screening'        (default — matches Phase 1 Sumsub config)
+    """
+    return os.environ.get("SUMSUB_AML_LEVEL_NAME", "aml-screening")
+
 def get_sumsub_company_level_name() -> str:
     """Company/KYB level.  Empty string means 'not configured'."""
     return os.environ.get("SUMSUB_COMPANY_LEVEL_NAME", "")
