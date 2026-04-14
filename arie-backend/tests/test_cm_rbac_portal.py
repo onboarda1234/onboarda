@@ -599,7 +599,7 @@ class TestServiceLayerRBAC:
         req = cm.create_change_request(
             db=wrapped, application_id=app_a, source="backoffice_manual",
             source_channel="backoffice", reason="PV guard test",
-            items=[{"change_type": "company_name", "field_name": "company_name",
+            items=[{"change_type": "company_details", "field_name": "company_name",
                     "old_value": "Old", "new_value": "New"}],
             user=admin, log_audit_fn=_noop_audit,
         )
@@ -641,7 +641,7 @@ class TestServiceLayerRBAC:
         req = cm.create_change_request(
             db=wrapped, application_id=app_a, source="backoffice_manual",
             source_channel="backoffice", reason="Analyst impl attempt",
-            items=[{"change_type": "company_name", "field_name": "company_name",
+            items=[{"change_type": "company_details", "field_name": "company_name",
                     "old_value": original, "new_value": "HACKED"}],
             user=admin, log_audit_fn=_noop_audit,
         )
