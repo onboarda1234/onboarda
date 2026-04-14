@@ -7228,7 +7228,9 @@ class MemoApproveHandler(BaseHandler):
                     "Only admin or Senior Compliance Officer (SCO) may approve memos with supervisor warnings.",
                     403
                 )
-            # Parse body for approval_reason if not already available from Gate 2
+            # Parse body for approval_reason if not already parsed by Gate 2.
+            # When val_status == "pass_with_fixes", Gate 2 has already validated
+            # and set approval_reason to a non-empty string (empty is rejected).
             if val_status != "pass_with_fixes":
                 body = {}
                 try:
