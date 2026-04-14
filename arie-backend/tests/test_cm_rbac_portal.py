@@ -538,7 +538,7 @@ class TestServiceLayerRBAC:
         req = cm.create_change_request(
             db=wrapped, application_id=app_a, source="backoffice_manual",
             source_channel="backoffice", reason="Admin impl test",
-            items=[{"change_type": "company_name", "field_name": "company_name",
+            items=[{"change_type": "company_details", "field_name": "company_name",
                     "old_value": "Company A Ltd", "new_value": "Company A Updated"}],
             user=admin, log_audit_fn=_noop_audit,
         )
@@ -568,7 +568,8 @@ class TestServiceLayerRBAC:
         req = cm.create_change_request(
             db=wrapped, application_id=app_a, source="backoffice_manual",
             source_channel="backoffice", reason="SCO impl test",
-            items=[{"change_type": "other"}],
+            items=[{"change_type": "company_details", "field_name": "sector",
+                    "old_value": "Financial Services", "new_value": "Insurance"}],
             user=sco, log_audit_fn=_noop_audit,
         )
         cm.submit_change_request(wrapped, req["id"], sco, log_audit_fn=_noop_audit)
