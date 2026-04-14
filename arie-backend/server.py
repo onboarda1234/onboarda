@@ -7213,7 +7213,38 @@ class MemoApproveHandler(BaseHandler):
         can_approve = supervisor_result.get("can_approve", False)  # Default to False (fail-closed)
         requires_sco = supervisor_result.get("requires_sco_review", False)
 
-        if supervisor_verdict != "CONSISTENT" or not can_approve:
+        supervisor_warnings_approval = False
+        if supervisor_verdict == "CONSISTENT" and can_approve:
+            pass  # Standard approval — no additional requirements
+        elif supervisor_verdict == "CONSISTENT_WITH_WARNINGS" and can_approve:
+            # Supervisor-warnings approval policy (EX-06 B2):
+            # Only admin or SCO may approve a memo whose supervisor flagged warnings.
+            # A documented reason is mandatory.
+            approver_role = user.get("role", "")
+            if approver_role not in ("admin", "sco"):
+                db.close()
+                return self.error(
+                    "Cannot approve memo with supervisor verdict 'CONSISTENT_WITH_WARNINGS'. "
+                    "Only admin or Senior Compliance Officer (SCO) may approve memos with supervisor warnings.",
+                    403
+                )
+            # Parse body for approval_reason if not already available from Gate 2
+            if val_status != "pass_with_fixes":
+                body = {}
+                try:
+                    body = json.loads(self.request.body or b"{}")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                approval_reason = (body.get("approval_reason") or "").strip()
+            if not approval_reason:
+                db.close()
+                return self.error(
+                    "approval_reason is required when approving a memo with supervisor verdict 'CONSISTENT_WITH_WARNINGS'. "
+                    "Provide a documented reason for approving despite supervisor warnings.",
+                    400
+                )
+            supervisor_warnings_approval = True
+        else:
             db.close()
             return self.error(
                 f"Cannot approve memo with supervisor verdict '{supervisor_verdict or 'pending'}'. "
@@ -7227,20 +7258,30 @@ class MemoApproveHandler(BaseHandler):
             return self.error("This memo requires Senior Compliance Officer review before approval.", 403)
 
         now_ts = datetime.now().isoformat()
+        needs_reason = val_status == "pass_with_fixes" or supervisor_warnings_approval
         try:
-            # Determine if this is a pass_with_fixes senior approval
-            if val_status == "pass_with_fixes":
-                # Store approval with reason — validation_status stays unchanged
+            if needs_reason:
+                # Store approval with reason — validation_status and supervisor verdict stay unchanged
                 db.execute(
                     "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ?, approval_reason = ? WHERE id = ?",
                     (user.get("sub", ""), now_ts, user.get("sub", ""), approval_reason, memo_row["id"])
                 )
+                # Build context-aware audit detail
+                context_parts = []
+                if val_status == "pass_with_fixes":
+                    context_parts.append("outstanding findings")
+                if supervisor_warnings_approval:
+                    context_parts.append("supervisor warnings")
+                context_desc = " and ".join(context_parts)
                 audit_detail = (
-                    f"Compliance memo approved with outstanding findings by {user.get('name', 'Unknown')} "
+                    f"Compliance memo approved with {context_desc} by {user.get('name', 'Unknown')} "
                     f"(role: {user.get('role', 'unknown')}). "
-                    f"Validation status: pass_with_fixes. "
-                    f"Approval reason: {approval_reason}"
                 )
+                if val_status == "pass_with_fixes":
+                    audit_detail += f"Validation status: pass_with_fixes. "
+                if supervisor_warnings_approval:
+                    audit_detail += f"Supervisor verdict: CONSISTENT_WITH_WARNINGS. "
+                audit_detail += f"Approval reason: {approval_reason}"
             else:
                 db.execute(
                     "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ? WHERE id = ?",
@@ -7260,6 +7301,10 @@ class MemoApproveHandler(BaseHandler):
             response["validation_status"] = "pass_with_fixes"
             response["approval_reason"] = approval_reason
             response["senior_approval"] = True
+        if supervisor_warnings_approval:
+            response["supervisor_verdict"] = "CONSISTENT_WITH_WARNINGS"
+            response["approval_reason"] = approval_reason
+            response["supervisor_warnings_approval"] = True
         self.success(response)
 
 
