@@ -238,22 +238,18 @@ class TestTransactionalFailure:
         assert row["company_name"] == "test [QA-TEST]"
 
     def test_no_items_fails_implementation(self, db):
-        """CR with zero items must fail with clear error."""
+        """CR with zero items must fail at create time with clear error."""
         cm = _get_cm()
         wdb = _DBWrapper(db)
         app_id, _ = _setup_test_data(db)
 
-        req = cm.create_change_request(
-            wdb, app_id, "backoffice_manual", "backoffice", "Empty",
-            [],
-            ADMIN_USER,
-        )
-        _approve_request(cm, wdb, req["id"])
-
-        success, err, version_id = cm.implement_change_request(wdb, req["id"], ADMIN_USER)
-        assert not success
-        assert "No change items" in err
-        assert version_id is None
+        # Zero-item creates are now rejected at the service layer
+        with pytest.raises(ValueError, match="At least one change item"):
+            cm.create_change_request(
+                wdb, app_id, "backoffice_manual", "backoffice", "Empty",
+                [],
+                ADMIN_USER,
+            )
 
     def test_unrecognised_change_type_fails(self, db):
         """CR with unrecognised change_type must not silently claim success."""

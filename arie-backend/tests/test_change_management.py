@@ -345,8 +345,9 @@ class TestDBIntegration:
         app_id, _ = _setup_test_data(db)
         user = {"sub": "u1", "name": "User", "role": "co"}
 
+        _items = [{"change_type": "other", "field_name": "note", "new_value": "test"}]
         req = cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice",
-                                        "Test", [], user)
+                                        "Test", _items, user)
         ok, _ = cm.submit_change_request(wdb, req["id"], user)
         assert ok
         detail = cm.get_change_request_detail(wdb, req["id"])
@@ -358,8 +359,9 @@ class TestDBIntegration:
         app_id, _ = _setup_test_data(db)
         user = {"sub": "u1", "name": "User", "role": "co"}
 
+        _items = [{"change_type": "other", "field_name": "note", "new_value": "test"}]
         req = cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice",
-                                        "Test", [], user)
+                                        "Test", _items, user)
         cm.submit_change_request(wdb, req["id"], user)
         ok, err = cm.submit_change_request(wdb, req["id"], user)
         assert not ok
@@ -395,8 +397,9 @@ class TestDBIntegration:
         app_id, _ = _setup_test_data(db)
         sco = {"sub": "sco1", "name": "SCO", "role": "sco"}
 
+        _items = [{"change_type": "other", "field_name": "note", "new_value": "test"}]
         req = cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice",
-                                        "Test", [], sco)
+                                        "Test", _items, sco)
         cm.submit_change_request(wdb, req["id"], sco)
         cm.update_change_request_status(wdb, req["id"], "triage_in_progress", sco)
         cm.update_change_request_status(wdb, req["id"], "ready_for_review", sco)
@@ -433,8 +436,9 @@ class TestDBIntegration:
         app_id, _ = _setup_test_data(db)
         sco = {"sub": "sco1", "name": "SCO", "role": "sco"}
 
+        _items = [{"change_type": "other", "field_name": "note", "new_value": "test"}]
         req = cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice",
-                                        "Test", [], sco)
+                                        "Test", _items, sco)
         ok, err, _ = cm.implement_change_request(wdb, req["id"], sco)
         assert not ok
         assert "approved" in err.lower()
@@ -545,8 +549,9 @@ class TestDBIntegration:
         app_id, _ = _setup_test_data(db)
         user = {"sub": "u1", "name": "User", "role": "co"}
 
+        _items = [{"change_type": "other", "field_name": "note", "new_value": "test"}]
         req = cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice",
-                                        "Test", [], user)
+                                        "Test", _items, user)
         doc = cm.attach_document_to_request(wdb, req["id"], "cert.pdf", "supporting",
                                              "/tmp/cert.pdf", uploaded_by="u1")
         assert doc["doc_name"] == "cert.pdf"
@@ -574,8 +579,9 @@ class TestDBIntegration:
         app_id, _ = _setup_test_data(db)
         user = {"sub": "u1", "name": "User", "role": "co"}
 
-        cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "R1", [], user)
-        cm.create_change_request(wdb, app_id, "portal_client", "portal", "R2", [], user)
+        _items = [{"change_type": "other", "field_name": "note", "new_value": "test"}]
+        cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "R1", _items, user)
+        cm.create_change_request(wdb, app_id, "portal_client", "portal", "R2", _items, user)
 
         reqs = cm.list_change_requests(wdb, application_id=app_id)
         assert len(reqs) >= 2
@@ -587,7 +593,8 @@ class TestDBIntegration:
         user = {"sub": "u1", "name": "User", "role": "co"}
 
         cm.create_change_alert(wdb, app_id, "other", "backoffice", "T", {}, user=user)
-        cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "T", [], user)
+        _items = [{"change_type": "other", "field_name": "note", "new_value": "test"}]
+        cm.create_change_request(wdb, app_id, "backoffice_manual", "backoffice", "T", _items, user)
 
         stats = cm.get_change_management_stats(wdb)
         assert stats["alerts"]["total"] >= 1
