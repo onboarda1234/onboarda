@@ -9103,7 +9103,7 @@ class ChangeRequestsListHandler(BaseHandler):
             items = data.get("items", [])
             if not items:
                 # Reject legacy top-level field/new_value payloads and empty creates
-                if data.get("field") or data.get("new_value") or data.get("change_type"):
+                if "field" in data or "new_value" in data or "change_type" in data:
                     self.error(
                         "Legacy top-level field/new_value payload is not supported. "
                         "Provide an 'items' array instead.",

@@ -579,7 +579,7 @@ class TestPortalHTTPEndpoint:
                 assert body["status"] == "submitted"  # auto-submitted
 
         suite = unittest.TestLoader().loadTestsFromName("test_post", _Test)
-        result = unittest.TextTestRunner(verbosity=0, stream=open(os.devnull, "w")).run(suite)
+        result = unittest.TextTestRunner(verbosity=0, stream=__import__("io").StringIO()).run(suite)
         assert result.wasSuccessful(), f"HTTP test failed: {result.failures + result.errors}"
 
     def test_portal_post_nonowned_returns_404(self, db, app):
@@ -610,7 +610,7 @@ class TestPortalHTTPEndpoint:
 
         import unittest
         suite = unittest.TestLoader().loadTestsFromName("test_post", _Test)
-        result = unittest.TextTestRunner(verbosity=0, stream=open(os.devnull, "w")).run(suite)
+        result = unittest.TextTestRunner(verbosity=0, stream=__import__("io").StringIO()).run(suite)
         assert result.wasSuccessful(), f"HTTP test failed: {result.failures + result.errors}"
 
     def test_portal_post_invalid_change_type_returns_400(self, db, app):
@@ -641,7 +641,7 @@ class TestPortalHTTPEndpoint:
 
         import unittest
         suite = unittest.TestLoader().loadTestsFromName("test_post", _Test)
-        result = unittest.TextTestRunner(verbosity=0, stream=open(os.devnull, "w")).run(suite)
+        result = unittest.TextTestRunner(verbosity=0, stream=__import__("io").StringIO()).run(suite)
         assert result.wasSuccessful(), f"HTTP test failed: {result.failures + result.errors}"
 
 
@@ -688,7 +688,7 @@ class TestBackofficeHTTPEndpoint:
 
         import unittest
         suite = unittest.TestLoader().loadTestsFromName("test_post", _Test)
-        result = unittest.TextTestRunner(verbosity=0, stream=open(os.devnull, "w")).run(suite)
+        result = unittest.TextTestRunner(verbosity=0, stream=__import__("io").StringIO()).run(suite)
         assert result.wasSuccessful(), f"HTTP test failed: {result.failures + result.errors}"
 
     def test_backoffice_post_legacy_payload_returns_400(self, db, app):
@@ -718,7 +718,7 @@ class TestBackofficeHTTPEndpoint:
 
         import unittest
         suite = unittest.TestLoader().loadTestsFromName("test_post", _Test)
-        result = unittest.TextTestRunner(verbosity=0, stream=open(os.devnull, "w")).run(suite)
+        result = unittest.TextTestRunner(verbosity=0, stream=__import__("io").StringIO()).run(suite)
         assert result.wasSuccessful(), f"HTTP test failed: {result.failures + result.errors}"
 
     def test_backoffice_post_invalid_change_type_returns_400(self, db, app):
@@ -746,7 +746,7 @@ class TestBackofficeHTTPEndpoint:
 
         import unittest
         suite = unittest.TestLoader().loadTestsFromName("test_post", _Test)
-        result = unittest.TextTestRunner(verbosity=0, stream=open(os.devnull, "w")).run(suite)
+        result = unittest.TextTestRunner(verbosity=0, stream=__import__("io").StringIO()).run(suite)
         assert result.wasSuccessful(), f"HTTP test failed: {result.failures + result.errors}"
 
     def test_backoffice_post_empty_items_returns_400(self, db, app):
@@ -773,5 +773,5 @@ class TestBackofficeHTTPEndpoint:
 
         import unittest
         suite = unittest.TestLoader().loadTestsFromName("test_post", _Test)
-        result = unittest.TextTestRunner(verbosity=0, stream=open(os.devnull, "w")).run(suite)
+        result = unittest.TextTestRunner(verbosity=0, stream=__import__("io").StringIO()).run(suite)
         assert result.wasSuccessful(), f"HTTP test failed: {result.failures + result.errors}"
