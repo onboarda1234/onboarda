@@ -65,8 +65,7 @@ def test_validate_approval_requires_explicit_validation_pass(db):
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
 
     assert can_approve is False
-    assert "validation_status" in message
-    assert "'pass'" in message
+    assert "pass_with_fixes" in message
 
 
 def test_validate_approval_requires_explicit_supervisor_consistent(db):

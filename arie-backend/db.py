@@ -2827,6 +2827,23 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.25: Add approval_reason column to compliance_memos (EX-06).
+    # Stores the mandatory reason when a senior approver approves a memo with
+    # validation_status == 'pass_with_fixes'.
+    try:
+        if not _safe_column_exists(db, "compliance_memos", "approval_reason"):
+            db.execute("ALTER TABLE compliance_memos ADD COLUMN approval_reason TEXT")
+            db.commit()
+            logger.info("Migration v2.25: Added approval_reason column to compliance_memos")
+        else:
+            logger.info("Migration v2.25: approval_reason column already exists")
+    except Exception as e:
+        logger.error("Migration v2.25 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.
