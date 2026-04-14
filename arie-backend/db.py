@@ -2890,6 +2890,14 @@ def _run_migrations(db: DBConnection):
                 ).fetchall()
                 for row in rows:
                     constraint_name = row["conname"]
+                    # Validate constraint name contains only safe identifier chars
+                    import re
+                    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', constraint_name):
+                        logger.warning(
+                            "Migration v2.27: Skipping invalid constraint name: %s",
+                            constraint_name,
+                        )
+                        continue
                     db.execute(
                         f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name}"
                     )
