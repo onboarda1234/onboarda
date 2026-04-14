@@ -1798,6 +1798,7 @@
             </div>
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+            <span style="flex:1;font-size:11px;color:var(--text-dim);align-self:center;">📎 Supporting documents may be requested by Compliance after submission.</span>
             <button type="button" class="btn-outline" onclick="document.getElementById('portal-change-form').style.display='none'" style="padding:8px 16px;font-size:13px;">Cancel</button>
             <button type="submit" class="btn-submit" style="padding:8px 16px;font-size:13px;">Submit Request</button>
           </div>
@@ -8435,6 +8436,11 @@ async function submitPortalChangeRequest(e) {
 }
 
 async function loadPortalChangeRequests() {
+  // Wait for auth readiness — avoid fetching before token is available
+  if (!AUTH_TOKEN) {
+    document.getElementById('portal-changes-list').innerHTML = '<div style="text-align:center;padding:32px;color:var(--text-dim);">Loading…</div>';
+    return;
+  }
   try {
     var resp = await apiCall('GET', '/api/portal/change-requests');
     var reqs = resp.requests || [];
@@ -8456,7 +8462,14 @@ async function loadPortalChangeRequests() {
     html += '</tbody></table>';
     container.innerHTML = html;
   } catch(e) {
-    document.getElementById('portal-changes-list').innerHTML = '<div style="text-align:center;padding:16px;color:var(--red);">Failed to load change requests.</div>';
+    // On initial load failure, retry once after short delay (handles session hydration race)
+    if (!loadPortalChangeRequests._retried) {
+      loadPortalChangeRequests._retried = true;
+      setTimeout(function() { loadPortalChangeRequests._retried = false; loadPortalChangeRequests(); }, 1500);
+      return;
+    }
+    loadPortalChangeRequests._retried = false;
+    document.getElementById('portal-changes-list').innerHTML = '<div style="text-align:center;padding:16px;color:var(--red);">Failed to load change requests. Please try again later.</div>';
   }
 }
 

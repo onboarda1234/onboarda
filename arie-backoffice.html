@@ -5724,6 +5724,20 @@ async function advanceEDDStage(caseId, newStage) {
 
 // ═══════════════ CHANGE MANAGEMENT ═══════════════
 
+// apiFetch: wrapper around boApiCall for Change Management calls.
+// Translates fetch-like (url, {method, body}) signature to boApiCall(method, path, body).
+function apiFetch(url, opts) {
+  var method = (opts && opts.method) ? opts.method : 'GET';
+  // Strip /api prefix since boApiCall prepends BO_API_BASE ("/api")
+  var path = url;
+  if (path.indexOf('/api') === 0) path = path.substring(4);
+  var body = null;
+  if (opts && opts.body) {
+    try { body = JSON.parse(opts.body); } catch(e) { body = opts.body; }
+  }
+  return boApiCall(method, path, body);
+}
+
 function renderChangeMgmt() {
   loadChangeAlerts();
   loadCMApplications();

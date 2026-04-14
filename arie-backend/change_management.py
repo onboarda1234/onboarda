@@ -349,11 +349,29 @@ def check_role_permission(user_role: str, action: str) -> Tuple[bool, str]:
 # Entity Profile Snapshot
 # ============================================================================
 
+def _json_safe_value(val: Any) -> Any:
+    """Convert a value to a JSON-safe type.
+
+    Handles datetime/date objects that SQLite may return as Python objects.
+    """
+    if isinstance(val, datetime):
+        return val.isoformat()
+    if hasattr(val, 'isoformat'):  # date objects
+        return val.isoformat()
+    return val
+
+
+def _json_safe_dict(d: Dict) -> Dict:
+    """Return a copy of dict with all values converted to JSON-safe types."""
+    return {k: _json_safe_value(v) for k, v in d.items()}
+
+
 def snapshot_entity_profile(db, application_id: str) -> Dict[str, Any]:
     """Capture a full snapshot of the current entity/company profile.
 
     Reads from applications, directors, ubos, intermediaries tables.
     Returns a dict that can be stored as JSON in entity_profile_versions.
+    All values are JSON-safe (no raw datetime objects).
     """
     app = db.execute(
         "SELECT * FROM applications WHERE id = ?", (application_id,)
@@ -364,19 +382,19 @@ def snapshot_entity_profile(db, application_id: str) -> Dict[str, Any]:
     # Convert row to dict
     app_dict = dict(app) if app else {}
 
-    # Get related parties
+    # Get related parties — ensure all values are JSON-serializable
     directors = [
-        dict(r) for r in db.execute(
+        _json_safe_dict(dict(r)) for r in db.execute(
             "SELECT * FROM directors WHERE application_id = ?", (application_id,)
         ).fetchall()
     ]
     ubos = [
-        dict(r) for r in db.execute(
+        _json_safe_dict(dict(r)) for r in db.execute(
             "SELECT * FROM ubos WHERE application_id = ?", (application_id,)
         ).fetchall()
     ]
     intermediaries = [
-        dict(r) for r in db.execute(
+        _json_safe_dict(dict(r)) for r in db.execute(
             "SELECT * FROM intermediaries WHERE application_id = ?", (application_id,)
         ).fetchall()
     ]
@@ -390,7 +408,7 @@ def snapshot_entity_profile(db, application_id: str) -> Dict[str, Any]:
     profile = {}
     for f in profile_fields:
         if f in app_dict:
-            profile[f] = app_dict[f]
+            profile[f] = _json_safe_value(app_dict[f])
 
     profile["directors"] = directors
     profile["ubos"] = ubos
@@ -533,10 +551,13 @@ def convert_alert_to_request(
     alert_id: str,
     user: Dict,
     additional_notes: Optional[str] = None,
+    items: Optional[List[Dict]] = None,
     log_audit_fn=None,
 ) -> Tuple[Optional[Dict], str]:
     """Convert a Change Alert into a formal Change Request.
 
+    If items are provided explicitly, they are used directly.
+    Otherwise, items are derived from the alert's detected_changes.
     Returns (request_dict_or_none, error_message).
     """
     alert = db.execute(
@@ -553,13 +574,17 @@ def convert_alert_to_request(
     if not valid:
         return None, err
 
-    # Create the change request from alert data
-    detected_changes = alert.get("detected_changes")
-    if isinstance(detected_changes, str):
-        try:
-            detected_changes = json.loads(detected_changes)
-        except (json.JSONDecodeError, TypeError):
-            detected_changes = {}
+    # Use explicitly provided items or derive from alert
+    if items and len(items) > 0:
+        request_items = items
+    else:
+        detected_changes = alert.get("detected_changes")
+        if isinstance(detected_changes, str):
+            try:
+                detected_changes = json.loads(detected_changes)
+            except (json.JSONDecodeError, TypeError):
+                detected_changes = {}
+        request_items = _alert_changes_to_items(detected_changes, alert.get("alert_type", "other"))
 
     request = create_change_request(
         db=db,
@@ -567,7 +592,7 @@ def convert_alert_to_request(
         source="external_alert_conversion",
         source_channel=alert.get("source_channel", "other"),
         reason=f"Converted from alert {alert_id}: {alert.get('summary', '')}",
-        items=_alert_changes_to_items(detected_changes, alert.get("alert_type", "other")),
+        items=request_items,
         user=user,
         source_alert_id=alert_id,
         log_audit_fn=log_audit_fn,
@@ -658,6 +683,14 @@ def create_change_request(
 
     # Capture base profile version for conflict detection
     base_version_id = _get_current_profile_version_id(db, application_id)
+
+    # If no profile version exists yet, create an initial baseline snapshot
+    if not base_version_id:
+        initial_snapshot = snapshot_entity_profile(db, application_id)
+        if initial_snapshot:
+            base_version_id = _create_profile_version(
+                db, application_id, None, {}, initial_snapshot, user
+            )
 
     # Downstream action flags based on materiality
     downstream = get_downstream_actions(overall_materiality)
@@ -1274,7 +1307,7 @@ def _create_profile_version(
            VALUES (?, ?, ?, 1, ?, ?, ?, ?)""",
         (
             version_id, application_id, next_version,
-            json.dumps(after_snapshot),
+            json.dumps(after_snapshot, default=str),
             request_id,
             user.get("sub"),
             now,
