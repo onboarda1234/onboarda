@@ -9024,6 +9024,7 @@ class ChangeAlertConvertHandler(BaseHandler):
             request, err = cm.convert_alert_to_request(
                 db, alert_id, user,
                 additional_notes=data.get("notes"),
+                items=data.get("items"),
                 log_audit_fn=self.log_audit,
             )
             if not request:
