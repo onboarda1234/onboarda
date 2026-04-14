@@ -60,7 +60,8 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
     returns api_status="not_configured" instead of pretending a check ran.
     """
     # ── Company screening: short-circuit when no company/KYB level exists ──
-    if entity_type == "Company" and not get_sumsub_company_level_name():
+    company_level = get_sumsub_company_level_name() if entity_type == "Company" else ""
+    if entity_type == "Company" and not company_level:
         logger.info(
             "Sumsub company KYB level not configured — returning not_configured for '%s'", name
         )
@@ -82,10 +83,7 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
         last = parts[1] if len(parts) > 1 else ""
 
         # Use entity-appropriate Sumsub level
-        if entity_type == "Company":
-            level = get_sumsub_company_level_name()
-        else:
-            level = get_sumsub_individual_level_name()
+        level = company_level if entity_type == "Company" else get_sumsub_individual_level_name()
 
         applicant_result = sumsub_create_applicant(
             external_user_id=ext_id,
