@@ -2881,7 +2881,7 @@ function applyEnvironmentUI() {
 
   // Production: hide role switcher
   if (!FEATURE_FLAGS.ENABLE_ROLE_SWITCHER) {
-    var roleSwitcher = document.querySelector('.role-switcher') || document.getElementById('role-switcher');
+    var roleSwitcher = document.querySelector('.role-switcher') || document.getElementById('role-switcher') || document.getElementById('login-as-select');
     if (roleSwitcher) roleSwitcher.style.display = 'none';
   }
 
@@ -3301,6 +3301,11 @@ var ROLE_LABELS = { admin:'Administrator', sco:'Senior Compliance Officer', co:'
 
 // ── Demo role switcher (called by #login-as-select onchange) ──
 function switchUser(role) {
+  // Guard: disabled in staging/production unless ENABLE_ROLE_SWITCHER is set
+  if (!FEATURE_FLAGS.ENABLE_ROLE_SWITCHER) {
+    showToast('Role switching is disabled in this environment', 'error');
+    return;
+  }
   var match = USERS.find(function(u) { return u.role === role; });
   if (!match) {
     match = { id: 0, name: ROLE_LABELS[role] || role, email: '', role: role, initials: '--', status: 'active' };
