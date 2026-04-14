@@ -35,7 +35,7 @@ from calendar import monthrange
 import requests
 from requests.exceptions import RequestException, Timeout
 
-from environment import is_production
+from environment import is_production, get_sumsub_individual_level_name
 
 
 logger = logging.getLogger("sumsub_client")
@@ -182,7 +182,7 @@ class SumsubClient:
         self.app_token = app_token or os.environ.get("SUMSUB_APP_TOKEN", "")
         self.secret_key = secret_key or os.environ.get("SUMSUB_SECRET_KEY", "")
         self.base_url = base_url or os.environ.get("SUMSUB_BASE_URL", "https://api.sumsub.com")
-        self.level_name = level_name or os.environ.get("SUMSUB_LEVEL_NAME", "basic-kyc-level")
+        self.level_name = level_name or get_sumsub_individual_level_name()
         self.webhook_secret = webhook_secret or os.environ.get("SUMSUB_WEBHOOK_SECRET", "")
         self.max_retries = max_retries
         self.timeout = timeout
@@ -937,7 +937,7 @@ def get_sumsub_client(
         app_token: Sumsub app token (env: SUMSUB_APP_TOKEN).
         secret_key: Sumsub secret key (env: SUMSUB_SECRET_KEY).
         base_url: API base URL (env: SUMSUB_BASE_URL, default: https://api.sumsub.com).
-        level_name: Default KYC level (env: SUMSUB_LEVEL_NAME, default: basic-kyc-level).
+        level_name: Default KYC level (env: SUMSUB_INDIVIDUAL_LEVEL_NAME / SUMSUB_LEVEL_NAME, default: id-and-liveness).
         webhook_secret: Webhook secret (env: SUMSUB_WEBHOOK_SECRET).
         monthly_cap_usd: Monthly API spending cap in USD (default: $500).
         max_retries: Max retry attempts for 5xx (default: 3).
@@ -953,7 +953,7 @@ def get_sumsub_client(
             app_token=app_token,
             secret_key=secret_key,
             base_url=base_url or os.environ.get("SUMSUB_BASE_URL", "https://api.sumsub.com"),
-            level_name=level_name or os.environ.get("SUMSUB_LEVEL_NAME", "basic-kyc-level"),
+            level_name=level_name or get_sumsub_individual_level_name(),
             webhook_secret=webhook_secret,
             monthly_cap_usd=monthly_cap_usd,
             max_retries=max_retries,

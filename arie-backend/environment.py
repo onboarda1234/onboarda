@@ -390,6 +390,24 @@ def get_sumsub_secret_key() -> str:
 def get_sumsub_level_name() -> str:
     return os.environ.get("SUMSUB_LEVEL_NAME", "basic-kyc-level")
 
+def get_sumsub_individual_level_name() -> str:
+    """Individual/director/UBO KYC level.
+
+    Resolution order:
+      1. SUMSUB_INDIVIDUAL_LEVEL_NAME  (explicit individual override)
+      2. SUMSUB_LEVEL_NAME             (backward-compatible fallback)
+      3. 'id-and-liveness'             (safe default for Sumsub sandbox)
+    """
+    return (
+        os.environ.get("SUMSUB_INDIVIDUAL_LEVEL_NAME")
+        or os.environ.get("SUMSUB_LEVEL_NAME")
+        or "id-and-liveness"
+    )
+
+def get_sumsub_company_level_name() -> str:
+    """Company/KYB level.  Empty string means 'not configured'."""
+    return os.environ.get("SUMSUB_COMPANY_LEVEL_NAME", "")
+
 def get_opencorporates_api_key() -> str:
     return os.environ.get("OPENCORPORATES_API_KEY", "")
 

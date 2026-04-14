@@ -93,6 +93,12 @@ SUMSUB_APP_TOKEN = os.getenv("SUMSUB_APP_TOKEN", "")
 SUMSUB_SECRET_KEY = os.getenv("SUMSUB_SECRET_KEY", "")
 SUMSUB_BASE_URL = os.getenv("SUMSUB_BASE_URL", "https://api.sumsub.com")
 SUMSUB_LEVEL_NAME = os.getenv("SUMSUB_LEVEL_NAME", "basic-kyc-level")
+SUMSUB_INDIVIDUAL_LEVEL_NAME = (
+    os.getenv("SUMSUB_INDIVIDUAL_LEVEL_NAME")
+    or os.getenv("SUMSUB_LEVEL_NAME")
+    or "id-and-liveness"
+)
+SUMSUB_COMPANY_LEVEL_NAME = os.getenv("SUMSUB_COMPANY_LEVEL_NAME", "")
 SUMSUB_WEBHOOK_SECRET = os.getenv("SUMSUB_WEBHOOK_SECRET", "")
 
 
