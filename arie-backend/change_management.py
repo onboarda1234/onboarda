@@ -669,7 +669,14 @@ def convert_alert_to_request(
 
 
 def _alert_changes_to_items(detected_changes: Dict, alert_type: str) -> List[Dict]:
-    """Convert detected_changes dict from alert into change request items."""
+    """Convert detected_changes dict from alert into change request items.
+
+    Alert types (e.g. legal_name_change, shareholding_change) may not match
+    the VALID_CHANGE_TYPES whitelist used for request items.  When an alert
+    type is not directly in the whitelist, we fall back to ``"other"`` so that
+    auto-derived items pass create-time validation while still preserving the
+    original materiality tier from the alert type.
+    """
     items = []
     if not detected_changes:
         return items

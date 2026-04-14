@@ -9041,6 +9041,7 @@ class ChangeAlertConvertHandler(BaseHandler):
             self.success(request, 201)
         except ValueError as ve:
             self.error(str(ve), 400)
+            return
         finally:
             db.close()
 
