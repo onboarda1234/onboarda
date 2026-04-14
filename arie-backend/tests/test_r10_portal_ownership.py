@@ -23,7 +23,6 @@ import sys
 import sqlite3
 import unittest
 import io
-import secrets
 
 import pytest
 
@@ -69,7 +68,7 @@ def _seed_r10_data(raw_db):
         "(id, application_id, person_key, full_name, first_name, last_name, "
         "nationality, date_of_birth) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (f"dir-r10-{secrets.token_hex(4)}", OWNED_APP_ID, "dir1",
+        ("dir-r10-4428154d", OWNED_APP_ID, "dir1",
          "R10 Director", "R10", "Director", "MU", "1985-03-10"),
     )
     raw_db.commit()
