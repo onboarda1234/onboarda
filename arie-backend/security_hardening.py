@@ -68,7 +68,8 @@ class ApprovalGateValidator:
             2. Screening must exist in prescreening_data and mode must be 'live'
             3. Compliance memo must exist in compliance_memos table
             4. All documents must not be 'flagged'
-            5. Screening report checks must not use simulated api_status
+            5. Required screening checks (Sumsub) must not use simulated api_status;
+               enrichment checks (company_registry, ip_geolocation) warn only
             6. Compliance memo ai_source must not be 'mock'
         """
         try:
@@ -210,25 +211,40 @@ class ApprovalGateValidator:
                     )
 
             # 5. Check screening report for any simulated or degraded provider statuses
+            #    Required checks (Sumsub AML/KYC/sanctions) block approval if simulated.
+            #    Enrichment checks (company_registry, ip_geolocation) warn but do not block.
             screening_evidence = _collect_screening_provider_evidence(screening_report)
             if screening_evidence:
                 for item in screening_evidence:
                     api_status = (item.get("api_status") or "").lower()
                     source = (item.get("source") or "").lower()
-                    if api_status in ("simulated", "mocked") or source in ("simulated", "mocked"):
+                    is_simulated = api_status in ("simulated", "mocked") or source in ("simulated", "mocked")
+                    is_error = api_status in ("error", "blocked")
+
+                    if not item.get("is_required", True):
+                        # Enrichment source — log warning but do not block approval
+                        if is_simulated:
+                            logger.warning(
+                                f"Enrichment screening '{item.get('name', 'unknown')}' used simulated data. "
+                                "This is non-blocking enrichment — approval proceeds."
+                            )
+                        continue
+
+                    # Required screening — block if simulated or errored
+                    if is_simulated:
                         return (
                             False,
                             f"Screening check '{item.get('name', 'unknown')}' used simulated data. "
                             "Live screening results are required for approval."
                         )
-                    if api_status in ("error", "blocked"):
+                    if is_error:
                         return (
                             False,
                             f"Screening check '{item.get('name', 'unknown')}' is not in a live usable state "
                             f"(api_status={api_status or 'unknown'}).",
                         )
             else:
-                for check_name in ('sanctions', 'company_registry', 'ip_geolocation', 'kyc'):
+                for check_name in ('sanctions', 'kyc'):
                     check_data = screening_report.get(check_name, {})
                     if isinstance(check_data, dict) and check_data.get('api_status') == 'simulated':
                         return (
@@ -386,6 +402,22 @@ class ApprovalGateValidator:
 # ============================================================================
 
 def _collect_screening_provider_evidence(screening_report: Dict) -> list:
+    """
+    Collects screening provider evidence with required/enrichment classification.
+
+    Required (Sumsub-sourced, compliance-critical):
+      - company_watchlist (Sumsub company sanctions)
+      - director_screening_N (Sumsub person AML/PEP)
+      - ubo_screening_N (Sumsub person AML/PEP)
+      - kyc_applicant_N (Sumsub identity verification)
+
+    Enrichment (optional, non-blocking):
+      - company_registry (OpenCorporates corporate registry lookup)
+      - ip_geolocation (IP-based geolocation)
+    """
+    # Enrichment sources: simulated data should warn but not block approval
+    _ENRICHMENT_CHECKS = frozenset({"company_registry", "ip_geolocation"})
+
     evidence = []
     if not isinstance(screening_report, dict):
         return evidence
@@ -397,6 +429,7 @@ def _collect_screening_provider_evidence(screening_report: Dict) -> list:
             "name": name,
             "api_status": item.get("api_status"),
             "source": item.get("source"),
+            "is_required": name not in _ENRICHMENT_CHECKS,
         })
 
     company_screening = screening_report.get("company_screening") or {}
@@ -420,11 +453,16 @@ def determine_screening_mode(screening_report: Dict) -> str:
     """
     Analyzes a screening report to determine if it used live or simulated sources.
 
+    Only required screening sources (Sumsub AML/KYC/sanctions) affect the mode.
+    Enrichment sources (company_registry, ip_geolocation) are excluded — their
+    simulated status does not make the overall screening mode 'simulated'.
+
     Args:
         screening_report: Dictionary with screening data, typically from SumSub API
 
     Returns:
-        'live' if all screening sources are production, 'simulated' if any source is mocked
+        'live' if all required screening sources are production,
+        'simulated' if any required source is mocked
     """
     try:
         if not isinstance(screening_report, dict) or not screening_report:
@@ -434,6 +472,9 @@ def determine_screening_mode(screening_report: Dict) -> str:
         if provider_evidence:
             saw_live = False
             for item in provider_evidence:
+                # Skip enrichment sources for mode determination
+                if not item.get("is_required", True):
+                    continue
                 api_status = (item.get("api_status") or "").lower()
                 source_name = (item.get("source") or "").lower()
                 if api_status in ("simulated", "mocked") or any(tag in source_name for tag in ("simulated", "mock", "demo")):
