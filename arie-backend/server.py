@@ -9039,6 +9039,8 @@ class ChangeAlertConvertHandler(BaseHandler):
                 self.error(err, 400)
                 return
             self.success(request, 201)
+        except ValueError as ve:
+            self.error(str(ve), 400)
         finally:
             db.close()
 
@@ -9111,6 +9113,9 @@ class ChangeRequestsListHandler(BaseHandler):
                 )
             except PermissionError as pe:
                 self.error(str(pe), 403)
+                return
+            except ValueError as ve:
+                self.error(str(ve), 400)
                 return
             self.success(request, 201)
         finally:
@@ -9414,6 +9419,27 @@ class EntityProfileVersionDetailHandler(BaseHandler):
             db.close()
 
 
+class ApplicationProfileVersionDetailHandler(BaseHandler):
+    """GET /api/applications/:app_id/profile-versions/:version_id — Scoped version detail"""
+    def get(self, app_id, version_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        if not HAS_CHANGE_MANAGEMENT:
+            self.error("Change management module not available", 503)
+            return
+
+        db = get_db()
+        try:
+            version = cm.get_profile_version_detail(db, version_id)
+            if not version or version.get("application_id") != app_id:
+                self.error("Version not found", 404)
+                return
+            self.success(version)
+        finally:
+            db.close()
+
+
 class PortalApplicationsHandler(BaseHandler):
     """GET /api/portal/applications — List only client-owned applications"""
     def get(self):
@@ -9491,22 +9517,39 @@ class PortalChangeRequestHandler(BaseHandler):
                 return
 
             items = data.get("items", [])
-            request = cm.create_change_request(
-                db=db,
-                application_id=application_id,
-                source="portal_client",
-                source_channel="portal",
-                reason=data.get("reason", ""),
-                items=items,
-                user=user,
-                log_audit_fn=self.log_audit,
-            )
+            if not items:
+                self.error("At least one change item is required", 400)
+                return
+
+            try:
+                request = cm.create_change_request(
+                    db=db,
+                    application_id=application_id,
+                    source="portal_client",
+                    source_channel="portal",
+                    reason=data.get("reason", ""),
+                    items=items,
+                    user=user,
+                    log_audit_fn=self.log_audit,
+                )
+            except PermissionError as pe:
+                self.error(str(pe), 403)
+                return
+            except ValueError as ve:
+                self.error(str(ve), 400)
+                return
 
             # Auto-submit portal requests
-            cm.submit_change_request(db, request["id"], user, log_audit_fn=self.log_audit)
-            request["status"] = "submitted"
+            ok, submit_err = cm.submit_change_request(db, request["id"], user, log_audit_fn=self.log_audit)
+            if ok:
+                request["status"] = "submitted"
+            else:
+                logger.warning("Portal CR %s auto-submit failed: %s", request["id"], submit_err)
 
             self.success(request, 201)
+        except Exception:
+            logger.exception("Unhandled error in portal change request creation")
+            self.error("Internal server error while creating change request", 500)
         finally:
             db.close()
 
@@ -9660,6 +9703,7 @@ def make_app():
         (r"/api/change-management/requests/([^/]+)", ChangeRequestDetailHandler),
         (r"/api/change-management/requests", ChangeRequestsListHandler),
         (r"/api/change-management/stats", ChangeManagementStatsHandler),
+        (r"/api/applications/([^/]+)/profile-versions/([^/]+)", ApplicationProfileVersionDetailHandler),
         (r"/api/applications/([^/]+)/profile-versions", EntityProfileVersionsHandler),
         (r"/api/profile-versions/([^/]+)", EntityProfileVersionDetailHandler),
         (r"/api/portal/applications", PortalApplicationsHandler),

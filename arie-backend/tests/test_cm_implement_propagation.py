@@ -261,17 +261,15 @@ class TestTransactionalFailure:
         wdb = _DBWrapper(db)
         app_id, _ = _setup_test_data(db)
 
-        req = cm.create_change_request(
-            wdb, app_id, "backoffice_manual", "backoffice", "Unknown type",
-            [{"change_type": "entity_update", "field_name": "company_name",
-              "old_value": "old", "new_value": "new"}],
-            ADMIN_USER,
-        )
-        _approve_request(cm, wdb, req["id"])
-
-        success, err, _ = cm.implement_change_request(wdb, req["id"], ADMIN_USER)
-        assert not success
-        assert "No items could be applied" in err or "skipped" in err.lower()
+        req = None
+        with pytest.raises(ValueError, match="entity_update"):
+            req = cm.create_change_request(
+                wdb, app_id, "backoffice_manual", "backoffice", "Unknown type",
+                [{"change_type": "entity_update", "field_name": "company_name",
+                  "old_value": "old", "new_value": "new"}],
+                ADMIN_USER,
+            )
+        assert req is None  # Should never have been created
 
     def test_no_profile_version_on_failed_implement(self, db):
         """Failed implementation must NOT leave an orphaned profile version."""
@@ -321,7 +319,7 @@ class TestPersonFieldPropagation:
 
         req = cm.create_change_request(
             wdb, app_id, "backoffice_manual", "backoffice", "UBO update",
-            [{"change_type": "ubo_update", "field_name": "ownership_pct",
+            [{"change_type": "ubo_change", "field_name": "ownership_pct",
               "new_value": "60.0",
               "person_action": "update",
               "person_snapshot": {"person_key": "ubo1"}}],
@@ -354,7 +352,7 @@ class TestPersonFieldPropagation:
         # ownership_pct is not a safe field for directors
         req = cm.create_change_request(
             wdb, app_id, "backoffice_manual", "backoffice", "Director bad field",
-            [{"change_type": "director_update", "field_name": "ownership_pct",
+            [{"change_type": "director_change", "field_name": "ownership_pct",
               "new_value": "30.0",
               "person_action": "update",
               "person_snapshot": {"person_key": "dir1"}}],

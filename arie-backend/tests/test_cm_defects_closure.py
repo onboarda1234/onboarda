@@ -604,7 +604,7 @@ class TestPortalChangeRequest:
 
         req = cm.create_change_request(
             wdb, app_id, "portal_client", "portal", "Test",
-            [{"change_type": "contact_update", "field_name": "email",
+            [{"change_type": "contact_detail_update", "field_name": "email",
               "old_value": "old@test.com", "new_value": "new@test.com"}],
             portal_user,
         )
@@ -648,8 +648,8 @@ class TestPermissions:
 
         req = cm.create_change_request(
             wdb, app_id, "backoffice_manual", "backoffice", "Legal name change",
-            [{"change_type": "legal_name_change", "field_name": "company_name",
-              "old_value": "Old Name", "new_value": "New Name"}],
+            [{"change_type": "company_details", "field_name": "company_name",
+              "old_value": "Old Name", "new_value": "New Name", "materiality": "tier1"}],
             ADMIN_USER,
         )
         cm.submit_change_request(wdb, req["id"], ADMIN_USER)
@@ -712,7 +712,7 @@ class TestAlertLifecycle:
         assert ok, err
 
         # Convert with items
-        items = [{"change_type": "ubo_update", "field_name": "ownership_pct",
+        items = [{"change_type": "ubo_change", "field_name": "ownership_pct",
                   "old_value": "75", "new_value": "60"}]
         request, err = cm.convert_alert_to_request(wdb, alert["id"], ADMIN_USER, items=items)
         assert request is not None, err

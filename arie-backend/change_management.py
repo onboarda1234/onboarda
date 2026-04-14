@@ -155,6 +155,43 @@ MATERIALITY_DEFAULTS = {
     "formatting_correction": "tier3",
 }
 
+# --- Valid Change Types (shared whitelist for create, convert, and implement) ---
+VALID_CHANGE_TYPES = frozenset({
+    # Entity-level field changes
+    "company_details",
+    "address_change",
+    "business_activity_change",
+    "contact_detail_update",
+    "other",
+    # Director changes
+    "director_add",
+    "director_remove",
+    "director_change",
+    # UBO changes
+    "ubo_add",
+    "ubo_remove",
+    "ubo_change",
+    # Intermediary changes
+    "intermediary_add",
+    "intermediary_remove",
+    "intermediary_change",
+})
+
+
+def validate_change_types(items: list) -> tuple:
+    """Validate that all items have a supported change_type.
+
+    Returns (valid, error_message).
+    """
+    for idx, item in enumerate(items):
+        ct = item.get("change_type", "")
+        if ct not in VALID_CHANGE_TYPES:
+            return False, (
+                f"Unsupported change_type '{ct}' in item {idx}. "
+                f"Valid types: {', '.join(sorted(VALID_CHANGE_TYPES))}"
+            )
+    return True, ""
+
 # --- Change Sources / Origins ---
 CHANGE_SOURCES = (
     "portal_client",
@@ -636,11 +673,13 @@ def _alert_changes_to_items(detected_changes: Dict, alert_type: str) -> List[Dic
     items = []
     if not detected_changes:
         return items
+    # Map alert_type to a valid change_type; fall back to "other" for unknown
+    change_type = alert_type if alert_type in VALID_CHANGE_TYPES else "other"
     for field, delta in detected_changes.items():
         old_value = delta.get("old") if isinstance(delta, dict) else None
         new_value = delta.get("new") if isinstance(delta, dict) else str(delta)
         items.append({
-            "change_type": alert_type,
+            "change_type": change_type,
             "field_name": field,
             "old_value": json.dumps(old_value) if old_value is not None else None,
             "new_value": json.dumps(new_value) if new_value is not None else None,
@@ -684,6 +723,12 @@ def create_change_request(
     allowed, role_err = check_role_permission(user.get("role", ""), "create_request")
     if not allowed:
         raise PermissionError(role_err)
+
+    # --- Validate change_type values before creating anything ---
+    if items:
+        valid, ct_err = validate_change_types(items)
+        if not valid:
+            raise ValueError(ct_err)
 
     request_id = generate_change_request_id()
     now = datetime.now(timezone.utc).isoformat()
@@ -1175,7 +1220,7 @@ def _apply_change_item(db, application_id: str, item: Dict) -> Tuple[bool, str]:
         _apply_intermediary_change(db, application_id, person_action, person_snapshot, field_name, new_value)
         return True, f"intermediary change applied ({person_action})"
     elif change_type in ("company_details", "address_change", "business_activity_change",
-                         "licensing_change", "contact_update", "other"):
+                         "licensing_change", "contact_update", "contact_detail_update", "other"):
         # Field-level changes on applications table
         if field_name and new_value is not None:
             _apply_field_change(db, application_id, field_name, new_value)
