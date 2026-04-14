@@ -8908,7 +8908,7 @@ class ChangeAlertsListHandler(BaseHandler):
             db.close()
 
     def post(self):
-        user = self.require_auth(roles=["admin", "sco", "co"])
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
         if not HAS_CHANGE_MANAGEMENT:
@@ -9064,7 +9064,7 @@ class ChangeRequestsListHandler(BaseHandler):
             db.close()
 
     def post(self):
-        user = self.require_auth(roles=["admin", "sco", "co"])
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
         if not HAS_CHANGE_MANAGEMENT:
@@ -9130,7 +9130,7 @@ class ChangeRequestDetailHandler(BaseHandler):
             db.close()
 
     def patch(self, request_id):
-        user = self.require_auth(roles=["admin", "sco", "co"])
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
         if not HAS_CHANGE_MANAGEMENT:
@@ -9151,7 +9151,8 @@ class ChangeRequestDetailHandler(BaseHandler):
                 log_audit_fn=self.log_audit,
             )
             if not success:
-                self.error(err, 400)
+                status_code = 403 if "not permitted" in err.lower() else 400
+                self.error(err, status_code)
                 return
             self.success({"status": "updated", "new_status": new_status})
         finally:
@@ -9161,7 +9162,7 @@ class ChangeRequestDetailHandler(BaseHandler):
 class ChangeRequestSubmitHandler(BaseHandler):
     """POST /api/change-management/requests/:id/submit — Submit a draft request"""
     def post(self, request_id):
-        user = self.require_auth(roles=["admin", "sco", "co"])
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
         if not HAS_CHANGE_MANAGEMENT:
@@ -9284,7 +9285,7 @@ class ChangeRequestImplementHandler(BaseHandler):
 class ChangeRequestDocumentHandler(BaseHandler):
     """POST /api/change-management/requests/:id/documents — Upload supporting doc"""
     def post(self, request_id):
-        user = self.require_auth(roles=["admin", "sco", "co"])
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
         if not user:
             return
         if not HAS_CHANGE_MANAGEMENT:

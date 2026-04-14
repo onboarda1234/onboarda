@@ -121,20 +121,46 @@ def _noop_audit(*args, **kwargs):
 # ============================================================================
 
 class TestRBACPermissionMatrix:
-    """Verify ROLE_PERMISSIONS denies analyst for all mutating CM actions."""
+    """Verify ROLE_PERMISSIONS allows analyst for preparation actions but blocks final/decision actions."""
 
-    def test_analyst_cannot_create_request(self):
+    # --- Analyst ALLOWED ---
+    def test_analyst_can_create_request(self):
         cm = _get_cm()
         allowed, err = cm.check_role_permission("analyst", "create_request")
-        assert allowed is False
-        assert "not permitted" in err.lower()
+        assert allowed is True
+        assert err == ""
 
-    def test_analyst_cannot_submit_request(self):
+    def test_analyst_can_submit_request(self):
         cm = _get_cm()
         allowed, err = cm.check_role_permission("analyst", "submit_request")
-        assert allowed is False
-        assert "not permitted" in err.lower()
+        assert allowed is True
+        assert err == ""
 
+    def test_analyst_can_create_alert(self):
+        cm = _get_cm()
+        allowed, err = cm.check_role_permission("analyst", "create_alert")
+        assert allowed is True
+        assert err == ""
+
+    def test_analyst_can_upload_document(self):
+        cm = _get_cm()
+        allowed, err = cm.check_role_permission("analyst", "upload_document")
+        assert allowed is True
+        assert err == ""
+
+    def test_analyst_can_triage(self):
+        cm = _get_cm()
+        allowed, err = cm.check_role_permission("analyst", "triage_request")
+        assert allowed is True
+        assert err == ""
+
+    def test_analyst_can_request_info(self):
+        cm = _get_cm()
+        allowed, err = cm.check_role_permission("analyst", "request_info")
+        assert allowed is True
+        assert err == ""
+
+    # --- Analyst BLOCKED ---
     def test_analyst_cannot_reject_request(self):
         cm = _get_cm()
         allowed, err = cm.check_role_permission("analyst", "reject_request")
@@ -168,18 +194,13 @@ class TestRBACPermissionMatrix:
         assert allowed is False
         assert "not permitted" in err.lower()
 
-    def test_analyst_cannot_create_alert(self):
+    def test_analyst_cannot_review_request(self):
         cm = _get_cm()
-        allowed, err = cm.check_role_permission("analyst", "create_alert")
+        allowed, err = cm.check_role_permission("analyst", "review_request")
         assert allowed is False
         assert "not permitted" in err.lower()
 
-    def test_analyst_cannot_upload_document(self):
-        cm = _get_cm()
-        allowed, err = cm.check_role_permission("analyst", "upload_document")
-        assert allowed is False
-        assert "not permitted" in err.lower()
-
+    # --- CO/Admin/SCO checks ---
     def test_co_cannot_implement(self):
         cm = _get_cm()
         allowed, err = cm.check_role_permission("co", "implement_change")
@@ -226,60 +247,226 @@ class TestRBACPermissionMatrix:
 class TestServiceLayerRBAC:
     """Verify service-layer functions enforce roles BEFORE DB mutations."""
 
-    def test_analyst_create_request_raises_permission_error(self, db):
+    # --- Analyst ALLOWED: create, submit, and preparatory transitions ---
+    def test_analyst_can_create_request(self, db):
         cm = _get_cm()
         _, _, app_a, _ = _setup_cm_test_data(db)
         wrapped = _DBWrapper(db)
         analyst = _make_user("analyst")
 
-        with pytest.raises(PermissionError):
-            cm.create_change_request(
-                db=wrapped,
-                application_id=app_a,
-                source="backoffice_manual",
-                source_channel="backoffice",
-                reason="Test",
-                items=[{"change_type": "company_name", "field_name": "company_name",
-                        "old_value": "Old", "new_value": "New"}],
-                user=analyst,
-                log_audit_fn=_noop_audit,
-            )
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Analyst prep",
+            items=[{"change_type": "other"}],
+            user=analyst, log_audit_fn=_noop_audit,
+        )
+        assert req["id"].startswith("CR-")
+        assert req["status"] == "draft"
 
-        # Verify no request was created
+    def test_analyst_can_submit_request(self, db):
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Analyst submit",
+            items=[{"change_type": "other"}],
+            user=analyst, log_audit_fn=_noop_audit,
+        )
+        success, err = cm.submit_change_request(
+            wrapped, req["id"], analyst, log_audit_fn=_noop_audit
+        )
+        assert success is True
+
         row = db.execute(
-            "SELECT COUNT(*) as cnt FROM change_requests WHERE created_by = ?",
-            (analyst["sub"],)
+            "SELECT status FROM change_requests WHERE id = ?", (req["id"],)
         ).fetchone()
-        assert row["cnt"] == 0
+        assert row["status"] == "submitted"
 
-    def test_analyst_submit_request_denied(self, db):
+    def test_analyst_can_patch_submitted_to_triage(self, db):
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Triage test",
+            items=[{"change_type": "other"}],
+            user=analyst, log_audit_fn=_noop_audit,
+        )
+        cm.submit_change_request(wrapped, req["id"], analyst, log_audit_fn=_noop_audit)
+
+        success, err = cm.update_change_request_status(
+            wrapped, req["id"], "triage_in_progress", analyst, log_audit_fn=_noop_audit
+        )
+        assert success is True
+
+    def test_analyst_can_patch_triage_to_ready_for_review(self, db):
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Ready test",
+            items=[{"change_type": "other"}],
+            user=analyst, log_audit_fn=_noop_audit,
+        )
+        cm.submit_change_request(wrapped, req["id"], analyst, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", analyst, log_audit_fn=_noop_audit)
+
+        success, err = cm.update_change_request_status(
+            wrapped, req["id"], "ready_for_review", analyst, log_audit_fn=_noop_audit
+        )
+        assert success is True
+
+    def test_analyst_can_patch_ready_to_approval_pending(self, db):
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Approval pending test",
+            items=[{"change_type": "other"}],
+            user=analyst, log_audit_fn=_noop_audit,
+        )
+        cm.submit_change_request(wrapped, req["id"], analyst, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", analyst, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "ready_for_review", analyst, log_audit_fn=_noop_audit)
+
+        success, err = cm.update_change_request_status(
+            wrapped, req["id"], "approval_pending", analyst, log_audit_fn=_noop_audit
+        )
+        assert success is True
+
+    # --- Analyst BLOCKED: terminal/final statuses ---
+    def test_analyst_cannot_patch_to_approved(self, db):
         cm = _get_cm()
         _, _, app_a, _ = _setup_cm_test_data(db)
         wrapped = _DBWrapper(db)
         admin = _make_user("admin")
         analyst = _make_user("analyst")
 
-        # Create a request as admin
         req = cm.create_change_request(
             db=wrapped, application_id=app_a, source="backoffice_manual",
-            source_channel="backoffice", reason="Test submit",
+            source_channel="backoffice", reason="Block test",
             items=[{"change_type": "other"}],
             user=admin, log_audit_fn=_noop_audit,
         )
+        cm.submit_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
 
-        # Analyst tries to submit
-        success, err = cm.submit_change_request(
-            wrapped, req["id"], analyst, log_audit_fn=_noop_audit
+        success, err = cm.update_change_request_status(
+            wrapped, req["id"], "approved", analyst, log_audit_fn=_noop_audit
         )
         assert success is False
         assert "not permitted" in err.lower()
 
-        # Verify status unchanged
-        row = db.execute(
-            "SELECT status FROM change_requests WHERE id = ?", (req["id"],)
-        ).fetchone()
-        assert row["status"] == "draft"
+        row = db.execute("SELECT status FROM change_requests WHERE id = ?", (req["id"],)).fetchone()
+        assert row["status"] == "approval_pending"
 
+    def test_analyst_cannot_patch_to_rejected(self, db):
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        admin = _make_user("admin")
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Reject block test",
+            items=[{"change_type": "other"}],
+            user=admin, log_audit_fn=_noop_audit,
+        )
+        cm.submit_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
+
+        success, err = cm.update_change_request_status(
+            wrapped, req["id"], "rejected", analyst, log_audit_fn=_noop_audit
+        )
+        assert success is False
+        assert "not permitted" in err.lower()
+
+    def test_analyst_cannot_patch_to_implemented(self, db):
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        admin = _make_user("admin")
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Impl block test",
+            items=[{"change_type": "other"}],
+            user=admin, log_audit_fn=_noop_audit,
+        )
+        cm.submit_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
+        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+
+        success, err = cm.update_change_request_status(
+            wrapped, req["id"], "implemented", analyst, log_audit_fn=_noop_audit
+        )
+        assert success is False
+        assert "not permitted" in err.lower()
+
+    def test_analyst_cannot_patch_to_cancelled(self, db):
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Cancel block test",
+            items=[{"change_type": "other"}],
+            user=analyst, log_audit_fn=_noop_audit,
+        )
+
+        success, err = cm.update_change_request_status(
+            wrapped, req["id"], "cancelled", analyst, log_audit_fn=_noop_audit
+        )
+        assert success is False
+        assert "not permitted" in err.lower()
+
+    def test_analyst_cannot_patch_to_superseded(self, db):
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        admin = _make_user("admin")
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Supersede block test",
+            items=[{"change_type": "other"}],
+            user=admin, log_audit_fn=_noop_audit,
+        )
+        cm.submit_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
+        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+
+        success, err = cm.update_change_request_status(
+            wrapped, req["id"], "superseded", analyst, log_audit_fn=_noop_audit
+        )
+        assert success is False
+        assert "not permitted" in err.lower()
+
+    # --- Analyst BLOCKED: reject (via dedicated reject endpoint) ---
     def test_analyst_reject_request_denied(self, db):
         cm = _get_cm()
         _, _, app_a, _ = _setup_cm_test_data(db)
@@ -287,7 +474,6 @@ class TestServiceLayerRBAC:
         admin = _make_user("admin")
         analyst = _make_user("analyst")
 
-        # Create and submit as admin
         req = cm.create_change_request(
             db=wrapped, application_id=app_a, source="backoffice_manual",
             source_channel="backoffice", reason="Test reject",
@@ -295,25 +481,22 @@ class TestServiceLayerRBAC:
             user=admin, log_audit_fn=_noop_audit,
         )
         cm.submit_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
-
-        # Move through valid transitions to approval_pending
         cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
 
-        # Analyst tries to reject
         success, err = cm.reject_change_request(
             wrapped, req["id"], analyst, log_audit_fn=_noop_audit
         )
         assert success is False
         assert "not permitted" in err.lower()
 
-        # Verify status unchanged
         row = db.execute(
             "SELECT status FROM change_requests WHERE id = ?", (req["id"],)
         ).fetchone()
         assert row["status"] == "approval_pending"
 
+    # --- CO BLOCKED: implement ---
     def test_co_implement_denied(self, db):
         cm = _get_cm()
         _, _, app_a, _ = _setup_cm_test_data(db)
@@ -321,7 +504,6 @@ class TestServiceLayerRBAC:
         admin = _make_user("admin")
         co = _make_user("co")
 
-        # Create → submit → triage → ready → approval_pending → approve as admin
         req = cm.create_change_request(
             db=wrapped, application_id=app_a, source="backoffice_manual",
             source_channel="backoffice", reason="Test impl",
@@ -334,7 +516,6 @@ class TestServiceLayerRBAC:
         cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
         cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
 
-        # CO tries to implement
         success, err, version_id = cm.implement_change_request(
             wrapped, req["id"], co, log_audit_fn=_noop_audit
         )
@@ -342,12 +523,12 @@ class TestServiceLayerRBAC:
         assert "not permitted" in err.lower()
         assert version_id is None
 
-        # Verify status unchanged
         row = db.execute(
             "SELECT status FROM change_requests WHERE id = ?", (req["id"],)
         ).fetchone()
         assert row["status"] == "approved"
 
+    # --- Admin/SCO CAN implement ---
     def test_admin_can_implement(self, db):
         cm = _get_cm()
         _, _, app_a, _ = _setup_cm_test_data(db)
@@ -373,7 +554,6 @@ class TestServiceLayerRBAC:
         assert success is True
         assert err == ""
 
-        # Verify status changed
         row = db.execute(
             "SELECT status FROM change_requests WHERE id = ?", (req["id"],)
         ).fetchone()
@@ -402,6 +582,7 @@ class TestServiceLayerRBAC:
         )
         assert success is True
 
+    # --- Mutation prevention: failed permission must not mutate ---
     def test_failed_permission_does_not_create_profile_version(self, db):
         cm = _get_cm()
         _, _, app_a, _ = _setup_cm_test_data(db)
@@ -409,13 +590,11 @@ class TestServiceLayerRBAC:
         co = _make_user("co")
         admin = _make_user("admin")
 
-        # Count existing profile versions for this app
         before_count = db.execute(
             "SELECT COUNT(*) as cnt FROM entity_profile_versions WHERE application_id = ?",
             (app_a,)
         ).fetchone()["cnt"]
 
-        # Create → submit → approve as admin
         req = cm.create_change_request(
             db=wrapped, application_id=app_a, source="backoffice_manual",
             source_channel="backoffice", reason="PV guard test",
@@ -423,7 +602,6 @@ class TestServiceLayerRBAC:
                     "old_value": "Old", "new_value": "New"}],
             user=admin, log_audit_fn=_noop_audit,
         )
-        # Creating a request may create a base profile version, so capture count after
         after_create_count = db.execute(
             "SELECT COUNT(*) as cnt FROM entity_profile_versions WHERE application_id = ?",
             (app_a,)
@@ -441,40 +619,110 @@ class TestServiceLayerRBAC:
         )
         assert success is False
 
-        # Profile version count should NOT have increased from CO's failed attempt
         after_fail_count = db.execute(
             "SELECT COUNT(*) as cnt FROM entity_profile_versions WHERE application_id = ?",
             (app_a,)
         ).fetchone()["cnt"]
         assert after_fail_count == after_create_count
 
-    def test_failed_permission_does_not_mutate_application(self, db):
+    def test_analyst_failed_implement_does_not_mutate_application(self, db):
+        """Analyst cannot implement, and failed attempt must not touch live data."""
         cm = _get_cm()
         _, _, app_a, _ = _setup_cm_test_data(db)
         wrapped = _DBWrapper(db)
         admin = _make_user("admin")
         analyst = _make_user("analyst")
 
-        # Record original company name
         original = db.execute(
             "SELECT company_name FROM applications WHERE id = ?", (app_a,)
         ).fetchone()["company_name"]
 
-        # Analyst tries to create a request to change company_name
-        with pytest.raises(PermissionError):
-            cm.create_change_request(
-                db=wrapped, application_id=app_a, source="backoffice_manual",
-                source_channel="backoffice", reason="Analyst mutation attempt",
-                items=[{"change_type": "company_name", "field_name": "company_name",
-                        "old_value": original, "new_value": "HACKED"}],
-                user=analyst, log_audit_fn=_noop_audit,
-            )
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Analyst impl attempt",
+            items=[{"change_type": "company_name", "field_name": "company_name",
+                    "old_value": original, "new_value": "HACKED"}],
+            user=admin, log_audit_fn=_noop_audit,
+        )
+        cm.submit_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
+        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
 
-        # Verify company_name unchanged
+        success, err, _ = cm.implement_change_request(
+            wrapped, req["id"], analyst, log_audit_fn=_noop_audit
+        )
+        assert success is False
+        assert "not permitted" in err.lower()
+
         current = db.execute(
             "SELECT company_name FROM applications WHERE id = ?", (app_a,)
         ).fetchone()["company_name"]
         assert current == original
+
+    def test_analyst_failed_implement_does_not_create_profile_version(self, db):
+        """Failed analyst implement must not create a profile version."""
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        admin = _make_user("admin")
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="PV guard analyst test",
+            items=[{"change_type": "other"}],
+            user=admin, log_audit_fn=_noop_audit,
+        )
+        after_create_count = db.execute(
+            "SELECT COUNT(*) as cnt FROM entity_profile_versions WHERE application_id = ?",
+            (app_a,)
+        ).fetchone()["cnt"]
+
+        cm.submit_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
+        cm.approve_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+
+        success, _, _ = cm.implement_change_request(
+            wrapped, req["id"], analyst, log_audit_fn=_noop_audit
+        )
+        assert success is False
+
+        after_fail_count = db.execute(
+            "SELECT COUNT(*) as cnt FROM entity_profile_versions WHERE application_id = ?",
+            (app_a,)
+        ).fetchone()["cnt"]
+        assert after_fail_count == after_create_count
+
+    def test_analyst_failed_approve_does_not_change_decision(self, db):
+        """Analyst cannot approve, and attempt must not change any decision fields."""
+        cm = _get_cm()
+        _, _, app_a, _ = _setup_cm_test_data(db)
+        wrapped = _DBWrapper(db)
+        admin = _make_user("admin")
+        analyst = _make_user("analyst")
+
+        req = cm.create_change_request(
+            db=wrapped, application_id=app_a, source="backoffice_manual",
+            source_channel="backoffice", reason="Approve guard test",
+            items=[{"change_type": "other"}],
+            user=admin, log_audit_fn=_noop_audit,
+        )
+        cm.submit_change_request(wrapped, req["id"], admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "triage_in_progress", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "ready_for_review", admin, log_audit_fn=_noop_audit)
+        cm.update_change_request_status(wrapped, req["id"], "approval_pending", admin, log_audit_fn=_noop_audit)
+
+        success, err = cm.approve_change_request(
+            wrapped, req["id"], analyst, log_audit_fn=_noop_audit
+        )
+        assert success is False
+
+        row = db.execute("SELECT status FROM change_requests WHERE id = ?", (req["id"],)).fetchone()
+        assert row["status"] == "approval_pending"
 
 
 # ============================================================================

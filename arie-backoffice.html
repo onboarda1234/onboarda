@@ -5977,9 +5977,13 @@ function viewRequestDetail(reqId) {
 
     // Actions
     var actions = [];
+    var userRole = (BO_AUTH_USER && BO_AUTH_USER.role) ? BO_AUTH_USER.role : '';
+    var isAnalyst = (userRole === 'analyst');
     if (r.status === 'draft') {
       actions.push('<button class="btn" style="font-size:12px;" onclick="submitChangeRequest(\'' + r.id + '\')">Submit</button>');
-      actions.push('<button class="btn btn-outline" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'cancelled\')">Cancel</button>');
+      if (!isAnalyst) {
+        actions.push('<button class="btn btn-outline" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'cancelled\')">Cancel</button>');
+      }
     }
     if (r.status === 'submitted') {
       actions.push('<button class="btn" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'triage_in_progress\')">Begin Triage</button>');
@@ -5991,11 +5995,11 @@ function viewRequestDetail(reqId) {
     if (r.status === 'ready_for_review') {
       actions.push('<button class="btn" style="font-size:12px;" onclick="updateRequestStatus(\'' + r.id + '\',\'approval_pending\')">Send for Approval</button>');
     }
-    if (r.status === 'approval_pending') {
+    if (r.status === 'approval_pending' && !isAnalyst) {
       actions.push('<button class="btn" style="font-size:12px;background:#198754;" onclick="approveRequest(\'' + r.id + '\')">Approve</button>');
       actions.push('<button class="btn" style="font-size:12px;background:#dc3545;" onclick="rejectRequest(\'' + r.id + '\')">Reject</button>');
     }
-    if (r.status === 'approved') {
+    if (r.status === 'approved' && !isAnalyst) {
       actions.push('<button class="btn" style="font-size:12px;background:#20c997;" onclick="implementRequest(\'' + r.id + '\')">Implement Changes</button>');
     }
 

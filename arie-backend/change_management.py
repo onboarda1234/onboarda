@@ -230,22 +230,28 @@ DOWNSTREAM_ACTION_MAP = {
 
 # --- Roles allowed for each action ---
 ROLE_PERMISSIONS = {
-    "create_request": ("admin", "sco", "co", "client"),
-    "submit_request": ("admin", "sco", "co", "client"),
-    "triage_request": ("admin", "sco", "co"),
-    "request_info": ("admin", "sco", "co"),
+    "create_request": ("admin", "sco", "co", "analyst", "client"),
+    "submit_request": ("admin", "sco", "co", "analyst", "client"),
+    "triage_request": ("admin", "sco", "co", "analyst"),
+    "request_info": ("admin", "sco", "co", "analyst"),
     "review_request": ("admin", "sco", "co"),
     "reject_request": ("admin", "sco", "co"),
     "approve_tier3": ("admin", "sco", "co"),
     "approve_tier2": ("admin", "sco", "co"),
     "approve_tier1": ("admin", "sco"),
     "implement_change": ("admin", "sco"),
-    "upload_document": ("admin", "sco", "co"),
-    "create_alert": ("admin", "sco", "co"),
+    "upload_document": ("admin", "sco", "co", "analyst"),
+    "create_alert": ("admin", "sco", "co", "analyst"),
     "review_alert": ("admin", "sco", "co"),
     "dismiss_alert": ("admin", "sco", "co"),
     "convert_alert": ("admin", "sco", "co"),
 }
+
+# Terminal/final statuses that analyst must NOT be able to set via PATCH
+ANALYST_BLOCKED_STATUSES = frozenset({
+    "approved", "rejected", "partially_approved",
+    "implemented", "cancelled", "superseded",
+})
 
 # Whitelists for person change operations — validated before any SQL construction
 _ALLOWED_PERSON_TABLES = {"directors", "ubos"}
@@ -796,6 +802,14 @@ def update_change_request_status(
     valid, err = validate_request_transition(current_status, new_status)
     if not valid:
         return False, err
+
+    # --- Analyst guard: block terminal/final statuses ---
+    user_role = user.get("role", "")
+    if user_role == "analyst" and new_status in ANALYST_BLOCKED_STATUSES:
+        return False, (
+            f"Role 'analyst' not permitted to set status '{new_status}'. "
+            f"Analysts may only move requests through preparatory statuses."
+        )
 
     # Role-based approval checks
     materiality = row["materiality"]
