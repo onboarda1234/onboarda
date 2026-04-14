@@ -184,17 +184,30 @@ class ApprovalGateValidator:
                 )
 
             # 4. Check all documents are not flagged (from DB, not app dict)
+            # Senior-officer override (EX-06): a flagged document passes the
+            # gate when review_status='accepted' AND reviewer_role is admin/sco
+            # AND review_comment is non-empty (documented reason).
             flagged_docs = db.execute(
-                "SELECT id, doc_type, verification_status FROM documents "
+                "SELECT id, doc_type, verification_status, review_status, review_comment, reviewer_role FROM documents "
                 "WHERE application_id = ? AND verification_status = 'flagged'",
                 (app_id,)
             ).fetchall()
             if flagged_docs:
-                doc_types = ', '.join(d['doc_type'] for d in flagged_docs)
-                return (
-                    False,
-                    f"Flagged documents must be resolved before approval: {doc_types}"
-                )
+                blocking_docs = []
+                for d in flagged_docs:
+                    d_dict = dict(d) if not isinstance(d, dict) else d
+                    r_status = (d_dict.get('review_status') or '').lower()
+                    r_role = (d_dict.get('reviewer_role') or '').lower()
+                    r_comment = (d_dict.get('review_comment') or '').strip()
+                    if r_status == 'accepted' and r_role in ('admin', 'sco') and r_comment:
+                        continue  # Senior-accepted with documented reason — passes gate
+                    blocking_docs.append(d_dict['doc_type'])
+                if blocking_docs:
+                    doc_types = ', '.join(blocking_docs)
+                    return (
+                        False,
+                        f"Flagged documents must be resolved before approval: {doc_types}"
+                    )
 
             # 5. Check screening report for any simulated or degraded provider statuses
             screening_evidence = _collect_screening_provider_evidence(screening_report)
