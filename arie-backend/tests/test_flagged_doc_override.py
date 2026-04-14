@@ -251,7 +251,6 @@ def test_audit_trail_records_override(db):
     This test simulates the handler-level insert directly since we are unit-testing
     the data contract, not the HTTP layer.
     """
-    import json as _json
 
     app, doc_id = _create_app_with_flagged_doc(db)
     app_ref = app["ref"]
@@ -280,7 +279,7 @@ def test_audit_trail_records_override(db):
             f"Senior override: flagged document 'memarts.pdf' (type=memarts) "
             f"accepted by Test Admin (role=admin). Reason: Verified via registrar",
             "127.0.0.1",
-            _json.dumps(before_state), _json.dumps(after_state),
+            json.dumps(before_state), json.dumps(after_state),
         ),
     )
     db.commit()
@@ -293,11 +292,11 @@ def test_audit_trail_records_override(db):
     assert "admin" in (dict(row).get("user_role") or "")
     assert "Verified via registrar" in (dict(row).get("detail") or "")
 
-    after = _json.loads(dict(row)["after_state"])
+    after = json.loads(dict(row)["after_state"])
     assert after["reviewer_role"] == "admin"
     assert after["review_status"] == "accepted"
 
-    before = _json.loads(dict(row)["before_state"])
+    before = json.loads(dict(row)["before_state"])
     assert before["verification_status"] == "flagged"
     assert before["review_status"] == "pending"
 
