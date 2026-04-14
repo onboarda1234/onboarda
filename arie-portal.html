@@ -8394,7 +8394,7 @@ function showPortalChangeRequestForm() {
 async function loadPortalChangeApps() {
   var sel = document.getElementById('portal-cr-app');
   try {
-    var resp = await apiCall('GET', '/applications');
+    var resp = await apiCall('GET', '/portal/applications');
     var apps = resp.applications || [];
     sel.innerHTML = '<option value="">Select application…</option>';
     apps.forEach(function(a) {

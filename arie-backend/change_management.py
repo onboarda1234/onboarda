@@ -230,15 +230,18 @@ DOWNSTREAM_ACTION_MAP = {
 
 # --- Roles allowed for each action ---
 ROLE_PERMISSIONS = {
-    "create_request": ("admin", "sco", "co", "analyst"),
+    "create_request": ("admin", "sco", "co", "client"),
+    "submit_request": ("admin", "sco", "co", "client"),
     "triage_request": ("admin", "sco", "co"),
     "request_info": ("admin", "sco", "co"),
     "review_request": ("admin", "sco", "co"),
+    "reject_request": ("admin", "sco", "co"),
     "approve_tier3": ("admin", "sco", "co"),
     "approve_tier2": ("admin", "sco", "co"),
     "approve_tier1": ("admin", "sco"),
     "implement_change": ("admin", "sco"),
-    "create_alert": ("admin", "sco", "co", "analyst"),
+    "upload_document": ("admin", "sco", "co"),
+    "create_alert": ("admin", "sco", "co"),
     "review_alert": ("admin", "sco", "co"),
     "dismiss_alert": ("admin", "sco", "co"),
     "convert_alert": ("admin", "sco", "co"),
@@ -671,6 +674,11 @@ def create_change_request(
     Returns:
         Dict with created request data.
     """
+    # --- Service-layer role guard ---
+    allowed, role_err = check_role_permission(user.get("role", ""), "create_request")
+    if not allowed:
+        raise PermissionError(role_err)
+
     request_id = generate_change_request_id()
     now = datetime.now(timezone.utc).isoformat()
 
@@ -828,6 +836,11 @@ def submit_change_request(
 
     Returns (success, error_message).
     """
+    # --- Service-layer role guard ---
+    allowed, role_err = check_role_permission(user.get("role", ""), "submit_request")
+    if not allowed:
+        return False, role_err
+
     row = db.execute(
         "SELECT id, status FROM change_requests WHERE id = ?", (request_id,)
     ).fetchone()
@@ -934,6 +947,11 @@ def reject_change_request(
 
     Returns (success, error_message).
     """
+    # --- Service-layer role guard ---
+    allowed, role_err = check_role_permission(user.get("role", ""), "reject_request")
+    if not allowed:
+        return False, role_err
+
     row = db.execute(
         "SELECT id, status, materiality FROM change_requests WHERE id = ?",
         (request_id,),

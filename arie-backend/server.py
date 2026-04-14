@@ -9064,7 +9064,7 @@ class ChangeRequestsListHandler(BaseHandler):
             db.close()
 
     def post(self):
-        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
         if not HAS_CHANGE_MANAGEMENT:
@@ -9090,16 +9090,20 @@ class ChangeRequestsListHandler(BaseHandler):
                 return
 
             items = data.get("items", [])
-            request = cm.create_change_request(
-                db=db,
-                application_id=application_id,
-                source=data.get("source", "backoffice_manual"),
-                source_channel=data.get("source_channel", "backoffice"),
-                reason=data.get("reason", ""),
-                items=items,
-                user=user,
-                log_audit_fn=self.log_audit,
-            )
+            try:
+                request = cm.create_change_request(
+                    db=db,
+                    application_id=application_id,
+                    source=data.get("source", "backoffice_manual"),
+                    source_channel=data.get("source_channel", "backoffice"),
+                    reason=data.get("reason", ""),
+                    items=items,
+                    user=user,
+                    log_audit_fn=self.log_audit,
+                )
+            except PermissionError as pe:
+                self.error(str(pe), 403)
+                return
             self.success(request, 201)
         finally:
             db.close()
@@ -9157,7 +9161,7 @@ class ChangeRequestDetailHandler(BaseHandler):
 class ChangeRequestSubmitHandler(BaseHandler):
     """POST /api/change-management/requests/:id/submit — Submit a draft request"""
     def post(self, request_id):
-        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
         if not HAS_CHANGE_MANAGEMENT:
@@ -9170,7 +9174,8 @@ class ChangeRequestSubmitHandler(BaseHandler):
                 db, request_id, user, log_audit_fn=self.log_audit,
             )
             if not success:
-                self.error(err, 400)
+                status_code = 403 if "not permitted" in err.lower() else 400
+                self.error(err, status_code)
                 return
             self.success({"status": "submitted"})
         finally:
@@ -9224,7 +9229,13 @@ class ChangeRequestRejectHandler(BaseHandler):
                 log_audit_fn=self.log_audit,
             )
             if not success:
-                self.error(err, 400 if "not found" not in err.lower() else 404)
+                if "not permitted" in err.lower():
+                    status_code = 403
+                elif "not found" in err.lower():
+                    status_code = 404
+                else:
+                    status_code = 400
+                self.error(err, status_code)
                 return
             self.success({"status": "rejected"})
         finally:
@@ -9273,7 +9284,7 @@ class ChangeRequestImplementHandler(BaseHandler):
 class ChangeRequestDocumentHandler(BaseHandler):
     """POST /api/change-management/requests/:id/documents — Upload supporting doc"""
     def post(self, request_id):
-        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
         if not HAS_CHANGE_MANAGEMENT:
@@ -9390,6 +9401,26 @@ class EntityProfileVersionDetailHandler(BaseHandler):
                 self.error("Version not found", 404)
                 return
             self.success(version)
+        finally:
+            db.close()
+
+
+class PortalApplicationsHandler(BaseHandler):
+    """GET /api/portal/applications — List only client-owned applications"""
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+
+        client_id = user.get("sub")
+        db = get_db()
+        try:
+            rows = db.execute(
+                "SELECT id, ref, company_name, status FROM applications WHERE client_id = ? ORDER BY created_at DESC",
+                (client_id,),
+            ).fetchall()
+            apps = [dict(r) for r in rows]
+            self.success({"applications": apps, "total": len(apps)})
         finally:
             db.close()
 
@@ -9622,6 +9653,7 @@ def make_app():
         (r"/api/change-management/stats", ChangeManagementStatsHandler),
         (r"/api/applications/([^/]+)/profile-versions", EntityProfileVersionsHandler),
         (r"/api/profile-versions/([^/]+)", EntityProfileVersionDetailHandler),
+        (r"/api/portal/applications", PortalApplicationsHandler),
         (r"/api/portal/change-requests", PortalChangeRequestHandler),
 
         # ── Public API v1 ─────────────────────────────────────
