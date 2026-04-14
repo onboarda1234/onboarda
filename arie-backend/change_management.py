@@ -1066,16 +1066,33 @@ def implement_change_request(
         (request_id,),
     ).fetchall()
 
+    if not items:
+        return False, f"No change items found for request {request_id}", None
+
     try:
-        # Apply changes
+        # Apply changes — track what was applied vs skipped
+        applied_details = []
+        skipped_details = []
+
         for item in items:
             item = dict(item)
-            _apply_change_item(db, application_id, item)
+            applied, detail = _apply_change_item(db, application_id, item)
+            if applied:
+                applied_details.append(detail)
+            else:
+                skipped_details.append(detail)
 
-        # Snapshot after applying
+        # Fail if NO items were actually applied to live tables
+        if not applied_details:
+            raise ValueError(
+                f"No items could be applied to live profile. "
+                f"Skipped: {'; '.join(skipped_details)}"
+            )
+
+        # Snapshot after applying — captures the post-change live profile
         after_snapshot = snapshot_entity_profile(db, application_id)
 
-        # Create new profile version
+        # Create new profile version (errors propagate — no silent swallow)
         new_version_id = _create_profile_version(
             db, application_id, request_id, before_snapshot, after_snapshot, user
         )
@@ -1091,6 +1108,8 @@ def implement_change_request(
             (now, user.get("sub"), new_version_id, now, request_id),
         )
 
+        # Single atomic commit — live update, profile version, and status
+        # all succeed or all fail together
         db.commit()
 
         # Trigger risk recomputation if needed (after commit)
@@ -1100,10 +1119,14 @@ def implement_change_request(
             except Exception as e:
                 logger.warning("Risk recomputation after change %s failed: %s", request_id, e)
 
+        audit_msg = f"Profile version: {new_version_id}. Items applied: {len(applied_details)}"
+        if skipped_details:
+            audit_msg += f". Items skipped: {len(skipped_details)} ({'; '.join(skipped_details)})"
+
         if log_audit_fn:
             log_audit_fn(
                 user, "Change Request Implemented", request_id,
-                f"Profile version: {new_version_id}. Items applied: {len(items)}",
+                audit_msg,
                 db=db,
                 before_state=_safe_snapshot_summary(before_snapshot),
                 after_state=_safe_snapshot_summary(after_snapshot),
@@ -1120,10 +1143,14 @@ def implement_change_request(
         return False, f"Implementation failed: {str(e)}", None
 
 
-def _apply_change_item(db, application_id: str, item: Dict) -> None:
+def _apply_change_item(db, application_id: str, item: Dict) -> Tuple[bool, str]:
     """Apply a single change request item to the live database.
 
     Handles both field-level changes and person (director/UBO/intermediary) changes.
+
+    Returns (applied, detail) where applied is True if the item was
+    successfully applied to a live table, and detail is a human-readable
+    note (empty on success, descriptive on skip/failure).
     """
     change_type = item.get("change_type", "")
     field_name = item.get("field_name")
@@ -1140,15 +1167,23 @@ def _apply_change_item(db, application_id: str, item: Dict) -> None:
     # Person changes (director/UBO/intermediary)
     if change_type.startswith("director_"):
         _apply_person_change(db, application_id, "directors", person_action, person_snapshot, field_name, new_value)
+        return True, f"director change applied ({person_action})"
     elif change_type.startswith("ubo_"):
         _apply_person_change(db, application_id, "ubos", person_action, person_snapshot, field_name, new_value)
+        return True, f"ubo change applied ({person_action})"
     elif change_type.startswith("intermediary_"):
         _apply_intermediary_change(db, application_id, person_action, person_snapshot, field_name, new_value)
+        return True, f"intermediary change applied ({person_action})"
     elif change_type in ("company_details", "address_change", "business_activity_change",
                          "licensing_change", "contact_update", "other"):
         # Field-level changes on applications table
         if field_name and new_value is not None:
             _apply_field_change(db, application_id, field_name, new_value)
+            return True, f"field '{field_name}' updated"
+        else:
+            return False, f"skipped: field_name={field_name!r}, new_value={'None' if new_value is None else repr(new_value)}"
+    else:
+        return False, f"skipped: unrecognised change_type={change_type!r}"
 
 
 def _apply_person_change(db, application_id: str, table: str, action: str,
@@ -1262,18 +1297,24 @@ def _apply_intermediary_change(db, application_id: str, action: str,
                 )
 
 
+SAFE_ENTITY_FIELDS = {
+    "company_name", "brn", "country", "sector", "entity_type",
+    "ownership_structure",
+}
+
+
 def _apply_field_change(db, application_id: str, field_name: str, new_value: str) -> None:
     """Apply a field-level change to the applications table.
 
     Only allows changes to known safe fields.
+    Raises ValueError for unsupported fields so the caller can fail or
+    record an explicit audit note — never silently claims success.
     """
-    SAFE_ENTITY_FIELDS = {
-        "company_name", "brn", "country", "sector", "entity_type",
-        "ownership_structure",
-    }
     if field_name not in SAFE_ENTITY_FIELDS:
-        logger.warning("Blocked unsafe field change attempt: %s on application %s", field_name, application_id)
-        return
+        raise ValueError(
+            f"Unsupported/unsafe field '{field_name}' on application {application_id}. "
+            f"Allowed fields: {', '.join(sorted(SAFE_ENTITY_FIELDS))}"
+        )
 
     now = datetime.now(timezone.utc).isoformat()
     db.execute(
@@ -1308,29 +1349,29 @@ def _create_profile_version(
     after_snapshot: Dict,
     user: Dict,
 ) -> str:
-    """Create a new entity profile version record."""
+    """Create a new entity profile version record.
+
+    All SQL operations run within the caller's transaction.  Errors are
+    propagated — never swallowed — so that the caller can roll back the
+    entire transaction (including any live-profile mutations that preceded
+    this call).
+    """
     version_id = generate_profile_version_id()
     now = datetime.now(timezone.utc).isoformat()
 
-    # Get next version number
-    try:
-        row = db.execute(
-            "SELECT MAX(version_number) as max_v FROM entity_profile_versions WHERE application_id = ?",
-            (application_id,),
-        ).fetchone()
-        next_version = (row["max_v"] or 0) + 1 if row else 1
-    except Exception:
-        next_version = 1
+    # Get next version number — errors propagate to caller for full rollback
+    row = db.execute(
+        "SELECT MAX(version_number) as max_v FROM entity_profile_versions WHERE application_id = ?",
+        (application_id,),
+    ).fetchone()
+    next_version = (row["max_v"] or 0) + 1 if row else 1
 
     # Mark all existing versions as not current
     # Use parameterized boolean for PostgreSQL BOOLEAN / SQLite INTEGER compatibility
-    try:
-        db.execute(
-            "UPDATE entity_profile_versions SET is_current = ? WHERE application_id = ?",
-            (False, application_id),
-        )
-    except Exception:
-        pass
+    db.execute(
+        "UPDATE entity_profile_versions SET is_current = ? WHERE application_id = ?",
+        (False, application_id),
+    )
 
     db.execute(
         """INSERT INTO entity_profile_versions

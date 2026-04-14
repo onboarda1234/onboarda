@@ -637,7 +637,8 @@ class TestDBIntegration:
         wdb = _DBWrapper(db)
         app_id, _ = _setup_test_data(db)
 
-        cm._apply_field_change(wdb, app_id, "status", "rejected")
+        with pytest.raises(ValueError, match="Unsupported/unsafe field"):
+            cm._apply_field_change(wdb, app_id, "status", "rejected")
         assert db.execute("SELECT status FROM applications WHERE id = ?",
                           (app_id,)).fetchone()["status"] == "approved"
 

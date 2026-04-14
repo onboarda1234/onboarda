@@ -4375,6 +4375,14 @@ class UserDetailHandler(BaseHandler):
 
         data = self.get_json()
 
+        # Reject unsupported password field — password changes are not
+        # implemented via this endpoint.  Return 400 rather than silently
+        # ignoring the field.
+        if "password" in data:
+            return self.error(
+                "Password changes are not supported via this endpoint. "
+                "Use the dedicated password-change flow.", 400)
+
         # Validate role
         new_role = data.get("role")
         if new_role and new_role not in self.VALID_ROLES:
