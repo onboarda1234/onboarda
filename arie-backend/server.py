@@ -7158,7 +7158,34 @@ class MemoApproveHandler(BaseHandler):
 
         # Gate 2: Check validation status
         val_status = memo_row.get("validation_status") or "pending"
-        if val_status != "pass":
+        if val_status == "pass":
+            pass  # Standard approval — no additional requirements
+        elif val_status == "pass_with_fixes":
+            # Senior-approval-with-findings policy (EX-06):
+            # Only admin or SCO may approve a memo that passed with outstanding findings.
+            # A documented reason is mandatory.
+            approver_role = user.get("role", "")
+            if approver_role not in ("admin", "sco"):
+                db.close()
+                return self.error(
+                    "Cannot approve memo with validation status 'pass_with_fixes'. "
+                    "Only admin or Senior Compliance Officer (SCO) may approve memos with outstanding findings.",
+                    403
+                )
+            body = {}
+            try:
+                body = json.loads(self.request.body or b"{}")
+            except (json.JSONDecodeError, TypeError):
+                pass
+            approval_reason = (body.get("approval_reason") or "").strip()
+            if not approval_reason:
+                db.close()
+                return self.error(
+                    "approval_reason is required when approving a memo with validation status 'pass_with_fixes'. "
+                    "Provide a documented reason for approving despite outstanding findings.",
+                    400
+                )
+        else:
             db.close()
             return self.error(
                 f"Cannot approve memo with validation status '{val_status}'. "
@@ -7201,18 +7228,39 @@ class MemoApproveHandler(BaseHandler):
 
         now_ts = datetime.now().isoformat()
         try:
-            db.execute(
-                "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ? WHERE id = ?",
-                (user.get("sub", ""), now_ts, user.get("sub", ""), memo_row["id"])
-            )
+            # Determine if this is a pass_with_fixes senior approval
+            if val_status == "pass_with_fixes":
+                # Store approval with reason — validation_status stays unchanged
+                db.execute(
+                    "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ?, approval_reason = ? WHERE id = ?",
+                    (user.get("sub", ""), now_ts, user.get("sub", ""), approval_reason, memo_row["id"])
+                )
+                audit_detail = (
+                    f"Compliance memo approved with outstanding findings by {user.get('name', 'Unknown')} "
+                    f"(role: {user.get('role', 'unknown')}). "
+                    f"Validation status: pass_with_fixes. "
+                    f"Approval reason: {approval_reason}"
+                )
+            else:
+                db.execute(
+                    "UPDATE compliance_memos SET review_status = 'approved', approved_by = ?, approved_at = ?, reviewed_by = ? WHERE id = ?",
+                    (user.get("sub", ""), now_ts, user.get("sub", ""), memo_row["id"])
+                )
+                audit_detail = f"Compliance memo approved by {user.get('name', 'Unknown')}"
+
             db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Approve Memo", app_id, f"Compliance memo approved by {user.get('name', 'Unknown')}", self.get_client_ip()))
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Approve Memo", app_id, audit_detail, self.get_client_ip()))
             db.commit()
         except Exception as e:
             logger.error(f"Failed to store memo approval for {app_id}: {e}", exc_info=True)
         db.close()
 
-        self.success({"status": "approved", "approved_by": user.get("name", ""), "approved_at": now_ts})
+        response = {"status": "approved", "approved_by": user.get("name", ""), "approved_at": now_ts}
+        if val_status == "pass_with_fixes":
+            response["validation_status"] = "pass_with_fixes"
+            response["approval_reason"] = approval_reason
+            response["senior_approval"] = True
+        self.success(response)
 
 
 class MemoValidationResultsHandler(BaseHandler):

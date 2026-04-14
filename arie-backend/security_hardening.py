@@ -110,7 +110,7 @@ class ApprovalGateValidator:
 
             # 3. Check compliance memo exists and meets quality gates
             memo_row = db.execute(
-                "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, created_at "
+                "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, created_at, approval_reason "
                 "FROM compliance_memos WHERE application_id = ? ORDER BY version DESC LIMIT 1",
                 (app_id,)
             ).fetchone()
@@ -132,8 +132,26 @@ class ApprovalGateValidator:
                         "Memo must be reviewed and approved before application approval.")
 
             # 3c. Memo validation must have an explicit positive pass
+            # Senior-approval-with-findings policy (EX-06): 'pass_with_fixes'
+            # is accepted when the memo has been formally approved by a senior
+            # approver (admin/SCO) with a documented reason.  The memo approval
+            # handler enforces the role and reason requirements; if the memo
+            # review_status is 'approved' AND approval_reason is populated, the
+            # senior gate has already been satisfied.
             memo_validation = (memo_row.get('validation_status') or '').lower()
-            if memo_validation != 'pass':
+            if memo_validation == 'pass':
+                pass  # Standard path — no additional checks
+            elif memo_validation == 'pass_with_fixes':
+                # Only allow through if memo was senior-approved with a reason
+                approval_reason = memo_row.get('approval_reason') or ''
+                if memo_review != 'approved' or not approval_reason.strip():
+                    return (
+                        False,
+                        f"Compliance memo validation_status is 'pass_with_fixes'. "
+                        "Memo must be approved by a senior approver (admin/SCO) with a documented reason "
+                        "before application approval can proceed."
+                    )
+            else:
                 return (
                     False,
                     f"Compliance memo validation_status is '{memo_validation}', must be 'pass'. "
