@@ -424,8 +424,20 @@ class SumsubClient:
             elif status == 409:
                 # Applicant already exists, retrieve it
                 logger.info(f"Applicant already exists for {external_user_id}, retrieving existing")
+                self._log_non_2xx(
+                    endpoint=url_path,
+                    status_code=status,
+                    response_body=error_msg,
+                    application_id=external_user_id,
+                )
                 return self.get_applicant_by_external_id(external_user_id)
             else:
+                self._log_non_2xx(
+                    endpoint=url_path,
+                    status_code=status,
+                    response_body=error_msg,
+                    application_id=external_user_id,
+                )
                 logger.warning(f"Sumsub create applicant failed: {status} — {error_msg}")
                 if self.is_configured:
                     return self._error_result("create_applicant", f"API returned {status}",
@@ -476,6 +488,12 @@ class SumsubClient:
                     "api_status": "live",
                 }
             else:
+                self._log_non_2xx(
+                    endpoint=url_path,
+                    status_code=status,
+                    response_body=error_msg,
+                    application_id=external_user_id,
+                )
                 logger.warning(f"Sumsub get applicant failed: {status}")
                 if self.is_configured:
                     return self._error_result("get_applicant", f"Lookup returned {status}",
@@ -534,6 +552,12 @@ class SumsubClient:
 
                 return result
             else:
+                self._log_non_2xx(
+                    endpoint=url_path,
+                    status_code=status,
+                    response_body=error_msg,
+                    applicant_id=applicant_id,
+                )
                 logger.warning(f"Sumsub status check failed: {status}")
                 if self.is_configured:
                     return self._error_result("get_applicant_status", f"API returned {status}",
@@ -603,6 +627,12 @@ class SumsubClient:
                     "api_status": "live",
                 }
             else:
+                self._log_non_2xx(
+                    endpoint=url_path,
+                    status_code=status,
+                    response_body=error_msg,
+                    applicant_id=applicant_id,
+                )
                 logger.warning(f"Sumsub doc upload failed: {status} — {error_msg}")
                 return {
                     "status": "error",
@@ -645,6 +675,12 @@ class SumsubClient:
                     "api_status": "live",
                 }
             else:
+                self._log_non_2xx(
+                    endpoint=url_path,
+                    status_code=status,
+                    response_body=error_msg,
+                    applicant_id=applicant_id,
+                )
                 logger.warning(f"Sumsub get verification result failed: {status}")
                 if self.is_configured:
                     return self._error_result("get_verification_result", f"API returned {status}",
@@ -669,9 +705,16 @@ class SumsubClient:
         screening immediately.  The caller should then poll
         :meth:`get_applicant_review_status` until the review completes.
 
+        **409 handling (retry-safe):**
+        A 409 on this mutation endpoint means the applicant is already in a
+        non-initial state (state conflict / idempotency signal).  Instead of
+        returning ``api_status=error``, we poll
+        ``GET /resources/applicants/{applicant_id}/one`` and return the
+        canonical review state.
+
         Returns:
-            Dict with ``ok: True`` on success, or ``api_status: "error"``
-            on failure.
+            Dict with ``ok: True`` on success, the polled review state on
+            409, or ``api_status: "error"`` on other failures.
         """
         if not self.is_configured:
             logger.info(
@@ -690,6 +733,31 @@ class SumsubClient:
                 logger.info("Sumsub: Requested check for applicant %s", applicant_id)
                 return {"ok": True, "source": "sumsub", "api_status": "live"}
 
+            # 409 = state conflict / idempotency — poll canonical review state
+            if status == 409:
+                logger.info(
+                    "Sumsub request_check 409 (state conflict) for applicant %s "
+                    "— polling review state as canonical",
+                    applicant_id,
+                )
+                self._log_non_2xx(
+                    endpoint=url_path,
+                    status_code=status,
+                    response_body=error_msg,
+                    applicant_id=applicant_id,
+                )
+                review = self.get_applicant_review_status(applicant_id)
+                # Propagate ok=True so callers know the check was not a hard
+                # failure — the review state is the authoritative answer.
+                review["ok"] = review.get("api_status") != "error"
+                return review
+
+            self._log_non_2xx(
+                endpoint=url_path,
+                status_code=status,
+                response_body=error_msg,
+                applicant_id=applicant_id,
+            )
             logger.warning(
                 "Sumsub request_check failed for %s: %s — %s",
                 applicant_id, status, error_msg,
@@ -754,6 +822,12 @@ class SumsubClient:
                     "api_status": api_status,
                 }
 
+            self._log_non_2xx(
+                endpoint=url_path,
+                status_code=status,
+                response_body=error_msg,
+                applicant_id=applicant_id,
+            )
             logger.warning(
                 "Sumsub get_applicant_review_status failed: %s — %s",
                 status, error_msg,
@@ -804,6 +878,12 @@ class SumsubClient:
                     "api_status": "live",
                 }
             else:
+                self._log_non_2xx(
+                    endpoint=url_path,
+                    status_code=status,
+                    response_body=error_msg,
+                    applicant_id=applicant_id,
+                )
                 logger.warning(f"Sumsub get AML screening failed: {status}")
                 if self.is_configured:
                     return self._error_result("get_aml_screening", f"API returned {status}",
@@ -903,6 +983,35 @@ class SumsubClient:
             logger.warning("Invalid Sumsub webhook signature")
 
         return is_valid
+
+    # ── Structured Logging ──
+
+    @staticmethod
+    def _log_non_2xx(
+        endpoint: str,
+        status_code: int,
+        response_body: str,
+        applicant_id: str = "",
+        application_id: str = "",
+        person_id: str = "",
+    ) -> None:
+        """
+        Log a structured record for every non-2xx Sumsub response.
+
+        Includes endpoint, status code, response body (truncated),
+        applicant_id, and application_id / person_id where available.
+        Auth headers and secrets are **never** logged.
+        """
+        logger.warning(
+            "Sumsub non-2xx response: endpoint=%s status=%d body=%s "
+            "applicant_id=%s application_id=%s person_id=%s",
+            endpoint,
+            status_code,
+            (response_body or "")[:500],
+            applicant_id or "(none)",
+            application_id or "(none)",
+            person_id or "(none)",
+        )
 
     # ── Safe Error Responses (returned when live API fails with credentials present) ──
 
