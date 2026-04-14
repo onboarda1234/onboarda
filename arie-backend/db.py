@@ -2537,12 +2537,12 @@ def _run_migrations(db: DBConnection):
                         periodic_review_acceleration_hook BOOLEAN DEFAULT FALSE,
                         pre_change_risk_level TEXT,
                         post_change_risk_level TEXT,
-                        created_by TEXT REFERENCES users(id),
+                        created_by TEXT,
                         submitted_at TIMESTAMP,
-                        approved_by TEXT REFERENCES users(id),
+                        approved_by TEXT,
                         approved_at TIMESTAMP,
                         decision_notes TEXT,
-                        implemented_by TEXT REFERENCES users(id),
+                        implemented_by TEXT,
                         implemented_at TIMESTAMP,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -2578,12 +2578,12 @@ def _run_migrations(db: DBConnection):
                         periodic_review_acceleration_hook INTEGER DEFAULT 0,
                         pre_change_risk_level TEXT,
                         post_change_risk_level TEXT,
-                        created_by TEXT REFERENCES users(id),
+                        created_by TEXT,
                         submitted_at TEXT,
-                        approved_by TEXT REFERENCES users(id),
+                        approved_by TEXT,
                         approved_at TEXT,
                         decision_notes TEXT,
-                        implemented_by TEXT REFERENCES users(id),
+                        implemented_by TEXT,
                         implemented_at TEXT,
                         created_at TEXT DEFAULT (datetime('now')),
                         updated_at TEXT DEFAULT (datetime('now'))
@@ -2704,7 +2704,7 @@ def _run_migrations(db: DBConnection):
                         is_current BOOLEAN DEFAULT TRUE,
                         profile_snapshot TEXT NOT NULL,
                         change_request_id TEXT REFERENCES change_requests(id),
-                        created_by TEXT REFERENCES users(id),
+                        created_by TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
@@ -2719,7 +2719,7 @@ def _run_migrations(db: DBConnection):
                         is_current INTEGER DEFAULT 1,
                         profile_snapshot TEXT NOT NULL,
                         change_request_id TEXT REFERENCES change_requests(id),
-                        created_by TEXT REFERENCES users(id),
+                        created_by TEXT,
                         created_at TEXT DEFAULT (datetime('now'))
                     )
                 """)
@@ -2860,6 +2860,60 @@ def _run_migrations(db: DBConnection):
             db.rollback()
         except Exception:
             pass
+
+    # Migration v2.27: Drop FK constraints on created_by/approved_by/implemented_by
+    # in change_requests and entity_profile_versions.
+    # These columns can hold either officer user IDs (from users table) or
+    # client IDs (from clients table) when portal clients create change requests.
+    # The FK to users(id) causes a ForeignKeyViolation in PostgreSQL for client-
+    # created requests.  SQLite does not enforce FKs by default, so this only
+    # manifests in production (PostgreSQL).
+    if db.is_postgres:
+        _fk_targets = [
+            ("change_requests", "created_by"),
+            ("change_requests", "approved_by"),
+            ("change_requests", "implemented_by"),
+            ("entity_profile_versions", "created_by"),
+        ]
+        for table, column in _fk_targets:
+            try:
+                # Find the auto-generated constraint name for this FK
+                rows = db.execute(
+                    """SELECT conname FROM pg_constraint
+                       WHERE conrelid = %s::regclass
+                         AND contype = 'f'
+                         AND conkey @> ARRAY[(
+                             SELECT attnum FROM pg_attribute
+                             WHERE attrelid = %s::regclass AND attname = %s
+                         )]""",
+                    (table, table, column),
+                ).fetchall()
+                for row in rows:
+                    constraint_name = row["conname"]
+                    # Validate constraint name contains only safe identifier chars
+                    import re
+                    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', constraint_name):
+                        logger.warning(
+                            "Migration v2.27: Skipping invalid constraint name: %s",
+                            constraint_name,
+                        )
+                        continue
+                    db.execute(
+                        f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name}"
+                    )
+                    db.commit()
+                    logger.info(
+                        "Migration v2.27: Dropped FK constraint %s on %s.%s",
+                        constraint_name, table, column,
+                    )
+            except Exception as e:
+                logger.info(
+                    "Migration v2.27: No FK to drop on %s.%s (%s)", table, column, e
+                )
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
