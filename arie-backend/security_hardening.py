@@ -111,7 +111,7 @@ class ApprovalGateValidator:
             # 3. Check compliance memo exists and meets quality gates
             memo_row = db.execute(
                 "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, created_at, approval_reason "
-                "FROM compliance_memos WHERE application_id = ? ORDER BY version DESC LIMIT 1",
+                "FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
                 (app_id,)
             ).fetchone()
             if not memo_row:
