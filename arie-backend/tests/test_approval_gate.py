@@ -76,7 +76,7 @@ def test_validate_approval_requires_explicit_supervisor_consistent(db):
 
     assert can_approve is False
     assert "supervisor_status" in message
-    assert "'CONSISTENT'" in message
+    assert "CONSISTENT_WITH_WARNINGS" in message
 
 
 def test_validate_approval_allows_explicit_positive_states(db):

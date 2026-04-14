@@ -160,7 +160,23 @@ class ApprovalGateValidator:
 
             # 3d. Supervisor must have an explicit positive verdict
             memo_supervisor = (memo_row.get('supervisor_status') or '').upper()
-            if memo_supervisor != 'CONSISTENT':
+            if memo_supervisor == 'CONSISTENT':
+                pass  # Standard path — no additional checks
+            elif memo_supervisor == 'CONSISTENT_WITH_WARNINGS':
+                # Supervisor-warnings approval policy (EX-06 B2):
+                # Allow if memo was senior-approved with a documented reason.
+                # The memo approval handler enforces role and can_approve checks;
+                # if review_status is 'approved' AND approval_reason is populated,
+                # the senior gate has already been satisfied.
+                approval_reason_sv = memo_row.get('approval_reason') or ''
+                if memo_review != 'approved' or not approval_reason_sv.strip():
+                    return (
+                        False,
+                        f"Compliance memo supervisor_status is 'CONSISTENT_WITH_WARNINGS'. "
+                        "Memo must be approved by a senior approver (admin/SCO) with a documented reason "
+                        "before application approval can proceed."
+                    )
+            else:
                 return (
                     False,
                     f"Compliance memo supervisor_status is '{memo_supervisor}', must be 'CONSISTENT'. "
