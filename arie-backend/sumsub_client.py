@@ -460,12 +460,18 @@ class SumsubClient:
                 )
                 logger.warning(
                     "Sumsub create_applicant failure: "
-                    "external_user_id=%s endpoint=%s status=%d body=%s",
-                    external_user_id, url_path, status, (error_msg or "")[:200],
+                    "external_user_id=%s endpoint=%s method=POST status=%d body=%s",
+                    external_user_id, url_path, status, (error_msg or "")[:500],
                 )
                 if self.is_configured:
-                    return self._error_result("create_applicant", f"API returned {status}",
-                                              external_user_id=external_user_id)
+                    return self._error_result(
+                        "create_applicant", f"API returned {status}",
+                        external_user_id=external_user_id,
+                        response_body=(error_msg or "")[:500],
+                        endpoint=url_path,
+                        method="POST",
+                        status_code=status,
+                    )
                 return self._simulate_applicant(
                     external_user_id, first_name, last_name,
                     note=f"API returned {status}", info=info
