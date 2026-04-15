@@ -6194,8 +6194,17 @@ class ScreeningHandler(BaseHandler):
         # Store screening report
         prescreening = safe_json_loads(app["prescreening_data"])
         prescreening["screening_report"] = report
-        prescreening["last_screened_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        now_utc = datetime.now(timezone.utc)
+        prescreening["last_screened_at"] = now_utc.strftime("%Y-%m-%dT%H:%M:%S")
         prescreening["screened_by"] = user["sub"]
+
+        # EX-10: Compute and store screening validity deadline
+        from environment import get_screening_validity_days
+        validity_days = get_screening_validity_days()
+        valid_until = now_utc + timedelta(days=validity_days)
+        prescreening["screening_valid_until"] = valid_until.strftime("%Y-%m-%dT%H:%M:%S")
+        prescreening["screening_validity_days"] = validity_days
+
         db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now'), inputs_updated_at=datetime('now') WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
 
@@ -6213,6 +6222,8 @@ class ScreeningHandler(BaseHandler):
         response = dict(report)
         if risk_recomputed:
             response["risk_recomputed"] = True
+        response["screening_valid_until"] = prescreening["screening_valid_until"]
+        response["screening_validity_days"] = validity_days
         self.success(response)
 
 

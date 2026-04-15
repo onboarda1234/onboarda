@@ -8,17 +8,22 @@ the validator must select the newest row (by created_at DESC, id DESC)
 import json
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 
 def _make_prescreening():
+    now = datetime.now(timezone.utc)
     return json.dumps({
         "screening_report": {
             "screening_mode": "live",
+            "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
             "sanctions": {"api_status": "live"},
             "company_registry": {"api_status": "live"},
             "ip_geolocation": {"api_status": "live"},
             "kyc": {"api_status": "live"},
-        }
+        },
+        "screening_valid_until": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+        "screening_validity_days": 90,
     })
 
 

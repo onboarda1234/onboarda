@@ -1,8 +1,11 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 
 def _live_report():
+    now = datetime.now(timezone.utc)
     return {
+        "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
         "company_screening": {
             "found": True,
             "source": "opencorporates",
@@ -61,6 +64,9 @@ def test_approval_gate_rejects_simulated_nested_screening_report(db, temp_db):
     from security_hardening import ApprovalGateValidator
 
     app_id = "app_gate_nested"
+    now = datetime.now(timezone.utc)
+    screened_at = now.strftime("%Y-%m-%dT%H:%M:%S")
+    valid_until = (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S")
     db.execute(
         """
         INSERT INTO applications
@@ -78,7 +84,11 @@ def test_approval_gate_rejects_simulated_nested_screening_report(db, temp_db):
             "compliance_review",
             "MEDIUM",
             45,
-            json.dumps({"screening_report": dict(_live_report(), screening_mode="live")}),
+            json.dumps({
+                "screening_report": dict(_live_report(), screening_mode="live"),
+                "screening_valid_until": valid_until,
+                "screening_validity_days": 90,
+            }),
         ),
     )
     db.execute(
@@ -116,6 +126,8 @@ def test_approval_gate_rejects_simulated_nested_screening_report(db, temp_db):
 
 def _insert_gate5_app(db, app_id, screening_report):
     """Helper: insert application + valid compliance memo for Gate 5 testing."""
+    now = datetime.now(timezone.utc)
+    valid_until = (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S")
     db.execute(
         """
         INSERT INTO applications
@@ -133,7 +145,11 @@ def _insert_gate5_app(db, app_id, screening_report):
             "compliance_review",
             "MEDIUM",
             45,
-            json.dumps({"screening_report": dict(screening_report, screening_mode="live")}),
+            json.dumps({
+                "screening_report": dict(screening_report, screening_mode="live"),
+                "screening_valid_until": valid_until,
+                "screening_validity_days": 90,
+            }),
         ),
     )
     db.execute(

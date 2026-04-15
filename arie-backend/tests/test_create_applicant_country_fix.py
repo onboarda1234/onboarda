@@ -22,6 +22,7 @@ Covers:
 """
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 
 # Ensure DB_PATH is set before production-module import triggers config.py.
 if "DB_PATH" not in os.environ:
@@ -274,6 +275,7 @@ def test_request_check_still_sends_no_body():
 def _make_screening_report_for_gate5(*, director_status="live"):
     """Build a screening report with configurable director AML status."""
     return {
+        "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         "company_screening": {
             "found": True,
             "source": "opencorporates",
@@ -333,7 +335,11 @@ def _insert_gate5_app(db, screening_report):
             "compliance_review",
             "MEDIUM",
             45,
-            _json.dumps({"screening_report": screening_report}),
+            _json.dumps({
+                "screening_report": screening_report,
+                "screening_valid_until": (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+                "screening_validity_days": 90,
+            }),
         ),
     )
     db.execute(

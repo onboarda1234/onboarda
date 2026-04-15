@@ -18,6 +18,7 @@ import sqlite3
 import uuid
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -31,6 +32,7 @@ def _create_app_with_flagged_doc(db, *, doc_type="memarts", verification_status=
     app_ref = f"ARF-FLAGDOC-{suffix}"
     doc_id = f"doc-flagdoc-{suffix}"
 
+    _now = datetime.now(timezone.utc)
     db.execute(
         """
         INSERT INTO applications
@@ -44,11 +46,14 @@ def _create_app_with_flagged_doc(db, *, doc_type="memarts", verification_status=
             json.dumps({
                 "screening_report": {
                     "screening_mode": "live",
+                    "screened_at": _now.strftime("%Y-%m-%dT%H:%M:%S"),
                     "sanctions": {"api_status": "live"},
                     "company_registry": {"api_status": "live"},
                     "ip_geolocation": {"api_status": "live"},
                     "kyc": {"api_status": "live"},
-                }
+                },
+                "screening_valid_until": (_now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+                "screening_validity_days": 90,
             }),
         ),
     )

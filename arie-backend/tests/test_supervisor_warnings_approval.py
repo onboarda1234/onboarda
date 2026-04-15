@@ -14,6 +14,7 @@ ApprovalGateValidator correctly interprets the resulting memo state.
 import json
 import uuid
 import pytest
+from datetime import datetime, timedelta, timezone
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ def _insert_app(db, *, app_id=None, ref=None):
     suffix = uuid.uuid4().hex[:8]
     app_id = app_id or f"app-swarn-{suffix}"
     ref = ref or f"ARF-SWARN-{suffix}"
+    _now = datetime.now(timezone.utc)
     db.execute(
         """
         INSERT INTO applications
@@ -58,11 +60,14 @@ def _insert_app(db, *, app_id=None, ref=None):
             json.dumps({
                 "screening_report": {
                     "screening_mode": "live",
+                    "screened_at": _now.strftime("%Y-%m-%dT%H:%M:%S"),
                     "sanctions": {"api_status": "live"},
                     "company_registry": {"api_status": "live"},
                     "ip_geolocation": {"api_status": "live"},
                     "kyc": {"api_status": "live"},
                 },
+                "screening_valid_until": (_now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+                "screening_validity_days": 90,
             }),
         ),
     )
