@@ -78,9 +78,10 @@ class TestPartB_AdvisoryLabeling:
     def test_memo_rendered_content_has_advisory_banner(self, backoffice_html):
         # renderMemoSections() must add an advisory banner
         assert "AI-Generated — Advisory Only" in backoffice_html
-        # Verify it's inside the function
+        # Verify it's inside the function (use next function as boundary)
         fn_start = backoffice_html.index('function renderMemoSections')
-        fn_region = backoffice_html[fn_start:fn_start + 5000]
+        fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
+        fn_region = backoffice_html[fn_start:fn_end]
         assert 'ai-advisory-banner' in fn_region, \
             "renderMemoSections must include the AI advisory banner"
 
@@ -122,7 +123,8 @@ class TestPartB_AdvisoryLabeling:
 
     def test_verification_checks_have_advisory_banner(self, backoffice_html):
         fn_start = backoffice_html.index('function buildVerificationResultsHtml')
-        fn_region = backoffice_html[fn_start:fn_start + 5000]
+        fn_end = backoffice_html.index('function buildStoredRiskComputation', fn_start)
+        fn_region = backoffice_html[fn_start:fn_end]
         assert 'ai-advisory-banner' in fn_region, \
             "buildVerificationResultsHtml must include advisory banner"
         assert 'AI Verification — Advisory Only' in fn_region
@@ -266,21 +268,26 @@ class TestPartD_MockSimulatedLabeling:
 
     def test_verification_mock_banner_enhanced(self, backoffice_html):
         fn_start = backoffice_html.index('function buildVerificationResultsHtml')
-        fn_region = backoffice_html[fn_start:fn_start + 5000]
+        fn_end = backoffice_html.index('function buildStoredRiskComputation', fn_start)
+        fn_region = backoffice_html[fn_start:fn_end]
         assert 'Simulated — Not From Live AI' in fn_region, \
             "Verification checks must label mock results as simulated"
 
     def test_ai_source_surfaced_as_tag(self, backoffice_html):
         fn_start = backoffice_html.index('function renderMemoSections')
-        fn_region = backoffice_html[fn_start:fn_start + 5000]
+        fn_end = backoffice_html.index('function generateComplianceMemo', fn_start)
+        fn_region = backoffice_html[fn_start:fn_end]
         assert 'ai-source-tag' in fn_region, \
             "renderMemoSections should surface ai_source as a tag"
 
     def test_screening_simulated_blocks_approval(self, backoffice_html):
+        """Simulated screening badge indicates not from live + blocks approval."""
         fn_start = backoffice_html.index('function screeningModeBadge')
         fn_region = backoffice_html[fn_start:fn_start + 800]
         assert 'Not From Live Screening' in fn_region, \
             "Simulated screening must indicate it is not from live screening"
+        assert 'Blocks Approval' in fn_region, \
+            "Simulated screening badge must still indicate it blocks approval"
 
 
 # ═══════════════════════════════════════════════════
