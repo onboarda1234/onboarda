@@ -1,11 +1,15 @@
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 
 
 def _insert_application_and_memo(db, *, validation_status="pass", supervisor_status="CONSISTENT", review_status="approved"):
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-approval-gate-{suffix}"
     app_ref = f"ARF-APPROVAL-GATE-{suffix}"
+    now = datetime.now(timezone.utc)
+    screened_at = now.strftime("%Y-%m-%dT%H:%M:%S")
+    valid_until = (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S")
     db.execute(
         """
         INSERT INTO applications
@@ -27,11 +31,14 @@ def _insert_application_and_memo(db, *, validation_status="pass", supervisor_sta
                 {
                     "screening_report": {
                         "screening_mode": "live",
+                        "screened_at": screened_at,
                         "sanctions": {"api_status": "live"},
                         "company_registry": {"api_status": "live"},
                         "ip_geolocation": {"api_status": "live"},
                         "kyc": {"api_status": "live"},
-                    }
+                    },
+                    "screening_valid_until": valid_until,
+                    "screening_validity_days": 90,
                 }
             ),
         ),

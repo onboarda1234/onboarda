@@ -431,6 +431,25 @@ def get_opensanctions_api_key() -> str:
     return os.environ.get("OPENSANCTIONS_API_KEY", "")
 
 
+def get_screening_validity_days() -> int:
+    """Configurable screening validity period in days.
+
+    Screening results older than this threshold are considered expired
+    and will block approval until a re-screen is performed.
+
+    Resolution order:
+      1. SCREENING_VALIDITY_DAYS env var  (explicit override)
+      2. 90 days                          (regulatory default)
+
+    Returns at least 1 to prevent misconfiguration from disabling the gate.
+    """
+    try:
+        days = int(os.environ.get("SCREENING_VALIDITY_DAYS", "90"))
+    except (ValueError, TypeError):
+        days = 90
+    return max(1, days)
+
+
 def get_cors_origin() -> str:
     """Get allowed CORS origin for current environment."""
     if is_production():

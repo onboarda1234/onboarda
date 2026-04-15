@@ -18,6 +18,7 @@ import logging
 import os
 import tempfile
 import uuid
+from datetime import datetime, timedelta, timezone
 
 # Ensure DB_PATH is set before production-module import triggers config.py.
 if "DB_PATH" not in os.environ:
@@ -190,6 +191,7 @@ def _make_screening_report(*, company_sanctions_status="live",
                             director_status="live", kyc_status="live"):
     """Build a screening report with configurable statuses."""
     return {
+        "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         "company_screening": {
             "found": True,
             "source": "opencorporates",
@@ -249,7 +251,11 @@ def _insert_app_for_gate5(db, screening_report):
             "compliance_review",
             "MEDIUM",
             45,
-            json.dumps({"screening_report": screening_report}),
+            json.dumps({
+                "screening_report": screening_report,
+                "screening_valid_until": (datetime.now(timezone.utc) + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+                "screening_validity_days": 90,
+            }),
         ),
     )
     db.execute(

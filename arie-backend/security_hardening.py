@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Tuple, Dict, List, Optional, Any
 from pathlib import Path
 
-from environment import ENV, is_production
+from environment import ENV, is_production, get_screening_validity_days
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -353,6 +353,61 @@ class ApprovalGateValidator:
                     logger.warning(f"Could not compare screening timestamps: {ts_err}")
                     return (False, "Could not verify screening freshness due to timestamp format error. "
                             "Re-submit the application to trigger fresh screening.")
+
+            # 9. Screening age validation: screening results must not exceed
+            #    the configurable validity period (default 90 days).
+            #    Fail-closed: missing screening timestamp blocks approval.
+            validity_days = get_screening_validity_days()
+            screening_valid_until_str = prescreening_data.get('screening_valid_until')
+            if screening_valid_until_str:
+                # Prefer explicit valid_until if stored
+                try:
+                    if isinstance(screening_valid_until_str, str):
+                        valid_until = datetime.fromisoformat(screening_valid_until_str.replace('Z', '+00:00'))
+                    else:
+                        valid_until = screening_valid_until_str
+                    now = datetime.now(timezone.utc)
+                    if valid_until.tzinfo is None:
+                        now = now.replace(tzinfo=None)
+                    if now > valid_until:
+                        age_days = (now - valid_until).days
+                        return (
+                            False,
+                            f"Screening results expired {age_days} day(s) ago "
+                            f"(validity period: {validity_days} days). "
+                            "A re-screen is required before approval can proceed."
+                        )
+                except (ValueError, TypeError) as ts_err:
+                    logger.warning(f"Could not parse screening_valid_until: {ts_err}")
+                    return (False, "Could not verify screening expiry due to timestamp format error. "
+                            "Please re-run screening before approval.")
+            elif screening_ts_str:
+                # Fall back to computing expiry from screened_at + validity_days
+                try:
+                    if isinstance(screening_ts_str, str):
+                        scr_ts_check = datetime.fromisoformat(screening_ts_str.replace('Z', '+00:00'))
+                    else:
+                        scr_ts_check = screening_ts_str
+                    computed_valid_until = scr_ts_check + timedelta(days=validity_days)
+                    now = datetime.now(timezone.utc)
+                    if computed_valid_until.tzinfo is None:
+                        now = now.replace(tzinfo=None)
+                    if now > computed_valid_until:
+                        age_days = (now - computed_valid_until).days
+                        return (
+                            False,
+                            f"Screening results expired {age_days} day(s) ago "
+                            f"(validity period: {validity_days} days). "
+                            "A re-screen is required before approval can proceed."
+                        )
+                except (ValueError, TypeError) as ts_err:
+                    logger.warning(f"Could not compute screening expiry from screened_at: {ts_err}")
+                    return (False, "Could not verify screening freshness due to timestamp format error. "
+                            "Please re-run screening before approval.")
+            else:
+                # No screening timestamp at all — fail closed
+                return (False, "Screening timestamp is missing from the screening report. "
+                        "A re-screen is required before approval can proceed.")
 
             logger.info(f"Application {app_id} passed approval gate validation")
             return (True, "")

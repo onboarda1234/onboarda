@@ -4970,13 +4970,26 @@ function renderAuthoritativeAppDetail(app, options) {
   document.getElementById('detail-score-breakdown').innerHTML = renderStoredRiskComputationHtml(app);
 
   var screeningSummary = getApplicationScreeningSummary(app);
+  var freshnessBanner = '';
+  if (screeningSummary.screening_freshness) {
+    var sf = screeningSummary.screening_freshness;
+    if (sf.status === 'expired') {
+      freshnessBanner = '<div style="margin-bottom:8px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:8px;font-size:12px;color:#991b1b;font-weight:600;">' +
+        '🚫 Screening results have expired (' + sf.age_days + ' day(s) old, validity period: ' + sf.validity_days + ' days). Approval is blocked until a re-screen is performed.</div>';
+    } else if (sf.status === 'aging') {
+      freshnessBanner = '<div style="margin-bottom:8px;padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;">' +
+        '⚠️ Screening results are aging (' + sf.age_days + ' day(s) old, validity period: ' + sf.validity_days + ' days). Consider re-screening before approval.</div>';
+    }
+  }
   var screeningMeta = '<div style="padding:12px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:12px;">' +
     '<div><strong>Screening Run:</strong> ' + (screeningSummary.screening_run_recorded ? 'Recorded' : 'Not recorded') + '</div>' +
     '<div><strong>Total Hits:</strong> ' + escapeHtml(String(screeningSummary.total_hits || 0)) + '</div>' +
     '<div style="display:flex;align-items:center;gap:6px;"><strong>Mode:</strong> ' + screeningModeBadge(screeningSummary.screening_mode) + '</div>' +
     '<div><strong>Screened At:</strong> ' + escapeHtml(normalizeDetailValue(screeningSummary.screened_at)) + '</div>' +
+    (screeningSummary.screening_freshness ? '<div><strong>Screening Age:</strong> ' + screeningSummary.screening_freshness.age_days + ' day(s)' +
+    (screeningSummary.screening_valid_until ? ' — <strong>Valid Until:</strong> ' + escapeHtml(String(screeningSummary.screening_valid_until).replace('T', ' ').slice(0, 19)) : '') + '</div>' : '') +
     '</div>';
-  document.getElementById('detail-screening-review').innerHTML = renderDocumentReadinessBanner(documentReadiness) + screeningMeta;
+  document.getElementById('detail-screening-review').innerHTML = renderDocumentReadinessBanner(documentReadiness) + freshnessBanner + screeningMeta;
   renderScreeningReviewPanel(app, currentScreeningReviewFocus);
   renderExplainabilityPanel(app, screeningSummary);
 
@@ -5152,8 +5165,35 @@ function getApplicationScreeningSummary(app) {
       screening_mode: null,
       screened_at: screeningData.meta.last_screened_at || null,
       screened_by: screeningData.meta.screened_by || null,
-      last_screened_at: screeningData.meta.last_screened_at || null
+      last_screened_at: screeningData.meta.last_screened_at || null,
+      screening_valid_until: screeningData.meta.screening_valid_until || null,
+      screening_validity_days: screeningData.meta.screening_validity_days || null,
+      screening_freshness: null
     };
+  }
+
+  // EX-10: Compute screening freshness status client-side for display
+  var freshness = null;
+  var screenedAtRaw = report.screened_at || screeningData.meta.last_screened_at || null;
+  var validUntilRaw = screeningData.meta.screening_valid_until || null;
+  if (screenedAtRaw) {
+    try {
+      var screenedDate = new Date(screenedAtRaw.replace(' ', 'T') + (screenedAtRaw.indexOf('Z') < 0 && screenedAtRaw.indexOf('+') < 0 ? 'Z' : ''));
+      var nowMs = Date.now();
+      var ageDays = Math.floor((nowMs - screenedDate.getTime()) / 86400000);
+      var validityDays = screeningData.meta.screening_validity_days || 90;
+      var status = 'valid';
+      var warningThreshold = Math.max(1, Math.floor(validityDays * 0.8));
+      if (validUntilRaw) {
+        var validUntilDate = new Date(validUntilRaw.replace(' ', 'T') + (validUntilRaw.indexOf('Z') < 0 && validUntilRaw.indexOf('+') < 0 ? 'Z' : ''));
+        if (nowMs > validUntilDate.getTime()) status = 'expired';
+        else if (ageDays >= warningThreshold) status = 'aging';
+      } else {
+        if (ageDays >= validityDays) status = 'expired';
+        else if (ageDays >= warningThreshold) status = 'aging';
+      }
+      freshness = { age_days: ageDays, validity_days: validityDays, status: status, valid_until: validUntilRaw };
+    } catch(e) {}
   }
 
   return {
@@ -5168,7 +5208,10 @@ function getApplicationScreeningSummary(app) {
     screening_mode: report.screening_mode || null,
     screened_at: report.screened_at || screeningData.meta.last_screened_at || null,
     screened_by: screeningData.meta.screened_by || null,
-    last_screened_at: screeningData.meta.last_screened_at || report.screened_at || null
+    last_screened_at: screeningData.meta.last_screened_at || report.screened_at || null,
+    screening_valid_until: screeningData.meta.screening_valid_until || null,
+    screening_validity_days: screeningData.meta.screening_validity_days || null,
+    screening_freshness: freshness
   };
 }
 
@@ -5432,6 +5475,15 @@ function renderScreeningReviewPanel(app, focus) {
   html += '<div><div class="card-title">Screening Review</div><div style="font-size:12px;color:var(--text3);margin-top:4px;">Stored provider AML/watchlist and PEP results for this application. This is the dedicated review surface opened from the Screening Queue.</div></div>';
   html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-left:auto;">' + screeningModeBadge(screeningSummary.screening_mode) + (screeningSummary.screened_at ? '<span class="explain-data-source">Last screened: ' + escapeHtml(String(screeningSummary.screened_at).replace('T', ' ').slice(0, 19)) + '</span>' : '') + '</div>';
   html += '</div>';
+  // EX-10: Screening freshness warning in review panel
+  if (screeningSummary.screening_freshness) {
+    var sfr = screeningSummary.screening_freshness;
+    if (sfr.status === 'expired') {
+      html += '<div style="margin:0 18px 12px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:8px;font-size:12px;color:#991b1b;font-weight:600;">🚫 Screening expired — ' + sfr.age_days + ' day(s) old (limit: ' + sfr.validity_days + ' days). Re-screen required before approval.</div>';
+    } else if (sfr.status === 'aging') {
+      html += '<div style="margin:0 18px 12px;padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;">⚠️ Screening aging — ' + sfr.age_days + ' day(s) old (limit: ' + sfr.validity_days + ' days). Consider re-screening.</div>';
+    }
+  }
   if (focus && focus.subject_name) html += '<div style="font-size:12px;color:var(--text2);padding:0 18px 18px;">Focused subject: <strong>' + escapeHtml(focus.subject_name) + '</strong> (' + escapeHtml(String(focus.subject_type || '').replace('_', ' ')) + ')</div>';
   html += '</div>';
 
