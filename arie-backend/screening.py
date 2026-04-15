@@ -487,6 +487,8 @@ def sumsub_create_applicant(external_user_id, first_name=None, last_name=None,
         first_name=first_name,
         last_name=last_name,
         level_name=level_name,
+        dob=dob,
+        country=country,
         info=info if info else None,
     )
 
