@@ -7359,7 +7359,7 @@ def _persist_signoff_audit(db, user, target_ref, scope, signoff_obj, ip_address,
     of any client-side audit log. This is the authoritative compliance record.
     """
     detail = json.dumps({
-        "signoff_acknowledged": signoff_obj.get("acknowledged", False) if isinstance(signoff_obj, dict) else False,
+        "signoff_acknowledged": signoff_obj.get("acknowledged", False),
         "signoff_scope": scope,
         "source_context": "ai_advisory",
         "user_agent": user_agent,
@@ -7425,7 +7425,7 @@ class MemoApproveHandler(BaseHandler):
                     "Only admin or Senior Compliance Officer (SCO) may approve memos with outstanding findings.",
                     403
                 )
-            # body already parsed above for sign-off validation
+            # body parsed at EX-11 sign-off validation gate (before Gate 1)
             approval_reason = (body.get("approval_reason") or "").strip()
             if not approval_reason:
                 db.close()
@@ -7480,7 +7480,7 @@ class MemoApproveHandler(BaseHandler):
             # Parse approval_reason if not already parsed by Gate 2.
             # When val_status == "pass_with_fixes", Gate 2 has already validated
             # and set approval_reason to a non-empty string (empty is rejected).
-            # body already parsed above for sign-off validation
+            # body parsed at EX-11 sign-off validation gate (before Gate 1)
             if val_status != "pass_with_fixes":
                 approval_reason = (body.get("approval_reason") or "").strip()
             if not approval_reason:
