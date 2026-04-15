@@ -1858,11 +1858,13 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_dict.pop("memo_data", None)
             result["latest_memo"] = latest_memo_dict
             result["latest_memo_data"] = latest_memo_data
-            # Memo staleness detection: compare memo creation vs application last update
+            # Memo staleness detection: compare memo creation vs application input update
+            # Use inputs_updated_at (substantive changes only) to avoid false
+            # staleness from operational writes (e.g. first-approval recording).
             memo_created = latest_memo_dict.get("created_at", "")
-            app_updated = result.get("updated_at", "")
-            if memo_created and app_updated:
-                result["memo_is_stale"] = str(app_updated) > str(memo_created)
+            app_input_updated = result.get("inputs_updated_at") or result.get("updated_at", "")
+            if memo_created and app_input_updated:
+                result["memo_is_stale"] = str(app_input_updated) > str(memo_created)
             else:
                 result["memo_is_stale"] = False
         else:
@@ -1919,7 +1921,8 @@ class ApplicationDetailHandler(BaseHandler):
             db.execute("""
                 UPDATE applications SET
                     company_name=?, brn=?, country=?, sector=?, entity_type=?,
-                    ownership_structure=?, prescreening_data=?, updated_at=datetime('now')
+                    ownership_structure=?, prescreening_data=?,
+                    updated_at=datetime('now'), inputs_updated_at=datetime('now')
                 WHERE id=?
             """, (
                 resolved_company_name,
@@ -1936,7 +1939,8 @@ class ApplicationDetailHandler(BaseHandler):
             db.execute("""
                 UPDATE applications SET
                     company_name=?, brn=?, country=?, sector=?, entity_type=?,
-                    ownership_structure=?, updated_at=datetime('now')
+                    ownership_structure=?,
+                    updated_at=datetime('now'), inputs_updated_at=datetime('now')
                 WHERE id=?
             """, (
                 resolved_company_name,
@@ -6192,7 +6196,7 @@ class ScreeningHandler(BaseHandler):
         prescreening["screening_report"] = report
         prescreening["last_screened_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         prescreening["screened_by"] = user["sub"]
-        db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now') WHERE id=?",
+        db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now'), inputs_updated_at=datetime('now') WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
 
         # EX-09: Recompute risk after screening re-run — screening hits affect risk score

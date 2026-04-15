@@ -1400,8 +1400,8 @@ def _apply_field_change(db, application_id: str, field_name: str, new_value: str
 
     now = datetime.now(timezone.utc).isoformat()
     db.execute(
-        f"UPDATE applications SET {field_name} = ?, updated_at = ? WHERE id = ?",
-        (new_value, now, application_id),
+        f"UPDATE applications SET {field_name} = ?, updated_at = ?, inputs_updated_at = ? WHERE id = ?",
+        (new_value, now, now, application_id),
     )
 
 

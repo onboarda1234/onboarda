@@ -291,9 +291,12 @@ class ApprovalGateValidator:
                 )
 
             # 7. Staleness detection: application data modified after memo/screening
-            # If the application was updated after the memo was generated, the memo
-            # may be based on outdated data and should be regenerated.
-            app_updated_at = app.get('updated_at')
+            # If the application inputs were updated after the memo was generated,
+            # the memo may be based on outdated data and should be regenerated.
+            # We use inputs_updated_at (substantive input changes only) rather than
+            # updated_at (which includes operational workflow writes like first-
+            # approval recording) to avoid false stale-memo blocking.
+            app_updated_at = app.get('inputs_updated_at') or app.get('updated_at')
             memo_created_at = memo_row.get('created_at')
             if app_updated_at and memo_created_at:
                 try:
