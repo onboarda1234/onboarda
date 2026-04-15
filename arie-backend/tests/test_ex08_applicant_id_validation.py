@@ -155,7 +155,7 @@ class TestPortalApplicantIdValidation:
         finally_pos = func_region.rfind("finally")
         assert finally_pos > 0, "No finally block in sendKYCLink"
         finally_block = func_region[finally_pos:finally_pos + 200]
-        assert "disabled = false" in finally_block or "disabled=false" in finally_block or ".disabled = false" in finally_block, (
+        assert re.search(r'\.disabled\s*=\s*false', finally_block), (
             "Button not re-enabled in finally block"
         )
 
