@@ -16,9 +16,12 @@ import hmac
 import hashlib
 import base64
 import random
+import re
 import logging
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
+
+import pycountry
 
 import requests
 
@@ -480,7 +483,6 @@ def normalize_country_alpha3(code):
     if not code:
         return None
     try:
-        import pycountry
         if len(code) == 2:
             country_obj = pycountry.countries.get(alpha_2=code)
             return country_obj.alpha_3 if country_obj else None
@@ -503,7 +505,6 @@ def validate_dob_format(dob):
     if not dob or not isinstance(dob, str):
         return None
     dob = dob.strip()
-    import re
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", dob):
         return None
     try:
