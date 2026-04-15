@@ -7308,6 +7308,71 @@ class MemoValidateHandler(BaseHandler):
         self.success(validation)
 
 
+# ── EX-11: Officer sign-off validation & audit helpers ──
+
+_VALID_SIGNOFF_SCOPES = {"decision", "override", "memo"}
+
+
+def _validate_officer_signoff(signoff, expected_scope):
+    """Validate the officer_signoff object in a request payload.
+
+    Returns an error message string if invalid, or None if valid.
+    Fail-closed: missing or malformed sign-off is rejected.
+    """
+    if signoff is None:
+        return (
+            "officer_signoff is required. Officers must acknowledge AI-generated advisory "
+            "outputs before this action can proceed."
+        )
+    if not isinstance(signoff, dict):
+        return "officer_signoff must be an object with acknowledged, scope, and source_context fields."
+
+    acknowledged = signoff.get("acknowledged")
+    if acknowledged is not True:
+        return (
+            "officer_signoff.acknowledged must be true. Officers must confirm they have "
+            "reviewed the AI-generated advisory content."
+        )
+
+    scope = signoff.get("scope", "")
+    if scope not in _VALID_SIGNOFF_SCOPES:
+        return (
+            f"officer_signoff.scope must be one of: {', '.join(sorted(_VALID_SIGNOFF_SCOPES))}. "
+            f"Received: '{scope}'."
+        )
+    if scope != expected_scope:
+        return (
+            f"officer_signoff.scope mismatch: expected '{expected_scope}', received '{scope}'."
+        )
+
+    source_context = signoff.get("source_context", "")
+    if source_context != "ai_advisory":
+        return "officer_signoff.source_context must be 'ai_advisory'."
+
+    return None
+
+
+def _persist_signoff_audit(db, user, target_ref, scope, signoff_obj, ip_address, user_agent):
+    """Persist officer sign-off event to the audit_log table.
+
+    Records server-side context (IP, user agent, timestamp) independently
+    of any client-side audit log. This is the authoritative compliance record.
+    """
+    detail = json.dumps({
+        "signoff_acknowledged": signoff_obj.get("acknowledged", False) if isinstance(signoff_obj, dict) else False,
+        "signoff_scope": scope,
+        "source_context": "ai_advisory",
+        "user_agent": user_agent,
+    }, default=str)
+
+    db.execute(
+        "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (user.get("sub", ""), user.get("name", ""), user.get("role", ""),
+         f"Officer Sign-Off ({scope})", target_ref, detail, ip_address)
+    )
+
+
 class MemoApproveHandler(BaseHandler):
     """POST /api/applications/:id/memo/approve — Approve memo (requires validation pass)"""
     def post(self, app_id):
@@ -7324,6 +7389,17 @@ class MemoApproveHandler(BaseHandler):
         if not memo_row:
             db.close()
             return self.error("No compliance memo found.", 404)
+
+        # ── EX-11: Backend enforcement of officer sign-off for memo approval ──
+        body = {}
+        try:
+            body = json.loads(self.request.body or b"{}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        signoff_error = _validate_officer_signoff(body.get("officer_signoff"), "memo")
+        if signoff_error:
+            db.close()
+            return self.error(signoff_error, 400)
 
         # ── SERVER-SIDE 5-GATE APPROVAL ENFORCEMENT ──
         # Gate 1: Check if memo is blocked by rule engine
@@ -7349,11 +7425,7 @@ class MemoApproveHandler(BaseHandler):
                     "Only admin or Senior Compliance Officer (SCO) may approve memos with outstanding findings.",
                     403
                 )
-            body = {}
-            try:
-                body = json.loads(self.request.body or b"{}")
-            except (json.JSONDecodeError, TypeError):
-                pass
+            # body already parsed above for sign-off validation
             approval_reason = (body.get("approval_reason") or "").strip()
             if not approval_reason:
                 db.close()
@@ -7405,15 +7477,11 @@ class MemoApproveHandler(BaseHandler):
                     "Only admin or Senior Compliance Officer (SCO) may approve memos with supervisor warnings.",
                     403
                 )
-            # Parse body for approval_reason if not already parsed by Gate 2.
+            # Parse approval_reason if not already parsed by Gate 2.
             # When val_status == "pass_with_fixes", Gate 2 has already validated
             # and set approval_reason to a non-empty string (empty is rejected).
+            # body already parsed above for sign-off validation
             if val_status != "pass_with_fixes":
-                body = {}
-                try:
-                    body = json.loads(self.request.body or b"{}")
-                except (json.JSONDecodeError, TypeError):
-                    pass
                 approval_reason = (body.get("approval_reason") or "").strip()
             if not approval_reason:
                 db.close()
@@ -7470,6 +7538,13 @@ class MemoApproveHandler(BaseHandler):
 
             db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                        (user.get("sub",""), user.get("name",""), user.get("role",""), "Approve Memo", app_id, audit_detail, self.get_client_ip()))
+
+            # ── EX-11: Persist officer sign-off audit record ──
+            _persist_signoff_audit(db, user, app_id, "memo",
+                                   body.get("officer_signoff", {}),
+                                   self.get_client_ip(),
+                                   self.request.headers.get("User-Agent", ""))
+
             db.commit()
         except Exception as e:
             logger.error(f"Failed to store memo approval for {app_id}: {e}", exc_info=True)
@@ -7786,6 +7861,13 @@ class ApplicationDecisionHandler(BaseHandler):
             db.close()
             return self.error("override_reason is required when override_ai is true", 400)
 
+        # ── EX-11: Backend enforcement of officer sign-off for AI advisory ──
+        signoff_scope = "override" if override_ai else "decision"
+        signoff_error = _validate_officer_signoff(data.get("officer_signoff"), signoff_scope)
+        if signoff_error:
+            db.close()
+            return self.error(signoff_error, 400)
+
         # ── SECURITY: Enforce approval preconditions (mandatory) ──
         if decision == "approve":
             # ── H-1 FIX: Enforce ROLE_PERMISSION_MATRIX — CO cannot approve HIGH/VERY_HIGH ──
@@ -7889,6 +7971,13 @@ class ApplicationDecisionHandler(BaseHandler):
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip(),
                     _safe_json(_before), _safe_json(_after)))
+
+        # ── EX-11: Persist officer sign-off audit record ──
+        _persist_signoff_audit(db, user, app["ref"],
+                               "override" if override_ai else "decision",
+                               data.get("officer_signoff", {}),
+                               self.get_client_ip(),
+                               self.request.headers.get("User-Agent", ""))
 
         # ── Record normalized decision record ──
         try:
