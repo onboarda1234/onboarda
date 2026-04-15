@@ -753,8 +753,11 @@ class SumsubClient:
 
         try:
             url_path = f"/resources/applicants/{applicant_id}/status/pending"
+            # Sumsub's status-transition endpoint expects NO request body.
+            # Sending body=b"{}" adds Content-Type: application/json and an
+            # empty JSON object, which causes a 400 for AML-only levels.
             status, data, error_msg = self._request_with_retry(
-                "POST", url_path, body=b"{}", operation="request_check"
+                "POST", url_path, body=None, operation="request_check"
             )
 
             if 200 <= status < 300:
@@ -801,12 +804,16 @@ class SumsubClient:
             )
             logger.warning(
                 "Sumsub request_check failure: applicant_id=%s "
-                "endpoint=%s status=%d body=%s",
-                applicant_id, url_path, status, (error_msg or "")[:200],
+                "endpoint=%s method=POST status=%d body=%s",
+                applicant_id, url_path, status, (error_msg or "")[:500],
             )
             return self._error_result(
                 "request_check", f"API returned {status}",
                 applicant_id=applicant_id,
+                response_body=(error_msg or "")[:500],
+                endpoint=url_path,
+                method="POST",
+                status_code=status,
             )
 
         except (SumsubRetryError, Timeout, RequestException) as e:
