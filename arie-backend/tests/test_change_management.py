@@ -189,6 +189,29 @@ class TestRequestTransitions:
             v, _ = cm.validate_request_transition(t, "draft")
             assert v is False
 
+    def test_submitted_to_rejected_blocked(self):
+        """A6: submitted → rejected is NOT a valid transition.
+        Rejection is only reachable from approval_pending."""
+        cm = _get_cm()
+        v, err = cm.validate_request_transition("submitted", "rejected")
+        assert v is False
+        assert "Invalid request transition" in err
+
+    def test_submitted_to_cancelled_allowed(self):
+        """A7: submitted → cancelled IS a valid transition
+        (the correct admin path for force-close from submitted)."""
+        cm = _get_cm()
+        v, err = cm.validate_request_transition("submitted", "cancelled")
+        assert v is True
+        assert err == ""
+
+    def test_submitted_to_triage_allowed(self):
+        """submitted → triage_in_progress is the normal forward path."""
+        cm = _get_cm()
+        v, err = cm.validate_request_transition("submitted", "triage_in_progress")
+        assert v is True
+        assert err == ""
+
 
 class TestRolePermissions:
     def test_admin_approve_tier1(self):
@@ -692,3 +715,93 @@ class TestDBIntegration:
         u2 = db.execute("SELECT ownership_pct FROM ubos WHERE application_id = ? AND person_key = ?",
                         (app_id, u["person_key"])).fetchone()
         assert float(u2["ownership_pct"]) == 50.0
+
+
+# ============================================================================
+# Defence-in-depth audit tests
+# ============================================================================
+
+class TestDefenceInDepthAudit:
+    """A1: Defence-in-depth block in create_change_request writes audit."""
+
+    def test_defence_in_depth_writes_audit_on_denial(self, db):
+        """When a portal client attempts to create a CR for an app they
+        don't own, the defence-in-depth guard must write an audit row
+        with action='portal_cr_denied_not_owner'."""
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, client_id = _setup_test_data(db)
+
+        # Create a second client + app owned by them
+        other_client = f"other-cl-{secrets.token_hex(4)}"
+        other_app = f"other-app-{secrets.token_hex(4)}"
+        db.execute(
+            "INSERT INTO clients (id, email, password_hash, company_name) VALUES (?, ?, ?, ?)",
+            (other_client, f"other-{secrets.token_hex(3)}@test.com", "hash", "Other Corp"),
+        )
+        db.execute(
+            "INSERT INTO applications (id, ref, client_id, company_name, country, sector, entity_type, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (other_app, f"APP-OTH-{secrets.token_hex(4)}", other_client,
+             "Other Corp Ltd", "GB", "Tech", "SME", "approved"),
+        )
+        db.commit()
+
+        # Track audit calls
+        audit_calls = []
+
+        def mock_audit(user, action, target, detail, db=None):
+            audit_calls.append({
+                "action": action,
+                "target": target,
+                "detail": detail,
+            })
+
+        # Client tries to create a CR for the other client's app
+        user = {"sub": client_id, "name": "Test Client", "role": "client"}
+        items = [{"change_type": "company_details",
+                  "field_name": "company_name", "new_value": "Hijacked"}]
+
+        with pytest.raises(PermissionError):
+            cm.create_change_request(
+                wdb, other_app, "portal_client", "portal",
+                "Cross-tenant attempt", items, user,
+                log_audit_fn=mock_audit,
+            )
+
+        # Verify audit was called with the denial event
+        assert len(audit_calls) == 1, f"Expected 1 audit call, got {len(audit_calls)}"
+        assert audit_calls[0]["action"] == "portal_cr_denied_not_owner"
+        assert audit_calls[0]["target"] == other_app
+
+        detail = json.loads(audit_calls[0]["detail"])
+        assert detail["reason"] == "defence_in_depth"
+        assert detail["client_id"] == client_id
+        assert detail["actual_owner"] == other_client
+
+    def test_defence_in_depth_no_audit_on_success(self, db):
+        """When a portal client creates a CR for their own app,
+        no denial audit should fire."""
+        cm = _get_cm()
+        wdb = _DBWrapper(db)
+        app_id, client_id = _setup_test_data(db)
+
+        audit_calls = []
+
+        def mock_audit(user, action, target, detail, db=None):
+            audit_calls.append({"action": action})
+
+        user = {"sub": client_id, "name": "Test Client", "role": "client"}
+        items = [{"change_type": "company_details",
+                  "field_name": "company_name", "new_value": "Legit Update"}]
+
+        result = cm.create_change_request(
+            wdb, app_id, "portal_client", "portal",
+            "Legitimate update", items, user,
+            log_audit_fn=mock_audit,
+        )
+        assert result["id"].startswith("CR-")
+        # No denial audit calls
+        denial_calls = [c for c in audit_calls
+                        if c["action"] == "portal_cr_denied_not_owner"]
+        assert len(denial_calls) == 0

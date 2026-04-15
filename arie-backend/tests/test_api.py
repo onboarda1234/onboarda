@@ -530,3 +530,41 @@ class TestDecisionRecordsEndpoint:
         resp = http_requests.get(f"{api_server}/api/applications/app_dec_rec_test/decision-records?limit=-5",
                                  headers={"Authorization": f"Bearer {token}"}, timeout=3)
         assert resp.status_code == 400
+
+
+# ═══════════════════════════════════════════════════════════
+# A8. Password Rotation Regression Guard
+# ═══════════════════════════════════════════════════════════
+
+class TestPasswordRotationGuard:
+    """A8: PUT /api/users/{id} must reject the password field with 400."""
+
+    def test_put_user_rejects_password_field(self, api_server):
+        """PUT /api/users/{id} with {"password":"new"} must return 400
+        with a message about the dedicated password-change flow."""
+        from auth import create_token
+        from db import get_db
+
+        # Ensure a target user exists
+        conn = get_db()
+        conn.execute("""
+            INSERT OR IGNORE INTO users (id, email, password_hash, full_name, role, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, ("pwd_test_user", "pwd_test@test.com", "hash", "PwdTest User", "analyst", "active"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.put(
+            f"{api_server}/api/users/pwd_test_user",
+            json={"password": "newpassword123"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400, (
+            f"Expected 400, got {resp.status_code}: {resp.text}"
+        )
+        body = resp.json()
+        assert "dedicated password-change flow" in body.get("error", ""), (
+            f"Expected password-change flow message, got: {body}"
+        )
