@@ -409,8 +409,24 @@ class SumsubClient:
             )
 
             if status in (200, 201):
-                applicant_id = data.get("id", "")
-                logger.info(f"Sumsub: Created applicant {applicant_id} for user {external_user_id}")
+                applicant_id = (data.get("id") or "").strip()
+                if not applicant_id:
+                    # Provider returned 2xx but no applicantId — treat as failure
+                    logger.error(
+                        "Sumsub create_applicant: 2xx but empty applicantId "
+                        "for user %s — treating as failure",
+                        external_user_id,
+                    )
+                    return self._error_result(
+                        "create_applicant",
+                        "API returned 2xx but empty applicantId",
+                        external_user_id=external_user_id,
+                    )
+                logger.info(
+                    "Sumsub create_applicant success: applicant_id=%s "
+                    "external_user_id=%s endpoint=%s status=%d",
+                    applicant_id, external_user_id, url_path, status,
+                )
                 return {
                     "applicant_id": applicant_id,
                     "external_user_id": external_user_id,
@@ -423,7 +439,11 @@ class SumsubClient:
                 }
             elif status == 409:
                 # Applicant already exists, retrieve it
-                logger.info(f"Applicant already exists for {external_user_id}, retrieving existing")
+                logger.info(
+                    "Sumsub create_applicant 409 (exists): "
+                    "external_user_id=%s endpoint=%s — retrieving existing",
+                    external_user_id, url_path,
+                )
                 self._log_non_2xx(
                     endpoint=url_path,
                     status_code=status,
@@ -438,7 +458,11 @@ class SumsubClient:
                     response_body=error_msg,
                     application_id=external_user_id,
                 )
-                logger.warning(f"Sumsub create applicant failed: {status} — {error_msg}")
+                logger.warning(
+                    "Sumsub create_applicant failure: "
+                    "external_user_id=%s endpoint=%s status=%d body=%s",
+                    external_user_id, url_path, status, (error_msg or "")[:200],
+                )
                 if self.is_configured:
                     return self._error_result("create_applicant", f"API returned {status}",
                                               external_user_id=external_user_id)
@@ -448,7 +472,11 @@ class SumsubClient:
                 )
 
         except (SumsubRetryError, Timeout, RequestException) as e:
-            logger.error(f"Sumsub create applicant error: {e}")
+            logger.error(
+                "Sumsub create_applicant exception: "
+                "external_user_id=%s error=%s",
+                external_user_id, str(e)[:200],
+            )
             if self.is_configured:
                 return self._error_result("create_applicant", str(e)[:100],
                                           external_user_id=external_user_id)
@@ -730,15 +758,20 @@ class SumsubClient:
             )
 
             if 200 <= status < 300:
-                logger.info("Sumsub: Requested check for applicant %s", applicant_id)
+                logger.info(
+                    "Sumsub request_check success: applicant_id=%s "
+                    "endpoint=%s status=%d",
+                    applicant_id, url_path, status,
+                )
                 return {"ok": True, "source": "sumsub", "api_status": "live"}
 
             # 409 = state conflict / idempotency — poll canonical review state
             if status == 409:
                 logger.info(
-                    "Sumsub request_check 409 (state conflict) for applicant %s "
-                    "— polling review state as canonical",
-                    applicant_id,
+                    "Sumsub request_check 409 fallback-to-poll: "
+                    "applicant_id=%s endpoint=%s status=409 "
+                    "body=%s — polling review state as canonical",
+                    applicant_id, url_path, (error_msg or "")[:200],
                 )
                 self._log_non_2xx(
                     endpoint=url_path,
@@ -750,6 +783,14 @@ class SumsubClient:
                 # Propagate ok=True so callers know the check was not a hard
                 # failure — the review state is the authoritative answer.
                 review["ok"] = review.get("api_status") != "error"
+                logger.info(
+                    "Sumsub request_check 409 poll result: applicant_id=%s "
+                    "review_status=%s review_answer=%s api_status=%s",
+                    applicant_id,
+                    review.get("review_status", ""),
+                    review.get("review_answer", ""),
+                    review.get("api_status", ""),
+                )
                 return review
 
             self._log_non_2xx(
@@ -759,8 +800,9 @@ class SumsubClient:
                 applicant_id=applicant_id,
             )
             logger.warning(
-                "Sumsub request_check failed for %s: %s — %s",
-                applicant_id, status, error_msg,
+                "Sumsub request_check failure: applicant_id=%s "
+                "endpoint=%s status=%d body=%s",
+                applicant_id, url_path, status, (error_msg or "")[:200],
             )
             return self._error_result(
                 "request_check", f"API returned {status}",
@@ -768,7 +810,10 @@ class SumsubClient:
             )
 
         except (SumsubRetryError, Timeout, RequestException) as e:
-            logger.error("Sumsub request_check error: %s", e)
+            logger.error(
+                "Sumsub request_check exception: applicant_id=%s error=%s",
+                applicant_id, str(e)[:200],
+            )
             return self._error_result(
                 "request_check", str(e)[:100], applicant_id=applicant_id
             )
