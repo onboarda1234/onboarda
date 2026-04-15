@@ -167,8 +167,14 @@ def test_generate_access_token_logs_non_2xx(caplog):
         m.return_value = (403, {}, "Forbidden")
         with caplog.at_level(logging.WARNING, logger="sumsub_client"):
             client.generate_access_token("ext_log")
-    assert any("non-2xx" in r.message.lower() or "generate_access_token" in r.message
-               for r in caplog.records), "Expected structured non-2xx log"
+    non_2xx_logged = any("non-2xx" in r.message.lower() for r in caplog.records)
+    failure_logged = any(
+        "generate_access_token" in r.message and "failure" in r.message.lower()
+        for r in caplog.records
+    )
+    assert non_2xx_logged and failure_logged, (
+        "Expected both structured non-2xx log and generate_access_token failure log"
+    )
 
 
 # ── 12. Response body is truncated to 500 chars ──
