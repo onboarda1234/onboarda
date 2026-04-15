@@ -322,7 +322,8 @@ def _get_postgres_schema() -> str:
         pre_approval_timestamp TIMESTAMP,
         screening_mode TEXT DEFAULT 'live',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        inputs_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
     -- Directors
@@ -923,7 +924,8 @@ def _get_sqlite_schema() -> str:
         pre_approval_timestamp TEXT,
         screening_mode TEXT DEFAULT 'live',
         created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
+        updated_at TEXT DEFAULT (datetime('now')),
+        inputs_updated_at TEXT DEFAULT (datetime('now'))
     );
 
     -- Directors
@@ -2914,6 +2916,52 @@ def _run_migrations(db: DBConnection):
                     db.rollback()
                 except Exception:
                     pass
+
+    # Migration v2.28: Add inputs_updated_at column to applications.
+    # This column tracks only substantive application-input mutations (data edits,
+    # screening reruns, change-management field updates).  Operational workflow
+    # writes (approval-state, status, assignment) update only updated_at, NOT
+    # inputs_updated_at.  The memo-staleness gate compares memo.created_at
+    # against inputs_updated_at so that first-approval writes do not falsely
+    # retrigger stale-memo blocking.
+    if not _safe_column_exists(db, "applications", "inputs_updated_at"):
+        try:
+            # Step 1: Add column WITHOUT a default so existing rows get NULL.
+            # This ensures the backfill in Step 2 actually matches existing rows
+            # (PostgreSQL would otherwise compute CURRENT_TIMESTAMP for all
+            # existing rows, skipping the backfill).
+            if db.is_postgres:
+                db.execute(
+                    "ALTER TABLE applications ADD COLUMN inputs_updated_at TIMESTAMP"
+                )
+            else:
+                db.execute(
+                    "ALTER TABLE applications ADD COLUMN inputs_updated_at TEXT"
+                )
+            # Step 2: Backfill from updated_at so existing memos retain correct
+            # freshness semantics.
+            db.execute(
+                "UPDATE applications SET inputs_updated_at = updated_at "
+                "WHERE inputs_updated_at IS NULL"
+            )
+            # Step 3: Set the column default for future inserts.
+            if db.is_postgres:
+                db.execute(
+                    "ALTER TABLE applications "
+                    "ALTER COLUMN inputs_updated_at SET DEFAULT CURRENT_TIMESTAMP"
+                )
+            # SQLite does not support ALTER COLUMN SET DEFAULT; the default is
+            # defined in the CREATE TABLE schema for new databases, and for
+            # migrated databases new INSERTs must supply the value explicitly
+            # or rely on the application layer.
+            db.commit()
+            logger.info("Migration v2.28: Added and backfilled applications.inputs_updated_at")
+        except Exception as e:
+            logger.info("Migration v2.28: inputs_updated_at already exists or failed: %s", e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
 
 def _repair_risk_config_shapes(db: 'DBConnection'):

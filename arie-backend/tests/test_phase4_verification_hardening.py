@@ -198,10 +198,12 @@ def _insert_app_and_memo(db, app_id=None,
     db.execute("""
         INSERT INTO applications
         (id, ref, company_name, country, sector, entity_type, status,
-         risk_level, risk_score, prescreening_data, submitted_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         risk_level, risk_score, prescreening_data, submitted_at, updated_at,
+         inputs_updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (app_id, ref, "Test Corp", "Mauritius", "Technology", "SME",
-          status, "MEDIUM", 50, prescreening, sub_at, app_updated))
+          status, "MEDIUM", 50, prescreening, sub_at, app_updated,
+          app_updated))
 
     memo_data = json.dumps({"ai_source": "deterministic", "metadata": {"ai_source": "deterministic"}})
     db.execute("""
