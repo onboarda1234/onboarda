@@ -185,7 +185,8 @@ class TestMemoStalenessInputsUpdatedAt:
         assert can, f"Expected approval to pass with fresh memo but got: {err}"
 
     def test_fallback_to_updated_at_when_inputs_updated_at_null(self, db):
-        """When inputs_updated_at is NULL, gate falls back to updated_at."""
+        """When inputs_updated_at is NULL (e.g. pre-migration rows), gate falls
+        back to updated_at to preserve safety."""
         from security_hardening import ApprovalGateValidator
 
         now = datetime.now()
@@ -197,11 +198,34 @@ class TestMemoStalenessInputsUpdatedAt:
                                 inputs_updated_at=row_updated_time)
         _insert_memo(db, app_id, created_at=memo_time)
 
-        # Force inputs_updated_at to NULL to test fallback
+        # Force inputs_updated_at to NULL to simulate a pre-migration row
+        # that wasn't backfilled.
         db.execute("UPDATE applications SET inputs_updated_at = NULL WHERE id = ?",
                    (app_id,))
         db.commit()
         app = _get_app(db, app_id)
+        assert app["inputs_updated_at"] is None, "Precondition: inputs_updated_at must be NULL"
+
+        can, err = ApprovalGateValidator.validate_approval(app, db)
+        assert not can, "Expected fallback to updated_at to detect staleness"
+
+    def test_pre_migration_row_without_inputs_updated_at_column(self, db):
+        """If inputs_updated_at key is absent from app dict entirely (simulating
+        old code that doesn't SELECT it), the gate falls back to updated_at."""
+        from security_hardening import ApprovalGateValidator
+
+        now = datetime.now()
+        memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        row_updated_time = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        app_id, _ = _insert_app(db, risk_level="MEDIUM",
+                                app_updated_at=row_updated_time,
+                                inputs_updated_at=row_updated_time)
+        _insert_memo(db, app_id, created_at=memo_time)
+        app = _get_app(db, app_id)
+
+        # Remove the key to simulate dict without the column
+        app.pop("inputs_updated_at", None)
 
         can, err = ApprovalGateValidator.validate_approval(app, db)
         assert not can, "Expected fallback to updated_at to detect staleness"

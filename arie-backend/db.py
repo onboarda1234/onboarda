@@ -2926,22 +2926,34 @@ def _run_migrations(db: DBConnection):
     # retrigger stale-memo blocking.
     if not _safe_column_exists(db, "applications", "inputs_updated_at"):
         try:
+            # Step 1: Add column WITHOUT a default so existing rows get NULL.
+            # This ensures the backfill in Step 2 actually matches existing rows
+            # (PostgreSQL would otherwise compute CURRENT_TIMESTAMP for all
+            # existing rows, skipping the backfill).
             if db.is_postgres:
                 db.execute(
-                    "ALTER TABLE applications ADD COLUMN inputs_updated_at "
-                    "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                    "ALTER TABLE applications ADD COLUMN inputs_updated_at TIMESTAMP"
                 )
             else:
                 db.execute(
-                    "ALTER TABLE applications ADD COLUMN inputs_updated_at "
-                    "TEXT DEFAULT (datetime('now'))"
+                    "ALTER TABLE applications ADD COLUMN inputs_updated_at TEXT"
                 )
-            # Backfill: set inputs_updated_at = updated_at for all existing rows
-            # so that existing memos retain correct freshness semantics.
+            # Step 2: Backfill from updated_at so existing memos retain correct
+            # freshness semantics.
             db.execute(
                 "UPDATE applications SET inputs_updated_at = updated_at "
                 "WHERE inputs_updated_at IS NULL"
             )
+            # Step 3: Set the column default for future inserts.
+            if db.is_postgres:
+                db.execute(
+                    "ALTER TABLE applications "
+                    "ALTER COLUMN inputs_updated_at SET DEFAULT CURRENT_TIMESTAMP"
+                )
+            # SQLite does not support ALTER COLUMN SET DEFAULT; the default is
+            # defined in the CREATE TABLE schema for new databases, and for
+            # migrated databases new INSERTs must supply the value explicitly
+            # or rely on the application layer.
             db.commit()
             logger.info("Migration v2.28: Added and backfilled applications.inputs_updated_at")
         except Exception as e:
