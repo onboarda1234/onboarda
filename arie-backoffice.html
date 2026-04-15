@@ -345,6 +345,34 @@ a { color:var(--brand); text-decoration:none; }
 .memo-action-btn.download { background:var(--brand); color:white; }
 .memo-action-btn.generate { background:var(--green); color:white; }
 
+/* ── EX-11: AI Advisory Labels ── */
+.ai-advisory-banner { display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:6px; background:linear-gradient(135deg,#ede9fe,#e0e7ff); border:1.5px solid #7c3aed; margin-bottom:12px; }
+.ai-advisory-banner .ai-adv-icon { font-size:16px; flex-shrink:0; }
+.ai-advisory-banner .ai-adv-text { font-size:11px; font-weight:700; color:#5b21b6; letter-spacing:0.3px; text-transform:uppercase; }
+.ai-advisory-banner .ai-adv-sub { font-size:10px; color:#6d28d9; font-weight:500; margin-top:1px; }
+.ai-advisory-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:4px; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; background:rgba(124,58,237,0.1); color:#7c3aed; border:1px solid rgba(124,58,237,0.3); white-space:nowrap; }
+.ai-simulated-banner { display:flex; align-items:center; gap:8px; padding:8px 14px; border-radius:6px; background:#fffbeb; border:1.5px solid #d97706; margin-bottom:12px; }
+.ai-simulated-banner .ai-sim-icon { font-size:16px; flex-shrink:0; }
+.ai-simulated-banner .ai-sim-text { font-size:11px; font-weight:700; color:#92400e; letter-spacing:0.3px; text-transform:uppercase; }
+.ai-simulated-banner .ai-sim-sub { font-size:10px; color:#a16207; font-weight:500; margin-top:1px; }
+.ai-source-tag { display:inline-flex; align-items:center; gap:3px; padding:1px 6px; border-radius:3px; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px; }
+.ai-source-tag.live { background:rgba(22,163,74,0.1); color:#166534; border:1px solid rgba(22,163,74,0.3); }
+.ai-source-tag.mock { background:rgba(217,119,6,0.1); color:#92400e; border:1px solid rgba(217,119,6,0.3); }
+.ai-source-tag.deterministic { background:rgba(37,99,235,0.1); color:#1e40af; border:1px solid rgba(37,99,235,0.3); }
+.ai-source-tag.demo { background:rgba(124,58,237,0.1); color:#5b21b6; border:1px solid rgba(124,58,237,0.3); }
+.ai-source-tag.fallback { background:rgba(220,38,38,0.1); color:#991b1b; border:1px solid rgba(220,38,38,0.3); }
+.check-type-legend { display:flex; gap:12px; align-items:center; padding:6px 10px; background:var(--bg2); border:1px solid var(--border1); border-radius:6px; margin-bottom:8px; font-size:10px; }
+.check-type-legend .legend-item { display:flex; align-items:center; gap:4px; }
+.check-type-legend .legend-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.check-type-legend .legend-dot.rule { background:#16a34a; }
+.check-type-legend .legend-dot.hybrid { background:#d97706; }
+.check-type-legend .legend-dot.ai { background:#7c3aed; }
+.officer-signoff-gate { padding:10px 14px; background:rgba(124,58,237,0.05); border:1.5px solid rgba(124,58,237,0.3); border-radius:8px; margin-top:10px; margin-bottom:6px; }
+.officer-signoff-gate label { display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:12px; color:var(--text1); line-height:1.5; }
+.officer-signoff-gate input[type="checkbox"] { margin-top:3px; accent-color:#7c3aed; width:16px; height:16px; flex-shrink:0; }
+.officer-signoff-gate .signoff-text { font-weight:600; }
+.officer-signoff-gate .signoff-sub { font-size:10px; color:var(--text3); font-weight:400; margin-top:2px; }
+
 /* ── Activity Log ── */
 .activity-item { display:flex; gap:12px; padding:10px 0; border-bottom:1px solid var(--border1); }
 .activity-item:last-child { border-bottom:none; }
@@ -1157,7 +1185,8 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 
       <!-- AI Agent Results -->
       <div class="card">
-        <div class="card-header"><div class="card-title">AI Agent Pipeline Results</div></div>
+        <div class="card-header"><div class="card-title">AI Agent Pipeline Results</div><span class="ai-advisory-badge">🤖 AI-Generated — Advisory Only</span></div>
+        <div class="ai-advisory-banner"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI-Generated — Advisory Only</div><div class="ai-adv-sub">These results are AI-generated and advisory. Officer review is required before any compliance decision.</div></div></div>
         <div id="detail-agents"></div>
       </div>
 
@@ -1166,6 +1195,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
         <div class="memo-header">
           <span style="font-size:18px;">📝</span>
           <span style="font-weight:700;">Compliance Onboarding Memo</span>
+          <span class="ai-advisory-badge">🤖 AI-Generated — Advisory Only</span>
           <span class="badge approved" id="memo-status-badge">Auto-Generated</span>
           <button class="memo-generate-btn" id="btn-generate-memo" onclick="generateComplianceMemo()" title="Regenerate memo from server">🔄 Generate Memo</button>
           <button class="memo-download-btn" id="btn-download-memo" onclick="downloadMemoPDF()" title="Download as PDF">📥 Download Memo (PDF)</button>
@@ -1177,6 +1207,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
           <div class="memo-validation-header">
             <span style="font-size:16px;">🛡️</span>
             <span class="val-title">Memo Quality Validation</span>
+            <span class="ai-advisory-badge">🤖 AI-Generated — Advisory Only</span>
             <span class="memo-val-status pending" id="memo-val-status-badge">PENDING</span>
           </div>
           <div class="memo-validation-body">
@@ -1197,6 +1228,15 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
             <div class="memo-val-scores" id="memo-val-scores"></div>
 
             <!-- Action Buttons -->
+            <div class="officer-signoff-gate" id="memo-officer-signoff-gate">
+              <label>
+                <input type="checkbox" id="memo-officer-signoff" />
+                <div>
+                  <div class="signoff-text">Officer Sign-Off Required</div>
+                  <div class="signoff-sub">I confirm I have reviewed all AI-generated advisory content above and accept responsibility for this compliance decision. AI outputs are advisory only and do not constitute authoritative determinations.</div>
+                </div>
+              </label>
+            </div>
             <div class="memo-action-bar">
               <button class="memo-action-btn generate" onclick="generateComplianceMemo()">🔄 Generate Memo</button>
               <button class="memo-action-btn validate" id="btn-revalidate-memo" onclick="revalidateMemo()">🛡️ Validate Memo</button>
@@ -1217,8 +1257,10 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
           <div class="card-title">KYC Documents &amp; Verifications</div>
           <div style="font-size:11px;color:var(--text3);">Each document with inline AI verification results</div>
         </div>
+        <span class="ai-advisory-badge">🤖 AI Verification — Advisory Only</span>
         <button class="btn btn-outline btn-sm" onclick="toggleBoDocUpload()" id="btn-bo-upload-toggle-top" style="font-size:11px;">📤 Upload Document</button>
       </div>
+      <div class="ai-advisory-banner"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI Verification Results — Advisory Only</div><div class="ai-adv-sub">Document verification checks below are AI-generated and advisory. Officer review is required before relying on these results for compliance decisions.</div></div></div>
       <div id="bo-doc-upload-panel" style="display:none;margin-bottom:14px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
           <div class="form-group" style="margin:0;">
@@ -1285,35 +1327,37 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <div class="card-header" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <span style="font-size:18px;">🛡️</span>
         <span style="font-weight:700;">Compliance Supervisor Pipeline</span>
+        <span class="ai-advisory-badge">🤖 AI-Generated — Advisory Only</span>
         <span class="badge" style="background:rgba(99,102,241,0.1);color:#6366f1;font-size:10px;">Decision Support — Rules-Based Analysis</span>
         <span class="badge" id="sv-pipeline-status" style="background:var(--bg2);color:var(--text3);">Not Run</span>
         <button class="btn btn-primary btn-sm" id="btn-run-supervisor" onclick="runSupervisorPipeline()" style="margin-left:auto;">▶️ Run Analysis</button>
       </div>
+      <div class="ai-advisory-banner" style="margin:12px 16px 0;"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI-Generated — Advisory Only</div><div class="ai-adv-sub">All supervisor pipeline outputs are AI-generated and advisory. Officer review and sign-off is required before acting on these findings.</div></div></div>
     </div>
 
     <!-- Pipeline Results -->
     <div id="sv-pipeline-results" style="display:none;">
       <!-- Case Aggregate -->
       <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">Case Aggregate</div></div>
+        <div class="card-header"><div class="card-title">Case Aggregate</div><span class="ai-advisory-badge" style="margin-left:8px;">🤖 Advisory</span></div>
         <div id="sv-case-aggregate" style="padding:14px;"></div>
       </div>
 
       <!-- Agent Results -->
       <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">Agent Results</div></div>
+        <div class="card-header"><div class="card-title">Agent Results</div><span class="ai-advisory-badge" style="margin-left:8px;">🤖 Advisory</span></div>
         <div id="sv-agent-results" style="padding:14px;"></div>
       </div>
 
       <!-- Contradictions -->
       <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">Contradictions Detected</div></div>
+        <div class="card-header"><div class="card-title">Contradictions Detected</div><span class="ai-advisory-badge" style="margin-left:8px;">🤖 Advisory</span></div>
         <div id="sv-contradictions" style="padding:14px;"></div>
       </div>
 
       <!-- Rules Triggered -->
       <div class="card" style="margin-bottom:14px;">
-        <div class="card-header"><div class="card-title">Compliance Rules Triggered</div></div>
+        <div class="card-header"><div class="card-title">Compliance Rules Triggered</div><span class="ai-advisory-badge" style="margin-left:8px;">⚙️ Rule-Based</span></div>
         <div id="sv-rules-triggered" style="padding:14px;"></div>
       </div>
 
@@ -2532,6 +2576,15 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <div class="form-group"><div class="form-label">Decision</div><div style="padding:10px 12px;background:var(--brand-dim);border-radius:var(--radius-sm);font-weight:600;color:var(--text1);" id="decision-type-display">Approve</div></div>
       <div class="form-group"><div class="form-label">Reason (Required)</div><textarea class="form-input" rows="4" id="decision-reason" placeholder="Explain your decision and key factors considered..." style="resize:vertical;"></textarea></div>
       <div class="form-group"><div class="form-label">Additional Notes (Optional)</div><textarea class="form-input" rows="3" id="decision-notes" placeholder="Any additional information..." style="resize:vertical;"></textarea></div>
+      <div class="officer-signoff-gate">
+        <label>
+          <input type="checkbox" id="decision-officer-signoff" />
+          <div>
+            <div class="signoff-text">Officer Sign-Off — AI Advisory Acknowledgment</div>
+            <div class="signoff-sub">I confirm I have independently reviewed the AI-generated advisory outputs (compliance memo, verification results, supervisor findings) and accept responsibility for this decision. AI outputs are advisory only and do not replace officer judgment.</div>
+          </div>
+        </label>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-decision-reason')">Cancel</button>
@@ -2545,6 +2598,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
   <div class="modal">
     <div class="modal-header"><h3>Override AI Recommendation</h3><button class="modal-close" onclick="closeModal('modal-override')">&times;</button></div>
     <div class="modal-body">
+      <div class="ai-advisory-banner"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI Recommendation — Advisory Only</div><div class="ai-adv-sub">The AI recommendation below is advisory. You are overriding it with your own officer judgment.</div></div></div>
       <div class="form-group"><div class="form-label">Current AI Recommendation</div><div style="padding:10px 12px;background:var(--brand-dim);border-radius:var(--radius-sm);font-weight:600;color:var(--text1);" id="current-recommendation">Standard Due Diligence</div></div>
       <div class="form-group"><div class="form-label">Your Decision</div>
         <select class="form-select" id="override-decision">
@@ -2554,6 +2608,15 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
         </select>
       </div>
       <div class="form-group"><div class="form-label">Override Reason (Required)</div><textarea class="form-input" rows="4" id="override-reason" placeholder="Explain why you are overriding the AI recommendation..." style="resize:vertical;"></textarea></div>
+      <div class="officer-signoff-gate">
+        <label>
+          <input type="checkbox" id="override-officer-signoff" />
+          <div>
+            <div class="signoff-text">Officer Sign-Off — AI Advisory Acknowledgment</div>
+            <div class="signoff-sub">I confirm I have independently reviewed the AI-generated advisory outputs and accept responsibility for overriding the AI recommendation.</div>
+          </div>
+        </label>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-override')">Cancel</button>
@@ -4350,12 +4413,18 @@ function buildVerificationResultsHtml(results) {
   }
 
   if (typeof results === 'object') {
+    // EX-11: AI advisory label for verification checks
+    items.push('<div class="ai-advisory-banner" style="margin-bottom:8px;padding:6px 10px;"><span class="ai-adv-icon" style="font-size:13px;">🤖</span><div><div class="ai-adv-text" style="font-size:10px;">AI Verification — Advisory Only</div></div></div>');
+
     // Finding 9: Show ai_source banner when not live
     var aiSrc = results.ai_source || '';
     if (aiSrc && aiSrc !== 'live') {
       var srcColor = aiSrc === 'mock' ? '#d97706' : aiSrc === 'error' ? '#dc2626' : aiSrc === 'unavailable' ? '#6b7280' : '#2563eb';
-      var srcLabel = aiSrc === 'mock' ? '⚠️ Mock/Simulated AI Output' : aiSrc === 'error' ? '❌ AI Error — Manual Review Required' : aiSrc === 'unavailable' ? '⏸️ AI Unavailable' : '🔧 ' + aiSrc;
-      items.push('<div style="background:' + srcColor + '11;border:1px solid ' + srcColor + ';border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:' + srcColor + ';font-weight:600;">' + srcLabel + '</div>');
+      var srcLabel = aiSrc === 'mock' ? '🧪 Simulated — Not From Live AI' : aiSrc === 'error' ? '❌ AI Error — Manual Review Required' : aiSrc === 'unavailable' ? '⏸️ AI Unavailable — Manual Review Required' : '🔧 AI Source: ' + aiSrc;
+      items.push('<div class="ai-simulated-banner" style="padding:6px 10px;margin-bottom:8px;"><span class="ai-sim-icon" style="font-size:13px;">' + (aiSrc === 'mock' ? '🧪' : aiSrc === 'error' ? '❌' : aiSrc === 'unavailable' ? '⏸️' : '🔧') + '</span><div><div class="ai-sim-text" style="font-size:10px;">' + srcLabel + '</div></div></div>');
+      items.push('<div style="margin-bottom:6px;"><span class="ai-source-tag ' + aiSrc + '">Source: ' + aiSrc.replace(/_/g, ' ') + '</span></div>');
+    } else if (aiSrc === 'live') {
+      items.push('<div style="margin-bottom:6px;"><span class="ai-source-tag live">Source: Live AI</span></div>');
     }
     // System warning banner — distinguishes system failures from document failures
     var sysWarn = results.system_warning || '';
@@ -4376,6 +4445,11 @@ function buildVerificationResultsHtml(results) {
     pushItem('Checks Run', Array.isArray(results.checks_run) ? results.checks_run.join(', ') : '');
     if (Array.isArray(results.checks)) {
       var classColors = { rule: '#16a34a', hybrid: '#d97706', ai: '#7c3aed' };
+      // EX-11: Check type legend for visual distinction
+      var hasClassifiedChecks = results.checks.some(function(c) { return c && c.classification; });
+      if (hasClassifiedChecks) {
+        items.push('<div class="check-type-legend"><span style="font-weight:600;color:var(--text2);">Check Type:</span><span class="legend-item"><span class="legend-dot rule"></span> Rule-Based (Deterministic)</span><span class="legend-item"><span class="legend-dot hybrid"></span> Hybrid</span><span class="legend-item"><span class="legend-dot ai"></span> AI-Generated (Interpretive)</span></div>');
+      }
       results.checks.forEach(function(check, idx) {
         if (!check || typeof check !== 'object') return;
         var label = escapeHtml(firstMeaningfulDetailValue(check.label, check.name) || ('Check ' + (idx + 1)));
@@ -4387,11 +4461,12 @@ function buildVerificationResultsHtml(results) {
         var resultColor = result === 'pass' ? '#16a34a' : result === 'fail' ? '#dc2626' : result === 'warn' ? '#d97706' : '#6b7280';
         var resultBadge = result ? '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + resultColor + ';color:#fff;margin-left:4px;">' + result.toUpperCase() + '</span>' : '';
 
-        // Classification badge
+        // Classification badge — EX-11 enhanced with descriptive labels
         var classTag = '';
         if (check.classification) {
           var cc = check.classification.toLowerCase();
-          classTag = '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + (classColors[cc] || '#6b7280') + '22;color:' + (classColors[cc] || '#6b7280') + ';border:1px solid ' + (classColors[cc] || '#6b7280') + ';margin-left:4px;">' + cc + '</span>';
+          var classLabel = cc === 'rule' ? '⚙️ Rule-Based' : cc === 'hybrid' ? '🔀 Hybrid' : cc === 'ai' ? '🤖 AI-Generated' : cc;
+          classTag = '<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:' + (classColors[cc] || '#6b7280') + '22;color:' + (classColors[cc] || '#6b7280') + ';border:1px solid ' + (classColors[cc] || '#6b7280') + ';margin-left:4px;">' + classLabel + '</span>';
         }
 
         var meta = '';
@@ -5320,7 +5395,7 @@ function screeningReviewBadge(row) {
 function screeningModeBadge(mode) {
   if (!mode || mode === 'unknown') return '<span class="badge high" title="Screening provenance could not be verified. This will block approval in production.">⚠ Unverified — Blocks Approval</span>';
   if (mode === 'live') return '<span class="badge approved">✓ Live Screening</span>';
-  if (mode === 'simulated') return '<span class="badge high" title="Simulated screening data cannot be used for production approval.">⚠ Simulated — Blocks Approval</span>';
+  if (mode === 'simulated') return '<span class="badge high" title="Simulated screening data cannot be used for production approval. This is not from a live screening provider.">🧪 Simulated — Not From Live Screening — Blocks Approval</span>';
   return '<span class="badge pending">' + escapeHtml(mode) + '</span>';
 }
 
@@ -6837,6 +6912,7 @@ function approveApplication() {
   document.getElementById('decision-type-display').textContent = 'Approve';
   document.getElementById('decision-reason').value = '';
   document.getElementById('decision-notes').value = '';
+  var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
   document.getElementById('modal-decision-reason').classList.add('open');
 }
 
@@ -6846,6 +6922,7 @@ function rejectApplication() {
   document.getElementById('decision-type-display').textContent = 'Reject';
   document.getElementById('decision-reason').value = '';
   document.getElementById('decision-notes').value = '';
+  var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
   document.getElementById('modal-decision-reason').classList.add('open');
 }
 
@@ -6874,6 +6951,13 @@ async function confirmDecision() {
 
   if (!reason) {
     showToast('Please provide a reason for your decision');
+    return;
+  }
+
+  // ── EX-11: Officer sign-off gate for AI advisory acknowledgment ──
+  var signoffCheckbox = document.getElementById('decision-officer-signoff');
+  if (signoffCheckbox && !signoffCheckbox.checked) {
+    showToast('Officer Sign-Off Required: You must acknowledge the AI advisory outputs before proceeding with this decision.', 'error');
     return;
   }
 
@@ -6979,6 +7063,7 @@ function openOverrideModal() {
   document.getElementById('current-recommendation').textContent = recommendation;
   document.getElementById('override-decision').value = 'Approve';
   document.getElementById('override-reason').value = '';
+  var oso = document.getElementById('override-officer-signoff'); if (oso) oso.checked = false;
   document.getElementById('modal-override').classList.add('open');
 }
 
@@ -6989,6 +7074,13 @@ async function confirmOverride() {
 
   if (!reason) {
     showToast('Please provide a reason for the override');
+    return;
+  }
+
+  // ── EX-11: Officer sign-off gate for AI advisory acknowledgment ──
+  var signoffCheckbox = document.getElementById('override-officer-signoff');
+  if (signoffCheckbox && !signoffCheckbox.checked) {
+    showToast('Officer Sign-Off Required: You must acknowledge the AI advisory outputs before submitting an override.', 'error');
     return;
   }
 
@@ -7025,6 +7117,7 @@ function requestMoreInfo() {
   document.getElementById('decision-type-display').textContent = 'Request Additional Documents';
   document.getElementById('decision-reason').value = '';
   document.getElementById('decision-notes').value = '';
+  var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
   document.getElementById('modal-decision-reason').classList.add('open');
 }
 
@@ -7061,6 +7154,7 @@ async function escalateCase() {
   document.getElementById('decision-type-display').textContent = 'Escalate to EDD';
   document.getElementById('decision-reason').value = '';
   document.getElementById('decision-notes').value = '';
+  var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
   document.getElementById('modal-decision-reason').classList.add('open');
 }
 
@@ -9795,34 +9889,52 @@ function renderMemoSections(data) {
   var sectionOrder = ['executive_summary','client_overview','ownership_and_control','risk_assessment','screening_results','document_verification','ai_explainability','red_flags_and_mitigants','compliance_decision','ongoing_monitoring','audit_and_governance'];
   var html = '';
 
+  // ── EX-11: AI ADVISORY BANNER (always shown) ──
+  html += '<div class="ai-advisory-banner"><span class="ai-adv-icon">🤖</span><div><div class="ai-adv-text">AI-Generated — Advisory Only</div><div class="ai-adv-sub">This compliance memo is AI-generated and advisory only. Officer review and sign-off is required before this content can inform any compliance decision.</div></div></div>';
+
   // ── FALLBACK / AI SOURCE TRANSPARENCY BANNER ──
   var meta = data.metadata || {};
   var isFallback = meta.is_fallback === true;
   var aiSource = meta.ai_source || '';
   var fallbackReason = meta.fallback_reason || '';
   var memoSource = meta.memo_source || '';
+
+  // ── EX-11: AI source tag (human-readable) ──
+  var aiSourceTag = '';
+  if (isFallback || memoSource === 'fallback') {
+    aiSourceTag = '<span class="ai-source-tag fallback">Source: Fallback Template</span>';
+  } else if (aiSource === 'mock') {
+    aiSourceTag = '<span class="ai-source-tag mock">Source: Mock / Simulated</span>';
+  } else if (aiSource === 'deterministic') {
+    aiSourceTag = '<span class="ai-source-tag deterministic">Source: Deterministic (Rule-Based)</span>';
+  } else if (aiSource === 'demo') {
+    aiSourceTag = '<span class="ai-source-tag demo">Source: Demo Mode</span>';
+  } else if (aiSource === 'live') {
+    aiSourceTag = '<span class="ai-source-tag live">Source: Live AI</span>';
+  } else if (aiSource) {
+    aiSourceTag = '<span class="ai-source-tag" style="background:rgba(107,114,128,0.1);color:#4b5563;border:1px solid rgba(107,114,128,0.3);">Source: ' + aiSource + '</span>';
+  }
+  if (aiSourceTag) {
+    html += '<div style="margin-bottom:10px;">' + aiSourceTag + '</div>';
+  }
+
   if (isFallback) {
-    html += '<div style="border:3px solid #dc2626;border-radius:8px;padding:12px 16px;margin-bottom:14px;background:#fef2f2;display:flex;align-items:center;gap:10px;">';
-    html += '<span style="font-size:20px;">⚠️</span>';
-    html += '<div><div style="font-size:12px;font-weight:700;color:#dc2626;">FALLBACK MEMO — AI Pipeline Unavailable</div>';
-    html += '<div style="font-size:11px;color:#991b1b;">This memo was generated by a template fallback, not by live AI analysis. ' + (fallbackReason ? 'Reason: ' + fallbackReason + '. ' : '') + 'Manual compliance review is required before any decision.</div>';
-    html += '</div></div>';
-  } else if (aiSource && aiSource !== 'live') {
-    var srcColor = aiSource === 'mock' ? '#d97706' : aiSource === 'deterministic' ? '#2563eb' : aiSource === 'demo' ? '#7c3aed' : '#6b7280';
-    var srcBg = aiSource === 'mock' ? '#fffbeb' : aiSource === 'deterministic' ? '#eff6ff' : aiSource === 'demo' ? '#f5f3ff' : '#f9fafb';
-    var srcIcon = aiSource === 'mock' ? '🧪' : aiSource === 'deterministic' ? '⚙️' : aiSource === 'demo' ? '🎭' : 'ℹ️';
-    var srcLabel = aiSource === 'mock' ? 'Mock/Simulated AI Output' : aiSource === 'deterministic' ? 'Deterministic (Rule-Based) Output' : aiSource === 'demo' ? 'Demo Mode Output' : 'AI Source: ' + aiSource;
-    html += '<div style="border:2px solid ' + srcColor + ';border-radius:8px;padding:10px 14px;margin-bottom:14px;background:' + srcBg + ';display:flex;align-items:center;gap:10px;">';
-    html += '<span style="font-size:18px;">' + srcIcon + '</span>';
-    html += '<div><div style="font-size:11px;font-weight:700;color:' + srcColor + ';">' + srcLabel.toUpperCase() + '</div>';
-    html += '<div style="font-size:10px;color:' + srcColor + ';">This output was not generated by live AI. Verify findings independently before making compliance decisions.</div>';
+    html += '<div class="ai-simulated-banner" style="border-color:#dc2626;background:#fef2f2;"><span class="ai-sim-icon">⚠️</span><div><div class="ai-sim-text" style="color:#dc2626;">Simulated — Not From Live AI</div><div class="ai-sim-sub" style="color:#991b1b;">This memo was generated by a template fallback, not by live AI analysis. ' + (fallbackReason ? 'Reason: ' + fallbackReason + '. ' : '') + 'Manual compliance review is required before any decision.</div></div></div>';
+  } else if (aiSource === 'mock') {
+    html += '<div class="ai-simulated-banner"><span class="ai-sim-icon">🧪</span><div><div class="ai-sim-text">Simulated — Not From Live AI</div><div class="ai-sim-sub">This output is mock/simulated and was not generated by live AI analysis. Do not rely on this content for compliance decisions.</div></div></div>';
+  } else if (aiSource === 'demo') {
+    html += '<div class="ai-simulated-banner" style="border-color:#7c3aed;background:#f5f3ff;"><span class="ai-sim-icon">🎭</span><div><div class="ai-sim-text" style="color:#5b21b6;">Simulated — Demo Mode Output</div><div class="ai-sim-sub" style="color:#6d28d9;">This output was generated in demo mode and is simulated. Not suitable for production compliance decisions.</div></div></div>';
+  } else if (aiSource && aiSource !== 'live' && aiSource !== 'deterministic') {
+    var srcColor = '#6b7280';
+    html += '<div class="ai-simulated-banner" style="border-color:' + srcColor + ';background:#f9fafb;"><span class="ai-sim-icon">ℹ️</span><div><div class="ai-sim-text" style="color:' + srcColor + ';">AI Source: ' + aiSource.toUpperCase() + '</div><div class="ai-sim-sub" style="color:' + srcColor + ';">This output was not generated by live AI. Verify findings independently.</div></div></div>';
+  } else if (aiSource === 'deterministic') {
+    html += '<div style="border:2px solid #2563eb;border-radius:8px;padding:10px 14px;margin-bottom:14px;background:#eff6ff;display:flex;align-items:center;gap:10px;">';
+    html += '<span style="font-size:18px;">⚙️</span>';
+    html += '<div><div style="font-size:11px;font-weight:700;color:#2563eb;">DETERMINISTIC (RULE-BASED) OUTPUT</div>';
+    html += '<div style="font-size:10px;color:#2563eb;">This output was generated by deterministic rule-based logic, not AI. Results are advisory and should be reviewed by the compliance officer.</div>';
     html += '</div></div>';
   } else if (memoSource === 'fallback') {
-    html += '<div style="border:2px solid #d97706;border-radius:8px;padding:10px 14px;margin-bottom:14px;background:#fffbeb;display:flex;align-items:center;gap:10px;">';
-    html += '<span style="font-size:18px;">⚠️</span>';
-    html += '<div><div style="font-size:11px;font-weight:700;color:#d97706;">MEMO SOURCE: FALLBACK</div>';
-    html += '<div style="font-size:10px;color:#92400e;">The memo builder encountered an error and used a fallback template. Results may be incomplete.</div>';
-    html += '</div></div>';
+    html += '<div class="ai-simulated-banner" style="border-color:#d97706;"><span class="ai-sim-icon">⚠️</span><div><div class="ai-sim-text">Simulated — Fallback Source</div><div class="ai-sim-sub">The memo builder encountered an error and used a fallback template. Results may be incomplete. Not from live AI.</div></div></div>';
   }
 
   // Risk badge at top
@@ -9938,8 +10050,9 @@ function renderMemoSections(data) {
     var svColor = sv.verdict === 'CONSISTENT' ? '#16a34a' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#d97706' : '#dc2626';
     var svBg = sv.verdict === 'CONSISTENT' ? '#f0fdf4' : sv.verdict === 'CONSISTENT_WITH_WARNINGS' ? '#fffbeb' : '#fef2f2';
     html += '<div style="border:2px solid ' + svColor + ';border-radius:8px;padding:16px;margin-top:16px;background:' + svBg + ';">';
-    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">';
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">';
     html += '<span style="font-size:13px;font-weight:700;color:' + svColor + ';">SUPERVISOR VERDICT</span>';
+    html += '<span class="ai-advisory-badge">🤖 AI-Generated — Advisory Only</span>';
     html += '<span style="background:' + svColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + sv.verdict.replace(/_/g, ' ') + '</span>';
     html += '<span style="font-size:11px;color:var(--text3);margin-left:auto;">Confidence: ' + Math.round((sv.supervisor_confidence || 0) * 100) + '%</span>';
     html += '</div>';
@@ -9972,8 +10085,9 @@ function renderMemoSections(data) {
     var reColor = re.engine_status === 'CLEAN' ? '#16a34a' : re.engine_status === 'ENFORCED' ? '#d97706' : '#dc2626';
     var reBg = re.engine_status === 'CLEAN' ? '#f0fdf4' : re.engine_status === 'ENFORCED' ? '#fffbeb' : '#fef2f2';
     html += '<div style="border:2px solid ' + reColor + ';border-radius:8px;padding:16px;margin-top:12px;background:' + reBg + ';">';
-    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">';
+    html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">';
     html += '<span style="font-size:13px;font-weight:700;color:' + reColor + ';">PRE-GENERATION RULE ENGINE</span>';
+    html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;background:rgba(22,163,74,0.1);color:#166534;border:1px solid rgba(22,163,74,0.3);">⚙️ Deterministic — Rule-Based</span>';
     html += '<span style="background:' + reColor + ';color:#fff;padding:2px 10px;border-radius:4px;font-size:11px;font-weight:700;">' + re.engine_status + '</span>';
     html += '<span style="font-size:10px;color:var(--text3);margin-left:auto;">Rules: ' + (re.rules_checked || []).length + ' | Enforcements: ' + (re.total_enforcements || 0) + ' | Violations: ' + (re.total_violations || 0) + '</span>';
     html += '</div>';
@@ -10140,6 +10254,13 @@ async function approveMemo() {
   if (!app) { alert('No application selected.'); return; }
   var btn = document.getElementById('btn-approve-memo');
   var memoData = window._currentMemoData;
+
+  // ── EX-11 GATE: Officer sign-off for AI advisory acknowledgment ──
+  var memoSignoff = document.getElementById('memo-officer-signoff');
+  if (memoSignoff && !memoSignoff.checked) {
+    alert('Officer Sign-Off Required\n\nYou must check the Officer Sign-Off box to confirm you have reviewed the AI-generated advisory content before approving this memo.');
+    return;
+  }
 
   // ── GATE 1: Check if memo is blocked by Rule Engine + Supervisor ──
   if (memoData && memoData.metadata && memoData.metadata.blocked) {
