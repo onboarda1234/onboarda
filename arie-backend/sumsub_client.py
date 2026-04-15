@@ -528,14 +528,28 @@ class SumsubClient:
                     response_body=error_msg,
                     application_id=external_user_id,
                 )
-                logger.warning(f"Sumsub get applicant failed: {status}")
+                logger.warning(
+                    "Sumsub get_applicant_by_external_id failure: "
+                    "external_user_id=%s endpoint=%s method=GET status=%d body=%s",
+                    external_user_id, url_path, status, (error_msg or "")[:500],
+                )
                 if self.is_configured:
-                    return self._error_result("get_applicant", f"Lookup returned {status}",
-                                              external_user_id=external_user_id)
+                    return self._error_result(
+                        "get_applicant", f"Lookup returned {status}",
+                        external_user_id=external_user_id,
+                        response_body=(error_msg or "")[:500],
+                        endpoint=url_path,
+                        method="GET",
+                        status_code=status,
+                    )
                 return self._simulate_applicant(external_user_id, note=f"Lookup returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
-            logger.error(f"Sumsub get applicant error: {e}")
+            logger.error(
+                "Sumsub get_applicant_by_external_id exception: "
+                "external_user_id=%s error=%s",
+                external_user_id, str(e)[:200],
+            )
             if self.is_configured:
                 return self._error_result("get_applicant", str(e)[:100],
                                           external_user_id=external_user_id)
@@ -592,14 +606,28 @@ class SumsubClient:
                     response_body=error_msg,
                     applicant_id=applicant_id,
                 )
-                logger.warning(f"Sumsub status check failed: {status}")
+                logger.warning(
+                    "Sumsub get_applicant_status failure: "
+                    "applicant_id=%s endpoint=%s method=GET status=%d body=%s",
+                    applicant_id, url_path, status, (error_msg or "")[:500],
+                )
                 if self.is_configured:
-                    return self._error_result("get_applicant_status", f"API returned {status}",
-                                              applicant_id=applicant_id)
+                    return self._error_result(
+                        "get_applicant_status", f"API returned {status}",
+                        applicant_id=applicant_id,
+                        response_body=(error_msg or "")[:500],
+                        endpoint=url_path,
+                        method="GET",
+                        status_code=status,
+                    )
                 return self._simulate_status(applicant_id, note=f"API returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
-            logger.error(f"Sumsub status error: {e}")
+            logger.error(
+                "Sumsub get_applicant_status exception: "
+                "applicant_id=%s error=%s",
+                applicant_id, str(e)[:200],
+            )
             if self.is_configured:
                 return self._error_result("get_applicant_status", str(e)[:100],
                                           applicant_id=applicant_id)
@@ -667,20 +695,30 @@ class SumsubClient:
                     response_body=error_msg,
                     applicant_id=applicant_id,
                 )
-                logger.warning(f"Sumsub doc upload failed: {status} — {error_msg}")
-                return {
-                    "status": "error",
-                    "message": f"Upload failed: {status}",
-                    "source": "sumsub",
-                }
+                logger.warning(
+                    "Sumsub add_document failure: "
+                    "applicant_id=%s endpoint=%s method=POST status=%d body=%s",
+                    applicant_id, url_path, status, (error_msg or "")[:500],
+                )
+                return self._error_result(
+                    "add_document", f"Upload failed: {status}",
+                    applicant_id=applicant_id,
+                    response_body=(error_msg or "")[:500],
+                    endpoint=url_path,
+                    method="POST",
+                    status_code=status,
+                )
 
         except (SumsubRetryError, Timeout, RequestException) as e:
-            logger.error(f"Sumsub doc upload error: {e}")
-            return {
-                "status": "error",
-                "message": str(e)[:100],
-                "source": "sumsub",
-            }
+            logger.error(
+                "Sumsub add_document exception: "
+                "applicant_id=%s error=%s",
+                applicant_id, str(e)[:200],
+            )
+            return self._error_result(
+                "add_document", str(e)[:100],
+                applicant_id=applicant_id,
+            )
 
     def get_verification_result(self, applicant_id: str) -> Dict[str, Any]:
         """
@@ -715,14 +753,28 @@ class SumsubClient:
                     response_body=error_msg,
                     applicant_id=applicant_id,
                 )
-                logger.warning(f"Sumsub get verification result failed: {status}")
+                logger.warning(
+                    "Sumsub get_verification_result failure: "
+                    "applicant_id=%s endpoint=%s method=GET status=%d body=%s",
+                    applicant_id, url_path, status, (error_msg or "")[:500],
+                )
                 if self.is_configured:
-                    return self._error_result("get_verification_result", f"API returned {status}",
-                                              applicant_id=applicant_id)
+                    return self._error_result(
+                        "get_verification_result", f"API returned {status}",
+                        applicant_id=applicant_id,
+                        response_body=(error_msg or "")[:500],
+                        endpoint=url_path,
+                        method="GET",
+                        status_code=status,
+                    )
                 return self._simulate_verification_result(applicant_id, note=f"API returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
-            logger.error(f"Sumsub get verification result error: {e}")
+            logger.error(
+                "Sumsub get_verification_result exception: "
+                "applicant_id=%s error=%s",
+                applicant_id, str(e)[:200],
+            )
             if self.is_configured:
                 return self._error_result("get_verification_result", str(e)[:100],
                                           applicant_id=applicant_id)
@@ -887,16 +939,25 @@ class SumsubClient:
                 applicant_id=applicant_id,
             )
             logger.warning(
-                "Sumsub get_applicant_review_status failed: %s — %s",
-                status, error_msg,
+                "Sumsub get_applicant_review_status failure: "
+                "applicant_id=%s endpoint=%s method=GET status=%d body=%s",
+                applicant_id, url_path, status, (error_msg or "")[:500],
             )
             return self._error_result(
                 "get_applicant_review_status", f"API returned {status}",
                 applicant_id=applicant_id,
+                response_body=(error_msg or "")[:500],
+                endpoint=url_path,
+                method="GET",
+                status_code=status,
             )
 
         except (SumsubRetryError, Timeout, RequestException) as e:
-            logger.error("Sumsub get_applicant_review_status error: %s", e)
+            logger.error(
+                "Sumsub get_applicant_review_status exception: "
+                "applicant_id=%s error=%s",
+                applicant_id, str(e)[:200],
+            )
             return self._error_result(
                 "get_applicant_review_status", str(e)[:100],
                 applicant_id=applicant_id,
@@ -942,14 +1003,28 @@ class SumsubClient:
                     response_body=error_msg,
                     applicant_id=applicant_id,
                 )
-                logger.warning(f"Sumsub get AML screening failed: {status}")
+                logger.warning(
+                    "Sumsub get_aml_screening failure: "
+                    "applicant_id=%s endpoint=%s method=GET status=%d body=%s",
+                    applicant_id, url_path, status, (error_msg or "")[:500],
+                )
                 if self.is_configured:
-                    return self._error_result("get_aml_screening", f"API returned {status}",
-                                              applicant_id=applicant_id)
+                    return self._error_result(
+                        "get_aml_screening", f"API returned {status}",
+                        applicant_id=applicant_id,
+                        response_body=(error_msg or "")[:500],
+                        endpoint=url_path,
+                        method="GET",
+                        status_code=status,
+                    )
                 return self._simulate_aml_screening(applicant_id, note=f"API returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
-            logger.error(f"Sumsub get AML screening error: {e}")
+            logger.error(
+                "Sumsub get_aml_screening exception: "
+                "applicant_id=%s error=%s",
+                applicant_id, str(e)[:200],
+            )
             if self.is_configured:
                 return self._error_result("get_aml_screening", str(e)[:100],
                                           applicant_id=applicant_id)
@@ -992,14 +1067,35 @@ class SumsubClient:
                     "api_status": "live",
                 }
             else:
-                logger.warning(f"Sumsub token gen failed: {status} — {error_msg}")
+                self._log_non_2xx(
+                    endpoint=url_path,
+                    status_code=status,
+                    response_body=error_msg,
+                    application_id=external_user_id,
+                )
+                logger.warning(
+                    "Sumsub generate_access_token failure: "
+                    "external_user_id=%s endpoint=%s method=POST status=%d body=%s",
+                    external_user_id, url_path, status, (error_msg or "")[:500],
+                )
                 if self.is_configured:
-                    return self._error_result("generate_access_token", f"API returned {status}",
-                                              external_user_id=external_user_id, token="")
+                    return self._error_result(
+                        "generate_access_token", f"API returned {status}",
+                        external_user_id=external_user_id,
+                        token="",
+                        response_body=(error_msg or "")[:500],
+                        endpoint=url_path,
+                        method="POST",
+                        status_code=status,
+                    )
                 return self._simulate_token(external_user_id, note=f"API returned {status}")
 
         except (SumsubRetryError, Timeout, RequestException) as e:
-            logger.error(f"Sumsub token error: {e}")
+            logger.error(
+                "Sumsub generate_access_token exception: "
+                "external_user_id=%s error=%s",
+                external_user_id, str(e)[:200],
+            )
             if self.is_configured:
                 return self._error_result("generate_access_token", str(e)[:100],
                                           external_user_id=external_user_id, token="")
