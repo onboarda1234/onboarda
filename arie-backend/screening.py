@@ -114,16 +114,15 @@ def screen_sumsub_aml(name, birth_date=None, nationality=None, entity_type="Pers
 
         if not applicant_result.get("applicant_id"):
             logger.warning("Sumsub AML: Failed to create/retrieve applicant for '%s'", name)
-            if applicant_result.get("api_status") == "error":
-                return {
-                    "matched": False,
-                    "results": [],
-                    "source": "sumsub",
-                    "api_status": "error",
-                    "error": applicant_result.get("error", "Applicant creation failed"),
-                    "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-                }
-            return _simulate_aml_screen(name)
+            # Always return error — never coerce missing applicant into pending
+            return {
+                "matched": False,
+                "results": [],
+                "source": "sumsub" if applicant_result.get("api_status") == "error" else "simulated",
+                "api_status": "error" if applicant_result.get("api_status") == "error" else "simulated",
+                "error": applicant_result.get("error", "Applicant creation failed — no applicant_id"),
+                "screened_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+            }
 
         applicant_id = applicant_result["applicant_id"]
 

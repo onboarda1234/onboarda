@@ -6368,9 +6368,110 @@ class SumsubApplicantHandler(BaseHandler):
             finally:
                 db.close()
 
-        self.log_audit(user, "KYC Applicant Created", external_user_id,
-                       f"Sumsub applicant created — ID: {applicant_id} ({result.get('source', 'unknown')})")
+        # Only write "KYC Applicant Created" audit entry when applicantId is real
+        # and non-empty.  Log failure explicitly otherwise.
+        if applicant_id:
+            self.log_audit(user, "KYC Applicant Created", external_user_id,
+                           f"Sumsub applicant created — ID: {applicant_id} ({result.get('source', 'unknown')})")
+        else:
+            self.log_audit(user, "KYC Applicant Creation Failed", external_user_id,
+                           f"Sumsub applicant creation failed — "
+                           f"api_status={result.get('api_status', 'unknown')} "
+                           f"error={result.get('error', 'no applicant_id returned')}")
         self.success(result)
+
+
+class SumsubDiagnosticsHandler(BaseHandler):
+    """GET /api/admin/sumsub-diagnostics?application_id=... — Per-person Sumsub state"""
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+
+        app_id = self.get_query_argument("application_id", "")
+        if not app_id:
+            return self.error("application_id query parameter required")
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref, prescreening_data FROM applications WHERE id=? OR ref=?",
+                (app_id, app_id)
+            ).fetchone()
+            if not app:
+                db.close()
+                return self.error("Application not found", 404)
+
+            real_id = app["id"]
+            prescreening = safe_json_loads(app["prescreening_data"] or "{}")
+            screening_report = prescreening.get("screening_report", {})
+            sumsub_applicant_ids = prescreening.get("sumsub_applicant_ids", {})
+
+            # Collect applicant mapping rows for this application
+            mappings = db.execute(
+                "SELECT applicant_id, external_user_id, person_name, person_type, created_at "
+                "FROM sumsub_applicant_mappings WHERE application_id=?",
+                (real_id,)
+            ).fetchall()
+            mapping_list = [dict(m) for m in mappings]
+
+            # Collect audit entries for applicant creation for this application
+            # Use exact match on target with all known identifiers (app_id + ext_ids)
+            ext_ids = [m["external_user_id"] for m in mapping_list]
+            all_targets = [real_id] + ext_ids
+            placeholders = ",".join("?" for _ in all_targets)
+            audit_entries = db.execute(
+                "SELECT action, target, detail, created_at FROM audit_log "
+                "WHERE action IN ('KYC Applicant Created', 'KYC Applicant Creation Failed') "
+                f"AND target IN ({placeholders}) "
+                "ORDER BY created_at DESC LIMIT 50",
+                tuple(all_targets)
+            ).fetchall()
+
+            unique_audits = [dict(a) for a in audit_entries]
+
+            # Build per-person diagnostics
+            persons = []
+            # From KYC applicants in screening report
+            for kyc in screening_report.get("kyc_applicants", []):
+                persons.append({
+                    "person_name": kyc.get("person_name", ""),
+                    "person_type": kyc.get("person_type", ""),
+                    "sumsub_applicant_id": kyc.get("applicant_id", ""),
+                    "applicant_creation_status": kyc.get("api_status", "unknown"),
+                    "source": kyc.get("source", "unknown"),
+                })
+            # From director screenings
+            for ds in screening_report.get("director_screenings", []):
+                scr = ds.get("screening", {})
+                persons.append({
+                    "person_name": ds.get("person_name", ""),
+                    "person_type": "director",
+                    "screening_api_status": scr.get("api_status", "unknown"),
+                    "screening_source": scr.get("source", "unknown"),
+                })
+            # From UBO screenings
+            for us in screening_report.get("ubo_screenings", []):
+                scr = us.get("screening", {})
+                persons.append({
+                    "person_name": us.get("person_name", ""),
+                    "person_type": "ubo",
+                    "screening_api_status": scr.get("api_status", "unknown"),
+                    "screening_source": scr.get("source", "unknown"),
+                })
+
+            self.success({
+                "application_id": real_id,
+                "application_ref": app["ref"],
+                "sumsub_applicant_ids": sumsub_applicant_ids,
+                "applicant_mappings": mapping_list,
+                "audit_entries": unique_audits,
+                "persons": persons,
+                "screening_mode": screening_report.get("screening_mode", "unknown"),
+                "last_screened_at": prescreening.get("last_screened_at", ""),
+            })
+        finally:
+            db.close()
 
 
 class SumsubAccessTokenHandler(BaseHandler):
@@ -9690,6 +9791,9 @@ def make_app():
         (r"/api/kyc/status/([^/]+)", SumsubStatusHandler),
         (r"/api/kyc/document", SumsubDocumentHandler),
         (r"/api/kyc/webhook", SumsubWebhookHandler),
+
+        # Sumsub Diagnostics (admin only)
+        (r"/api/admin/sumsub-diagnostics", SumsubDiagnosticsHandler),
 
         # Reports
         (r"/api/reports/generate", ReportHandler),
