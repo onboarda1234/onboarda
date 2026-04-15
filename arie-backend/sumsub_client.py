@@ -409,7 +409,7 @@ class SumsubClient:
             )
 
             if status in (200, 201):
-                applicant_id = (data.get("id") or "").strip()
+                applicant_id = str(data.get("id") or "").strip()
                 if not applicant_id:
                     # Provider returned 2xx but no applicantId — treat as failure
                     logger.error(

@@ -6416,33 +6416,19 @@ class SumsubDiagnosticsHandler(BaseHandler):
             mapping_list = [dict(m) for m in mappings]
 
             # Collect audit entries for applicant creation for this application
+            # Use exact match on target with all known identifiers (app_id + ext_ids)
+            ext_ids = [m["external_user_id"] for m in mapping_list]
+            all_targets = [real_id] + ext_ids
+            placeholders = ",".join("?" for _ in all_targets)
             audit_entries = db.execute(
                 "SELECT action, target, detail, created_at FROM audit_log "
                 "WHERE action IN ('KYC Applicant Created', 'KYC Applicant Creation Failed') "
-                "AND target LIKE ? "
+                f"AND target IN ({placeholders}) "
                 "ORDER BY created_at DESC LIMIT 50",
-                (f"%{real_id}%",)
+                tuple(all_targets)
             ).fetchall()
-            # Also check by external_user_ids from mappings
-            ext_ids = [m["external_user_id"] for m in mapping_list]
-            for ext_id in ext_ids:
-                more = db.execute(
-                    "SELECT action, target, detail, created_at FROM audit_log "
-                    "WHERE action IN ('KYC Applicant Created', 'KYC Applicant Creation Failed') "
-                    "AND target = ? "
-                    "ORDER BY created_at DESC LIMIT 10",
-                    (ext_id,)
-                ).fetchall()
-                audit_entries = list(audit_entries) + list(more)
 
-            # Deduplicate audit entries
-            seen = set()
-            unique_audits = []
-            for a in audit_entries:
-                key = (a["action"], a["target"], a["created_at"])
-                if key not in seen:
-                    seen.add(key)
-                    unique_audits.append(dict(a))
+            unique_audits = [dict(a) for a in audit_entries]
 
             # Build per-person diagnostics
             persons = []
