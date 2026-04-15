@@ -315,7 +315,7 @@ class BaseHandler(tornado.web.RequestHandler):
             "attempted_resource_id": resource_id,
             "actual_owner": context_dict.get("actual_owner", ""),
             "path": self.request.path if hasattr(self, "request") else "",
-            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+            "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         }
         # Merge caller-supplied extras (e.g. source_channel) without
         # overriding the canonical keys above.
