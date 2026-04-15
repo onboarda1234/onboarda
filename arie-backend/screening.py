@@ -16,9 +16,12 @@ import hmac
 import hashlib
 import base64
 import random
+import re
 import logging
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
+
+import pycountry
 
 import requests
 
@@ -466,6 +469,51 @@ def _sumsub_sign(method, url_path, body=b""):
     }
 
 
+def normalize_country_alpha3(code):
+    """Convert an ISO 3166 alpha-2 country code to alpha-3.
+
+    Returns the alpha-3 code on success, or ``None`` if the input is
+    empty, already alpha-3 (pass-through), or unrecognised.  This
+    ensures Sumsub always receives a valid alpha-3 country code and
+    never an invalid value that would trigger a 400.
+    """
+    if not code or not isinstance(code, str):
+        return None
+    code = code.strip().upper()
+    if not code:
+        return None
+    try:
+        if len(code) == 2:
+            country_obj = pycountry.countries.get(alpha_2=code)
+            return country_obj.alpha_3 if country_obj else None
+        if len(code) == 3:
+            country_obj = pycountry.countries.get(alpha_3=code)
+            return country_obj.alpha_3 if country_obj else None
+        return None
+    except Exception:
+        return None
+
+
+def validate_dob_format(dob):
+    """Return *dob* only if it matches ``YYYY-MM-DD`` (ISO 8601 date).
+
+    Sumsub expects this exact format in ``fixedInfo.dob``.  If the
+    value is empty, malformed, or represents an impossible date, return
+    ``None`` so the field is omitted from the payload rather than
+    sending a value that would cause a 400.
+    """
+    if not dob or not isinstance(dob, str):
+        return None
+    dob = dob.strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", dob):
+        return None
+    try:
+        datetime.strptime(dob, "%Y-%m-%d")
+        return dob
+    except ValueError:
+        return None
+
+
 def sumsub_create_applicant(external_user_id, first_name=None, last_name=None,
                             email=None, phone=None, dob=None, country=None,
                             level_name=None):
@@ -474,6 +522,10 @@ def sumsub_create_applicant(external_user_id, first_name=None, last_name=None,
     Thin wrapper — delegates to SumsubClient for retry, cost tracking, and consistent error handling.
     Returns: { applicant_id, external_user_id, status, source }
     """
+    # Normalize inputs before forwarding to Sumsub
+    dob = validate_dob_format(dob)
+    country = normalize_country_alpha3(country)
+
     client = get_sumsub_client()
     info = {}
     if first_name or last_name or dob or country:

@@ -136,8 +136,8 @@ def test_create_applicant_forwards_dob_and_country():
     assert call_kwargs["dob"] == "1990-01-15", (
         f"dob not forwarded: {call_kwargs}"
     )
-    assert call_kwargs["country"] == "MU", (
-        f"country not forwarded: {call_kwargs}"
+    assert call_kwargs["country"] == "MUS", (
+        f"country not forwarded/normalised to alpha-3: {call_kwargs}"
     )
 
 
