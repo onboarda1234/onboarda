@@ -358,6 +358,32 @@ class ApprovalGateValidator:
             #    the configurable validity period (default 90 days).
             #    Fail-closed: missing screening timestamp blocks approval.
             validity_days = get_screening_validity_days()
+            # EX-10 closeout: max allowed clock skew for future-dated timestamps
+            _FUTURE_SKEW_SECONDS = 300  # 5 minutes
+
+            # 9a. Reject future-dated screened_at timestamps (fail closed)
+            if screening_ts_str:
+                try:
+                    if isinstance(screening_ts_str, str):
+                        _scr_ts_future = datetime.fromisoformat(screening_ts_str.replace('Z', '+00:00'))
+                    else:
+                        _scr_ts_future = screening_ts_str
+                    _now_future = datetime.now(timezone.utc)
+                    if _scr_ts_future.tzinfo is None:
+                        _now_future = _now_future.replace(tzinfo=None)
+                    if _scr_ts_future > _now_future + timedelta(seconds=_FUTURE_SKEW_SECONDS):
+                        logger.warning(
+                            f"Future-dated screened_at rejected for application {app_id}: "
+                            f"screened_at={screening_ts_str}, now={_now_future.isoformat()}"
+                        )
+                        return (
+                            False,
+                            "Screening timestamp is in the future and cannot be trusted. "
+                            "A re-screen is required before approval can proceed."
+                        )
+                except (ValueError, TypeError):
+                    pass  # Will be caught by subsequent gates
+
             screening_valid_until_str = prescreening_data.get('screening_valid_until')
             if screening_valid_until_str:
                 # Prefer explicit valid_until if stored
@@ -369,6 +395,20 @@ class ApprovalGateValidator:
                     now = datetime.now(timezone.utc)
                     if valid_until.tzinfo is None:
                         now = now.replace(tzinfo=None)
+
+                    # EX-10 closeout: reject future-dated valid_until beyond allowed skew + validity window
+                    max_valid_until = now + timedelta(days=validity_days, seconds=_FUTURE_SKEW_SECONDS)
+                    if valid_until > max_valid_until:
+                        logger.warning(
+                            f"Future-dated screening_valid_until rejected for application {app_id}: "
+                            f"valid_until={screening_valid_until_str}, max_allowed={max_valid_until.isoformat()}"
+                        )
+                        return (
+                            False,
+                            "Screening validity window is implausibly far in the future. "
+                            "A re-screen is required before approval can proceed."
+                        )
+
                     if now > valid_until:
                         age_days = (now - valid_until).days
                         return (
@@ -408,6 +448,29 @@ class ApprovalGateValidator:
                 # No screening timestamp at all — fail closed
                 return (False, "Screening timestamp is missing from the screening report. "
                         "A re-screen is required before approval can proceed.")
+
+            # EX-10 closeout: Audit log on successful freshness validation
+            _screening_age_days = None
+            _valid_until_log = screening_valid_until_str or None
+            try:
+                _now_log = datetime.now(timezone.utc)
+                if screening_ts_str:
+                    if isinstance(screening_ts_str, str):
+                        _scr_log = datetime.fromisoformat(screening_ts_str.replace('Z', '+00:00'))
+                    else:
+                        _scr_log = screening_ts_str
+                    if _scr_log.tzinfo is None:
+                        _now_log = _now_log.replace(tzinfo=None)
+                    _screening_age_days = (_now_log - _scr_log).days
+            except (ValueError, TypeError):
+                _screening_age_days = None
+
+            logger.info(
+                f"Screening freshness validated for application {app_id}: "
+                f"screening_age_days={_screening_age_days}, "
+                f"valid_until={_valid_until_log}, "
+                f"validity_days={validity_days}"
+            )
 
             logger.info(f"Application {app_id} passed approval gate validation")
             return (True, "")
