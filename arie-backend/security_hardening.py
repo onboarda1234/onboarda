@@ -381,8 +381,8 @@ class ApprovalGateValidator:
                             "Screening timestamp is in the future and cannot be trusted. "
                             "A re-screen is required before approval can proceed."
                         )
-                except (ValueError, TypeError):
-                    pass  # Will be caught by subsequent gates
+                except (ValueError, TypeError) as ts_err:
+                    logger.debug(f"Could not parse screened_at for future-date check: {ts_err}")
 
             screening_valid_until_str = prescreening_data.get('screening_valid_until')
             if screening_valid_until_str:
@@ -462,7 +462,8 @@ class ApprovalGateValidator:
                     if _scr_log.tzinfo is None:
                         _now_log = _now_log.replace(tzinfo=None)
                     _screening_age_days = (_now_log - _scr_log).days
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as age_err:
+                logger.debug(f"Could not compute screening age for audit log: {age_err}")
                 _screening_age_days = None
 
             logger.info(
