@@ -33,7 +33,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only")
 # ── Fixed IDs from the retest spec ──
 CLIENT_ID = "21eb50f952e54634"
 OWNED_APP_ID = "4428154d80e1474f"
-NON_OWNED_APP_ID = "aa8817ef78484777"
+NON_OWNED_APP_ID = "014e50a0b65c4137"  # Dedicated cross-tenant probe app
 OTHER_CLIENT_ID = "r10_other_client_bb"
 
 
@@ -74,6 +74,25 @@ def _seed_r10_data(raw_db):
     raw_db.commit()
 
 
+def _assert_fixture_isolation(raw_db):
+    """Fail loudly if the non-owned app's client_id matches the test client.
+
+    Call at the top of every test to guard against premise-drift where
+    the cross-tenant probe app accidentally becomes owned by CLIENT_ID.
+    """
+    row = raw_db.execute(
+        "SELECT client_id FROM applications WHERE id = ?",
+        (NON_OWNED_APP_ID,),
+    ).fetchone()
+    assert row is not None, (
+        f"Fixture drift: non-owned app {NON_OWNED_APP_ID} missing from DB"
+    )
+    assert row["client_id"] != CLIENT_ID, (
+        f"Fixture drift: {NON_OWNED_APP_ID} is now owned by test client "
+        f"{CLIENT_ID} — cross-tenant tests are invalid"
+    )
+
+
 # ============================================================================
 # Unit-level tests (direct service-layer via create_change_request)
 # ============================================================================
@@ -103,10 +122,11 @@ class TestR10PortalOwnershipUnit:
 
     # --- Test 4: non-owned app creates zero change_requests ----------------
     def test_nonowned_creates_zero_change_requests(self, db):
-        """POST as 21eb50f952e54634 targeting aa8817ef78484777 must NOT
+        """POST as 21eb50f952e54634 targeting non-owned app must NOT
         insert any change_requests row."""
         import change_management as cm
         _seed_r10_data(db)
+        _assert_fixture_isolation(db)
         wdb = _DBWrapper(db)
 
         before = db.execute(
@@ -133,10 +153,11 @@ class TestR10PortalOwnershipUnit:
 
     # --- Test 5: non-owned app creates zero change_request_items -----------
     def test_nonowned_creates_zero_change_request_items(self, db):
-        """POST as 21eb50f952e54634 targeting aa8817ef78484777 must NOT
+        """POST as 21eb50f952e54634 targeting non-owned app must NOT
         insert any change_request_items row."""
         import change_management as cm
         _seed_r10_data(db)
+        _assert_fixture_isolation(db)
         wdb = _DBWrapper(db)
 
         before = db.execute(
@@ -409,3 +430,31 @@ class TestR10PortalOwnershipHTTP:
                     f"{result.failures + result.errors}")
 
         _Test().runTest()
+
+
+# ============================================================================
+# Fixture isolation assertion tests
+# ============================================================================
+
+class TestFixtureIsolation:
+    """A9: _assert_fixture_isolation raises if the non-owned app
+    becomes owned by the test client (premise-drift detection)."""
+
+    def test_fixture_isolation_assertion(self, db):
+        """After seeding, the non-owned app must NOT be owned by CLIENT_ID."""
+        _seed_r10_data(db)
+        _assert_fixture_isolation(db)  # Should pass
+
+    def test_fixture_isolation_catches_drift(self, db):
+        """If we force NON_OWNED_APP_ID.client_id = CLIENT_ID,
+        _assert_fixture_isolation must raise AssertionError."""
+        _seed_r10_data(db)
+        # Simulate drift by reassigning ownership
+        db.execute(
+            "UPDATE applications SET client_id = ? WHERE id = ?",
+            (CLIENT_ID, NON_OWNED_APP_ID),
+        )
+        db.commit()
+
+        with pytest.raises(AssertionError, match="Fixture drift"):
+            _assert_fixture_isolation(db)

@@ -751,6 +751,24 @@ def create_change_request(
                 "Defence-in-depth: portal CR blocked | client=%s app=%s owner=%s",
                 client_id, application_id, app_row["client_id"],
             )
+            # Audit the denial via the caller-supplied audit function
+            if log_audit_fn:
+                try:
+                    log_audit_fn(
+                        user, "portal_cr_denied_not_owner",
+                        application_id,
+                        json.dumps({
+                            "reason": "defence_in_depth",
+                            "client_id": client_id,
+                            "attempted_application_id": application_id,
+                            "actual_owner": app_row["client_id"],
+                        }),
+                        db=db,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to write denial audit in defence-in-depth"
+                    )
             raise PermissionError(
                 "You do not own this application. Portal change request denied."
             )

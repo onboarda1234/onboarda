@@ -8,11 +8,13 @@ Provides: CORS, security headers, CSRF protection, dual auth (Bearer + cookie),
 rate limiting, JSON helpers, audit logging, and safe error responses.
 """
 
+import datetime
 import hmac
 import json
 import logging
 import os
 import secrets
+import sys
 
 import tornado.web
 
@@ -294,9 +296,80 @@ class BaseHandler(tornado.web.RequestHandler):
         if own_db:
             db.close()
 
+    def log_authz_denial(self, user, event, resource_id, context_dict, db=None):
+        """Write a uniform audit row for any AuthZ denial.
+
+        Uses an autonomous DB connection so the row survives even if the
+        caller's transaction rolls back.  Falls back to structured stderr
+        (tagged ``AUDIT_FALLBACK``) if the primary write fails.
+
+        Args:
+            user: Authenticated user dict.
+            event: Action name, e.g. ``authz_denied_not_owner``.
+            resource_id: The resource the caller tried to access.
+            context_dict: Extra context merged into the audit detail.
+        """
+        payload = {
+            "event": event,
+            "client_id": user.get("sub", ""),
+            "attempted_resource_id": resource_id,
+            "actual_owner": context_dict.get("actual_owner", ""),
+            "path": self.request.path if hasattr(self, "request") else "",
+            "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        }
+        # Merge caller-supplied extras (e.g. source_channel) without
+        # overriding the canonical keys above.
+        for k, v in context_dict.items():
+            if k not in payload:
+                payload[k] = v
+        detail = json.dumps(payload, default=str)
+
+        # --- Primary: autonomous connection ---
+        try:
+            audit_db = get_db()
+            try:
+                audit_db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, "
+                    "action, target, detail, ip_address) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (
+                        user.get("sub", ""),
+                        user.get("name", ""),
+                        user.get("role", ""),
+                        event,
+                        resource_id,
+                        detail,
+                        self.get_client_ip() if hasattr(self, "request") else "",
+                    ),
+                )
+                audit_db.commit()
+            finally:
+                audit_db.close()
+            return  # success
+        except Exception:
+            logger.exception("Primary audit write failed for event=%s", event)
+
+        # --- Fallback: structured stderr ---
+        try:
+            fallback = json.dumps({
+                "AUDIT_FALLBACK": True,
+                **payload,
+                "user_name": user.get("name", ""),
+                "user_role": user.get("role", ""),
+            }, default=str)
+            print(fallback, file=sys.stderr, flush=True)
+        except Exception:
+            logger.exception("Audit fallback stderr write also failed")
+
     def check_app_ownership(self, user, app):
         """Returns True if user is allowed to access this application."""
         if user.get("type") == "client" and app["client_id"] != user["sub"]:
+            self.log_authz_denial(
+                user,
+                "authz_denied_not_owner",
+                app.get("id", app.get("ref", "")),
+                {"actual_owner": app["client_id"]},
+            )
             self.error("Unauthorized", 403)
             return False
         return True
