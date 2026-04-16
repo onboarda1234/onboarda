@@ -248,6 +248,16 @@ def validate_compliance_memo(memo_data):
     else:
         issues.append({"category": "screening", "severity": "info", "description": "Screening provider not explicitly named.", "fix": "Reference the screening data source for audit defensibility."})
 
+    # Flag unsubstantiated adverse media claims
+    _adverse_claimed = any(phrase in screen_content.lower() for phrase in [
+        "adverse media screening returned no relevant",
+        "comprehensive search conducted across global news",
+        "adverse media review conducted",
+    ])
+    _adverse_disclosed = "not yet conducted" in screen_content.lower() or "not yet in place" in screen_content.lower()
+    if _adverse_claimed and not _adverse_disclosed:
+        issues.append({"category": "screening", "severity": "critical", "description": "Memo claims adverse media screening was conducted, but no adverse media provider is integrated.", "fix": "Replace with truthful language acknowledging adverse media screening has not been conducted, or integrate a dedicated adverse media screening provider."})
+
     scores["screening"] = screen_score
 
     # ── 6. DOCUMENT VERIFICATION QUALITY (weight: 0.5) ──

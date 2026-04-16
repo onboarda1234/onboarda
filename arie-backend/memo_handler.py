@@ -63,6 +63,21 @@ def build_compliance_memo(app, directors, ubos, documents):
             if not already_declared and name:
                 all_peps.append({"full_name": name, "is_pep": "Yes", "source": "screening"})
 
+    # ── Adverse media screening state ──
+    # Determine whether an actual adverse media screening was conducted.
+    # The screening pipeline (screening.py) does NOT persist adverse media
+    # results today; claiming otherwise in the memo is misleading and a
+    # regulatory risk.  The flag below drives truthful language throughout.
+    _has_adverse_media = False
+    if isinstance(screening_report, dict):
+        # Future-proof: if adverse media data is ever added to the report,
+        # this will detect it automatically.
+        am = screening_report.get("adverse_media")
+        if isinstance(am, dict) and am.get("results"):
+            _has_adverse_media = True
+        elif isinstance(am, list) and am:
+            _has_adverse_media = True
+
     # W2-1: Deduplicate PEPs appearing in both director and UBO roles
     seen_pep_names = set()
     deduped_peps = []
@@ -477,7 +492,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                         "content": (
                             f"Sanctions screening was conducted across UN Security Council, EU, OFAC SDN, and HMT consolidated lists. "
                             + ("No matches were returned for any director, UBO, or the entity itself. " if not all_peps else f"{len(all_peps)} PEP match(es) identified requiring enhanced assessment. ")
-                            + "Adverse media screening returned no relevant hits across global media databases. "
+                            + ("Adverse media screening returned no relevant hits across global media databases. " if _has_adverse_media else "Adverse media screening: not yet conducted — separate adverse media screening capability is required. ")
                             + f"The entity's business model {'does not exhibit' if fc_rating in ('LOW', 'MEDIUM') else 'may exhibit'} typology indicators associated with money laundering, terrorist financing, or proliferation financing. "
                             + f"Risk weighting factor: 0.10."
                         )
@@ -492,7 +507,8 @@ def build_compliance_memo(app, directors, ubos, documents):
                        else f"PEP matches identified — assessed as confirmed true positives based on verified identity data. ")
                     + f"PEP Screening: {len(all_peps)} confirmed match(es)"
                     + (" — " + ". ".join([p["full_name"] + " identified as PEP. PEP declaration form and enhanced due diligence documentation requested." for p in all_peps]) if all_peps else " — no matches identified.")
-                    + " Adverse Media Screening: Comprehensive search conducted across global news and regulatory enforcement databases. No relevant hits identified for any associated individual or the entity. "
+                    + (" Adverse Media Screening: Comprehensive search conducted across global news and regulatory enforcement databases. No relevant hits identified for any associated individual or the entity. " if _has_adverse_media
+                       else " Adverse Media Screening: Not yet conducted. Current screening covers sanctions and PEP only; a dedicated adverse media screening provider is required. ")
                     + f"Company Registry Verification: {app['company_name']} verified against registry records. "
                     + f"Registration details are {'consistent' if verified_docs else 'pending verification against'} application data."
                 )
@@ -615,7 +631,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + (f", with an interim 6-month review triggered by PEP conditions" if all_peps and risk_level not in ("HIGH", "VERY_HIGH") else "")
                     + f". Transaction monitoring: {'Quarterly' if risk_level != 'LOW' else 'Annual'} review of transaction patterns against stated business activity. "
                     + "Trigger events requiring immediate review: (1) Any change in beneficial ownership structure or directorship composition. "
-                    + "(2) Adverse media alerts from continuous screening. "
+                    + ("(2) Adverse media alerts from continuous screening. " if _has_adverse_media else "(2) Adverse media alerts (requires dedicated screening provider — not yet in place). ")
                     + (f"(3) Change in PEP status for {', '.join([p['full_name'] for p in all_peps])}. " if all_peps else "(3) New PEP identification among associated persons. ")
                     + "(4) Transaction volumes exceeding 150% of stated expectations in any quarter. "
                     + "(5) Regulatory action, investigation, or enforcement proceedings against the entity or any associated person. "
@@ -657,7 +673,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "key_findings": [
                 f"Beneficial ownership {'traced to natural persons via ' + struct_complexity.lower() + ' structure — ' + control_name + ' (' + str(control_pct) + '%) exercises effective control' if primary_ubo else 'could not be verified — critical data gap'}",
                 f"{'PEP identified: ' + ', '.join([p['full_name'] + ' (' + ('Director' if p in pep_directors else 'UBO') + ')' for p in all_peps]) + '. Enhanced due diligence required.' if all_peps else 'No PEP exposure identified among directors or UBOs'}",
-                f"Sanctions and adverse media screening {'clear' if not all_peps else 'completed with PEP identification'} across all consolidated lists",
+                f"Sanctions {'and adverse media ' if _has_adverse_media else ''}screening {'clear' if not all_peps else 'completed with PEP identification'} across all consolidated lists" + ("" if _has_adverse_media else " (adverse media screening not yet conducted)"),
                 ("No documents uploaded — entity verification remains incomplete" if not has_documents else f"{len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence" + (f"; {len(pending_docs)} outstanding" if pending_docs else " — full documentation")),
                 f"{'Business model assessed as plausible and consistent with regulatory authorisations' if sector != 'Information not provided' else 'Business model assessment limited by insufficient sector data'}",
                 f"{country} jurisdiction presents {'severe' if is_high_risk_country else 'moderate' if is_offshore else 'low'} risk — {'sanctions/FATF blacklist' if is_high_risk_country else 'offshore IFC classification' if is_offshore else 'adequate AML/CFT framework'}"
@@ -674,7 +690,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 f"UBO chain mapped to natural persons: {control_name + ' (' + str(control_pct) + '%)' if primary_ubo else 'Not verified — data gap'}",
                 f"PEP screening completed — {len(all_peps)} confirmed match(es)" + (f": {', '.join([p['full_name'] for p in all_peps])}" if all_peps else ""),
                 "Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists",
-                "Adverse media review conducted — no relevant hits identified",
+                "Adverse media review conducted — no relevant hits identified" if _has_adverse_media else "Adverse media screening — not yet conducted; dedicated provider required",
                 f"Source of funds {'reviewed and assessed as consistent' if sof != 'Information not provided' else 'not provided — data gap flagged'}",
                 f"Business model plausibility {'confirmed' if sector != 'Information not provided' else 'assessment limited by data gap'}",
                 (f"Document verification not started — no uploaded documents available ({len(verified_docs)}/{len(documents)}) at {doc_confidence}% confidence" if not has_documents else f"Document verification completed ({len(verified_docs)}/{len(documents)}) at {doc_confidence}% confidence"),
