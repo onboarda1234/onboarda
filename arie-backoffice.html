@@ -1002,7 +1002,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 
 <!-- ═══════════════ APPLICATIONS VIEW ═══════════════ -->
 <div class="view" id="view-applications">
-  <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+  <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;">
     <select class="form-select" style="width:auto;" id="filter-risk" onchange="filterApplications()">
       <option value="">All Risk Levels</option>
       <option value="LOW">Low</option>
@@ -1034,6 +1034,10 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <option value="">All Officers</option>
       <option value="Unassigned">Unassigned</option>
     </select>
+    <span id="applications-last-updated" style="margin-left:auto;font-size:11px;color:var(--text3);display:flex;align-items:center;gap:4px;" title="Time since last data refresh">
+      <span id="applications-freshness-dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;"></span>
+      <span id="applications-freshness-text">Updated just now</span>
+    </span>
   </div>
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
@@ -3088,6 +3092,11 @@ async function loadFromAPI() {
       });
     }
 
+    // EX-13: Mark data as freshly loaded and start auto-refresh
+    _applicationsLastRefreshed = Date.now();
+    _updateFreshnessIndicator();
+    _startApplicationsAutoRefresh();
+
     // Load users
     try {
       var usersResp = await boApiCall('GET', '/users');
@@ -3388,6 +3397,138 @@ function switchUser(role) {
 var APPLICATIONS = [];
 // Demo data is no longer hardcoded. APPLICATIONS is populated from API via loadFromAPI().
 var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
+
+// ═══════════════════════════════════════════════════════════
+// EX-13: Auto-refresh, ETag caching, and staleness indicator
+// ═══════════════════════════════════════════════════════════
+var _applicationsLastRefreshed = null;   // timestamp of last successful refresh
+var _applicationsEtag = '';              // last ETag from /api/applications
+var _applicationsRefreshInterval = null; // setInterval handle
+var _applicationsRefreshMs = 30000;      // 30 seconds default
+var _stalenessTickInterval = null;       // 1-second UI tick for freshness display
+var _STALE_THRESHOLD_S = 60;             // show stale warning after 60 seconds
+
+function _updateFreshnessIndicator() {
+  var textEl = document.getElementById('applications-freshness-text');
+  var dotEl = document.getElementById('applications-freshness-dot');
+  if (!textEl || !dotEl) return;
+  if (!_applicationsLastRefreshed) {
+    textEl.textContent = 'Not yet loaded';
+    dotEl.style.background = '#94a3b8';
+    return;
+  }
+  var ageS = Math.floor((Date.now() - _applicationsLastRefreshed) / 1000);
+  var label;
+  if (ageS < 5) label = 'Updated just now';
+  else if (ageS < 60) label = 'Updated ' + ageS + 's ago';
+  else if (ageS < 3600) label = 'Updated ' + Math.floor(ageS / 60) + 'm ago';
+  else label = 'Updated ' + Math.floor(ageS / 3600) + 'h ago';
+  textEl.textContent = label;
+  if (ageS > _STALE_THRESHOLD_S) {
+    dotEl.style.background = '#f59e0b';
+    dotEl.title = 'Data may be stale';
+    textEl.style.color = '#d97706';
+    textEl.textContent = '⚠ ' + label;
+  } else {
+    dotEl.style.background = '#22c55e';
+    dotEl.title = 'Data is fresh';
+    textEl.style.color = '';
+  }
+}
+
+async function _autoRefreshApplications() {
+  if (!BO_AUTH_TOKEN) return;
+  try {
+    var opts = { method: 'GET', headers: {} };
+    if (BO_AUTH_TOKEN) opts.headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
+    if (_applicationsEtag) opts.headers['If-None-Match'] = _applicationsEtag;
+    var res = await fetch(BO_API_BASE + '/applications', opts);
+    // ETag match — data unchanged, just update timestamp
+    if (res.status === 304) {
+      _applicationsLastRefreshed = Date.now();
+      _updateFreshnessIndicator();
+      return;
+    }
+    if (res.status === 401) return; // session expired, don't refresh
+    if (!res.ok) return;
+    var etag = res.headers.get('ETag') || '';
+    if (etag) _applicationsEtag = etag;
+    var data = await res.json();
+    if (data.applications && data.applications.length > 0) {
+      // Preserve current filter/selection state
+      var listView = document.getElementById('view-applications');
+      var isOnList = listView && listView.classList.contains('active');
+      // Re-map same as loadFromAPI
+      APPLICATIONS = data.applications.map(function(a) {
+        var dims = {};
+        try { dims = typeof a.risk_dimensions === 'string' ? JSON.parse(a.risk_dimensions) : (a.risk_dimensions || {}); } catch(e) {}
+        var backendDocuments = (a.documents || []).map(function(d) {
+          return {
+            id: d.id, doc_type: d.doc_type, doc_name: d.doc_name,
+            file_size: d.file_size, mime_type: d.mime_type,
+            verification_status: d.verification_status,
+            verification_results: d.verification_results,
+            verified_at: d.verified_at, person_id: d.person_id
+          };
+        });
+        return {
+          id: a.id, ref: a.ref, company: a.company_name,
+          sector: a.sector || 'Unknown', entityType: a.entity_type || '',
+          risk: a.risk_level || 'LOW', score: a.risk_score || 0,
+          lane: a.onboarding_lane || 'Standard Review',
+          statusRaw: a.status || '', status: formatStatus(a.status),
+          assignedId: a.assigned_to || '',
+          assigned: a.assigned_name || a.assigned_to || 'Unassigned',
+          date: (a.created_at || '').split('T')[0].split(' ')[0],
+          country: a.country || '', brn: a.brn || '',
+          directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, dob: d.date_of_birth || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
+          ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
+          intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
+          dims: dims,
+          docs: backendDocuments.map(function(d) { return d.doc_type; }),
+          _documents: backendDocuments,
+          pepCount: (function() {
+            var declared = (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
+                           (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length;
+            if (declared > 0) return declared;
+            var sr = (a.prescreening_data || {}).screening_report || {};
+            var screeningPeps = (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
+                                (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
+            return screeningPeps;
+          })(),
+          _raw_prescreening: a.prescreening_data
+        };
+      });
+      // Re-render list if currently visible (preserves filter state)
+      if (isOnList) renderApplications();
+      // Update dashboard counts
+      renderDashboardRecent();
+    }
+    _applicationsLastRefreshed = Date.now();
+    _updateFreshnessIndicator();
+  } catch(e) {
+    console.warn('EX-13: auto-refresh failed:', e);
+  }
+}
+
+function _startApplicationsAutoRefresh() {
+  if (_applicationsRefreshInterval) return;
+  _applicationsRefreshInterval = setInterval(_autoRefreshApplications, _applicationsRefreshMs);
+  if (!_stalenessTickInterval) {
+    _stalenessTickInterval = setInterval(_updateFreshnessIndicator, 1000);
+  }
+}
+
+function _stopApplicationsAutoRefresh() {
+  if (_applicationsRefreshInterval) {
+    clearInterval(_applicationsRefreshInterval);
+    _applicationsRefreshInterval = null;
+  }
+  if (_stalenessTickInterval) {
+    clearInterval(_stalenessTickInterval);
+    _stalenessTickInterval = null;
+  }
+}
 
 /* ── REMOVED: 9 hardcoded demo applications (TechPay Global, Africom Remittances, Nordic Payments,
    GoldBridge Trading, MedServe Health, CryptoVault Exchange, Pacific Logistics, Sahara Construction,
@@ -8959,6 +9100,9 @@ function signOut() {
   // httpOnly session cookie cleared by server on logout; no JS cookie to expire
   BO_AUTH_TOKEN = '';
   BO_AUTH_USER = null;
+
+  // EX-13: Stop auto-refresh on logout
+  _stopApplicationsAutoRefresh();
 
   // ── EX-12: Clear auth/session keys from browser storage on logout ──
   try {

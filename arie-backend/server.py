@@ -138,6 +138,7 @@ from party_utils import (
     extract_fernet_token, encrypt_pii_fields, decrypt_pii_fields,
     PII_FIELDS_DIRECTORS, PII_FIELDS_UBOS, PII_FIELDS_APPLICATIONS,
     parse_json_field, hydrate_party_record, get_application_parties,
+    get_application_parties_batch,
 )
 from prescreening.normalize import (
     compose_source_of_funds_summary as _compose_source_of_funds_summary,
@@ -1659,20 +1660,61 @@ class ApplicationsHandler(BaseHandler):
         db.close()
 
         apps = [dict(r) for r in rows]
-        # Attach directors, UBOs, and documents for each — C-02: decrypt PII on read
+
+        # EX-13: Batch-fetch related records to eliminate N+1 query pattern.
+        # Instead of 4N+1 queries, we use 5 total queries regardless of app count.
         db = get_db()
+        app_ids = [app["id"] for app in apps]
+
+        # Batch fetch parties (3 queries: directors, ubos, intermediaries)
+        parties_by_app = get_application_parties_batch(db, app_ids) if app_ids else {}
+
+        # Batch fetch documents (1 query)
+        docs_by_app = {}
+        if app_ids:
+            doc_placeholders = ",".join("?" for _ in app_ids)
+            doc_rows = db.execute(
+                "SELECT id, doc_type, doc_name, file_size, verification_status, "
+                "verification_results, verified_at, person_id, review_status, "
+                "review_comment, reviewed_by, reviewed_at, application_id "
+                f"FROM documents WHERE application_id IN ({doc_placeholders})",
+                app_ids,
+            ).fetchall()
+            for d in doc_rows:
+                docs_by_app.setdefault(d["application_id"], []).append(dict(d))
+
+        # Stitch results back into each application
         for app in apps:
             app["status_label"] = get_status_label(app.get("status"))
-            app["directors"], app["ubos"], app["intermediaries"] = get_application_parties(db, app["id"])
-            app["documents"] = [dict(d) for d in db.execute(
-                "SELECT id, doc_type, doc_name, file_size, verification_status, verification_results, verified_at, person_id, review_status, review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?",
-                (app["id"],)).fetchall()]
+            parties = parties_by_app.get(app["id"], ([], [], []))
+            app["directors"] = parties[0]
+            app["ubos"] = parties[1]
+            app["intermediaries"] = parties[2]
+            app_docs = docs_by_app.get(app["id"], [])
+            # Remove application_id from document dicts (not part of original response)
+            for doc in app_docs:
+                doc.pop("application_id", None)
+            app["documents"] = app_docs
             # Bug #4: Parse risk_dimensions from JSON string for API consumers
             if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
                 app["risk_dimensions"] = safe_json_loads(app["risk_dimensions"])
         db.close()
 
-        self.success({"applications": apps, "total": len(apps)})
+        # EX-13: ETag support — compute hash of response for conditional requests
+        payload = {"applications": apps, "total": len(apps)}
+        payload_json = json.dumps(payload, sort_keys=True, default=str)
+        etag = '"' + hashlib.md5(payload_json.encode("utf-8")).hexdigest() + '"'
+
+        # Check If-None-Match header for conditional request
+        client_etag = self.request.headers.get("If-None-Match", "")
+        if client_etag == etag:
+            self.set_status(304)
+            self.set_header("ETag", etag)
+            self.finish()
+            return
+
+        self.set_header("ETag", etag)
+        self.success(payload)
 
     def post(self):
         user = self.require_auth()

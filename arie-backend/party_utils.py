@@ -176,3 +176,62 @@ def get_application_parties(db, application_id):
         item["full_name"] = item.get("entity_name", "")
         intermediaries.append(item)
     return directors, ubos, intermediaries
+
+
+def get_application_parties_batch(db, application_ids):
+    """Batch-fetch directors, UBOs, and intermediaries for multiple applications.
+
+    Uses WHERE application_id IN (...) to avoid N+1 queries.
+    Returns a dict keyed by application_id, each value being a 3-tuple:
+    (directors, ubos, intermediaries).
+
+    EX-13: Reduces party queries from 3N to 3 regardless of application count.
+    """
+    if not application_ids:
+        return {}
+
+    placeholders = ",".join("?" for _ in application_ids)
+    id_list = list(application_ids)
+
+    # Batch query directors
+    directors_by_app = {}
+    for d in db.execute(
+        f"SELECT * FROM directors WHERE application_id IN ({placeholders})",
+        id_list,
+    ).fetchall():
+        app_id = d["application_id"]
+        directors_by_app.setdefault(app_id, []).append(
+            hydrate_party_record(d, PII_FIELDS_DIRECTORS)
+        )
+
+    # Batch query UBOs
+    ubos_by_app = {}
+    for u in db.execute(
+        f"SELECT * FROM ubos WHERE application_id IN ({placeholders})",
+        id_list,
+    ).fetchall():
+        app_id = u["application_id"]
+        ubos_by_app.setdefault(app_id, []).append(
+            hydrate_party_record(u, PII_FIELDS_UBOS)
+        )
+
+    # Batch query intermediaries
+    intermediaries_by_app = {}
+    for row in db.execute(
+        f"SELECT * FROM intermediaries WHERE application_id IN ({placeholders})",
+        id_list,
+    ).fetchall():
+        app_id = row["application_id"]
+        item = dict(row)
+        item["full_name"] = item.get("entity_name", "")
+        intermediaries_by_app.setdefault(app_id, []).append(item)
+
+    # Build result dict for all requested IDs (include empty lists for apps with no parties)
+    result = {}
+    for app_id in application_ids:
+        result[app_id] = (
+            directors_by_app.get(app_id, []),
+            ubos_by_app.get(app_id, []),
+            intermediaries_by_app.get(app_id, []),
+        )
+    return result
