@@ -16,6 +16,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from memo_handler import build_compliance_memo
 from validation_engine import validate_compliance_memo
 
+# Phrases that indicate a false claim of adverse media screening.
+# Used across multiple tests to ensure consistency.
+FALSE_ADVERSE_MEDIA_CLAIMS = [
+    "adverse media screening returned no relevant hits",
+    "comprehensive search conducted across global news and regulatory enforcement databases. no relevant hits",
+    "adverse media review conducted — no relevant hits identified",
+]
+
 
 # ── Helpers ──
 
@@ -72,12 +80,7 @@ class TestAdverseMediaTruthfulness:
         memo_text = json.dumps(memo).lower()
 
         # These phrases indicate a false claim of adverse media screening
-        false_claims = [
-            "adverse media screening returned no relevant hits",
-            "comprehensive search conducted across global news and regulatory enforcement databases. no relevant hits",
-            "adverse media review conducted — no relevant hits identified",
-        ]
-        for claim in false_claims:
+        for claim in FALSE_ADVERSE_MEDIA_CLAIMS:
             assert claim not in memo_text, (
                 f"Memo falsely claims adverse media screening was conducted: '{claim}'"
             )
@@ -106,11 +109,7 @@ class TestAdverseMediaTruthfulness:
         memo, _, _, _ = build_compliance_memo(app, directors, ubos, docs)
 
         memo_text = json.dumps(memo).lower()
-        false_claims = [
-            "adverse media screening returned no relevant hits",
-            "adverse media review conducted — no relevant hits identified",
-        ]
-        for claim in false_claims:
+        for claim in FALSE_ADVERSE_MEDIA_CLAIMS:
             assert claim not in memo_text, (
                 f"Memo falsely claims adverse media screening with PEP: '{claim}'"
             )
