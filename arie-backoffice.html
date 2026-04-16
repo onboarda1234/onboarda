@@ -3426,9 +3426,12 @@ function _updateFreshnessIndicator() {
   textEl.textContent = label;
   if (ageS > _STALE_THRESHOLD_S) {
     dotEl.style.background = '#f59e0b';
+    dotEl.title = 'Data may be stale';
     textEl.style.color = '#d97706';
+    textEl.textContent = '⚠ ' + label;
   } else {
     dotEl.style.background = '#22c55e';
+    dotEl.title = 'Data is fresh';
     textEl.style.color = '';
   }
 }
@@ -3453,8 +3456,8 @@ async function _autoRefreshApplications() {
     var data = await res.json();
     if (data.applications && data.applications.length > 0) {
       // Preserve current filter/selection state
-      var currentView = document.querySelector('.view:not([style*="display:none"]):not([style*="display: none"])');
-      var isOnList = currentView && currentView.id === 'view-applications';
+      var listView = document.getElementById('view-applications');
+      var isOnList = listView && listView.classList.contains('active');
       // Re-map same as loadFromAPI
       APPLICATIONS = data.applications.map(function(a) {
         var dims = {};

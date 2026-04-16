@@ -291,8 +291,10 @@ class TestBatchFetchingIntegration:
         for key in ("id", "ref", "company_name", "status", "directors",
                      "ubos", "intermediaries", "documents", "status_label"):
             assert key in app, f"Missing key: {key}"
-        for doc in app.get("documents", []):
-            assert "application_id" not in doc
+        # Documents should not leak application_id in any app
+        for a in resp.json()["applications"]:
+            for doc in a.get("documents", []):
+                assert "application_id" not in doc
 
     def test_directors_have_full_name(self, ex13_server, admin_token):
         """Directors have full_name and pep_declaration in list response."""

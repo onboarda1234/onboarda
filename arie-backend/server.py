@@ -1677,7 +1677,7 @@ class ApplicationsHandler(BaseHandler):
                 "SELECT id, doc_type, doc_name, file_size, verification_status, "
                 "verification_results, verified_at, person_id, review_status, "
                 "review_comment, reviewed_by, reviewed_at, application_id "
-                "FROM documents WHERE application_id IN (%s)" % doc_placeholders,
+                f"FROM documents WHERE application_id IN ({doc_placeholders})",
                 app_ids,
             ).fetchall()
             for d in doc_rows:

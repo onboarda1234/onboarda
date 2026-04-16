@@ -196,7 +196,7 @@ def get_application_parties_batch(db, application_ids):
     # Batch query directors
     directors_by_app = {}
     for d in db.execute(
-        "SELECT * FROM directors WHERE application_id IN (%s)" % placeholders,
+        f"SELECT * FROM directors WHERE application_id IN ({placeholders})",
         id_list,
     ).fetchall():
         app_id = d["application_id"]
@@ -207,7 +207,7 @@ def get_application_parties_batch(db, application_ids):
     # Batch query UBOs
     ubos_by_app = {}
     for u in db.execute(
-        "SELECT * FROM ubos WHERE application_id IN (%s)" % placeholders,
+        f"SELECT * FROM ubos WHERE application_id IN ({placeholders})",
         id_list,
     ).fetchall():
         app_id = u["application_id"]
@@ -218,7 +218,7 @@ def get_application_parties_batch(db, application_ids):
     # Batch query intermediaries
     intermediaries_by_app = {}
     for row in db.execute(
-        "SELECT * FROM intermediaries WHERE application_id IN (%s)" % placeholders,
+        f"SELECT * FROM intermediaries WHERE application_id IN ({placeholders})",
         id_list,
     ).fetchall():
         app_id = row["application_id"]
