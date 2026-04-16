@@ -4712,6 +4712,28 @@ function clearAuth() {
   AUTH_USER = null;
   resetPortalApplicationState();
   // httpOnly session cookie cleared by server on logout; no JS cookie to expire
+
+  // ── EX-12: Clear all auth token keys and draft data from browser storage ──
+  try {
+    ['token', 'access_token', 'portal_token', 'auth_token', 'session_token'].forEach(function(k) {
+      localStorage.removeItem(k);
+      sessionStorage.removeItem(k);
+    });
+    // Clear any arie_draft_* keys from localStorage
+    var lsKeys = [];
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.indexOf('arie_draft_') === 0) lsKeys.push(k);
+    }
+    lsKeys.forEach(function(k) { localStorage.removeItem(k); });
+    // Clear any arie_draft_* keys from sessionStorage
+    var ssKeys = [];
+    for (var j = 0; j < sessionStorage.length; j++) {
+      var sk = sessionStorage.key(j);
+      if (sk && sk.indexOf('arie_draft_') === 0) ssKeys.push(sk);
+    }
+    ssKeys.forEach(function(sk) { sessionStorage.removeItem(sk); });
+  } catch(e) { /* storage may be unavailable in some environments */ }
 }
 
 // ─── State ───────────────────────────────────────────────
@@ -9124,6 +9146,16 @@ async function resumeApplication(ref, stage) {
   try {
     if (AUTH_TOKEN && ref) {
       var app = await apiCall('GET', '/applications/' + encodeURIComponent(ref));
+
+      // ── EX-12: Client-side ownership assertion (defence-in-depth) ──
+      // Backend enforces ownership via check_app_ownership(); this is a redundant client-side guard.
+      if (AUTH_USER && AUTH_USER.sub && app.client_id && String(app.client_id) !== String(AUTH_USER.sub)) {
+        resetPortalApplicationState();
+        showToast('error', 'Unauthorized', 'You do not have permission to view this application.');
+        showView('my-apps');
+        return;
+      }
+
       resetPortalApplicationState();
       currentApplicationId = app.id || '';
       appRef = app.ref || ref;

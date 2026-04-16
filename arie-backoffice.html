@@ -3473,6 +3473,24 @@ var RESOURCES = [];
 var ROLE_PERMISSIONS = null;
 // Populated from backend authorization policy for the Roles & Permissions view.
 
+// ── EX-12: Client-side permission helpers (defence-in-depth, NOT a replacement for backend auth) ──
+function hasPermission(permissionId) {
+  var role = currentUser ? currentUser.role : '';
+  if (!role) return false;
+  if (!ROLE_PERMISSIONS || !Array.isArray(ROLE_PERMISSIONS.permissions)) return false;
+  var perm = ROLE_PERMISSIONS.permissions.find(function(p) { return p.id === permissionId; });
+  if (!perm || !Array.isArray(perm.roles)) return false;
+  return perm.roles.indexOf(role) >= 0;
+}
+
+function assertPermission(permissionId) {
+  if (!hasPermission(permissionId)) {
+    showToast('Insufficient permissions: your role does not allow this action.', 'error');
+    return false;
+  }
+  return true;
+}
+
 var currentUser = USERS[0] || { id:0, name:"System", email:"", role:"admin", initials:"--", status:"active" };
 var currentApp = null;
 var currentScreeningReviewFocus = null;
@@ -6916,6 +6934,7 @@ async function loadDecisionRecords() {
 // ═══════════════════════════════════════════════════════════
 function approveApplication() {
   if (!currentApp) return;
+  if (!assertPermission('approve_low_medium')) return;
   pendingDecision = 'Approve';
   document.getElementById('decision-type-display').textContent = 'Approve';
   document.getElementById('decision-reason').value = '';
@@ -6926,6 +6945,7 @@ function approveApplication() {
 
 function rejectApplication() {
   if (!currentApp) return;
+  if (!assertPermission('reject_applications')) return;
   pendingDecision = 'Reject';
   document.getElementById('decision-type-display').textContent = 'Reject';
   document.getElementById('decision-reason').value = '';
@@ -6954,6 +6974,12 @@ async function refreshCurrentAppDetail() {
 
 async function confirmDecision() {
   if (!currentApp) return;
+
+  // ── EX-12: Permission guard based on pending decision type (defence-in-depth) ──
+  var permMap = { 'Approve': 'approve_low_medium', 'Reject': 'reject_applications', 'EDD': 'escalate_to_sco', 'Request Docs': 'request_more_information' };
+  var requiredPerm = permMap[pendingDecision];
+  if (requiredPerm && !assertPermission(requiredPerm)) return;
+
   var reason = document.getElementById('decision-reason').value.trim();
   var notes = document.getElementById('decision-notes').value.trim();
 
@@ -7078,6 +7104,7 @@ function openOverrideModal() {
 
 async function confirmOverride() {
   if (!currentApp) return;
+  if (!assertPermission('override_ai_risk_score')) return;
   var decision = document.getElementById('override-decision').value;
   var reason = document.getElementById('override-reason').value.trim();
 
@@ -7123,6 +7150,7 @@ async function confirmOverride() {
 
 function requestMoreInfo() {
   if (!currentApp) return;
+  if (!assertPermission('request_more_information')) return;
   pendingDecision = 'Request Docs';
   document.getElementById('decision-type-display').textContent = 'Request Additional Documents';
   document.getElementById('decision-reason').value = '';
@@ -7160,6 +7188,7 @@ async function confirmReassign() {
 
 async function escalateCase() {
   if (!currentApp) return;
+  if (!assertPermission('escalate_to_sco')) return;
   pendingDecision = 'EDD';
   document.getElementById('decision-type-display').textContent = 'Escalate to EDD';
   document.getElementById('decision-reason').value = '';
@@ -7196,6 +7225,7 @@ function addNote() {
 // ═══════════════════════════════════════════════════════════
 async function preApproveApplication() {
   if (!currentApp) return;
+  if (!assertPermission('approve_low_medium')) return;
   var notes = document.getElementById('pre-approval-notes').value.trim();
   if (!notes) { showToast('Please provide pre-approval notes before making a decision'); return; }
 
@@ -7214,6 +7244,7 @@ async function preApproveApplication() {
 
 async function preApprovalReject() {
   if (!currentApp) return;
+  if (!assertPermission('reject_applications')) return;
   var notes = document.getElementById('pre-approval-notes').value.trim();
   if (!notes) { showToast('Please provide rejection notes'); return; }
 
@@ -7232,6 +7263,7 @@ async function preApprovalReject() {
 
 async function preApprovalRequestInfo() {
   if (!currentApp) return;
+  if (!assertPermission('request_more_information')) return;
   var notes = document.getElementById('pre-approval-notes').value.trim();
   if (!notes) { showToast('Please specify what information is required'); return; }
 
@@ -8927,6 +8959,29 @@ function signOut() {
   // httpOnly session cookie cleared by server on logout; no JS cookie to expire
   BO_AUTH_TOKEN = '';
   BO_AUTH_USER = null;
+
+  // ── EX-12: Clear auth/session keys from browser storage on logout ──
+  try {
+    ['token', 'access_token', 'portal_token', 'bo_token', 'auth_token', 'regmind_token', 'session_token'].forEach(function(k) {
+      localStorage.removeItem(k);
+      sessionStorage.removeItem(k);
+    });
+    // Clear any arie_draft_* keys from localStorage
+    var lsKeys = [];
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.indexOf('arie_draft_') === 0) lsKeys.push(k);
+    }
+    lsKeys.forEach(function(k) { localStorage.removeItem(k); });
+    // Clear any arie_draft_* keys from sessionStorage
+    var ssKeys = [];
+    for (var j = 0; j < sessionStorage.length; j++) {
+      var sk = sessionStorage.key(j);
+      if (sk && sk.indexOf('arie_draft_') === 0) ssKeys.push(sk);
+    }
+    ssKeys.forEach(function(sk) { sessionStorage.removeItem(sk); });
+  } catch(e) { /* storage may be unavailable in some environments */ }
+
   AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Logout', target:'System', detail:'Signed out', ip:'client' });
   showToast('Signed out successfully');
   showLoginScreen();
@@ -10139,6 +10194,7 @@ function renderMemoSections(data) {
 async function generateComplianceMemo() {
   var app = window._currentDetailApp;
   if (!app) { alert('No application selected.'); return; }
+  if (!assertPermission('view_compliance_memo')) return;
   var btn = document.getElementById('btn-generate-memo');
   btn.innerHTML = '⏳ Generating...'; btn.disabled = true;
   try {
@@ -10262,6 +10318,7 @@ async function revalidateMemo() {
 async function approveMemo() {
   var app = window._currentDetailApp;
   if (!app) { alert('No application selected.'); return; }
+  if (!assertPermission('approve_low_medium')) return;
   var btn = document.getElementById('btn-approve-memo');
   var memoData = window._currentMemoData;
 
