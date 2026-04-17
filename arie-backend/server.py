@@ -2411,6 +2411,41 @@ class SubmitApplicationHandler(BaseHandler):
             db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
                        (json.dumps(prescreening, default=str), real_id))
 
+            # SCR-010: Dual-write normalized screening report (non-authoritative)
+            try:
+                from screening_config import is_abstraction_enabled
+                if is_abstraction_enabled():
+                    from screening_normalizer import normalize_screening_report
+                    from screening_storage import (
+                        ensure_normalized_table, persist_normalized_report,
+                        persist_normalization_failure, compute_report_hash,
+                    )
+                    ensure_normalized_table(db)
+                    _src_hash = compute_report_hash(screening_report)
+                    _norm = normalize_screening_report(screening_report)
+                    persist_normalized_report(
+                        db, app.get("client_id", ""), real_id,
+                        _norm, _src_hash,
+                    )
+            except Exception as _norm_exc:
+                logger.warning(
+                    "Normalized screening write failed: app_id=%s client_id=%s error_type=%s",
+                    real_id, app.get("client_id", ""), type(_norm_exc).__name__,
+                )
+                try:
+                    from screening_storage import (
+                        ensure_normalized_table, persist_normalization_failure,
+                        compute_report_hash,
+                    )
+                    ensure_normalized_table(db)
+                    persist_normalization_failure(
+                        db, app.get("client_id", ""), real_id,
+                        compute_report_hash(screening_report),
+                        str(type(_norm_exc).__name__),
+                    )
+                except Exception:
+                    pass  # Do not block onboarding flow
+
             # Sync undeclared PEP detections back to director/UBO records
             for ds in screening_report.get("director_screenings", []):
                 if ds.get("undeclared_pep"):
@@ -6249,6 +6284,41 @@ class ScreeningHandler(BaseHandler):
 
         db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now'), inputs_updated_at=datetime('now') WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
+
+        # SCR-010: Dual-write normalized screening report (non-authoritative)
+        try:
+            from screening_config import is_abstraction_enabled
+            if is_abstraction_enabled():
+                from screening_normalizer import normalize_screening_report
+                from screening_storage import (
+                    ensure_normalized_table, persist_normalized_report,
+                    persist_normalization_failure, compute_report_hash,
+                )
+                ensure_normalized_table(db)
+                _src_hash = compute_report_hash(report)
+                _norm = normalize_screening_report(report)
+                persist_normalized_report(
+                    db, app.get("client_id", ""), real_id,
+                    _norm, _src_hash,
+                )
+        except Exception as _norm_exc:
+            logger.warning(
+                "Normalized screening write failed: app_id=%s client_id=%s error_type=%s",
+                real_id, app.get("client_id", ""), type(_norm_exc).__name__,
+            )
+            try:
+                from screening_storage import (
+                    ensure_normalized_table, persist_normalization_failure,
+                    compute_report_hash,
+                )
+                ensure_normalized_table(db)
+                persist_normalization_failure(
+                    db, app.get("client_id", ""), real_id,
+                    compute_report_hash(report),
+                    str(type(_norm_exc).__name__),
+                )
+            except Exception:
+                pass  # Do not block onboarding flow
 
         # EX-09: Recompute risk after screening re-run — screening hits affect risk score
         rr = recompute_risk(db, real_id, "screening_rerun", user=user,
