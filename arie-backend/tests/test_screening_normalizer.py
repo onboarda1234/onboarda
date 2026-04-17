@@ -95,10 +95,10 @@ class TestNormalize:
         normalized = normalize_screening_report(raw)
         assert normalized["adverse_media_coverage"] == "none"
 
-    def test_company_screening_coverage_full(self):
+    def test_company_screening_coverage_partial(self):
         raw = _make_raw_report()
         normalized = normalize_screening_report(raw)
-        assert normalized["company_screening_coverage"] == "full"
+        assert normalized["company_screening_coverage"] == "partial"
         assert normalized["has_company_screening_hit"] is False
 
     def test_preserves_all_original_fields(self):

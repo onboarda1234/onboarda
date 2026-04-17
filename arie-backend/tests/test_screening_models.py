@@ -133,11 +133,11 @@ class TestCompanyFactory:
 
     def test_custom_values(self):
         c = create_normalized_company_screening(
-            company_screening_coverage="full",
+            company_screening_coverage="partial",
             has_company_screening_hit=False,
             company_screening={"found": True},
         )
-        assert c["company_screening_coverage"] == "full"
+        assert c["company_screening_coverage"] == "partial"
         assert c["has_company_screening_hit"] is False
         assert c["company_screening"]["found"] is True
 

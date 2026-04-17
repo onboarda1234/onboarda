@@ -124,7 +124,7 @@ class TestScreenCompany:
         adapter = SumsubScreeningAdapter()
         result = adapter.screen_company("Test Corp")
 
-        assert result["company_screening_coverage"] == "full"
+        assert result["company_screening_coverage"] == "partial"
         assert result["has_company_screening_hit"] is False
         assert result["company_screening"] == mock_result
 

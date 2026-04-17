@@ -89,7 +89,7 @@ class SumsubScreeningAdapter(ScreeningProvider):
             has_hit = matched
 
         return create_normalized_company_screening(
-            company_screening_coverage="full",
+            company_screening_coverage="partial",
             has_company_screening_hit=has_hit,
             company_screening=raw_result,
         )

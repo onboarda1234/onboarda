@@ -152,7 +152,7 @@ def normalize_screening_report(raw_report: dict) -> dict:
     # Company screening coverage
     company = raw_report.get("company_screening", {})
     if company:
-        normalized["company_screening_coverage"] = "full"
+        normalized["company_screening_coverage"] = "partial"
         # Determine if there's a company screening hit
         sanctions = company.get("sanctions", {})
         if sanctions.get("matched"):
