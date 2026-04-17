@@ -51,6 +51,9 @@ arie-backend/=2.0.0
 scripts/
 # Track operational maintenance scripts (cleanup tooling)
 !arie-backend/scripts/cleanup_named_application.py
+!arie-backend/scripts/staging_shadow_parity.py
+# Track migration scripts (database schema changes)
+!arie-backend/migrations/scripts/
 
 # ── Archive (old ARIE-branded files) ──
 archive/
