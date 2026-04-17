@@ -2408,6 +2408,16 @@ class SubmitApplicationHandler(BaseHandler):
         try:
             # Store screening report in prescreening_data
             prescreening["screening_report"] = screening_report
+
+            # SCR-010: Dual-write normalized model alongside legacy shape
+            try:
+                from screening_config import is_abstraction_enabled
+                if is_abstraction_enabled():
+                    from screening_normalizer import normalize_screening_report
+                    prescreening["screening_report_normalized"] = normalize_screening_report(screening_report)
+            except Exception as norm_exc:
+                logger.warning("Screening normalization failed (non-blocking): %s", str(norm_exc)[:200])
+
             db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
                        (json.dumps(prescreening, default=str), real_id))
 
@@ -6236,6 +6246,16 @@ class ScreeningHandler(BaseHandler):
         # Store screening report
         prescreening = safe_json_loads(app["prescreening_data"])
         prescreening["screening_report"] = report
+
+        # SCR-010: Dual-write normalized model alongside legacy shape
+        try:
+            from screening_config import is_abstraction_enabled
+            if is_abstraction_enabled():
+                from screening_normalizer import normalize_screening_report
+                prescreening["screening_report_normalized"] = normalize_screening_report(report)
+        except Exception as norm_exc:
+            logger.warning("Screening normalization failed (non-blocking): %s", str(norm_exc)[:200])
+
         now_utc = datetime.now(timezone.utc)
         prescreening["last_screened_at"] = now_utc.strftime("%Y-%m-%dT%H:%M:%S")
         prescreening["screened_by"] = user["sub"]
