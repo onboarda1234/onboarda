@@ -2441,7 +2441,7 @@ class SubmitApplicationHandler(BaseHandler):
                     persist_normalization_failure(
                         db, app.get("client_id", ""), real_id,
                         compute_report_hash(screening_report),
-                        str(type(_norm_exc).__name__),
+                        type(_norm_exc).__name__,
                     )
                 except Exception:
                     pass  # Do not block onboarding flow
@@ -6315,7 +6315,7 @@ class ScreeningHandler(BaseHandler):
                 persist_normalization_failure(
                     db, app.get("client_id", ""), real_id,
                     compute_report_hash(report),
-                    str(type(_norm_exc).__name__),
+                    type(_norm_exc).__name__,
                 )
             except Exception:
                 pass  # Do not block onboarding flow
