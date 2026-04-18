@@ -82,6 +82,36 @@ def migrated_db(tmp_path, monkeypatch):
 
     conn = db_module.get_db()
 
+    # init_db() already reflects the full post-007 schema in the current repo,
+    # so tell the runner that 001..007 are already applied. Only migration 008
+    # should actually execute during the test. Without this, the runner would
+    # replay historical migrations (e.g. 004 adding documents.s3_key) against a
+    # table that already has that column and fail with OperationalError.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_version ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "version TEXT UNIQUE NOT NULL, "
+        "filename TEXT NOT NULL, "
+        "description TEXT DEFAULT '', "
+        "applied_at TEXT DEFAULT (datetime('now')), "
+        "checksum TEXT)"
+    )
+    _PRE_APPLIED = [
+        ("001", "migration_001_initial.sql"),
+        ("002", "migration_002_supervisor_tables.sql"),
+        ("003", "migration_003_monitoring_indexes.sql"),
+        ("004", "migration_004_documents_s3_key.sql"),
+        ("005", "migration_005_applications_truth_schema.sql"),
+        ("006", "migration_006_person_dob.sql"),
+        ("007", "migration_007_screening_reports_normalized.sql"),
+    ]
+    for _v, _fn in _PRE_APPLIED:
+        conn.execute(
+            "INSERT OR IGNORE INTO schema_version (version, filename) VALUES (?, ?)",
+            (_v, _fn),
+        )
+    conn.commit()
+
     # Seed minimal rows so the "existing rows survive" assertion is meaningful.
     # edd_cases and periodic_reviews require an application_id; use a
     # lightweight applications row if needed.
