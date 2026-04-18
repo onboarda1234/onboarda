@@ -8409,48 +8409,106 @@ class MonitoringAlertDetailHandler(BaseHandler):
         self.success(result)
 
     def patch(self, alert_id):
-        """Update alert status (dismiss, escalate, trigger_review)"""
+        """Update alert state and route it to a downstream object.
+
+        PR-02 supported actions:
+          - triage
+          - assign
+          - dismiss              (requires `dismissal_reason`)
+          - route_to_periodic_review
+          - route_to_edd
+
+        Legacy aliases (kept for back-compat with existing UI/tests):
+          - escalate         -> route_to_edd
+          - trigger_review   -> route_to_periodic_review
+        """
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
 
         data = self.get_json()
-        db = get_db()
-
-        alert = db.execute("SELECT * FROM monitoring_alerts WHERE id = ?", (alert_id,)).fetchone()
-        if not alert:
-            db.close()
-            return self.error("Alert not found", 404)
 
         action = data.get("action")
-        reason = data.get("reason", "")
+        reason = data.get("reason", "") or ""
 
-        valid_actions = ["dismiss", "escalate", "trigger_review"]
-        if action not in valid_actions:
+        # Back-compat aliases. Kept narrow so legacy callers still work
+        # while new explicit verbs are the documented contract.
+        legacy_alias = {
+            "escalate": "route_to_edd",
+            "trigger_review": "route_to_periodic_review",
+        }
+        canonical_action = legacy_alias.get(action, action)
+
+        valid_actions = [
+            "triage", "assign", "dismiss",
+            "route_to_periodic_review", "route_to_edd",
+        ]
+        valid_for_error = valid_actions + list(legacy_alias.keys())
+        if canonical_action not in valid_actions:
+            return self.error(
+                f"Invalid action. Must be one of: {', '.join(valid_for_error)}",
+                400,
+            )
+
+        import monitoring_routing as mr
+
+        db = get_db()
+        try:
+            try:
+                if canonical_action == "triage":
+                    result = mr.triage_alert(
+                        db, alert_id, user=user, audit_writer=self.log_audit,
+                    )
+                elif canonical_action == "assign":
+                    result = mr.assign_alert(
+                        db, alert_id, user=user, audit_writer=self.log_audit,
+                    )
+                elif canonical_action == "dismiss":
+                    dismissal_reason = data.get("dismissal_reason")
+                    if not dismissal_reason:
+                        return self.error(
+                            "dismissal_reason is required for action=dismiss "
+                            f"(one of: {', '.join(mr.VALID_DISMISSAL_REASONS)})",
+                            400,
+                        )
+                    result = mr.dismiss_alert(
+                        db, alert_id,
+                        dismissal_reason=dismissal_reason,
+                        dismissal_notes=reason or data.get("dismissal_notes"),
+                        user=user, audit_writer=self.log_audit,
+                    )
+                elif canonical_action == "route_to_periodic_review":
+                    result = mr.route_alert_to_periodic_review(
+                        db, alert_id,
+                        review_reason=reason or data.get("review_reason"),
+                        priority=data.get("priority"),
+                        user=user, audit_writer=self.log_audit,
+                    )
+                elif canonical_action == "route_to_edd":
+                    result = mr.route_alert_to_edd(
+                        db, alert_id,
+                        trigger_notes=reason or data.get("trigger_notes"),
+                        priority=data.get("priority"),
+                        user=user, audit_writer=self.log_audit,
+                    )
+            except mr.AlertNotFound:
+                return self.error("Alert not found", 404)
+            except mr.InvalidDismissalReason as e:
+                return self.error(str(e), 400)
+            except mr.AlertAlreadyTerminal as e:
+                return self.error(str(e), 409)
+            except mr.MonitoringRoutingError as e:
+                return self.error(str(e), 400)
+
+            self.success({
+                "status": "alert_updated",
+                "action": canonical_action,
+                "result": result,
+                # Back-compat field for existing UI consumers.
+                "new_status": result.get("status"),
+            })
+        finally:
             db.close()
-            return self.error(f"Invalid action. Must be one of: {', '.join(valid_actions)}", 400)
-
-        new_status = {
-            "dismiss": "dismissed",
-            "escalate": "escalated",
-            "trigger_review": "escalated"
-        }[action]
-
-        db.execute("""
-            UPDATE monitoring_alerts SET
-                status=?, reviewed_at=datetime('now'), reviewed_by=?, officer_notes=?, officer_action=?
-            WHERE id=?
-        """, (new_status, user["sub"], reason, action, alert_id))
-
-        # Log audit
-        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Alert Action", f"Alert {alert_id}",
-                    f"Action: {action}, Reason: {reason}", self.get_client_ip()))
-
-        db.commit()
-        db.close()
-
-        self.success({"status": "alert_updated", "new_status": new_status})
 
 
 class MonitoringAgentsHandler(BaseHandler):
