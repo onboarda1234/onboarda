@@ -215,7 +215,10 @@ class TestStorageIsolation:
 
 
 class TestDeleteNormalizedReports:
-    """Sprint 3 Obj 2a — application-delete cascade coverage."""
+    """Sprint 3 Obj 2a — application-delete cascade coverage.
+
+    PR #116 fixup H2/H3: the helper is the single production cleanup path.
+    """
 
     def test_deletes_all_records_for_application(self, norm_db):
         """All normalized records for an application are deleted."""
@@ -248,9 +251,32 @@ class TestDeleteNormalizedReports:
         assert deleted == 3
         mock_db.commit.assert_not_called()
 
-    def test_handles_missing_table(self):
-        """Returns 0 if screening_reports_normalized table does not exist."""
+    def test_handles_missing_table_sqlite(self, tmp_path):
+        """Returns 0 if screening_reports_normalized table does not exist (SQLite wording)."""
+        # Real sqlite connection without the table created — produces
+        # "no such table" which is the SQLite missing-table wording.
+        db_path = str(tmp_path / "no_table.db")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            deleted = delete_normalized_reports_for_application(conn, "app_1")
+            assert deleted == 0
+        finally:
+            conn.close()
+
+    def test_handles_missing_table_postgres_wording(self):
+        """Returns 0 for PostgreSQL 'does not exist' / 'undefined table' wording."""
+        for msg in ("relation \"screening_reports_normalized\" does not exist",
+                    "ERROR: undefined table"):
+            mock_db = MagicMock()
+            mock_db.execute.side_effect = Exception(msg)
+            deleted = delete_normalized_reports_for_application(mock_db, "app_1")
+            assert deleted == 0
+            mock_db.rollback.assert_called()  # PG transaction must be rolled back
+
+    def test_unknown_db_error_is_re_raised(self):
+        """Helper must NOT swallow arbitrary DB errors — only missing-table."""
         mock_db = MagicMock()
-        mock_db.execute.side_effect = Exception("no such table")
-        deleted = delete_normalized_reports_for_application(mock_db, "app_1")
-        assert deleted == 0
+        mock_db.execute.side_effect = Exception("connection lost")
+        with pytest.raises(Exception, match="connection lost"):
+            delete_normalized_reports_for_application(mock_db, "app_1")

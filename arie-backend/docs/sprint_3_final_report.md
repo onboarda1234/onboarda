@@ -52,7 +52,7 @@ The following files are protected per `protected_controls.py`:
 
 **Verdict:** Inconclusive — evidence unavailable.
 
-**Details:** No CloudWatch IAM access is available to this agent for the `regmind-staging` environment (`af-south-1`, account `782913919880`). The `/api/applications` 503 cluster observed at positions 51–56, 60 in the 2026-04-17 staging network log cannot be confirmed as a redeploy artefact or persistent issue without:
+**Details:** No CloudWatch IAM access is available to this agent for the `regmind-staging` environment (`af-south-1`, account `782913119880`). The `/api/applications` 503 cluster observed at positions 51–56, 60 in the 2026-04-17 staging network log cannot be confirmed as a redeploy artefact or persistent issue without:
 - CloudWatch `regmind-backend` ERROR/WARN logs for the 24h window
 - ECS service events timeline covering the PR #115 redeploy
 
@@ -180,7 +180,7 @@ PASS — All M applications passed bidirectional parity
 
 **Changes to `docs/rollback/screening_abstraction_sprint_1_2.md`:**
 - Replaced all Render.com references with AWS ECS staging
-- Account: `782913919880`, Region: `af-south-1`
+- Account: `782913119880`, Region: `af-south-1`
 - Cluster: `regmind-staging`, Service: `regmind-backend`
 - PostgreSQL (RDS) throughout
 - Flag-off via ECS task definition environment variable update

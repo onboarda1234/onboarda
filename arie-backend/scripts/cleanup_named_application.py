@@ -86,8 +86,11 @@ _CHILD_TABLES_BY_APP_ID = [
     "sumsub_applicant_mappings",
     "supervisor_pipeline_results",
     "supervisor_audit_log",
-    "screening_reports_normalized",
 ]
+# screening_reports_normalized is handled via the shared helper
+# (delete_normalized_reports_for_application) below — it has narrow
+# missing-table handling so the cascade does not abort in environments
+# where migration 007 has not been applied.
 # Tables whose rows reference application_ref (not id)
 _CHILD_TABLES_BY_REF = [
     "decision_records",
@@ -229,6 +232,35 @@ def run_cleanup(target_name: str, execute: bool):
                 total_deleted[table] = total_deleted.get(table, 0) + count
                 log.info("  %-42s %d row(s) %s", table + ":", count,
                          "deleted" if execute else "(would delete)")
+
+        # ── 4b. Normalized screening records via shared helper ─────────────
+        # Sprint 3 PR #116 fixup H2/H3: use the shared helper so both this
+        # script and server.py share one production cleanup mechanism with
+        # narrow missing-table handling.
+        try:
+            count_row = db.execute(
+                "SELECT COUNT(*) AS c FROM screening_reports_normalized WHERE application_id=?",
+                (app_id,)
+            ).fetchone()
+            norm_count = count_row["c"] if count_row else 0
+        except Exception:
+            # Table does not exist — nothing to count or delete.  Roll back
+            # so PG transaction state is clean before subsequent statements.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            norm_count = 0
+        if norm_count:
+            if execute:
+                from screening_storage import delete_normalized_reports_for_application
+                delete_normalized_reports_for_application(db, app_id)
+            total_deleted["screening_reports_normalized"] = (
+                total_deleted.get("screening_reports_normalized", 0) + norm_count
+            )
+            log.info("  %-42s %d row(s) %s",
+                     "screening_reports_normalized:", norm_count,
+                     "deleted" if execute else "(would delete)")
 
         # ── 5. Application row itself ───────────────────────────────────────
         if execute:

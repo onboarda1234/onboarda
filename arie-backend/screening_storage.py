@@ -160,12 +160,41 @@ def get_normalized_report(db, application_id: str, client_id: str = None) -> dic
     return result
 
 
+def _is_missing_table_error(exc: Exception) -> bool:
+    """
+    Return True iff the exception indicates the screening_reports_normalized
+    table is absent.  Matches the dialect-specific error wording used by the
+    drivers we run against:
+
+        * SQLite (sqlite3):  "no such table"
+        * PostgreSQL (psycopg2): "does not exist" / "undefined table"
+
+    All other exceptions are surfaced to the caller — we do NOT swallow
+    arbitrary DB errors.
+    """
+    msg = str(exc).lower()
+    return (
+        "no such table" in msg
+        or "does not exist" in msg
+        or "undefined table" in msg
+    )
+
+
 def delete_normalized_reports_for_application(db, application_id: str) -> int:
     """
     Delete all normalized screening reports for an application.
 
     Used by application-delete cascade to prevent orphan records.
     Does NOT call commit — the caller owns the transaction boundary.
+
+    Missing-table handling (Sprint 3 fixup H3):
+        If `screening_reports_normalized` does not exist (e.g. migration 007
+        has not been applied in this environment), the function logs and
+        returns 0 instead of aborting the caller's cascade.  The transaction
+        is rolled back first so subsequent statements in the same caller-owned
+        transaction are not poisoned (PostgreSQL aborts the whole transaction
+        on the first error).  All other exceptions are re-raised — we never
+        broadly swallow DB errors.
 
     Returns the number of rows deleted (0 if table does not exist).
     """
@@ -174,7 +203,29 @@ def delete_normalized_reports_for_application(db, application_id: str) -> int:
             "DELETE FROM screening_reports_normalized WHERE application_id=?",
             (application_id,),
         )
-        return cursor.rowcount
-    except Exception:
-        # Table may not exist if migration 007 has not been applied
+        # rowcount may be on the cursor (raw sqlite3 / psycopg2) or on the
+        # underlying cursor exposed by the production DBConnection wrapper.
+        # Fall back to -1 ("unknown") if neither path exposes it — callers
+        # that need an exact count can query before/after.
+        rowcount = getattr(cursor, "rowcount", None)
+        if rowcount is None:
+            inner = getattr(cursor, "_cursor", None)
+            rowcount = getattr(inner, "rowcount", -1)
+        return rowcount if rowcount is not None else -1
+    except Exception as exc:
+        if not _is_missing_table_error(exc):
+            # Unknown DB error — surface to the caller, do NOT swallow.
+            raise
+        # Table is absent in this environment.  Roll back so the caller's
+        # transaction is not left in an aborted state on PostgreSQL, then
+        # report zero rows deleted so the cascade can proceed.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.info(
+            "screening_reports_normalized absent — skipping delete for "
+            "application_id=%s (migration 007 not applied here)",
+            application_id,
+        )
         return 0
