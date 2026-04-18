@@ -1,22 +1,49 @@
 #!/usr/bin/env python3
 """
-Staging Shadow-Parity Validation Script — SCR-012
-==================================================
+Staging Shadow-Parity Validation Script — SCR-012 (Bidirectional)
+=================================================================
 For every application in the staging database that has both a legacy
-screening_report and a normalized record, verifies that:
+screening_report and a normalized record, verifies **bidirectional**
+round-trip fidelity:
 
-    denormalize_to_legacy(normalized) == legacy
+    Direction 1 (Forward):  denormalize_to_legacy(normalized) == legacy
+    Direction 2 (Reverse):  normalize_screening_report(legacy) == normalized
+    Source Hash:            compute_report_hash(legacy) == stored hash
 
-Outputs:
-- Summary of applications checked
-- Parity failures with application_id, client_id, source hash, and diff summary
-- No PII in output
+No PII is emitted in output — only application IDs, client IDs,
+source hashes, and structural diff summaries.
 
-Usage:
+Manual Runbook
+--------------
+**When to run:**
+    Run after every migration, schema change, or screening-normalizer
+    code change against the staging database before promoting to
+    production.
+
+**How to run:**
     ENVIRONMENT=staging python scripts/staging_shadow_parity.py
 
     Or with a specific database path:
     DB_PATH=/path/to/staging.db python scripts/staging_shadow_parity.py
+
+**What to look for:**
+    - The final summary line reports Forward-pass, Reverse-pass,
+      Hash-match counts and total Failures.
+    - Any line containing PARITY_FAILURE indicates a mismatch.
+
+**What a failure means:**
+    - Forward failure: denormalize_to_legacy does not reconstruct the
+      original legacy report — the denormalization logic has drifted.
+    - Reverse failure: normalize_screening_report does not reproduce
+      the stored normalized report — the normalization logic has
+      drifted or the stored record is stale.
+    - Hash mismatch: the legacy report in prescreening_data has
+      changed since the normalized record was created.
+
+**When to escalate:**
+    - Any failure count > 0 blocks promotion to production.
+    - If failures persist after re-running normalization, escalate to
+      the screening-normalizer maintainer.
 
 Exit codes:
     0 = all parity checks passed (or no applications to check)
@@ -31,7 +58,7 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from screening_normalizer import denormalize_to_legacy
+from screening_normalizer import denormalize_to_legacy, normalize_screening_report
 from screening_storage import compute_report_hash
 
 logging.basicConfig(
@@ -66,9 +93,12 @@ def _diff_summary(expected, actual, max_keys=10):
 
 def run_parity_check(db_path=None):
     """
-    Run parity check across all applications with both legacy and normalized data.
+    Run bidirectional parity check across all applications with both
+    legacy and normalized data.
     """
     from db import get_db
+
+    logger.info("=== Staging Shadow-Parity Check (Bidirectional) ===")
 
     db = get_db()
 
@@ -103,10 +133,14 @@ def run_parity_check(db_path=None):
             seen_apps.add(app_id)
             unique_rows.append(row)
 
-    logger.info("Found %d applications with normalized records", len(unique_rows))
+    total_apps = len(unique_rows)
+    logger.info("Found %d applications with normalized records", total_apps)
 
     failures = 0
     checked = 0
+    forward_pass = 0
+    reverse_pass = 0
+    hash_match = 0
 
     for row in unique_rows:
         app_id = row["application_id"]
@@ -146,39 +180,94 @@ def run_parity_check(db_path=None):
             failures += 1
             continue
 
-        # Denormalize and compare
+        checked += 1
+        row_failed = False
+
+        # --- Direction 1 (Forward): denormalize_to_legacy(normalized) == legacy ---
         try:
             denormalized = denormalize_to_legacy(normalized_report)
         except Exception as e:
             logger.error(
-                "PARITY_FAILURE: Denormalization error: app_id=%s client_id=%s hash=%s error=%s",
+                "PARITY_FAILURE: Forward denormalization error: app_id=%s client_id=%s hash=%s error=%s",
                 app_id, client_id, source_hash, type(e).__name__,
             )
-            failures += 1
-            continue
+            row_failed = True
+            denormalized = None
 
-        if denormalized == legacy_report:
-            checked += 1
-        else:
-            failures += 1
-            diffs = _diff_summary(legacy_report, denormalized)
+        if denormalized is not None:
+            if denormalized == legacy_report:
+                forward_pass += 1
+            else:
+                diffs = _diff_summary(legacy_report, denormalized)
+                logger.error(
+                    "PARITY_FAILURE: Forward mismatch: app_id=%s client_id=%s hash=%s diffs=%s",
+                    app_id, client_id, source_hash, "; ".join(diffs),
+                )
+                row_failed = True
+
+        # --- Direction 2 (Reverse): normalize_screening_report(legacy) == normalized ---
+        try:
+            re_normalized = normalize_screening_report(legacy_report)
+        except Exception as e:
             logger.error(
-                "PARITY_FAILURE: Round-trip mismatch: app_id=%s client_id=%s hash=%s diffs=%s",
-                app_id, client_id, source_hash, "; ".join(diffs),
+                "PARITY_FAILURE: Reverse normalization error: app_id=%s client_id=%s hash=%s error=%s",
+                app_id, client_id, source_hash, type(e).__name__,
             )
+            row_failed = True
+            re_normalized = None
+
+        if re_normalized is not None:
+            if re_normalized == normalized_report:
+                reverse_pass += 1
+            else:
+                diffs = _diff_summary(normalized_report, re_normalized)
+                logger.error(
+                    "PARITY_FAILURE: Reverse mismatch: app_id=%s client_id=%s hash=%s diffs=%s",
+                    app_id, client_id, source_hash, "; ".join(diffs),
+                )
+                row_failed = True
+
+        # --- Source hash check ---
+        try:
+            legacy_hash = compute_report_hash(legacy_report)
+        except Exception as e:
+            logger.error(
+                "PARITY_FAILURE: Hash computation error: app_id=%s client_id=%s error=%s",
+                app_id, client_id, type(e).__name__,
+            )
+            row_failed = True
+            legacy_hash = None
+
+        if legacy_hash is not None:
+            if not source_hash:
+                logger.warning(
+                    "No stored source hash: app_id=%s client_id=%s — skipping hash check",
+                    app_id, client_id,
+                )
+            elif legacy_hash != source_hash:
+                logger.error(
+                    "PARITY_FAILURE: Source hash mismatch: app_id=%s client_id=%s stored=%s computed=%s",
+                    app_id, client_id, source_hash, legacy_hash,
+                )
+                row_failed = True
+            else:
+                hash_match += 1
+
+        if row_failed:
+            failures += 1
 
     db.close()
 
     logger.info(
-        "Parity check complete: checked=%d failures=%d total_apps=%d",
-        checked, failures, len(unique_rows),
+        "Total: %d applications, Checked: %d, Forward-pass: %d, Reverse-pass: %d, Hash-match: %d, Failures: %d",
+        total_apps, checked, forward_pass, reverse_pass, hash_match, failures,
     )
 
     if failures > 0:
-        logger.error("PARITY CHECK FAILED: %d failure(s) detected", failures)
+        logger.error("FAIL — %d failure(s) detected", failures)
         return 1
 
-    logger.info("PARITY CHECK PASSED: All %d applications match", checked)
+    logger.info("PASS — All %d applications passed bidirectional parity", checked)
     return 0
 
 

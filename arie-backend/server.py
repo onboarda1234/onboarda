@@ -1841,6 +1841,13 @@ def cleanup_application_delete_artifacts(db, application_id, application_ref):
         db.execute(f"DELETE FROM {table} WHERE application_id=?", (application_id,))
     db.execute("DELETE FROM decision_records WHERE application_ref=?", (application_ref,))
 
+    # Sprint 3 Obj 2a (PR #116 fixup H2/H3): Delete normalized screening
+    # records via the shared helper, which narrowly handles the
+    # missing-table case (migration 007 not applied) without swallowing
+    # other DB errors.  This is the single production cleanup path.
+    from screening_storage import delete_normalized_reports_for_application
+    delete_normalized_reports_for_application(db, application_id)
+
 
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
@@ -4613,6 +4620,27 @@ class EnvironmentInfoHandler(BaseHandler):
     """GET /api/config/environment — return environment info for frontend"""
     def get(self):
         self.success(get_environment_info())
+
+
+class VersionHandler(BaseHandler):
+    """GET /api/version — build identification for authenticated sessions.
+
+    Auth-gated: returns 401 for unauthenticated requests.
+    No DB calls, no secrets, no PII.  Values from env vars only.
+    """
+
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        self.success({
+            "git_sha": os.environ.get("GIT_SHA", "unknown"),
+            "git_sha_short": os.environ.get("GIT_SHA", "unknown")[:7]
+            if os.environ.get("GIT_SHA") else "unknown",
+            "build_time": os.environ.get("BUILD_TIME", "unknown"),
+            "environment": ENVIRONMENT,
+            "service": "regmind-backend",
+        })
 
 
 class SystemSettingsHandler(BaseHandler):
@@ -9991,6 +10019,7 @@ def make_app():
         (r"/api/config/ai-agents/([^/]+)", AIAgentDetailHandler),
         (r"/api/config/verification-checks", VerificationChecksHandler),
         (r"/api/config/environment", EnvironmentInfoHandler),
+        (r"/api/version", VersionHandler),
 
         # Screening (Real API Integrations)
         (r"/api/screening/run", ScreeningHandler),

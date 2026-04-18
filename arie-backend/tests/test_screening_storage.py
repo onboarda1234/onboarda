@@ -4,6 +4,7 @@ Tests for SCR-005 — Normalized screening storage.
 
 import json
 import sqlite3
+from unittest.mock import MagicMock
 import pytest
 
 from screening_storage import (
@@ -12,6 +13,7 @@ from screening_storage import (
     persist_normalized_report,
     persist_normalization_failure,
     get_normalized_report,
+    delete_normalized_reports_for_application,
 )
 
 
@@ -76,6 +78,7 @@ class TestPersistNormalizedReport:
         row_id = persist_normalized_report(
             norm_db, "client_1", "app_1", report, "hash123"
         )
+        norm_db.commit()
         assert row_id > 0
 
         row = norm_db.execute(
@@ -92,6 +95,7 @@ class TestPersistNormalizedReport:
         row_id = persist_normalized_report(
             norm_db, "c1", "a1", report, "hash1"
         )
+        norm_db.commit()
         row = norm_db.execute(
             "SELECT normalized_report_json FROM screening_reports_normalized WHERE id=?", (row_id,)
         ).fetchone()
@@ -110,6 +114,7 @@ class TestPersistNormalizedReport:
     def test_tenant_scoped(self, norm_db):
         persist_normalized_report(norm_db, "client_A", "app_1", {}, "h1")
         persist_normalized_report(norm_db, "client_B", "app_2", {}, "h2")
+        norm_db.commit()
 
         rows = norm_db.execute(
             "SELECT * FROM screening_reports_normalized WHERE client_id='client_A'"
@@ -123,6 +128,7 @@ class TestPersistFailure:
         row_id = persist_normalization_failure(
             norm_db, "c1", "a1", "hash_fail", "KeyError: 'missing_field'"
         )
+        norm_db.commit()
         row = norm_db.execute(
             "SELECT * FROM screening_reports_normalized WHERE id=?", (row_id,)
         ).fetchone()
@@ -140,19 +146,49 @@ class TestGetNormalizedReport:
     def test_returns_latest(self, norm_db):
         persist_normalized_report(norm_db, "c1", "a1", {"v": 1}, "h1")
         persist_normalized_report(norm_db, "c1", "a1", {"v": 2}, "h2")
+        norm_db.commit()
         result = get_normalized_report(norm_db, "a1", "c1")
         assert result["normalized_report"]["v"] == 2
 
     def test_tenant_scoped_query(self, norm_db):
         persist_normalized_report(norm_db, "c1", "a1", {"v": 1}, "h1")
         persist_normalized_report(norm_db, "c2", "a1", {"v": 2}, "h2")
+        norm_db.commit()
         result = get_normalized_report(norm_db, "a1", "c1")
         assert result["normalized_report"]["v"] == 1
 
     def test_without_client_id(self, norm_db):
         persist_normalized_report(norm_db, "c1", "a1", {"v": 1}, "h1")
+        norm_db.commit()
         result = get_normalized_report(norm_db, "a1")
         assert result is not None
+
+
+class TestStorageTransactionSafety:
+    """Persist helpers must NOT call commit — the caller owns the transaction."""
+
+    def _make_mock_db(self):
+        mock_db = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.lastrowid = 42
+        mock_db.execute.return_value = mock_cursor
+        return mock_db
+
+    def test_persist_normalized_report_does_not_commit(self):
+        mock_db = self._make_mock_db()
+        row_id = persist_normalized_report(
+            mock_db, "c1", "a1", {"key": "val"}, "hash1"
+        )
+        assert row_id == 42
+        mock_db.commit.assert_not_called()
+
+    def test_persist_normalization_failure_does_not_commit(self):
+        mock_db = self._make_mock_db()
+        row_id = persist_normalization_failure(
+            mock_db, "c1", "a1", "hash_fail", "some error"
+        )
+        assert row_id == 42
+        mock_db.commit.assert_not_called()
 
 
 class TestStorageIsolation:
@@ -176,3 +212,71 @@ class TestStorageIsolation:
         ]
         for col in required:
             assert col in col_names, f"Missing column: {col}"
+
+
+class TestDeleteNormalizedReports:
+    """Sprint 3 Obj 2a — application-delete cascade coverage.
+
+    PR #116 fixup H2/H3: the helper is the single production cleanup path.
+    """
+
+    def test_deletes_all_records_for_application(self, norm_db):
+        """All normalized records for an application are deleted."""
+        persist_normalized_report(norm_db, "c1", "app_1", {"v": 1}, "h1")
+        persist_normalized_report(norm_db, "c1", "app_1", {"v": 2}, "h2")
+        persist_normalized_report(norm_db, "c2", "app_2", {"v": 3}, "h3")
+        norm_db.commit()
+
+        deleted = delete_normalized_reports_for_application(norm_db, "app_1")
+        norm_db.commit()
+        assert deleted == 2
+
+        # app_1 gone
+        assert get_normalized_report(norm_db, "app_1") is None
+        # app_2 unaffected
+        assert get_normalized_report(norm_db, "app_2") is not None
+
+    def test_returns_zero_when_no_records(self, norm_db):
+        """Returns 0 when no records exist for the application."""
+        deleted = delete_normalized_reports_for_application(norm_db, "nonexistent")
+        assert deleted == 0
+
+    def test_does_not_commit(self):
+        """Delete helper must not call commit — caller owns the transaction."""
+        mock_db = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 3
+        mock_db.execute.return_value = mock_cursor
+        deleted = delete_normalized_reports_for_application(mock_db, "app_1")
+        assert deleted == 3
+        mock_db.commit.assert_not_called()
+
+    def test_handles_missing_table_sqlite(self, tmp_path):
+        """Returns 0 if screening_reports_normalized table does not exist (SQLite wording)."""
+        # Real sqlite connection without the table created — produces
+        # "no such table" which is the SQLite missing-table wording.
+        db_path = str(tmp_path / "no_table.db")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            deleted = delete_normalized_reports_for_application(conn, "app_1")
+            assert deleted == 0
+        finally:
+            conn.close()
+
+    def test_handles_missing_table_postgres_wording(self):
+        """Returns 0 for PostgreSQL 'does not exist' / 'undefined table' wording."""
+        for msg in ("relation \"screening_reports_normalized\" does not exist",
+                    "ERROR: undefined table"):
+            mock_db = MagicMock()
+            mock_db.execute.side_effect = Exception(msg)
+            deleted = delete_normalized_reports_for_application(mock_db, "app_1")
+            assert deleted == 0
+            mock_db.rollback.assert_called()  # PG transaction must be rolled back
+
+    def test_unknown_db_error_is_re_raised(self):
+        """Helper must NOT swallow arbitrary DB errors — only missing-table."""
+        mock_db = MagicMock()
+        mock_db.execute.side_effect = Exception("connection lost")
+        with pytest.raises(Exception, match="connection lost"):
+            delete_normalized_reports_for_application(mock_db, "app_1")
