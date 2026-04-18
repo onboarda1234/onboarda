@@ -45,6 +45,11 @@ def ensure_normalized_table(db) -> None:
     """
     Ensure the screening_reports_normalized table exists.
     Safe to call multiple times (uses IF NOT EXISTS).
+
+    NOTE: This is a standalone DDL setup function that commits its own work.
+    DDL statements (CREATE TABLE / CREATE INDEX) are structural changes that
+    must be committed immediately and cannot participate in caller-owned
+    data transactions.  Do NOT use this as a pattern for DML helpers.
     """
     db.execute(_CREATE_TABLE_SQL)
     for idx_sql in _CREATE_INDEXES_SQL:
@@ -88,7 +93,6 @@ def persist_normalized_report(
         (client_id, application_id, provider, normalized_version,
          source_report_hash, report_json),
     )
-    db.commit()
     return cursor.lastrowid
 
 
@@ -113,7 +117,6 @@ def persist_normalization_failure(
            VALUES (?, ?, ?, '1.0', ?, 'failed', ?, 'migration_scaffolding')""",
         (client_id, application_id, provider, source_report_hash, error_message),
     )
-    db.commit()
     return cursor.lastrowid
 
 

@@ -4,6 +4,7 @@ Tests for SCR-005 — Normalized screening storage.
 
 import json
 import sqlite3
+from unittest.mock import MagicMock
 import pytest
 
 from screening_storage import (
@@ -76,6 +77,7 @@ class TestPersistNormalizedReport:
         row_id = persist_normalized_report(
             norm_db, "client_1", "app_1", report, "hash123"
         )
+        norm_db.commit()
         assert row_id > 0
 
         row = norm_db.execute(
@@ -92,6 +94,7 @@ class TestPersistNormalizedReport:
         row_id = persist_normalized_report(
             norm_db, "c1", "a1", report, "hash1"
         )
+        norm_db.commit()
         row = norm_db.execute(
             "SELECT normalized_report_json FROM screening_reports_normalized WHERE id=?", (row_id,)
         ).fetchone()
@@ -110,6 +113,7 @@ class TestPersistNormalizedReport:
     def test_tenant_scoped(self, norm_db):
         persist_normalized_report(norm_db, "client_A", "app_1", {}, "h1")
         persist_normalized_report(norm_db, "client_B", "app_2", {}, "h2")
+        norm_db.commit()
 
         rows = norm_db.execute(
             "SELECT * FROM screening_reports_normalized WHERE client_id='client_A'"
@@ -123,6 +127,7 @@ class TestPersistFailure:
         row_id = persist_normalization_failure(
             norm_db, "c1", "a1", "hash_fail", "KeyError: 'missing_field'"
         )
+        norm_db.commit()
         row = norm_db.execute(
             "SELECT * FROM screening_reports_normalized WHERE id=?", (row_id,)
         ).fetchone()
@@ -140,19 +145,49 @@ class TestGetNormalizedReport:
     def test_returns_latest(self, norm_db):
         persist_normalized_report(norm_db, "c1", "a1", {"v": 1}, "h1")
         persist_normalized_report(norm_db, "c1", "a1", {"v": 2}, "h2")
+        norm_db.commit()
         result = get_normalized_report(norm_db, "a1", "c1")
         assert result["normalized_report"]["v"] == 2
 
     def test_tenant_scoped_query(self, norm_db):
         persist_normalized_report(norm_db, "c1", "a1", {"v": 1}, "h1")
         persist_normalized_report(norm_db, "c2", "a1", {"v": 2}, "h2")
+        norm_db.commit()
         result = get_normalized_report(norm_db, "a1", "c1")
         assert result["normalized_report"]["v"] == 1
 
     def test_without_client_id(self, norm_db):
         persist_normalized_report(norm_db, "c1", "a1", {"v": 1}, "h1")
+        norm_db.commit()
         result = get_normalized_report(norm_db, "a1")
         assert result is not None
+
+
+class TestStorageTransactionSafety:
+    """Persist helpers must NOT call commit — the caller owns the transaction."""
+
+    def _make_mock_db(self):
+        mock_db = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.lastrowid = 42
+        mock_db.execute.return_value = mock_cursor
+        return mock_db
+
+    def test_persist_normalized_report_does_not_commit(self):
+        mock_db = self._make_mock_db()
+        row_id = persist_normalized_report(
+            mock_db, "c1", "a1", {"key": "val"}, "hash1"
+        )
+        assert row_id == 42
+        mock_db.commit.assert_not_called()
+
+    def test_persist_normalization_failure_does_not_commit(self):
+        mock_db = self._make_mock_db()
+        row_id = persist_normalization_failure(
+            mock_db, "c1", "a1", "hash_fail", "some error"
+        )
+        assert row_id == 42
+        mock_db.commit.assert_not_called()
 
 
 class TestStorageIsolation:
