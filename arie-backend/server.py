@@ -9440,6 +9440,121 @@ class EDDStatsHandler(BaseHandler):
 
 
 # ══════════════════════════════════════════════════════════
+# PR-05: LIFECYCLE QUEUE CLARITY ENDPOINTS (additive, read-only)
+# ══════════════════════════════════════════════════════════
+# These endpoints expose a single coherent operational view over the
+# three lifecycle object types (monitoring alerts, periodic reviews,
+# EDD cases) so the back-office can answer "what needs attention now,
+# who owns it, how old is it, what is it linked to?" without
+# scattering five separate API calls. Read-only; no DB mutation; no
+# semantic change to existing endpoints. Delegates to lifecycle_queue.
+
+class LifecycleQueueHandler(BaseHandler):
+    """GET /api/lifecycle/queue — unified lifecycle work queue.
+
+    Query params (all optional):
+      include : 'active' (default), 'historical', or 'all'
+      type    : 'alerts', 'reviews', 'edd', or 'all' (default)
+                also accepted: comma-separated list of item types
+                (alert / review / edd) for finer control
+      application_id : scope to a single application
+
+    Response: ``{"items": [...], "counts": {...}, "filter": {...}}``.
+    Items carry: type, state, owner, age, linkage, next-action hint,
+    plus type-specific fields (severity, outcome, memo_context, ...).
+    """
+    def get(self):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        include = (self.get_argument("include", "active") or "active").lower()
+        if include not in ("active", "historical", "all"):
+            return self.error(
+                "include must be one of: active, historical, all", 400,
+            )
+
+        # Accept either a single 'type' or 'types' (alerts/reviews/edd/all)
+        # plus comma-separated value for friendliness.
+        type_arg = (self.get_argument("type", None)
+                    or self.get_argument("types", None))
+        types = None
+        if type_arg:
+            raw = [t.strip().lower() for t in type_arg.split(",") if t.strip()]
+            if "all" in raw:
+                types = None
+            else:
+                # Accept both 'alerts'/'reviews'/'edd' (plural friendly) and
+                # canonical 'alert'/'review'/'edd' singular.
+                singular = {"alerts": "alert", "reviews": "review", "edd": "edd"}
+                normalised = []
+                for t in raw:
+                    canonical = singular.get(t, t)
+                    if canonical not in ("alert", "review", "edd"):
+                        return self.error(
+                            "type must be one of: alerts, reviews, edd, all",
+                            400,
+                        )
+                    normalised.append(canonical)
+                types = tuple(normalised)
+
+        application_id = self.get_argument("application_id", None) or None
+
+        import lifecycle_queue as lq
+        db = get_db()
+        try:
+            try:
+                result = lq.build_lifecycle_queue(
+                    db,
+                    include=include,
+                    types=types,
+                    application_id=application_id,
+                )
+            except ValueError as exc:
+                return self.error(str(exc), 400)
+            self.success(result)
+        finally:
+            db.close()
+
+
+class LifecycleApplicationSummaryHandler(BaseHandler):
+    """GET /api/lifecycle/applications/:application_id/summary
+
+    Per-application lifecycle linkage view. Returns active and
+    historical lifecycle objects plus the explicit linkage edge set
+    (alert<->review, alert<->edd, review<->edd) so the application
+    detail surface can show "what lifecycle objects exist for this
+    client and how are they connected" in one read.
+    """
+    def get(self, application_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        if not application_id:
+            return self.error("application_id is required", 400)
+
+        import lifecycle_queue as lq
+        db = get_db()
+        try:
+            # Sanity-check that the application exists -- 404 is a more
+            # useful signal than an empty payload.
+            row = db.execute(
+                "SELECT id FROM applications WHERE id = ?", (application_id,)
+            ).fetchone()
+            if not row:
+                return self.error("Application not found", 404)
+            try:
+                result = lq.build_application_lifecycle_summary(
+                    db, application_id,
+                )
+            except ValueError as exc:
+                return self.error(str(exc), 400)
+            self.success(result)
+        finally:
+            db.close()
+
+
+# ══════════════════════════════════════════════════════════
 # AI ASSISTANT ENDPOINT
 # ══════════════════════════════════════════════════════════
 
@@ -10360,6 +10475,11 @@ def make_app():
         (r"/api/edd/stats", EDDStatsHandler),
         (r"/api/edd/cases/([^/]+)", EDDDetailHandler),
         (r"/api/edd/cases", EDDListHandler),
+
+        # PR-05: Lifecycle queue clarity (additive, read-only)
+        (r"/api/lifecycle/queue", LifecycleQueueHandler),
+        (r"/api/lifecycle/applications/([^/]+)/summary",
+         LifecycleApplicationSummaryHandler),
 
         # AI Assistant
         (r"/api/ai/assistant", AIAssistantHandler),
