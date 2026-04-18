@@ -727,6 +727,26 @@ def attach_edd_findings_to_memo_context(db, edd_case_id, *,
     :func:`set_edd_findings` first; this is enforced (raises
     :class:`AttachmentValidationError` when no findings exist).
 
+    PR-04a -- onboarding attachment identity rule (NEW)
+    ---------------------------------------------------
+
+    For ``kind='onboarding'``, an attachment row may ONLY be created
+    once the onboarding memo identity exists -- i.e. once
+    :func:`resolve_active_memo_context` returns a non-``None``
+    ``memo_id`` (latest ``compliance_memos.id`` for the application).
+
+    If the resolver returns ``kind='onboarding'`` with ``memo_id=None``,
+    this function fails fast with :class:`AttachmentValidationError`
+    BEFORE writing any row. This eliminates the PR-04 ambiguity where
+    a temporary onboarding attachment with ``memo_id=NULL`` could later
+    be duplicated by a second attachment created against the real
+    ``compliance_memos.id`` -- producing two active onboarding
+    attachments for the same EDD under different identities.
+
+    Periodic-review attachments are unaffected: the
+    ``periodic_reviews.id`` row IS the review memo context (no
+    pre-existence ambiguity).
+
     Idempotency:
 
     * If an active attachment already exists for the same
@@ -773,6 +793,21 @@ def attach_edd_findings_to_memo_context(db, edd_case_id, *,
     memo_id = context.get("memo_id")
     periodic_review_id = context.get("periodic_review_id")
     application_id = context["application_id"]
+
+    # PR-04a: onboarding attachment requires a real onboarding memo
+    # identity. Refuse to insert an attachment row with memo_id=NULL,
+    # which would otherwise allow a second active attachment to be
+    # created later for the same EDD against the real compliance_memos.id
+    # (two active onboarding attachments under different identities).
+    if kind == MEMO_CONTEXT_ONBOARDING and memo_id is None:
+        raise AttachmentValidationError(
+            f"edd_case id={edd_case_id} resolves to onboarding context "
+            "but no onboarding memo (compliance_memos row) exists yet "
+            "for application_id="
+            f"{application_id!r}. Generate the onboarding memo first, "
+            "then attach. This is enforced to prevent ambiguous "
+            "onboarding attachments with memo_id=NULL (PR-04a)."
+        )
 
     existing = _find_active_attachment(
         db, edd_case_id, kind=kind,
