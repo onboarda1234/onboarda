@@ -8714,6 +8714,31 @@ class PeriodicReviewScheduleHandler(BaseHandler):
 # delegate all state, generation, escalation and outcome logic to the
 # provider-agnostic ``periodic_review_engine`` module so that server.py
 # stays thin and the operating model is unit-testable in isolation.
+#
+# PR-03a hardening: every PR-03 handler validates ``review_id`` at the
+# HTTP boundary via ``_parse_review_id`` BEFORE calling the engine /
+# touching the database. This prevents a non-numeric path segment from
+# bubbling down into a Postgres type error and surfacing as a 500 to
+# clients. The path regex is permissive (``[^/]+``) so the validation
+# must live in code, not in the URL spec.
+def _parse_review_id(handler, raw_review_id):
+    """Validate / coerce a path-segment review_id to a positive int.
+
+    Returns the int on success; on failure writes a 400 response and
+    returns ``None`` so the caller can early-return without ever
+    invoking the engine or the DB.
+    """
+    try:
+        rid = int(raw_review_id)
+    except (TypeError, ValueError):
+        handler.error("review_id must be a positive integer", 400)
+        return None
+    if rid < 1:
+        handler.error("review_id must be a positive integer", 400)
+        return None
+    return rid
+
+
 class PeriodicReviewStateHandler(BaseHandler):
     """POST /api/monitoring/reviews/:id/state -- transition review state.
 
@@ -8727,6 +8752,9 @@ class PeriodicReviewStateHandler(BaseHandler):
     def post(self, review_id):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
             return
         data = self.get_json()
         new_state = data.get("state")
@@ -8764,6 +8792,9 @@ class PeriodicReviewRequiredItemsHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
         import periodic_review_engine as pre
         db = get_db()
         try:
@@ -8781,6 +8812,9 @@ class PeriodicReviewRequiredItemsGenerateHandler(BaseHandler):
     def post(self, review_id):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
             return
         import periodic_review_engine as pre
         db = get_db()
@@ -8817,6 +8851,9 @@ class PeriodicReviewEscalateHandler(BaseHandler):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
         data = self.get_json() or {}
         import periodic_review_engine as pre
         db = get_db()
@@ -8849,6 +8886,9 @@ class PeriodicReviewCompleteHandler(BaseHandler):
     def post(self, review_id):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
             return
         data = self.get_json() or {}
         outcome = data.get("outcome")

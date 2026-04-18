@@ -122,8 +122,14 @@ engine.
   linked_periodic_review_id=review_id)`.
 * Else create a new `edd_cases` row mirroring the INSERT shape used by
   `EDDCreateHandler.post`/`monitoring_routing._create_edd_case_row`,
-  set origin via `set_edd_origin`, optionally call `mark_edd_assigned`
-  with `priority`.
+  set origin via `set_edd_origin`.
+* If the caller supplies a valid `priority` (PR-03a: in *any* path,
+  not only the create path), persist it to `edd_cases.priority` via
+  `lifecycle_linkage.mark_edd_assigned`. Invalid `priority` values
+  are rejected at the engine boundary as a
+  `PeriodicReviewEngineError` (mapped to HTTP 400) before any DB
+  write. `priority=None` remains a no-op and never overwrites an
+  existing value on a reused case.
 * Emits `periodic_review.escalated_to_edd` with `created`/`reused`/
   `edd_case_id`.
 
@@ -150,6 +156,35 @@ existing one. Repeated escalation from the same review is a no-op
   is preserved (`lifecycle.review.closed`).
 * Emits `periodic_review.outcome_recorded`.
 * Does **not** touch `compliance_memos` (proven by test).
+
+#### `decision` vs `outcome` — which is authoritative? (PR-03a clarification)
+
+The PR-03 operating model treats **`outcome` as the single
+authoritative outcome field** for any new read or write path:
+
+| Field      | Status                | Written by                                              | Read by new flows? |
+|------------|-----------------------|---------------------------------------------------------|--------------------|
+| `outcome`  | Authoritative (PR-03) | `record_review_outcome` (engine) + `/complete` handler  | **Yes**            |
+| `decision` | Legacy back-compat    | `PeriodicReviewDecisionHandler` only (pre-PR-03 path)   | No                 |
+
+Rules of engagement, pinned by inline comment in
+`record_review_outcome` and by this section:
+
+* New flows MUST read and write `outcome` only.
+* New flows MUST NOT write `decision`. The PR-03 engine deliberately
+  does **not** mirror to `decision`; allowing dual-write would create
+  drift between two columns claiming the same truth.
+* The legacy `decision` column is preserved for read-back of pre-PR-03
+  rows. It must never be treated as a co-authoritative source of
+  truth alongside `outcome`. The required-item generator already
+  reflects this: it falls back to `decision` only when `outcome` is
+  absent on a prior row (legacy data path).
+* The legacy `PeriodicReviewDecisionHandler` is intentionally
+  unchanged and remains the only writer of `decision`. It is not
+  removed in PR-03a so that any in-flight callers do not break;
+  retirement is a future PR with explicit deprecation.
+
+PR-03a does not change storage; it only makes the contract explicit.
 
 ### Audit behavior
 
@@ -256,3 +291,90 @@ Full suite: **3313 passed** after PR-03 (3265 → 3313).
   `db.py`, `arie-backoffice.html`, `arie-portal.html` — all unchanged.
 * `db.py` schema is extended **only** through the migration script
   (`migration_009_*.sql`); no inline `_run_migrations` change is made.
+
+## PR-03a — hardening fixes (follow-up)
+
+PR-03a is a narrow hardening PR layered on top of PR-03. It does not
+expand scope, reopen any EX control, or restructure storage.
+
+### Issues fixed
+
+1. **Non-numeric `review_id` no longer 500s.** All five PR-03 review
+   handlers now validate / coerce the path-segment `review_id` to a
+   positive integer at the HTTP boundary via the new
+   `_parse_review_id(handler, raw_review_id)` helper in `server.py`,
+   *before* any engine or database call. Non-numeric, empty,
+   zero, negative, or otherwise malformed `review_id` values now
+   return an explicit HTTP 400 with body `{"error": "Invalid review_id"}`
+   instead of leaking through to a Postgres type error (500) or
+   silently round-tripping as a `ReviewNotFound` (404). The route
+   regex (`[^/]+`) is permissive by design, so the validation must
+   live in code; this is consistent across `/state`,
+   `/required-items`, `/required-items/generate`, `/escalate`, and
+   `/complete`.
+
+2. **`outcome` vs `decision` contract is explicit.** See the table in
+   *Outcome recording → `decision` vs `outcome`* above. An inline
+   comment on the `record_review_outcome` UPDATE statement pins the
+   contract at the code seam: `decision` is intentionally NOT
+   included in the UPDATE, and new flows must not co-write both.
+
+3. **`priority` is no longer silently ignored on EDD reuse.**
+   `escalate_review_to_edd` now persists `priority` to
+   `edd_cases.priority` via `lifecycle_linkage.mark_edd_assigned` on
+   *both* the create-new-EDD path and the reuse-existing-EDD path
+   (previously only on create). Invalid `priority` values are
+   rejected at the engine boundary as a `PeriodicReviewEngineError`
+   (mapped to HTTP 400) before any DB write occurs. Passing
+   `priority=None` (the documented "do not change" sentinel) remains
+   a no-op and does not overwrite the existing value on a reused
+   case.
+
+### Tests added (PR-03a)
+
+In `tests/test_periodic_review_handlers.py`:
+
+* `TestNonNumericReviewIdHandling` — six tests (one per PR-03
+  endpoint plus a sanity check that a well-formed but non-existent
+  numeric id still returns 404 on `/state`). Each iterates a
+  representative bad-input set (`abc`, `1; DROP TABLE`, `0`, `-5`,
+  `1.5`, ` `) and asserts no 500 + explicit 400.
+* `TestEscalatePriorityPersistence` — four tests:
+  - priority persists on the create path,
+  - priority persists on the reuse path (the regression PR-03a
+    closes),
+  - invalid priority returns 400 (not 500) and creates no EDD as a
+    side effect,
+  - omitting priority on a re-escalate does not overwrite a
+    previously set value.
+
+### Deferred (intentionally not in PR-03a scope)
+
+* **Audit ordering hardening.** The PR-03 engine emits audit events
+  post-commit; this is consistent with the existing PR-01/PR-02
+  audit posture and was noted only as an observation. PR-03a does
+  not redesign the audit transaction model.
+* **Escalation concurrency hardening.** The `escalate_review_to_edd`
+  active-EDD predicate is not transactionally locked; under
+  concurrent escalation against the same application a duplicate
+  could in principle be created. Repo inspection showed this is not
+  a trivial fix at the SQLite/Postgres seam without a wider
+  transaction model change, which is explicitly out of PR-03a scope.
+
+### Protected-control posture (PR-03a)
+
+* `server.py` is on the `PROTECTED_FILES` list (for EX-02 / EX-07 /
+  EX-09 / EX-11 / EX-12 / EX-13). PR-03a edits `server.py` ONLY on
+  the PR-03 handler block (lines around `PeriodicReviewStateHandler
+  … PeriodicReviewCompleteHandler`) and adds a single helper
+  (`_parse_review_id`) directly above that block. None of the EX
+  enforcement seams (Sumsub webhook ingestion, approval gate,
+  rate-limit, officer sign-off, client-side security helpers,
+  batch-fetch / ETag) are touched, read, or affected.
+* `periodic_review_engine.py` is *not* in `PROTECTED_FILES`; PR-03a
+  edits are confined to it for the priority-wiring / boundary
+  validation change and a docstring/inline-comment clarification on
+  the outcome-vs-decision contract.
+* `lifecycle_linkage.py` is not modified (PR-03a only imports
+  `VALID_PRIORITIES` from it, which was already a public contract).
+* No other protected file is modified.
