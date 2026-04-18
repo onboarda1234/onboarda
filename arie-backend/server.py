@@ -4615,6 +4615,27 @@ class EnvironmentInfoHandler(BaseHandler):
         self.success(get_environment_info())
 
 
+class VersionHandler(BaseHandler):
+    """GET /api/version — build identification for authenticated sessions.
+
+    Auth-gated: returns 401 for unauthenticated requests.
+    No DB calls, no secrets, no PII.  Values from env vars only.
+    """
+
+    def get(self):
+        user = self.require_auth()
+        if not user:
+            return
+        self.success({
+            "git_sha": os.environ.get("GIT_SHA", "unknown"),
+            "git_sha_short": os.environ.get("GIT_SHA", "unknown")[:7]
+            if os.environ.get("GIT_SHA") else "unknown",
+            "build_time": os.environ.get("BUILD_TIME", "unknown"),
+            "environment": ENVIRONMENT,
+            "service": "regmind-backend",
+        })
+
+
 class SystemSettingsHandler(BaseHandler):
     """GET/PUT /api/config/system-settings"""
     def get(self):
@@ -9991,6 +10012,7 @@ def make_app():
         (r"/api/config/ai-agents/([^/]+)", AIAgentDetailHandler),
         (r"/api/config/verification-checks", VerificationChecksHandler),
         (r"/api/config/environment", EnvironmentInfoHandler),
+        (r"/api/version", VersionHandler),
 
         # Screening (Real API Integrations)
         (r"/api/screening/run", ScreeningHandler),
