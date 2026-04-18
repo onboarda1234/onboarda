@@ -86,6 +86,7 @@ _CHILD_TABLES_BY_APP_ID = [
     "sumsub_applicant_mappings",
     "supervisor_pipeline_results",
     "supervisor_audit_log",
+    "screening_reports_normalized",
 ]
 # Tables whose rows reference application_ref (not id)
 _CHILD_TABLES_BY_REF = [

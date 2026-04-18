@@ -1841,6 +1841,13 @@ def cleanup_application_delete_artifacts(db, application_id, application_ref):
         db.execute(f"DELETE FROM {table} WHERE application_id=?", (application_id,))
     db.execute("DELETE FROM decision_records WHERE application_ref=?", (application_ref,))
 
+    # Sprint 3 Obj 2a: Delete normalized screening records to prevent orphans.
+    # Table may not exist if migration 007 has not been applied (e.g., local dev).
+    try:
+        db.execute("DELETE FROM screening_reports_normalized WHERE application_id=?", (application_id,))
+    except Exception:
+        pass  # Table does not exist — no orphans possible
+
 
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""

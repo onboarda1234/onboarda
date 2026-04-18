@@ -13,6 +13,7 @@ from screening_storage import (
     persist_normalized_report,
     persist_normalization_failure,
     get_normalized_report,
+    delete_normalized_reports_for_application,
 )
 
 
@@ -211,3 +212,45 @@ class TestStorageIsolation:
         ]
         for col in required:
             assert col in col_names, f"Missing column: {col}"
+
+
+class TestDeleteNormalizedReports:
+    """Sprint 3 Obj 2a — application-delete cascade coverage."""
+
+    def test_deletes_all_records_for_application(self, norm_db):
+        """All normalized records for an application are deleted."""
+        persist_normalized_report(norm_db, "c1", "app_1", {"v": 1}, "h1")
+        persist_normalized_report(norm_db, "c1", "app_1", {"v": 2}, "h2")
+        persist_normalized_report(norm_db, "c2", "app_2", {"v": 3}, "h3")
+        norm_db.commit()
+
+        deleted = delete_normalized_reports_for_application(norm_db, "app_1")
+        norm_db.commit()
+        assert deleted == 2
+
+        # app_1 gone
+        assert get_normalized_report(norm_db, "app_1") is None
+        # app_2 unaffected
+        assert get_normalized_report(norm_db, "app_2") is not None
+
+    def test_returns_zero_when_no_records(self, norm_db):
+        """Returns 0 when no records exist for the application."""
+        deleted = delete_normalized_reports_for_application(norm_db, "nonexistent")
+        assert deleted == 0
+
+    def test_does_not_commit(self):
+        """Delete helper must not call commit — caller owns the transaction."""
+        mock_db = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 3
+        mock_db.execute.return_value = mock_cursor
+        deleted = delete_normalized_reports_for_application(mock_db, "app_1")
+        assert deleted == 3
+        mock_db.commit.assert_not_called()
+
+    def test_handles_missing_table(self):
+        """Returns 0 if screening_reports_normalized table does not exist."""
+        mock_db = MagicMock()
+        mock_db.execute.side_effect = Exception("no such table")
+        deleted = delete_normalized_reports_for_application(mock_db, "app_1")
+        assert deleted == 0

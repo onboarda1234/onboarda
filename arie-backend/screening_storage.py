@@ -7,6 +7,15 @@ in the screening_reports_normalized table.
 SAFETY: This table is non-authoritative in Sprint 1-2.
 SAFETY: No EX-validated control reads this storage.
 SAFETY: Does not modify db.py (protected file).
+
+GDPR / DSAR Treatment (Sprint 3 Obj 2b):
+    screening_reports_normalized is EXCLUDED from DSAR/export because it
+    contains a derived, non-authoritative copy of data already present in
+    prescreening_data.screening_report.  Any DSAR or data-export request is
+    satisfied by the legacy prescreening_data column, which is the single
+    source of truth.  Including the normalized copy would duplicate data and
+    risk confusion.  When normalized storage becomes authoritative
+    (post-activation gate), DSAR treatment must be revisited.
 """
 
 import hashlib
@@ -149,3 +158,23 @@ def get_normalized_report(db, application_id: str, client_id: str = None) -> dic
     if result.get("normalized_report_json"):
         result["normalized_report"] = json.loads(result["normalized_report_json"])
     return result
+
+
+def delete_normalized_reports_for_application(db, application_id: str) -> int:
+    """
+    Delete all normalized screening reports for an application.
+
+    Used by application-delete cascade to prevent orphan records.
+    Does NOT call commit — the caller owns the transaction boundary.
+
+    Returns the number of rows deleted (0 if table does not exist).
+    """
+    try:
+        cursor = db.execute(
+            "DELETE FROM screening_reports_normalized WHERE application_id=?",
+            (application_id,),
+        )
+        return cursor.rowcount
+    except Exception:
+        # Table may not exist if migration 007 has not been applied
+        return 0
