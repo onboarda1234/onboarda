@@ -154,14 +154,15 @@ def migrated_db(tmp_path, monkeypatch):
 
 def _column_names(conn, table):
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [r[1] if not hasattr(r, "get") else r.get("name") for r in rows]
+    # DBConnection.fetchall() returns list of dict (see arie-backend/db.py).
+    return [r["name"] for r in rows]
 
 
 def _index_names(conn):
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='index'"
     ).fetchall()
-    return [r[0] if not hasattr(r, "get") else r.get("name") for r in rows]
+    return [r["name"] for r in rows]
 
 
 class TestLifecycleLinkageColumns:
@@ -207,11 +208,11 @@ class TestExistingRowsSurvive:
             ("Pre-migration Client",),
         ).fetchone()
         assert row is not None
-        assert row[0] == "Pre-migration Client"
-        assert row[1] is None
-        assert row[2] is None
-        assert row[3] is None
-        assert row[4] is None
+        assert row["client_name"] == "Pre-migration Client"
+        assert row["origin_context"] is None
+        assert row["linked_monitoring_alert_id"] is None
+        assert row["priority"] is None
+        assert row["sla_due_at"] is None
 
     def test_seeded_periodic_review_still_present_with_nulls(self, migrated_db):
         row = migrated_db.execute(
@@ -220,10 +221,10 @@ class TestExistingRowsSurvive:
             ("Pre-migration Client",),
         ).fetchone()
         assert row is not None
-        assert row[0] == "Pre-migration Client"
-        assert row[1] is None
-        assert row[2] is None
-        assert row[3] is None
+        assert row["client_name"] == "Pre-migration Client"
+        assert row["trigger_source"] is None
+        assert row["linked_edd_case_id"] is None
+        assert row["review_reason"] is None
 
     def test_seeded_monitoring_alert_still_present_with_nulls(self, migrated_db):
         row = migrated_db.execute(
@@ -232,11 +233,11 @@ class TestExistingRowsSurvive:
             ("Pre-migration Client",),
         ).fetchone()
         assert row is not None
-        assert row[0] == "Pre-migration Client"
-        assert row[1] is None
-        assert row[2] is None
-        assert row[3] is None
-        assert row[4] is None
+        assert row["client_name"] == "Pre-migration Client"
+        assert row["linked_edd_case_id"] is None
+        assert row["linked_periodic_review_id"] is None
+        assert row["triaged_at"] is None
+        assert row["resolved_at"] is None
 
 
 class TestMigrationIdempotency:
@@ -244,15 +245,15 @@ class TestMigrationIdempotency:
         """A second invocation of the runner must not duplicate or error."""
         from migrations.runner import run_all_migrations_with_connection
         applied_before = migrated_db.execute(
-            "SELECT COUNT(*) FROM schema_version WHERE version = ?",
+            "SELECT COUNT(*) AS n FROM schema_version WHERE version = ?",
             ("008",),
-        ).fetchone()[0]
+        ).fetchone()["n"]
         assert applied_before == 1
         run_all_migrations_with_connection(migrated_db)
         applied_after = migrated_db.execute(
-            "SELECT COUNT(*) FROM schema_version WHERE version = ?",
+            "SELECT COUNT(*) AS n FROM schema_version WHERE version = ?",
             ("008",),
-        ).fetchone()[0]
+        ).fetchone()["n"]
         assert applied_after == 1
 
 
@@ -276,7 +277,7 @@ class TestEnumValuesAcceptedAndJunkRejectedAtAppLayer:
             "SELECT origin_context FROM edd_cases WHERE client_name = ?",
             ("OriginOK",),
         ).fetchone()
-        assert row[0] == "monitoring_alert"
+        assert row["origin_context"] == "monitoring_alert"
 
     def test_null_origin_context_allowed(self, migrated_db):
         migrated_db.execute(
@@ -289,4 +290,4 @@ class TestEnumValuesAcceptedAndJunkRejectedAtAppLayer:
             "SELECT origin_context FROM edd_cases WHERE client_name = ?",
             ("OriginNull",),
         ).fetchone()
-        assert row[0] is None
+        assert row["origin_context"] is None
