@@ -239,7 +239,12 @@ def run_parity_check(db_path=None):
             legacy_hash = None
 
         if legacy_hash is not None:
-            if source_hash and legacy_hash != source_hash:
+            if not source_hash:
+                logger.warning(
+                    "No stored source hash: app_id=%s client_id=%s — skipping hash check",
+                    app_id, client_id,
+                )
+            elif legacy_hash != source_hash:
                 logger.error(
                     "PARITY_FAILURE: Source hash mismatch: app_id=%s client_id=%s stored=%s computed=%s",
                     app_id, client_id, source_hash, legacy_hash,
