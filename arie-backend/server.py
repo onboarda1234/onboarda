@@ -8706,6 +8706,179 @@ class PeriodicReviewScheduleHandler(BaseHandler):
         self.success({"status": "schedule_check_complete", "reviews_created": created_count})
 
 
+# ──────────────────────────────────────────────────────────
+# PR-03: Periodic Review Operating Model -- additive handlers
+# ──────────────────────────────────────────────────────────
+# These handlers are additive and do NOT replace the legacy
+# PeriodicReviewDecisionHandler above (kept for back-compat). They
+# delegate all state, generation, escalation and outcome logic to the
+# provider-agnostic ``periodic_review_engine`` module so that server.py
+# stays thin and the operating model is unit-testable in isolation.
+class PeriodicReviewStateHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/state -- transition review state.
+
+    Body: {"state": "<one of in_progress|awaiting_information|"
+                       "pending_senior_review>",
+           "reason": "<optional rationale>"}
+
+    Use POST /complete to move a review to 'completed' (completion
+    must carry an explicit outcome).
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json()
+        new_state = data.get("state")
+        reason = data.get("reason")
+        if not new_state:
+            return self.error("state is required", 400)
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                result = pre.transition_review_state(
+                    db, review_id,
+                    new_state=new_state, reason=reason,
+                    user=user, audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.InvalidReviewState as e:
+                return self.error(str(e), 400)
+            except pre.InvalidReviewTransition as e:
+                return self.error(str(e), 409)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            self.success({"status": "state_changed", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewRequiredItemsHandler(BaseHandler):
+    """GET /api/monitoring/reviews/:id/required-items -- list items.
+
+    POST /api/monitoring/reviews/:id/required-items/generate -- (re)generate.
+    """
+    def get(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                items = pre.get_required_items(db, review_id)
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            self.success({"review_id": review_id, "items": items})
+        finally:
+            db.close()
+
+
+class PeriodicReviewRequiredItemsGenerateHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/required-items/generate."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                items = pre.generate_required_items(
+                    db, review_id,
+                    user=user, audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            self.success({
+                "status": "required_items_generated",
+                "review_id": review_id,
+                "count": len(items),
+                "items": items,
+            })
+        finally:
+            db.close()
+
+
+class PeriodicReviewEscalateHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/escalate -- escalate to EDD.
+
+    Body: {"trigger_notes": "<optional>", "priority": "<optional>"}.
+
+    Reuses any active EDD case linked to the review or to the
+    application; otherwise creates a new EDD case via the same
+    duplicate-prevention predicate as ``EDDCreateHandler.post``.
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                result = pre.escalate_review_to_edd(
+                    db, review_id,
+                    trigger_notes=data.get("trigger_notes"),
+                    priority=data.get("priority"),
+                    user=user, audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.PeriodicReviewEngineError as e:
+                return self.error(str(e), 400)
+            self.success({"status": "escalated_to_edd", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewCompleteHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/complete -- record outcome and close.
+
+    Body: {"outcome": "<one of no_change|enhanced_monitoring|"
+                       "edd_required|exit_recommended>",
+           "outcome_reason": "<rationale>"}
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json() or {}
+        outcome = data.get("outcome")
+        outcome_reason = data.get("outcome_reason")
+        if not outcome:
+            return self.error("outcome is required", 400)
+        if not outcome_reason:
+            return self.error("outcome_reason is required", 400)
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                result = pre.record_review_outcome(
+                    db, review_id,
+                    outcome=outcome, outcome_reason=outcome_reason,
+                    user=user, audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.InvalidReviewOutcome as e:
+                return self.error(str(e), 400)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.PeriodicReviewEngineError as e:
+                return self.error(str(e), 400)
+            self.success({"status": "outcome_recorded", "result": result})
+        finally:
+            db.close()
+
+
 # ══════════════════════════════════════════════════════════
 # SAR (SUSPICIOUS ACTIVITY REPORT) ENDPOINTS
 # ══════════════════════════════════════════════════════════
@@ -10126,6 +10299,13 @@ def make_app():
         (r"/api/monitoring/agents", MonitoringAgentsHandler),
         # Periodic Reviews (more specific routes first)
         (r"/api/monitoring/reviews/schedule", PeriodicReviewScheduleHandler),
+        (r"/api/monitoring/reviews/([^/]+)/required-items/generate",
+         PeriodicReviewRequiredItemsGenerateHandler),
+        (r"/api/monitoring/reviews/([^/]+)/required-items",
+         PeriodicReviewRequiredItemsHandler),
+        (r"/api/monitoring/reviews/([^/]+)/state", PeriodicReviewStateHandler),
+        (r"/api/monitoring/reviews/([^/]+)/escalate", PeriodicReviewEscalateHandler),
+        (r"/api/monitoring/reviews/([^/]+)/complete", PeriodicReviewCompleteHandler),
         (r"/api/monitoring/reviews/([^/]+)/decision", PeriodicReviewDecisionHandler),
         (r"/api/monitoring/reviews/([^/]+)", PeriodicReviewDetailHandler),
         (r"/api/monitoring/reviews", PeriodicReviewsListHandler),
