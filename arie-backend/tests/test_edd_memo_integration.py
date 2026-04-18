@@ -562,6 +562,8 @@ class TestAttachEDDFindingsToMemoContext:
 
     def test_attach_is_idempotent_for_same_context(self, edd_db, audit_sink):
         from edd_memo_integration import attach_edd_findings_to_memo_context
+        # PR-04a: onboarding memo must exist before attaching.
+        _insert_compliance_memo(edd_db)
         eid = _insert_edd(edd_db, origin_context="onboarding")
         self._seed_findings(edd_db, audit_sink, eid)
         attach_edd_findings_to_memo_context(
@@ -684,6 +686,275 @@ class TestAttachEDDFindingsToMemoContext:
 
 
 # ─────────────────────────────────────────────────────────────────
+# PR-04a -- onboarding-attachment identity hardening
+# ─────────────────────────────────────────────────────────────────
+class TestPR04aOnboardingAttachmentIdentity:
+    """PR-04a closes the onboarding-attachment ambiguity:
+
+    * Attaching to onboarding context BEFORE an onboarding memo
+      (`compliance_memos`) row exists must fail cleanly.
+    * No attachment row may be created with `memo_id=NULL` for
+      `kind='onboarding'`.
+    * Once the onboarding memo exists, attach succeeds and is
+      idempotent on the resolved (`edd_case_id`, `kind`, `memo_id`,
+      `periodic_review_id`) identity.
+    """
+
+    def _seed_findings(self, edd_db, audit_sink, eid):
+        from edd_memo_integration import set_edd_findings
+        set_edd_findings(
+            edd_db, eid,
+            findings={"findings_summary": "x"},
+            user=USER, audit_writer=audit_sink,
+        )
+
+    def test_attach_onboarding_without_memo_fails_cleanly(
+        self, edd_db, audit_sink,
+    ):
+        from edd_memo_integration import (
+            attach_edd_findings_to_memo_context,
+            AttachmentValidationError,
+        )
+        eid = _insert_edd(edd_db, origin_context="onboarding")
+        self._seed_findings(edd_db, audit_sink, eid)
+        with pytest.raises(AttachmentValidationError) as excinfo:
+            attach_edd_findings_to_memo_context(
+                edd_db, eid, user=USER, audit_writer=audit_sink,
+            )
+        # Error message must mention onboarding memo / memo_id, not be
+        # an opaque crash.
+        msg = str(excinfo.value).lower()
+        assert "onboarding" in msg
+        assert "memo" in msg
+
+    def test_attach_onboarding_without_memo_creates_no_row(
+        self, edd_db, audit_sink,
+    ):
+        from edd_memo_integration import (
+            attach_edd_findings_to_memo_context,
+            AttachmentValidationError,
+        )
+        eid = _insert_edd(edd_db, origin_context="onboarding")
+        self._seed_findings(edd_db, audit_sink, eid)
+        try:
+            attach_edd_findings_to_memo_context(
+                edd_db, eid, user=USER, audit_writer=audit_sink,
+            )
+        except AttachmentValidationError:
+            pass
+        # NO row in edd_memo_attachments.
+        rows = edd_db.execute(
+            "SELECT * FROM edd_memo_attachments WHERE edd_case_id = ?",
+            (eid,),
+        ).fetchall()
+        assert rows == []
+        # NO `attached` audit event was emitted (fail-fast BEFORE write).
+        assert not any(
+            e["action"] == "edd.memo_context.attached"
+            for e in audit_sink.events
+        )
+
+    def test_attach_succeeds_once_onboarding_memo_exists(
+        self, edd_db, audit_sink,
+    ):
+        """After the onboarding memo is generated, attach must succeed
+        and produce exactly one active attachment with the real
+        ``memo_id``."""
+        from edd_memo_integration import (
+            attach_edd_findings_to_memo_context,
+            AttachmentValidationError,
+            MEMO_CONTEXT_ONBOARDING,
+        )
+        eid = _insert_edd(edd_db, origin_context="onboarding")
+        self._seed_findings(edd_db, audit_sink, eid)
+        # First attempt fails.
+        with pytest.raises(AttachmentValidationError):
+            attach_edd_findings_to_memo_context(
+                edd_db, eid, user=USER, audit_writer=audit_sink,
+            )
+        # Generate the onboarding memo, then retry.
+        memo_id = _insert_compliance_memo(edd_db)
+        out = attach_edd_findings_to_memo_context(
+            edd_db, eid, user=USER, audit_writer=audit_sink,
+        )
+        assert out["created"] is True
+        assert out["attachment"]["memo_context_kind"] == MEMO_CONTEXT_ONBOARDING
+        assert out["attachment"]["memo_id"] == memo_id
+        # Exactly one ACTIVE row, with the real memo_id (not NULL).
+        active = edd_db.execute(
+            "SELECT * FROM edd_memo_attachments "
+            "WHERE edd_case_id = ? AND detached_at IS NULL",
+            (eid,),
+        ).fetchall()
+        assert len(active) == 1
+        assert active[0]["memo_id"] == memo_id
+
+    def test_periodic_review_attach_unaffected_by_pr04a_rule(
+        self, edd_db, audit_sink,
+    ):
+        """PR-04a only constrains onboarding attachments. A
+        periodic-review context must still be attachable without any
+        ``compliance_memos`` row existing."""
+        from edd_memo_integration import (
+            attach_edd_findings_to_memo_context,
+            MEMO_CONTEXT_PERIODIC_REVIEW,
+        )
+        rid = _insert_review(edd_db)
+        eid = _insert_edd(
+            edd_db, origin_context="periodic_review",
+            linked_periodic_review_id=rid,
+        )
+        self._seed_findings(edd_db, audit_sink, eid)
+        out = attach_edd_findings_to_memo_context(
+            edd_db, eid, user=USER, audit_writer=audit_sink,
+        )
+        assert out["created"] is True
+        assert out["attachment"]["memo_context_kind"] == MEMO_CONTEXT_PERIODIC_REVIEW
+        assert out["attachment"]["periodic_review_id"] == rid
+
+    def test_detach_then_reattach_after_memo_creates_one_active_row(
+        self, edd_db, audit_sink,
+    ):
+        """Detach-then-reattach behavior under the PR-04a rule:
+        the cycle must end with exactly one active attachment row."""
+        from edd_memo_integration import (
+            attach_edd_findings_to_memo_context,
+            detach_edd_findings_from_memo_context,
+        )
+        memo_id = _insert_compliance_memo(edd_db)
+        eid = _insert_edd(edd_db, origin_context="onboarding")
+        self._seed_findings(edd_db, audit_sink, eid)
+        # Attach -> active=1
+        attach_edd_findings_to_memo_context(
+            edd_db, eid, user=USER, audit_writer=audit_sink,
+        )
+        # Detach -> active=0
+        detach_edd_findings_from_memo_context(
+            edd_db, eid, user=USER, audit_writer=audit_sink,
+        )
+        active = edd_db.execute(
+            "SELECT * FROM edd_memo_attachments "
+            "WHERE edd_case_id = ? AND detached_at IS NULL",
+            (eid,),
+        ).fetchall()
+        assert active == []
+        # Reattach -> active=1, with the same real memo_id (no NULL ghost row).
+        out = attach_edd_findings_to_memo_context(
+            edd_db, eid, user=USER, audit_writer=audit_sink,
+        )
+        assert out["created"] is True
+        assert out["attachment"]["memo_id"] == memo_id
+        active = edd_db.execute(
+            "SELECT * FROM edd_memo_attachments "
+            "WHERE edd_case_id = ? AND detached_at IS NULL",
+            (eid,),
+        ).fetchall()
+        assert len(active) == 1
+        # Total rows (including the detached one) is now 2 -- the
+        # detached row is preserved for audit history.
+        all_rows = edd_db.execute(
+            "SELECT * FROM edd_memo_attachments WHERE edd_case_id = ?",
+            (eid,),
+        ).fetchall()
+        assert len(all_rows) == 2
+
+    def test_two_edd_cases_attach_to_same_onboarding_memo(
+        self, edd_db, audit_sink,
+    ):
+        """Aggregation: two EDD cases attached to the same onboarding
+        memo context must both surface under that memo when read back.
+        (PR-05 will read attachments this way for officer UX.)"""
+        from edd_memo_integration import (
+            attach_edd_findings_to_memo_context,
+            get_memo_context_attachments,
+            get_memo_context_findings,
+            set_edd_findings,
+            MEMO_CONTEXT_ONBOARDING,
+        )
+        memo_id = _insert_compliance_memo(edd_db)
+        eid_a = _insert_edd(edd_db, origin_context="onboarding")
+        eid_b = _insert_edd(edd_db, origin_context="onboarding")
+        for eid, summary in ((eid_a, "A"), (eid_b, "B")):
+            set_edd_findings(
+                edd_db, eid,
+                findings={"findings_summary": summary},
+                user=USER, audit_writer=audit_sink,
+            )
+            attach_edd_findings_to_memo_context(
+                edd_db, eid, user=USER, audit_writer=audit_sink,
+            )
+        atts = get_memo_context_attachments(
+            edd_db, kind=MEMO_CONTEXT_ONBOARDING, memo_id=memo_id,
+        )
+        assert sorted(a["edd_case_id"] for a in atts) == sorted([eid_a, eid_b])
+        for a in atts:
+            assert a["memo_id"] == memo_id
+            assert a["detached_at"] is None
+        findings = get_memo_context_findings(
+            edd_db, kind=MEMO_CONTEXT_ONBOARDING, memo_id=memo_id,
+        )
+        assert {f["findings_summary"] for f in findings} == {"A", "B"}
+
+    def test_uniqueness_backstop_blocks_duplicate_active_row(
+        self, edd_db, audit_sink,
+    ):
+        """Schema-level backstop (migration 011): even a direct INSERT
+        bypassing the application-layer guard cannot create a second
+        ACTIVE row for the same identity."""
+        import sqlite3
+        from edd_memo_integration import attach_edd_findings_to_memo_context
+        memo_id = _insert_compliance_memo(edd_db)
+        eid = _insert_edd(edd_db, origin_context="onboarding")
+        self._seed_findings(edd_db, audit_sink, eid)
+        attach_edd_findings_to_memo_context(
+            edd_db, eid, user=USER, audit_writer=audit_sink,
+        )
+        # Try to inject a second ACTIVE row for the same identity by
+        # going around the application-layer helper. The partial unique
+        # index must reject it.
+        with pytest.raises(sqlite3.IntegrityError):
+            edd_db.execute(
+                "INSERT INTO edd_memo_attachments "
+                "(edd_case_id, application_id, memo_context_kind, "
+                " memo_id, periodic_review_id, attached_by, attached_at) "
+                "VALUES (?, ?, 'onboarding', ?, NULL, ?, ?)",
+                (eid, "test-app-200", memo_id, "officer-1", "2026-01-01"),
+            )
+            edd_db.commit()
+        # Roll back any partial state so the fixture teardown is clean.
+        try:
+            edd_db.rollback()
+        except Exception:
+            pass
+
+    def test_uniqueness_backstop_allows_detached_plus_active(
+        self, edd_db, audit_sink,
+    ):
+        """The partial unique index is scoped to ACTIVE rows
+        (``detached_at IS NULL``). Detached rows must not collide with
+        a new active row -- detach-then-reattach must work."""
+        from edd_memo_integration import (
+            attach_edd_findings_to_memo_context,
+            detach_edd_findings_from_memo_context,
+        )
+        _insert_compliance_memo(edd_db)
+        eid = _insert_edd(edd_db, origin_context="onboarding")
+        self._seed_findings(edd_db, audit_sink, eid)
+        attach_edd_findings_to_memo_context(
+            edd_db, eid, user=USER, audit_writer=audit_sink,
+        )
+        detach_edd_findings_from_memo_context(
+            edd_db, eid, user=USER, audit_writer=audit_sink,
+        )
+        # Re-attach must not raise IntegrityError -- the prior row is
+        # detached and therefore excluded from the partial unique index.
+        out = attach_edd_findings_to_memo_context(
+            edd_db, eid, user=USER, audit_writer=audit_sink,
+        )
+        assert out["created"] is True
+
+
+# ─────────────────────────────────────────────────────────────────
 # Detach
 # ─────────────────────────────────────────────────────────────────
 class TestDetachEDDFindings:
@@ -693,6 +964,8 @@ class TestDetachEDDFindings:
             detach_edd_findings_from_memo_context,
             set_edd_findings,
         )
+        # PR-04a: onboarding memo must exist before attaching.
+        _insert_compliance_memo(edd_db)
         eid = _insert_edd(edd_db, origin_context="onboarding")
         set_edd_findings(
             edd_db, eid, findings={"findings_summary": "x"},

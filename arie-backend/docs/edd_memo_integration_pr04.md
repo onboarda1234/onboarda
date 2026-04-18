@@ -284,3 +284,130 @@ by construction.
 None. No protected boundary required touching. No broader-risk issue
 was encountered. The change is additive-only and stays inside the
 documented PR-04 envelope.
+
+---
+
+## PR-04a addendum — Onboarding-attachment identity hardening
+
+### What changed
+
+PR-04 validation surfaced one meaningful artifact-model gap:
+`attach_edd_findings_to_memo_context()` could create an `onboarding`
+attachment row with `memo_id=NULL` *before* a `compliance_memos` row
+existed. Once the onboarding memo was later generated, a *second*
+active onboarding attachment could be created for the same EDD with
+the real `memo_id` — leaving two active onboarding attachments under
+two different identities.
+
+PR-04a closes that gap with the smallest honest design (Option 1):
+
+> **Onboarding attachment is FORBIDDEN until the onboarding memo
+> exists.**
+
+### The rule (authoritative)
+
+* For `kind='onboarding'`, `attach_edd_findings_to_memo_context()`
+  refuses to insert any attachment row when
+  `resolve_active_memo_context()` returns `memo_id=None`. It raises
+  `AttachmentValidationError` **before** any DB write and **before**
+  any audit event is emitted.
+* Once the onboarding memo (`compliance_memos` row) exists, attach
+  succeeds normally and produces exactly one active row whose
+  `memo_id` equals the real `compliance_memos.id`.
+* `kind='periodic_review'` is unaffected — the `periodic_reviews.id`
+  row IS the review memo context, so there is no pre-existence
+  ambiguity to close there.
+
+### Schema-level backstop
+
+A partial unique index (migration 011) enforces the rule at the
+schema level:
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS uix_edd_memo_attachments_active_identity
+    ON edd_memo_attachments (
+        edd_case_id,
+        memo_context_kind,
+        COALESCE(memo_id, 0),
+        COALESCE(periodic_review_id, 0)
+    )
+    WHERE detached_at IS NULL;
+```
+
+* Scoped to ACTIVE rows (`detached_at IS NULL`) so detach-then-reattach
+  still works and detached rows are preserved for audit history.
+* `COALESCE(..., 0)` gives NULL-safe identity uniqueness portably across
+  SQLite and PostgreSQL (both treat NULL as distinct in unique indexes
+  by default; surrogate id columns start at 1, so 0 is a safe sentinel).
+* This index is a defence-in-depth backstop. The application-layer
+  guard in `attach_edd_findings_to_memo_context()` is the primary
+  enforcement; the index protects against bypass and concurrent
+  insertions.
+
+### What PR-05 can safely assume
+
+When PR-05 (or any other consumer) reads from `edd_memo_attachments`:
+
+* Every active row with `memo_context_kind='onboarding'` has a
+  non-NULL `memo_id` pointing at a real `compliance_memos.id`. There
+  are no `memo_id=NULL` "ghost" onboarding attachments to defend
+  against.
+* For any `(edd_case_id, memo_context_kind, memo_id, periodic_review_id)`
+  identity, there is **at most one** active row at any time.
+* Detached rows (`detached_at IS NOT NULL`) may still exist and may
+  legitimately have any historical `memo_id` value (including NULL on
+  rows created by previous code paths, if any). Read helpers exclude
+  these by default; pass `include_detached=True` only when audit
+  history is being surfaced.
+
+### Files changed in PR-04a
+
+* `arie-backend/edd_memo_integration.py` — added the onboarding
+  pre-memo guard in `attach_edd_findings_to_memo_context()`; updated
+  the docstring to document the new rule.
+* `arie-backend/migrations/scripts/migration_011_edd_memo_attachment_uniqueness.sql`
+  — new additive partial unique index. No existing column changed.
+* `arie-backend/tests/test_edd_memo_integration.py` — new
+  `TestPR04aOnboardingAttachmentIdentity` class (8 tests):
+  pre-memo attach fails cleanly, no row is created, attach succeeds
+  after memo exists, periodic-review path unaffected, detach/reattach
+  cycle ends with one active row, two EDDs aggregate to the same
+  onboarding memo, schema-level uniqueness backstop blocks duplicate
+  active inserts, detached rows do not collide with new active rows.
+  Two pre-existing onboarding tests
+  (`test_attach_is_idempotent_for_same_context`,
+  `test_detach_marks_row_and_emits_audit`) were updated to insert a
+  `compliance_memos` row first so they continue to exercise their
+  original concern under the new rule.
+* `arie-backend/docs/edd_memo_integration_pr04.md` — this addendum.
+
+### EX-01..EX-13 control posture
+
+No file in `PROTECTED_FILES` is modified. No EX-control critical file
+is touched. Migration 011 is additive (`CREATE UNIQUE INDEX
+IF NOT EXISTS`); no existing column or row is altered. EX-01..EX-13
+regressions are impossible by construction.
+
+### Deferred hardening (intentionally out of scope for PR-04a)
+
+* **Concurrency hardening beyond the partial unique index.** The
+  partial unique index is sufficient to make duplicate-active inserts
+  impossible at the storage layer. A full read-modify-write retry
+  wrapper around `attach_edd_findings_to_memo_context()` (so
+  `IntegrityError` from a race becomes a clean reuse-existing-row
+  return) is left for a future PR — today the application-layer
+  `_find_active_attachment` lookup makes the race window vanishingly
+  small in practice and the index makes the corruption impossible.
+* **Reconciliation of historical NULL-memo_id onboarding attachments.**
+  Production has not yet exercised `attach_edd_findings_to_memo_context`
+  against real traffic, so no historical NULL-memo_id rows exist to
+  reconcile. If/when a future deployment surfaces such rows, a one-shot
+  reconciliation helper can be added then — it is not required by
+  PR-04a to keep PR-05 unblocked.
+* **PostgreSQL `NULLS NOT DISTINCT` simplification.** PG 15+ supports
+  `UNIQUE NULLS NOT DISTINCT`, which would let us drop the `COALESCE`
+  expression form. Deferred until the production minimum is known to
+  be PG 15+.
+* **Promoting periodic-review memo to its own row** — unchanged from
+  PR-04: still deferred.
+
