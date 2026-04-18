@@ -386,3 +386,159 @@ class TestCompleteHandler(_PRReviewHandlerBase):
             {"outcome": "no_change"},
         )
         self.assertEqual(resp.code, 400)
+
+
+# ─────────────────────────────────────────────────────────────────
+# PR-03a hardening: non-numeric review_id must not 500
+# ─────────────────────────────────────────────────────────────────
+class TestNonNumericReviewIdHandling(_PRReviewHandlerBase):
+    """All PR-03 review handlers must reject non-numeric path
+    segments at the HTTP boundary with a clean 400, never a 500.
+
+    The route regex is permissive (``[^/]+``) so a string like ``abc``
+    reaches the handler. Without the PR-03a ``_parse_review_id`` guard
+    this would either materialise as a Postgres type error (500) or
+    silently round-trip through the engine as a ReviewNotFound (404),
+    both of which are inconsistent. PR-03a pins the explicit 400.
+    """
+
+    BAD_IDS = ["abc", "1; DROP TABLE", "0", "-5", "1.5", " "]
+
+    def _assert_clean_400(self, resp):
+        # The hardening contract: NEVER a 500; explicitly 400.
+        self.assertNotEqual(resp.code, 500,
+                            "non-numeric review_id must not 500")
+        self.assertEqual(resp.code, 400,
+                         f"expected 400, got {resp.code}: {resp.body!r}")
+
+    def test_state_endpoint_non_numeric_id(self):
+        for bad in self.BAD_IDS:
+            resp = self._post(
+                f"/api/monitoring/reviews/{bad}/state",
+                {"state": "in_progress"},
+            )
+            self._assert_clean_400(resp)
+
+    def test_required_items_get_non_numeric_id(self):
+        for bad in self.BAD_IDS:
+            resp = self._get(
+                f"/api/monitoring/reviews/{bad}/required-items",
+            )
+            self._assert_clean_400(resp)
+
+    def test_required_items_generate_non_numeric_id(self):
+        for bad in self.BAD_IDS:
+            resp = self._post(
+                f"/api/monitoring/reviews/{bad}/required-items/generate",
+                {},
+            )
+            self._assert_clean_400(resp)
+
+    def test_escalate_non_numeric_id(self):
+        for bad in self.BAD_IDS:
+            resp = self._post(
+                f"/api/monitoring/reviews/{bad}/escalate", {},
+            )
+            self._assert_clean_400(resp)
+
+    def test_complete_non_numeric_id(self):
+        for bad in self.BAD_IDS:
+            resp = self._post(
+                f"/api/monitoring/reviews/{bad}/complete",
+                {"outcome": "no_change", "outcome_reason": "x"},
+            )
+            self._assert_clean_400(resp)
+
+    def test_unknown_numeric_id_still_returns_404_on_state(self):
+        # Sanity: the boundary guard must not regress the existing
+        # contract for a well-formed but non-existent review id.
+        resp = self._post(
+            "/api/monitoring/reviews/99999/state",
+            {"state": "in_progress"},
+        )
+        self.assertEqual(resp.code, 404)
+
+
+# ─────────────────────────────────────────────────────────────────
+# PR-03a hardening: priority is persisted to edd_cases.priority
+# ─────────────────────────────────────────────────────────────────
+class TestEscalatePriorityPersistence(_PRReviewHandlerBase):
+    """Prove the PR-03a contract: if the escalate handler accepts a
+    ``priority`` value, it is actually written to ``edd_cases.priority``
+    on both the create-new-EDD and the reuse-existing-EDD paths. Prior
+    to PR-03a the parameter was silently ignored on the reuse path.
+    """
+
+    def test_priority_persisted_when_creating_new_edd(self):
+        rid = self._create_review(risk_level="HIGH")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/escalate",
+            {"priority": "high", "trigger_notes": "elevated risk"},
+        )
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertTrue(body["result"]["created"])
+        edd_id = body["result"]["edd_case_id"]
+        row = self._conn.execute(
+            "SELECT priority FROM edd_cases WHERE id = ?", (edd_id,),
+        ).fetchone()
+        self.assertEqual(row["priority"], "high")
+
+    def test_priority_persisted_when_reusing_linked_edd(self):
+        # First escalate without priority -> creates EDD with NULL priority
+        rid = self._create_review(risk_level="HIGH")
+        first = json.loads(self._post(
+            f"/api/monitoring/reviews/{rid}/escalate", {},
+        ).body)
+        edd_id = first["result"]["edd_case_id"]
+        before = self._conn.execute(
+            "SELECT priority FROM edd_cases WHERE id = ?", (edd_id,),
+        ).fetchone()["priority"]
+        self.assertIsNone(before)
+        # Re-escalate with priority -> reuses same EDD AND now persists.
+        second = json.loads(self._post(
+            f"/api/monitoring/reviews/{rid}/escalate",
+            {"priority": "urgent"},
+        ).body)
+        self.assertEqual(second["result"]["edd_case_id"], edd_id)
+        self.assertTrue(second["result"]["reused"])
+        after = self._conn.execute(
+            "SELECT priority FROM edd_cases WHERE id = ?", (edd_id,),
+        ).fetchone()["priority"]
+        self.assertEqual(after, "urgent")
+
+    def test_invalid_priority_returns_400_not_500(self):
+        rid = self._create_review(risk_level="HIGH")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/escalate",
+            {"priority": "ludicrous"},
+        )
+        # Must surface as a clean validation error, never a 500.
+        self.assertNotEqual(resp.code, 500)
+        self.assertEqual(resp.code, 400)
+        # And no EDD case should have been created as a side effect.
+        n = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id = ?",
+            (self._app_id,),
+        ).fetchone()["c"]
+        self.assertEqual(n, 0)
+
+    def test_omitting_priority_does_not_overwrite_existing(self):
+        # Set a priority on first escalate, then re-escalate without
+        # priority and confirm the existing value is preserved.
+        rid = self._create_review(risk_level="HIGH")
+        self._post(
+            f"/api/monitoring/reviews/{rid}/escalate",
+            {"priority": "high"},
+        )
+        edd_id = self._conn.execute(
+            "SELECT id FROM edd_cases WHERE application_id = ?",
+            (self._app_id,),
+        ).fetchone()["id"]
+        self._post(
+            f"/api/monitoring/reviews/{rid}/escalate", {},
+        )
+        row = self._conn.execute(
+            "SELECT priority FROM edd_cases WHERE id = ?", (edd_id,),
+        ).fetchone()
+        self.assertEqual(row["priority"], "high")

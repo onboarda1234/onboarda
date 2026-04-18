@@ -56,6 +56,7 @@ from lifecycle_linkage import (
     LifecycleLinkageError,
     MissingAuditWriter,
     ReferencedRowNotFound,
+    VALID_PRIORITIES,
     _row_get,  # internal but stable helper -- mirror PR-01 conventions
 )
 
@@ -744,6 +745,19 @@ def escalate_review_to_edd(db, review_id, *,
     * Emits ``periodic_review.escalated_to_edd`` with
       ``created`` / ``reused`` flags and the resolved ``edd_case_id``.
 
+    Priority handling (PR-03a):
+
+    * If ``priority`` is supplied (and is a member of
+      ``lifecycle_linkage.VALID_PRIORITIES``), it is persisted to
+      ``edd_cases.priority`` via ``lifecycle_linkage.mark_edd_assigned``
+      regardless of whether the EDD case was created or reused. Prior
+      to PR-03a, a ``priority`` argument was silently dropped on the
+      reuse path; that hidden no-op is the bug PR-03a closes. Invalid
+      priority values are rejected at the engine boundary as a
+      ``PeriodicReviewEngineError`` (mapped to HTTP 400) before any DB
+      writes occur. Passing ``priority=None`` remains a no-op and never
+      overwrites the existing priority on a reused case.
+
     Refuses to escalate a completed review.
 
     NOTE on the PR-02 reverse-link displacement contract:
@@ -753,6 +767,17 @@ def escalate_review_to_edd(db, review_id, *,
     every alert/review that pointed at this EDD.
     """
     _require_audit_writer(audit_writer)
+    # PR-03a: validate priority at the engine boundary so an invalid
+    # value surfaces as a clean PeriodicReviewEngineError (mapped to 400
+    # by the handler) instead of leaking through to ``mark_edd_assigned``
+    # as an InvalidEnumValue and bubbling up as a 500. ``None`` is the
+    # documented "do not change priority" sentinel and stays a no-op.
+    if priority is not None and priority not in VALID_PRIORITIES:
+        raise PeriodicReviewEngineError(
+            "priority must be one of: "
+            + ", ".join(VALID_PRIORITIES)
+            + f"; got {priority!r}"
+        )
     review = _fetch_review(db, review_id)
     if _coerce_state(_row_get(review, "status")) == STATE_COMPLETED:
         raise ReviewClosedError(
@@ -812,12 +837,20 @@ def escalate_review_to_edd(db, review_id, *,
             linked_periodic_review_id=review_id,
             user=user, audit_writer=audit_writer,
         )
-        if priority:
-            ll.mark_edd_assigned(
-                db, edd_case_id, priority=priority,
-                user=user, audit_writer=audit_writer,
-            )
         created = True
+
+    # PR-03a: persist priority into ``edd_cases.priority`` whenever the
+    # caller supplied one, regardless of whether we created or reused
+    # the EDD case. Previously this only ran on the create path, so a
+    # ``priority`` argument was silently dropped on reuse. ``mark_edd_assigned``
+    # uses ``COALESCE(?, priority)`` semantics: passing a non-NULL value
+    # overwrites; we already gated with ``if priority`` so a None caller
+    # never disturbs the existing priority on a reused case.
+    if priority:
+        ll.mark_edd_assigned(
+            db, edd_case_id, priority=priority,
+            user=user, audit_writer=audit_writer,
+        )
 
     payload = {
         "review_id": review_id,
@@ -855,9 +888,19 @@ def record_review_outcome(db, review_id, *,
     ``closed_at`` via ``lifecycle_linkage.mark_review_closed`` so the
     PR-01 closure audit trail is preserved.
 
-    The legacy ``decision`` column is left untouched (it is only
-    written by the legacy ``PeriodicReviewDecisionHandler``); ``outcome``
-    is the new source of truth. Onboarding memo history (``compliance_memos``)
+    PR-03 / PR-03a contract:
+
+    * ``outcome`` (with ``outcome_reason`` + ``outcome_recorded_at``)
+      is the **authoritative** field for new reads/writes against the
+      PR-03 operating model. All new flows must read ``outcome``.
+    * The legacy ``decision`` column is retained ONLY for backward
+      compatibility with rows written by the pre-PR-03
+      ``PeriodicReviewDecisionHandler``. New flows MUST NOT write
+      ``decision`` and MUST NOT treat it as a co-authoritative source
+      of truth alongside ``outcome``. This helper deliberately leaves
+      ``decision`` untouched so dual-write drift cannot occur.
+
+    Onboarding memo history (``compliance_memos``)
     is intentionally NOT touched -- onboarding memo identity is
     per-application per-version and remains separate from periodic
     review lifecycle context (see PR-01 design notes).
@@ -902,6 +945,11 @@ def record_review_outcome(db, review_id, *,
         "    outcome_recorded_at = ?, "
         "    completed_at = ?, "
         "    state_changed_at = ? "
+        # NB: ``decision`` is intentionally NOT included in this UPDATE.
+        # PR-03a contract: ``outcome`` is the authoritative outcome
+        # field for the periodic review operating model; ``decision``
+        # remains read-only legacy state owned by the pre-PR-03
+        # ``PeriodicReviewDecisionHandler``. Do not co-write both.
         "WHERE id = ?",
         (STATE_COMPLETED, outcome, outcome_reason, ts, ts, ts, review_id),
     )
