@@ -8429,7 +8429,7 @@ class MonitoringAlertDetailHandler(BaseHandler):
         data = self.get_json()
 
         action = data.get("action")
-        reason = data.get("reason", "") or ""
+        reason = data.get("reason") or ""
 
         # Back-compat aliases. Kept narrow so legacy callers still work
         # while new explicit verbs are the documented contract.
