@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import lifecycle_linkage as ll
@@ -379,15 +379,20 @@ def _doc_uploaded_at_dt(row) -> Optional[datetime]:
     raw = _row_get(row, "uploaded_at")
     if not raw:
         return None
+    raw_str = str(raw)
+    # Try common timestamp shapes used in the documents table. The
+    # ``+ 4`` slice tolerates trailing fractional seconds or short
+    # timezone suffixes that strptime cannot consume directly; the
+    # fromisoformat() fallback handles everything else.
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
-            return datetime.strptime(str(raw)[: len(fmt) + 4], fmt).replace(
+            return datetime.strptime(raw_str[: len(fmt) + 4], fmt).replace(
                 tzinfo=timezone.utc,
             )
         except ValueError:
             continue
     try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        return datetime.fromisoformat(raw_str.replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
 
@@ -486,9 +491,10 @@ def _generate_items_for_context(db, review: Dict[str, Any],
             ).fetchall()
         except Exception:
             doc_rows = []
-        cutoff = datetime.now(timezone.utc).timestamp() - (
-            _DOCUMENT_STALENESS_DAYS * 86400
-        )
+        cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(days=_DOCUMENT_STALENESS_DAYS)
+        ).timestamp()
         stale_types = []
         for doc in doc_rows:
             uploaded = _doc_uploaded_at_dt(doc)
@@ -667,7 +673,7 @@ def _create_edd_case_row(db, *, application_id, client_name, risk_level,
     )
     try:
         from db import USE_POSTGRESQL as _USE_PG  # type: ignore
-    except Exception:
+    except (ImportError, AttributeError):
         _USE_PG = False
 
     if _USE_PG:
