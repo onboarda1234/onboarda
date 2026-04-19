@@ -485,7 +485,8 @@ class TestMigration012AuditEmission(_LifecycleQuarantineBase):
         self._rerun_migration_012()
 
         rows = self._conn.execute(
-            "SELECT user_id, user_role, action, target, detail "
+            "SELECT user_id, user_role, action, target, "
+            "       detail, before_state, after_state, ip_address "
             "FROM audit_log WHERE action = 'lifecycle.alert.quarantined' "
             "ORDER BY id"
         ).fetchall()
@@ -498,25 +499,49 @@ class TestMigration012AuditEmission(_LifecycleQuarantineBase):
         })
         self.assertNotIn(f"monitoring_alert:{healthy}", targets)
 
-        # Each row carries a system actor and parseable JSON detail.
+        # Each row carries a system actor.
         for r in rows:
             self.assertEqual(r["user_role"], "system")
             self.assertEqual(r["user_id"], "system:lifecycle-quarantine")
-            payload = json.loads(r["detail"])
-            self.assertIn("reasons", payload)
-            self.assertGreater(len(payload["reasons"]), 0)
-            for reason in payload["reasons"]:
+            # ip_address mirrors precedent for system-emitted rows
+            # (omitted from the column list -> NULL); it must NOT be a
+            # made-up sentinel like the literal string "system".
+            self.assertIsNone(r["ip_address"])
+
+            # detail column contains CLASSIFICATION METADATA ONLY --
+            # no row state, no before/after embedded.
+            detail = json.loads(r["detail"])
+            self.assertEqual(detail["classification"], "legacy_unmapped")
+            self.assertIn("reasons", detail)
+            self.assertGreater(len(detail["reasons"]), 0)
+            for reason in detail["reasons"]:
                 self.assertIn(reason, (
                     "vocabulary_ghost", "unscopable_no_application",
                 ))
-            self.assertIn("before_state", payload)
-            self.assertIn("after_state", payload)
-            self.assertEqual(payload["after_state"], {"bucket": "legacy_unmapped"})
-            self.assertEqual(payload["before_state"]["bucket"], "hidden_ghost")
             self.assertEqual(
-                payload["migration"],
+                detail["migration"],
                 "012_legacy_unmapped_audit_classification",
             )
+            # Defensive: state keys must NOT leak back into detail.
+            self.assertNotIn("before_state", detail)
+            self.assertNotIn("after_state", detail)
+            self.assertNotIn("status", detail)
+            self.assertNotIn("application_id", detail)
+
+            # before_state is a dedicated JSON column; populated.
+            self.assertIsNotNone(r["before_state"])
+            before = json.loads(r["before_state"])
+            self.assertIn("id", before)
+            self.assertIn("status", before)
+            self.assertIn("application_id", before)
+            self.assertIn("linked_periodic_review_id", before)
+            self.assertIn("linked_edd_case_id", before)
+            self.assertEqual(before["bucket"], "hidden_ghost")
+
+            # after_state is a dedicated JSON column; single-field marker.
+            self.assertIsNotNone(r["after_state"])
+            after = json.loads(r["after_state"])
+            self.assertEqual(after, {"bucket": "legacy_unmapped"})
 
     def test_audit_payload_reasons_match_classifier_per_row(self):
         a = self._alert(status="escalated", application_id=None)
@@ -528,21 +553,32 @@ class TestMigration012AuditEmission(_LifecycleQuarantineBase):
         self._conn.commit()
         self._rerun_migration_012()
         rows = self._conn.execute(
-            "SELECT target, detail FROM audit_log "
+            "SELECT target, detail, before_state FROM audit_log "
             "WHERE action = 'lifecycle.alert.quarantined'"
         ).fetchall()
-        by_target = {r["target"]: json.loads(r["detail"]) for r in rows}
+        by_target = {
+            r["target"]: (json.loads(r["detail"]), json.loads(r["before_state"]))
+            for r in rows
+        }
+        # detail.reasons must be the classifier's output, in stable order.
         self.assertEqual(
-            by_target[f"monitoring_alert:{a}"]["reasons"],
+            by_target[f"monitoring_alert:{a}"][0]["reasons"],
             ["vocabulary_ghost", "unscopable_no_application"],
         )
         self.assertEqual(
-            by_target[f"monitoring_alert:{b}"]["reasons"],
+            by_target[f"monitoring_alert:{b}"][0]["reasons"],
             ["unscopable_no_application"],
         )
         self.assertEqual(
-            by_target[f"monitoring_alert:{c}"]["reasons"],
+            by_target[f"monitoring_alert:{c}"][0]["reasons"],
             ["vocabulary_ghost"],
+        )
+        # before_state.application_id mirrors the row's actual value.
+        self.assertIsNone(by_target[f"monitoring_alert:{a}"][1]["application_id"])
+        self.assertIsNone(by_target[f"monitoring_alert:{b}"][1]["application_id"])
+        self.assertEqual(
+            by_target[f"monitoring_alert:{c}"][1]["application_id"],
+            self._app_id,
         )
 
     def test_audit_json_escapes_quotes_and_backslashes_in_status(self):
@@ -550,6 +586,9 @@ class TestMigration012AuditEmission(_LifecycleQuarantineBase):
         # then quotes so a status (or application_id) with either
         # special character still produces parseable JSON. Practical
         # statuses are short slugs but the migration must not assume so.
+        # See the SQL comment block "INPUT-ALPHABET ASSUMPTION" for
+        # the bounded scope of this defence (printable ASCII; no
+        # control characters such as \n, \t, \u0000).
         tricky_app = "app-x\"with\\backslash"
         # Seed application + alert with the tricky id.
         try:
@@ -571,17 +610,47 @@ class TestMigration012AuditEmission(_LifecycleQuarantineBase):
         self._conn.commit()
         self._rerun_migration_012()
         rows = self._conn.execute(
-            "SELECT detail FROM audit_log "
+            "SELECT before_state FROM audit_log "
             "WHERE action = 'lifecycle.alert.quarantined'"
         ).fetchall()
         self.assertEqual(len(rows), 1)
         # If escaping is correct, json.loads succeeds and round-trips
-        # the original strings exactly.
-        payload = json.loads(rows[0]["detail"])
-        self.assertEqual(payload["before_state"]["status"],
+        # the original strings exactly. before_state is now a dedicated
+        # column (not nested in detail).
+        before = json.loads(rows[0]["before_state"])
+        self.assertEqual(before["status"],
                          'escalated"with\\backslash')
-        self.assertEqual(payload["before_state"]["application_id"],
+        self.assertEqual(before["application_id"],
                          'app-x"with\\backslash')
+
+    def test_migration_is_self_idempotent_when_run_twice(self):
+        # PR-A follow-up #1: the migration must not duplicate audit
+        # rows when executed twice in a row, even if the schema_version
+        # gate is bypassed (DBA re-run, test harness, etc).
+        self._alert(status="escalated", application_id=None)
+        self._alert(status="dismissed", application_id=None)
+        self._alert(status="escalated", application_id=self._app_id)
+        self._conn.execute(
+            "DELETE FROM audit_log WHERE action = 'lifecycle.alert.quarantined'"
+        )
+        self._conn.commit()
+
+        self._rerun_migration_012()
+        first_count = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log "
+            "WHERE action = 'lifecycle.alert.quarantined'"
+        ).fetchone()["c"]
+        self.assertEqual(first_count, 3)
+
+        # Second run -- no schema_version touch, just re-execute the SQL.
+        self._rerun_migration_012()
+        second_count = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_log "
+            "WHERE action = 'lifecycle.alert.quarantined'"
+        ).fetchone()["c"]
+        self.assertEqual(second_count, 3,
+                         "migration must self-guard via NOT EXISTS so "
+                         "double-execution does not duplicate audit rows")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -617,6 +686,208 @@ class TestUIReadsAgreeWithClassifier(_LifecycleQuarantineBase):
                                  f"mismatch on id={it['id']} include={include}")
                 self.assertEqual(it["quarantine_reasons"], pure_reasons,
                                  f"reason mismatch on id={it['id']}")
+
+
+# ─────────────────────────────────────────────────────────────────
+# SQL-side vocabulary parity (PR-A review blocker 2, option B)
+# ─────────────────────────────────────────────────────────────────
+class TestSqlVocabularyParity(unittest.TestCase):
+    """Migration 012 hardcodes the canonical PR-02 vocabulary in three
+    SQL ``IN (...)`` lists. This test reads the migration file as text,
+    extracts every status literal, and asserts set equality with
+    monitoring_routing.STATUS_*. If PR-02 ever renames a canonical
+    status, the Python tripwire fires AND this SQL tripwire fires --
+    so the migration's classification cannot drift silently from the
+    runtime classifier."""
+
+    def test_sql_vocabulary_matches_monitoring_routing(self):
+        import re
+        from pathlib import Path
+        import monitoring_routing as mr
+
+        sql_path = (
+            Path(__file__).parent.parent
+            / "migrations" / "scripts"
+            / "migration_012_legacy_unmapped_audit_classification.sql"
+        )
+        sql = sql_path.read_text(encoding="utf-8")
+        # Strip line comments so we only inspect executable SQL.
+        executable = "\n".join(
+            line.split("--", 1)[0] for line in sql.splitlines()
+        )
+
+        canonical_from_engine = {
+            mr.STATUS_OPEN, mr.STATUS_TRIAGED, mr.STATUS_ASSIGNED,
+            mr.STATUS_DISMISSED, mr.STATUS_ROUTED_REVIEW, mr.STATUS_ROUTED_EDD,
+        }
+
+        # Find every ``status NOT IN (...)`` clause and extract its
+        # quoted string literals.
+        in_clauses = re.findall(
+            r"status\s+NOT\s+IN\s*\(([^)]*)\)",
+            executable, flags=re.IGNORECASE,
+        )
+        self.assertGreater(
+            len(in_clauses), 0,
+            "expected at least one ``status NOT IN (...)`` clause in "
+            "migration 012; the regex extractor found none",
+        )
+        # Every IN clause must carry the FULL canonical vocabulary --
+        # not a subset, not an extension. A drifted clause is the
+        # silent-misclassification failure mode this test prevents.
+        for clause in in_clauses:
+            literals = set(re.findall(r"'([^']*)'", clause))
+            self.assertEqual(
+                literals, canonical_from_engine,
+                f"SQL IN-clause vocabulary {literals!r} drifted from "
+                f"monitoring_routing.STATUS_* {canonical_from_engine!r}; "
+                "update both the Python constant in lifecycle_quarantine "
+                "AND every IN-clause in migration 012 together.",
+            )
+
+
+# ─────────────────────────────────────────────────────────────────
+# Audit-row shape parity with canonical lifecycle.* emitters
+# ─────────────────────────────────────────────────────────────────
+class TestQuarantineAuditRowShapeMatchesLifecycleLinkAuditRow(
+        _LifecycleQuarantineBase):
+    """Reviewer's "byte-identical column population pattern" test.
+
+    Seed one ``lifecycle.link.alert_to_review.created`` audit row via
+    the canonical writer (lifecycle_linkage._emit_audit invoked
+    indirectly through link_alert_to_review), and one
+    ``lifecycle.alert.quarantined`` row via migration 012. Diff the
+    set of columns that are non-NULL on each row. The two sets MUST
+    be identical, proving the quarantine row uses the same column
+    population pattern as every other lifecycle.* row in the system.
+
+    This is the literal proof for the PR description claim "No new
+    audit format is invented."
+    """
+
+    def _make_canonical_lifecycle_audit_row(self):
+        # Use lifecycle_linkage's link_alert_to_review which calls
+        # _emit_audit -> audit_writer (i.e. our test audit_writer here).
+        # This produces a ``lifecycle.link.alert_to_review.created``
+        # row written through the SAME path BaseHandler.log_audit takes.
+        import lifecycle_linkage as ll
+
+        # The lifecycle_linkage audit_writer signature:
+        #   audit_writer(user, action, target, detail,
+        #                db=None, before_state=None, after_state=None)
+        # Mirror BaseHandler.log_audit but without ip_address (no
+        # request context in a unit test).
+        def _audit_writer(user, action, target, detail,
+                          db=None, before_state=None, after_state=None):
+            import json as _json
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, "
+                "action, target, detail, before_state, after_state) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user.get("sub", ""), user.get("name", ""),
+                    user.get("role", ""),
+                    action, target, detail,
+                    None if before_state is None else _json.dumps(before_state),
+                    None if after_state is None else _json.dumps(after_state),
+                ),
+            )
+            db.commit()
+
+        # Seed an alert + a review, then link them.
+        alert_id = self._alert(status="open")
+        self._conn.execute(
+            "INSERT INTO periodic_reviews "
+            "(application_id, client_name, status, risk_level, trigger_type) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (self._app_id, "PRA", "pending", "MEDIUM", "time_based"),
+        )
+        self._conn.commit()
+        review_id = self._conn.execute(
+            "SELECT id FROM periodic_reviews ORDER BY id DESC LIMIT 1"
+        ).fetchone()["id"]
+
+        ll.link_alert_to_review(
+            self._conn,
+            alert_id,
+            review_id,
+            user={"sub": "officer-pra", "name": "Officer", "role": "co"},
+            audit_writer=_audit_writer,
+        )
+
+    def _column_population_pattern(self, row):
+        # Map column -> True if non-NULL/non-empty-string.
+        return {
+            col: (row[col] is not None and row[col] != "")
+            for col in (
+                "user_id", "user_name", "user_role",
+                "action", "target", "detail",
+                "ip_address", "before_state", "after_state",
+            )
+        }
+
+    def test_quarantine_audit_row_shape_matches_lifecycle_link_audit_row(self):
+        # Step 1: canonical lifecycle.link.alert_to_review.created row.
+        self._make_canonical_lifecycle_audit_row()
+
+        # Step 2: emit a lifecycle.alert.quarantined row via the migration.
+        self._alert(status="escalated", application_id=None)
+        self._conn.execute(
+            "DELETE FROM audit_log WHERE action = 'lifecycle.alert.quarantined'"
+        )
+        self._conn.commit()
+        # Inline re-execution of migration SQL (bypassing schema_version).
+        from pathlib import Path
+        sql_path = (
+            Path(__file__).parent.parent
+            / "migrations" / "scripts"
+            / "migration_012_legacy_unmapped_audit_classification.sql"
+        )
+        self._conn.executescript(sql_path.read_text(encoding="utf-8"))
+        self._conn.commit()
+
+        # Step 3: fetch one of each.
+        link_row = self._conn.execute(
+            "SELECT user_id, user_name, user_role, action, target, "
+            "       detail, ip_address, before_state, after_state "
+            "FROM audit_log WHERE action LIKE 'lifecycle.link.%' LIMIT 1"
+        ).fetchone()
+        quarantine_row = self._conn.execute(
+            "SELECT user_id, user_name, user_role, action, target, "
+            "       detail, ip_address, before_state, after_state "
+            "FROM audit_log WHERE action = 'lifecycle.alert.quarantined' "
+            "LIMIT 1"
+        ).fetchone()
+
+        self.assertIsNotNone(link_row,
+                             "canonical lifecycle.link.* row was not seeded")
+        self.assertIsNotNone(quarantine_row,
+                             "migration 012 did not emit a quarantine row")
+
+        link_pattern = self._column_population_pattern(link_row)
+        quarantine_pattern = self._column_population_pattern(quarantine_row)
+
+        # The two non-null column sets must be IDENTICAL. If migration
+        # 012 ever stuffs before/after back into detail (or omits
+        # before_state / after_state entirely), this test fails loudly.
+        self.assertEqual(
+            link_pattern, quarantine_pattern,
+            "lifecycle.alert.quarantined row column population pattern "
+            f"({quarantine_pattern}) does not match the canonical "
+            f"lifecycle.link.* row pattern ({link_pattern}). The PR-A "
+            "claim 'No new audit format is invented' is broken.",
+        )
+
+        # Also: detail on the quarantine row must contain classification
+        # metadata only, while before_state / after_state are populated
+        # in their dedicated columns.
+        import json as _json
+        q_detail = _json.loads(quarantine_row["detail"])
+        self.assertNotIn("before_state", q_detail)
+        self.assertNotIn("after_state", q_detail)
+        self.assertIn("classification", q_detail)
+        self.assertIsNotNone(quarantine_row["before_state"])
+        self.assertIsNotNone(quarantine_row["after_state"])
 
 
 if __name__ == "__main__":
