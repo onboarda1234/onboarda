@@ -1,5 +1,30 @@
--- Migration 004: Add s3_key column to documents table
--- Tracks the S3 object key for documents stored in S3.
--- Nullable: NULL means local-only storage (pre-S3 or S3 upload failed).
-
-ALTER TABLE documents ADD COLUMN s3_key TEXT;
+-- Migration 004: Add s3_key column to documents table  (NO-OP)
+-- =============================================================
+-- SUPERSEDED BY INLINE MIGRATION v2.3 IN db.py
+--
+-- The authoritative addition of `documents.s3_key` is performed by
+-- inline migration v2.3 in arie-backend/db.py (search for
+-- "Migration v2.3: Add s3_key column to documents table"). The
+-- column is also part of the freshly-created `documents` table
+-- definition in `init_db` for both the SQLite and PostgreSQL
+-- branches, so on a fresh database the column already exists by
+-- the time the file-based migration runner executes.
+--
+-- Running this file's original `ALTER TABLE documents ADD COLUMN
+-- s3_key TEXT` against a fresh SQLite database therefore raised
+-- `sqlite3.OperationalError: duplicate column name: s3_key` and
+-- broke the docker-validate CI job (and any first-client production
+-- stand-up).
+--
+-- RETAINED AS NO-OP FOR schema_version CONTINUITY
+-- -----------------------------------------------
+-- Existing production environments already have version "004"
+-- recorded in `schema_version`. Renumbering or deleting this file
+-- would either re-orphan that row or shift later versions, so the
+-- file is preserved with a no-op body. The `SELECT 1` statement is
+-- portable across SQLite and PostgreSQL and has no side effects.
+--
+-- DO NOT delete this file. DO NOT renumber migrations. The file
+-- remains part of the applied-migration history on production
+-- environments.
+SELECT 1;

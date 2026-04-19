@@ -1,30 +1,39 @@
--- Migration 005: Applications truth schema
--- Adds ownership identity columns, intermediary shareholders, and durable
--- document review fields required by the Applications workflow.
-
-ALTER TABLE directors ADD COLUMN IF NOT EXISTS person_key TEXT;
-ALTER TABLE directors ADD COLUMN IF NOT EXISTS first_name TEXT;
-ALTER TABLE directors ADD COLUMN IF NOT EXISTS last_name TEXT;
-ALTER TABLE directors ADD COLUMN IF NOT EXISTS pep_declaration TEXT DEFAULT '{}';
-
-ALTER TABLE ubos ADD COLUMN IF NOT EXISTS person_key TEXT;
-ALTER TABLE ubos ADD COLUMN IF NOT EXISTS first_name TEXT;
-ALTER TABLE ubos ADD COLUMN IF NOT EXISTS last_name TEXT;
-ALTER TABLE ubos ADD COLUMN IF NOT EXISTS pep_declaration TEXT DEFAULT '{}';
-
-CREATE TABLE IF NOT EXISTS intermediaries (
-    id TEXT PRIMARY KEY,
-    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-    person_key TEXT,
-    entity_name TEXT NOT NULL,
-    jurisdiction TEXT,
-    ownership_pct REAL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_status TEXT DEFAULT 'pending';
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_comment TEXT;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS reviewed_by TEXT;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS reviewed_at TEXT;
-
-CREATE INDEX IF NOT EXISTS idx_intermediaries_application_id ON intermediaries(application_id);
+-- Migration 005: Applications truth schema  (NO-OP)
+-- =====================================================
+-- SUPERSEDED BY init_db AND INLINE MIGRATIONS v2.5 / v2.7 IN db.py
+--
+-- Original intent: add ownership identity columns to `directors`
+-- and `ubos` (`person_key`, `first_name`, `last_name`,
+-- `pep_declaration`), create the `intermediaries` table, and add
+-- durable document-review columns (`review_status`, `review_comment`,
+-- `reviewed_by`, `reviewed_at`) to `documents`.
+--
+-- All of that work is now performed by:
+--   * `init_db` in arie-backend/db.py — the SQLite and PostgreSQL
+--     CREATE TABLE statements for `directors`, `ubos`,
+--     `intermediaries`, and `documents` already include every one
+--     of these columns on a fresh database;
+--   * inline migration v2.5 in db.py — adds the same columns and
+--     creates `intermediaries` on existing databases that pre-date
+--     the change;
+--   * inline migration v2.7 in db.py — adds the document review
+--     columns on existing databases.
+--
+-- The original SQL used `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`,
+-- which is PostgreSQL-only. SQLite (any version) rejects it with
+-- `near "EXISTS": syntax error`, so on a fresh SQLite database the
+-- file aborted before adding anything. This broke the docker-validate
+-- CI job and would break any first-client SQLite stand-up.
+--
+-- RETAINED AS NO-OP FOR schema_version CONTINUITY
+-- -----------------------------------------------
+-- Existing production environments already have version "005"
+-- recorded in `schema_version`. Renumbering or deleting this file
+-- would either re-orphan that row or shift later versions, so the
+-- file is preserved with a no-op body. The `SELECT 1` statement is
+-- portable across SQLite and PostgreSQL and has no side effects.
+--
+-- DO NOT delete this file. DO NOT renumber migrations. The file
+-- remains part of the applied-migration history on production
+-- environments.
+SELECT 1;
