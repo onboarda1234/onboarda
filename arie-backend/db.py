@@ -2203,6 +2203,24 @@ def _run_migrations(db: DBConnection):
     # Runs on every startup but is effectively a no-op after the first successful pass
     # because no matching rows will remain.  The UPPER(TRIM()) normalisation guards
     # against case/whitespace variants of the same company name.
+    #
+    # FK SAFETY (closes #126)
+    # -----------------------
+    # The schema in this file declares ``client_sessions.application_id``
+    # with ``ON DELETE CASCADE``, but staging Postgres still carries the
+    # original non-cascading constraint (``CREATE TABLE IF NOT EXISTS``
+    # never alters an existing FK).  If a candidate application is still
+    # referenced from ``client_sessions`` the parent DELETE raises
+    # ``ForeignKeyViolation`` and aborts the migration.
+    #
+    # We therefore probe ``client_sessions`` per row and skip any
+    # candidate that still has live references.  The skipped row is
+    # surfaced in the migration log as
+    # ``Skipped row <id> due to FK constraint (referenced by client_sessions)``
+    # so an operator can investigate and decide on the data manually
+    # (the data classification of e.g. ``4b005704dcdb436b`` -- test debris
+    # vs. real onboarding -- is intentionally not pre-empted by this
+    # migration).
     try:
         target_name = "1947 OIL & GAS PLC"
         rows = db.execute(
@@ -2211,10 +2229,54 @@ def _run_migrations(db: DBConnection):
         ).fetchall()
         if rows:
             ids_deleted = []
+            ids_skipped = []
             for row in rows:
                 app_id = row["id"] if isinstance(row, dict) else row[0]
                 app_ref = row["ref"] if isinstance(row, dict) else row[1]
                 app_name = row["company_name"] if isinstance(row, dict) else row[2]
+
+                # FK probe: any non-cascading reference disqualifies this
+                # row from auto-deletion.  ``client_sessions`` is the
+                # known offender on staging; we count rows so the log is
+                # actionable.
+                cs_row = db.execute(
+                    "SELECT COUNT(*) AS n FROM client_sessions WHERE application_id = ?",
+                    (app_id,),
+                ).fetchone()
+                cs_count = 0
+                if cs_row is not None:
+                    # Different DB drivers expose the count under
+                    # different keys / positions: psycopg2 RealDictCursor
+                    # gives ``{"n": N}``; sqlite3.Row gives a Row that
+                    # ``dict()``s to ``{"n": N}``; bare tuples expose it
+                    # at index 0.  Handle each shape explicitly rather
+                    # than via a brittle expression.
+                    if isinstance(cs_row, dict):
+                        if "n" in cs_row:
+                            cs_count_raw = cs_row["n"]
+                        else:
+                            cs_count_raw = next(iter(cs_row.values()), 0)
+                    else:
+                        cs_count_raw = cs_row[0]
+                    try:
+                        cs_count = int(cs_count_raw or 0)
+                    except (TypeError, ValueError):
+                        cs_count = 0
+
+                if cs_count > 0:
+                    ids_skipped.append({
+                        "id": app_id,
+                        "ref": app_ref,
+                        "company_name": app_name,
+                        "client_sessions": cs_count,
+                    })
+                    logger.warning(
+                        "Migration v2.13: Skipped row %s (ref=%s, company=%s) due to "
+                        "FK constraint (referenced by client_sessions: %d row(s)). "
+                        "Operator must reconcile manually before this row can be purged.",
+                        app_id, app_ref, app_name, cs_count,
+                    )
+                    continue
 
                 # Remove local document files; failures are non-fatal (files may already
                 # be absent or hosted on S3) but are logged for manual follow-up.
@@ -2239,17 +2301,29 @@ def _run_migrations(db: DBConnection):
                 db.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
                 # decision_records uses application_ref (not application_id) as the FK.
                 db.execute("DELETE FROM decision_records WHERE application_ref = ?", (app_ref,))
-                # Deleting the parent cascades to all remaining child tables.
+                # Deleting the parent cascades to all remaining child tables that *do*
+                # have ON DELETE CASCADE on their FK.  Rows that survive on a
+                # non-cascading constraint were already filtered above.
                 db.execute("DELETE FROM applications WHERE id = ?", (app_id,))
                 ids_deleted.append({"id": app_id, "ref": app_ref, "company_name": app_name})
 
             db.commit()
-            logger.info(
-                "Migration v2.13: Purged %d application(s) for '%s': %s",
-                len(ids_deleted),
-                target_name,
-                [r["ref"] for r in ids_deleted],
-            )
+            if ids_deleted:
+                logger.info(
+                    "Migration v2.13: Purged %d application(s) for '%s': %s",
+                    len(ids_deleted),
+                    target_name,
+                    [r["ref"] for r in ids_deleted],
+                )
+            if ids_skipped:
+                logger.info(
+                    "Migration v2.13: Skipped %d application(s) for '%s' due to live "
+                    "FK references (manual reconciliation required): %s",
+                    len(ids_skipped),
+                    target_name,
+                    [{"id": r["id"], "ref": r["ref"], "client_sessions": r["client_sessions"]}
+                     for r in ids_skipped],
+                )
         else:
             logger.debug("Migration v2.13: No '%s' applications found – nothing to purge.", target_name)
     except Exception as e:
