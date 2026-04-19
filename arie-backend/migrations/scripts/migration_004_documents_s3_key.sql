@@ -1,34 +1,5 @@
--- Migration 004: Add s3_key column to documents table -- NO-OP (superseded).
--- =========================================================================
---
--- Originally:
---     ALTER TABLE documents ADD COLUMN s3_key TEXT;
---
--- This column is now added by inline ``_run_migrations`` v2.3 in
--- ``arie-backend/db.py`` (search "Migration v2.3: Add s3_key column"),
--- which runs on every startup *before* the file-based migration runner
--- (``init_db`` in ``server.py`` invokes the inline path first, then
--- calls ``run_all_migrations``).
---
--- On a fresh database the inline path adds the column under a
--- ``_safe_column_exists`` guard, then this file's ``ALTER TABLE`` would
--- raise ``OperationalError: duplicate column name: s3_key`` on SQLite
--- (and ``DuplicateColumn`` on PostgreSQL).  On staging Postgres the
--- failure was masked because version ``004`` is already recorded in
--- ``schema_version`` and the runner skips it; PR #128's docker smoke
--- test on a fresh SQLite container surfaced the latent bug.
---
--- This file is intentionally retained as a NO-OP so the version row
--- ``004`` continues to be recorded in ``schema_version`` and the
--- migration history stays contiguous (the runner uses lexicographic
--- ordering and a missing version would create a permanent gap).  The
--- ``SELECT 1;`` keeps the script non-empty for ``psycopg2.cursor.execute``
--- which raises on empty queries (``DBConnection.executescript`` on
--- PostgreSQL, see ``arie-backend/db.py``).  SQLite's ``executescript``
--- accepts comment-only and ``SELECT`` payloads alike.
---
--- Long-term cleanup (separate PR, out of scope here): the inline v2.3
--- guard should be retired and ``s3_key`` declared in the file-based
--- migration history alone, removing the inline/file duplication.
+-- Migration 004: Add s3_key column to documents table
+-- Tracks the S3 object key for documents stored in S3.
+-- Nullable: NULL means local-only storage (pre-S3 or S3 upload failed).
 
-SELECT 1;
+ALTER TABLE documents ADD COLUMN s3_key TEXT;
