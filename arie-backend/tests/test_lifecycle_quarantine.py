@@ -727,10 +727,13 @@ class TestSqlVocabularyParity(unittest.TestCase):
             r"status\s+NOT\s+IN\s*\(([^)]*)\)",
             executable, flags=re.IGNORECASE,
         )
-        self.assertGreater(
-            len(in_clauses), 0,
-            "expected at least one ``status NOT IN (...)`` clause in "
-            "migration 012; the regex extractor found none",
+        self.assertEqual(
+            len(in_clauses), 3,
+            "expected exactly three ``status NOT IN (...)`` clauses in "
+            "migration 012 (the two predicate locations in the SELECT's "
+            "CASE expressions plus the one in the WHERE filter); pinning "
+            "the count catches clause-deletion drift in addition to "
+            "literal drift inside surviving clauses.",
         )
         # Every IN clause must carry the FULL canonical vocabulary --
         # not a subset, not an extension. A drifted clause is the
@@ -827,6 +830,13 @@ class TestQuarantineAuditRowShapeMatchesLifecycleLinkAuditRow(
         }
 
     def test_quarantine_audit_row_shape_matches_lifecycle_link_audit_row(self):
+        # PR-B BACKLOG: strengthen this test to exercise BaseHandler.log_audit
+        # via a handler path with real request context, so ip_address parity
+        # is non-tautological. Today both rows are written through writers
+        # that omit ip_address (the lifecycle_linkage path uses a test-local
+        # writer shim and the migration SQL omits ip_address from its
+        # column list), so "both NULL" is necessarily true rather than
+        # observed equal. Tracked for PR-B.
         # Step 1: canonical lifecycle.link.alert_to_review.created row.
         self._make_canonical_lifecycle_audit_row()
 
