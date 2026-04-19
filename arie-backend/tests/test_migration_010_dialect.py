@@ -168,7 +168,7 @@ def test_executescript_translates_migration_010_for_postgres():
         def __init__(self):
             self.received = None
 
-        def execute(self, sql_text):  # noqa: D401
+        def execute(self, sql_text):
             self.received = sql_text
 
     class _RecordingConn:
