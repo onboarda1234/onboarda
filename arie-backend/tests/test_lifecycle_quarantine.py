@@ -545,6 +545,44 @@ class TestMigration012AuditEmission(_LifecycleQuarantineBase):
             ["vocabulary_ghost"],
         )
 
+    def test_audit_json_escapes_quotes_and_backslashes_in_status(self):
+        # Defensive: the SQL JSON construction REPLACEs backslashes
+        # then quotes so a status (or application_id) with either
+        # special character still produces parseable JSON. Practical
+        # statuses are short slugs but the migration must not assume so.
+        tricky_app = "app-x\"with\\backslash"
+        # Seed application + alert with the tricky id.
+        try:
+            self._conn.execute(
+                "INSERT INTO applications (id, ref, company_name) "
+                "VALUES (?, ?, ?)",
+                (tricky_app, "TRICKY", "Tricky Co"),
+            )
+        except Exception:
+            pass
+        self._conn.commit()
+        self._alert(
+            application_id=tricky_app,
+            status='escalated"with\\backslash',
+        )
+        self._conn.execute(
+            "DELETE FROM audit_log WHERE action = 'lifecycle.alert.quarantined'"
+        )
+        self._conn.commit()
+        self._rerun_migration_012()
+        rows = self._conn.execute(
+            "SELECT detail FROM audit_log "
+            "WHERE action = 'lifecycle.alert.quarantined'"
+        ).fetchall()
+        self.assertEqual(len(rows), 1)
+        # If escaping is correct, json.loads succeeds and round-trips
+        # the original strings exactly.
+        payload = json.loads(rows[0]["detail"])
+        self.assertEqual(payload["before_state"]["status"],
+                         'escalated"with\\backslash')
+        self.assertEqual(payload["before_state"]["application_id"],
+                         'app-x"with\\backslash')
+
 
 # ─────────────────────────────────────────────────────────────────
 # Truth-layer parity: UI-facing read agrees with classifier

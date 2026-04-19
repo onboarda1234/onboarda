@@ -82,10 +82,10 @@ SELECT
     || '],"before_state":{"id":' || CAST(id AS TEXT)
     || ',"status":' ||
         CASE WHEN status IS NULL THEN 'null'
-             ELSE '"' || REPLACE(status, '"', '\"') || '"' END
+             ELSE '"' || REPLACE(REPLACE(status, '\', '\\'), '"', '\"') || '"' END
     || ',"application_id":' ||
         CASE WHEN application_id IS NULL THEN 'null'
-             ELSE '"' || REPLACE(application_id, '"', '\"') || '"' END
+             ELSE '"' || REPLACE(REPLACE(application_id, '\', '\\'), '"', '\"') || '"' END
     || ',"linked_periodic_review_id":' ||
         CASE WHEN linked_periodic_review_id IS NULL THEN 'null'
              ELSE CAST(linked_periodic_review_id AS TEXT) END
