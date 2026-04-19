@@ -1,5 +1,32 @@
--- Migration 006: Add date_of_birth to directors and ubos tables
--- Required by Agent 1 Verification Matrix check DOC-49A (Passport DOB Match)
-
-ALTER TABLE directors ADD COLUMN IF NOT EXISTS date_of_birth TEXT;
-ALTER TABLE ubos ADD COLUMN IF NOT EXISTS date_of_birth TEXT;
+-- Migration 006: Add date_of_birth to directors and ubos tables  (NO-OP)
+-- =======================================================================
+-- SUPERSEDED BY init_db IN db.py
+--
+-- Original intent: add a `date_of_birth TEXT` column to the
+-- `directors` and `ubos` tables (required by Agent 1 Verification
+-- Matrix check DOC-49A, Passport DOB Match).
+--
+-- The column is now part of the freshly-created `directors` and
+-- `ubos` tables in `init_db` for both the SQLite and PostgreSQL
+-- branches in arie-backend/db.py, so on a fresh database the column
+-- already exists by the time the file-based migration runner
+-- executes.
+--
+-- The original SQL used `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`,
+-- which is PostgreSQL-only. SQLite (any version) rejects it with
+-- `near "EXISTS": syntax error`, so on a fresh SQLite database the
+-- file aborted before adding anything. This broke the docker-validate
+-- CI job and would break any first-client SQLite stand-up.
+--
+-- RETAINED AS NO-OP FOR schema_version CONTINUITY
+-- -----------------------------------------------
+-- Existing production environments already have version "006"
+-- recorded in `schema_version`. Renumbering or deleting this file
+-- would either re-orphan that row or shift later versions, so the
+-- file is preserved with a no-op body. The `SELECT 1` statement is
+-- portable across SQLite and PostgreSQL and has no side effects.
+--
+-- DO NOT delete this file. DO NOT renumber migrations. The file
+-- remains part of the applied-migration history on production
+-- environments.
+SELECT 1;
