@@ -129,6 +129,10 @@ class _LifecycleQueueBase(unittest.TestCase):
 
     # ── seed helpers ────────────────────────────────────────────────
     def _alert(self, **kw) -> int:
+        # NOTE: application_id must be non-null unless you want PR-A to
+        # quarantine this row (lifecycle_quarantine.is_legacy_unmapped's
+        # unscopable_no_application predicate fires on application_id IS
+        # NULL and pulls the row out of active/historical buckets).
         defaults = dict(
             application_id=self._app_id,
             client_name="PR05 Test Co",

@@ -9469,9 +9469,9 @@ class LifecycleQueueHandler(BaseHandler):
             return
 
         include = (self.get_argument("include", "active") or "active").lower()
-        if include not in ("active", "historical", "all"):
+        if include not in ("active", "historical", "all", "legacy_unmapped"):
             return self.error(
-                "include must be one of: active, historical, all", 400,
+                "include must be one of: active, historical, all, legacy_unmapped", 400,
             )
 
         # Accept either a single 'type' or 'types' (alerts/reviews/edd/all)
