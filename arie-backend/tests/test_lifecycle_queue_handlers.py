@@ -276,6 +276,25 @@ class TestLifecycleQueueEndpoint(_LifecycleQueueHandlerBase):
         )
         self.assertEqual(resp.code, 400)
 
+    def test_include_legacy_unmapped_returns_only_quarantined(self):
+        # PR-A: handler must accept include=legacy_unmapped and surface
+        # only ghost rows. Healthy rows must be absent from this bucket.
+        self._alert(status="open")  # healthy active
+        self._alert(status="dismissed")  # healthy historical
+        ghost_a = self._alert(status="escalated", application_id=None)
+        ghost_b = self._alert(status="escalated")  # vocab ghost only
+        resp = self._get(
+            "/api/lifecycle/queue?include=legacy_unmapped",
+            token=self.admin_token,
+        )
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        ids = {it["id"] for it in body["items"]}
+        self.assertEqual(ids, {ghost_a, ghost_b})
+        for it in body["items"]:
+            self.assertTrue(it["is_legacy_unmapped"])
+            self.assertGreater(len(it["quarantine_reasons"]), 0)
+
     def test_invalid_type_returns_400(self):
         resp = self._get(
             "/api/lifecycle/queue?type=bogus", token=self.admin_token,

@@ -88,7 +88,13 @@ ACTIVE_EDD_STAGES = (
 )
 
 VALID_ITEM_TYPES = ("alert", "review", "edd")
-VALID_INCLUDE = ("active", "historical", "all")
+# PR-A (Data Trust Hardening) added the third bucket ``legacy_unmapped``
+# alongside ``active`` and ``historical``. Quarantined rows are EXCLUDED
+# from active / historical / all and ONLY appear when explicitly asked
+# for via ``include='legacy_unmapped'``. Reviews and EDD cases are not
+# subject to quarantine -- they have schema-defined CHECK-constrained
+# states. The bucket is implemented for ``monitoring_alerts`` only.
+VALID_INCLUDE = ("active", "historical", "all", "legacy_unmapped")
 
 
 # ── Internal utilities ──────────────────────────────────────────────
@@ -230,16 +236,24 @@ def _next_action_for_edd(stage: str) -> Optional[str]:
 # ── Per-row materialisation ──────────────────────────────────────────
 def _materialise_alert(row, *, user_names: Dict[str, str],
                        now: datetime) -> Dict[str, Any]:
+    from lifecycle_quarantine import is_legacy_unmapped
     status = _row_get(row, "status", "open") or "open"
     owner_id = _row_get(row, "reviewed_by")
+    is_quarantined, quarantine_reasons = is_legacy_unmapped(row)
     return {
         "type": "alert",
         "id": _row_get(row, "id"),
         "application_id": _row_get(row, "application_id"),
         "client_name": _row_get(row, "client_name", "") or "",
         "state": status,
-        "is_active": status in ACTIVE_ALERT_STATUSES,
-        "is_historical": status in HISTORICAL_ALERT_STATUSES,
+        # PR-A: a quarantined row is NEITHER active NOR historical even
+        # if its status would otherwise place it in one of those buckets.
+        # The third bucket is explicit and additive.
+        "is_active": (not is_quarantined) and status in ACTIVE_ALERT_STATUSES,
+        "is_historical": (not is_quarantined)
+                         and status in HISTORICAL_ALERT_STATUSES,
+        "is_legacy_unmapped": is_quarantined,
+        "quarantine_reasons": quarantine_reasons,
         "severity": _row_get(row, "severity"),
         "alert_type": _row_get(row, "alert_type"),
         "summary": _row_get(row, "summary"),
@@ -422,6 +436,10 @@ def _findings_present_map(db, edd_case_ids: List[int]) -> Dict[int, bool]:
 
 # ── Public API ───────────────────────────────────────────────────────
 def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
+    from lifecycle_quarantine import (
+        legacy_unmapped_where_clause,
+        active_or_historical_exclude_legacy_clause,
+    )
     sql = "SELECT * FROM monitoring_alerts WHERE 1=1"
     params: List[Any] = []
     if application_id is not None:
@@ -431,15 +449,42 @@ def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
         ph = ",".join(["?"] * len(ACTIVE_ALERT_STATUSES))
         sql += f" AND status IN ({ph})"
         params.extend(ACTIVE_ALERT_STATUSES)
+        # PR-A: a row whose status happens to be canonical-active but
+        # has application_id IS NULL must NOT contaminate the active
+        # bucket -- it is unscopable and therefore quarantined.
+        excl, excl_params = active_or_historical_exclude_legacy_clause()
+        sql += f" AND {excl}"
+        params.extend(excl_params)
     elif include == "historical":
         ph = ",".join(["?"] * len(HISTORICAL_ALERT_STATUSES))
         sql += f" AND status IN ({ph})"
         params.extend(HISTORICAL_ALERT_STATUSES)
+        # PR-A: a dismissed row with application_id IS NULL is still
+        # quarantined (cannot be scoped) -- exclude it here too so the
+        # historical bucket reflects only canonical scoped closures.
+        excl, excl_params = active_or_historical_exclude_legacy_clause()
+        sql += f" AND {excl}"
+        params.extend(excl_params)
+    elif include == "all":
+        # active+historical without quarantined rows.
+        excl, excl_params = active_or_historical_exclude_legacy_clause()
+        sql += f" AND {excl}"
+        params.extend(excl_params)
+    elif include == "legacy_unmapped":
+        # PR-A: only quarantined rows.
+        legacy, legacy_params = legacy_unmapped_where_clause()
+        sql += f" AND {legacy}"
+        params.extend(legacy_params)
     sql += " ORDER BY created_at DESC"
     return db.execute(sql, params).fetchall() or []
 
 
 def _fetch_reviews(db, *, application_id=None, include="active") -> List[Any]:
+    # PR-A: periodic_reviews are NOT subject to quarantine (they have
+    # schema-defined CHECK-constrained states). The legacy_unmapped
+    # bucket is monitoring_alerts-only.
+    if include == "legacy_unmapped":
+        return []
     sql = "SELECT * FROM periodic_reviews WHERE 1=1"
     params: List[Any] = []
     if application_id is not None:
@@ -458,6 +503,11 @@ def _fetch_reviews(db, *, application_id=None, include="active") -> List[Any]:
 
 
 def _fetch_edd(db, *, application_id=None, include="active") -> List[Any]:
+    # PR-A: edd_cases are NOT subject to quarantine (schema-defined
+    # CHECK-constrained stages). The legacy_unmapped bucket is
+    # monitoring_alerts-only.
+    if include == "legacy_unmapped":
+        return []
     sql = "SELECT * FROM edd_cases WHERE 1=1"
     params: List[Any] = []
     if application_id is not None:
