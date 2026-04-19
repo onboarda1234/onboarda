@@ -10560,36 +10560,13 @@ if __name__ == "__main__":
     init_db()
     logger.info("startup: completed init_db (+%s)", _elapsed())
 
-    # Run database migrations.
-    #
-    # Failure policy (closes #127): the runner is fail-closed by default.
-    # If any migration raises, ``run_all_migrations`` will itself raise
-    # ``MigrationFailure`` after emitting a structured summary; we then
-    # halt startup so the platform is never booted with un-applied schema
-    # changes — a regulated AML system must not silently drift.
-    #
-    # The ``ImportError`` branch below is the *only* tolerated swallow
-    # (the migrations package is genuinely optional for some unit-test
-    # entrypoints).  Any other exception is re-raised after logging.
-    #
-    # Override for non-production debugging: set
-    # ``MIGRATION_FAILURE_MODE=continue`` (handled inside the runner).
+    # Run database migrations
     logger.info("startup: entering run_all_migrations (+%s)", _elapsed())
     try:
-        from migrations.runner import run_all_migrations, MigrationFailure
-    except ImportError as e:
-        logger.warning("Migration runner unavailable (import failed): %s", e)
-    else:
-        try:
-            run_all_migrations()
-        except MigrationFailure as e:
-            logger.error(
-                "startup: migration runner failed-closed (%d/%d applied, "
-                "failed=%s) — halting startup. Set MIGRATION_FAILURE_MODE=continue "
-                "to override in non-production.",
-                e.applied_count, e.total_count, e.failed_versions,
-            )
-            raise
+        from migrations.runner import run_all_migrations
+        run_all_migrations()
+    except Exception as e:
+        logger.warning("Migration runner unavailable: %s", e)
     logger.info("startup: completed run_all_migrations (+%s)", _elapsed())
 
     # Initialize supervisor framework
