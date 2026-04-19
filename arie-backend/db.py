@@ -182,13 +182,19 @@ class DBConnection:
         return self
 
     def executescript(self, sql: str) -> None:
-        """Execute multiple SQL statements. Handles dialect differences."""
+        """Execute multiple SQL statements. Handles dialect differences.
+
+        On PostgreSQL the script is run through ``_translate_query`` first so
+        that file-based migrations authored in the repo's SQLite-portable
+        convention (``INTEGER PRIMARY KEY AUTOINCREMENT``,
+        ``DEFAULT (datetime('now'))``, etc.) execute cleanly. The inline
+        ``_get_postgres_schema()`` DDL is already PostgreSQL-native; the
+        translator is a no-op against constructs PG already accepts, so the
+        translation is safe for both call sites.
+        """
         if self.is_postgres:
-            # For PostgreSQL, execute the entire script as one block.
-            # Schema DDL uses PostgreSQL-native syntax already (_get_postgres_schema),
-            # so no per-statement translation is needed here.
             cursor = self._cursor_or_create()
-            cursor.execute(sql)
+            cursor.execute(self._translate_query(sql))
         else:
             self.conn.executescript(sql)
 
