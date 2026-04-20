@@ -45,6 +45,7 @@ _CHAIN_FILES = [
     ("010", "migration_010_edd_memo_integration.sql"),
     ("011", "migration_011_edd_memo_attachment_uniqueness.sql"),
     ("012", "migration_012_legacy_unmapped_audit_classification.sql"),
+    ("013", "migration_013_periodic_review_memos.sql"),
 ]
 
 
@@ -115,72 +116,71 @@ def _applied_versions(db):
     return [r["version"] for r in rows]
 
 
-def test_fresh_db_applies_all_twelve_migrations(
+def test_fresh_db_applies_all_migrations(
     tmp_path, monkeypatch, caplog
 ):
-    """Step 4 case 1: fresh init_db then runner; 12 migrations apply."""
+    """Step 4 case 1: fresh init_db then runner; all chained migrations apply."""
+    expected = len(_CHAIN_FILES)
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         applied, messages = _run_and_capture(db, caplog)
         _assert_no_failed_log(messages)
-        assert applied == 12, (
-            f"Expected 12 migrations applied on fresh DB; got {applied}"
+        assert applied == expected, (
+            f"Expected {expected} migrations applied on fresh DB; got {applied}"
         )
         assert any(
-            m.startswith("Applied 12 migration(s) successfully")
+            m.startswith(f"Applied {expected} migration(s) successfully")
             for m in messages
         ), f"Missing summary log; got: {messages}"
         assert _applied_versions(db) == [v for v, _ in _CHAIN_FILES]
 
 
-def test_staging_partial_001_through_009_applies_only_010_011_012(
+def test_staging_partial_chain_applies_only_remaining(
     tmp_path, monkeypatch, caplog
 ):
     """Step 4 case 2: simulate staging where 001..009 are already
-    recorded; runner should apply only 010, 011, 012 (3 total).
-
-    Strategy: apply the full chain so the schema reflects 012-state,
-    then delete the trailing rows from ``schema_version`` so the
-    runner sees 010..012 as pending. Migrations 010 / 011 / 012 are
-    idempotent against an existing 012-state schema (CREATE ... IF
-    NOT EXISTS, INSERT ... WHERE NOT EXISTS), so the re-application
-    succeeds."""
+    recorded; runner should apply only 010..latest. Migrations 010..
+    latest are idempotent against an existing post-009 schema (CREATE
+    ... IF NOT EXISTS, INSERT ... WHERE NOT EXISTS), so the
+    re-application succeeds."""
+    expected = len(_CHAIN_FILES) - 9
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         _apply_full_chain_then_rewind(db, keep_count=9)  # keep 001..009
         applied, messages = _run_and_capture(db, caplog)
         _assert_no_failed_log(messages)
-        assert applied == 3, (
-            "Expected exactly 3 migrations (010, 011, 012) on staging; "
+        assert applied == expected, (
+            f"Expected exactly {expected} migrations on staging; "
             f"got {applied}; messages={messages}"
         )
         assert any(
-            m.startswith("Applied 3 migration(s) successfully")
+            m.startswith(f"Applied {expected} migration(s) successfully")
             for m in messages
         ), f"Missing summary log; got: {messages}"
         assert _applied_versions(db) == [v for v, _ in _CHAIN_FILES]
 
 
-def test_half_applied_001_through_005_applies_006_through_012(
+def test_half_applied_chain_applies_remaining(
     tmp_path, monkeypatch, caplog
 ):
     """Step 4 case 3: half-applied state where 001..005 are already
-    recorded; runner should apply 006..012 (7 total).
+    recorded; runner should apply 006..latest.
 
     Strategy: ``init_db`` already provides the schema 001..005 would
     establish (those migrations are no-ops or duplicate init_db
     tables post-fix), so it is safe to mark them applied without
-    running. The runner then applies 006..012 against a schema that
+    running. The runner then applies 006..latest against a schema that
     does not yet have 008's added columns, which keeps 008's plain
     ALTER TABLE statements valid."""
+    expected = len(_CHAIN_FILES) - 5
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         _preseed_schema_version(db, _CHAIN_FILES[:5])  # 001..005
         applied, messages = _run_and_capture(db, caplog)
         _assert_no_failed_log(messages)
-        assert applied == 7, (
-            "Expected exactly 7 migrations (006..012) on half-applied "
-            f"state; got {applied}; messages={messages}"
+        assert applied == expected, (
+            f"Expected exactly {expected} migrations (006..latest) on "
+            f"half-applied state; got {applied}; messages={messages}"
         )
         assert any(
-            m.startswith("Applied 7 migration(s) successfully")
+            m.startswith(f"Applied {expected} migration(s) successfully")
             for m in messages
         ), f"Missing summary log; got: {messages}"
         assert _applied_versions(db) == [v for v, _ in _CHAIN_FILES]

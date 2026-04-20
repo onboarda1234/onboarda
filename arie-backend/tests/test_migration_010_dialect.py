@@ -67,8 +67,12 @@ def test_migration_010_creates_tables_on_sqlite(tmp_path, monkeypatch):
     on a fresh SQLite database after the full chain runs cleanly."""
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         from migrations.runner import run_all_migrations_with_connection
+        from migrations.runner import MIGRATIONS_DIR
+        expected = len(sorted(MIGRATIONS_DIR.glob("migration_*.sql")))
         applied = run_all_migrations_with_connection(db)
-        assert applied == 12, f"Expected 12 migrations applied; got {applied}"
+        assert applied == expected, (
+            f"Expected {expected} migrations applied; got {applied}"
+        )
 
         # Both 010-owned tables must exist.
         tables = {
