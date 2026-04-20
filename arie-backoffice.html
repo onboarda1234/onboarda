@@ -805,6 +805,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     <div class="snav-section">Compliance</div>
     <div class="snav-item" onclick="showView('screening',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span> Screening Queue</div>
     <div class="snav-item" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Ongoing Monitoring</div>
+    <div class="snav-item" onclick="showView('lifecycle',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M21 12a9 9 0 0 1-9 9"/><path d="M16 7l5 0 0-5"/><path d="M8 17l-5 0 0 5"/></svg></span> Lifecycle</div>
     <div class="snav-item" onclick="showView('edd',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span> EDD Pipeline</div>
     <div class="snav-item" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
     <div class="snav-item" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
@@ -1092,6 +1093,8 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 
   <!-- Tab: Overview (full width) -->
   <div id="detail-tab-overview">
+    <!-- Lifecycle summary (PR-B AC5): typed-edge linkage chips, above-the-fold. -->
+    <div id="detail-lifecycle-summary"></div>
     <!-- Client Info (full width) -->
       <div class="card">
         <div class="card-header">
@@ -1551,6 +1554,49 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     <div class="stats-grid" style="grid-template-columns:repeat(1,1fr);max-width:600px;">
       <div id="agents-status-list"></div>
     </div>
+  </div>
+</div>
+
+<!-- ═══════════════ LIFECYCLE (PR-B) ═══════════════ -->
+<!-- Unified operator queue over monitoring alerts, periodic reviews and EDD cases. -->
+<!-- Reads /api/lifecycle/queue?include=<active|historical|legacy_unmapped>. -->
+<!-- Active vs Historical vs Legacy buckets are surfaced as a 3-tab toggle. -->
+<div class="view" id="view-lifecycle">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+    <div>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Lifecycle Queue</h3>
+      <p style="font-size:13px;color:var(--text3);">Unified operator surface across monitoring alerts, periodic reviews and EDD cases. Active work shows oldest-first; historical work shows most-recent-first.</p>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <span id="lifecycle-load-time" style="font-size:11px;color:var(--text3);"></span>
+      <button class="btn btn-outline btn-sm" onclick="loadLifecycleQueue(window._lifecycleInclude||'active')" style="font-size:11px;">⟳ Refresh</button>
+    </div>
+  </div>
+
+  <!-- Bucket toggle: Active / Historical / Legacy. Default = Active. -->
+  <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--border1);flex-wrap:wrap;">
+    <button class="btn btn-outline btn-sm lifecycle-tab active" data-include="active" onclick="switchLifecycleTab('active')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Active <span id="lifecycle-count-active" class="badge pending" style="margin-left:6px;">0</span></button>
+    <button class="btn btn-outline btn-sm lifecycle-tab" data-include="historical" onclick="switchLifecycleTab('historical')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Historical <span id="lifecycle-count-historical" class="badge draft" style="margin-left:6px;">—</span></button>
+    <button class="btn btn-outline btn-sm lifecycle-tab" data-include="legacy_unmapped" onclick="switchLifecycleTab('legacy_unmapped')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Legacy (unmapped) <span id="lifecycle-count-legacy_unmapped" class="badge draft" style="margin-left:6px;">—</span></button>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>State</th>
+          <th>Client / Application</th>
+          <th>Owner</th>
+          <th>Age</th>
+          <th>Linkage</th>
+          <th id="lifecycle-th-context">Next action</th>
+        </tr>
+      </thead>
+      <tbody id="lifecycle-body">
+        <tr><td colspan="7" style="padding:32px;text-align:center;color:var(--text3);font-size:12px;">Loading lifecycle queue…</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
@@ -3719,7 +3765,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', edd:'EDD Pipeline', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', lifecycle:'Lifecycle Queue', edd:'EDD Pipeline', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
 
   // Close mobile menu on navigation
@@ -3732,6 +3778,7 @@ function showView(name, navItem) {
   if (name === 'roles') renderRolesPermissions();
   if (name === 'screening') renderScreening();
   if (name === 'monitoring') renderMonitoring();
+  if (name === 'lifecycle') renderLifecycle();
   if (name === 'edd') renderEDD();
   if (name === 'change-mgmt') renderChangeMgmt();
   if (name === 'cases') renderCases();
@@ -5318,6 +5365,9 @@ function renderAuthoritativeAppDetail(app, options) {
   switchDetailTab(options.initialTab || 'overview');
   showView('app-detail');
   document.getElementById('topbar-title').textContent = 'Application Review — ' + app.ref;
+  // PR-B AC5: load lifecycle linkage summary (alert→review→EDD edges)
+  // for this application. Soft-fails if endpoint is unavailable.
+  try { loadLifecycleApplicationSummary(app.id); } catch (e) { console.warn('Lifecycle summary call failed:', e); }
 }
 
 async function openAppDetail(ref, options) {
@@ -6457,6 +6507,210 @@ function renderCases() {
     badge.textContent = preApprovalCount;
     badge.style.display = preApprovalCount > 0 ? '' : 'none';
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// LIFECYCLE QUEUE (PR-B)
+// ═══════════════════════════════════════════════════════════
+// Consumes the PR-A endpoints exposed by server.py:
+//   GET /api/lifecycle/queue?include=<active|historical|legacy_unmapped>
+//   GET /api/lifecycle/applications/:id/summary
+// Default load = include=active. Items are rendered in the order the
+// API returns (active oldest-first; historical newest-first). Legacy
+// rows are isolated from the default Active view by separate fetch.
+window._lifecycleInclude = 'active';
+
+function lifecycleTypeChip(type) {
+  var t = String(type || '').toLowerCase();
+  // Reuse existing badge palette so this matches backoffice idiom.
+  var cls = (t === 'alert') ? 'edd-required'
+          : (t === 'review') ? 'in-review'
+          : (t === 'edd') ? 'very-high'
+          : 'draft';
+  var label = (t === 'edd') ? 'EDD' : (t.charAt(0).toUpperCase() + t.slice(1));
+  return '<span class="badge ' + cls + '" style="font-family:monospace;">' + escapeHtml(label) + '</span>';
+}
+
+function lifecycleStateChip(state) {
+  var s = String(state || '').toLowerCase();
+  var historical = ['resolved','dismissed','closed','completed','edd_approved','edd_rejected'];
+  var inflight = ['in_progress','triaged','assigned','pending_senior_review','information_gathering','analysis','awaiting_information'];
+  var cls = (historical.indexOf(s) >= 0) ? 'approved'
+          : (inflight.indexOf(s) >= 0) ? 'pending'
+          : 'draft';
+  return '<span class="badge ' + cls + '">' + escapeHtml(state || '—') + '</span>';
+}
+
+function lifecycleAgeLabel(item) {
+  if (typeof item.age_days === 'number' && item.age_days >= 1) {
+    return Math.floor(item.age_days) + 'd ago';
+  }
+  if (typeof item.age_seconds === 'number' && item.age_seconds >= 0) {
+    var s = item.age_seconds;
+    if (s < 60) return Math.floor(s) + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    return Math.floor(s / 3600) + 'h ago';
+  }
+  return '—';
+}
+
+function lifecycleLinkageChips(item) {
+  var chips = [];
+  function chip(label, kind) {
+    var cls = (kind === 'alert') ? 'edd-required'
+            : (kind === 'review') ? 'in-review'
+            : (kind === 'edd') ? 'very-high'
+            : 'draft';
+    chips.push('<span class="badge ' + cls + '" style="font-family:monospace;">' + escapeHtml(label) + '</span>');
+  }
+  if (item.linked_periodic_review_id) chip('→ review #' + String(item.linked_periodic_review_id).slice(0, 8), 'review');
+  if (item.linked_edd_case_id)        chip('→ EDD #' + String(item.linked_edd_case_id).slice(0, 8), 'edd');
+  if (item.linked_monitoring_alert_id) chip('← alert #' + String(item.linked_monitoring_alert_id).slice(0, 8), 'alert');
+  return chips.length ? chips.join(' ') : '<span style="color:var(--text3);font-size:11px;">—</span>';
+}
+
+function lifecycleQuarantineChips(reasons) {
+  if (!reasons || !reasons.length) return '<span style="color:var(--text3);font-size:11px;">—</span>';
+  return reasons.map(function(r) {
+    return '<span class="badge draft" style="font-family:monospace;">' + escapeHtml(String(r)) + '</span>';
+  }).join(' ');
+}
+
+function renderLifecycle() {
+  // Default initial load = active only. Per AC4, legacy rows must
+  // never appear in the default Active view.
+  switchLifecycleTab(window._lifecycleInclude || 'active');
+}
+
+function switchLifecycleTab(include) {
+  var valid = { active: 1, historical: 1, legacy_unmapped: 1 };
+  if (!valid[include]) include = 'active';
+  window._lifecycleInclude = include;
+  // Toggle the visual active state on the bucket buttons.
+  document.querySelectorAll('#view-lifecycle .lifecycle-tab').forEach(function(btn) {
+    var isActive = (btn.getAttribute('data-include') === include);
+    btn.classList.toggle('active', isActive);
+    btn.style.borderBottom = '2px solid ' + (isActive ? 'var(--brand)' : 'transparent');
+    btn.style.color = isActive ? 'var(--brand)' : 'var(--text3)';
+    btn.style.fontWeight = isActive ? '600' : '';
+  });
+  // Swap the rightmost column header to give legacy a clearer label.
+  var th = document.getElementById('lifecycle-th-context');
+  if (th) th.textContent = (include === 'legacy_unmapped') ? 'Quarantine reasons' : 'Next action';
+  loadLifecycleQueue(include);
+}
+
+async function loadLifecycleQueue(include) {
+  var body = document.getElementById('lifecycle-body');
+  if (body) body.innerHTML = '<tr><td colspan="7" style="padding:32px;text-align:center;color:var(--text3);font-size:12px;">Loading lifecycle queue…</td></tr>';
+  var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  try {
+    // AC1: explicit include= param so the rendered count matches counts.total exactly.
+    // AC4: default tab fetches include=active only — no client-side bucket merging.
+    var resp = await boApiCall('GET', '/lifecycle/queue?include=' + encodeURIComponent(include));
+    var items = (resp && resp.items) || [];
+    var counts = (resp && resp.counts) || {};
+    renderLifecycleRows(items, include);
+    var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    var ms = Math.round(t1 - t0);
+    var timeEl = document.getElementById('lifecycle-load-time');
+    if (timeEl) timeEl.textContent = 'Loaded ' + items.length + ' rows in ' + ms + 'ms';
+    var countEl = document.getElementById('lifecycle-count-' + include);
+    if (countEl) countEl.textContent = String(typeof counts.total === 'number' ? counts.total : items.length);
+  } catch (err) {
+    console.error('Lifecycle queue load failed:', err);
+    if (body) body.innerHTML = '<tr><td colspan="7" style="padding:32px;text-align:center;color:var(--red);font-size:12px;">Failed to load lifecycle queue: ' + escapeHtml(err.message || 'unknown error') + '</td></tr>';
+  }
+}
+
+function renderLifecycleRows(items, include) {
+  var body = document.getElementById('lifecycle-body');
+  if (!body) return;
+  if (!items.length) {
+    var emptyMsg = (include === 'legacy_unmapped')
+      ? 'No legacy / unmapped rows. The lifecycle classifier has nothing to quarantine.'
+      : (include === 'historical' ? 'No historical lifecycle items yet.' : 'No active lifecycle work. Queue is clear.');
+    body.innerHTML = '<tr><td colspan="7" style="padding:32px;text-align:center;color:var(--text3);font-size:12px;">' + escapeHtml(emptyMsg) + '</td></tr>';
+    return;
+  }
+  // Render rows in the exact order the API returned them. Do NOT
+  // re-sort client-side (AC2): the server orders active oldest-first
+  // and historical newest-first.
+  body.innerHTML = items.map(function(it) {
+    var clientLabel = it.client_name
+      || (it.application_id ? String(it.application_id).slice(0, 8) : '')
+      || (include === 'legacy_unmapped' ? '(no application)' : '—');
+    var owner = it.owner_name || (it.owner_id ? String(it.owner_id).slice(0, 8) : 'unassigned');
+    var contextCell = (include === 'legacy_unmapped')
+      ? lifecycleQuarantineChips(it.quarantine_reasons)
+      : (it.next_action ? '<span class="badge pending">' + escapeHtml(it.next_action) + '</span>' : '<span style="color:var(--text3);font-size:11px;">—</span>');
+    return '<tr>' +
+      '<td>' + lifecycleTypeChip(it.type) + '</td>' +
+      '<td>' + lifecycleStateChip(it.state) + '</td>' +
+      '<td><div style="font-weight:600;">' + escapeHtml(clientLabel) + '</div>' +
+        (it.application_id ? '<div style="font-size:11px;color:var(--text3);font-family:monospace;">' + escapeHtml(String(it.application_id).slice(0, 8)) + '</div>' : '') +
+      '</td>' +
+      '<td style="font-size:12px;">' + escapeHtml(owner) + '</td>' +
+      '<td style="font-size:12px;color:var(--text2);">' + escapeHtml(lifecycleAgeLabel(it)) + '</td>' +
+      '<td>' + lifecycleLinkageChips(it) + '</td>' +
+      '<td>' + contextCell + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+// AC5: Application detail surface — typed-edge summary loaded from
+// /api/lifecycle/applications/:id/summary. Above-the-fold; no
+// hover/navigation interactivity in PR-B (PR-C may wire navigation).
+async function loadLifecycleApplicationSummary(applicationId) {
+  var container = document.getElementById('detail-lifecycle-summary');
+  if (!container || !applicationId) return;
+  container.innerHTML = '<div style="font-size:11px;color:var(--text3);">Loading lifecycle summary…</div>';
+  try {
+    var resp = await boApiCall('GET', '/lifecycle/applications/' + encodeURIComponent(applicationId) + '/summary');
+    renderLifecycleApplicationSummary(resp);
+  } catch (err) {
+    // Soft-fail: do not block app detail rendering if the lifecycle
+    // endpoint is unavailable. Keep this section out of the way.
+    console.warn('Lifecycle summary load failed:', err);
+    container.innerHTML = '<div style="font-size:11px;color:var(--text3);">Lifecycle summary unavailable.</div>';
+  }
+}
+
+function renderLifecycleApplicationSummary(resp) {
+  var container = document.getElementById('detail-lifecycle-summary');
+  if (!container) return;
+  var linkage = (resp && resp.linkage) || { edges: [], count: 0 };
+  var activeCount  = ((resp && resp.active  && resp.active.counts)  || {}).total || 0;
+  var historicalCount = ((resp && resp.historical && resp.historical.counts) || {}).total || 0;
+
+  function edgeChip(edge) {
+    function side(o) {
+      var t = String((o && o.type) || '').toLowerCase();
+      var label = (t === 'edd') ? 'EDD' : (t.charAt(0).toUpperCase() + t.slice(1));
+      var idShort = (o && o.id) ? String(o.id).slice(0, 8) : '?';
+      return label + ' #' + idShort;
+    }
+    var cls = (edge && edge.kind && edge.kind.indexOf('edd') >= 0) ? 'very-high'
+            : (edge && edge.kind && edge.kind.indexOf('review') >= 0) ? 'in-review'
+            : 'edd-required';
+    return '<span class="badge ' + cls + '" style="font-family:monospace;">' + escapeHtml(side(edge.from)) + ' → ' + escapeHtml(side(edge.to)) + '</span>';
+  }
+
+  var edgesHtml = (linkage.edges && linkage.edges.length)
+    ? linkage.edges.map(edgeChip).join(' ')
+    : '<span style="font-size:11px;color:var(--text3);">No linked lifecycle objects.</span>';
+
+  container.innerHTML =
+    '<div class="card" style="border-left:4px solid #7c3aed;background:rgba(124,58,237,0.03);margin-bottom:16px;">' +
+      '<div class="card-header" style="margin-bottom:12px;">' +
+        '<div class="card-icon" style="background:rgba(124,58,237,0.1);color:#7c3aed;">🔗</div>' +
+        '<div>' +
+          '<div class="card-title">Lifecycle Summary</div>' +
+          '<div style="font-size:11px;color:var(--text3);">Active: ' + activeCount + ' · Historical: ' + historicalCount + ' · Linked edges: ' + linkage.count + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">' + edgesHtml + '</div>' +
+    '</div>';
 }
 
 function renderMonitoring() {
