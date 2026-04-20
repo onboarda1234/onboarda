@@ -167,11 +167,10 @@ def _build_review_purpose(review) -> Dict[str, Any]:
                      or _row_get(review, "review_reason")
 
     source_label = trigger_source or trigger_type or "scheduled"
-    why = (
-        "Periodic review triggered by %s." % source_label
-        if source_label
-        else "Periodic review."
-    )
+    if source_label:
+        why = f"Periodic review triggered by {source_label}."
+    else:
+        why = "Periodic review."
     summary = trigger_reason or ""
     return {
         "why_review_exists": why,
@@ -184,10 +183,12 @@ def _build_profile_snapshot(review, application) -> Dict[str, Any]:
     # reconstructed ownership analysis. See PR-D brief Step 1.
     app_id = _row_get(review, "application_id")
     app_ref = _row_get(application, "ref")
-    ownership_reference = (
-        f"See application {app_ref}" if app_ref else
-        (f"See application {app_id}" if app_id else "")
-    )
+    if app_ref:
+        ownership_reference = f"See application {app_ref}"
+    elif app_id:
+        ownership_reference = f"See application {app_id}"
+    else:
+        ownership_reference = ""
     return {
         "entity_type": _row_get(application, "entity_type") or "",
         "jurisdiction": _row_get(application, "country") or "",
