@@ -1485,7 +1485,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <div class="stat-card"><div class="stat-card-label">Open Monitoring Alerts (raw)</div><div class="stat-card-value" style="color:var(--amber);" id="mon-stat-open">0</div></div>
       <div class="stat-card"><div class="stat-card-label">Critical (raw)</div><div class="stat-card-value" style="color:var(--red);" id="mon-stat-critical">0</div></div>
       <div class="stat-card"><div class="stat-card-label">Reviews Due (raw)</div><div class="stat-card-value" style="color:var(--blue);" id="mon-stat-reviews">0</div></div>
-      <div class="stat-card" title="Source of truth: /api/lifecycle/queue?include=active (alerts).">
+      <div class="stat-card" title="Same source as Lifecycle tab Active count: /api/lifecycle/queue?include=active (counts.total).">
         <div class="stat-card-label">Active Lifecycle Work</div>
         <div class="stat-card-value" style="color:#7c3aed;" id="mon-stat-lifecycle-active">—</div>
       </div>
@@ -3264,7 +3264,11 @@ async function loadFromAPI() {
             status: (a.status || 'open').charAt(0).toUpperCase() + (a.status || 'open').slice(1),
             source: a.source_reference || '',
             detail: a.summary || '',
-            recommendation: a.ai_recommendation || ''
+            recommendation: a.ai_recommendation || '',
+            linked_periodic_review_id: a.linked_periodic_review_id,
+            linked_edd_case_id: a.linked_edd_case_id,
+            officer_action: a.officer_action || null,
+            officer_notes: a.officer_notes || null
           };
         });
       }
@@ -6962,7 +6966,9 @@ async function openAlertDetailById(alertId) {
         detail: raw.summary || '',
         recommendation: raw.ai_recommendation || '',
         linked_periodic_review_id: raw.linked_periodic_review_id,
-        linked_edd_case_id: raw.linked_edd_case_id
+        linked_edd_case_id: raw.linked_edd_case_id,
+        officer_action: raw.officer_action || null,
+        officer_notes: raw.officer_notes || null
       };
     }
     showAlertDetail(found);
@@ -7022,18 +7028,21 @@ function prcChipHtml(label, kind, id) {
 }
 
 // ── Scope D: Active Lifecycle Work tile counter ──────────────────
+// KPI truth reconciliation: the Monitoring page's "Active Lifecycle
+// Work" tile must never disagree with the Lifecycle queue's active
+// count. Both now read from the same endpoint with the same filter
+// (`/lifecycle/queue?include=active`) and use `counts.total`, which
+// is the authoritative count the queue tab also renders in its
+// "Active" pill.
 async function loadActiveLifecycleWorkTile() {
   var el = document.getElementById('mon-stat-lifecycle-active');
   if (!el) return;
   try {
-    // Items.length filtered to alert-type (per brief):
-    // /api/lifecycle/queue?include=active returns mixed items; filter
-    // to 'alert' type so the tile is unambiguous against the raw
-    // monitoring alert counter above it.
-    var resp = await boApiCall('GET', '/lifecycle/queue?include=active&type=alerts');
+    var resp = await boApiCall('GET', '/lifecycle/queue?include=active');
     var items = (resp && resp.items) || [];
-    var alertItems = items.filter(function(it) { return String(it.type || '').toLowerCase() === 'alert'; });
-    el.textContent = String(alertItems.length);
+    var counts = (resp && resp.counts) || {};
+    var total = (typeof counts.total === 'number') ? counts.total : items.length;
+    el.textContent = String(total);
   } catch(err) {
     el.textContent = '—';
     console.warn('Active lifecycle work tile failed:', err);
@@ -7155,7 +7164,7 @@ function renderPrcReviewDetailSection(detail) {
   // Fire-and-forget; renderer owns its own error handling and the three
   // distinct visual states (generated / 404 / generation_failed).
   if (detail && detail.id != null) {
-    try { renderPeriodicReviewMemo(detail.id); } catch (e) { /* renderer logs */ }
+    try { renderPeriodicReviewMemo(detail.id, detail.state || detail.status || null); } catch (e) { /* renderer logs */ }
   }
 }
 
@@ -7358,38 +7367,124 @@ function renderPeriodicReviews() {
   }
 }
 
-function renderMonitoringAgents() {
-  var html = '';
-  if (!MONITORING_AGENTS.length) {
-    document.getElementById('agents-status-list').innerHTML = '<div class="card" style="padding:20px;text-align:center;color:var(--text3);">No monitoring agent status is available yet.</div>';
-    return;
-  }
-  MONITORING_AGENTS.forEach(function(agent) {
-    var detail = agent.clientsMonitored ? agent.clientsMonitored + ' clients' :
-                 agent.sourceScanned ? agent.sourceScanned + ' sources' :
-                 agent.registriesChecked ? agent.registriesChecked + ' registries' :
-                 agent.profilesAnalyzed ? agent.profilesAnalyzed + ' profiles' :
-                 agent.regulationsTracked ? agent.regulationsTracked + ' regulations' : '';
-    var statusLabel = agent.status === 'active' ? 'Active' : agent.status === 'paused' ? 'Paused' : agent.status === 'error' ? 'Error' : (agent.status || 'Unknown');
-    var statusBadge = agent.status === 'active' ? 'approved' : agent.status === 'paused' ? 'pending' : agent.status === 'error' ? 'rejected' : 'draft';
+// ── Monitoring-stage AI agent catalog (static, code-local) ───────
+// Mirrors arie-backend/ai_agent_catalog.py for the Monitoring-stage
+// agents. Used to populate the Monitoring Agents tab even when
+// `monitoring_agent_status` has no runtime rows yet, so Agent 6
+// (Periodic Review Preparation) and its siblings are always visible
+// to officers. Runtime fields (last_run / alerts_generated / status)
+// are left blank when not available and labelled "Not yet run" rather
+// than invented — this panel is a truthful minimal view per the
+// audit brief.
+var MONITORING_AGENT_CATALOG = [
+  { id: 6, name: 'Periodic Review Preparation Agent', icon: '🗂️',
+    purpose: 'Prepares periodic reviews: required items, priority score, signals to feed the review.',
+    contributes: 'Periodic review preparation',
+    implementation: 'deterministic' },
+  { id: 7, name: 'Adverse Media & PEP Monitoring Agent', icon: '📡',
+    purpose: 'Monitors adverse media, PEP list updates and sanctions changes for onboarded clients.',
+    contributes: 'Adverse media / PEP / sanctions signal detection',
+    implementation: 'hybrid' },
+  { id: 8, name: 'Behaviour & Risk Drift Agent', icon: '📈',
+    purpose: 'Compares activity patterns against onboarding baseline; flags velocity anomalies and drift.',
+    contributes: 'Behavioural drift & risk-profile deviation',
+    implementation: 'deterministic' },
+  { id: 10, name: 'Ongoing Compliance Review Agent', icon: '⚖️',
+    purpose: 'Consolidates inter-agent findings; verifies document currency, condition compliance and deadlines.',
+    contributes: 'Consolidated compliance narrative & escalation / closure recommendation',
+    implementation: 'hybrid' }
+];
 
+function monitoringAgentRuntimeMatch(catalogEntry) {
+  if (!MONITORING_AGENTS || !MONITORING_AGENTS.length) return null;
+  var byName = catalogEntry.name.toLowerCase();
+  for (var i = 0; i < MONITORING_AGENTS.length; i++) {
+    var a = MONITORING_AGENTS[i];
+    if (!a) continue;
+    if (Number(a.id) === Number(catalogEntry.id)) return a;
+    if (a.name && String(a.name).toLowerCase() === byName) return a;
+  }
+  return null;
+}
+
+function renderMonitoringAgents() {
+  var host = document.getElementById('agents-status-list');
+  if (!host) return;
+  var legendHtml = '<div style="margin-bottom:12px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;color:var(--text3);">' +
+    '<strong style="color:var(--text2);">Monitoring Agents</strong> — identity, purpose and contribution are <em>static configuration</em> drawn from the AI register. Last run, status and alerts generated are <em>runtime-derived</em> when available; rows with no runtime data are labelled "Not yet run".' +
+    '</div>';
+  var html = legendHtml;
+  MONITORING_AGENT_CATALOG.forEach(function(entry) {
+    var runtime = monitoringAgentRuntimeMatch(entry);
+    var hasRuntime = !!runtime;
+    var statusLabel, statusBadge;
+    if (hasRuntime) {
+      var s = (runtime.status || 'active').toLowerCase();
+      statusLabel = s === 'active' ? 'Active' : s === 'paused' ? 'Paused' : s === 'error' ? 'Error' : (runtime.status || 'Unknown');
+      statusBadge = s === 'active' ? 'approved' : s === 'paused' ? 'pending' : s === 'error' ? 'rejected' : 'draft';
+    } else {
+      statusLabel = 'Not yet run';
+      statusBadge = 'draft';
+    }
+    var lastRun = hasRuntime && runtime.lastRun && runtime.lastRun !== '—' ? runtime.lastRun : '—';
+    var nextRun = hasRuntime && runtime.nextRun && runtime.nextRun !== '—' ? runtime.nextRun : '—';
+    var alertsGenerated = hasRuntime ? (runtime.alertsGenerated || 0) : 0;
+    var runtimeTag = hasRuntime
+      ? '<span class="badge approved" style="font-size:10px;margin-left:6px;" title="Runtime-derived from monitoring_agent_status">runtime</span>'
+      : '<span class="badge draft" style="font-size:10px;margin-left:6px;" title="Static catalog entry; no runtime telemetry yet">static</span>';
+    var runBtn = hasRuntime && runtime.id != null
+      ? '<button class="btn btn-outline btn-sm" id="agent-run-btn-' + runtime.id + '" onclick="triggerAgentRun(' + runtime.id + ')" style="font-size:11px;padding:3px 8px;" title="Manually trigger this agent">Run Now</button>'
+      : '';
     html += '<div class="card" style="margin-bottom:12px;">' +
       '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">' +
       '<div style="display:flex;align-items:center;gap:12px;">' +
-      '<span style="font-size:24px;">' + agent.icon + '</span>' +
-      '<div><div style="font-weight:600;font-size:14px;">' + agent.name + '</div>' +
-      '<div style="font-size:12px;color:var(--text3);">Monitoring ' + detail + '</div></div></div>' +
+      '<span style="font-size:24px;">' + entry.icon + '</span>' +
+      '<div>' +
+      '<div style="font-weight:600;font-size:14px;">Agent ' + entry.id + ' — ' + escapeHtml(entry.name) + runtimeTag + '</div>' +
+      '<div style="font-size:12px;color:var(--text3);">' + escapeHtml(entry.purpose) + '</div>' +
+      '</div></div>' +
       '<div style="display:flex;align-items:center;gap:8px;">' +
       '<span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(statusLabel) + '</span>' +
-      '<button class="btn btn-outline btn-sm" id="agent-run-btn-' + agent.id + '" onclick="triggerAgentRun(' + agent.id + ')" style="font-size:11px;padding:3px 8px;" title="Manually trigger this agent">Run Now</button>' +
+      runBtn +
       '</div></div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:12px;">' +
-      '<div><span style="color:var(--text3);">Last run:</span><br/>' + agent.lastRun + '</div>' +
-      '<div><span style="color:var(--text3);">Next run:</span><br/>' + agent.nextRun + '</div>' +
-      '<div><span style="color:var(--text3);">Alerts generated:</span><br/>' + (agent.alertsGenerated || 0) + '</div>' +
+      '<div><span style="color:var(--text3);">Contributes:</span><br/>' + escapeHtml(entry.contributes) + '</div>' +
+      '<div><span style="color:var(--text3);">Last run:</span><br/>' + escapeHtml(lastRun) + '</div>' +
+      '<div><span style="color:var(--text3);">Alerts generated:</span><br/>' + escapeHtml(String(alertsGenerated)) + '</div>' +
       '</div></div>';
   });
-  document.getElementById('agents-status-list').innerHTML = html;
+  // Append any runtime-only agents not covered by the static catalog
+  // (e.g. future monitoring agents wired up purely via the database
+  // seed) so the panel never hides backend-registered agents.
+  if (MONITORING_AGENTS && MONITORING_AGENTS.length) {
+    var catalogIds = {}; MONITORING_AGENT_CATALOG.forEach(function(e) { catalogIds[e.id] = 1; });
+    var catalogNames = {}; MONITORING_AGENT_CATALOG.forEach(function(e) { catalogNames[e.name.toLowerCase()] = 1; });
+    MONITORING_AGENTS.forEach(function(ag) {
+      if (!ag) return;
+      if (catalogIds[Number(ag.id)]) return;
+      if (ag.name && catalogNames[String(ag.name).toLowerCase()]) return;
+      var s = (ag.status || 'active').toLowerCase();
+      var statusLabel = s === 'active' ? 'Active' : s === 'paused' ? 'Paused' : s === 'error' ? 'Error' : (ag.status || 'Unknown');
+      var statusBadge = s === 'active' ? 'approved' : s === 'paused' ? 'pending' : s === 'error' ? 'rejected' : 'draft';
+      html += '<div class="card" style="margin-bottom:12px;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">' +
+        '<div style="display:flex;align-items:center;gap:12px;">' +
+        '<span style="font-size:24px;">' + (ag.icon || '🤖') + '</span>' +
+        '<div><div style="font-weight:600;font-size:14px;">' + escapeHtml(ag.name || 'Agent') +
+        '<span class="badge approved" style="font-size:10px;margin-left:6px;" title="Runtime-derived">runtime</span></div>' +
+        '<div style="font-size:12px;color:var(--text3);">Registered monitoring agent</div></div></div>' +
+        '<div style="display:flex;align-items:center;gap:8px;">' +
+        '<span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(statusLabel) + '</span>' +
+        '<button class="btn btn-outline btn-sm" id="agent-run-btn-' + ag.id + '" onclick="triggerAgentRun(' + ag.id + ')" style="font-size:11px;padding:3px 8px;">Run Now</button>' +
+        '</div></div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:12px;">' +
+        '<div><span style="color:var(--text3);">Last run:</span><br/>' + escapeHtml(ag.lastRun || '—') + '</div>' +
+        '<div><span style="color:var(--text3);">Next run:</span><br/>' + escapeHtml(ag.nextRun || '—') + '</div>' +
+        '<div><span style="color:var(--text3);">Alerts generated:</span><br/>' + escapeHtml(String(ag.alertsGenerated || 0)) + '</div>' +
+        '</div></div>';
+    });
+  }
+  host.innerHTML = html;
 }
 
 async function triggerAgentRun(agentId) {
@@ -7403,7 +7498,7 @@ async function triggerAgentRun(agentId) {
       var alertsResp = await boApiCall('GET', '/monitoring/alerts');
       if (alertsResp.alerts) {
         MONITORING_ALERTS = alertsResp.alerts.map(function(a) {
-          return { id: a.id, date: (a.created_at || '').split('T')[0].split(' ')[0], client: a.client_name || '', type: a.alert_type || '', severity: a.severity || 'Medium', agent: a.detected_by || '', status: (a.status || 'open').charAt(0).toUpperCase() + (a.status || 'open').slice(1), source: a.source_reference || '', detail: a.summary || '', recommendation: a.ai_recommendation || '' };
+          return { id: a.id, date: (a.created_at || '').split('T')[0].split(' ')[0], client: a.client_name || '', type: a.alert_type || '', severity: a.severity || 'Medium', agent: a.detected_by || '', status: (a.status || 'open').charAt(0).toUpperCase() + (a.status || 'open').slice(1), source: a.source_reference || '', detail: a.summary || '', recommendation: a.ai_recommendation || '', linked_periodic_review_id: a.linked_periodic_review_id, linked_edd_case_id: a.linked_edd_case_id, officer_action: a.officer_action || null, officer_notes: a.officer_notes || null };
         });
       }
     } catch(e) {}
@@ -7486,6 +7581,70 @@ function renderRolesPermissions() {
 
 var currentAlertRef = null;
 
+// ── Lifecycle cockpit hardening ──────────────────────────────────
+// Visibility-only helpers for the alert detail modal:
+//   A. Downstream linkage chips (→ review / → EDD) when the alert
+//      has already been routed. Reuses prcChipHtml so click-through
+//      opens the existing review / EDD detail surfaces.
+//   D. Structured dismissal reason + notes on terminal-state alerts
+//      (parsed from officer_notes JSON written by monitoring_routing
+//      .dismiss_alert; falls back to the raw string if not JSON).
+function renderAlertDownstreamChipsRow(alert) {
+  if (!alert) return '';
+  var chips = [];
+  if (alert.linked_periodic_review_id != null) {
+    chips.push(prcChipHtml('→ Review #' + String(alert.linked_periodic_review_id).slice(0, 8),
+                            'review', alert.linked_periodic_review_id));
+  }
+  if (alert.linked_edd_case_id != null) {
+    chips.push(prcChipHtml('→ EDD #' + String(alert.linked_edd_case_id).slice(0, 8),
+                            'edd', alert.linked_edd_case_id));
+  }
+  if (!chips.length) return '';
+  return '<div class="detail-row"><span class="label">Downstream</span>' +
+    '<span class="value" style="display:flex;gap:6px;flex-wrap:wrap;">' + chips.join('') + '</span></div>';
+}
+
+function renderAlertDismissalSection(alert) {
+  if (!alert || alert.status !== 'Dismissed') return '';
+  var reason = '';
+  var notes = '';
+  var dismissedBy = '';
+  var dismissedAt = '';
+  var raw = alert.officer_notes;
+  if (raw) {
+    // monitoring_routing.dismiss_alert stores a JSON payload in
+    // officer_notes; tolerate legacy free-text by falling back to
+    // the raw string as the notes field.
+    try {
+      var parsed = (typeof raw === 'string') ? JSON.parse(raw) : raw;
+      if (parsed && typeof parsed === 'object') {
+        reason = parsed.dismissal_reason || '';
+        notes = parsed.dismissal_notes || '';
+        dismissedBy = parsed.dismissed_by || '';
+        dismissedAt = parsed.dismissed_at || '';
+      } else {
+        notes = String(raw);
+      }
+    } catch (e) {
+      notes = String(raw);
+    }
+  }
+  if (!reason && !notes) return '';
+  var rows = '';
+  if (reason) rows += '<div class="detail-row"><span class="label">Reason</span>' +
+    '<span class="value" style="font-family:monospace;font-size:12px;">' + escapeHtml(reason) + '</span></div>';
+  if (notes) rows += '<div class="detail-row"><span class="label">Notes</span>' +
+    '<span class="value" style="white-space:pre-wrap;">' + escapeHtml(notes) + '</span></div>';
+  if (dismissedBy) rows += '<div class="detail-row"><span class="label">Dismissed by</span>' +
+    '<span class="value" style="font-size:12px;color:var(--text3);">' + escapeHtml(dismissedBy) + '</span></div>';
+  if (dismissedAt) rows += '<div class="detail-row"><span class="label">Dismissed at</span>' +
+    '<span class="value" style="font-size:12px;color:var(--text3);">' + escapeHtml(dismissedAt) + '</span></div>';
+  return '<div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Dismissal</div>' +
+    rows + '</div>';
+}
+
 function showAlertDetail(alert) {
   currentAlertRef = alert;
   var html = '<div class="detail-section">' +
@@ -7497,10 +7656,13 @@ function showAlertDetail(alert) {
     '<div class="detail-row"><span class="label">Detected By</span><span class="value">' + alert.agent + '</span></div>' +
     '<div class="detail-row"><span class="label">Source</span><span class="value">' + alert.source + '</span></div>' +
     '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + (alert.status === 'Open' ? 'pending' : alert.status === 'Reviewed' ? 'approved' : alert.status === 'Dismissed' ? 'draft' : 'in-review') + '">' + alert.status + '</span></span></div>' +
+    renderAlertDownstreamChipsRow(alert) +
     '</div><div class="detail-section" style="margin-top:16px;">' +
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Finding Details</div>' +
     '<div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--text2);">' + alert.detail + '</div>' +
-    '</div><div class="detail-section" style="margin-top:16px;">' +
+    '</div>' +
+    renderAlertDismissalSection(alert) +
+    '<div class="detail-section" style="margin-top:16px;">' +
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Recommended Action</div>' +
     '<div style="padding:12px;background:var(--amber-bg);border-radius:var(--radius-sm);font-size:13px;line-height:1.6;color:var(--amber);">' +
     (alert.severity === 'Critical' ? '🚨 <strong>IMMEDIATE ACTION REQUIRED.</strong> Escalate to Senior Compliance Officer and initiate enhanced monitoring. Consider filing SAR if confirmed.' :
@@ -7674,7 +7836,7 @@ var currentReviewRef = null;
 // This function only paints into the container; placement is owned by
 // renderPrcReviewDetailSection above.
 // ─────────────────────────────────────────────────────────────
-async function renderPeriodicReviewMemo(reviewId) {
+async function renderPeriodicReviewMemo(reviewId, reviewState) {
   var container = document.getElementById('periodic-review-memo-container');
   if (!container) return;
   container.innerHTML =
@@ -7689,14 +7851,14 @@ async function renderPeriodicReviewMemo(reviewId) {
     // generation); every other message is a real fetch error.
     var msg = (err && err.message) || '';
     if (msg === 'Memo not found') {
-      container.innerHTML = renderMemoNotCompletedPlaceholder();
+      container.innerHTML = renderMemoNotCompletedPlaceholder(reviewState);
       return;
     }
     container.innerHTML = renderMemoFetchError(msg);
     return;
   }
   if (!resp) {
-    container.innerHTML = renderMemoNotCompletedPlaceholder();
+    container.innerHTML = renderMemoNotCompletedPlaceholder(reviewState);
     return;
   }
   if (resp.status === 'generation_failed') {
@@ -7706,12 +7868,26 @@ async function renderPeriodicReviewMemo(reviewId) {
   container.innerHTML = renderMemoGenerated(resp);
 }
 
-function renderMemoNotCompletedPlaceholder() {
-  // State 2 — neutral styling. Absence is expected.
+function renderMemoNotCompletedPlaceholder(reviewState) {
+  // Neutral placeholder with copy tailored to the review's current
+  // state, so officers can distinguish:
+  //   (1) review not yet completed — memo will be generated on completion
+  //   (2) legacy completed review with no memo — pre-feature review
+  //       whose memo was never generated (will remain absent)
+  //   (3) unknown / in-flight — memo fetch returned no record yet
+  var state = String(reviewState || '').toLowerCase();
+  var copy;
+  if (state === 'completed') {
+    copy = '<strong>No memo on file for this completed review.</strong> This review was completed before the periodic review memo feature was available, or memo generation has not yet run. No memo will appear unless one is generated.';
+  } else if (state && state !== 'unknown') {
+    copy = 'Review is <strong>' + escapeHtml(state) + '</strong> — the periodic review memo is generated when the review is completed. No memo is expected yet.';
+  } else {
+    copy = 'No memo on file yet. A periodic review memo is generated once the review is completed.';
+  }
   return '<div class="detail-section" style="margin-top:16px;">' +
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Periodic Review Memo</div>' +
-    '<div style="padding:12px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:13px;color:var(--text2);">' +
-    'No memo generated — review not completed or awaiting first generation.' +
+    '<div style="padding:12px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:13px;color:var(--text2);line-height:1.5;">' +
+    copy +
     '</div></div>';
 }
 
