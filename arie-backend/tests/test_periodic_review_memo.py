@@ -254,6 +254,71 @@ class TestMigration013(_PRDBase):
         applied = run_all_migrations_with_connection(self._conn)
         self.assertEqual(applied, 0)
 
+    def test_migration_reversibility_drop_and_reapply(self):
+        """Drop periodic_review_memos + its indexes, rewind the
+        schema_version row for migration 013, re-run the migration
+        runner, and assert the table shape is byte-identical (same
+        columns + same indexes) to the first application. Strengthens
+        the reversibility verdict for migration 013.
+        """
+        # Capture the post-013 shape.
+        original_cols = sorted(
+            (r["name"], r["type"]) for r in self._conn.execute(
+                "PRAGMA table_info(periodic_review_memos)"
+            ).fetchall()
+        )
+        original_indexes = sorted(
+            r["name"] for r in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND tbl_name='periodic_review_memos'"
+            ).fetchall()
+            if not r["name"].startswith("sqlite_autoindex_")
+        )
+        self.assertGreater(len(original_cols), 0)
+        self.assertEqual(original_indexes, ["idx_prm_app", "idx_prm_review"])
+
+        # Drop the table + indexes (DROP TABLE in SQLite cascades the
+        # explicit indexes); rewind schema_version so the runner sees
+        # 013 as pending again.
+        self._conn.execute("DROP TABLE periodic_review_memos")
+        self._conn.execute(
+            "DELETE FROM schema_version WHERE version = ?", ("013",)
+        )
+        self._conn.commit()
+
+        # Sanity: table is gone.
+        gone = self._conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='periodic_review_memos'"
+        ).fetchone()
+        self.assertIsNone(gone)
+
+        # Re-apply.
+        from migrations.runner import run_all_migrations_with_connection
+        applied = run_all_migrations_with_connection(self._conn)
+        self.assertGreaterEqual(
+            applied, 1,
+            "expected at least migration 013 to re-apply"
+        )
+
+        # Re-capture and compare.
+        replayed_cols = sorted(
+            (r["name"], r["type"]) for r in self._conn.execute(
+                "PRAGMA table_info(periodic_review_memos)"
+            ).fetchall()
+        )
+        replayed_indexes = sorted(
+            r["name"] for r in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND tbl_name='periodic_review_memos'"
+            ).fetchall()
+            if not r["name"].startswith("sqlite_autoindex_")
+        )
+        self.assertEqual(replayed_cols, original_cols,
+                         "table shape changed after drop+reapply")
+        self.assertEqual(replayed_indexes, original_indexes,
+                         "index shape changed after drop+reapply")
+
 
 # ─────────────────────────────────────────────────────────────────
 # Direct generator tests
@@ -584,13 +649,18 @@ class TestEDDIntegrationIsolation(_PRDBase):
             return original_execute(sql, *a, **kw)
 
         with mock.patch.object(self._conn, "execute", _spy_execute):
-            try:
-                emi.resolve_active_memo_context(self._conn, edd_id)
-            except Exception:
-                # Resolver may raise for unrelated reasons on this
-                # minimal fixture; we only care that it did not query
-                # periodic_review_memos.
-                pass
+            result = emi.resolve_active_memo_context(self._conn, edd_id)
+        # Tighter assertion: the resolver must have actually completed
+        # (not crashed before issuing any query) AND must not have
+        # touched periodic_review_memos. This distinguishes "did not
+        # query the table" from "exploded before querying anything".
+        self.assertIsNotNone(
+            result,
+            "resolve_active_memo_context must return a context dict; "
+            "a None return suggests the resolver crashed before "
+            "querying anything, which would make the isolation "
+            "assertion below trivially pass."
+        )
         self.assertFalse(
             touched["periodic_review_memos"],
             "edd_memo_integration.resolve_active_memo_context must not "
@@ -634,6 +704,15 @@ class TestDeterminism(_PRDBase):
                     )
                     patcher.start()
                     patched.append(patcher)
+        # Guard against a trivially-passing test if no AI module is
+        # importable in the test environment. claude_client lives in
+        # this repo so at least one patcher MUST have been installed.
+        self.assertGreater(
+            len(patched), 0,
+            "expected at least one AI client module to be patched; "
+            "none were installed -- the test would trivially pass "
+            "and stop guarding the determinism invariant."
+        )
         try:
             import periodic_review_memo as prm
             prm.generate_periodic_review_memo(self._conn, rid)

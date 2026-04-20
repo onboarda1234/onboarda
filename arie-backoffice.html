@@ -7128,11 +7128,35 @@ function renderPrcReviewDetailSection(detail) {
       '<div class="detail-row"><span class="label">Escalation</span><span class="value">' + escalatedHtml + '</span></div>' +
       '<div class="detail-row"><span class="label">Linked objects</span><span class="value">' + chipsHtml + '</span></div>' +
       (legacyDecision ? '<div class="detail-row"><span class="label" title="Historical column superseded by outcome">legacy decision (non-authoritative)</span><span class="value" style="font-size:12px;color:var(--text3);text-decoration:line-through;">' + escapeHtml(String(legacyDecision)) + '</span></div>' : '') +
-    '</div>' +
-    '<div class="detail-section" style="margin-top:16px;">' +
-      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Required items (' + requiredItems.length + ')</div>' +
-      itemsHtml +
     '</div>';
+
+  // PR-D seam: insert the lightweight periodic-review memo container
+  // BETWEEN PR-C's outcome section and PR-C's required-items section
+  // so the final DOM order is
+  //   outcome → memo container → required items.
+  // This satisfies the PR-D brief's "immediately below outcome/
+  // outcome_reason, immediately above required-items list" placement.
+  var memoContainer = document.createElement('div');
+  memoContainer.id = 'periodic-review-memo-container';
+  if (detail && detail.id != null) {
+    memoContainer.setAttribute('data-review-id', String(detail.id));
+  }
+  host.appendChild(memoContainer);
+
+  var requiredSection = document.createElement('div');
+  requiredSection.className = 'detail-section';
+  requiredSection.style.marginTop = '16px';
+  requiredSection.innerHTML =
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Required items (' + requiredItems.length + ')</div>' +
+    itemsHtml;
+  host.appendChild(requiredSection);
+
+  // Kick off the memo fetch + render now that the container is placed.
+  // Fire-and-forget; renderer owns its own error handling and the three
+  // distinct visual states (generated / 404 / generation_failed).
+  if (detail && detail.id != null) {
+    try { renderPeriodicReviewMemo(detail.id); } catch (e) { /* renderer logs */ }
+  }
 }
 
 // ── Scope C: EDD detail visibility (read-only) ───────────────────
@@ -7613,18 +7637,13 @@ function openPeriodicReview(ref) {
     }
 
     document.getElementById('review-modal-title').textContent = 'Periodic Review — ' + review.client;
-    // PR-D: placeholder node for the lightweight periodic review memo
-    // artifact. PR-C owns the outcome / required-items block that will
-    // sit above this; the memo block is additive and self-contained so
-    // the two PRs can merge in either order. Per PR-D brief, placement
-    // is "immediately below outcome/outcome_reason, immediately above
-    // required-items" -- when PR-C lands, the required-items list will
-    // render between this title and the memo container below.
-    reviewHtml += '<div id="periodic-review-memo-container" data-review-id="' + (review.id || '') + '"></div>';
+    // PR-D: the periodic review memo container is NOT injected here.
+    // It is placed by PR-C's renderPrcReviewDetailSection between
+    // PR-C's "Review state & outcome (authoritative)" section and
+    // PR-C's "Required items" section so the resulting DOM order is
+    //   Summary → Client Profile → banners → outcome → memo → required-items.
+    // See renderPrcReviewDetailSection below.
     document.getElementById('review-modal-body').innerHTML = reviewHtml;
-    // Kick off the memo fetch + render. Fire-and-forget; renderer owns
-    // its own error handling and the three distinct visual states.
-    if (review.id) { renderPeriodicReviewMemo(review.id); }
     // Store current review for decision submission
     currentReviewRef = review;
     // Show/hide decision button based on status (completed reviews cannot be re-decided)
@@ -7647,10 +7666,13 @@ var currentReviewRef = null;
 //   State 2 — 404:                   neutral placeholder
 //   State 3 — 200 generation_failed: warning banner
 // Contract owner: periodic_review_memo.py + GET /api/periodic-reviews/:id/memo
-// Modal placement: additive sub-section directly below the review
-// detail body. PR-C owns outcome/outcome_reason + required-items
-// rendering; the memo container is a sibling placeholder so the two
-// PRs can merge in either order without overlapping edits.
+// Modal placement (post PR-C merge): the memo container is injected
+// by PR-C's renderPrcReviewDetailSection BETWEEN PR-C's outcome
+// section and PR-C's required-items section, so the resulting DOM
+// order in #review-modal-body is
+//   Summary → Client Profile → banners → outcome → memo → required-items.
+// This function only paints into the container; placement is owned by
+// renderPrcReviewDetailSection above.
 // ─────────────────────────────────────────────────────────────
 async function renderPeriodicReviewMemo(reviewId) {
   var container = document.getElementById('periodic-review-memo-container');

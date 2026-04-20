@@ -116,7 +116,7 @@ def _applied_versions(db):
     return [r["version"] for r in rows]
 
 
-def test_fresh_db_applies_all_twelve_migrations(
+def test_fresh_db_applies_all_migrations(
     tmp_path, monkeypatch, caplog
 ):
     """Step 4 case 1: fresh init_db then runner; all chained migrations apply."""
@@ -134,7 +134,7 @@ def test_fresh_db_applies_all_twelve_migrations(
         assert _applied_versions(db) == [v for v, _ in _CHAIN_FILES]
 
 
-def test_staging_partial_001_through_009_applies_only_010_011_012(
+def test_staging_partial_chain_applies_only_remaining(
     tmp_path, monkeypatch, caplog
 ):
     """Step 4 case 2: simulate staging where 001..009 are already
@@ -158,7 +158,7 @@ def test_staging_partial_001_through_009_applies_only_010_011_012(
         assert _applied_versions(db) == [v for v, _ in _CHAIN_FILES]
 
 
-def test_half_applied_001_through_005_applies_006_through_012(
+def test_half_applied_chain_applies_remaining(
     tmp_path, monkeypatch, caplog
 ):
     """Step 4 case 3: half-applied state where 001..005 are already
