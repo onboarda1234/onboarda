@@ -7094,7 +7094,18 @@ function openPeriodicReview(ref) {
     }
 
     document.getElementById('review-modal-title').textContent = 'Periodic Review — ' + review.client;
+    // PR-D: placeholder node for the lightweight periodic review memo
+    // artifact. PR-C owns the outcome / required-items block that will
+    // sit above this; the memo block is additive and self-contained so
+    // the two PRs can merge in either order. Per PR-D brief, placement
+    // is "immediately below outcome/outcome_reason, immediately above
+    // required-items" -- when PR-C lands, the required-items list will
+    // render between this title and the memo container below.
+    reviewHtml += '<div id="periodic-review-memo-container" data-review-id="' + (review.id || '') + '"></div>';
     document.getElementById('review-modal-body').innerHTML = reviewHtml;
+    // Kick off the memo fetch + render. Fire-and-forget; renderer owns
+    // its own error handling and the three distinct visual states.
+    if (review.id) { renderPeriodicReviewMemo(review.id); }
     // Store current review for decision submission
     currentReviewRef = review;
     // Show/hide decision button based on status (completed reviews cannot be re-decided)
@@ -7108,6 +7119,193 @@ function openPeriodicReview(ref) {
 }
 
 var currentReviewRef = null;
+
+// ─────────────────────────────────────────────────────────────
+// PR-D: Lightweight periodic review memo (read-only, 3 UI states).
+//   State 1 — 200 generated:         full memo render
+//   State 2 — 404:                   neutral placeholder
+//   State 3 — 200 generation_failed: warning banner
+// Contract owner: periodic_review_memo.py + GET /api/periodic-reviews/:id/memo
+// Modal placement: additive sub-section directly below the review
+// detail body. PR-C owns outcome/outcome_reason + required-items
+// rendering; the memo container is a sibling placeholder so the two
+// PRs can merge in either order without overlapping edits.
+// ─────────────────────────────────────────────────────────────
+async function renderPeriodicReviewMemo(reviewId) {
+  var container = document.getElementById('periodic-review-memo-container');
+  if (!container) return;
+  container.innerHTML =
+    '<div style="margin-top:16px;padding:12px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;color:var(--text3);">Loading review memo…</div>';
+  var resp;
+  try {
+    resp = await boApiCall('GET', '/periodic-reviews/' + reviewId + '/memo');
+  } catch (err) {
+    // boApiCall throws a plain Error whose message is the backend's
+    // {"error": ...} body on non-2xx. The read endpoint returns
+    // "Memo not found" on 404 (review not completed / awaiting first
+    // generation); every other message is a real fetch error.
+    var msg = (err && err.message) || '';
+    if (msg === 'Memo not found') {
+      container.innerHTML = renderMemoNotCompletedPlaceholder();
+      return;
+    }
+    container.innerHTML = renderMemoFetchError(msg);
+    return;
+  }
+  if (!resp) {
+    container.innerHTML = renderMemoNotCompletedPlaceholder();
+    return;
+  }
+  if (resp.status === 'generation_failed') {
+    container.innerHTML = renderMemoFailureBanner(resp);
+    return;
+  }
+  container.innerHTML = renderMemoGenerated(resp);
+}
+
+function renderMemoNotCompletedPlaceholder() {
+  // State 2 — neutral styling. Absence is expected.
+  return '<div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Periodic Review Memo</div>' +
+    '<div style="padding:12px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:13px;color:var(--text2);">' +
+    'No memo generated — review not completed or awaiting first generation.' +
+    '</div></div>';
+}
+
+function renderMemoFailureBanner(memo) {
+  // State 3 — warning styling (yellow/orange), NOT an error color.
+  // Render whatever memo_data was stored at the failure point.
+  var partial = memo && memo.memo_data ? JSON.stringify(memo.memo_data, null, 2) : '';
+  return '<div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Periodic Review Memo</div>' +
+    '<div style="padding:12px;background:var(--amber-bg);border:1px solid var(--amber);border-radius:var(--radius-sm);font-size:13px;color:var(--amber);">' +
+    '⚠️ <strong>Memo generation failed</strong> — generation failure logged; contact platform team for retry.' +
+    '</div>' +
+    (partial ? '<pre style="margin-top:8px;padding:8px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:11px;color:var(--text3);white-space:pre-wrap;word-break:break-word;">' + escapeHtml(partial) + '</pre>' : '') +
+    '</div>';
+}
+
+function renderMemoFetchError(msg) {
+  return '<div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Periodic Review Memo</div>' +
+    '<div style="padding:12px;background:var(--amber-bg);border:1px solid var(--amber);border-radius:var(--radius-sm);font-size:13px;color:var(--amber);">' +
+    '⚠️ Unable to load memo: ' + escapeHtml(msg || 'unknown error') +
+    '</div></div>';
+}
+
+function renderMemoGenerated(memo) {
+  var data = (memo && memo.memo_data) || {};
+  var sections = [
+    ['Header', renderMemoHeader(data.header || {})],
+    ['Review Purpose', renderMemoKeyValue(data.review_purpose || {}, {
+      why_review_exists: 'Why this review exists',
+      trigger_summary: 'Trigger summary'
+    })],
+    ['Current Profile Snapshot', renderMemoKeyValue(data.current_profile_snapshot || {}, {
+      entity_type: 'Entity type',
+      jurisdiction: 'Jurisdiction',
+      sector: 'Sector',
+      ownership_reference: 'Ownership'
+    })],
+    ['Monitoring Summary', renderMemoMonitoring(data.monitoring_screening_summary || {})],
+    ['Required Items', renderMemoRequiredItems(data.required_items || [])],
+    ['EDD Summary', renderMemoEDD(data.edd_summary || {})],
+    ['Risk Reassessment', renderMemoKeyValue(data.risk_reassessment || {}, {
+      outcome: 'Outcome',
+      rationale: 'Rationale'
+    })],
+    ['Conclusion', renderMemoKeyValue(data.conclusion || {}, {
+      outcome: 'Outcome',
+      outcome_reason: 'Reason',
+      next_step: 'Next step'
+    })],
+    ['Artifact References', renderMemoArtifactRefs(data.artifact_references || {})]
+  ];
+  var footer = '<div style="margin-top:8px;font-size:11px;color:var(--text3);">Version ' + escapeHtml(String(memo.version || 1)) +
+    ' · Generated ' + escapeHtml(memo.generated_at || '') +
+    ' · by ' + escapeHtml(memo.generated_by || '') + '</div>';
+  var html = '<div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Periodic Review Memo</div>';
+  sections.forEach(function(pair) {
+    html += '<div style="margin-top:10px;">' +
+      '<div style="font-weight:600;font-size:12px;color:var(--text2);margin-bottom:4px;">' + escapeHtml(pair[0]) + '</div>' +
+      pair[1] + '</div>';
+  });
+  html += footer + '</div>';
+  return html;
+}
+
+function renderMemoHeader(h) {
+  return renderMemoKeyValue(h, {
+    review_id: 'Review ID',
+    application_id: 'Application ID',
+    application_name: 'Application',
+    trigger_source: 'Trigger',
+    reviewer: 'Reviewer',
+    current_risk_level: 'Current risk level'
+  });
+}
+
+function renderMemoKeyValue(obj, labels) {
+  var rows = '';
+  Object.keys(labels).forEach(function(k) {
+    var v = obj[k];
+    if (v === null || v === undefined || v === '') v = '—';
+    rows += '<div class="detail-row"><span class="label">' + escapeHtml(labels[k]) + '</span>' +
+      '<span class="value">' + escapeHtml(String(v)) + '</span></div>';
+  });
+  return rows || '<div style="font-size:12px;color:var(--text3);">No data.</div>';
+}
+
+function renderMemoMonitoring(ms) {
+  var alerts = Array.isArray(ms.linked_alerts) ? ms.linked_alerts : [];
+  if (!alerts.length) {
+    return '<div style="font-size:12px;color:var(--text3);">No linked monitoring alerts.</div>';
+  }
+  return alerts.map(function(a) {
+    return '<div class="detail-row"><span class="label">Alert #' + escapeHtml(String(a.id)) + '</span>' +
+      '<span class="value">' + escapeHtml(a.alert_type || '') +
+      ' (' + escapeHtml(a.severity || '') + '/' + escapeHtml(a.status || '') + ')</span></div>';
+  }).join('');
+}
+
+function renderMemoRequiredItems(items) {
+  if (!items || !items.length) {
+    return '<div style="font-size:12px;color:var(--text3);">No required items.</div>';
+  }
+  return items.map(function(it) {
+    return '<div class="detail-row"><span class="label">' + escapeHtml(it.label || '—') + '</span>' +
+      '<span class="value">' + escapeHtml(it.rationale || '') +
+      (it.status ? ' · ' + escapeHtml(it.status) : '') + '</span></div>';
+  }).join('');
+}
+
+function renderMemoEDD(e) {
+  if (!e.triggered) {
+    return '<div style="font-size:12px;color:var(--text3);">EDD not triggered.</div>';
+  }
+  var rows = '<div class="detail-row"><span class="label">Triggered</span><span class="value">Yes</span></div>';
+  if (e.linked_edd_id) {
+    rows += '<div class="detail-row"><span class="label">Linked EDD</span><span class="value">#' + escapeHtml(String(e.linked_edd_id)) + '</span></div>';
+  }
+  if (e.key_findings_summary) {
+    rows += '<div class="detail-row"><span class="label">Findings</span><span class="value">' + escapeHtml(e.key_findings_summary) + '</span></div>';
+  }
+  return rows;
+}
+
+function renderMemoArtifactRefs(a) {
+  var alerts = Array.isArray(a.linked_alerts) ? a.linked_alerts : [];
+  var rows = '';
+  rows += '<div class="detail-row"><span class="label">Linked alerts</span><span class="value">' +
+    (alerts.length ? alerts.map(function(x) { return '#' + escapeHtml(String(x)); }).join(', ') : '—') +
+    '</span></div>';
+  rows += '<div class="detail-row"><span class="label">Linked EDD</span><span class="value">' +
+    (a.linked_edd ? '#' + escapeHtml(String(a.linked_edd)) : '—') + '</span></div>';
+  rows += '<div class="detail-row"><span class="label">Onboarding memo</span><span class="value">' +
+    (a.onboarding_memo_reference ? escapeHtml(String(a.onboarding_memo_reference)) : '—') + '</span></div>';
+  return rows;
+}
 
 function showReviewDecisionForm() {
   if (!currentReviewRef) return;

@@ -8914,7 +8914,63 @@ class PeriodicReviewCompleteHandler(BaseHandler):
                 return self.error(str(e), 409)
             except pre.PeriodicReviewEngineError as e:
                 return self.error(str(e), 400)
-            self.success({"status": "outcome_recorded", "result": result})
+
+            # PR-D: generate the lightweight periodic review memo AFTER
+            # the outcome commit. Deterministic, template-driven, no AI.
+            # Failure here MUST NOT roll back the outcome -- the review
+            # remains completed; a status='generation_failed' row is
+            # persisted by the generator so the read endpoint and UI can
+            # differentiate "not yet completed" (no row) from "completed
+            # but generation failed" (row with failure status). See
+            # periodic_review_memo.py docstring for the failure contract.
+            memo_result = None
+            try:
+                import periodic_review_memo as prm
+                memo_result = prm.generate_periodic_review_memo(db, review_id)
+            except Exception:
+                # Generator already logged with full traceback. Swallow
+                # here so the outcome commit is the authoritative result
+                # surfaced to the caller.
+                memo_result = {"status": "generation_failed"}
+
+            self.success({
+                "status": "outcome_recorded",
+                "result": result,
+                "memo": memo_result,
+            })
+        finally:
+            db.close()
+
+
+class PeriodicReviewMemoHandler(BaseHandler):
+    """GET /api/periodic-reviews/:id/memo — Lightweight periodic review memo.
+
+    PR-D: returns the latest memo row for the given periodic review.
+
+    * 200 with ``status='generated'`` and full ``memo_data`` when the
+      memo was generated successfully.
+    * 200 with ``status='generation_failed'`` when a failure-indicator
+      row exists (review completed, but memo generation raised).
+    * 404 when no memo row exists at all (review not yet completed).
+
+    Auth gating mirrors ``PeriodicReviewDetailHandler`` (admin|sco|co).
+    Explicitly NOT ``compliance_memos``: this endpoint never reads or
+    writes the onboarding memo table.
+    """
+    def get(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        db = get_db()
+        try:
+            import periodic_review_memo as prm
+            memo = prm.fetch_latest_memo(db, review_id)
+            if memo is None:
+                return self.error("Memo not found", 404)
+            self.success(memo)
         finally:
             db.close()
 
@@ -10464,6 +10520,9 @@ def make_app():
         (r"/api/monitoring/reviews/([^/]+)/decision", PeriodicReviewDecisionHandler),
         (r"/api/monitoring/reviews/([^/]+)", PeriodicReviewDetailHandler),
         (r"/api/monitoring/reviews", PeriodicReviewsListHandler),
+
+        # PR-D: Lightweight periodic review memo artifact (read-only)
+        (r"/api/periodic-reviews/([^/]+)/memo", PeriodicReviewMemoHandler),
 
         # SAR (Suspicious Activity Reports)
         (r"/api/sar/auto-trigger", SARAutoTriggerHandler),
