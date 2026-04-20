@@ -1476,11 +1476,19 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 
   <!-- Alerts Tab -->
   <div id="monitoring-alerts-tab">
-    <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:20px;">
-      <div class="stat-card"><div class="stat-card-label">Active Monitoring</div><div class="stat-card-value" style="color:var(--green);" id="mon-stat-active">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Open Alerts</div><div class="stat-card-value" style="color:var(--amber);" id="mon-stat-open">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Critical</div><div class="stat-card-value" style="color:var(--red);" id="mon-stat-critical">0</div></div>
-      <div class="stat-card"><div class="stat-card-label">Reviews Due</div><div class="stat-card-value" style="color:var(--blue);" id="mon-stat-reviews">0</div></div>
+    <!-- PR-C Scope D: existing "raw" tiles kept for backward compatibility; new
+         "Active lifecycle work" tile is the source of truth going forward.
+         Existing tile data sources are unchanged — only the labels are
+         clarified so counters no longer read as authoritative. -->
+    <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:20px;">
+      <div class="stat-card"><div class="stat-card-label">Active Monitoring (raw)</div><div class="stat-card-value" style="color:var(--green);" id="mon-stat-active">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Open Monitoring Alerts (raw)</div><div class="stat-card-value" style="color:var(--amber);" id="mon-stat-open">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Critical (raw)</div><div class="stat-card-value" style="color:var(--red);" id="mon-stat-critical">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Reviews Due (raw)</div><div class="stat-card-value" style="color:var(--blue);" id="mon-stat-reviews">0</div></div>
+      <div class="stat-card" title="Source of truth: /api/lifecycle/queue?include=active (alerts).">
+        <div class="stat-card-label">Active Lifecycle Work</div>
+        <div class="stat-card-value" style="color:#7c3aed;" id="mon-stat-lifecycle-active">—</div>
+      </div>
     </div>
 
     <div style="display:flex;gap:10px;margin-bottom:16px;">
@@ -6043,6 +6051,8 @@ function openEDDDetail(caseId) {
   document.getElementById('edd-modal-title').textContent = 'EDD Case — ' + c.client_name;
   document.getElementById('edd-modal-body').innerHTML = html;
   document.getElementById('modal-edd-detail').classList.add('open');
+  // PR-C Scope C — additive lifecycle context section (read-only).
+  prcEnhanceEDDDetail(c);
 }
 
 async function advanceEDDStage(caseId, newStage) {
@@ -6556,16 +6566,18 @@ function lifecycleAgeLabel(item) {
 
 function lifecycleLinkageChips(item) {
   var chips = [];
-  function chip(label, kind) {
-    var cls = (kind === 'alert') ? 'edd-required'
-            : (kind === 'review') ? 'in-review'
-            : (kind === 'edd') ? 'very-high'
-            : 'draft';
-    chips.push('<span class="badge ' + cls + '" style="font-family:monospace;">' + escapeHtml(label) + '</span>');
+  // PR-C chip click-through — reuses the shared prcChipHtml helper so
+  // chips route consistently from the queue, the app summary card, and
+  // both detail modals.
+  if (item.linked_periodic_review_id) {
+    chips.push(prcChipHtml('→ review #' + String(item.linked_periodic_review_id).slice(0, 8), 'review', item.linked_periodic_review_id));
   }
-  if (item.linked_periodic_review_id) chip('→ review #' + String(item.linked_periodic_review_id).slice(0, 8), 'review');
-  if (item.linked_edd_case_id)        chip('→ EDD #' + String(item.linked_edd_case_id).slice(0, 8), 'edd');
-  if (item.linked_monitoring_alert_id) chip('← alert #' + String(item.linked_monitoring_alert_id).slice(0, 8), 'alert');
+  if (item.linked_edd_case_id) {
+    chips.push(prcChipHtml('→ EDD #' + String(item.linked_edd_case_id).slice(0, 8), 'edd', item.linked_edd_case_id));
+  }
+  if (item.linked_monitoring_alert_id) {
+    chips.push(prcChipHtml('← alert #' + String(item.linked_monitoring_alert_id).slice(0, 8), 'alert', item.linked_monitoring_alert_id));
+  }
   return chips.length ? chips.join(' ') : '<span style="color:var(--text3);font-size:11px;">—</span>';
 }
 
@@ -6688,12 +6700,15 @@ function renderLifecycleApplicationSummary(resp) {
       var t = String((o && o.type) || '').toLowerCase();
       var label = (t === 'edd') ? 'EDD' : (t.charAt(0).toUpperCase() + t.slice(1));
       var idShort = (o && o.id) ? String(o.id).slice(0, 8) : '?';
-      return label + ' #' + idShort;
+      return { kind: t, id: o && o.id, label: label + ' #' + idShort };
     }
-    var cls = (edge && edge.kind && edge.kind.indexOf('edd') >= 0) ? 'very-high'
-            : (edge && edge.kind && edge.kind.indexOf('review') >= 0) ? 'in-review'
-            : 'edd-required';
-    return '<span class="badge ' + cls + '" style="font-family:monospace;">' + escapeHtml(side(edge.from)) + ' → ' + escapeHtml(side(edge.to)) + '</span>';
+    var from = side(edge.from);
+    var to = side(edge.to);
+    // PR-C — app-summary edges route through prcChipHtml so clicking
+    // either end of the edge opens the relevant detail modal.
+    var fromChip = from.id != null ? prcChipHtml(from.label, from.kind, from.id) : '<span>' + escapeHtml(from.label) + '</span>';
+    var toChip = to.id != null ? prcChipHtml(to.label, to.kind, to.id) : '<span>' + escapeHtml(to.label) + '</span>';
+    return '<span style="display:inline-flex;gap:4px;align-items:center;">' + fromChip + '<span style="color:var(--text3);">→</span>' + toChip + '</span>';
   }
 
   var edgesHtml = (linkage.edges && linkage.edges.length)
@@ -6710,6 +6725,506 @@ function renderLifecycleApplicationSummary(resp) {
         '</div>' +
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">' + edgesHtml + '</div>' +
+    '</div>';
+}
+
+// ═══════════════════════════════════════════════════════════
+// PR-C — Per-detail operator actions & visibility
+// ═══════════════════════════════════════════════════════════
+// Additive helpers that wire alert/review/EDD detail surfaces to
+// authoritative backend state. No existing function is renamed; all
+// pre-existing controls remain operational. See pull-request
+// description for the canonical officer-workflow mapping.
+
+// PR-C Scope A: structured dismissal reasons (from
+// monitoring_routing.VALID_DISMISSAL_REASONS — keep in sync with
+// arie-backend/monitoring_routing.py).
+var PRC_DISMISSAL_REASONS = [
+  { value: 'false_positive',       label: 'False positive' },
+  { value: 'duplicate',            label: 'Duplicate alert' },
+  { value: 'no_action_needed',     label: 'No action needed' },
+  { value: 'resolved_externally',  label: 'Resolved externally' },
+  { value: 'other',                label: 'Other (see notes)' }
+];
+
+// Terminal/non-actionable alert statuses (mirror monitoring_routing
+// STATUS_* vocabulary). "Open" alerts here are those still routable.
+function prcAlertIsRoutable(status) {
+  var s = String(status || '').toLowerCase();
+  return s === 'open' || s === 'triaged' || s === 'assigned';
+}
+
+// Standard confirmation wording (per PR-C brief — verbatim).
+function prcRoutingConfirmation(kind, id, reused) {
+  var label = (kind === 'review') ? 'review' : 'EDD';
+  if (reused) {
+    return 'Reused ' + label + ' #' + id + ' — already active for this application';
+  }
+  return 'Created ' + label + ' #' + id;
+}
+
+// Per-button in-flight guard: disable/re-enable by id to prevent
+// duplicate submissions while a routing request is pending.
+function prcButtonsBusy(ids, busy) {
+  ids.forEach(function(id) {
+    var b = document.getElementById(id);
+    if (!b) return;
+    if (busy) {
+      b.setAttribute('data-prc-orig-text', b.textContent);
+      b.disabled = true;
+      b.textContent = 'Working…';
+    } else {
+      b.disabled = false;
+      var orig = b.getAttribute('data-prc-orig-text');
+      if (orig) { b.textContent = orig; b.removeAttribute('data-prc-orig-text'); }
+    }
+  });
+}
+
+// ── Scope A: Alert detail — structured lifecycle actions ─────────
+function prcAlertActionsMarkup(alert) {
+  if (!alert || !alert.id) return '';
+  if (!prcAlertIsRoutable(alert.status)) {
+    return '<div class="detail-section" style="margin-top:16px;">' +
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Lifecycle actions</div>' +
+      '<div style="font-size:12px;color:var(--text3);">This alert is in a terminal state (' + escapeHtml(String(alert.status || '')) + ') and cannot be routed. Status changes are read-only.</div>' +
+      '<div id="prc-alert-action-result" style="margin-top:10px;"></div>' +
+      '</div>';
+  }
+  var reasonOpts = PRC_DISMISSAL_REASONS.map(function(r) {
+    return '<option value="' + r.value + '">' + escapeHtml(r.label) + '</option>';
+  }).join('');
+  return '<div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Lifecycle actions</div>' +
+    '<div style="display:grid;grid-template-columns:1fr;gap:10px;">' +
+      // Dismiss row — structured reason is REQUIRED by the backend.
+      '<div style="padding:10px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);">' +
+        '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Dismiss alert <span style="color:var(--red);">*</span></label>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' +
+          '<select id="prc-alert-dismiss-reason" style="flex:1;min-width:180px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg1);">' + reasonOpts + '</select>' +
+          '<input id="prc-alert-dismiss-notes" type="text" placeholder="Optional notes" style="flex:2;min-width:200px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg1);" />' +
+          '<button id="prc-alert-btn-dismiss" class="btn btn-outline btn-sm" onclick="prcAlertDismiss()">Dismiss</button>' +
+        '</div>' +
+      '</div>' +
+      // Triage / Assign / Route-to-review / Route-to-EDD row.
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button id="prc-alert-btn-triage" class="btn btn-outline btn-sm" onclick="prcAlertTriage()">Triage</button>' +
+        '<button id="prc-alert-btn-assign" class="btn btn-outline btn-sm" onclick="prcAlertAssign()">Assign to me</button>' +
+        '<button id="prc-alert-btn-route-review" class="btn btn-primary btn-sm" onclick="prcAlertRouteReview()">Route to periodic review</button>' +
+        '<button id="prc-alert-btn-route-edd" class="btn btn-outline btn-sm" style="background:#7c3aed;color:#fff;border-color:#7c3aed;" onclick="prcAlertRouteEDD()">Route to EDD</button>' +
+      '</div>' +
+      '<div id="prc-alert-action-result" style="font-size:12px;"></div>' +
+    '</div>' +
+    '</div>';
+}
+
+function prcAlertShowResult(msg, kind) {
+  var el = document.getElementById('prc-alert-action-result');
+  if (!el) return;
+  var bg = (kind === 'error') ? 'rgba(220,38,38,0.08)' : 'rgba(16,185,129,0.08)';
+  var color = (kind === 'error') ? 'var(--red)' : 'var(--green)';
+  el.innerHTML = '<div style="padding:8px 10px;background:' + bg + ';color:' + color + ';border-radius:var(--radius-sm);">' + escapeHtml(msg) + '</div>';
+}
+
+var PRC_ALERT_BTN_IDS = ['prc-alert-btn-dismiss','prc-alert-btn-triage','prc-alert-btn-assign','prc-alert-btn-route-review','prc-alert-btn-route-edd'];
+
+async function prcAlertTriage() {
+  if (!currentAlertRef || !currentAlertRef.id) return;
+  prcButtonsBusy(PRC_ALERT_BTN_IDS, true);
+  try {
+    var resp = await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, { action: 'triage' });
+    var newStatus = (resp && resp.new_status) || 'triaged';
+    currentAlertRef.status = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+    prcAlertShowResult('Alert triaged (status: ' + newStatus + ')');
+    try { renderMonitoringAlerts(); } catch(e) {}
+  } catch(err) {
+    prcAlertShowResult('Triage failed: ' + (err.message || 'unknown error'), 'error');
+  } finally {
+    prcButtonsBusy(PRC_ALERT_BTN_IDS, false);
+  }
+}
+
+async function prcAlertAssign() {
+  if (!currentAlertRef || !currentAlertRef.id) return;
+  prcButtonsBusy(PRC_ALERT_BTN_IDS, true);
+  try {
+    var resp = await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, { action: 'assign' });
+    var newStatus = (resp && resp.new_status) || 'assigned';
+    currentAlertRef.status = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+    prcAlertShowResult('Alert assigned (status: ' + newStatus + ')');
+    try { renderMonitoringAlerts(); } catch(e) {}
+  } catch(err) {
+    prcAlertShowResult('Assign failed: ' + (err.message || 'unknown error'), 'error');
+  } finally {
+    prcButtonsBusy(PRC_ALERT_BTN_IDS, false);
+  }
+}
+
+async function prcAlertDismiss() {
+  if (!currentAlertRef || !currentAlertRef.id) return;
+  var sel = document.getElementById('prc-alert-dismiss-reason');
+  var notesEl = document.getElementById('prc-alert-dismiss-notes');
+  var reason = sel ? sel.value : '';
+  var notes = notesEl ? notesEl.value.trim() : '';
+  if (!reason) { prcAlertShowResult('Select a dismissal reason.', 'error'); return; }
+  prcButtonsBusy(PRC_ALERT_BTN_IDS, true);
+  try {
+    await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, {
+      action: 'dismiss',
+      dismissal_reason: reason,
+      dismissal_notes: notes || null
+    });
+    currentAlertRef.status = 'Dismissed';
+    prcAlertShowResult('Alert dismissed (' + reason + ')' + (notes ? ' — ' + notes : ''));
+    try { renderMonitoringAlerts(); } catch(e) {}
+  } catch(err) {
+    prcAlertShowResult('Dismiss failed: ' + (err.message || 'unknown error'), 'error');
+  } finally {
+    prcButtonsBusy(PRC_ALERT_BTN_IDS, false);
+  }
+}
+
+async function prcAlertRouteReview() {
+  if (!currentAlertRef || !currentAlertRef.id) return;
+  prcButtonsBusy(PRC_ALERT_BTN_IDS, true);
+  try {
+    var resp = await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, { action: 'route_to_periodic_review' });
+    // Authoritative server fields: result.periodic_review_id, result.reused
+    // The response envelope is not stripped; do not swallow reused.
+    var result = (resp && resp.result) || {};
+    var reviewId = result.periodic_review_id;
+    var reused = !!result.reused;
+    currentAlertRef.status = 'Routed_review';
+    currentAlertRef.linked_periodic_review_id = reviewId;
+    if (reviewId != null) {
+      prcAlertShowResult(prcRoutingConfirmation('review', reviewId, reused));
+    } else {
+      prcAlertShowResult('Routed to periodic review (id not returned).', 'error');
+    }
+    try { renderMonitoringAlerts(); } catch(e) {}
+  } catch(err) {
+    prcAlertShowResult('Route to review failed: ' + (err.message || 'unknown error'), 'error');
+  } finally {
+    prcButtonsBusy(PRC_ALERT_BTN_IDS, false);
+  }
+}
+
+async function prcAlertRouteEDD() {
+  if (!currentAlertRef || !currentAlertRef.id) return;
+  prcButtonsBusy(PRC_ALERT_BTN_IDS, true);
+  try {
+    var resp = await boApiCall('PATCH', '/monitoring/alerts/' + currentAlertRef.id, { action: 'route_to_edd' });
+    var result = (resp && resp.result) || {};
+    var eddId = result.edd_case_id;
+    var reused = !!result.reused;
+    currentAlertRef.status = 'Routed_edd';
+    currentAlertRef.linked_edd_case_id = eddId;
+    if (eddId != null) {
+      prcAlertShowResult(prcRoutingConfirmation('edd', eddId, reused));
+    } else {
+      prcAlertShowResult('Routed to EDD (id not returned).', 'error');
+    }
+    try { renderMonitoringAlerts(); } catch(e) {}
+  } catch(err) {
+    prcAlertShowResult('Route to EDD failed: ' + (err.message || 'unknown error'), 'error');
+  } finally {
+    prcButtonsBusy(PRC_ALERT_BTN_IDS, false);
+  }
+}
+
+// ── Chip click-through (Scopes B + C + app summary) ──────────────
+// Thin helpers that look up by numeric id. The existing
+// openEDDDetail(id) function is already id-addressable and is reused
+// directly; this module adds id-addressable wrappers for alert and
+// review detail surfaces.
+async function openAlertDetailById(alertId) {
+  if (alertId == null) return;
+  try {
+    // Prefer the in-memory list (already loaded for the monitoring
+    // table) to avoid a redundant API call. Fall back to GET /:id.
+    var found = null;
+    if (typeof MONITORING_ALERTS !== 'undefined' && MONITORING_ALERTS && MONITORING_ALERTS.length) {
+      for (var i = 0; i < MONITORING_ALERTS.length; i++) {
+        if (String(MONITORING_ALERTS[i].id) === String(alertId)) { found = MONITORING_ALERTS[i]; break; }
+      }
+    }
+    if (!found) {
+      var raw = await boApiCall('GET', '/monitoring/alerts/' + encodeURIComponent(alertId));
+      found = {
+        id: raw.id,
+        date: (raw.created_at || '').split('T')[0].split(' ')[0],
+        client: raw.client_name || '',
+        type: raw.alert_type || '',
+        severity: raw.severity || 'Medium',
+        agent: raw.detected_by || '',
+        status: (raw.status || 'open').charAt(0).toUpperCase() + (raw.status || 'open').slice(1),
+        source: raw.source_reference || '',
+        detail: raw.summary || '',
+        recommendation: raw.ai_recommendation || '',
+        linked_periodic_review_id: raw.linked_periodic_review_id,
+        linked_edd_case_id: raw.linked_edd_case_id
+      };
+    }
+    showAlertDetail(found);
+  } catch(err) {
+    showToast('Failed to open alert: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+async function openReviewDetailById(reviewId) {
+  if (reviewId == null) return;
+  // openPeriodicReview takes a ref (application id). Use it when a
+  // cached row exists; otherwise fetch authoritative detail.
+  try {
+    var cached = null;
+    if (typeof PERIODIC_REVIEWS !== 'undefined' && PERIODIC_REVIEWS && PERIODIC_REVIEWS.length) {
+      for (var i = 0; i < PERIODIC_REVIEWS.length; i++) {
+        if (String(PERIODIC_REVIEWS[i].id) === String(reviewId)) { cached = PERIODIC_REVIEWS[i]; break; }
+      }
+    }
+    if (cached) { openPeriodicReview(cached.ref); return; }
+    // Fallback: fetch detail directly so officers can still land on
+    // the review surface even if the list cache is cold.
+    var detail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(reviewId));
+    var pseudo = {
+      id: detail.id,
+      ref: detail.application_id || '',
+      client: detail.client_name || '',
+      risk: detail.risk_level || 'Low',
+      lastReview: detail.completed_at ? String(detail.completed_at).split('T')[0].split(' ')[0] : '—',
+      nextDue: detail.due_date || '—',
+      trigger: detail.trigger_reason || detail.trigger_type || '',
+      status: detail.status === 'completed' ? 'Completed' : (detail.status || 'pending')
+    };
+    // Temporarily insert into cache so openPeriodicReview can find it.
+    if (typeof PERIODIC_REVIEWS !== 'undefined' && PERIODIC_REVIEWS) PERIODIC_REVIEWS.push(pseudo);
+    openPeriodicReview(pseudo.ref);
+  } catch(err) {
+    showToast('Failed to open review: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+// Wrap a PR-B chip with a click handler. Returns a span-string with
+// onclick. Keeps the original badge class so the idiom matches.
+function prcChipHtml(label, kind, id) {
+  if (id == null) return '';
+  var cls = (kind === 'alert') ? 'edd-required'
+          : (kind === 'review') ? 'in-review'
+          : (kind === 'edd') ? 'very-high'
+          : 'draft';
+  var handler = (kind === 'alert') ? 'openAlertDetailById'
+              : (kind === 'review') ? 'openReviewDetailById'
+              : (kind === 'edd') ? 'openEDDDetail'
+              : null;
+  var onclick = handler ? ' onclick="event.stopPropagation();' + handler + '(' + JSON.stringify(id) + ')"' : '';
+  var cursor = handler ? ';cursor:pointer;text-decoration:underline dotted;' : '';
+  return '<span class="badge ' + cls + '" style="font-family:monospace;' + cursor + '" title="Open ' + escapeHtml(kind) + ' detail"' + onclick + '>' + escapeHtml(label) + '</span>';
+}
+
+// ── Scope D: Active Lifecycle Work tile counter ──────────────────
+async function loadActiveLifecycleWorkTile() {
+  var el = document.getElementById('mon-stat-lifecycle-active');
+  if (!el) return;
+  try {
+    // Items.length filtered to alert-type (per brief):
+    // /api/lifecycle/queue?include=active returns mixed items; filter
+    // to 'alert' type so the tile is unambiguous against the raw
+    // monitoring alert counter above it.
+    var resp = await boApiCall('GET', '/lifecycle/queue?include=active&type=alerts');
+    var items = (resp && resp.items) || [];
+    var alertItems = items.filter(function(it) { return String(it.type || '').toLowerCase() === 'alert'; });
+    el.textContent = String(alertItems.length);
+  } catch(err) {
+    el.textContent = '—';
+    console.warn('Active lifecycle work tile failed:', err);
+  }
+}
+
+// ── Scope B: Review detail visibility (read-only) ────────────────
+// Fetch authoritative review detail and render outcome + required
+// items + linked chips into the existing modal body. Appended to
+// the body so the existing summary section is untouched.
+async function prcEnhanceReviewDetail(review) {
+  if (!review || !review.id) return;
+  var body = document.getElementById('review-modal-body');
+  if (!body) return;
+  // Placeholder while the detail fetch completes.
+  var placeholder = document.createElement('div');
+  placeholder.id = 'prc-review-detail-section';
+  placeholder.innerHTML = '<div style="margin-top:16px;font-size:12px;color:var(--text3);">Loading authoritative review detail…</div>';
+  body.appendChild(placeholder);
+  try {
+    var detail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(review.id));
+    renderPrcReviewDetailSection(detail);
+  } catch(err) {
+    placeholder.innerHTML = '<div style="margin-top:16px;font-size:12px;color:var(--red);">Failed to load review detail: ' + escapeHtml(err.message || 'unknown error') + '</div>';
+  }
+}
+
+function renderPrcReviewDetailSection(detail) {
+  var host = document.getElementById('prc-review-detail-section');
+  if (!host) return;
+  var state = detail.state || detail.status || '—';
+  var outcome = detail.outcome;
+  var outcomeReason = detail.outcome_reason;
+  var outcomeRecordedAt = detail.outcome_recorded_at;
+  var legacyDecision = detail.decision;
+  var linkedAlertId = detail.linked_monitoring_alert_id;
+  var linkedEDDId = detail.linked_edd_case_id;
+  var triggerSource = detail.trigger_source || detail.trigger_type || detail.trigger_reason || '—';
+  var reviewReason = detail.review_reason;
+  var requiredItems = detail.required_items;
+  // required_items is JSON-encoded TEXT in the DB (migration 009).
+  if (typeof requiredItems === 'string' && requiredItems.length) {
+    try { requiredItems = JSON.parse(requiredItems); } catch(e) { requiredItems = []; }
+  }
+  if (!Array.isArray(requiredItems)) requiredItems = [];
+
+  // Outcome visualisation — ensure completed reviews with different
+  // outcomes render visibly differently (AC2).
+  var outcomeColor = (outcome === 'no_change') ? 'var(--green)'
+                   : (outcome === 'enhanced_monitoring') ? 'var(--amber)'
+                   : (outcome === 'edd_required') ? '#7c3aed'
+                   : (outcome === 'exit_recommended') ? 'var(--red)'
+                   : 'var(--text3)';
+  var outcomeLabel = outcome ? String(outcome).replace(/_/g,' ') : '(no outcome recorded)';
+
+  // Linked chips using prcChipHtml for click-through.
+  var chips = [];
+  if (linkedAlertId != null) chips.push(prcChipHtml('← alert #' + linkedAlertId, 'alert', linkedAlertId));
+  if (linkedEDDId != null)   chips.push(prcChipHtml('→ EDD #' + linkedEDDId, 'edd', linkedEDDId));
+  var chipsHtml = chips.length ? chips.join(' ') : '<span style="color:var(--text3);font-size:11px;">No linked lifecycle objects.</span>';
+
+  // Required items rendered with rationale strings when present.
+  var itemsHtml;
+  if (!requiredItems.length) {
+    itemsHtml = '<div style="font-size:12px;color:var(--text3);">No required items generated yet.</div>';
+  } else {
+    itemsHtml = '<ul style="margin:0 0 0 18px;padding:0;font-size:12px;">' +
+      requiredItems.map(function(it) {
+        var label = (it && (it.label || it.item || it.title)) || (typeof it === 'string' ? it : JSON.stringify(it));
+        var rationale = it && (it.rationale || it.reason || it.why);
+        return '<li style="margin-bottom:4px;"><strong>' + escapeHtml(String(label)) + '</strong>' +
+          (rationale ? '<div style="color:var(--text3);font-size:11px;">' + escapeHtml(String(rationale)) + '</div>' : '') +
+          '</li>';
+      }).join('') +
+      '</ul>';
+  }
+
+  // Escalated-to-EDD indicator — use linked_edd_case_id as the signal
+  // (PR-03 surfaces this link when a review escalates).
+  var escalatedHtml = (linkedEDDId != null)
+    ? '<span class="badge very-high" style="font-size:11px;">Escalated to EDD #' + escapeHtml(String(linkedEDDId)) + '</span>'
+    : '<span style="color:var(--text3);font-size:11px;">Not escalated.</span>';
+
+  host.innerHTML =
+    '<div class="detail-section" style="margin-top:16px;">' +
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Review state &amp; outcome (authoritative)</div>' +
+      '<div class="detail-row"><span class="label">State</span><span class="value"><span class="badge pending" style="font-size:11px;">' + escapeHtml(String(state)) + '</span></span></div>' +
+      '<div class="detail-row"><span class="label">Trigger provenance</span><span class="value" style="font-size:12px;">' + escapeHtml(String(triggerSource)) + (reviewReason ? ' — ' + escapeHtml(String(reviewReason)) : '') + '</span></div>' +
+      '<div class="detail-row"><span class="label">Outcome</span><span class="value" style="font-weight:700;color:' + outcomeColor + ';">' + escapeHtml(outcomeLabel) + '</span></div>' +
+      (outcomeReason ? '<div class="detail-row"><span class="label">Outcome reason</span><span class="value" style="font-size:12px;">' + escapeHtml(String(outcomeReason)) + '</span></div>' : '') +
+      (outcomeRecordedAt ? '<div class="detail-row"><span class="label">Outcome recorded at</span><span class="value" style="font-family:monospace;font-size:12px;">' + escapeHtml(String(outcomeRecordedAt)) + '</span></div>' : '') +
+      '<div class="detail-row"><span class="label">Escalation</span><span class="value">' + escalatedHtml + '</span></div>' +
+      '<div class="detail-row"><span class="label">Linked objects</span><span class="value">' + chipsHtml + '</span></div>' +
+      (legacyDecision ? '<div class="detail-row"><span class="label" title="Historical column superseded by outcome">legacy decision (non-authoritative)</span><span class="value" style="font-size:12px;color:var(--text3);text-decoration:line-through;">' + escapeHtml(String(legacyDecision)) + '</span></div>' : '') +
+    '</div>' +
+    '<div class="detail-section" style="margin-top:16px;">' +
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Required items (' + requiredItems.length + ')</div>' +
+      itemsHtml +
+    '</div>';
+}
+
+// ── Scope C: EDD detail visibility (read-only) ───────────────────
+async function prcEnhanceEDDDetail(eddCase) {
+  if (!eddCase || !eddCase.id) return;
+  var body = document.getElementById('edd-modal-body');
+  if (!body) return;
+  var placeholder = document.createElement('div');
+  placeholder.id = 'prc-edd-detail-section';
+  placeholder.innerHTML = '<div style="margin-top:16px;font-size:12px;color:var(--text3);">Loading lifecycle context…</div>';
+  body.appendChild(placeholder);
+  try {
+    // The lifecycle application summary pre-resolves memo_context and
+    // findings_present for every EDD on the application (see
+    // lifecycle_queue._materialise_edd). One fetch covers the visibility
+    // needs of Scope C.
+    var summary = await boApiCall('GET', '/lifecycle/applications/' + encodeURIComponent(eddCase.application_id) + '/summary');
+    var active = (summary && summary.active && summary.active.items) || [];
+    var historical = (summary && summary.historical && summary.historical.items) || [];
+    var items = active.concat(historical);
+    var materialised = null;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type === 'edd' && String(items[i].id) === String(eddCase.id)) {
+        materialised = items[i]; break;
+      }
+    }
+    renderPrcEDDDetailSection(eddCase, materialised);
+  } catch(err) {
+    placeholder.innerHTML = '<div style="margin-top:16px;font-size:12px;color:var(--red);">Failed to load lifecycle context: ' + escapeHtml(err.message || 'unknown error') + '</div>';
+  }
+}
+
+function renderPrcEDDDetailSection(eddCase, materialised) {
+  var host = document.getElementById('prc-edd-detail-section');
+  if (!host) return;
+  materialised = materialised || {};
+  var originContext = materialised.origin_context || eddCase.origin_context || null;
+  var linkedAlertId = materialised.linked_monitoring_alert_id != null ? materialised.linked_monitoring_alert_id : eddCase.linked_monitoring_alert_id;
+  var linkedReviewId = materialised.linked_periodic_review_id != null ? materialised.linked_periodic_review_id : eddCase.linked_periodic_review_id;
+  var findingsPresent = !!materialised.findings_present;
+  var memoCtx = materialised.memo_context || null;
+
+  // Memo-context badge — all three states rendered.
+  var memoBadge;
+  if (!memoCtx) {
+    memoBadge = '<span class="badge draft" style="font-size:11px;">Unresolved (no context data)</span>';
+  } else if (memoCtx.unresolved) {
+    memoBadge = '<span class="badge very-high" style="font-size:11px;" title="' + escapeHtml(String(memoCtx.unresolved_reason || '')) + '">Unresolved</span>';
+  } else if (memoCtx.kind === 'onboarding') {
+    var memoIdLbl = (memoCtx.memo_id != null) ? '#' + memoCtx.memo_id : '(pending)';
+    memoBadge = '<span class="badge approved" style="font-size:11px;">Onboarding memo ' + escapeHtml(memoIdLbl) + '</span>';
+  } else if (memoCtx.kind === 'periodic_review') {
+    var prIdLbl = (memoCtx.periodic_review_id != null) ? '#' + memoCtx.periodic_review_id : '';
+    memoBadge = '<span class="badge in-review" style="font-size:11px;">Periodic review ' + escapeHtml(prIdLbl) + '</span>';
+  } else {
+    memoBadge = '<span class="badge draft" style="font-size:11px;">Unresolved</span>';
+  }
+
+  // Onboarding attachment warning — when confirmed is explicitly false
+  // on an onboarding-origin EDD.
+  var attachmentWarning = '';
+  var onboardingConfirmed = memoCtx ? memoCtx.onboarding_attachment_confirmed : null;
+  var isOnboardingOrigin = (originContext === 'onboarding') || (memoCtx && memoCtx.kind === 'onboarding');
+  if (isOnboardingOrigin && onboardingConfirmed === false) {
+    attachmentWarning =
+      '<div style="margin-top:10px;padding:10px 12px;background:var(--amber-bg);border-radius:var(--radius-sm);border:1px solid rgba(245,158,11,0.3);font-size:12px;color:var(--amber);">' +
+      '⚠️ <strong>Onboarding memo attachment not confirmed — reconciliation required.</strong> The EDD case claims an onboarding origin but the memo linkage cannot be confirmed against compliance_memos.' +
+      '</div>';
+  }
+
+  // Linked chips.
+  var chips = [];
+  if (linkedAlertId != null)  chips.push(prcChipHtml('← alert #' + linkedAlertId, 'alert', linkedAlertId));
+  if (linkedReviewId != null) chips.push(prcChipHtml('← review #' + linkedReviewId, 'review', linkedReviewId));
+  var chipsHtml = chips.length ? chips.join(' ') : '<span style="color:var(--text3);font-size:11px;">No linked lifecycle objects.</span>';
+
+  var findingsBadge = findingsPresent
+    ? '<span class="badge approved" style="font-size:11px;">Findings present</span>'
+    : '<span class="badge draft" style="font-size:11px;">No findings yet</span>';
+
+  var originLabel = originContext
+    ? String(originContext).replace(/_/g,' ')
+    : '(none — legacy)';
+
+  host.innerHTML =
+    '<div class="detail-section" style="margin-top:16px;">' +
+      '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Lifecycle context</div>' +
+      '<div class="detail-row"><span class="label">Origin context</span><span class="value" style="font-size:12px;">' + escapeHtml(originLabel) + '</span></div>' +
+      '<div class="detail-row"><span class="label">Memo context</span><span class="value">' + memoBadge + '</span></div>' +
+      '<div class="detail-row"><span class="label">Findings</span><span class="value">' + findingsBadge + '</span></div>' +
+      '<div class="detail-row"><span class="label">Linked objects</span><span class="value">' + chipsHtml + '</span></div>' +
+      attachmentWarning +
     '</div>';
 }
 
@@ -6737,6 +7252,10 @@ function renderMonitoring() {
   el = document.getElementById('mon-stat-critical'); if (el) el.textContent = criticalAlerts;
   el = document.getElementById('mon-stat-reviews'); if (el) el.textContent = reviewsDue;
   updateDashboardMonitoringStats();
+  // PR-C Scope D — authoritative lifecycle-work counter; uses the
+  // unified queue endpoint so officers see the real number of alert
+  // items in the active lifecycle bucket, not the raw dashboard count.
+  loadActiveLifecycleWorkTile();
 
   renderMonitoringAlerts();
   renderPeriodicReviews();
@@ -6966,7 +7485,7 @@ function showAlertDetail(alert) {
     '</div></div>';
 
   document.getElementById('alert-modal-title').textContent = alert.type + ' — ' + alert.client;
-  document.getElementById('alert-modal-body').innerHTML = html;
+  document.getElementById('alert-modal-body').innerHTML = html + prcAlertActionsMarkup(alert);
 
   // Show/hide buttons based on status
   var escBtn = document.getElementById('alert-modal-escalate-btn');
@@ -7101,6 +7620,8 @@ function openPeriodicReview(ref) {
     var decideBtn = document.getElementById('review-modal-decide-btn');
     if (decideBtn) decideBtn.style.display = (review.status === 'Completed') ? 'none' : '';
     document.getElementById('modal-periodic-review').classList.add('open');
+    // PR-C Scope B — additive authoritative detail section (read-only).
+    prcEnhanceReviewDetail(review);
   } else if (app) {
     // Fall back to opening the full application detail
     openAppDetail(ref);
