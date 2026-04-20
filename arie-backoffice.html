@@ -7613,7 +7613,8 @@ function renderAlertDownstreamChipsRow(alert) {
 }
 
 function renderAlertDismissalSection(alert) {
-  if (!alert || alert.status !== 'Dismissed') return '';
+  if (!alert || String(alert.status || '').toLowerCase() !== 'dismissed') return '';
+  var action = alert.officer_action || '';
   var reason = '';
   var notes = '';
   var dismissedBy = '';
@@ -7637,8 +7638,10 @@ function renderAlertDismissalSection(alert) {
       notes = String(raw);
     }
   }
-  if (!reason && !notes) return '';
+  if (!reason && !notes && !action) return '';
   var rows = '';
+  if (action) rows += '<div class="detail-row"><span class="label">Action</span>' +
+    '<span class="value" style="font-family:monospace;font-size:12px;">' + escapeHtml(action) + '</span></div>';
   if (reason) rows += '<div class="detail-row"><span class="label">Reason</span>' +
     '<span class="value" style="font-family:monospace;font-size:12px;">' + escapeHtml(reason) + '</span></div>';
   if (notes) rows += '<div class="detail-row"><span class="label">Notes</span>' +
