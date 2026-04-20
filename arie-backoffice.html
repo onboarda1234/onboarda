@@ -7376,6 +7376,13 @@ function renderPeriodicReviews() {
 // are left blank when not available and labelled "Not yet run" rather
 // than invented — this panel is a truthful minimal view per the
 // audit brief.
+//
+// NOTE on Agent 9 (Regulatory Impact Agent): intentionally omitted.
+// Its catalog entry has implementation_mode="future_phase" — it is
+// not yet implemented, so surfacing it here would mislead officers
+// into thinking regulatory-impact monitoring is live. Add it to this
+// array when its implementation_mode flips to live/deterministic/
+// hybrid in ai_agent_catalog.py.
 var MONITORING_AGENT_CATALOG = [
   { id: 6, name: 'Periodic Review Preparation Agent', icon: '🗂️',
     purpose: 'Prepares periodic reviews: required items, priority score, signals to feed the review.',
