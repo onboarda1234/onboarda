@@ -10,8 +10,15 @@ name: seed-staging-fixtures
 #   - apply is additionally gated by the GitHub `staging` Environment so
 #     environment-scoped secrets and required-reviewer rules apply
 #
-# Apply path executes directly on the GitHub runner against the staging
-# database via STAGING_DATABASE_URL. No ECS/Fargate dependency.
+# Apply path executes as a one-off ECS/Fargate task in the same VPC as the
+# staging backend, because the staging RDS is private and unreachable from
+# GitHub-hosted runners. Dry-run still runs locally on the GitHub runner.
+#
+# The Fargate task reuses the existing staging backend task family
+# (`regmind-staging`), so it inherits the exact same DATABASE_URL secret
+# injection, IAM role, networking, and RDS reachability that the live
+# staging backend uses. Only the container command is overridden to invoke
+# `python -m fixtures.cli apply ...` instead of the normal server entrypoint.
 
 permissions:
   contents: read
@@ -88,14 +95,17 @@ jobs:
           path: arie-backend/fixtures/REGISTER.md
 
       # ----------------------------------------------------------------
-      # Apply step against real staging.
+      # Apply step against real staging — runs as a one-off ECS/Fargate
+      # task because the staging RDS is private (no public ingress from
+      # GitHub-hosted runners).
       #
       # Triple-gated:
       #   1. workflow input `mode == apply`
       #   2. workflow input `confirm_apply == I-UNDERSTAND-FIXTURE-WRITE`
       #      (also enforced inside fixtures/cli.py via --confirm)
       #   3. fixtures/cli.py refuses unless ENVIRONMENT=staging and
-      #      ALLOW_FIXTURE_SEED=1 are both set
+      #      ALLOW_FIXTURE_SEED=1 are both set (we set both via the
+      #      ECS container `environment` overrides below)
       #
       # Plus the GitHub `staging` Environment can require manual reviewer
       # approval before this job runs at all.
@@ -108,37 +118,212 @@ jobs:
             exit 2
           fi
 
-      - name: Apply (gated)
+      - name: Configure AWS credentials (apply only)
         if: ${{ inputs.mode == 'apply' }}
-        working-directory: arie-backend
-        env:
-          ENVIRONMENT: staging
-          ALLOW_FIXTURE_SEED: "1"
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-        run: |
-          if [ -z "${DATABASE_URL}" ]; then
-            echo "REFUSED: STAGING_DATABASE_URL secret is not set on the staging environment" >&2
-            exit 3
-          fi
-          if [ -n "${{ inputs.scenarios }}" ]; then
-            python -m fixtures.cli apply \
-              --confirm I-UNDERSTAND-FIXTURE-WRITE \
-              --scen "${{ inputs.scenarios }}"
-          else
-            python -m fixtures.cli apply --confirm I-UNDERSTAND-FIXTURE-WRITE
-          fi
-
-      - name: Render register (post-apply)
-        if: ${{ inputs.mode == 'apply' }}
-        working-directory: arie-backend
-        env:
-          ENVIRONMENT: staging
-          DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-        run: python -m fixtures.cli register --out fixtures/REGISTER.staging.md
-
-      - name: Upload register (post-apply)
-        if: ${{ inputs.mode == 'apply' }}
-        uses: actions/upload-artifact@v4
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          name: fixtures-register-staging
-          path: arie-backend/fixtures/REGISTER.staging.md
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: af-south-1
+
+      - name: Validate ECS apply prerequisites
+        if: ${{ inputs.mode == 'apply' }}
+        env:
+          STAGING_ECS_SUBNETS: ${{ secrets.STAGING_ECS_SUBNETS }}
+          STAGING_ECS_SECURITY_GROUPS: ${{ secrets.STAGING_ECS_SECURITY_GROUPS }}
+        run: |
+          missing=""
+          [ -z "${STAGING_ECS_SUBNETS}" ] && missing="${missing} STAGING_ECS_SUBNETS"
+          [ -z "${STAGING_ECS_SECURITY_GROUPS}" ] && missing="${missing} STAGING_ECS_SECURITY_GROUPS"
+          if [ -n "${missing}" ]; then
+            echo "REFUSED: missing required staging environment secret(s):${missing}." >&2
+            echo "Configure these on the GitHub 'staging' Environment before running apply." >&2
+            exit 4
+          fi
+
+      - name: Run fixtures apply on ECS/Fargate
+        id: ecs_apply
+        if: ${{ inputs.mode == 'apply' }}
+        env:
+          AWS_REGION: af-south-1
+          ECS_CLUSTER: regmind-staging
+          ECS_TASK_FAMILY: regmind-staging
+          # Container name in the regmind-staging task definition whose
+          # `command` we override. Defaults to the canonical backend
+          # container name; can be overridden via repo/environment var if
+          # the staging container is ever renamed.
+          ECS_CONTAINER_NAME: ${{ vars.STAGING_ECS_CONTAINER_NAME || 'regmind-backend' }}
+          STAGING_ECS_SUBNETS: ${{ secrets.STAGING_ECS_SUBNETS }}
+          STAGING_ECS_SECURITY_GROUPS: ${{ secrets.STAGING_ECS_SECURITY_GROUPS }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          set -euo pipefail
+
+          # Build run-task JSON inputs (network config + container overrides)
+          # using a small helper script so we never rely on shell quoting.
+          python3 - <<'PY' > /tmp/network.json
+          import json, os
+          subnets = [s.strip() for s in os.environ["STAGING_ECS_SUBNETS"].split(",") if s.strip()]
+          sgs     = [s.strip() for s in os.environ["STAGING_ECS_SECURITY_GROUPS"].split(",") if s.strip()]
+          print(json.dumps({
+              "awsvpcConfiguration": {
+                  "subnets": subnets,
+                  "securityGroups": sgs,
+                  "assignPublicIp": "DISABLED",
+              }
+          }))
+          PY
+
+          python3 - <<'PY' > /tmp/overrides.json
+          import json, os
+          cmd = ["python", "-m", "fixtures.cli", "apply",
+                 "--confirm", "I-UNDERSTAND-FIXTURE-WRITE"]
+          scen = os.environ.get("SCENARIOS", "").strip()
+          if scen:
+              cmd += ["--scen", scen]
+          print(json.dumps({
+              "containerOverrides": [{
+                  "name": os.environ["ECS_CONTAINER_NAME"],
+                  "command": cmd,
+                  "environment": [
+                      {"name": "ENVIRONMENT",        "value": "staging"},
+                      {"name": "ALLOW_FIXTURE_SEED", "value": "1"},
+                  ],
+              }]
+          }))
+          PY
+
+          echo "Launching one-off Fargate task on cluster=${ECS_CLUSTER} family=${ECS_TASK_FAMILY}..."
+          aws ecs run-task \
+            --cluster "${ECS_CLUSTER}" \
+            --task-definition "${ECS_TASK_FAMILY}" \
+            --launch-type FARGATE \
+            --count 1 \
+            --network-configuration "file:///tmp/network.json" \
+            --overrides "file:///tmp/overrides.json" \
+            --started-by "gh-actions-seed-${GITHUB_RUN_ID}" \
+            --region "${AWS_REGION}" \
+            > /tmp/run-task.json
+
+          # Surface any AWS-reported run-task failures explicitly.
+          FAIL_COUNT=$(python3 -c 'import json; print(len(json.load(open("/tmp/run-task.json")).get("failures",[])))')
+          if [ "${FAIL_COUNT}" != "0" ]; then
+            echo "ECS run-task reported failures:" >&2
+            python3 -c 'import json; print(json.dumps(json.load(open("/tmp/run-task.json")).get("failures",[]), indent=2))' >&2
+            exit 5
+          fi
+
+          TASK_ARN=$(python3 -c 'import json; print(json.load(open("/tmp/run-task.json"))["tasks"][0]["taskArn"])')
+          echo "task_arn=${TASK_ARN}" >> "${GITHUB_OUTPUT}"
+          echo "Launched task: ${TASK_ARN}"
+
+          echo "Waiting for task to stop (this can take several minutes)..."
+          aws ecs wait tasks-stopped \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "${TASK_ARN}" \
+            --region "${AWS_REGION}"
+
+          aws ecs describe-tasks \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "${TASK_ARN}" \
+            --region "${AWS_REGION}" \
+            > /tmp/describe-task.json
+
+          # Best-effort log pointer from the task definition's awslogs config.
+          aws ecs describe-task-definition \
+            --task-definition "${ECS_TASK_FAMILY}" \
+            --region "${AWS_REGION}" \
+            --query 'taskDefinition' \
+            --output json \
+            > /tmp/task-def.json || echo '{}' > /tmp/task-def.json
+
+          # Extract exit code, stoppedReason, and CloudWatch pointer.
+          export TASK_ARN
+          python3 - <<'PY' > /tmp/result.env
+          import json, os
+          name = os.environ["ECS_CONTAINER_NAME"]
+          arn  = os.environ["TASK_ARN"]
+
+          d = json.load(open("/tmp/describe-task.json"))
+          task = d["tasks"][0] if d.get("tasks") else {}
+          containers = task.get("containers", [])
+          target = next((c for c in containers if c.get("name") == name), None)
+          if target is None and containers:
+              import sys
+              print(f"WARNING: container '{name}' not found in describe-tasks; "
+                    f"falling back to first container '{containers[0].get('name')}'",
+                    file=sys.stderr)
+              target = containers[0]
+          target = target or {}
+          ec = target.get("exitCode")
+          exit_code = ec if ec is not None else 1
+          stopped_reason = task.get("stoppedReason", "(none)")
+
+          try:
+              td = json.load(open("/tmp/task-def.json"))
+              defs = td.get("containerDefinitions") or []
+              cdef = next((c for c in defs if c.get("name") == name), None)
+              if cdef is None and defs:
+                  import sys
+                  print(f"WARNING: container '{name}' not found in task definition; "
+                        f"falling back to first container definition '{defs[0].get('name')}'",
+                        file=sys.stderr)
+                  cdef = defs[0]
+              opts = ((cdef or {}).get("logConfiguration") or {}).get("options") or {}
+              log_group  = opts.get("awslogs-group", "(unknown)")
+              prefix     = opts.get("awslogs-stream-prefix", "")
+              task_id    = arn.split("/")[-1]
+              log_stream = f"{prefix}/{name}/{task_id}" if prefix else f"{name}/{task_id}"
+          except Exception as e:
+              log_group  = f"(lookup-failed: {e})"
+              log_stream = "(lookup-failed)"
+
+          # POSIX shell single-quote escaping so values containing spaces,
+          # quotes, or other shell metacharacters parse correctly when the
+          # resulting file is sourced (`. /tmp/result.env`). Newlines are
+          # collapsed to spaces because /tmp/result.env is line-oriented.
+          def shq(s):
+              s = str(s).replace("\n", " ").replace("\r", " ")
+              return "'" + s.replace("'", "'\\''") + "'"
+
+          print(f"EXIT_CODE={exit_code}")
+          print(f"STOPPED_REASON={shq(stopped_reason)}")
+          print(f"LOG_GROUP={shq(log_group)}")
+          print(f"LOG_STREAM={shq(log_stream)}")
+          PY
+
+          # shellcheck disable=SC1091
+          . /tmp/result.env
+
+          echo "Task ARN:        ${TASK_ARN}"
+          echo "Exit code:       ${EXIT_CODE}"
+          echo "Stopped reason:  ${STOPPED_REASON}"
+          echo "Log group:       ${LOG_GROUP}"
+          echo "Log stream:      ${LOG_STREAM}"
+
+          {
+            echo "## Fixtures apply (ECS/Fargate)"
+            echo ""
+            echo "- **Task ARN:** \`${TASK_ARN}\`"
+            echo "- **Cluster:** \`${ECS_CLUSTER}\`"
+            echo "- **Task family:** \`${ECS_TASK_FAMILY}\`"
+            echo "- **Container:** \`${ECS_CONTAINER_NAME}\`"
+            echo "- **Container exit code:** \`${EXIT_CODE}\`"
+            echo "- **Stopped reason:** ${STOPPED_REASON}"
+            echo ""
+            echo "### CloudWatch logs"
+            echo "- **Log group:** \`${LOG_GROUP}\`"
+            echo "- **Log stream:** \`${LOG_STREAM}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${EXIT_CODE}" != "0" ]; then
+            echo "FAIL: ECS apply container exit code ${EXIT_CODE} (stoppedReason: ${STOPPED_REASON})" >&2
+            exit "${EXIT_CODE}"
+          fi
+          echo "ECS apply task completed successfully."
+
+      # Post-apply register/artifact extraction is intentionally deferred
+      # for this PR. The first apply relies on CloudWatch logs (pointer
+      # printed in the step summary above) for review. A follow-up can
+      # add S3 upload from inside the Fargate task once the bucket and
+      # task IAM permissions are in place.
