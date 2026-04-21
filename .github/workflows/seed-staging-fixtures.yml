@@ -169,7 +169,7 @@ jobs:
               "awsvpcConfiguration": {
                   "subnets": subnets,
                   "securityGroups": sgs,
-                  "assignPublicIp": "DISABLED",
+                  "assignPublicIp": "ENABLED",
               }
           }))
           PY
