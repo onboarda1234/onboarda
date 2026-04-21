@@ -6,6 +6,7 @@ Subcommands:
     apply   --confirm TOKEN [--scen CODE]
                            - run the seeder and commit; double-gated by env
     register [--out PATH]  - write/print REGISTER.md (Markdown table of seeded rows)
+    check                  - run the SCEN-05 legacy-review sanity probe (no writes)
 
 Safety gates (apply mode only):
     - ENVIRONMENT must be 'staging'
@@ -73,6 +74,14 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_scen05_check() -> None:
+    """Run and print the SCEN-05 sanity check (non-fatal probe)."""
+    from fixtures.seeder import check_scen05_assumption
+    res = check_scen05_assumption()
+    tag = "OK" if res.get("satisfied") else ("ERR" if res.get("error") else "WARN")
+    print(f"[SCEN-05 sanity check] {tag}: {res.get('message')}")
+
+
 def cmd_dry_run(args: argparse.Namespace) -> int:
     only = args.scen.split(",") if args.scen else None
     from fixtures.seeder import seed_all
@@ -80,6 +89,8 @@ def cmd_dry_run(args: argparse.Namespace) -> int:
     print(f"\nDRY-RUN: {len(results)} scenarios processed (all writes rolled back).\n")
     for r in results:
         print(json.dumps(r, default=str, sort_keys=True))
+    print()
+    _print_scen05_check()
     return 0
 
 
@@ -91,6 +102,14 @@ def cmd_apply(args: argparse.Namespace) -> int:
     print(f"\nAPPLIED: {len(results)} scenarios committed.\n")
     for r in results:
         print(json.dumps(r, default=str, sort_keys=True))
+    print()
+    _print_scen05_check()
+    return 0
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """Standalone SCEN-05 sanity check without seeding."""
+    _print_scen05_check()
     return 0
 
 
@@ -161,6 +180,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_reg = sub.add_parser("register", help="render REGISTER.md (dry-run, no commit)")
     p_reg.add_argument("--out", help="path to write to (default: stdout)")
     p_reg.set_defaults(func=cmd_register)
+
+    sub.add_parser(
+        "check",
+        help="run SCEN-05 sanity check against the target DB (no writes)",
+    ).set_defaults(func=cmd_check)
 
     args = parser.parse_args(argv)
     return args.func(args)

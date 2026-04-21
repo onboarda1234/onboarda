@@ -15,10 +15,15 @@ Conventions enforced here (so the seeder stays generic):
                               satisfy the schema CHECK constraint
 - ``company_name`` prefix : ``FIX-SCENxx ...``
 - ``alert.source_reference``: ``FIX_SCENxx_ALERT`` (idempotency key)
-- ``review.fixture_marker`` : ``FIX_SCENxx_REVIEW`` (embedded into
-                              ``periodic_reviews.trigger_reason``)
-- ``edd.fixture_marker``    : ``FIX_SCENxx_EDD`` (embedded into
-                              ``edd_cases.trigger_notes``)
+- ``review.fixture_marker`` : ``FIX_SCENxx_REVIEW`` (leading prefix in
+                              ``periodic_reviews.trigger_reason``; the rest
+                              of the column is a ``FIX_REVIEW_JSON:{...}``
+                              sentinel-prefixed JSON payload so that memo
+                              text containing ``;``/``=`` cannot break the
+                              round-trip)
+- ``edd.fixture_marker``    : ``FIX_SCENxx_EDD`` (leading prefix in
+                              ``edd_cases.trigger_notes``; rest is
+                              ``FIX_EDD_JSON:{...}`` JSON payload)
 - ``document.fixture_marker``: ``FIX_SCENxx_DOC_<purpose>``
                               (embedded into ``documents.file_path``
                               as ``fixture://<marker>``)
@@ -112,11 +117,11 @@ class ReviewSpec:
 
     - ``status``        -> ``trigger_type`` (e.g. 'fixture_completed',
                           'fixture_in_progress')
-    - ``review_memo``   -> appended to ``trigger_reason`` as
-                           ``...; memo=<text>``
-    - ``outcome``       -> ``decision``
-    - ``source_alert_id`` -> appended to ``trigger_reason`` as
-                             ``; source_alert_id=N``
+    - ``review_memo``   -> packed into ``trigger_reason`` after a
+                           ``FIX_REVIEW_JSON:`` sentinel as JSON (round-trip
+                           safe regardless of memo content)
+    - ``outcome``       -> ``decision`` (and also mirrored in the JSON payload)
+    - ``source_alert_id`` -> packed into ``trigger_reason`` JSON payload
     """
     status: str                              # mapped to trigger_type
     fixture_marker: str                      # leading token in trigger_reason
@@ -138,10 +143,9 @@ class EddSpec:
                          information_gathering, analysis,
                          pending_senior_review, edd_approved, edd_rejected)
     - ``memo_id``     -> NOT stored; memo lookup is by application_id only
-    - ``source_review_id`` -> appended to ``trigger_notes`` as
-                              ``; source_review_id=N``
-    - ``source_alert_id``  -> appended to ``trigger_notes`` as
-                              ``; source_alert_id=N``
+    - ``source_review_id`` -> packed into ``trigger_notes`` after a
+                              ``FIX_EDD_JSON:`` sentinel as JSON
+    - ``source_alert_id``  -> packed into ``trigger_notes`` JSON payload
     """
     kind: str                          # mapped to trigger_source
     risk_level: str                    # UPPERCASE

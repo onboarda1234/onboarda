@@ -44,9 +44,12 @@ from fixtures.registry import (
 
 logger = logging.getLogger(__name__)
 
-# Sentinel embedded in monitoring_alerts.officer_notes when a structured
-# dismissal payload is present. Anything between the colon and end-of-string
-# is the JSON payload. Renderers / tests parse it back as JSON.
+# Sentinel embedded in periodic_reviews.trigger_reason and edd_cases.trigger_notes
+# after the leading fixture marker. Everything between the colon and end-of-string
+# is a JSON payload. Tooling parses it back as JSON; the leading marker keeps the
+# ``LIKE 'FIX_SCENxx_<KIND>%'`` idempotency lookup working.
+REVIEW_PAYLOAD_SENTINEL = "FIX_REVIEW_JSON:"
+EDD_PAYLOAD_SENTINEL = "FIX_EDD_JSON:"
 DISMISSAL_PAYLOAD_SENTINEL = "FIX_PAYLOAD_JSON:"
 
 
@@ -112,19 +115,45 @@ def _fetch_id(db, sql: str, params: tuple):
 def _insert_returning_id(db, table: str, cols: str, values: tuple) -> int:
     """INSERT and return the new SERIAL/AUTOINCREMENT id.
 
-    On Postgres uses RETURNING id. On SQLite uses cursor.lastrowid.
+    Uses backend-native placeholders directly against the underlying
+    DB-API connection (``db.conn``) rather than relying on the
+    ``DBConnection._translate_query`` ``?``-to-``%s`` text rewrite.
+    String-rewriting placeholders is fragile when any value contains a
+    literal ``%`` or ``?`` character; using the driver's own paramstyle
+    eliminates that class of bug. We also avoid touching the private
+    ``DBConnection._cursor`` attribute.
+
+    - Postgres: ``%s`` placeholders + ``RETURNING id``.
+    - SQLite:   ``?`` placeholders + ``cursor.lastrowid``.
+
     Caller is responsible for ensuring the table has an integer PK.
     """
-    placeholders = ", ".join(["?"] * len(values))
     if USE_POSTGRESQL:
+        placeholders = ", ".join(["%s"] * len(values))
         sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING id"
-        row = db.execute(sql, values).fetchone()
-        # RealDictCursor returns {"id": N}
-        return row["id"] if isinstance(row, dict) else row[0]
+        cursor = db.conn.cursor()
+        try:
+            cursor.execute(sql, values)
+            row = cursor.fetchone()
+        finally:
+            cursor.close()
+        if row is None:
+            raise RuntimeError(f"INSERT ... RETURNING id produced no row for {table}")
+        # psycopg2 default cursor returns a tuple; RealDictCursor returns a dict.
+        if isinstance(row, dict):
+            return row["id"]
+        return row[0]
+    placeholders = ", ".join(["?"] * len(values))
     sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
-    db.execute(sql, values)
-    # Reach into the underlying sqlite3 cursor for lastrowid.
-    return db._cursor.lastrowid
+    cursor = db.conn.cursor()
+    try:
+        cursor.execute(sql, values)
+        last_id = cursor.lastrowid
+    finally:
+        cursor.close()
+    if last_id is None:
+        raise RuntimeError(f"INSERT into {table} did not produce a lastrowid")
+    return last_id
 
 
 # ---------------------------------------------------------------------------
@@ -297,16 +326,27 @@ def _upsert_alert(db, audit, app_id: str, scen: ScenarioDef) -> Optional[int]:
 # ---------------------------------------------------------------------------
 
 def _build_review_trigger_reason(spec, alert_id: Optional[int]) -> str:
-    """Pack marker + memo + source_alert_id into trigger_reason.
+    """Pack marker + structured payload into trigger_reason.
 
-    Format: 'FIX_SCENxx_REVIEW; status=fixture_completed; source_alert_id=N; memo=<text>'
+    Format: '<FIX_SCENxx_REVIEW> FIX_REVIEW_JSON:{...}'
+
+    The leading fixture marker is preserved as a stable prefix so that
+    ``... WHERE trigger_reason LIKE 'FIX_SCENxx_REVIEW%'`` still works as
+    the idempotency lookup. Everything after the sentinel is canonical JSON,
+    so the round-trip cannot be broken by ``;`` or ``=`` characters that may
+    appear in human-authored memo text.
     """
-    parts = [spec.fixture_marker, f"status={spec.status}"]
-    if alert_id is not None:
-        parts.append(f"source_alert_id={alert_id}")
-    if spec.review_memo:
-        parts.append(f"memo={spec.review_memo}")
-    return "; ".join(parts)
+    payload = {
+        "status": spec.status,
+        "source_alert_id": alert_id,
+        "review_memo": spec.review_memo,
+        "outcome": spec.outcome,
+    }
+    return (
+        f"{spec.fixture_marker} "
+        f"{REVIEW_PAYLOAD_SENTINEL}"
+        f"{json.dumps(payload, sort_keys=True, default=str)}"
+    )
 
 
 def _upsert_review(
@@ -465,12 +505,24 @@ _VALID_EDD_STAGES = {
 def _build_edd_trigger_notes(
     spec, review_id: Optional[int], alert_id: Optional[int]
 ) -> str:
-    parts = [spec.fixture_marker, f"kind={spec.kind}"]
-    if review_id is not None:
-        parts.append(f"source_review_id={review_id}")
-    if alert_id is not None:
-        parts.append(f"source_alert_id={alert_id}")
-    return "; ".join(parts)
+    """Pack marker + structured payload into trigger_notes.
+
+    Format: '<FIX_SCENxx_EDD> FIX_EDD_JSON:{...}'
+
+    Leading fixture marker preserved for ``LIKE 'FIX_SCENxx_EDD%'``
+    idempotency. Source linkage and ``kind`` are stored as JSON to avoid
+    free-text-delimiter parsing fragility.
+    """
+    payload = {
+        "kind": spec.kind,
+        "source_review_id": review_id,
+        "source_alert_id": alert_id,
+    }
+    return (
+        f"{spec.fixture_marker} "
+        f"{EDD_PAYLOAD_SENTINEL}"
+        f"{json.dumps(payload, sort_keys=True, default=str)}"
+    )
 
 
 def _upsert_edd(
@@ -709,6 +761,20 @@ def seed_all(
 # ---------------------------------------------------------------------------
 
 _DISMISSAL_RE = re.compile(re.escape(DISMISSAL_PAYLOAD_SENTINEL) + r"(.*)$", re.DOTALL)
+_REVIEW_PAYLOAD_RE = re.compile(re.escape(REVIEW_PAYLOAD_SENTINEL) + r"(.*)$", re.DOTALL)
+_EDD_PAYLOAD_RE = re.compile(re.escape(EDD_PAYLOAD_SENTINEL) + r"(.*)$", re.DOTALL)
+
+
+def _parse_sentinel_json(text: Optional[str], pattern) -> Optional[Dict[str, Any]]:
+    if not text:
+        return None
+    m = pattern.search(text)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except Exception:
+        return None
 
 
 def parse_dismissal_payload(officer_notes: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -716,12 +782,91 @@ def parse_dismissal_payload(officer_notes: Optional[str]) -> Optional[Dict[str, 
 
     Returns ``None`` if no FIX_PAYLOAD_JSON: sentinel is present.
     """
-    if not officer_notes:
-        return None
-    m = _DISMISSAL_RE.search(officer_notes)
-    if not m:
-        return None
+    return _parse_sentinel_json(officer_notes, _DISMISSAL_RE)
+
+
+def parse_review_payload(trigger_reason: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Recover the structured fixture payload from periodic_reviews.trigger_reason.
+
+    Returns ``None`` if no FIX_REVIEW_JSON: sentinel is present.
+    """
+    return _parse_sentinel_json(trigger_reason, _REVIEW_PAYLOAD_RE)
+
+
+def parse_edd_payload(trigger_notes: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Recover the structured fixture payload from edd_cases.trigger_notes.
+
+    Returns ``None`` if no FIX_EDD_JSON: sentinel is present.
+    """
+    return _parse_sentinel_json(trigger_notes, _EDD_PAYLOAD_RE)
+
+
+# ---------------------------------------------------------------------------
+# SCEN-05 sanity check
+# ---------------------------------------------------------------------------
+#
+# SCEN-05 ("legacy completed periodic review with embedded memo") is
+# intentionally NOT seeded — see registry comment and README "Known gaps".
+# The assumption is that the target staging DB already carries at least one
+# legacy ``periodic_reviews`` row that satisfies SCEN-05 (a completed review
+# with a non-null memo-bearing field).
+#
+# This check is a *non-fatal* probe: it never raises, never writes, never
+# touches a fixture row. It returns a structured result that the CLI surfaces
+# so a human can decide whether to seed an extra fixture or accept the gap.
+
+
+def check_scen05_assumption() -> Dict[str, Any]:
+    """Probe the target DB for a legacy completed periodic_review.
+
+    Returns a dict with at minimum:
+      - ``satisfied`` (bool): True iff at least one *non-fixture* completed
+        review row exists.
+      - ``count`` (int):     number of qualifying legacy rows found.
+      - ``message`` (str):   human-readable summary.
+
+    Never raises. Caller is responsible for surfacing the result.
+    """
     try:
-        return json.loads(m.group(1))
-    except Exception:
-        return None
+        init_db()
+        db = get_db()
+    except Exception as exc:
+        return {
+            "satisfied": False,
+            "count": 0,
+            "message": f"DB unavailable for SCEN-05 probe: {exc}",
+            "error": True,
+        }
+    try:
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM periodic_reviews "
+            "WHERE completed_at IS NOT NULL "
+            "AND (trigger_reason IS NULL OR trigger_reason NOT LIKE ?)",
+            ("FIX_SCEN%",),
+        ).fetchone()
+        count = int(row["c"] if row and "c" in row else (row[0] if row else 0))
+        satisfied = count > 0
+        if satisfied:
+            msg = (
+                f"SCEN-05 assumption holds: {count} legacy completed "
+                "periodic_review(s) present."
+            )
+        else:
+            msg = (
+                "SCEN-05 assumption NOT satisfied: no legacy completed "
+                "periodic_review rows found. Consider seeding an explicit "
+                "SCEN-05 fixture or treat the gap as expected."
+            )
+        return {"satisfied": satisfied, "count": count, "message": msg, "error": False}
+    except Exception as exc:
+        return {
+            "satisfied": False,
+            "count": 0,
+            "message": f"SCEN-05 probe query failed: {exc}",
+            "error": True,
+        }
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
