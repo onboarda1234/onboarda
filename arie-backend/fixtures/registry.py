@@ -46,7 +46,7 @@ APP_ID = {
     "SCEN-02": "f1xed00000000002",
     "SCEN-03": "f1xed00000000003",
     "SCEN-04": "f1xed00000000004",
-    # SCEN-05 intentionally omitted - covered by existing legacy reviews.
+    "SCEN-05": "f1xed00000000005",
     "SCEN-06": "f1xed00000000006",
     "SCEN-07": "f1xed00000000007",
     "SCEN-08": "f1xed00000000008",
@@ -60,6 +60,7 @@ APP_REF = {
     "SCEN-02": "ARF-2026-900002",
     "SCEN-03": "ARF-2026-900003",
     "SCEN-04": "ARF-2026-900004",
+    "SCEN-05": "ARF-2026-900005",
     "SCEN-06": "ARF-2026-900006",
     "SCEN-07": "ARF-2026-900007",
     "SCEN-08": "ARF-2026-900008",
@@ -274,7 +275,33 @@ SCENARIOS: List[ScenarioDef] = [
             "positive control for SCEN-05",
         ],
     ),
-    # SCEN-05 intentionally not seeded - covered by existing legacy reviews.
+    # SCEN-05 is the negative control / no-memo counterpart to SCEN-04.
+    # It is explicitly seeded as a completed periodic review with NO memo
+    # (review_memo=None) and NO edd_spec (so no compliance memo is created
+    # by the seeder either). This deterministically exercises the
+    # "legacy completed / no memo" UI/state without relying on pre-existing
+    # legacy rows in staging.
+    ScenarioDef(
+        code="SCEN-05",
+        purpose="Completed periodic review with NO memo (memo-negative case)",
+        company_name="FIX-SCEN05 NoMemo Holdings Ltd",
+        risk_level="MEDIUM",
+        country="Singapore",
+        sector="fintech",
+        review_spec=ReviewSpec(
+            status="fixture_completed",
+            fixture_marker="FIX_SCEN05_REVIEW",
+            review_memo=None,
+            outcome="no_action_required",
+            completed_at_iso=_now_iso(),
+        ),
+        proves=[
+            "Completed periodic review with NO memo is the negative control "
+            "for SCEN-04 (memo-positive)",
+            "Legacy 'completed / no memo' state is exercised deterministically "
+            "without relying on pre-existing staging rows",
+        ],
+    ),
     ScenarioDef(
         code="SCEN-06",
         purpose="Dismissed alert with structured dismissal JSON",
