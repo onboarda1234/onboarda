@@ -1,0 +1,131 @@
+name: seed-staging-fixtures
+
+# Path A (real-schema-adapted) staging fixture seeder.
+#
+# This workflow is deliberately conservative:
+#   - manual dispatch only (no schedule, no push trigger)
+#   - dry-run is the default; apply requires an explicit input
+#   - all safety gates from fixtures/cli.py still apply (ENVIRONMENT=staging,
+#     ALLOW_FIXTURE_SEED=1, --confirm I-UNDERSTAND-FIXTURE-WRITE)
+#
+# TEAM-REVIEW BLOCK (must be resolved before this workflow can apply
+# against real staging infrastructure):
+#   - REGMIND_STAGING_TASK_FAMILY: the actual ECS/Fargate task family to
+#     execute against. Currently a placeholder.
+#   - the artifact-extraction step needs the concrete S3/ECS path used to
+#     pull seeder logs out of a stopped Fargate task. Currently a comment.
+#   - the staging DATABASE_URL secret name (assumed: STAGING_DATABASE_URL).
+#
+# Until the TEAM-REVIEW items are resolved, this workflow only runs the
+# safe local dry-run path inside the CI runner and does NOT touch any
+# real staging database.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run or apply"
+        required: true
+        default: "dry-run"
+        type: choice
+        options:
+          - dry-run
+          - apply
+      scenarios:
+        description: "Comma-separated scenario codes (blank = all)"
+        required: false
+        default: ""
+      confirm_apply:
+        description: "Must equal I-UNDERSTAND-FIXTURE-WRITE for apply mode"
+        required: false
+        default: ""
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    # NOTE: change to the staging environment once the gate is wired up so
+    # required reviewers / secrets are enforced by GitHub Environments.
+    # environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        working-directory: arie-backend
+        run: pip install -r requirements.txt
+
+      - name: Show registry
+        working-directory: arie-backend
+        run: python -m fixtures.cli list
+
+      - name: Dry-run (always)
+        working-directory: arie-backend
+        env:
+          # Local dry-run uses the bundled SQLite path; no DATABASE_URL needed.
+          ENVIRONMENT: development
+        run: |
+          if [ -n "${{ inputs.scenarios }}" ]; then
+            python -m fixtures.cli dry-run --scen "${{ inputs.scenarios }}"
+          else
+            python -m fixtures.cli dry-run
+          fi
+
+      - name: Render register
+        working-directory: arie-backend
+        run: python -m fixtures.cli register --out fixtures/REGISTER.md
+
+      - name: Upload register
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixtures-register
+          path: arie-backend/fixtures/REGISTER.md
+
+      # ----------------------------------------------------------------
+      # TEAM-REVIEW: Apply step against real staging.
+      #
+      # The block below is intentionally NOT run yet. Before enabling:
+      #   1. Resolve REGMIND_STAGING_TASK_FAMILY.
+      #   2. Decide whether the seeder runs inside the existing staging
+      #      Fargate task family or a one-shot job. If one-shot, define
+      #      the artifact-extraction path so seeder stdout / fixture
+      #      register markdown end up in S3 or workflow artifacts.
+      #   3. Wire STAGING_DATABASE_URL (or equivalent) as a GitHub secret
+      #      and bind it via the staging Environment.
+      #   4. Move ENVIRONMENT=staging into a step-level env block on the
+      #      apply step ONLY (never on dry-run; we want dry-run to remain
+      #      runnable in any environment).
+      # ----------------------------------------------------------------
+      - name: Apply (gated)
+        if: ${{ inputs.mode == 'apply' }}
+        working-directory: arie-backend
+        env:
+          ENVIRONMENT: staging
+          ALLOW_FIXTURE_SEED: "1"
+          # TEAM-REVIEW: source the real staging DB URL.
+          # DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+        run: |
+          if [ "${{ inputs.confirm_apply }}" != "I-UNDERSTAND-FIXTURE-WRITE" ]; then
+            echo "REFUSED: confirm_apply must equal I-UNDERSTAND-FIXTURE-WRITE" >&2
+            exit 2
+          fi
+          echo "TEAM-REVIEW: real apply path is not wired yet."
+          echo "TEAM-REVIEW: REGMIND_STAGING_TASK_FAMILY=<unresolved>"
+          echo "TEAM-REVIEW: artifact-extraction path from stopped Fargate task=<unresolved>"
+          echo "Refusing to apply until TEAM-REVIEW items are resolved."
+          exit 1
+          # Once wired:
+          # if [ -n "${{ inputs.scenarios }}" ]; then
+          #   python -m fixtures.cli apply \
+          #     --confirm I-UNDERSTAND-FIXTURE-WRITE \
+          #     --scen "${{ inputs.scenarios }}"
+          # else
+          #   python -m fixtures.cli apply --confirm I-UNDERSTAND-FIXTURE-WRITE
+          # fi
