@@ -18,7 +18,7 @@
 - SCEN-02 — Monitoring alert → direct EDD (no review)
 - SCEN-03 — Periodic review → escalated to EDD
 - SCEN-04 — Completed review with generated memo (positive control)
-- SCEN-05 — *not seeded* (covered by existing legacy reviews — verify in staging)
+- SCEN-05 — Completed periodic review with NO memo (negative control / no-memo counterpart to SCEN-04)
 - SCEN-06 — Dismissed alert with structured dismissal JSON (in `officer_notes`)
 - SCEN-07 — Dismissed alert with legacy free-text dismissal notes
 - SCEN-08 — EDD with no compliance memo (attachment-warning state)

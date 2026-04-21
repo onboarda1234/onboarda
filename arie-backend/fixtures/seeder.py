@@ -802,71 +802,87 @@ def parse_edd_payload(trigger_notes: Optional[str]) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# SCEN-05 sanity check
+# SCEN-05 fixture validation
 # ---------------------------------------------------------------------------
 #
-# SCEN-05 ("legacy completed periodic review with embedded memo") is
-# intentionally NOT seeded — see registry comment and README "Known gaps".
-# The assumption is that the target staging DB already carries at least one
-# legacy ``periodic_reviews`` row that satisfies SCEN-05 (a completed review
-# with a non-null memo-bearing field).
+# SCEN-05 ("completed periodic review with NO memo") is now an explicit,
+# deterministic fixture in the registry — it is the negative control / no-memo
+# counterpart to SCEN-04 (memo-positive). The historical assumption that
+# pre-existing legacy ``periodic_reviews`` rows in staging would cover this
+# scenario has been removed.
 #
-# This check is a *non-fatal* probe: it never raises, never writes, never
-# touches a fixture row. It returns a structured result that the CLI surfaces
-# so a human can decide whether to seed an extra fixture or accept the gap.
+# This check is a non-fatal probe that validates the SCEN-05 *fixture
+# definition* (the registry contract), not the presence of legacy rows. It
+# never raises and never writes. It returns a structured result that the CLI
+# surfaces.
 
 
-def check_scen05_assumption() -> Dict[str, Any]:
-    """Probe the target DB for a legacy completed periodic_review.
+def check_scen05_fixture() -> Dict[str, Any]:
+    """Validate the explicit SCEN-05 fixture contract.
+
+    SCEN-05 must be:
+
+    - present in the scenario registry
+    - a completed periodic review (``review_spec.completed_at_iso`` set,
+      ``review_spec.status == 'fixture_completed'``)
+    - WITHOUT a memo (``review_spec.review_memo is None``) and without an
+      ``edd_spec`` (so no compliance memo is seeded either)
 
     Returns a dict with at minimum:
-      - ``satisfied`` (bool): True iff at least one *non-fixture* completed
-        review row exists.
-      - ``count`` (int):     number of qualifying legacy rows found.
-      - ``message`` (str):   human-readable summary.
+      - ``satisfied`` (bool): True iff the registry contract is met.
+      - ``message`` (str):    human-readable summary.
+      - ``error`` (bool):     True only on unexpected internal errors.
 
     Never raises. Caller is responsible for surfacing the result.
     """
     try:
-        init_db()
-        db = get_db()
-    except Exception as exc:
-        return {
-            "satisfied": False,
-            "count": 0,
-            "message": f"DB unavailable for SCEN-05 probe: {exc}",
-            "error": True,
-        }
-    try:
-        row = db.execute(
-            "SELECT COUNT(*) AS c FROM periodic_reviews "
-            "WHERE completed_at IS NOT NULL "
-            "AND (trigger_reason IS NULL OR trigger_reason NOT LIKE ?)",
-            ("FIX_SCEN%",),
-        ).fetchone()
-        count = int(row["c"] if row and "c" in row else (row[0] if row else 0))
-        satisfied = count > 0
-        if satisfied:
-            msg = (
-                f"SCEN-05 assumption holds: {count} legacy completed "
-                "periodic_review(s) present."
-            )
+        from fixtures.registry import by_code
+
+        scen = by_code("SCEN-05")
+        problems: List[str] = []
+        if scen.review_spec is None:
+            problems.append("missing review_spec")
         else:
-            msg = (
-                "SCEN-05 assumption NOT satisfied: no legacy completed "
-                "periodic_review rows found. Consider seeding an explicit "
-                "SCEN-05 fixture or treat the gap as expected."
+            rs = scen.review_spec
+            if rs.review_memo is not None:
+                problems.append("review_spec.review_memo must be None (no-memo case)")
+            if not rs.completed_at_iso:
+                problems.append("review_spec.completed_at_iso must be set (completed case)")
+            if rs.status != "fixture_completed":
+                problems.append(
+                    f"review_spec.status must be 'fixture_completed' "
+                    f"(got '{rs.status}')"
+                )
+        if scen.edd_spec is not None:
+            problems.append(
+                "edd_spec must be None (no compliance memo is seeded for SCEN-05)"
             )
-        return {"satisfied": satisfied, "count": count, "message": msg, "error": False}
+        if problems:
+            return {
+                "satisfied": False,
+                "message": (
+                    "SCEN-05 explicit fixture contract violated: "
+                    + "; ".join(problems)
+                ),
+                "error": False,
+            }
+        return {
+            "satisfied": True,
+            "message": (
+                "SCEN-05 explicit fixture validated: completed periodic "
+                "review with no memo (negative control to SCEN-04)."
+            ),
+            "error": False,
+        }
+    except KeyError:
+        return {
+            "satisfied": False,
+            "message": "SCEN-05 missing from registry (expected explicit fixture).",
+            "error": False,
+        }
     except Exception as exc:
         return {
             "satisfied": False,
-            "count": 0,
-            "message": f"SCEN-05 probe query failed: {exc}",
+            "message": f"SCEN-05 fixture validation failed unexpectedly: {exc}",
             "error": True,
         }
-    finally:
-        try:
-            db.close()
-        except Exception:
-            pass

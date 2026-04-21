@@ -6,7 +6,7 @@ Subcommands:
     apply   --confirm TOKEN [--scen CODE]
                            - run the seeder and commit; double-gated by env
     register [--out PATH]  - write/print REGISTER.md (Markdown table of seeded rows)
-    check                  - run the SCEN-05 legacy-review sanity probe (no writes)
+    check                  - validate the explicit SCEN-05 fixture contract (no writes)
 
 Safety gates (apply mode only):
     - ENVIRONMENT must be 'staging'
@@ -75,11 +75,11 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def _print_scen05_check() -> None:
-    """Run and print the SCEN-05 sanity check (non-fatal probe)."""
-    from fixtures.seeder import check_scen05_assumption
-    res = check_scen05_assumption()
+    """Validate and print the explicit SCEN-05 fixture contract."""
+    from fixtures.seeder import check_scen05_fixture
+    res = check_scen05_fixture()
     tag = "OK" if res.get("satisfied") else ("ERR" if res.get("error") else "WARN")
-    print(f"[SCEN-05 sanity check] {tag}: {res.get('message')}")
+    print(f"[SCEN-05 fixture check] {tag}: {res.get('message')}")
 
 
 def cmd_dry_run(args: argparse.Namespace) -> int:
@@ -108,7 +108,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """Standalone SCEN-05 sanity check without seeding."""
+    """Standalone SCEN-05 fixture validation without seeding."""
     _print_scen05_check()
     return 0
 
@@ -183,7 +183,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     sub.add_parser(
         "check",
-        help="run SCEN-05 sanity check against the target DB (no writes)",
+        help="validate the explicit SCEN-05 fixture contract (no writes)",
     ).set_defaults(func=cmd_check)
 
     args = parser.parse_args(argv)
