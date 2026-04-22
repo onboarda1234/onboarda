@@ -87,7 +87,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             FAILED as _S_FAILED,
             TERMINAL_STATES as _S_TERMINAL,
         )
-    except Exception:  # pragma: no cover — defensive: never break memo build
+    except ImportError:  # pragma: no cover — defensive: never break memo build
         _derive_state = lambda _x: "not_started"
         _S_CLEAR = "completed_clear"
         _S_MATCH = "completed_match"

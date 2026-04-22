@@ -6077,10 +6077,9 @@ def _build_screening_queue_payload(db, user):
         # Fail-closed: any non-terminal company sanctions state requires
         # officer review. Previously only ``matched`` triggered review,
         # which silently passed not_configured / pending / unavailable.
-        company_sanctions_requires_review = company_sanctions_state in (
-            _SCR_COMPLETED_MATCH, _SCR_NOT_CONFIGURED, _SCR_FAILED,
-            _SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED,
-        )
+        # Equivalent to "anything that is not completed_clear", expressed
+        # explicitly so the intent is auditable.
+        company_sanctions_requires_review = company_sanctions_state != _SCR_COMPLETED_CLEAR
 
         company_requires_review = False
         if report:
