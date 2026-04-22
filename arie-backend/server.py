@@ -6154,7 +6154,12 @@ def _build_screening_queue_payload(db, user):
             item = person_screenings.get(person_name)
             screening = (item or {}).get("screening") or {}
             facts = _screening_hit_facts(screening)
-            declared_pep = person.get("is_pep", "No") == "Yes"
+            # Priority A.2: declared PEP must survive any non-canonical
+            # truthy form ("Yes"/"yes"/True/"true"/"1"). Falling back to the
+            # raw == "Yes" check silently flattened declared PEP into
+            # "Not Declared" on the queue chip whenever stored data did
+            # not exactly match "Yes".
+            declared_pep = normalize_is_pep(person.get("is_pep", "No")) == "Yes"
             provider_other = facts["other_hits"] > 0
 
             # Priority A: derive canonical state from api_status. Never let

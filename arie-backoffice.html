@@ -5713,10 +5713,14 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   }
   var screening = (screeningRecord || {}).screening || null;
   var facts = screeningResultFacts(screening);
+  var personDeclaredPep = (person.pep === 'Yes');
   var badges = [
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : (screening ? (facts.matched ? 'review_required' : 'screened_no_match') : 'awaiting_screening'), reviewRow ? reviewRow.status_label : (screening ? (facts.matched ? 'Review Required' : 'No Provider Match') : 'Awaiting Screening')),
     screeningBadge(reviewRow ? reviewRow.watchlist_status : (screening ? (facts.sanctions_hits > 0 ? 'match' : (facts.other_hits > 0 ? 'review' : 'clear')) : 'pending')),
-    screeningBadge(reviewRow ? reviewRow.pep_declared_status : (person.pep === 'Yes' ? 'declared' : 'not_declared')),
+    // Priority A.2: declared PEP from source data wins over the queue
+    // serializer's pep_declared_status. The chip must never render
+    // "Not Declared" while the body text below states "Declared PEP: Yes".
+    screeningBadge(personDeclaredPep ? 'declared' : (reviewRow ? reviewRow.pep_declared_status : 'not_declared')),
     screeningBadge(reviewRow ? reviewRow.pep_screening_status : (screening ? (facts.pep_hits > 0 || !!(screeningRecord || {}).undeclared_pep ? 'match' : (facts.other_hits > 0 ? 'review' : 'clear')) : 'pending'))
   ];
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow));

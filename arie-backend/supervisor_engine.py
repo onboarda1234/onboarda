@@ -120,6 +120,55 @@ def run_memo_supervisor(memo_data):
             "section_b": "executive_summary"
         })
 
+    # ── 3b. Priority A.2: Declared-PEP vs memo narrative contradiction ──
+    # Source-of-truth signal lives in metadata.screening_state_summary
+    # (populated by memo_handler from the application/director/UBO data).
+    # If declared PEP exists but the memo body still denies PEP exposure,
+    # this is a critical contradiction regardless of provider screening
+    # state — declared PEP must never be flattened away.
+    _scr_summary = metadata.get("screening_state_summary") or {}
+    declared_pep_count = int(_scr_summary.get("declared_pep_count") or 0)
+    if declared_pep_count > 0:
+        # Concatenate the memo surfaces officers actually read.
+        own_risk_sub = ((sections.get("risk_assessment") or {}).get("sub_sections") or {}).get("ownership_risk") or {}
+        fc_risk_sub = ((sections.get("risk_assessment") or {}).get("sub_sections") or {}).get("financial_crime_risk") or {}
+        narrative_chunks = [
+            _sc("executive_summary"),
+            _sc("screening_results"),
+            _sc("ongoing_monitoring"),
+            (own_risk_sub or {}).get("content", "") or "",
+            (fc_risk_sub or {}).get("content", "") or "",
+        ]
+        # Also scan key_findings list since it is officer-visible.
+        for _kf in (metadata.get("key_findings") or []):
+            if isinstance(_kf, str):
+                narrative_chunks.append(_kf)
+        narrative_text = " \n ".join([c for c in narrative_chunks if c]).lower()
+        denial_phrases = [
+            "no pep exposure",
+            "no declared or detected match",
+            "no declared or detected pep",
+            "no material pep concern",
+            "no material pep or jurisdictional concern",
+            "0 self-declared / detected match",
+        ]
+        matched_denials = [p for p in denial_phrases if p in narrative_text]
+        if matched_denials:
+            contradictions.append({
+                "category": "declared_pep_contradiction",
+                "severity": "critical",
+                "description": (
+                    "Declared PEP exists for " + str(declared_pep_count)
+                    + " director/UBO subject(s) but memo narrative denies PEP exposure"
+                    + " (matched phrasing: " + "; ".join(matched_denials[:3]) + ")."
+                    + " Declared PEP must remain visible across executive summary,"
+                    + " screening results, ownership risk, financial crime risk,"
+                    + " and ongoing monitoring sections."
+                ),
+                "section_a": "metadata.screening_state_summary",
+                "section_b": "memo_narrative"
+            })
+
     # ── 4. Document verification vs decision conditions ──
     doc_content = _sc("document_verification").lower()
     decision_content = _sc("compliance_decision").lower()
