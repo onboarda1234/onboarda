@@ -132,6 +132,10 @@ from decision_model import (
     save_decision_record,
     get_decision_records,
 )
+from edd_routing_policy import (
+    evaluate_edd_routing as _evaluate_edd_routing,
+    emit_routing_audit as _emit_edd_routing_audit,
+)
 from branding import BRAND, get_status_label
 from party_utils import (
     _pii_encryptor, _pii_encryption_ok,
@@ -7384,6 +7388,15 @@ class ComplianceMemoHandler(BaseHandler):
                     + " | Rule Engine: " + rule_engine_result["engine_status"]
                     + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
                     self.get_client_ip()))
+
+        # ── Priority B / Workstream C: audit-log the EDD routing decision ──
+        try:
+            _routing = memo.get("metadata", {}).get("edd_routing")
+            if _routing:
+                _emit_edd_routing_audit(db, user, app["ref"], _routing, self.get_client_ip())
+        except Exception as _re:
+            logger.error("Failed to emit EDD routing audit row for %s: %s", app["ref"], _re)
+
         db.commit()
         db.close()
 
@@ -7727,6 +7740,47 @@ class MemoApproveHandler(BaseHandler):
         can_approve = supervisor_result.get("can_approve", False)  # Default to False (fail-closed)
         requires_sco = supervisor_result.get("requires_sco_review", False)
 
+        # ── Priority B / Workstream B: mandatory_escalation gate ──
+        # The supervisor is the single authoritative verdict; when it
+        # has raised mandatory_escalation, the approval API MUST refuse
+        # regardless of CONSISTENT verdict. This protects against UI
+        # paths that surface only the verdict string and against
+        # legacy embedded memo-only signals.
+        if supervisor_result.get("mandatory_escalation"):
+            db.close()
+            reasons = supervisor_result.get("mandatory_escalation_reasons") or []
+            return self.error(
+                "Cannot approve memo: supervisor mandatory_escalation is set "
+                "(reasons: " + ", ".join(reasons[:6]) + "). "
+                "Case must be routed to EDD / senior review before approval.",
+                400
+            )
+
+        # ── Priority B / Workstream C: server-side EDD routing gate ──
+        # If the deterministic routing policy says EDD and the
+        # application status is not already on the EDD path, the
+        # standard memo-approval API must refuse. The application can
+        # only be approved through the EDD-completion flow.
+        edd_routing = metadata.get("edd_routing") or {}
+        if edd_routing.get("route") == "edd":
+            app_row = db.execute(
+                "SELECT status FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id)
+            ).fetchone()
+            current_status = (app_row["status"] if app_row else "") or ""
+            if current_status not in ("edd_required", "edd_approved"):
+                db.close()
+                return self.error(
+                    "Cannot approve memo: deterministic EDD routing policy ("
+                    + str(edd_routing.get("policy_version", "")) + ") routes this "
+                    "case to EDD (triggers: "
+                    + ", ".join(edd_routing.get("triggers", [])[:6])
+                    + "). Application status is '" + current_status
+                    + "'. Route the case via /api/edd/cases or set status to "
+                    "'edd_required' before memo approval.",
+                    400
+                )
+
         supervisor_warnings_approval = False
         if supervisor_verdict == "CONSISTENT" and can_approve:
             pass  # Standard approval — no additional requirements
@@ -7990,6 +8044,20 @@ class MemoSupervisorHandler(BaseHandler):
             memo_data["supervisor"] = supervisor_result
             memo_data["metadata"]["supervisor_status"] = supervisor_result["verdict"]
             memo_data["metadata"]["supervisor_confidence"] = supervisor_result["supervisor_confidence"]
+            # ── Priority B / Workstream C: re-evaluate EDD routing ──
+            # The supervisor verdict (and mandatory_escalation) may
+            # have changed; the routing decision must reflect that.
+            try:
+                _contract = (memo_data.get("metadata") or {}).get("agent5_input_contract") or {}
+                _facts = dict(_contract)
+                _facts["supervisor_mandatory_escalation"] = bool(
+                    supervisor_result.get("mandatory_escalation", False)
+                )
+                _routing = _evaluate_edd_routing(_facts)
+                memo_data["metadata"]["edd_routing"] = _routing
+                _emit_edd_routing_audit(db, user, app_id, _routing, self.get_client_ip())
+            except Exception as _re:
+                logger.error("Failed to re-evaluate EDD routing for %s: %s", app_id, _re)
             db.execute(
                 "UPDATE compliance_memos SET memo_data = ?, supervisor_status = ?, supervisor_summary = ? WHERE id = ?",
                 (json.dumps(memo_data), supervisor_result["verdict"], supervisor_result["recommendation"], memo_row["id"])

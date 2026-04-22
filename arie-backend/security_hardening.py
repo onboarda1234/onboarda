@@ -184,6 +184,51 @@ class ApprovalGateValidator:
                     "Supervisor warnings or inconsistencies must be resolved before approval."
                 )
 
+            # 3e. ── Priority B / Workstream B & C: ──────────────────
+            # mandatory_escalation and EDD-routing checks. The memo's
+            # serialized supervisor block is the single authoritative
+            # source. If mandatory_escalation is set, the application
+            # cannot be approved through the standard pathway. If the
+            # deterministic EDD routing policy says the case must be
+            # routed to EDD, the application status must already be on
+            # the EDD pathway (edd_required / edd_approved) before
+            # approval can proceed.
+            try:
+                import json as _json2
+                _md_raw = memo_row.get('memo_data') or '{}'
+                _md_obj = _json2.loads(_md_raw) if isinstance(_md_raw, str) else (_md_raw or {})
+                _md_meta = _md_obj.get('metadata') or {}
+                _supervisor_block = _md_obj.get('supervisor') or _md_meta.get('supervisor') or {}
+                if _supervisor_block.get('mandatory_escalation'):
+                    _reasons = _supervisor_block.get('mandatory_escalation_reasons') or []
+                    return (
+                        False,
+                        "Supervisor mandatory_escalation is set on the compliance memo "
+                        f"(reasons: {', '.join(_reasons[:6])}). "
+                        "Approval through the standard pathway is blocked; "
+                        "complete EDD or senior review and re-generate the memo first."
+                    )
+                _routing = _md_meta.get('edd_routing') or {}
+                if _routing.get('route') == 'edd':
+                    _app_status = (app.get('status') or '').lower()
+                    if _app_status not in ('edd_required', 'edd_approved'):
+                        return (
+                            False,
+                            "EDD routing policy " + str(_routing.get('policy_version', ''))
+                            + " requires this case to be routed to EDD "
+                            "(triggers: " + ", ".join(_routing.get('triggers', [])[:6]) + "). "
+                            "Application status is '" + _app_status
+                            + "'. Complete the EDD pathway before approval."
+                        )
+            except Exception as _ge:  # pragma: no cover — defensive
+                logger.error("Failed to evaluate mandatory_escalation/edd_routing gate: %s", _ge)
+                # Fail-closed: refuse approval rather than silently allow.
+                return (
+                    False,
+                    "Could not verify mandatory_escalation/EDD routing on the compliance memo. "
+                    "Re-generate the memo and retry."
+                )
+
             # 4. Check all documents are not flagged (from DB, not app dict)
             # Senior-officer override (EX-06): a flagged document passes the
             # gate when review_status='accepted' AND reviewer_role is admin/sco

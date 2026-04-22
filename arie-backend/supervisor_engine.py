@@ -383,6 +383,44 @@ def run_memo_supervisor(memo_data):
         can_approve = False
         requires_sco_review = True
 
+    # ── Priority B / Workstream B: mandatory_escalation flag ──────────
+    # Derived from the Agent 5 input contract (memo_handler builds and
+    # stores it under metadata.agent5_input_contract). When true, the
+    # approval gate MUST refuse approval regardless of supervisor
+    # verdict. This is the single authoritative escalation signal that
+    # the UI and approval API consult.
+    contract = metadata.get("agent5_input_contract") or {}
+    risk_dims = contract.get("risk_dimensions") or {}
+    screening_summary = contract.get("screening_terminality_summary") or {}
+    contract_final_risk = (contract.get("final_risk_level") or "").upper()
+    contract_jur = (risk_dims.get("jurisdiction") or "").upper()
+    contract_biz = (risk_dims.get("business") or "").upper()
+    contract_ownership = (contract.get("ownership_transparency_status") or "").lower()
+    mandatory_reasons = []
+    if contract_final_risk in ("HIGH", "VERY_HIGH"):
+        mandatory_reasons.append("final_risk_level=" + contract_final_risk)
+    if contract.get("declared_pep_present"):
+        mandatory_reasons.append("declared_pep_present")
+    if contract_jur in ("HIGH", "VERY_HIGH"):
+        mandatory_reasons.append("jurisdiction_risk_tier=" + contract_jur)
+    if contract_biz == "HIGH":
+        mandatory_reasons.append("sector_risk_tier=HIGH")
+    if contract_ownership in ("opaque", "incomplete"):
+        mandatory_reasons.append("ownership_transparency=" + contract_ownership)
+    if screening_summary.get("has_terminal_match"):
+        mandatory_reasons.append("material_screening_concern")
+    if verdict == "INCONSISTENT":
+        mandatory_reasons.append("supervisor_verdict=INCONSISTENT")
+    mandatory_escalation = len(mandatory_reasons) > 0
+
+    if mandatory_escalation:
+        # An escalated case must never be marked approvable by the
+        # supervisor. The approval gate enforces this explicitly, but
+        # we also flip can_approve here so any consumer that ignores
+        # mandatory_escalation still fail-closes.
+        can_approve = False
+        requires_sco_review = True
+
     return {
         "verdict": verdict,
         "contradictions": contradictions,
@@ -396,5 +434,7 @@ def run_memo_supervisor(memo_data):
         "rule_enforcements_applied": len(rule_enforcements),
         "can_approve": can_approve,
         "requires_sco_review": requires_sco_review,
+        "mandatory_escalation": mandatory_escalation,
+        "mandatory_escalation_reasons": mandatory_reasons,
         "checked_at": datetime.now().isoformat()
     }
