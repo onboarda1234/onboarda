@@ -11,6 +11,7 @@ from datetime import datetime
 
 from validation_engine import validate_compliance_memo
 from supervisor_engine import run_memo_supervisor
+from edd_routing_policy import evaluate_edd_routing as _evaluate_edd_routing
 from rule_engine import (
     HIGH_RISK_COUNTRIES, OFFSHORE_COUNTRIES,
     HIGH_RISK_SECTORS, MINIMUM_MEDIUM_SECTORS, MEDIUM_RISK_SECTORS,
@@ -1164,12 +1165,11 @@ def build_compliance_memo(app, directors, ubos, documents):
     # flag) and persist the routing decision on the memo. The audit-log
     # row is written by the HTTP handler that owns the DB cursor.
     try:
-        from edd_routing_policy import evaluate_edd_routing as _eval_routing
         routing_facts = dict(agent5_input_contract)
         routing_facts["supervisor_mandatory_escalation"] = bool(
             supervisor_result.get("mandatory_escalation", False)
         )
-        edd_routing = _eval_routing(routing_facts)
+        edd_routing = _evaluate_edd_routing(routing_facts)
     except Exception as _routing_err:  # pragma: no cover — defensive
         logger.error("EDD routing evaluation failed: %s", _routing_err)
         edd_routing = {

@@ -132,6 +132,10 @@ from decision_model import (
     save_decision_record,
     get_decision_records,
 )
+from edd_routing_policy import (
+    evaluate_edd_routing as _evaluate_edd_routing,
+    emit_routing_audit as _emit_edd_routing_audit,
+)
 from branding import BRAND, get_status_label
 from party_utils import (
     _pii_encryptor, _pii_encryption_ok,
@@ -7387,10 +7391,9 @@ class ComplianceMemoHandler(BaseHandler):
 
         # ── Priority B / Workstream C: audit-log the EDD routing decision ──
         try:
-            from edd_routing_policy import emit_routing_audit
             _routing = memo.get("metadata", {}).get("edd_routing")
             if _routing:
-                emit_routing_audit(db, user, app["ref"], _routing, self.get_client_ip())
+                _emit_edd_routing_audit(db, user, app["ref"], _routing, self.get_client_ip())
         except Exception as _re:
             logger.error("Failed to emit EDD routing audit row for %s: %s", app["ref"], _re)
 
@@ -8045,15 +8048,14 @@ class MemoSupervisorHandler(BaseHandler):
             # The supervisor verdict (and mandatory_escalation) may
             # have changed; the routing decision must reflect that.
             try:
-                from edd_routing_policy import evaluate_edd_routing as _eval, emit_routing_audit as _emit
                 _contract = (memo_data.get("metadata") or {}).get("agent5_input_contract") or {}
                 _facts = dict(_contract)
                 _facts["supervisor_mandatory_escalation"] = bool(
                     supervisor_result.get("mandatory_escalation", False)
                 )
-                _routing = _eval(_facts)
+                _routing = _evaluate_edd_routing(_facts)
                 memo_data["metadata"]["edd_routing"] = _routing
-                _emit(db, user, app_id, _routing, self.get_client_ip())
+                _emit_edd_routing_audit(db, user, app_id, _routing, self.get_client_ip())
             except Exception as _re:
                 logger.error("Failed to re-evaluate EDD routing for %s: %s", app_id, _re)
             db.execute(

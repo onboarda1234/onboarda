@@ -392,17 +392,21 @@ def run_memo_supervisor(memo_data):
     contract = metadata.get("agent5_input_contract") or {}
     risk_dims = contract.get("risk_dimensions") or {}
     screening_summary = contract.get("screening_terminality_summary") or {}
+    contract_final_risk = (contract.get("final_risk_level") or "").upper()
+    contract_jur = (risk_dims.get("jurisdiction") or "").upper()
+    contract_biz = (risk_dims.get("business") or "").upper()
+    contract_ownership = (contract.get("ownership_transparency_status") or "").lower()
     mandatory_reasons = []
-    if (contract.get("final_risk_level") or "").upper() in ("HIGH", "VERY_HIGH"):
-        mandatory_reasons.append("final_risk_level=" + str(contract.get("final_risk_level")))
+    if contract_final_risk in ("HIGH", "VERY_HIGH"):
+        mandatory_reasons.append("final_risk_level=" + contract_final_risk)
     if contract.get("declared_pep_present"):
         mandatory_reasons.append("declared_pep_present")
-    if (risk_dims.get("jurisdiction") or "").upper() in ("HIGH", "VERY_HIGH"):
-        mandatory_reasons.append("jurisdiction_risk_tier=" + str(risk_dims.get("jurisdiction")))
-    if (risk_dims.get("business") or "").upper() in ("HIGH",):
+    if contract_jur in ("HIGH", "VERY_HIGH"):
+        mandatory_reasons.append("jurisdiction_risk_tier=" + contract_jur)
+    if contract_biz == "HIGH":
         mandatory_reasons.append("sector_risk_tier=HIGH")
-    if (contract.get("ownership_transparency_status") or "").lower() in ("opaque", "incomplete"):
-        mandatory_reasons.append("ownership_transparency=" + str(contract.get("ownership_transparency_status")))
+    if contract_ownership in ("opaque", "incomplete"):
+        mandatory_reasons.append("ownership_transparency=" + contract_ownership)
     if screening_summary.get("has_terminal_match"):
         mandatory_reasons.append("material_screening_concern")
     if verdict == "INCONSISTENT":
