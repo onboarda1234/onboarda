@@ -136,6 +136,212 @@ from edd_routing_policy import (
     evaluate_edd_routing as _evaluate_edd_routing,
     emit_routing_audit as _emit_edd_routing_audit,
 )
+
+
+# ── Priority B.2 / Workstream A: EDD route actuation ─────────────────
+# When the deterministic EDD routing policy returns route="edd", this
+# helper turns the policy decision into actual workflow reality:
+#   1. upserts an ``edd_cases`` row at stage='triggered' for the
+#      application (idempotent — at most one active EDD case per
+#      application);
+#   2. flips ``applications.status`` to ``edd_required`` so the case
+#      leaves the Standard Review lane;
+#   3. preserves routing context (policy_version, triggers,
+#      evaluated_at, supervisor mandatory-escalation reasons,
+#      origin=``policy_routing``) inside the EDD case's
+#      ``trigger_notes`` and ``edd_notes`` so the audit trail is
+#      reconstructable without replaying the pipeline.
+# Returns ``{"case_id": int, "created": bool, "status_changed": bool}``.
+# The caller owns the transaction (``db.commit()``).
+_EDD_ACTUATION_TERMINAL_STAGES = ("edd_approved", "edd_rejected")
+
+
+def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, client_ip=""):
+    """Create or upsert an EDD case + flip application status when route=edd.
+
+    Args:
+        db: live DBConnection (caller commits).
+        app_row: dict-like application record (must expose id, ref,
+                 company_name, risk_level, risk_score, status).
+        edd_routing: routing decision dict from evaluate_edd_routing.
+        supervisor_result: supervisor result dict (may be empty).
+        user: authenticated user dict for audit attribution.
+        client_ip: optional client IP for audit row.
+
+    Returns:
+        dict with ``case_id`` (int or None), ``created`` (bool),
+        ``status_changed`` (bool), and ``skipped`` (bool when route
+        is not edd or app_row missing).
+    """
+    result = {"case_id": None, "created": False, "status_changed": False, "skipped": False}
+    try:
+        if not isinstance(edd_routing, dict) or edd_routing.get("route") != "edd":
+            result["skipped"] = True
+            return result
+        if not app_row:
+            result["skipped"] = True
+            return result
+        try:
+            app_dict = dict(app_row)
+        except Exception:
+            app_dict = app_row
+        application_id = app_dict.get("id")
+        if not application_id:
+            result["skipped"] = True
+            return result
+
+        # Idempotency: at most one active EDD case per application.
+        placeholders = ",".join(["?"] * len(_EDD_ACTUATION_TERMINAL_STAGES))
+        existing = db.execute(
+            "SELECT id, stage FROM edd_cases WHERE application_id = ? "
+            "AND stage NOT IN (" + placeholders + ") "
+            "ORDER BY id ASC LIMIT 1",
+            (application_id, *_EDD_ACTUATION_TERMINAL_STAGES),
+        ).fetchone()
+
+        triggers = list(edd_routing.get("triggers") or [])
+        policy_version = edd_routing.get("policy_version", "")
+        evaluated_at = edd_routing.get("evaluated_at", "")
+        mandatory_reasons = list((supervisor_result or {}).get("mandatory_escalation_reasons") or [])
+        trigger_notes = (
+            "Auto-routed to EDD by policy " + str(policy_version)
+            + " | triggers: " + ", ".join(triggers[:8])
+            + (" | mandatory_escalation: " + ", ".join(mandatory_reasons[:6])
+               if mandatory_reasons else "")
+        )
+
+        if existing:
+            case_id = existing["id"]
+            # Append a new audited note so reviewers see the routing
+            # re-confirmed by this memo regeneration. We do not
+            # re-create the case (idempotent).
+            try:
+                _row = db.execute(
+                    "SELECT edd_notes FROM edd_cases WHERE id = ?",
+                    (case_id,),
+                ).fetchone()
+                existing_notes = []
+                if _row and _row.get("edd_notes"):
+                    raw = _row["edd_notes"]
+                    if isinstance(raw, str):
+                        try:
+                            existing_notes = json.loads(raw) or []
+                        except Exception:
+                            existing_notes = []
+                    elif isinstance(raw, list):
+                        existing_notes = list(raw)
+                existing_notes.append({
+                    "ts": datetime.now().isoformat(),
+                    "author": (user or {}).get("name") or "system",
+                    "source": "policy_routing",
+                    "policy_version": policy_version,
+                    "triggers": triggers,
+                    "mandatory_escalation_reasons": mandatory_reasons,
+                    "evaluated_at": evaluated_at,
+                    "note": "Routing re-confirmed by memo regeneration",
+                })
+                db.execute(
+                    "UPDATE edd_cases SET edd_notes = ? WHERE id = ?",
+                    (json.dumps(existing_notes), case_id),
+                )
+            except Exception as _ne:
+                logger.warning(
+                    "Failed to append routing note to EDD case %s: %s",
+                    case_id, _ne,
+                )
+            result["case_id"] = case_id
+            result["created"] = False
+        else:
+            initial_note = json.dumps([{
+                "ts": datetime.now().isoformat(),
+                "author": (user or {}).get("name") or "system",
+                "source": "policy_routing",
+                "policy_version": policy_version,
+                "triggers": triggers,
+                "mandatory_escalation_reasons": mandatory_reasons,
+                "evaluated_at": evaluated_at,
+                "note": "EDD case auto-created by routing policy actuation",
+            }])
+            insert_params = (
+                application_id,
+                app_dict.get("company_name") or "",
+                (app_dict.get("risk_level") or "HIGH"),
+                app_dict.get("risk_score") or 0,
+                "triggered",
+                (user or {}).get("sub") or None,
+                "policy_routing",
+                trigger_notes,
+                initial_note,
+            )
+            if USE_POSTGRES:
+                row = db.execute(
+                    "INSERT INTO edd_cases (application_id, client_name, "
+                    "risk_level, risk_score, stage, assigned_officer, "
+                    "trigger_source, trigger_notes, edd_notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
+                    insert_params,
+                ).fetchone()
+                case_id = row["id"]
+            else:
+                db.execute(
+                    "INSERT INTO edd_cases (application_id, client_name, "
+                    "risk_level, risk_score, stage, assigned_officer, "
+                    "trigger_source, trigger_notes, edd_notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    insert_params,
+                )
+                case_id = db.execute(
+                    "SELECT last_insert_rowid() as id"
+                ).fetchone()["id"]
+            result["case_id"] = case_id
+            result["created"] = True
+
+        # Flip application status to edd_required if not already on
+        # the EDD path. Preserve terminal/edd-approved states.
+        current_status = (app_dict.get("status") or "")
+        if current_status not in ("edd_required", "edd_approved", "approved", "rejected"):
+            db.execute(
+                "UPDATE applications SET status = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                ("edd_required", application_id),
+            )
+            result["status_changed"] = True
+
+        # Write a single audit row so the actuation is independently
+        # reconstructable (separate from the routing.evaluated row).
+        try:
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, "
+                "action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                (
+                    (user or {}).get("sub") or "system",
+                    (user or {}).get("name") or "system",
+                    (user or {}).get("role") or "system",
+                    "edd_routing.actuated",
+                    "application:" + str(app_dict.get("ref") or application_id),
+                    json.dumps({
+                        "policy_version": policy_version,
+                        "route": edd_routing.get("route"),
+                        "triggers": triggers,
+                        "mandatory_escalation_reasons": mandatory_reasons,
+                        "evaluated_at": evaluated_at,
+                        "edd_case_id": result["case_id"],
+                        "edd_case_created": result["created"],
+                        "status_changed": result["status_changed"],
+                        "origin": "policy_routing",
+                    }, default=str, sort_keys=True),
+                    client_ip or "",
+                ),
+            )
+        except Exception as _ae:
+            logger.warning("Failed to write edd_routing.actuated audit row: %s", _ae)
+    except Exception as _err:
+        # Fail-closed semantics: if actuation cannot complete, log
+        # loudly. The approval gate already refuses approval when
+        # route=edd and status is not edd_required, so the case
+        # cannot silently leak through.
+        logger.error("EDD route actuation failed: %s", _err, exc_info=True)
+    return result
 from branding import BRAND, get_status_label
 from party_utils import (
     _pii_encryptor, _pii_encryption_ok,
@@ -7397,6 +7603,25 @@ class ComplianceMemoHandler(BaseHandler):
         except Exception as _re:
             logger.error("Failed to emit EDD routing audit row for %s: %s", app["ref"], _re)
 
+        # ── Priority B.2 / Workstream A: Actuate EDD routing ──
+        # When policy says route=edd, this is where the policy decision
+        # becomes workflow reality: an EDD case is upserted and the
+        # application status flips to edd_required. Idempotent on
+        # re-generation.
+        try:
+            _routing_actuate = memo.get("metadata", {}).get("edd_routing")
+            if _routing_actuate and _routing_actuate.get("route") == "edd":
+                _actuation = _actuate_edd_routing(
+                    db, app, _routing_actuate, supervisor_result, user,
+                    client_ip=self.get_client_ip(),
+                )
+                memo.setdefault("metadata", {})["edd_routing_actuation"] = _actuation
+        except Exception as _ae:
+            logger.error(
+                "Failed to actuate EDD routing for %s: %s",
+                app.get("ref"), _ae, exc_info=True,
+            )
+
         db.commit()
         db.close()
 
@@ -8056,6 +8281,27 @@ class MemoSupervisorHandler(BaseHandler):
                 _routing = _evaluate_edd_routing(_facts)
                 memo_data["metadata"]["edd_routing"] = _routing
                 _emit_edd_routing_audit(db, user, app_id, _routing, self.get_client_ip())
+                # ── Priority B.2 / Workstream A: Actuate EDD routing ──
+                # Re-running the supervisor may surface mandatory_escalation
+                # that the original memo generation missed; if the
+                # re-evaluated route is edd, actuate it here too.
+                if _routing.get("route") == "edd":
+                    try:
+                        _app_for_actuate = db.execute(
+                            "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                            (app_id, app_id),
+                        ).fetchone()
+                        _actuation = _actuate_edd_routing(
+                            db, _app_for_actuate, _routing,
+                            supervisor_result, user,
+                            client_ip=self.get_client_ip(),
+                        )
+                        memo_data["metadata"]["edd_routing_actuation"] = _actuation
+                    except Exception as _ae2:
+                        logger.error(
+                            "Failed to actuate EDD routing in supervisor run for %s: %s",
+                            app_id, _ae2, exc_info=True,
+                        )
             except Exception as _re:
                 logger.error("Failed to re-evaluate EDD routing for %s: %s", app_id, _re)
             db.execute(

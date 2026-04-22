@@ -15,6 +15,7 @@ from edd_routing_policy import evaluate_edd_routing as _evaluate_edd_routing
 from rule_engine import (
     HIGH_RISK_COUNTRIES, OFFSHORE_COUNTRIES,
     HIGH_RISK_SECTORS, MINIMUM_MEDIUM_SECTORS, MEDIUM_RISK_SECTORS,
+    HIGH_RISK_SECTOR_KEYWORDS, OPAQUE_OWNERSHIP_KEYWORDS,
     ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
     RISK_WEIGHTS, RISK_RANK,
     SANCTIONED, FATF_BLACK,
@@ -196,7 +197,15 @@ def build_compliance_memo(app, directors, ubos, documents):
     is_high_risk_country = country in HIGH_RISK_COUNTRIES
     is_offshore = country in OFFSHORE_COUNTRIES
     is_sanctioned_country = country.lower().strip() in SANCTIONED or country.lower().strip() in FATF_BLACK
-    is_high_risk_sector = sector in HIGH_RISK_SECTORS
+    # Priority B.2: Sector classification must use both the canonical
+    # tuple AND the keyword set so non-canonical labels like
+    # "Crypto Exchange", "Digital Assets Exchange", "Virtual Asset
+    # Service Provider", "Online Gambling Operator" are not silently
+    # flattened to LOW. The keyword check is case-insensitive and
+    # substring-based; matching keywords are recorded for audit.
+    _sector_lc = (sector or "").lower()
+    _matched_high_sector_keywords = sorted({kw for kw in HIGH_RISK_SECTOR_KEYWORDS if kw in _sector_lc})
+    is_high_risk_sector = (sector in HIGH_RISK_SECTORS) or bool(_matched_high_sector_keywords)
     is_medium_risk_sector = sector in MEDIUM_RISK_SECTORS
     is_minimum_medium_sector = sector in MINIMUM_MEDIUM_SECTORS
 
@@ -234,6 +243,28 @@ def build_compliance_memo(app, directors, ubos, documents):
             "reason": sector + " sector carries minimum MEDIUM inherent risk per FATF risk-based approach guidance"
         })
         biz_rating = "MEDIUM"
+
+    # ── Priority B.2: Sector keyword floor (non-canonical labels) ─────
+    # When the literal sector string is not in HIGH_RISK_SECTORS but
+    # contains a high-risk sector keyword (e.g. "Crypto Exchange",
+    # "Digital Assets Exchange", "Virtual Asset Service Provider"),
+    # business risk MUST be HIGH. This closes the normalization gap
+    # where Agent 5 was receiving sector_risk_tier="low" for crypto
+    # / virtual-asset cases solely because the label did not match a
+    # canonical tuple member. We always record an audit-grade
+    # enforcement row when the keyword path was responsible for HIGH.
+    if _matched_high_sector_keywords and (sector not in HIGH_RISK_SECTORS):
+        rule_enforcements.append({
+            "rule": "BIZ_RISK_KEYWORD_FLOOR",
+            "original": "LOW" if not is_minimum_medium_sector and not is_medium_risk_sector else "MEDIUM",
+            "enforced": "HIGH",
+            "reason": (
+                "Sector label '" + str(sector) + "' contains high-risk keyword(s): "
+                + ", ".join(_matched_high_sector_keywords)
+                + " — business risk floor is HIGH"
+            ),
+        })
+        biz_rating = "HIGH"
 
     # ── RULE 4A: Factor classification hard constraints ──
     # ALWAYS_RISK_DECREASING / ALWAYS_RISK_INCREASING imported from rule_engine.py
@@ -956,9 +987,35 @@ def build_compliance_memo(app, directors, ubos, documents):
     # from this single source so the decision path cannot diverge from
     # the facts. Keep the keys aligned with REQUIRED_FACT_KEYS in
     # edd_routing_policy.py.
+    # ── Priority B.2: Ownership transparency normalization ────────────
+    # The deterministic facts handed to Agent 5 / EDD routing must
+    # reflect ALL signals, not just struct_complexity == "Complex" or
+    # missing-pct gaps. A case explicitly described as multi-tier /
+    # multi-jurisdiction / nominee / shell / opaque, OR a case where
+    # the disclosed UBO ownership totals less than 75%, MUST normalize
+    # to "incomplete" or "opaque" — never "transparent".
+    _own_struct_lc = (own_struct or "").lower()
+    _matched_opaque_keywords = sorted({kw for kw in OPAQUE_OWNERSHIP_KEYWORDS if kw in _own_struct_lc})
+    # Multi-jurisdiction is a known opaqueness driver but not in the
+    # core OPAQUE_OWNERSHIP_KEYWORDS set; surface it explicitly.
+    if "multi-jurisdiction" in _own_struct_lc or "multi jurisdiction" in _own_struct_lc \
+            or "multiple jurisdictions" in _own_struct_lc:
+        _matched_opaque_keywords = sorted(set(_matched_opaque_keywords) | {"multi-jurisdiction"})
+    _total_disclosed_pct = sum(float(u.get("ownership_pct", 0) or 0) for u in ubos) if ubos else 0.0
+
+    _is_opaque = (
+        own_rating == "HIGH"
+        or struct_complexity == "Complex"
+        or bool(_matched_opaque_keywords)
+        or (ubos and _total_disclosed_pct < 50)
+    )
+    _is_incomplete = (
+        ownership_has_gaps
+        or (ubos and _total_disclosed_pct < 75)
+    )
     _ownership_status = (
-        "opaque" if (own_rating == "HIGH" or struct_complexity == "Complex")
-        else "incomplete" if ownership_has_gaps
+        "opaque" if _is_opaque
+        else "incomplete" if _is_incomplete
         else "transparent"
     )
     _has_terminal_match = any(s == _S_MATCH for s in _all_states)
@@ -1180,6 +1237,83 @@ def build_compliance_memo(app, directors, ubos, documents):
             "evaluated_at": now_ts,
         }
     memo["metadata"]["edd_routing"] = edd_routing
+
+    # ── Priority B.2 / Workstream C: Bind memo recommendation to route ──
+    # Deterministic guarantee: when the routing policy says EDD, OR
+    # the supervisor has flagged mandatory_escalation, the memo's
+    # approval_recommendation MUST NOT be APPROVE / APPROVE_WITH_CONDITIONS.
+    # We override to the canonical escalation value ESCALATE_TO_EDD
+    # and re-record the original value for auditability. This closes
+    # the gap where memo could recommend approval while routing said
+    # EDD and supervisor said mandatory_escalation.
+    _route_is_edd = (edd_routing or {}).get("route") == "edd"
+    _is_mandatory_escalation = bool(supervisor_result.get("mandatory_escalation", False))
+    if _route_is_edd or _is_mandatory_escalation:
+        _original_decision = memo["metadata"].get("approval_recommendation")
+        _approval_like = ("APPROVE", "APPROVE_WITH_CONDITIONS")
+        if _original_decision in _approval_like:
+            rule_enforcements.append({
+                "rule": "RECOMMENDATION_BOUND_TO_EDD_ROUTE",
+                "original_decision": _original_decision,
+                "enforced_decision": "ESCALATE_TO_EDD",
+                "reason": (
+                    "Routing policy route=" + str((edd_routing or {}).get("route"))
+                    + " (triggers: " + ", ".join((edd_routing or {}).get("triggers", [])[:6]) + ")"
+                    + "; supervisor.mandatory_escalation=" + str(_is_mandatory_escalation)
+                    + ". Memo recommendation cannot be an approval value."
+                ),
+            })
+            rule_engine_result["enforcements"] = rule_enforcements
+            memo["metadata"]["rule_engine"] = rule_engine_result
+        # Always set escalation values so officer-visible recommendation
+        # and workflow state cannot diverge.
+        memo["metadata"]["approval_recommendation_original"] = _original_decision
+        memo["metadata"]["approval_recommendation"] = "ESCALATE_TO_EDD"
+        memo["metadata"]["decision_label"] = "ESCALATE TO EDD"
+        # Mirror inside the agent5 input contract so downstream
+        # consumers reading the contract see the bound value too.
+        try:
+            agent5_input_contract["decision_recommendation"] = "ESCALATE_TO_EDD"
+            memo["metadata"]["agent5_input_contract"] = agent5_input_contract
+        except Exception:
+            pass
+        # Update the compliance_decision section content if it exists,
+        # so officer-visible narrative does not contradict the workflow.
+        try:
+            _decision_sec = (memo.get("sections") or {}).get("compliance_decision") or {}
+            if isinstance(_decision_sec, dict):
+                _decision_sec["decision"] = "ESCALATE_TO_EDD"
+                _decision_sec["decision_label"] = "ESCALATE TO EDD"
+                _existing_content = _decision_sec.get("content") or ""
+                _esc_prefix = (
+                    "Recommendation overridden to ESCALATE_TO_EDD by deterministic routing policy "
+                    + str((edd_routing or {}).get("policy_version", ""))
+                    + " (triggers: " + ", ".join((edd_routing or {}).get("triggers", [])[:6]) + "). "
+                    "Case must be routed to Enhanced Due Diligence before any approval. "
+                )
+                if "ESCALATE_TO_EDD" not in _existing_content:
+                    _decision_sec["content"] = _esc_prefix + _existing_content
+                memo["sections"]["compliance_decision"] = _decision_sec
+        except Exception:
+            pass
+
+    # ── Priority B.2 / Workstream C: Contradiction guard (fail-closed) ──
+    # Defensive cross-check: if for any reason the recommendation
+    # ended up as an approval value while the route is EDD or
+    # mandatory_escalation is set, block the memo. This is belt-and-
+    # braces — the binding above should already prevent this — and
+    # ensures persistence cannot silently store a contradicting memo.
+    _final_decision = memo["metadata"].get("approval_recommendation")
+    if (_route_is_edd or _is_mandatory_escalation) and _final_decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
+        memo["metadata"]["validation_status"] = "fail"
+        memo["metadata"]["blocked"] = True
+        memo["metadata"]["block_reason"] = (
+            "Memo blocked: recommendation '" + str(_final_decision)
+            + "' contradicts routing policy (route="
+            + str((edd_routing or {}).get("route"))
+            + ", mandatory_escalation=" + str(_is_mandatory_escalation)
+            + "). Recommendation must be ESCALATE_TO_EDD."
+        )
 
     # Run validation engine — now with rule engine awareness
     validation_result = validate_compliance_memo(memo)
