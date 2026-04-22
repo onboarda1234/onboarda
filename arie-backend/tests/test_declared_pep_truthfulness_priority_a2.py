@@ -227,23 +227,6 @@ def _flatten_narrative(memo):
     return "\n".join(chunks).lower()
 
 
-def _flatten(memo):
-    chunks = []
-
-    def _walk(x):
-        if isinstance(x, str):
-            chunks.append(x)
-        elif isinstance(x, dict):
-            for v in x.values():
-                _walk(v)
-        elif isinstance(x, list):
-            for v in x:
-                _walk(v)
-
-    _walk(memo)
-    return "\n".join(chunks).lower()
-
-
 @pytest.mark.parametrize("is_pep_value", ["Yes", "yes", "true", True, "1"])
 def test_memo_with_declared_pep_does_not_emit_no_pep_exposure(is_pep_value):
     from memo_handler import build_compliance_memo

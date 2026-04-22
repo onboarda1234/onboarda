@@ -550,7 +550,7 @@ def validate_compliance_memo(memo_data):
 
     # ── COMPUTE FINAL SCORE ──
     total = sum(scores.values())
-    max_possible = 14.5  # Updated: +1.0 for declared_pep_truthfulness rule (A.2)
+    max_possible = 14.5  # 13.5 (15 original rules) + 1.0 (rule #16 declared_pep_truthfulness, A.2)
     quality_score = round(min(total / max_possible * 10, 10), 1)
 
     # Determine status
