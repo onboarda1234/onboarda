@@ -32,9 +32,19 @@ def build_compliance_memo(app, directors, ubos, documents):
     Returns:
         tuple: (memo, rule_engine_result, supervisor_result, validation_result)
     """
-    # Collect PEP matches — from both declarations and screening results
-    pep_directors = [d for d in directors if d.get("is_pep") == "Yes"]
-    pep_ubos = [u for u in ubos if u.get("is_pep") == "Yes"]
+    # Collect PEP matches — from both declarations and screening results.
+    # Priority A.2: accept any truthy form of `is_pep` (Yes/true/1/True)
+    # so a declared PEP cannot be flattened to "no PEP" merely because of
+    # a non-canonical input shape.
+    def _is_declared_pep(person):
+        v = person.get("is_pep")
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return False
+        return str(v).strip().lower() in ("yes", "true", "1")
+    pep_directors = [d for d in directors if _is_declared_pep(d)]
+    pep_ubos = [u for u in ubos if _is_declared_pep(u)]
     all_peps = pep_directors + pep_ubos
 
     # W2-5: Also check screening results for PEP hits not covered by declarations
@@ -841,6 +851,102 @@ def build_compliance_memo(app, directors, ubos, documents):
     if rule_violations:
         rule_engine_result["engine_status"] = "VIOLATIONS_DETECTED"
     memo["metadata"]["rule_engine"] = rule_engine_result
+
+    # ── Priority A.2: Declared-PEP truthfulness guardrail ────────────
+    # If any director or UBO is declared as PEP, the memo narrative
+    # MUST NOT emit phrases that deny PEP exposure. We scan the built
+    # memo for banned phrasings, rewrite each occurrence with a truthful
+    # qualifier that preserves declared-PEP visibility, and record an
+    # audit-grade rule violation per scrub. This is a hard guardrail:
+    # even if upstream conditional gating fails, the memo cannot be
+    # shipped claiming "no PEP exposure" while declared PEP exists.
+    declared_pep_guardrail = {
+        "applied": False,
+        "declared_pep_count": len(all_peps),
+        "scrubs": [],
+    }
+    if has_declared_pep:
+        _declared_names = ", ".join([p.get("full_name", "") for p in all_peps if p.get("full_name")])
+        _qualifier = (
+            "Declared PEP exposure present"
+            + (" (" + _declared_names + ")" if _declared_names else "")
+        )
+        # Phrase → replacement. Match is case-insensitive; replacement
+        # preserves the original casing pattern by lowercasing the
+        # surrounding string before substitution. Phrases ordered from
+        # most specific to least specific to avoid double-rewrites.
+        _banned_phrases = [
+            "no pep exposure identified in the ownership or governance structure",
+            "no pep exposure identified among directors or ubos",
+            "no pep exposure identified",
+            "no pep exposure",
+            "no declared or detected matches",
+            "no declared or detected pep",
+            "no material pep or jurisdictional concerns",
+            "no material pep concerns",
+            "no material pep",
+            "0 self-declared / detected match(es)",
+            "0 self-declared / detected matches",
+            "0 self-declared / detected match",
+        ]
+
+        def _scrub(text):
+            if not isinstance(text, str) or not text:
+                return text
+            scrubbed = text
+            lower = scrubbed.lower()
+            for phrase in _banned_phrases:
+                idx = 0
+                while True:
+                    found = lower.find(phrase, idx)
+                    if found < 0:
+                        break
+                    end = found + len(phrase)
+                    scrubbed = scrubbed[:found] + _qualifier + scrubbed[end:]
+                    lower = scrubbed.lower()
+                    declared_pep_guardrail["scrubs"].append({
+                        "phrase": phrase,
+                        "qualifier": _qualifier,
+                    })
+                    declared_pep_guardrail["applied"] = True
+                    idx = found + len(_qualifier)
+            return scrubbed
+
+        def _walk_and_scrub(node):
+            if isinstance(node, str):
+                return _scrub(node)
+            if isinstance(node, list):
+                return [_walk_and_scrub(v) for v in node]
+            if isinstance(node, dict):
+                return {k: _walk_and_scrub(v) for k, v in node.items()}
+            return node
+
+        memo["sections"] = _walk_and_scrub(memo.get("sections") or {})
+        # Also scrub key_findings / review_checklist / conditions which
+        # are lists of free-text strings inside metadata.
+        for _meta_key in ("key_findings", "review_checklist", "conditions"):
+            if _meta_key in memo["metadata"]:
+                memo["metadata"][_meta_key] = _walk_and_scrub(memo["metadata"][_meta_key])
+
+        if declared_pep_guardrail["applied"]:
+            rule_violations.append({
+                "rule": "DECLARED_PEP_TRUTHFULNESS",
+                "severity": "high",
+                "detail": (
+                    "Memo narrative contained PEP-denial phrasing while "
+                    + str(len(all_peps))
+                    + " declared PEP(s) exist. Phrases were rewritten with "
+                    "truthful qualifier; supervisor and validator will "
+                    "still surface this contradiction."
+                ),
+                "action": "Scrubbed " + str(len(declared_pep_guardrail["scrubs"])) + " occurrence(s)",
+            })
+            rule_engine_result["violations"] = rule_violations
+            rule_engine_result["total_violations"] = len(rule_violations)
+            rule_engine_result["engine_status"] = "VIOLATIONS_DETECTED"
+            memo["metadata"]["rule_engine"] = rule_engine_result
+
+    memo["metadata"]["declared_pep_guardrail"] = declared_pep_guardrail
 
     # Run memo supervisor — contradiction detection & verdict
     supervisor_result = run_memo_supervisor(memo)

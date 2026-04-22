@@ -498,9 +498,59 @@ def validate_compliance_memo(memo_data):
         decision_enforcement_score = 0.5  # No enforcements needed — clean
     scores["rule_enforcement_check"] = min(decision_enforcement_score, 0.5)
 
+    # ── 16. DECLARED-PEP TRUTHFULNESS (weight: 1.0) — Priority A.2 ──
+    # If declared PEP exists in source data (recorded in
+    # metadata.screening_state_summary.declared_pep_count), the memo
+    # narrative must NOT contain phrases that deny PEP exposure. This
+    # rule prevents a memo from receiving a clean / excellent pass when
+    # declared PEP has been silently flattened away in the body text.
+    declared_pep_score = 1.0
+    _scr_summary = metadata.get("screening_state_summary") or {}
+    declared_pep_count = int(_scr_summary.get("declared_pep_count") or 0)
+    if declared_pep_count > 0:
+        own_risk_sub = sub_sections.get("ownership_risk") or {}
+        fc_risk_sub = sub_sections.get("financial_crime_risk") or {}
+        narrative_chunks = [
+            (sections.get("executive_summary") or {}).get("content", "") or "",
+            (sections.get("screening_results") or {}).get("content", "") or "",
+            (sections.get("ongoing_monitoring") or {}).get("content", "") or "",
+            (own_risk_sub or {}).get("content", "") or "",
+            (fc_risk_sub or {}).get("content", "") or "",
+        ]
+        for _kf in (metadata.get("key_findings") or []):
+            if isinstance(_kf, str):
+                narrative_chunks.append(_kf)
+        narrative_text = " \n ".join([c for c in narrative_chunks if c]).lower()
+        denial_phrases = [
+            "no pep exposure",
+            "no declared or detected match",
+            "no declared or detected pep",
+            "no material pep concern",
+            "no material pep or jurisdictional concern",
+            "0 self-declared / detected match",
+        ]
+        matched_denials = [p for p in denial_phrases if p in narrative_text]
+        if matched_denials:
+            issues.append({
+                "category": "declared_pep_truthfulness",
+                "severity": "critical",
+                "description": (
+                    f"Declared PEP exists for {declared_pep_count} subject(s) "
+                    f"but memo narrative denies PEP exposure (matched phrasing: "
+                    + "; ".join(matched_denials[:3]) + "). Memo cannot pass "
+                    "as clean while declared PEP is flattened to 'no PEP'."
+                ),
+                "fix": "Rewrite executive summary, screening results, ownership/"
+                       "financial crime risk, and ongoing monitoring sections to "
+                       "acknowledge declared PEP exposure. Use the screening_state_"
+                       "summary.declared_pep_count metadata as source of truth."
+            })
+            declared_pep_score = 0.0
+    scores["declared_pep_truthfulness"] = declared_pep_score
+
     # ── COMPUTE FINAL SCORE ──
     total = sum(scores.values())
-    max_possible = 13.5  # Updated: 13 original categories + 2 new rule engine categories
+    max_possible = 14.5  # 13.5 (15 original rules) + 1.0 (rule #16 declared_pep_truthfulness, A.2)
     quality_score = round(min(total / max_possible * 10, 10), 1)
 
     # Determine status
