@@ -21,6 +21,14 @@ INVARIANT:
 
 import logging
 
+from screening_state import (
+    derive_screening_state,
+    derive_subject_state,
+    COMPLETED_CLEAR as _SCR_COMPLETED_CLEAR,
+    COMPLETED_MATCH as _SCR_COMPLETED_MATCH,
+    TERMINAL_STATES as _SCR_TERMINAL_STATES,
+)
+
 logger = logging.getLogger("arie.screening_normalizer")
 
 # Metadata keys added during normalization (stripped during denormalization)
@@ -33,6 +41,9 @@ _REPORT_METADATA_KEYS = frozenset({
     "adverse_media_coverage",
     "company_screening_coverage",
     "has_company_screening_hit",
+    # Priority A: canonical state metadata
+    "company_screening_state",
+    "any_non_terminal_subject",
 })
 
 _PERSON_METADATA_KEYS = frozenset({
@@ -40,6 +51,9 @@ _PERSON_METADATA_KEYS = frozenset({
     "has_sanctions_hit",
     "has_adverse_media_hit",
     "adverse_media_coverage",
+    # Priority A: canonical state metadata
+    "screening_state",
+    "requires_review",
 })
 
 
@@ -52,21 +66,31 @@ def _compute_person_hits(person: dict) -> dict:
     """
     Compute per-person hit summary fields from screening results.
     Does not modify the input dict.
+
+    Priority A (truthful semantics): when the underlying screening is **not**
+    terminal (pending / not_configured / unavailable / failed / not_started),
+    has_pep_hit and has_sanctions_hit are set to ``None`` rather than
+    ``False``. ``False`` would mean "we have a real provider answer and
+    there is no hit" — which is a misrepresentation when the provider has
+    not produced a terminal answer yet.
     """
     screening = person.get("screening", {})
+    state = derive_screening_state(screening)
     results = screening.get("results", [])
-    matched = screening.get("matched", False)
 
-    has_pep_hit = None
-    has_sanctions_hit = None
-
-    if matched and results:
-        has_pep_hit = any(r.get("is_pep") for r in results)
-        has_sanctions_hit = any(r.get("is_sanctioned") for r in results)
-    elif isinstance(matched, bool):
-        # Screened but no match
-        has_pep_hit = False
-        has_sanctions_hit = False
+    if state in _SCR_TERMINAL_STATES:
+        # Real provider answer: hits can be asserted truthfully.
+        if state == _SCR_COMPLETED_MATCH and results:
+            has_pep_hit = any(r.get("is_pep") for r in results)
+            has_sanctions_hit = any(r.get("is_sanctioned") for r in results)
+        else:
+            # COMPLETED_CLEAR (or COMPLETED_MATCH with empty results) → no hit
+            has_pep_hit = False
+            has_sanctions_hit = False
+    else:
+        # Non-terminal: cannot assert absence of hits. Stay null.
+        has_pep_hit = None
+        has_sanctions_hit = None
 
     return {
         "has_pep_hit": has_pep_hit,
@@ -74,6 +98,8 @@ def _compute_person_hits(person: dict) -> dict:
         # Sumsub does not provide adverse media screening
         "has_adverse_media_hit": None,
         "adverse_media_coverage": "none",
+        # Priority A: canonical state, persisted alongside legacy fields.
+        "screening_state": state,
     }
 
 
@@ -113,12 +139,21 @@ def normalize_screening_report(raw_report: dict) -> dict:
     any_pep = False
     any_sanctions = False
     total_persons = 0
+    any_non_terminal_subject = False
 
     new_directors = []
     for d in raw_report.get("director_screenings", []):
         nd = dict(d)  # shallow copy to add metadata
         hits = _compute_person_hits(d)
         nd.update(hits)
+        # Priority A: declared_pep stays a separate signal regardless of
+        # provider state. requires_review is True for any non-terminal
+        # state, terminal match, or declared PEP.
+        declared_pep_flag = (d.get("declared_pep") or "").lower() == "yes"
+        envelope = derive_subject_state(d.get("screening", {}), declared_pep=declared_pep_flag)
+        nd["requires_review"] = envelope["requires_review"]
+        if hits["screening_state"] not in _SCR_TERMINAL_STATES:
+            any_non_terminal_subject = True
         new_directors.append(nd)
         total_persons += 1
         if hits["has_pep_hit"]:
@@ -131,6 +166,11 @@ def normalize_screening_report(raw_report: dict) -> dict:
         nu = dict(u)  # shallow copy to add metadata
         hits = _compute_person_hits(u)
         nu.update(hits)
+        declared_pep_flag = (u.get("declared_pep") or "").lower() == "yes"
+        envelope = derive_subject_state(u.get("screening", {}), declared_pep=declared_pep_flag)
+        nu["requires_review"] = envelope["requires_review"]
+        if hits["screening_state"] not in _SCR_TERMINAL_STATES:
+            any_non_terminal_subject = True
         new_ubos.append(nu)
         total_persons += 1
         if hits["has_pep_hit"]:
@@ -145,25 +185,35 @@ def normalize_screening_report(raw_report: dict) -> dict:
     normalized["any_pep_hits"] = any_pep
     normalized["any_sanctions_hits"] = any_sanctions
     normalized["total_persons_screened"] = total_persons
+    normalized["any_non_terminal_subject"] = any_non_terminal_subject
 
     # Adverse media coverage (Sumsub does not provide adverse media)
     normalized["adverse_media_coverage"] = "none"
 
-    # Company screening coverage
+    # Company screening coverage + canonical state.
     company = raw_report.get("company_screening", {})
     if company:
         normalized["company_screening_coverage"] = "partial"
-        # Determine if there's a company screening hit
         sanctions = company.get("sanctions", {})
-        if sanctions.get("matched"):
+        company_state = derive_screening_state(sanctions)
+        normalized["company_screening_state"] = company_state
+        # Priority A: only a terminal state may yield a non-null
+        # has_company_screening_hit.
+        if company_state == _SCR_COMPLETED_MATCH:
             normalized["has_company_screening_hit"] = True
-        elif isinstance(sanctions.get("matched"), bool):
+        elif company_state == _SCR_COMPLETED_CLEAR:
             normalized["has_company_screening_hit"] = False
         else:
+            # pending / not_configured / failed → cannot assert presence
+            # or absence of a hit.
             normalized["has_company_screening_hit"] = None
+            if company_state not in _SCR_TERMINAL_STATES:
+                any_non_terminal_subject = True
+                normalized["any_non_terminal_subject"] = True
     else:
         normalized["company_screening_coverage"] = "none"
         normalized["has_company_screening_hit"] = None
+        normalized["company_screening_state"] = "not_started"
 
     return normalized
 
