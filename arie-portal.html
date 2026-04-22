@@ -1844,6 +1844,11 @@
             <div class="dash-cta-title">Resume Application</div>
             <div class="dash-cta-desc" id="resume-cta-desc">No applications in progress</div>
             <div style="margin-top:12px;font-size:11px;opacity:0.8;" id="resume-cta-ref"></div>
+            <div style="margin-top:10px;display:flex;gap:8px;">
+              <button type="button" id="resume-cta-discard" class="btn-resume-discard"
+                      style="display:none;background:transparent;border:1px solid rgba(255,255,255,0.4);color:#fff;padding:4px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;"
+                      onclick="event.stopPropagation();discardActiveDraft();">Discard draft</button>
+            </div>
             <div class="dash-cta-arrow">→</div>
           </div>
           <div class="dash-cta-card secondary" onclick="startNewApplication()">
@@ -2072,6 +2077,18 @@
               <div style="font-size:12px;color:var(--text2);">Some fields were pre-filled from your earlier input. Please review and update any details before submitting.</div>
             </div>
           </div>
+
+          <!-- Priority C: Save & Resume status bar (visible during pre-screening) -->
+          <div class="save-draft-bar" id="save-draft-bar" style="display:none;">
+            <div class="save-info">
+              <span id="save-status">Not saved yet</span>
+              <span id="save-ref-display" style="margin-left:10px;"></span>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <button type="button" class="btn-save-draft" onclick="saveDraft()">💾 Save Draft</button>
+            </div>
+          </div>
+
           <form id="prescreening-form" onsubmit="submitPrescreening(event)">
 
           <!-- 1. Entity Information -->
@@ -4877,6 +4894,10 @@ function resetPortalApplicationState() {
     clearInterval(autoSaveTimer);
     autoSaveTimer = null;
   }
+  // Priority C: clear dirty/submit flags so a fresh form does not trigger
+  // the navigation guard or carry over stale "Unsaved changes" UI.
+  _draftDirty = false;
+  _draftSubmitting = false;
   resetPortalPricingState();
   resetPortalDocumentState();
   var form = document.getElementById('prescreening-form');
@@ -5998,6 +6019,8 @@ async function submitPrescreening(e) {
   };
 
   try {
+    // Priority C: suppress beforeunload guard during legitimate submit nav
+    _draftSubmitting = true;
     if (currentApplicationId) {
       // Resume flow: update existing draft application instead of creating a new one
       await apiCall('PUT', '/applications/' + currentApplicationId, payload);
@@ -6013,6 +6036,8 @@ async function submitPrescreening(e) {
       throw new Error('Authoritative risk result was not returned by the server.');
     }
 
+    // Pre-screening submitted successfully — server holds canonical state now.
+    _draftDirty = false;
     btn.disabled = false;
     btn.innerHTML = '🚀 Submit Pre-Screening';
     showView('risk-scoring');
@@ -6023,6 +6048,8 @@ async function submitPrescreening(e) {
     btn.disabled = false;
     btn.innerHTML = '🚀 Submit Pre-Screening';
     showToast('error', 'Submission Failed', err.message || 'Could not submit your application. Please try again.');
+  } finally {
+    _draftSubmitting = false;
   }
 }
 
@@ -6719,9 +6746,60 @@ submitPrescreening = function(e) {
 // ─── Save & Resume ────────────────────────────────────────
 var DRAFT_STORAGE_KEY = 'arie_draft_';
 var autoSaveTimer = null;
+// Priority C: dirty-flag tracking + navigation guard state
+var _draftDirty = false;
+var _draftSubmitting = false;
+var _draftDirtyListenerAttached = false;
+var _draftBeforeUnloadAttached = false;
 
 function getSaveKey() {
   return DRAFT_STORAGE_KEY + (appRef || 'temp');
+}
+
+function _setSaveStatus(text, color) {
+  var bar = document.getElementById('save-draft-bar');
+  if (bar) bar.style.display = '';
+  var statusEl = document.getElementById('save-status');
+  if (statusEl) {
+    statusEl.textContent = text;
+    if (color) statusEl.style.color = color;
+  }
+  var refDisplay = document.getElementById('save-ref-display');
+  if (refDisplay && appRef) refDisplay.textContent = 'Ref: ' + appRef;
+}
+
+function _markDraftDirty() {
+  if (_draftSubmitting) return;
+  _draftDirty = true;
+  var statusEl = document.getElementById('save-status');
+  if (statusEl && statusEl.textContent.indexOf('Unsaved') === -1
+                && statusEl.textContent.indexOf('Saving') === -1) {
+    _setSaveStatus('● Unsaved changes', 'var(--amber)');
+  }
+}
+
+function _attachDraftDirtyListener() {
+  if (_draftDirtyListenerAttached) return;
+  var form = document.getElementById('prescreening-form');
+  if (!form) return;
+  // Capture-phase listener so dynamically added rows (directors/UBOs) are covered
+  form.addEventListener('input', _markDraftDirty, true);
+  form.addEventListener('change', _markDraftDirty, true);
+  _draftDirtyListenerAttached = true;
+}
+
+function _attachBeforeUnloadGuard() {
+  if (_draftBeforeUnloadAttached) return;
+  window.addEventListener('beforeunload', function(e) {
+    // Only warn when there are genuinely unsaved changes and we're not in
+    // the middle of a successful submit/navigation initiated by the app.
+    if (_draftDirty && !_draftSubmitting) {
+      e.preventDefault();
+      e.returnValue = ''; // Required for Chrome/Firefox to display prompt
+      return '';
+    }
+  });
+  _draftBeforeUnloadAttached = true;
 }
 
 function collectFormData() {
@@ -6809,27 +6887,38 @@ function collectFormData() {
 }
 
 async function saveDraft() {
+  // Priority C: server-side save with dirty-flag reset and graceful no-op
+  // when there is no application_id yet (form is pre-application).
   var data = collectFormData();
-  // Security: PII no longer stored in localStorage — API-only save
-  // Draft data kept in memory only for session duration
 
-  // Also save to API if authenticated
-  if (AUTH_TOKEN) {
-    try {
-      await apiCall('POST', '/save-resume', {
-        application_id: currentApplicationId,
-        form_data: data,
-        last_step: getCurrentStep()
-      });
-    } catch(e) { console.warn('API save failed', e); }
+  if (!AUTH_TOKEN) {
+    showToast('error', 'Sign In Required', 'Please sign in to save your draft.');
+    return;
+  }
+  if (!currentApplicationId) {
+    // No app exists yet — saving needs a server-side application record.
+    showToast('info', 'Save Unavailable Yet', 'Your draft is saved automatically once your application is created (after the first submit step).');
+    return;
   }
 
-  var statusEl = document.getElementById('save-status');
-  if (statusEl) {
-    statusEl.textContent = '✅ Saved ' + new Date().toLocaleTimeString();
-    statusEl.style.color = 'var(--green)';
+  _setSaveStatus('Saving…', 'var(--text3)');
+  try {
+    var resp = await apiCall('POST', '/save-resume', {
+      application_id: currentApplicationId,
+      form_data: data,
+      last_step: getCurrentStep()
+    });
+    _draftDirty = false;
+    var savedAt = (resp && resp.last_saved_at)
+      ? ' ' + new Date(resp.last_saved_at + (String(resp.last_saved_at).indexOf('Z') === -1 ? 'Z' : '')).toLocaleTimeString()
+      : ' ' + new Date().toLocaleTimeString();
+    _setSaveStatus('✓ Saved' + savedAt, 'var(--green)');
+    showToast('success', 'Draft Saved', 'Your progress has been saved. You can resume this application anytime.');
+  } catch (e) {
+    console.warn('saveDraft API failed:', e);
+    _setSaveStatus('⚠ Save failed — will retry', 'var(--amber)');
+    showToast('error', 'Save Failed', (e && e.message) ? e.message : 'Could not save your draft. Please try again.');
   }
-  showToast('success', 'Draft Saved', 'Your progress has been saved. You can resume this application anytime using your reference number.');
 }
 
 function getCurrentStep() {
@@ -7029,30 +7118,35 @@ function loadDraft(ref) {
 }
 
 function startAutoSave() {
+  // Priority C: dirty-only autosave with single in-flight guard. Runs on
+  // both the pre-screening view (where the bulk of editing happens) and
+  // the onboarding/KYC view. Skips ticks when nothing has changed, when
+  // the user is unauthenticated, or when no application_id exists yet.
   if (autoSaveTimer) clearInterval(autoSaveTimer);
+  _attachDraftDirtyListener();
+  _attachBeforeUnloadGuard();
+  var inFlight = false;
   autoSaveTimer = setInterval(async function() {
-    if (appRef) {
-      var data = collectFormData();
-      var saveOk = true;
-      if (AUTH_TOKEN) {
-        try {
-          await apiCall('POST', '/save-resume', {
-            application_id: currentApplicationId,
-            form_data: data,
-            last_step: getCurrentStep()
-          });
-        } catch(e) { saveOk = false; }
-      }
-      var statusEl = document.getElementById('save-status');
-      if (statusEl) {
-        if (saveOk) {
-          statusEl.textContent = '✓ Auto-saved ' + new Date().toLocaleTimeString();
-          statusEl.style.color = 'var(--green)';
-        } else {
-          statusEl.textContent = '⚠ Save failed — will retry';
-          statusEl.style.color = 'var(--amber)';
-        }
-      }
+    if (inFlight) return;
+    if (!_draftDirty) return;
+    if (!AUTH_TOKEN || !currentApplicationId) return;
+    inFlight = true;
+    var data = collectFormData();
+    try {
+      var resp = await apiCall('POST', '/save-resume', {
+        application_id: currentApplicationId,
+        form_data: data,
+        last_step: getCurrentStep()
+      });
+      _draftDirty = false;
+      var ts = (resp && resp.last_saved_at)
+        ? new Date(resp.last_saved_at + (String(resp.last_saved_at).indexOf('Z') === -1 ? 'Z' : '')).toLocaleTimeString()
+        : new Date().toLocaleTimeString();
+      _setSaveStatus('✓ Auto-saved ' + ts, 'var(--green)');
+    } catch(e) {
+      _setSaveStatus('⚠ Save failed — will retry', 'var(--amber)');
+    } finally {
+      inFlight = false;
     }
   }, 30000); // Auto-save every 30 seconds
 }
@@ -7061,9 +7155,16 @@ function startAutoSave() {
 var origShowView = showView;
 showView = function(name) {
   origShowView(name);
-  if (name === 'onboarding') {
+  // Priority C: Save & Resume — autosave runs during pre-screening and
+  // onboarding (the two long client-edit views). Stop on terminal/passive
+  // views so we don't churn the API after submission.
+  if (name === 'prescreening' || name === 'onboarding') {
     var refDisplay = document.getElementById('save-ref-display');
-    if (refDisplay) refDisplay.textContent = appRef || '';
+    if (refDisplay) refDisplay.textContent = appRef ? 'Ref: ' + appRef : '';
+    var bar = document.getElementById('save-draft-bar');
+    if (bar) bar.style.display = '';
+    _attachDraftDirtyListener();
+    _attachBeforeUnloadGuard();
     startAutoSave();
   } else if (autoSaveTimer) {
     clearInterval(autoSaveTimer);
@@ -7458,13 +7559,17 @@ async function finalSubmitFromReview() {
     showToast('error', 'Session Required', 'Please sign in again before submitting your KYC documents.');
     return;
   }
+  _draftSubmitting = true;
   try {
     await apiCall('POST', '/applications/' + currentApplicationId + '/submit-kyc');
   } catch(err) {
+    _draftSubmitting = false;
     console.error('KYC submission failed:', err);
     showToast('error', 'Submission Failed', err.message || 'Could not submit your KYC documents. Please try again.');
     return;
   }
+  // Server has cleared the draft on its side; mirror that locally.
+  _draftDirty = false;
   generateComplianceMemo();
   updateDocsReviewMessaging(lastReviewSummaryState);
   showView('docs-review');
@@ -7472,6 +7577,7 @@ async function finalSubmitFromReview() {
   // Clear the draft
   try { localStorage.removeItem(getSaveKey()); } catch(e) {}
   if (autoSaveTimer) clearInterval(autoSaveTimer);
+  _draftSubmitting = false;
 }
 
 
@@ -9314,6 +9420,60 @@ function renderResumeCTA(apps) {
   var refEl = document.getElementById('resume-cta-ref');
   if (desc) desc.textContent = (app.company_name || 'Your application') + ' · Awaiting action';
   if (refEl) refEl.textContent = 'Ref: ' + ref;
+
+  // Priority C: surface explicit Discard control only when there is a true
+  // server-side draft for this application (status === 'draft'). Other
+  // resumable states (kyc_documents, pricing_review, etc.) should not be
+  // discarded from this banner — they belong to live workflows.
+  var discardBtn = document.getElementById('resume-cta-discard');
+  if (discardBtn) {
+    if (app.status === 'draft') {
+      discardBtn.style.display = '';
+      discardBtn.setAttribute('data-app-id', app.id || '');
+      discardBtn.setAttribute('data-app-ref', ref);
+      discardBtn.setAttribute('data-app-name', app.company_name || ref);
+    } else {
+      discardBtn.style.display = 'none';
+    }
+  }
+}
+
+async function discardActiveDraft() {
+  // Priority C: explicit per-draft discard from the dashboard Resume CTA.
+  // Deletes both the saved-session row and the draft application record so
+  // the banner does not reappear after a reload.
+  var btn = document.getElementById('resume-cta-discard');
+  if (!btn) return;
+  var appId = btn.getAttribute('data-app-id') || '';
+  var ref = btn.getAttribute('data-app-ref') || '';
+  var name = btn.getAttribute('data-app-name') || ref || 'this draft';
+  if (!appId && !ref) return;
+  if (!confirm('Discard your in-progress draft for ' + name + '? This cannot be undone.')) return;
+  try {
+    if (appId) {
+      try {
+        await apiCall('DELETE', '/save-resume?application_id=' + encodeURIComponent(appId));
+      } catch (e) { console.warn('discard draft session failed:', e); }
+    }
+    // Best-effort: also delete the underlying draft application so the table
+    // and banner clear immediately. Backend only allows this for status=draft.
+    if (ref) {
+      try {
+        await apiCall('DELETE', '/applications/' + encodeURIComponent(ref));
+      } catch (e) { console.warn('discard draft application failed:', e); }
+    }
+    showToast('success', 'Draft Discarded', 'Your in-progress draft has been removed.');
+    var cta = document.getElementById('resume-cta');
+    if (cta) cta.style.display = 'none';
+    if (typeof loadDashboardApplications === 'function') {
+      try { loadDashboardApplications(); } catch (e) {}
+    } else if (typeof loadClientApplications === 'function') {
+      try { loadClientApplications(); } catch (e) {}
+    }
+  } catch (err) {
+    console.error('discardActiveDraft failed:', err);
+    showToast('error', 'Discard Failed', (err && err.message) ? err.message : 'Could not discard the draft. Please try again.');
+  }
 }
 
 function renderRecentActivity(apps) {

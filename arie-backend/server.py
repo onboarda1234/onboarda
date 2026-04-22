@@ -724,6 +724,91 @@ def safe_json_loads(val):
     return _safe_json_loads(val)
 
 
+# ── Priority C: Draft form_data at-rest protection ───────────
+# Drafts persisted in client_sessions.form_data may contain PII
+# (contact email, names, DOB, nationality, ownership %, etc.).
+# We encrypt the whole JSON blob using the existing PIIEncryptor
+# (same Fernet key used for director/UBO PII fields). When the
+# encryptor is not configured (dev/test without PII_ENCRYPTION_KEY)
+# we fall back to plaintext JSON so existing behaviour is preserved.
+# Reads transparently handle both encrypted and legacy plaintext
+# rows so deployment requires no data migration.
+
+DRAFT_FORM_DATA_ENCRYPTED_PREFIX = "enc:v1:"
+
+
+def encrypt_draft_form_data(payload) -> str:
+    """Serialize a draft form_data payload, encrypting at rest if a PII key is available."""
+    raw = json.dumps(payload or {})
+    if _pii_encryptor is None:
+        return raw
+    try:
+        token = _pii_encryptor.encrypt(raw)
+    except Exception as exc:
+        logger.warning("Draft form_data encryption failed, falling back to plaintext: %s", exc)
+        return raw
+    return DRAFT_FORM_DATA_ENCRYPTED_PREFIX + token
+
+
+def decrypt_draft_form_data(stored) -> dict:
+    """Decrypt + parse a stored client_sessions.form_data value.
+
+    Accepts:
+      * dict (PostgreSQL JSONB legacy rows) → returned as-is
+      * plaintext JSON strings (legacy rows / encryptor disabled)
+      * "enc:v1:<fernet_token>" strings written by encrypt_draft_form_data
+    Always returns a dict; never raises.
+    """
+    if stored is None or stored == "":
+        return {}
+    if isinstance(stored, dict):
+        return stored
+    if isinstance(stored, (bytes, bytearray)):
+        try:
+            stored = stored.decode("utf-8")
+        except Exception:
+            return {}
+    if not isinstance(stored, str):
+        return {}
+    if stored.startswith(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):
+        token = stored[len(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):]
+        if _pii_encryptor is None:
+            logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
+            return {}
+        try:
+            plaintext = _pii_encryptor.decrypt(token)
+        except Exception as exc:
+            logger.warning("Draft form_data decryption failed: %s", exc)
+            return {}
+        return safe_json_loads(plaintext) or {}
+    # Legacy plaintext JSON (or raw dict-like string)
+    return safe_json_loads(stored) or {}
+
+
+def _draft_payload_is_meaningful(payload) -> bool:
+    """Reject completely empty drafts (no form fields, no party rows)."""
+    if not isinstance(payload, dict) or not payload:
+        return False
+    # last_step / timestamp alone don't count as user content
+    interesting_keys = (
+        "prescreening", "directors", "ubos", "intermediaries",
+        "servicesRequired", "accountPurposes", "currencies",
+        "countriesOfOperation", "targetMarkets", "kycPersons",
+        "uploadedDocs",
+    )
+    for key in interesting_keys:
+        val = payload.get(key)
+        if isinstance(val, dict) and any(v not in (None, "", False, [], {}) for v in val.values()):
+            return True
+        if isinstance(val, (list, tuple)) and any(
+            (isinstance(item, dict) and any(v not in (None, "", False, [], {}) for v in item.values()))
+            or (not isinstance(item, dict) and item not in (None, "", False))
+            for item in val
+        ):
+            return True
+    return False
+
+
 def first_non_empty(*values):
     """Return the first non-empty string-like value, preserving non-string scalars."""
     return _first_non_empty(*values)
@@ -767,7 +852,8 @@ def load_saved_session_prescreening(db, app_record) -> dict:
         form_data = session.get("form_data")
     else:
         form_data = session["form_data"]
-    return normalize_saved_session_prescreening(form_data)
+    decoded = decrypt_draft_form_data(form_data)
+    return normalize_saved_session_prescreening(decoded)
 
 
 def resolve_application_company_name(data: dict, prescreening_data: dict, fallback="") -> str:
@@ -2885,6 +2971,22 @@ class KYCSubmitHandler(BaseHandler):
                 updated_at=datetime('now')
             WHERE id=?
         """, (real_id,))
+
+        # Priority C: KYC submission is the final client-side hand-off into
+        # compliance review. The portal draft (client_sessions row) is no
+        # longer needed at this point — discard it so a stale "Resume"
+        # banner does not reappear on the dashboard after submission.
+        try:
+            db.execute(
+                "DELETE FROM client_sessions WHERE application_id=?",
+                (real_id,),
+            )
+        except Exception as exc:
+            # Non-fatal: KYC submission is the source of truth, not the draft.
+            logger.warning(
+                "Failed to clear draft session for app %s after KYC submit: %s",
+                real_id, exc,
+            )
 
         # Notify ALL compliance officers
         compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
@@ -6075,66 +6177,205 @@ class DashboardHandler(BaseHandler):
 # ══════════════════════════════════════════════════════════
 
 class SaveResumeHandler(BaseHandler):
-    """POST /api/save-resume — save form progress, GET — restore"""
+    """Portal draft persistence — save / resume / discard a single application's form state.
+
+    Endpoints:
+      POST   /api/save-resume                — create or update the draft for an app
+      GET    /api/save-resume?application_id=… — retrieve the draft for an app
+      DELETE /api/save-resume?application_id=… — discard the draft for an app
+
+    Only portal client users may use this endpoint. Drafts are scoped strictly
+    to the authenticated client_id AND the application_id (which must belong
+    to that client). form_data is encrypted at rest where a PII encryption
+    key is configured; legacy plaintext rows continue to read transparently.
+    """
+
+    # ── Internal helpers ────────────────────────────────────────
+    def _require_portal_client(self):
+        """Restrict draft endpoints to portal client users only."""
+        user = self.require_auth()
+        if not user:
+            return None
+        if user.get("type") != "client":
+            self.error("Draft persistence is only available to portal clients.", 403)
+            return None
+        return user
+
+    def _assert_app_belongs_to_client(self, db, app_id, client_id):
+        """Defence-in-depth: verify that application_id belongs to the calling client.
+
+        Returns the application row on success, sends an error response and
+        returns None on failure. Prevents one client from writing/reading a
+        draft keyed to another client's application_id.
+        """
+        if not app_id:
+            self.error("application_id required", 400)
+            return None
+        row = db.execute(
+            "SELECT id, client_id FROM applications WHERE id=? OR ref=?",
+            (app_id, app_id),
+        ).fetchone()
+        if not row:
+            self.error("Application not found", 404)
+            return None
+        if row["client_id"] != client_id:
+            # Same shape as not-found to avoid enumeration leakage
+            self.error("Application not found", 404)
+            return None
+        return row
+
+    # ── HTTP methods ────────────────────────────────────────────
+    def get(self):
+        user = self._require_portal_client()
+        if not user:
+            return
+        app_id = self.get_argument("application_id", None)
+        db = get_db()
+        try:
+            app_row = self._assert_app_belongs_to_client(db, app_id, user["sub"])
+            if not app_row:
+                return
+            real_id = app_row["id"]
+            session = db.execute(
+                "SELECT * FROM client_sessions WHERE client_id=? AND application_id=? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (user["sub"], real_id),
+            ).fetchone()
+            if session:
+                self.success({
+                    "form_data": decrypt_draft_form_data(session["form_data"]),
+                    "last_step": session["last_step"],
+                    "application_id": session["application_id"],
+                    "last_saved_at": session["updated_at"],
+                })
+            else:
+                self.success({"form_data": {}, "last_step": 0, "last_saved_at": None})
+        finally:
+            db.close()
+
+    def post(self):
+        user = self._require_portal_client()
+        if not user:
+            return
+        data = self.get_json() or {}
+        app_id = data.get("application_id")
+        form_data = data.get("form_data", {}) or {}
+        last_step = data.get("last_step", 0)
+
+        # Reject drafts with no meaningful content — prevents noisy empty
+        # autosaves on a freshly opened (untouched) form.
+        if not _draft_payload_is_meaningful(form_data):
+            return self.error("Draft is empty — nothing to save.", 400)
+
+        db = get_db()
+        try:
+            app_row = self._assert_app_belongs_to_client(db, app_id, user["sub"])
+            if not app_row:
+                return
+            real_id = app_row["id"]
+            stored_form_data = encrypt_draft_form_data(form_data)
+
+            existing = db.execute(
+                "SELECT id FROM client_sessions WHERE client_id=? AND application_id=?",
+                (user["sub"], real_id),
+            ).fetchone()
+            if existing:
+                # Single active draft per (client, application) — updates in place,
+                # never inserts a duplicate row.
+                db.execute(
+                    "UPDATE client_sessions SET form_data=?, last_step=?, "
+                    "updated_at=datetime('now') WHERE id=?",
+                    (stored_form_data, last_step, existing["id"]),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO client_sessions (client_id, application_id, form_data, last_step) "
+                    "VALUES (?,?,?,?)",
+                    (user["sub"], real_id, stored_form_data, last_step),
+                )
+            db.commit()
+            saved_at = db.execute(
+                "SELECT updated_at FROM client_sessions WHERE client_id=? AND application_id=?",
+                (user["sub"], real_id),
+            ).fetchone()
+        finally:
+            db.close()
+        self.success({
+            "status": "saved",
+            "application_id": app_id,
+            "last_saved_at": saved_at["updated_at"] if saved_at else None,
+        })
+
+    def delete(self):
+        """DELETE /api/save-resume — discard the draft for an application."""
+        user = self._require_portal_client()
+        if not user:
+            return
+        app_id = self.get_argument("application_id", None)
+        db = get_db()
+        try:
+            app_row = self._assert_app_belongs_to_client(db, app_id, user["sub"])
+            if not app_row:
+                return
+            real_id = app_row["id"]
+            db.execute(
+                "DELETE FROM client_sessions WHERE client_id=? AND application_id=?",
+                (user["sub"], real_id),
+            )
+            db.commit()
+        finally:
+            db.close()
+        self.success({"status": "deleted"})
+
+
+class ActiveDraftsHandler(BaseHandler):
+    """GET /api/save-resume/active — list the calling client's active in-progress drafts.
+
+    Drives the portal Resume/Discard banner. Returns at most the most recent
+    open (non-terminal) drafts joined with their parent application's metadata
+    so the UI can render a per-draft Resume + Discard control.
+    """
+
+    TERMINAL_STATUSES = ("approved", "rejected", "withdrawn")
+
     def get(self):
         user = self.require_auth()
         if not user:
             return
+        if user.get("type") != "client":
+            return self.error("Draft persistence is only available to portal clients.", 403)
+        client_id = user["sub"]
         db = get_db()
-        # Support filtering by specific application_id
-        app_id = self.get_argument("application_id", None)
-        if not app_id:
+        try:
+            placeholders = ",".join("?" * len(self.TERMINAL_STATUSES))
+            rows = db.execute(
+                f"""
+                SELECT cs.application_id, cs.last_step, cs.updated_at AS last_saved_at,
+                       a.ref, a.company_name, a.status
+                FROM client_sessions cs
+                JOIN applications a ON a.id = cs.application_id
+                WHERE cs.client_id = ?
+                  AND a.client_id  = ?
+                  AND a.status NOT IN ({placeholders})
+                ORDER BY cs.updated_at DESC
+                """,
+                (client_id, client_id, *self.TERMINAL_STATUSES),
+            ).fetchall()
+        finally:
             db.close()
-            return self.error("application_id required", 400)
-        session = db.execute(
-            "SELECT * FROM client_sessions WHERE client_id=? AND application_id=? ORDER BY updated_at DESC LIMIT 1",
-            (user["sub"], app_id)).fetchone()
-        db.close()
-        if session:
-            self.success({"form_data": safe_json_loads(session["form_data"]),
-                         "last_step": session["last_step"],
-                         "application_id": session["application_id"]})
-        else:
-            self.success({"form_data": {}, "last_step": 0})
-
-    def post(self):
-        user = self.require_auth()
-        if not user:
-            return
-        data = self.get_json()
-        db = get_db()
-        app_id = data.get("application_id")
-        if not app_id:
-            db.close()
-            return self.error("application_id required", 400)
-        existing = db.execute(
-            "SELECT id FROM client_sessions WHERE client_id=? AND application_id=?",
-            (user["sub"], app_id)
-        ).fetchone()
-        if existing:
-            db.execute("UPDATE client_sessions SET form_data=?, last_step=?, application_id=?, updated_at=datetime('now') WHERE id=?",
-                       (json.dumps(data.get("form_data",{})), data.get("last_step",0),
-                         data.get("application_id"), existing["id"]))
-        else:
-            db.execute("INSERT INTO client_sessions (client_id, application_id, form_data, last_step) VALUES (?,?,?,?)",
-                       (user["sub"], data.get("application_id"), json.dumps(data.get("form_data",{})), data.get("last_step",0)))
-        db.commit()
-        db.close()
-        self.success({"status": "saved"})
-
-    def delete(self):
-        """DELETE /api/save-resume — delete saved session for an application."""
-        user = self.require_auth()
-        if not user:
-            return
-        app_id = self.get_argument("application_id", None)
-        if not app_id:
-            return self.error("application_id required", 400)
-        db = get_db()
-        db.execute("DELETE FROM client_sessions WHERE client_id=? AND application_id=?", (user.get("sub"), app_id))
-        db.commit()
-        db.close()
-        self.success({"status": "deleted"})
+        drafts = [
+            {
+                "application_id": r["application_id"],
+                "ref": r["ref"],
+                "company_name": r["company_name"],
+                "status": r["status"],
+                "status_label": get_status_label(r["status"]),
+                "last_step": r["last_step"],
+                "last_saved_at": r["last_saved_at"],
+            }
+            for r in rows
+        ]
+        self.success({"drafts": drafts})
 
 
 # ══════════════════════════════════════════════════════════
@@ -10983,6 +11224,7 @@ def make_app():
         (r"/api/ai/assistant", AIAssistantHandler),
 
         # Save & Resume
+        (r"/api/save-resume/active", ActiveDraftsHandler),
         (r"/api/save-resume", SaveResumeHandler),
 
         # Change Management
