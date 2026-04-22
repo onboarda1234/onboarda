@@ -948,11 +948,238 @@ def build_compliance_memo(app, directors, ubos, documents):
 
     memo["metadata"]["declared_pep_guardrail"] = declared_pep_guardrail
 
+    # ── Priority B / Workstream A: Agent 5 authoritative input contract ──
+    # The contract pins the case facts that the memo narrative MUST
+    # respect. Downstream guards (narrative contradiction check below,
+    # supervisor mandatory_escalation, EDD routing policy) all read
+    # from this single source so the decision path cannot diverge from
+    # the facts. Keep the keys aligned with REQUIRED_FACT_KEYS in
+    # edd_routing_policy.py.
+    _ownership_status = (
+        "opaque" if (own_rating == "HIGH" or struct_complexity == "Complex")
+        else "incomplete" if ownership_has_gaps
+        else "transparent"
+    )
+    _has_terminal_match = any(s == _S_MATCH for s in _all_states)
+    edd_trigger_flags = []
+    try:
+        _raw_esc = app.get("risk_escalations") or "[]"
+        _esc_list = json.loads(_raw_esc) if isinstance(_raw_esc, str) else (_raw_esc or [])
+        if isinstance(_esc_list, list):
+            for _esc in _esc_list:
+                if isinstance(_esc, dict):
+                    _label = _esc.get("rule") or _esc.get("reason") or ""
+                else:
+                    _label = str(_esc)
+                if _label:
+                    edd_trigger_flags.append(_label)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    agent5_input_contract = {
+        "final_risk_level": aggregated_risk,
+        "composite_score": risk_score,
+        "risk_dimensions": {
+            "jurisdiction": jur_rating,
+            "ownership": own_rating,
+            "business": biz_rating,
+            "fincrime": fc_rating,
+            "transaction": tx_rating,
+            "documentation": doc_rating,
+            "data_quality": dq_rating,
+        },
+        "declared_pep_present": has_declared_pep,
+        "declared_pep_count": len(all_peps),
+        "jurisdiction_risk_tier": jur_rating,
+        "sector_risk_tier": biz_rating,
+        "sector_label": sector,
+        "ownership_transparency_status": _ownership_status,
+        "screening_terminality_summary": {
+            "terminal": screening_terminal,
+            "has_non_terminal": screening_has_non_terminal,
+            "has_failed": screening_has_failed,
+            "has_not_configured": screening_has_not_configured,
+            "has_terminal_match": _has_terminal_match,
+            "company_screening_configured": bool(screening_report.get("company_screening")),
+        },
+        "company_screening_configured": bool(screening_report.get("company_screening")),
+        "edd_trigger_flags": edd_trigger_flags,
+        "decision_recommendation": decision,
+        "monitoring_tier": mon_tier,
+    }
+    memo["metadata"]["agent5_input_contract"] = agent5_input_contract
+
+    # ── Priority B / Workstream A: Narrative contradiction guard ──────
+    # Walk the memo narrative and surface contradictions against the
+    # authoritative input contract. Each contradiction is recorded as a
+    # high-severity rule violation so the supervisor (which already
+    # ingests rule_engine.violations as critical contradictions) cannot
+    # return CONSISTENT for a memo that lies about the facts. We
+    # intentionally do not rewrite the prose — officers must see the
+    # supervisor verdict flip to INCONSISTENT and re-generate.
+    def _narrative_text():
+        chunks = []
+        for sec in (memo.get("sections") or {}).values():
+            if not isinstance(sec, dict):
+                continue
+            for k, v in sec.items():
+                if isinstance(v, str):
+                    chunks.append(v)
+                elif isinstance(v, dict):
+                    for sub in v.values():
+                        if isinstance(sub, dict):
+                            c = sub.get("content")
+                            if isinstance(c, str):
+                                chunks.append(c)
+        for key in ("key_findings", "review_checklist", "conditions"):
+            for s in (memo["metadata"].get(key) or []):
+                if isinstance(s, str):
+                    chunks.append(s)
+        return "\n".join(chunks).lower()
+
+    _narr_lower = _narrative_text()
+
+    # Phrasings that flatten elevated facts to "low/clean/transparent".
+    # Each entry: (predicate_bool, list_of_banned_phrases, rule_tag, description)
+    _contradiction_checks = [
+        (
+            jur_rating in ("HIGH", "VERY_HIGH"),
+            [
+                "low jurisdictional risk", "low jurisdiction risk",
+                "presents low jurisdictional risk",
+                "presents low risk",
+                "low-risk jurisdiction",
+                "jurisdiction is low risk",
+            ],
+            "AGENT5_NARRATIVE_CONTRADICTION_JURISDICTION",
+            "Jurisdiction risk is " + jur_rating + " but narrative describes it as low.",
+        ),
+        (
+            biz_rating in ("HIGH",),
+            [
+                "low business risk", "low sector risk",
+                "low-risk sector", "sector presents low risk",
+                "no enhanced sector concern",
+            ],
+            "AGENT5_NARRATIVE_CONTRADICTION_SECTOR",
+            "Sector/business risk is " + biz_rating + " but narrative describes it as low.",
+        ),
+        (
+            not screening_terminal,
+            [
+                "sanctions screening completed across all major consolidated lists",
+                "screening completed — no matches across un, eu, ofac, hmt lists",
+                "sanctions screening completed — no matches",
+                "clean sanctions screening across all major consolidated lists",
+                "screening completed and clean",
+                "no screening concerns identified",
+            ],
+            "AGENT5_NARRATIVE_CONTRADICTION_SCREENING",
+            "Screening is non-terminal (provider pending/not_configured/failed for at least one subject) "
+            "but narrative claims screening is completed/clean.",
+        ),
+        (
+            _ownership_status in ("opaque", "incomplete"),
+            [
+                "fully transparent ownership",
+                "complete ownership transparency",
+                "ownership is fully transparent",
+                "fully traceable beneficial ownership chain",
+                "clean ownership structure with full transparency",
+            ],
+            "AGENT5_NARRATIVE_CONTRADICTION_OWNERSHIP",
+            "Ownership transparency status is " + _ownership_status
+            + " but narrative describes ownership as fully transparent.",
+        ),
+    ]
+
+    for _predicate, _phrases, _rule_tag, _desc in _contradiction_checks:
+        if not _predicate:
+            continue
+        _matched = [p for p in _phrases if p in _narr_lower]
+        if _matched:
+            rule_violations.append({
+                "rule": _rule_tag,
+                "severity": "high",
+                "detail": _desc + " Matched phrasing: " + "; ".join(_matched[:3]),
+                "action": "Contradiction surfaced — supervisor will mark INCONSISTENT.",
+            })
+
+    # EDD-trigger-but-described-as-standard check. We say a case is
+    # "EDD-triggering" if final risk is HIGH/VERY_HIGH, or there is a
+    # declared PEP, or jurisdiction is high/very_high, or sector is
+    # high. This mirrors the policy in edd_routing_policy.py without
+    # importing it (so this module remains policy-agnostic).
+    _is_edd_triggering = (
+        aggregated_risk in ("HIGH", "VERY_HIGH")
+        or has_declared_pep
+        or jur_rating in ("HIGH", "VERY_HIGH")
+        or biz_rating == "HIGH"
+        or _ownership_status == "opaque"
+    )
+    if _is_edd_triggering:
+        _standard_phrases = [
+            "standard review pathway",
+            "no enhanced concern",
+            "no enhanced compliance concern",
+            "ordinary review process",
+            "no edd required",
+            "edd is not required",
+            "no enhanced due diligence required",
+        ]
+        _matched = [p for p in _standard_phrases if p in _narr_lower]
+        if _matched:
+            rule_violations.append({
+                "rule": "AGENT5_NARRATIVE_CONTRADICTION_EDD",
+                "severity": "high",
+                "detail": (
+                    "Case is EDD-triggering (risk=" + aggregated_risk
+                    + ", declared_pep=" + str(has_declared_pep)
+                    + ", jurisdiction=" + jur_rating
+                    + ", sector=" + biz_rating
+                    + ", ownership=" + _ownership_status
+                    + ") but narrative describes it as standard/no-enhanced-concern. "
+                    "Matched phrasing: " + "; ".join(_matched[:3])
+                ),
+                "action": "Contradiction surfaced — supervisor will mark INCONSISTENT.",
+            })
+
+    # Re-sync rule engine result if narrative contradictions were added.
+    if rule_violations is not rule_engine_result["violations"]:
+        rule_engine_result["violations"] = rule_violations
+    rule_engine_result["total_violations"] = len(rule_violations)
+    if rule_engine_result["total_violations"] > 0:
+        rule_engine_result["engine_status"] = "VIOLATIONS_DETECTED"
+    memo["metadata"]["rule_engine"] = rule_engine_result
+
     # Run memo supervisor — contradiction detection & verdict
     supervisor_result = run_memo_supervisor(memo)
     memo["supervisor"] = supervisor_result
     memo["metadata"]["supervisor_status"] = supervisor_result["verdict"]
     memo["metadata"]["supervisor_confidence"] = supervisor_result["supervisor_confidence"]
+
+    # ── Priority B / Workstream C: Server-side EDD routing policy ─────
+    # Evaluate the deterministic policy from the authoritative input
+    # contract (now augmented with the supervisor's mandatory_escalation
+    # flag) and persist the routing decision on the memo. The audit-log
+    # row is written by the HTTP handler that owns the DB cursor.
+    try:
+        from edd_routing_policy import evaluate_edd_routing as _eval_routing
+        routing_facts = dict(agent5_input_contract)
+        routing_facts["supervisor_mandatory_escalation"] = bool(
+            supervisor_result.get("mandatory_escalation", False)
+        )
+        edd_routing = _eval_routing(routing_facts)
+    except Exception as _routing_err:  # pragma: no cover — defensive
+        logger.error("EDD routing evaluation failed: %s", _routing_err)
+        edd_routing = {
+            "policy_version": "edd_routing_policy_v1",
+            "route": "edd",  # fail-closed
+            "triggers": ["routing_evaluation_failed"],
+            "inputs": {},
+            "evaluated_at": now_ts,
+        }
+    memo["metadata"]["edd_routing"] = edd_routing
 
     # Run validation engine — now with rule engine awareness
     validation_result = validate_compliance_memo(memo)
