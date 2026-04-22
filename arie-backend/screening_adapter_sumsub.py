@@ -44,24 +44,33 @@ class SumsubScreeningAdapter(ScreeningProvider):
         """
         Screen an individual via existing screening.screen_sumsub_aml().
         Returns minimally normalized person record.
+
+        Priority A: only a terminal provider state (api_status=live) may
+        yield a non-null has_pep_hit/has_sanctions_hit. Pending /
+        not_configured / unavailable / error remain null so downstream
+        consumers cannot misread them as "no hit".
         """
         from screening import screen_sumsub_aml as _screen_sumsub_aml
+        from screening_state import (
+            derive_screening_state,
+            COMPLETED_CLEAR as _CC,
+            COMPLETED_MATCH as _CM,
+        )
         raw_result = _screen_sumsub_aml(
             name, birth_date=birth_date, nationality=nationality, entity_type=entity_type
         )
 
-        # Compute hit summaries
-        matched = raw_result.get("matched", False)
+        state = derive_screening_state(raw_result)
         results = raw_result.get("results", [])
-        has_pep_hit = None
-        has_sanctions_hit = None
-
-        if matched and results:
+        if state == _CM and results:
             has_pep_hit = any(r.get("is_pep") for r in results)
             has_sanctions_hit = any(r.get("is_sanctioned") for r in results)
-        elif isinstance(matched, bool):
+        elif state == _CC:
             has_pep_hit = False
             has_sanctions_hit = False
+        else:
+            has_pep_hit = None
+            has_sanctions_hit = None
 
         return create_normalized_person_screening(
             person_name=name,
@@ -71,6 +80,7 @@ class SumsubScreeningAdapter(ScreeningProvider):
             has_sanctions_hit=has_sanctions_hit,
             has_adverse_media_hit=None,
             adverse_media_coverage="none",
+            screening_state=state,
             screening=raw_result,
         )
 
@@ -79,18 +89,30 @@ class SumsubScreeningAdapter(ScreeningProvider):
         Screen a company. Sumsub provides company sanctions screening
         via screen_sumsub_aml with entity_type="Company".
         Returns minimally normalized company record.
+
+        Priority A: not_configured/pending/failed yield ``None`` for
+        has_company_screening_hit — never ``False``.
         """
         from screening import screen_sumsub_aml as _screen_sumsub_aml
+        from screening_state import (
+            derive_screening_state,
+            COMPLETED_CLEAR as _CC,
+            COMPLETED_MATCH as _CM,
+        )
         raw_result = _screen_sumsub_aml(company_name, entity_type="Company")
 
-        matched = raw_result.get("matched", False)
-        has_hit = None
-        if isinstance(matched, bool):
-            has_hit = matched
+        state = derive_screening_state(raw_result)
+        if state == _CM:
+            has_hit = True
+        elif state == _CC:
+            has_hit = False
+        else:
+            has_hit = None
 
         return create_normalized_company_screening(
             company_screening_coverage="partial",
             has_company_screening_hit=has_hit,
+            company_screening_state=state,
             company_screening=raw_result,
         )
 

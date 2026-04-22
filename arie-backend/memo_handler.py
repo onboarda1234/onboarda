@@ -72,6 +72,69 @@ def build_compliance_memo(app, directors, ubos, documents):
             seen_pep_names.add(pname)
             deduped_peps.append(p)
     all_peps = deduped_peps
+
+    # ── Priority A: derive truthful screening completion signals ──
+    # The memo must NOT claim "clean sanctions screening" or "screening
+    # completed" when the provider-backed result is non-terminal,
+    # not_configured, or unavailable. Compute three booleans that gate
+    # the screening narrative below.
+    try:
+        from screening_state import (
+            derive_screening_state as _derive_state,
+            COMPLETED_CLEAR as _S_CLEAR,
+            COMPLETED_MATCH as _S_MATCH,
+            NOT_CONFIGURED as _S_NCFG,
+            FAILED as _S_FAILED,
+            TERMINAL_STATES as _S_TERMINAL,
+        )
+    except Exception:  # pragma: no cover — defensive: never break memo build
+        _derive_state = lambda _x: "not_started"
+        _S_CLEAR = "completed_clear"
+        _S_MATCH = "completed_match"
+        _S_NCFG = "not_configured"
+        _S_FAILED = "failed"
+        _S_TERMINAL = frozenset({_S_CLEAR, _S_MATCH})
+
+    _person_states = []
+    for entry in (screening_report.get("director_screenings", []) +
+                  screening_report.get("ubo_screenings", [])):
+        _person_states.append(_derive_state((entry or {}).get("screening") or {}))
+    _company_state = _derive_state(
+        ((screening_report.get("company_screening") or {}).get("sanctions") or {})
+    )
+    _all_states = _person_states + ([_company_state] if screening_report.get("company_screening") else [])
+
+    # ``screening_terminal`` is True only if every screened subject has a
+    # terminal provider answer. Otherwise the memo must qualify its
+    # screening claims.
+    screening_terminal = bool(_all_states) and all(s in _S_TERMINAL for s in _all_states)
+    screening_has_non_terminal = any(s not in _S_TERMINAL for s in _all_states)
+    screening_has_failed = any(s == _S_FAILED for s in _all_states)
+    screening_has_not_configured = any(s == _S_NCFG for s in _all_states)
+    # Coverage of self-declared PEP exposure is independent of provider
+    # state and remains a first-class signal.
+    has_declared_pep = bool(pep_directors or pep_ubos)
+    # Phrasing helpers used throughout the memo body to avoid asserting
+    # "clean screening" when the underlying state does not support it.
+    if screening_terminal:
+        _screening_qualifier = ""  # safe to make assertive claims
+        _screening_completion_phrase = "Sanctions screening completed across all major consolidated lists (UN, EU, OFAC, HMT)"
+    else:
+        _bits = []
+        if screening_has_not_configured:
+            _bits.append("provider not configured for at least one subject")
+        if screening_has_failed:
+            _bits.append("provider unavailable for at least one subject")
+        if not _bits:
+            _bits.append("provider has not yet returned a terminal result for at least one subject")
+        _qual = "; ".join(_bits)
+        _screening_qualifier = (
+            " Screening is NOT complete: " + _qual + ". "
+            "No reliance can be placed on the absence of matches at this time."
+        )
+        _screening_completion_phrase = (
+            "Sanctions screening status: NOT COMPLETE — " + _qual
+        )
     has_documents = len(documents) > 0
     verified_docs = [d for d in documents if d.get("verification_status") == "verified"]
     pending_docs = [d for d in documents if d.get("verification_status") != "verified"]
@@ -365,7 +428,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + ". "
                     + ("These risk factors are " if (all_peps or own_rating in ("HIGH", "MEDIUM") or is_high_risk_country or is_offshore) else "The low-risk profile is supported by ")
                     + ("materially offset by " if aggregated_risk in ("LOW", "MEDIUM") else "insufficiently offset by ")
-                    + (f"clean sanctions screening across all major consolidated lists, " if not all_peps else "")
+                    + (f"clean sanctions screening across all major consolidated lists, " if (not all_peps and screening_terminal) else "")
                     + (f"a fully traceable beneficial ownership chain ({control_name} at {control_pct}%)" if primary_ubo and control_pct not in ("N/A", None, "", "0") else "beneficial ownership assessment")
                     + (f", and {len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence. " if has_documents else ", and no uploaded documents are currently available to substantiate entity verification. ")
                     + ("No documents have been uploaded, so entity verification remains incomplete and cannot be treated as a mitigant. " if not has_documents else f"{len(pending_docs)} document(s) remain outstanding, representing a documentation gap that must be remedied within 14 business days. " if pending_docs else "")
@@ -475,8 +538,14 @@ def build_compliance_memo(app, directors, ubos, documents):
                         "title": "Financial Crime Risk",
                         "rating": fc_rating,
                         "content": (
-                            f"Sanctions screening was conducted across UN Security Council, EU, OFAC SDN, and HMT consolidated lists. "
-                            + ("No matches were returned for any director, UBO, or the entity itself. " if not all_peps else f"{len(all_peps)} PEP match(es) identified requiring enhanced assessment. ")
+                            (
+                                f"Sanctions screening was conducted across UN Security Council, EU, OFAC SDN, and HMT consolidated lists. "
+                                + ("No matches were returned for any director, UBO, or the entity itself. " if not all_peps else f"{len(all_peps)} PEP match(es) identified requiring enhanced assessment. ")
+                                if screening_terminal else
+                                _screening_completion_phrase + ". "
+                                + ("Self-declared PEP exposure remains: " + ", ".join([p["full_name"] for p in all_peps]) + ". " if all_peps else "")
+                                + "No reliance can be placed on the absence of provider matches at this time. "
+                            )
                             + "Adverse media screening returned no relevant hits across global media databases. "
                             + f"The entity's business model {'does not exhibit' if fc_rating in ('LOW', 'MEDIUM') else 'may exhibit'} typology indicators associated with money laundering, terrorist financing, or proliferation financing. "
                             + f"Risk weighting factor: 0.10."
@@ -487,11 +556,17 @@ def build_compliance_memo(app, directors, ubos, documents):
             "screening_results": {
                 "title": "Screening Results",
                 "content": (
-                    f"Sanctions Screening: Conducted against UN Security Council Consolidated List, EU Consolidated Financial Sanctions List, OFAC SDN List, and HMT Consolidated List. "
-                    + ("No matches returned for any associated individual or the entity itself. " if not all_peps
-                       else f"PEP matches identified — assessed as confirmed true positives based on verified identity data. ")
-                    + f"PEP Screening: {len(all_peps)} confirmed match(es)"
-                    + (" — " + ". ".join([p["full_name"] + " identified as PEP. PEP declaration form and enhanced due diligence documentation requested." for p in all_peps]) if all_peps else " — no matches identified.")
+                    (
+                        f"Sanctions Screening: Conducted against UN Security Council Consolidated List, EU Consolidated Financial Sanctions List, OFAC SDN List, and HMT Consolidated List. "
+                        + ("No matches returned for any associated individual or the entity itself. " if not all_peps
+                           else f"PEP matches identified — assessed as confirmed true positives based on verified identity data. ")
+                        if screening_terminal else
+                        _screening_completion_phrase + ". "
+                        + "Provider-backed sanctions / PEP / watchlist screening is NOT yet complete for at least one subject; "
+                        + "no reliance may be placed on the absence of matches at this time. "
+                    )
+                    + f"PEP Screening: {len(all_peps)} self-declared / detected match(es)"
+                    + (" — " + ". ".join([p["full_name"] + " identified as PEP. PEP declaration form and enhanced due diligence documentation requested." for p in all_peps]) if all_peps else " — no declared or detected matches.")
                     + " Adverse Media Screening: Comprehensive search conducted across global news and regulatory enforcement databases. No relevant hits identified for any associated individual or the entity. "
                     + f"Company Registry Verification: {app['company_name']} verified against registry records. "
                     + f"Registration details are {'consistent' if verified_docs else 'pending verification against'} application data."
@@ -537,7 +612,9 @@ def build_compliance_memo(app, directors, ubos, documents):
                     ("No PEP exposure among directors or UBOs — no contribution to ownership risk" if not all_peps else None),
                     (f"Low jurisdictional risk — {country} maintains adequate AML/CFT frameworks" if not is_high_risk_country and not is_offshore else None),
                     (f"Low sector risk — {sector} does not exhibit elevated ML/TF typology indicators" if not is_high_risk_sector and not is_medium_risk_sector else None),
-                    ("Clean sanctions screening across all major consolidated lists (UN, EU, OFAC, HMT)" if not all_peps else "Screening completed — PEP(s) identified and flagged for enhanced measures"),
+                    ("Clean sanctions screening across all major consolidated lists (UN, EU, OFAC, HMT)" if (not all_peps and screening_terminal)
+                     else ("Provider sanctions screening NOT complete — no reliance on absence of matches" if not screening_terminal
+                           else "Screening completed — PEP(s) identified and flagged for enhanced measures")),
                     (f"Verified beneficial ownership traced to natural person level — {control_name} ({control_pct}%) exercises effective control" if primary_ubo and control_pct not in ("N/A", None, "", "0") else None),
                     (f"Full documentation received and verified at {doc_confidence}% confidence" if documentation_complete and doc_confidence >= 80 else None),
                 ] if f is not None],
@@ -558,7 +635,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + f"Risk-decreasing factors: "
                     + (f"(1) No PEP exposure — no contribution to ownership risk. " if not all_peps else "(1) PEP(s) identified and flagged for enhanced monitoring. ")
                     + (f"(2) Low jurisdictional risk — {country} maintains adequate AML/CFT frameworks. " if not is_high_risk_country and not is_offshore else "")
-                    + (f"{'(3) ' if not is_high_risk_country and not is_offshore else '(2) '}{'Clean' if not all_peps else 'Completed'} sanctions screening across all major consolidated lists. " if True else "")
+                    + (f"{'(3) ' if not is_high_risk_country and not is_offshore else '(2) '}{'Clean' if (not all_peps and screening_terminal) else 'Pending' if not screening_terminal else 'Completed'} sanctions screening across all major consolidated lists. " if True else "")
                     + (f"{'(4) ' if not is_high_risk_country and not is_offshore else '(3) '}Verified beneficial ownership to natural person level. " if primary_ubo and control_pct not in ("N/A", None, "", "0") else "")
                     + (f"Full documentation at {doc_confidence}% confidence. " if documentation_complete and doc_confidence >= 80 else "")
                     + f"Decision pathway: Agent 1 (Identity & Document Integrity) -> Agent 2 (External Database Cross-Verification) -> Agent 3 (FinCrime Screening Interpretation) -> Agent 4 (Corporate Structure & UBO Mapping) -> Agent 5 (Compliance Memo & Risk Recommendation). "
@@ -581,7 +658,9 @@ def build_compliance_memo(app, directors, ubos, documents):
                     [f"PEP ({p['full_name']}) {'holds no direct ownership stake, reducing control risk. PEP declaration and enhanced monitoring will be applied as conditions of approval.' if p in pep_directors else 'has been identified and PEP declaration, source of wealth verification, and enhanced monitoring are required as conditions.'}" for p in all_peps]
                     + (["Document collection has been initiated, but no uploaded documents are yet available to support entity verification. Approval must remain conditional on document receipt and review."] if not has_documents else [f"Outstanding documents have been formally requested with a 14-business-day deadline. Failure to provide will trigger automatic escalation to Senior Compliance Officer. The {len(verified_docs)} documents already verified are internally consistent."] if pending_docs else [f"All required documents received and verified at {doc_confidence}% confidence, providing strong assurance of entity legitimacy."])
                     + ([f"{country} is currently compliant with FATF standards following completion of its action plan. The entity's business activity is consistent with the jurisdiction's commercial profile."] if is_offshore else [])
-                    + [f"Sanctions screening completed across all major consolidated lists (UN, EU, OFAC, HMT) with {'no matches' if not all_peps else 'PEP identification and appropriate enhanced measures'}."]
+                    + ([f"Sanctions screening completed across all major consolidated lists (UN, EU, OFAC, HMT) with {'no matches' if not all_peps else 'PEP identification and appropriate enhanced measures'}."] if screening_terminal else [
+                        "Sanctions / PEP screening NOT yet complete for at least one subject. No reliance on absence of provider matches at this time."
+                    ])
                     + ([f"Beneficial ownership fully traced to natural person level via {struct_complexity.lower()} structure. {control_name} ({control_pct}%) confirmed as exercising effective control."] if primary_ubo else [])
                     + ["Transaction monitoring will be applied on a quarterly basis for the first 12 months, with automated alerts for anomalous volumes, compensating for the absence of historical benchmarking data."]
                 )
@@ -591,7 +670,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "decision": decision,
                 "content": (
                     f"On the basis of the composite risk assessment ({risk_level} — {risk_score}/100), "
-                    f"{'clean' if not all_peps else 'flagged'} screening results, "
+                    f"{'clean' if (not all_peps and screening_terminal) else 'pending' if not screening_terminal else 'flagged'} screening results, "
                     f"{'unavailable' if not has_documents else 'verified' if not pending_docs else 'partially verified'} documentation ({doc_confidence}% confidence), "
                     f"and {'confirmed' if ubos else 'unverified'} beneficial ownership, "
                     f"this application is recommended for {decision_label}. "
@@ -657,7 +736,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "key_findings": [
                 f"Beneficial ownership {'traced to natural persons via ' + struct_complexity.lower() + ' structure — ' + control_name + ' (' + str(control_pct) + '%) exercises effective control' if primary_ubo else 'could not be verified — critical data gap'}",
                 f"{'PEP identified: ' + ', '.join([p['full_name'] + ' (' + ('Director' if p in pep_directors else 'UBO') + ')' for p in all_peps]) + '. Enhanced due diligence required.' if all_peps else 'No PEP exposure identified among directors or UBOs'}",
-                f"Sanctions and adverse media screening {'clear' if not all_peps else 'completed with PEP identification'} across all consolidated lists",
+                f"Sanctions and adverse media screening {'clear' if (not all_peps and screening_terminal) else ('NOT complete — provider result pending or unavailable for at least one subject' if not screening_terminal else 'completed with PEP identification')} across all consolidated lists",
                 ("No documents uploaded — entity verification remains incomplete" if not has_documents else f"{len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence" + (f"; {len(pending_docs)} outstanding" if pending_docs else " — full documentation")),
                 f"{'Business model assessed as plausible and consistent with regulatory authorisations' if sector != 'Information not provided' else 'Business model assessment limited by insufficient sector data'}",
                 f"{country} jurisdiction presents {'severe' if is_high_risk_country else 'moderate' if is_offshore else 'low'} risk — {'sanctions/FATF blacklist' if is_high_risk_country else 'offshore IFC classification' if is_offshore else 'adequate AML/CFT framework'}"
@@ -672,8 +751,9 @@ def build_compliance_memo(app, directors, ubos, documents):
             "review_checklist": [
                 f"Company identity verified against registry — {'confirmed active' if verified_docs else 'not yet evidenced by uploaded documents' if not has_documents else 'pending verification'}",
                 f"UBO chain mapped to natural persons: {control_name + ' (' + str(control_pct) + '%)' if primary_ubo else 'Not verified — data gap'}",
-                f"PEP screening completed — {len(all_peps)} confirmed match(es)" + (f": {', '.join([p['full_name'] for p in all_peps])}" if all_peps else ""),
-                "Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists",
+                f"PEP screening {'completed' if screening_terminal else 'NOT complete'} — {len(all_peps)} declared/detected match(es)" + (f": {', '.join([p['full_name'] for p in all_peps])}" if all_peps else ""),
+                ("Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists" if screening_terminal
+                 else "Sanctions screening NOT complete — provider result pending or unavailable for at least one subject"),
                 "Adverse media review conducted — no relevant hits identified",
                 f"Source of funds {'reviewed and assessed as consistent' if sof != 'Information not provided' else 'not provided — data gap flagged'}",
                 f"Business model plausibility {'confirmed' if sector != 'Information not provided' else 'assessment limited by data gap'}",
@@ -682,6 +762,15 @@ def build_compliance_memo(app, directors, ubos, documents):
                 f"Compliance decision ({decision.replace('_', ' ')}) aligned with risk assessment findings and conditions framework"
             ],
             "rule_engine": rule_engine_result,
+            "screening_state_summary": {
+                "terminal": screening_terminal,
+                "has_non_terminal": screening_has_non_terminal,
+                "has_failed": screening_has_failed,
+                "has_not_configured": screening_has_not_configured,
+                "company_state": _company_state,
+                "person_states": _person_states,
+                "declared_pep_count": len(all_peps),
+            },
             "risk_dimensions": {
                 "jurisdiction": {"rating": jur_rating, "weight": 0.20},
                 "ownership": {"rating": own_rating, "weight": 0.25, "justification": own_rating_justification},

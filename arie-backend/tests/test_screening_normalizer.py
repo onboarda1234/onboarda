@@ -244,10 +244,63 @@ class TestEdgeCases:
     def test_empty_screening_results(self):
         raw = _make_raw_report()
         raw["director_screenings"][0]["screening"] = {
-            "matched": False, "results": [], "source": "sumsub",
+            "matched": False, "results": [], "source": "sumsub", "api_status": "live",
         }
         normalized = normalize_screening_report(raw)
+        # Priority A: terminal-clear (api_status=live) yields explicit False.
         assert normalized["director_screenings"][0]["has_pep_hit"] is False
+        assert normalized["director_screenings"][0]["screening_state"] == "completed_clear"
+
+    def test_pending_provider_state_is_not_clear(self):
+        # Priority A: api_status=pending must NOT yield has_pep_hit=False.
+        # Otherwise officers would see "Clear" before a real screening
+        # answer is in.
+        raw = _make_raw_report()
+        raw["director_screenings"][0]["screening"] = {
+            "matched": False, "results": [], "source": "sumsub", "api_status": "pending",
+        }
+        normalized = normalize_screening_report(raw)
+        d = normalized["director_screenings"][0]
+        assert d["has_pep_hit"] is None
+        assert d["has_sanctions_hit"] is None
+        assert d["screening_state"] == "pending_provider"
+        assert normalized["any_non_terminal_subject"] is True
+
+    def test_not_configured_state_is_explicit(self):
+        raw = _make_raw_report()
+        raw["company_screening"]["sanctions"] = {
+            "matched": False, "results": [], "source": "sumsub", "api_status": "not_configured",
+        }
+        normalized = normalize_screening_report(raw)
+        # Priority A: not_configured is preserved, never flattened to False.
+        assert normalized["has_company_screening_hit"] is None
+        assert normalized["company_screening_state"] == "not_configured"
+
+    def test_failed_provider_state_is_explicit(self):
+        raw = _make_raw_report()
+        raw["ubo_screenings"][0]["screening"] = {
+            "matched": False, "results": [], "source": "sumsub", "api_status": "error",
+        }
+        normalized = normalize_screening_report(raw)
+        u = normalized["ubo_screenings"][0]
+        assert u["has_pep_hit"] is None
+        assert u["has_sanctions_hit"] is None
+        assert u["screening_state"] == "failed"
+
+    def test_declared_pep_preserved_through_pending(self):
+        # Priority A: declared PEP is a self-declared signal that must
+        # remain visible even when the provider screening has not produced
+        # a terminal answer.
+        raw = _make_raw_report()
+        raw["director_screenings"][0]["declared_pep"] = "Yes"
+        raw["director_screenings"][0]["screening"] = {
+            "matched": False, "results": [], "source": "sumsub", "api_status": "pending",
+        }
+        normalized = normalize_screening_report(raw)
+        d = normalized["director_screenings"][0]
+        assert d["declared_pep"] == "Yes"
+        assert d["screening_state"] == "pending_provider"
+        assert d["requires_review"] is True
 
     def test_no_company_screening(self):
         raw = _make_raw_report(company_screening={})

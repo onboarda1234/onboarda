@@ -1057,6 +1057,26 @@ from screening import (
     run_full_screening, ScreeningProviderError,
 )
 
+# Priority A — Canonical screening state model (truthful, fail-closed).
+# See screening_state.py for state semantics. Used by the screening queue
+# serializer to ensure pending / not_configured / failed provider states are
+# never rendered as "Clear" or "No Provider Match".
+from screening_state import (
+    derive_screening_state,
+    derive_subject_state,
+    state_label as screening_state_label,
+    legacy_status_value as _screening_legacy_status,
+    combine_states as _combine_screening_states,
+    COMPLETED_CLEAR as _SCR_COMPLETED_CLEAR,
+    COMPLETED_MATCH as _SCR_COMPLETED_MATCH,
+    NOT_CONFIGURED as _SCR_NOT_CONFIGURED,
+    FAILED as _SCR_FAILED,
+    PENDING_PROVIDER as _SCR_PENDING,
+    PARTIAL_RESULT as _SCR_PARTIAL,
+    NOT_STARTED as _SCR_NOT_STARTED,
+    TERMINAL_STATES as _SCR_TERMINAL_STATES,
+)
+
 # Sprint 3.5: BaseHandler extracted to base_handler.py to reduce server.py concentration risk
 from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db, snapshot_app_state, _safe_json  # noqa: F401
 
@@ -6018,9 +6038,16 @@ def _build_screening_queue_payload(db, user):
         company_ip = (report or {}).get("ip_geolocation") or {}
         company_kyc = (report or {}).get("kyc_applicants") or []
         company_registry_found = company_screening.get("found")
-        company_watchlist_status = "pending"
-        if report:
-            company_watchlist_status = "match" if company_sanctions.get("matched") else "clear"
+
+        # Priority A: derive canonical company sanctions state from provider
+        # api_status. Never coerce pending/not_configured/error/unavailable
+        # into "clear".
+        company_sanctions_state = derive_screening_state(company_sanctions)
+        company_sanctions_subject = derive_subject_state(company_sanctions)
+        company_watchlist_status = _screening_legacy_status(
+            company_sanctions_state,
+            company_sanctions_subject["has_provider_sanctions_hit"],
+        )
 
         company_context = []
         if report:
@@ -6038,11 +6065,27 @@ def _build_screening_queue_payload(db, user):
             rejected_kyc = [a.get("person_name") for a in company_kyc if a.get("review_answer") == "RED"]
             if rejected_kyc:
                 company_context.append("KYC RED: " + ", ".join(rejected_kyc))
+            # Surface explicit non-terminal sanctions state so officers cannot
+            # mistake "we did not get a real answer" for "clear".
+            if company_sanctions_state == _SCR_NOT_CONFIGURED:
+                company_context.append("Company sanctions screening not configured")
+            elif company_sanctions_state == _SCR_FAILED:
+                company_context.append("Company sanctions screening unavailable")
+            elif company_sanctions_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
+                company_context.append("Company sanctions screening pending")
+
+        # Fail-closed: any non-terminal company sanctions state requires
+        # officer review. Previously only ``matched`` triggered review,
+        # which silently passed not_configured / pending / unavailable.
+        company_sanctions_requires_review = company_sanctions_state in (
+            _SCR_COMPLETED_MATCH, _SCR_NOT_CONFIGURED, _SCR_FAILED,
+            _SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED,
+        )
 
         company_requires_review = False
         if report:
             company_requires_review = (
-                bool(company_sanctions.get("matched")) or
+                company_sanctions_requires_review or
                 company_registry_found is False or
                 company_ip.get("risk_level") in ("HIGH", "VERY_HIGH") or
                 company_ip.get("is_vpn") or
@@ -6055,6 +6098,33 @@ def _build_screening_queue_payload(db, user):
 
         company_review = review_map.get(("entity", app["company_name"]))
         if directors or ubos or report:
+            # Priority A: explicit, truthful entity status_label / status_key.
+            # Provider-derived states drive the label so non-terminal cases
+            # cannot masquerade as "No Provider Match".
+            if not report:
+                entity_status_key = "awaiting_screening"
+                entity_status_label = "Awaiting Screening"
+            elif company_sanctions_state == _SCR_COMPLETED_MATCH:
+                entity_status_key = "review_required"
+                entity_status_label = "Review Required"
+            elif company_sanctions_state == _SCR_NOT_CONFIGURED:
+                entity_status_key = "screening_not_configured"
+                entity_status_label = "Screening Not Configured"
+            elif company_sanctions_state == _SCR_FAILED:
+                entity_status_key = "screening_unavailable"
+                entity_status_label = "Screening Unavailable"
+            elif company_sanctions_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
+                entity_status_key = "screening_pending"
+                entity_status_label = "Screening Pending Provider"
+            elif company_requires_review:
+                # Terminal-clear sanctions but other entity-level signal
+                # (registry not found, IP risk, KYC RED) requires review.
+                entity_status_key = "review_required"
+                entity_status_label = "Review Required"
+            else:
+                entity_status_key = "screened_no_match"
+                entity_status_label = "No Provider Match"
+
             rows.append({
                 "application_id": app["id"],
                 "application_ref": app["ref"],
@@ -6064,9 +6134,10 @@ def _build_screening_queue_payload(db, user):
                 "watchlist_status": company_watchlist_status,
                 "pep_declared_status": "not_applicable",
                 "pep_screening_status": "not_applicable",
+                "screening_state": company_sanctions_state,
                 "entity_context": company_context,
-                "status_key": "review_required" if company_requires_review else ("screened_no_match" if report else "awaiting_screening"),
-                "status_label": "Review Required" if company_requires_review else ("No Provider Match" if report else "Awaiting Screening"),
+                "status_key": entity_status_key,
+                "status_label": entity_status_label,
                 "screening_mode": screening_mode,
                 "screened_at": screened_at,
                 "screened_by": screened_by,
@@ -6085,34 +6156,73 @@ def _build_screening_queue_payload(db, user):
             screening = (item or {}).get("screening") or {}
             facts = _screening_hit_facts(screening)
             declared_pep = person.get("is_pep", "No") == "Yes"
-            provider_pep = facts["pep_hits"] > 0 or bool((item or {}).get("undeclared_pep"))
-            provider_sanctions = facts["sanctions_hits"] > 0
             provider_other = facts["other_hits"] > 0
 
+            # Priority A: derive canonical state from api_status. Never let
+            # pending/init/created/error/unavailable/not_configured collapse
+            # into "clear". Declared PEP is preserved as a separate signal.
+            person_state = derive_screening_state(screening)
+            subject_envelope = derive_subject_state(screening, declared_pep=declared_pep)
+            has_pep_hit = subject_envelope["has_provider_pep_hit"]
+            has_sanctions_hit = subject_envelope["has_provider_sanctions_hit"]
+            # ``undeclared_pep`` is computed by run_full_screening and only
+            # set when results contain a PEP hit — i.e. terminal. It is
+            # therefore safe to treat it as a provider PEP hit.
+            if (item or {}).get("undeclared_pep"):
+                has_pep_hit = True
+
             if not report:
+                person_state = _SCR_NOT_STARTED
                 watchlist_status = "pending"
                 pep_screening_status = "pending"
+            elif not item:
+                # We have a report but no screening sub-record for this
+                # person — fail-closed: treat as incomplete, never clear.
+                person_state = _SCR_NOT_STARTED
+                watchlist_status = "pending"
+                pep_screening_status = "pending"
+            else:
+                watchlist_status = _screening_legacy_status(person_state, has_sanctions_hit)
+                pep_screening_status = _screening_legacy_status(person_state, has_pep_hit)
+
+            # Status key/label — declared PEP must remain visible even when
+            # the provider is non-terminal.
+            if not report:
                 status_key = "awaiting_screening"
                 status_label = "Awaiting Screening"
             elif not item:
-                watchlist_status = "pending"
-                pep_screening_status = "pending"
                 status_key = "incomplete_record"
                 status_label = "Incomplete Screening Record"
+            elif person_state == _SCR_COMPLETED_MATCH or has_sanctions_hit or has_pep_hit or provider_other:
+                status_key = "review_required"
+                status_label = "Review Required"
+            elif person_state == _SCR_NOT_CONFIGURED:
+                status_key = "screening_not_configured"
+                status_label = "Declared PEP — Screening Not Configured" if declared_pep else "Screening Not Configured"
+            elif person_state == _SCR_FAILED:
+                status_key = "screening_unavailable"
+                status_label = "Declared PEP — Screening Unavailable" if declared_pep else "Screening Unavailable"
+            elif person_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
+                status_key = "screening_pending"
+                status_label = "Declared PEP — Screening Pending Provider" if declared_pep else "Screening Pending Provider"
+            elif declared_pep:
+                # Terminal-clear provider, but declared PEP must still be
+                # surfaced for officer review.
+                status_key = "declared_pep_review"
+                status_label = "Declared PEP Review"
             else:
-                watchlist_status = "match" if provider_sanctions else ("review" if provider_other else "clear")
-                pep_screening_status = "match" if provider_pep else ("review" if provider_other else "clear")
-                if provider_sanctions or provider_pep or provider_other:
-                    status_key = "review_required"
-                    status_label = "Review Required"
-                elif declared_pep:
-                    status_key = "declared_pep_review"
-                    status_label = "Declared PEP Review"
-                else:
-                    status_key = "screened_no_match"
-                    status_label = "No Provider Match"
+                status_key = "screened_no_match"
+                status_label = "No Provider Match"
 
-            requires_review = status_key in ("review_required", "declared_pep_review", "incomplete_record")
+            # Fail-closed review requirement: any non-terminal state, any
+            # match, any declared PEP, any not_configured/failed.
+            requires_review = (
+                status_key in (
+                    "review_required", "declared_pep_review", "incomplete_record",
+                    "screening_pending", "screening_not_configured",
+                    "screening_unavailable", "awaiting_screening",
+                )
+            )
             person_review = review_map.get((subject_type, person_name))
             review_disposition = (person_review or {}).get("disposition")
             review_resolved = review_disposition == "cleared"
@@ -6126,6 +6236,16 @@ def _build_screening_queue_payload(db, user):
                 entity_context.append("API: " + screening.get("api_status"))
             if (item or {}).get("undeclared_pep"):
                 entity_context.append("Undeclared PEP")
+            if declared_pep:
+                # Always surface declared PEP separately from provider state
+                # so it cannot be lost behind a "Pending" or "Clear" label.
+                entity_context.append("Declared PEP")
+            if person_state == _SCR_NOT_CONFIGURED:
+                entity_context.append("Provider not configured")
+            elif person_state == _SCR_FAILED:
+                entity_context.append("Provider unavailable")
+            elif person_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED) and report and item:
+                entity_context.append("Provider result pending")
 
             rows.append({
                 "application_id": app["id"],
@@ -6136,6 +6256,7 @@ def _build_screening_queue_payload(db, user):
                 "watchlist_status": watchlist_status,
                 "pep_declared_status": "declared" if declared_pep else "not_declared",
                 "pep_screening_status": pep_screening_status,
+                "screening_state": person_state,
                 "entity_context": entity_context,
                 "status_key": status_key,
                 "status_label": status_label,

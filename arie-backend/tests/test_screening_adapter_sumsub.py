@@ -114,8 +114,11 @@ class TestScreenPerson:
 
 class TestScreenCompany:
     def test_returns_normalized_company(self, monkeypatch):
+        # Priority A: a terminal-clear (api_status=live) result yields
+        # has_company_screening_hit=False. Anything non-terminal yields
+        # None — verified separately in test_not_configured_company.
         mock_result = {
-            "matched": False, "results": [], "source": "sumsub",
+            "matched": False, "results": [], "source": "sumsub", "api_status": "live",
         }
 
         import screening
@@ -127,6 +130,28 @@ class TestScreenCompany:
         assert result["company_screening_coverage"] == "partial"
         assert result["has_company_screening_hit"] is False
         assert result["company_screening"] == mock_result
+
+    def test_not_configured_company(self, monkeypatch):
+        # Priority A: not_configured must never collapse into False.
+        mock_result = {
+            "matched": False, "results": [], "source": "sumsub", "api_status": "not_configured",
+        }
+        import screening
+        monkeypatch.setattr(screening, "screen_sumsub_aml", lambda *a, **kw: mock_result)
+        adapter = SumsubScreeningAdapter()
+        result = adapter.screen_company("Test Corp")
+        assert result["has_company_screening_hit"] is None
+
+    def test_pending_company(self, monkeypatch):
+        # Priority A: pending must never collapse into False.
+        mock_result = {
+            "matched": False, "results": [], "source": "sumsub", "api_status": "pending",
+        }
+        import screening
+        monkeypatch.setattr(screening, "screen_sumsub_aml", lambda *a, **kw: mock_result)
+        adapter = SumsubScreeningAdapter()
+        result = adapter.screen_company("Test Corp")
+        assert result["has_company_screening_hit"] is None
 
     def test_detects_sanctions_hit(self, monkeypatch):
         mock_result = {
