@@ -3185,7 +3185,7 @@ function reviewStatusFromRaw(raw) {
 }
 
 function reviewTriggerText(raw, payload) {
-  if (raw.review_reason) return String(raw.review_reason);
+  if (raw.review_reason && String(raw.review_reason).indexOf('FIX_REVIEW_JSON:') < 0) return String(raw.review_reason);
   var tr = String(raw.trigger_reason || '');
   if (tr.indexOf('FIX_REVIEW_JSON:') >= 0) {
     var codeMatch = tr.match(/(FIX_SCEN\d{2}_REVIEW)/);

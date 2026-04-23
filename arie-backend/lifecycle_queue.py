@@ -384,7 +384,10 @@ def _materialise_edd(row, *, user_names: Dict[str, str],
             linked_alert = payload.get("source_alert_id")
         if linked_review is None:
             linked_review = payload.get("source_review_id")
-    if linked_review is not None and (not memo_context or memo_context.get("kind") != "periodic_review"):
+    # Only override memo_context from fixture payload data. Non-fixture rows
+    # already have their memo_context resolved by _safe_resolve_memo_context;
+    # we must not clobber it even when linked_periodic_review_id is set.
+    if payload and linked_review is not None and (not memo_context or memo_context.get("kind") != "periodic_review"):
         memo_context = {
             "kind": "periodic_review",
             "memo_id": None,

@@ -519,6 +519,45 @@ class TestFixturePayloadNormalization(_LifecycleQueueBase):
         self.assertEqual(review["outcome"], "continue_monitoring")
         self.assertTrue(review["is_historical"])
 
+    def test_non_fixture_edd_unresolved_memo_context_not_overwritten_by_fixture_guard(self):
+        """Non-fixture EDD whose linked_periodic_review_id points at a review
+        that does not exist in the DB produces an 'unresolved' memo_context
+        from _safe_resolve_memo_context.  The fixture-normalization guard must
+        NOT overwrite that with resolution_reason='fixture_payload_source_review_id'
+        because no FIX_EDD_JSON sentinel is present.
+
+        Before the payload guard fix, the overwrite would fire because:
+          linked_review is not None  (explicit FK column)
+          memo_context.get("kind") != "periodic_review"  (unresolved → kind=None)
+        The fix (``if payload and linked_review …``) prevents this.
+        """
+        import lifecycle_queue as lq
+        # Insert a review row that we will then DELETE so the EDD FK points
+        # at a stale/non-existent review — causing _safe_resolve_memo_context
+        # to return an unresolved marker (kind=None).
+        rid = self._review(status="in_progress")
+        self._conn.execute("DELETE FROM periodic_reviews WHERE id = ?", (rid,))
+        self._conn.commit()
+        # Non-fixture row: no FIX_EDD_JSON in trigger_notes; explicit FK pointing
+        # at the now-deleted review.
+        self._edd(
+            stage="analysis",
+            origin_context="onboarding",
+            linked_periodic_review_id=rid,
+            trigger_source="officer_decision",
+            trigger_notes="Officer initiated EDD review — no fixture payload",
+        )
+        result = lq.build_lifecycle_queue(self._conn, include="active", types=("edd",))
+        self.assertEqual(len(result["items"]), 1)
+        edd = result["items"][0]
+        ctx = edd.get("memo_context") or {}
+        # The fixture-normalization guard must NOT have fired.
+        self.assertNotEqual(
+            ctx.get("resolution_reason"), "fixture_payload_source_review_id",
+            "fixture-normalization guard must not fire on non-fixture rows "
+            "even when linked_periodic_review_id is set",
+        )
+
     def test_fixture_edd_payload_surfaces_origin_and_review_link(self):
         import lifecycle_queue as lq
         review_id = self._review(status="completed")
