@@ -515,15 +515,31 @@ def _findings_present_map(db, edd_case_ids: List[int]) -> Dict[int, bool]:
 # ── Public API ───────────────────────────────────────────────────────
 def _is_missing_column_error(exc: Exception) -> bool:
     msg = str(exc).lower()
-    if "no such column" in msg or "undefined column" in msg:
-        return True
-    if "column" in msg and "does not exist" in msg:
-        return True
-    if getattr(exc, "pgcode", None) == "42703":
-        return True
-    if exc.__class__.__name__.lower() == "undefinedcolumn":
-        return True
+    return (
+        "no such column" in msg
+        or "undefined column" in msg
+        or ("column" in msg and "does not exist" in msg)
+    )
+
+
+def _row_matches_alert_include(row, include: str) -> bool:
+    from lifecycle_quarantine import is_legacy_unmapped
+
+    status = _normalise_alert_state(row)
+    is_quarantined, _ = is_legacy_unmapped(row)
+    if include == "active":
+        return (not is_quarantined) and status in ACTIVE_ALERT_STATUSES
+    if include == "historical":
+        return (not is_quarantined) and status in HISTORICAL_ALERT_STATUSES
+    if include == "legacy_unmapped":
+        return is_quarantined
+    if include == "all":
+        return not is_quarantined
     return False
+
+
+def _python_filter_alert_rows(rows: List[Any], include: str) -> List[Any]:
+    return [row for row in rows if _row_matches_alert_include(row, include)]
 
 
 def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
@@ -552,12 +568,11 @@ def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
     try:
         return db.execute(sql, params).fetchall() or []
     except Exception as exc:
-        # Legacy/stale schemas may lack linkage columns used by quarantine SQL.
-        # Fall back to a base select and let Python materialisation classify rows.
-        if _is_missing_column_error(exc):
-            fallback_sql = base_sql + " ORDER BY created_at DESC"
-            return db.execute(fallback_sql, base_params).fetchall() or []
-        raise
+        if not _is_missing_column_error(exc):
+            raise
+        fallback_sql = base_sql + " ORDER BY created_at DESC"
+        rows = db.execute(fallback_sql, base_params).fetchall() or []
+        return _python_filter_alert_rows(rows, include)
 
 
 def _fetch_reviews(db, *, application_id=None, include="active") -> List[Any]:
