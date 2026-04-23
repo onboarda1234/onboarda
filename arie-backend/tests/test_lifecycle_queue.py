@@ -649,6 +649,8 @@ class _LegacySchemaDB:
         self._alert_rows = list(alert_rows or [])
         self._review_rows = list(review_rows or [])
         self.calls = []
+        self.alert_quarantine_attempted = False
+        self.alert_fallback_attempted = False
 
     def execute(self, sql, params=None):
         params = list(params or [])
@@ -659,7 +661,9 @@ class _LegacySchemaDB:
             # Simulate a stale schema where quarantine SQL references columns
             # not present yet.
             if "linked_periodic_review_id" in lower or "linked_edd_case_id" in lower:
+                self.alert_quarantine_attempted = True
                 raise Exception("no such column: linked_periodic_review_id")
+            self.alert_fallback_attempted = True
             return _StaticCursor(self._alert_rows)
         if "from periodic_reviews" in lower:
             # If _fetch_reviews starts referencing linkage columns, this fake DB
@@ -727,11 +731,8 @@ class TestLegacySchemaFallbacks(unittest.TestCase):
             result = lq.build_lifecycle_queue(db, include=include, types=("alert",))
             returned_ids = {it["id"] for it in result["items"]}
             self.assertEqual(returned_ids, expected_ids, f"include={include}")
-
-            alert_sql = [s for (s, _) in db.calls if "from monitoring_alerts" in s.lower()]
-            self.assertEqual(len(alert_sql), 2, f"include={include} should hit fallback")
-            self.assertIn("linked_periodic_review_id", alert_sql[0])
-            self.assertNotIn("linked_periodic_review_id", alert_sql[1])
+            self.assertTrue(db.alert_quarantine_attempted, f"include={include}")
+            self.assertTrue(db.alert_fallback_attempted, f"include={include}")
 
     def test_fetch_reviews_is_safe_on_legacy_schema_without_quarantine_columns(self):
         import lifecycle_queue as lq

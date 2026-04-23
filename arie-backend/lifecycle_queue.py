@@ -535,7 +535,7 @@ def _row_matches_alert_include(row, include: str) -> bool:
         return is_quarantined
     if include == "all":
         return not is_quarantined
-    return True
+    return False
 
 
 def _python_filter_alert_rows(rows: List[Any], include: str) -> List[Any]:
