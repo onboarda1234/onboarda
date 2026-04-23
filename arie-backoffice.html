@@ -3085,6 +3085,147 @@ function setBoAuth(token, user) {
   // Auth token kept in memory only; httpOnly session cookie set by server
 }
 
+function parseFixturePayload(rawText, sentinel) {
+  if (!rawText || !sentinel) return null;
+  var txt = String(rawText);
+  var idx = txt.indexOf(sentinel);
+  if (idx < 0) return null;
+  var jsonPart = txt.slice(idx + sentinel.length).trim();
+  try {
+    var parsed = JSON.parse(jsonPart);
+    return (parsed && typeof parsed === 'object') ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function fixtureScenarioCodeFromRef(sourceReference) {
+  var src = String(sourceReference || '');
+  var m = src.match(/FIX_SCEN(\d{2})/i);
+  return m ? ('SCEN-' + m[1]) : null;
+}
+
+function normalizeAlertType(raw) {
+  var direct = String(raw.alert_type || raw.type || '').trim();
+  if (direct && direct.toLowerCase() !== 'fixture') return direct;
+  var s = String(raw.summary || '').toLowerCase();
+  if (s.indexOf('sanction') >= 0) return 'Sanctions Match';
+  if (s.indexOf('adverse media') >= 0) return 'Adverse Media';
+  if (s.indexOf('outstanding alert') >= 0 || s.indexOf('drift') >= 0) return 'Risk Drift';
+  if (s.indexOf('name collision') >= 0 || s.indexOf('legacy free-text') >= 0) return 'Name Match';
+  return 'Monitoring Alert';
+}
+
+function normalizeDetectedBy(raw, normalizedType) {
+  var direct = String(raw.detected_by || '').trim();
+  if (direct && direct.toLowerCase() !== 'fixture_seed') return direct;
+  if (normalizedType === 'Sanctions Match') return 'Sanctions Screening Agent';
+  if (normalizedType === 'Adverse Media') return 'Adverse Media Agent';
+  if (normalizedType === 'Risk Drift') return 'Behaviour & Risk Drift Agent';
+  return 'Ongoing Compliance Review Agent';
+}
+
+function normalizeAlertStatusLabel(status) {
+  var s = String(status || '').toLowerCase();
+  var map = {
+    open: 'Open',
+    triaged: 'Triaged',
+    assigned: 'Assigned',
+    dismissed: 'Dismissed',
+    routed_to_review: 'Routed to Review',
+    routed_to_edd: 'Routed to EDD',
+    in_review: 'Triaged'
+  };
+  return map[s] || (s ? (s.charAt(0).toUpperCase() + s.slice(1)) : 'Open');
+}
+
+function normalizeMonitoringAlert(raw) {
+  var type = normalizeAlertType(raw || {});
+  return {
+    id: raw.id,
+    date: (raw.created_at || '').split('T')[0].split(' ')[0],
+    client: raw.client_name || '',
+    type: type,
+    severity: raw.severity || 'Medium',
+    agent: normalizeDetectedBy(raw || {}, type),
+    status: normalizeAlertStatusLabel(raw.status || 'open'),
+    source: raw.source_reference || '',
+    detail: raw.summary || '',
+    recommendation: raw.ai_recommendation || '',
+    linked_periodic_review_id: raw.linked_periodic_review_id,
+    linked_edd_case_id: raw.linked_edd_case_id,
+    officer_action: raw.officer_action || null,
+    officer_notes: raw.officer_notes || null,
+    scenario_code: fixtureScenarioCodeFromRef(raw.source_reference || '')
+  };
+}
+
+function reviewStatusFromRaw(raw) {
+  var payload = parseFixturePayload(raw.trigger_reason, 'FIX_REVIEW_JSON:') || {};
+  var statusRaw = String(raw.status || '').toLowerCase();
+  var fixtureState = String(payload.status || raw.trigger_type || '').toLowerCase();
+  if (fixtureState === 'fixture_completed') statusRaw = 'completed';
+  else if (fixtureState === 'fixture_in_progress') statusRaw = 'in_progress';
+  if (!statusRaw) statusRaw = 'pending';
+  var label;
+  if (statusRaw === 'completed') label = 'Completed';
+  else if (statusRaw === 'in_progress') label = 'In Progress';
+  else if (statusRaw === 'awaiting_information') label = 'Awaiting Information';
+  else if (statusRaw === 'pending_senior_review') label = 'Pending Senior Review';
+  else if (!raw.due_date) label = 'Upcoming';
+  else {
+    var due = new Date(raw.due_date);
+    var now = new Date();
+    var diff = (due - now) / 86400000;
+    if (diff < 0) label = 'Overdue';
+    else if (diff <= 14) label = 'Due Soon';
+    else label = 'Upcoming';
+  }
+  return { raw: statusRaw, label: label, payload: payload };
+}
+
+function reviewTriggerText(raw, payload) {
+  if (raw.review_reason) return String(raw.review_reason);
+  var tr = String(raw.trigger_reason || '');
+  if (tr.indexOf('FIX_REVIEW_JSON:') >= 0) {
+    var codeMatch = tr.match(/(FIX_SCEN\d{2}_REVIEW)/);
+    var code = codeMatch ? codeMatch[1].replace('FIX_', '').replace('_REVIEW', '').replace('SCEN', 'SCEN-') : 'seeded scenario';
+    if (payload && payload.source_alert_id != null) {
+      return code + ' trigger (linked alert #' + payload.source_alert_id + ')';
+    }
+    return code + ' trigger';
+  }
+  return tr || String(raw.trigger_type || '');
+}
+
+function normalizePeriodicReview(raw) {
+  var status = reviewStatusFromRaw(raw || {});
+  return {
+    id: raw.id,
+    ref: raw.application_id || '',
+    client: raw.client_name || '',
+    risk: raw.risk_level || 'Low',
+    lastReview: raw.completed_at ? raw.completed_at.split('T')[0].split(' ')[0] : '—',
+    nextDue: raw.due_date || '—',
+    trigger: reviewTriggerText(raw || {}, status.payload),
+    status: status.label,
+    raw_status: status.raw,
+    fixture_payload: status.payload
+  };
+}
+
+function eddTriggerText(caseRow) {
+  var payload = parseFixturePayload(caseRow && caseRow.trigger_notes, 'FIX_EDD_JSON:');
+  if (payload) {
+    var parts = [];
+    if (payload.kind) parts.push('Seeded ' + String(payload.kind).replace(/_/g, ' ') + ' trigger');
+    if (payload.source_review_id != null) parts.push('review #' + payload.source_review_id);
+    if (payload.source_alert_id != null) parts.push('alert #' + payload.source_alert_id);
+    if (parts.length) return parts.join(' — ');
+  }
+  return String((caseRow && (caseRow.trigger_notes || caseRow.trigger_source)) || '');
+}
+
 // Try to load data from API, fall back to mock data
 async function loadFromAPI() {
   if (!BO_AUTH_TOKEN) return false;
@@ -3253,24 +3394,7 @@ async function loadFromAPI() {
       MONITORING_ALERTS = [];
       var alertsResp = await boApiCall('GET', '/monitoring/alerts');
       if (alertsResp.alerts) {
-        MONITORING_ALERTS = alertsResp.alerts.map(function(a) {
-          return {
-            id: a.id,
-            date: (a.created_at || '').split('T')[0].split(' ')[0],
-            client: a.client_name || '',
-            type: a.alert_type || '',
-            severity: a.severity || 'Medium',
-            agent: a.detected_by || '',
-            status: (a.status || 'open').charAt(0).toUpperCase() + (a.status || 'open').slice(1),
-            source: a.source_reference || '',
-            detail: a.summary || '',
-            recommendation: a.ai_recommendation || '',
-            linked_periodic_review_id: a.linked_periodic_review_id,
-            linked_edd_case_id: a.linked_edd_case_id,
-            officer_action: a.officer_action || null,
-            officer_notes: a.officer_notes || null
-          };
-        });
+        MONITORING_ALERTS = alertsResp.alerts.map(normalizeMonitoringAlert);
       }
     } catch(e) { console.warn('Could not load monitoring alerts:', e); }
 
@@ -3279,27 +3403,7 @@ async function loadFromAPI() {
       PERIODIC_REVIEWS = [];
       var reviewsResp = await boApiCall('GET', '/monitoring/reviews');
       if (reviewsResp.reviews) {
-        PERIODIC_REVIEWS = reviewsResp.reviews.map(function(r) {
-          return {
-            id: r.id,
-            ref: r.application_id || '',
-            client: r.client_name || '',
-            risk: r.risk_level || 'Low',
-            lastReview: r.completed_at ? r.completed_at.split('T')[0].split(' ')[0] : '—',
-            nextDue: r.due_date || '—',
-            trigger: r.trigger_reason || r.trigger_type || '',
-            status: (function() {
-              if (r.status === 'completed') return 'Completed';
-              if (!r.due_date) return 'Upcoming';
-              var due = new Date(r.due_date);
-              var now = new Date();
-              var diff = (due - now) / 86400000;
-              if (diff < 0) return 'Overdue';
-              if (diff <= 14) return 'Due Soon';
-              return 'Upcoming';
-            })()
-          };
-        });
+        PERIODIC_REVIEWS = reviewsResp.reviews.map(normalizePeriodicReview);
       }
     } catch(e) { console.warn('Could not load periodic reviews:', e); }
 
@@ -5999,7 +6103,7 @@ function openEDDDetail(caseId) {
     '<div class="detail-row"><span class="label">Risk Score</span><span class="value" style="font-weight:700;">' + (c.risk_score || '—') + '</span></div>' +
     '<div class="detail-row"><span class="label">Current Stage</span><span class="value">' + eddStageBadge(c.stage) + '</span></div>' +
     '<div class="detail-row"><span class="label">Assigned Officer</span><span class="value">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === c.assigned_officer; }); return u ? u.name : (c.assigned_officer || 'Unassigned'); })()) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + escapeHtml(c.trigger_notes || c.trigger_source || '') + '</span></div>' +
+    '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + escapeHtml(eddTriggerText(c)) + '</span></div>' +
     '<div class="detail-row"><span class="label">EDD Opened</span><span class="value">' + (c.triggered_at || '').split('T')[0] + '</span></div>' +
     '<div class="detail-row"><span class="label">Days in EDD</span><span class="value" style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + ' days</span></div>' +
     '</div>';
@@ -6759,7 +6863,7 @@ var PRC_DISMISSAL_REASONS = [
 // STATUS_* vocabulary). "Open" alerts here are those still routable.
 function prcAlertIsRoutable(status) {
   var s = String(status || '').toLowerCase();
-  return s === 'open' || s === 'triaged' || s === 'assigned';
+  return s === 'open' || s === 'triaged' || s === 'assigned' || s === 'in_review' || s === 'in review';
 }
 
 // Standard confirmation wording (per PR-C brief — verbatim).
@@ -6958,22 +7062,7 @@ async function openAlertDetailById(alertId) {
     }
     if (!found) {
       var raw = await boApiCall('GET', '/monitoring/alerts/' + encodeURIComponent(alertId));
-      found = {
-        id: raw.id,
-        date: (raw.created_at || '').split('T')[0].split(' ')[0],
-        client: raw.client_name || '',
-        type: raw.alert_type || '',
-        severity: raw.severity || 'Medium',
-        agent: raw.detected_by || '',
-        status: (raw.status || 'open').charAt(0).toUpperCase() + (raw.status || 'open').slice(1),
-        source: raw.source_reference || '',
-        detail: raw.summary || '',
-        recommendation: raw.ai_recommendation || '',
-        linked_periodic_review_id: raw.linked_periodic_review_id,
-        linked_edd_case_id: raw.linked_edd_case_id,
-        officer_action: raw.officer_action || null,
-        officer_notes: raw.officer_notes || null
-      };
+      found = normalizeMonitoringAlert(raw);
     }
     showAlertDetail(found);
   } catch(err) {
@@ -6996,16 +7085,7 @@ async function openReviewDetailById(reviewId) {
     // Fallback: fetch detail directly so officers can still land on
     // the review surface even if the list cache is cold.
     var detail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(reviewId));
-    var pseudo = {
-      id: detail.id,
-      ref: detail.application_id || '',
-      client: detail.client_name || '',
-      risk: detail.risk_level || 'Low',
-      lastReview: detail.completed_at ? String(detail.completed_at).split('T')[0].split(' ')[0] : '—',
-      nextDue: detail.due_date || '—',
-      trigger: detail.trigger_reason || detail.trigger_type || '',
-      status: detail.status === 'completed' ? 'Completed' : (detail.status || 'pending')
-    };
+    var pseudo = normalizePeriodicReview(detail);
     // Temporarily insert into cache so openPeriodicReview can find it.
     if (typeof PERIODIC_REVIEWS !== 'undefined' && PERIODIC_REVIEWS) PERIODIC_REVIEWS.push(pseudo);
     openPeriodicReview(pseudo.ref);
@@ -7077,15 +7157,18 @@ async function prcEnhanceReviewDetail(review) {
 function renderPrcReviewDetailSection(detail) {
   var host = document.getElementById('prc-review-detail-section');
   if (!host) return;
-  var state = detail.state || detail.status || '—';
-  var outcome = detail.outcome;
+  var fixturePayload = parseFixturePayload(detail && detail.trigger_reason, 'FIX_REVIEW_JSON:') || {};
+  var statusInfo = reviewStatusFromRaw(detail || {});
+  var state = statusInfo.raw || detail.state || detail.status || '—';
+  var outcome = detail.outcome || fixturePayload.outcome || detail.decision;
   var outcomeReason = detail.outcome_reason;
   var outcomeRecordedAt = detail.outcome_recorded_at;
-  var legacyDecision = detail.decision;
-  var linkedAlertId = detail.linked_monitoring_alert_id;
+  var legacyDecision = detail.decision || fixturePayload.outcome;
+  var linkedAlertId = detail.linked_monitoring_alert_id != null ? detail.linked_monitoring_alert_id : fixturePayload.source_alert_id;
   var linkedEDDId = detail.linked_edd_case_id;
-  var triggerSource = detail.trigger_source || detail.trigger_type || detail.trigger_reason || '—';
+  var triggerSource = reviewTriggerText(detail || {}, fixturePayload) || detail.trigger_source || detail.trigger_type || '—';
   var reviewReason = detail.review_reason;
+  if (reviewReason && String(reviewReason).indexOf('FIX_REVIEW_JSON:') >= 0) reviewReason = null;
   var requiredItems = detail.required_items;
   // required_items is JSON-encoded TEXT in the DB (migration 009).
   if (typeof requiredItems === 'string' && requiredItems.length) {
@@ -7101,6 +7184,9 @@ function renderPrcReviewDetailSection(detail) {
                    : (outcome === 'exit_recommended') ? 'var(--red)'
                    : 'var(--text3)';
   var outcomeLabel = outcome ? String(outcome).replace(/_/g,' ') : '(no outcome recorded)';
+  var stateBadgeClass = (state === 'completed') ? 'approved'
+                    : (state === 'in_progress' || state === 'awaiting_information' || state === 'pending_senior_review') ? 'in-review'
+                    : 'pending';
 
   // Linked chips using prcChipHtml for click-through.
   var chips = [];
@@ -7133,14 +7219,14 @@ function renderPrcReviewDetailSection(detail) {
   host.innerHTML =
     '<div class="detail-section" style="margin-top:16px;">' +
       '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Review state &amp; outcome (authoritative)</div>' +
-      '<div class="detail-row"><span class="label">State</span><span class="value"><span class="badge pending" style="font-size:11px;">' + escapeHtml(String(state)) + '</span></span></div>' +
+      '<div class="detail-row"><span class="label">State</span><span class="value"><span class="badge ' + stateBadgeClass + '" style="font-size:11px;">' + escapeHtml(String(state)) + '</span></span></div>' +
       '<div class="detail-row"><span class="label">Trigger provenance</span><span class="value" style="font-size:12px;">' + escapeHtml(String(triggerSource)) + (reviewReason ? ' — ' + escapeHtml(String(reviewReason)) : '') + '</span></div>' +
       '<div class="detail-row"><span class="label">Outcome</span><span class="value" style="font-weight:700;color:' + outcomeColor + ';">' + escapeHtml(outcomeLabel) + '</span></div>' +
       (outcomeReason ? '<div class="detail-row"><span class="label">Outcome reason</span><span class="value" style="font-size:12px;">' + escapeHtml(String(outcomeReason)) + '</span></div>' : '') +
       (outcomeRecordedAt ? '<div class="detail-row"><span class="label">Outcome recorded at</span><span class="value" style="font-family:monospace;font-size:12px;">' + escapeHtml(String(outcomeRecordedAt)) + '</span></div>' : '') +
       '<div class="detail-row"><span class="label">Escalation</span><span class="value">' + escalatedHtml + '</span></div>' +
       '<div class="detail-row"><span class="label">Linked objects</span><span class="value">' + chipsHtml + '</span></div>' +
-      (legacyDecision ? '<div class="detail-row"><span class="label" title="Historical column superseded by outcome">legacy decision (non-authoritative)</span><span class="value" style="font-size:12px;color:var(--text3);text-decoration:line-through;">' + escapeHtml(String(legacyDecision)) + '</span></div>' : '') +
+      (legacyDecision ? '<div class="detail-row"><span class="label" title="Historical decision field">Legacy decision</span><span class="value" style="font-size:12px;color:var(--text3);' + (detail.outcome ? 'text-decoration:line-through;' : '') + '">' + escapeHtml(String(legacyDecision)) + '</span></div>' : '') +
     '</div>';
 
   // PR-D seam: insert the lightweight periodic-review memo container
@@ -7168,7 +7254,7 @@ function renderPrcReviewDetailSection(detail) {
   // Fire-and-forget; renderer owns its own error handling and the three
   // distinct visual states (generated / 404 / generation_failed).
   if (detail && detail.id != null) {
-    try { renderPeriodicReviewMemo(detail.id, detail.state || detail.status || null); } catch (e) { /* renderer logs */ }
+    try { renderPeriodicReviewMemo(detail.id, state, fixturePayload); } catch (e) { /* renderer logs */ }
   }
 }
 
@@ -7266,16 +7352,15 @@ function renderPrcEDDDetailSection(eddCase, materialised) {
 }
 
 function renderMonitoring() {
-  // Update monitoring stat cards from real loaded data
-  // Prefer backend dashboard stats when available, otherwise fall back to approved applications.
-  var approvedCount = APPLICATIONS.filter(function(a) {
-    var s = (a.status || '').toLowerCase();
-    return s === 'approved';
-  }).length;
-  var activeMonitoring = approvedCount;
-  if (MONITORING_DASHBOARD && typeof MONITORING_DASHBOARD.clients_under_review === 'number') {
-    activeMonitoring = Math.max(approvedCount, MONITORING_DASHBOARD.clients_under_review || 0);
-  }
+  // Use list-derived values so counter cards stay coherent with rows.
+  var activeClientSet = {};
+  MONITORING_ALERTS.forEach(function(a) {
+    if (a && a.client) activeClientSet[String(a.client)] = true;
+  });
+  PERIODIC_REVIEWS.forEach(function(r) {
+    if (r && r.client) activeClientSet[String(r.client)] = true;
+  });
+  var activeMonitoring = Object.keys(activeClientSet).length;
   // Open Alerts: count of monitoring alerts with Open status
   var openAlerts = MONITORING_ALERTS.filter(function(a) { return a.status === 'Open'; }).length;
   // Critical: count of Critical severity alerts that are Open
@@ -7325,13 +7410,19 @@ function renderMonitoringAlerts() {
 
     var tr = document.createElement('tr');
     var severityColor = { 'Critical':'red', 'High':'amber', 'Medium':'blue', 'Low':'green' }[alert.severity] || 'gray';
+    var statusBadgeClass = (function() {
+      if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned') return 'pending';
+      if (alert.status === 'Dismissed') return 'draft';
+      if (alert.status === 'Routed to Review' || alert.status === 'Routed to EDD' || alert.status === 'Reviewed') return 'approved';
+      return 'in-review';
+    })();
     tr.onclick = function() { showAlertDetail(alert); };
     tr.innerHTML = '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(alert.date) + '</td>' +
       '<td>' + escapeHtml(alert.client) + '</td>' +
       '<td style="font-size:12px;">' + escapeHtml(alert.type) + '</td>' +
       '<td><span class="badge ' + severityColor + '" style="font-size:11px;">' + escapeHtml(alert.severity) + '</span></td>' +
       '<td style="font-size:12px;">' + escapeHtml(alert.agent.replace(' Agent','')) + '</td>' +
-      '<td><span class="badge ' + (alert.status === 'Open' ? 'pending' : alert.status === 'Reviewed' ? 'approved' : 'in-review') + '" style="font-size:11px;">' + escapeHtml(alert.status) + '</span></td>' +
+      '<td><span class="badge ' + statusBadgeClass + '" style="font-size:11px;">' + escapeHtml(alert.status) + '</span></td>' +
       '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();viewAlert(\'' + escapeHtml(alert.date) + '\',\'' + escapeHtml(alert.client).replace(/'/g,"\\'") + '\')">View</button></td>';
     tbody.appendChild(tr);
     rendered++;
@@ -7353,7 +7444,13 @@ function renderPeriodicReviews() {
     if (riskFilter && review.risk !== riskFilter) return;
 
     var tr = document.createElement('tr');
-    var statusColor = review.status === 'Overdue' ? 'red' : review.status === 'Due Soon' ? 'amber' : 'green';
+    var statusBadge = (function() {
+      if (review.status === 'Overdue') return 'very-high';
+      if (review.status === 'Due Soon') return 'high';
+      if (review.status === 'Completed') return 'approved';
+      if (review.status === 'In Progress' || review.status === 'Awaiting Information' || review.status === 'Pending Senior Review') return 'in-review';
+      return 'low';
+    })();
     var riskClass = review.risk.toLowerCase().replace(' ','-');
     tr.onclick = function() { openPeriodicReview(review.ref); };
     tr.innerHTML = '<td>' + escapeHtml(review.client) + '</td>' +
@@ -7361,7 +7458,7 @@ function renderPeriodicReviews() {
       '<td style="font-size:12px;">' + escapeHtml(review.lastReview) + '</td>' +
       '<td style="font-size:12px;">' + escapeHtml(review.nextDue) + '</td>' +
       '<td style="font-size:12px;">' + escapeHtml(review.trigger) + '</td>' +
-      '<td><span class="badge ' + (statusColor === 'red' ? 'very-high' : statusColor === 'amber' ? 'high' : 'low') + '" style="font-size:11px;">' + escapeHtml(review.status) + '</span></td>' +
+      '<td><span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(review.status) + '</span></td>' +
       '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();openPeriodicReview(\'' + escapeHtml(review.ref) + '\')">Review</button></td>';
     tbody.appendChild(tr);
     rendered++;
@@ -7508,9 +7605,7 @@ async function triggerAgentRun(agentId) {
     try {
       var alertsResp = await boApiCall('GET', '/monitoring/alerts');
       if (alertsResp.alerts) {
-        MONITORING_ALERTS = alertsResp.alerts.map(function(a) {
-          return { id: a.id, date: (a.created_at || '').split('T')[0].split(' ')[0], client: a.client_name || '', type: a.alert_type || '', severity: a.severity || 'Medium', agent: a.detected_by || '', status: (a.status || 'open').charAt(0).toUpperCase() + (a.status || 'open').slice(1), source: a.source_reference || '', detail: a.summary || '', recommendation: a.ai_recommendation || '', linked_periodic_review_id: a.linked_periodic_review_id, linked_edd_case_id: a.linked_edd_case_id, officer_action: a.officer_action || null, officer_notes: a.officer_notes || null };
-        });
+        MONITORING_ALERTS = alertsResp.alerts.map(normalizeMonitoringAlert);
       }
     } catch(e) {}
     try {
@@ -7661,6 +7756,12 @@ function renderAlertDismissalSection(alert) {
 
 function showAlertDetail(alert) {
   currentAlertRef = alert;
+  var statusClass = (function() {
+    if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned') return 'pending';
+    if (alert.status === 'Dismissed') return 'draft';
+    if (alert.status === 'Reviewed' || alert.status === 'Routed to Review' || alert.status === 'Routed to EDD') return 'approved';
+    return 'in-review';
+  })();
   var html = '<div class="detail-section">' +
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Alert Summary</div>' +
     '<div class="detail-row"><span class="label">Date</span><span class="value">' + alert.date + '</span></div>' +
@@ -7669,7 +7770,7 @@ function showAlertDetail(alert) {
     '<div class="detail-row"><span class="label">Severity</span><span class="value"><span class="badge ' + (alert.severity === 'Critical' ? 'very-high' : alert.severity === 'High' ? 'high' : alert.severity === 'Medium' ? 'medium' : 'low') + '">' + alert.severity + '</span></span></div>' +
     '<div class="detail-row"><span class="label">Detected By</span><span class="value">' + alert.agent + '</span></div>' +
     '<div class="detail-row"><span class="label">Source</span><span class="value">' + alert.source + '</span></div>' +
-    '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + (alert.status === 'Open' ? 'pending' : alert.status === 'Reviewed' ? 'approved' : alert.status === 'Dismissed' ? 'draft' : 'in-review') + '">' + alert.status + '</span></span></div>' +
+    '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + statusClass + '">' + alert.status + '</span></span></div>' +
     renderAlertDownstreamChipsRow(alert) +
     '</div><div class="detail-section" style="margin-top:16px;">' +
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Finding Details</div>' +
@@ -7691,14 +7792,14 @@ function showAlertDetail(alert) {
   var escBtn = document.getElementById('alert-modal-escalate-btn');
   var dimBtn = document.getElementById('alert-modal-dismiss-btn');
   var sarBtn = document.getElementById('alert-modal-sar-btn');
-  if (alert.status === 'Open') {
+  if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned') {
     escBtn.style.display = ''; dimBtn.style.display = '';
   } else {
     escBtn.style.display = 'none'; dimBtn.style.display = 'none';
   }
   // Show SAR button only for Critical/High severity alerts that are Open or Escalated
   if (sarBtn) {
-    var showSar = (alert.severity === 'Critical' || alert.severity === 'High') && (alert.status === 'Open' || alert.status === 'Escalated');
+    var showSar = (alert.severity === 'Critical' || alert.severity === 'High') && (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'Escalated');
     sarBtn.style.display = showSar ? '' : 'none';
   }
 
@@ -7776,6 +7877,13 @@ function openPeriodicReview(ref) {
 
   // If we have the full application data, show a review modal with context
   if (review) {
+    var reviewStatusBadge = (function() {
+      if (review.status === 'Overdue') return 'very-high';
+      if (review.status === 'Due Soon') return 'high';
+      if (review.status === 'Completed') return 'approved';
+      if (review.status === 'In Progress' || review.status === 'Awaiting Information' || review.status === 'Pending Senior Review') return 'in-review';
+      return 'low';
+    })();
     var reviewHtml = '<div class="detail-section">' +
       '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Review Summary</div>' +
       '<div class="detail-row"><span class="label">Client</span><span class="value" style="font-weight:600;">' + review.client + '</span></div>' +
@@ -7784,7 +7892,7 @@ function openPeriodicReview(ref) {
       '<div class="detail-row"><span class="label">Last Review</span><span class="value">' + review.lastReview + '</span></div>' +
       '<div class="detail-row"><span class="label">Next Due</span><span class="value">' + review.nextDue + '</span></div>' +
       '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + review.trigger + '</span></div>' +
-      '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + (review.status === 'Overdue' ? 'very-high' : review.status === 'Due Soon' ? 'high' : 'low') + '">' + review.status + '</span></span></div>' +
+      '<div class="detail-row"><span class="label">Status</span><span class="value"><span class="badge ' + reviewStatusBadge + '">' + review.status + '</span></span></div>' +
       '</div>';
 
     if (app) {
@@ -7824,7 +7932,7 @@ function openPeriodicReview(ref) {
     currentReviewRef = review;
     // Show/hide decision button based on status (completed reviews cannot be re-decided)
     var decideBtn = document.getElementById('review-modal-decide-btn');
-    if (decideBtn) decideBtn.style.display = (review.status === 'Completed') ? 'none' : '';
+    if (decideBtn) decideBtn.style.display = (review.status === 'Completed' || review.raw_status === 'completed') ? 'none' : '';
     document.getElementById('modal-periodic-review').classList.add('open');
     // PR-C Scope B — additive authoritative detail section (read-only).
     prcEnhanceReviewDetail(review);
@@ -7850,9 +7958,13 @@ var currentReviewRef = null;
 // This function only paints into the container; placement is owned by
 // renderPrcReviewDetailSection above.
 // ─────────────────────────────────────────────────────────────
-async function renderPeriodicReviewMemo(reviewId, reviewState) {
+async function renderPeriodicReviewMemo(reviewId, reviewState, fixturePayload) {
   var container = document.getElementById('periodic-review-memo-container');
   if (!container) return;
+  if (fixturePayload && typeof fixturePayload.review_memo === 'string' && fixturePayload.review_memo.trim()) {
+    container.innerHTML = renderFixtureEmbeddedReviewMemo(fixturePayload);
+    return;
+  }
   container.innerHTML =
     '<div style="margin-top:16px;padding:12px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;color:var(--text3);">Loading review memo…</div>';
   var resp;
@@ -7880,6 +7992,15 @@ async function renderPeriodicReviewMemo(reviewId, reviewState) {
     return;
   }
   container.innerHTML = renderMemoGenerated(resp);
+}
+
+function renderFixtureEmbeddedReviewMemo(payload) {
+  var memoBody = String((payload && payload.review_memo) || '').trim();
+  return '<div class="detail-section" style="margin-top:16px;">' +
+    '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Periodic Review Memo</div>' +
+    '<div style="padding:12px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:13px;color:var(--text2);line-height:1.6;white-space:pre-wrap;">' +
+    escapeHtml(memoBody || 'No memo content available.') +
+    '</div></div>';
 }
 
 function renderMemoNotCompletedPlaceholder(reviewState) {
@@ -8105,9 +8226,7 @@ async function schedulePeriodicReviews() {
     try {
       var reviewsResp = await boApiCall('GET', '/monitoring/reviews');
       if (reviewsResp.reviews) {
-        PERIODIC_REVIEWS = reviewsResp.reviews.map(function(r) {
-          return { id: r.id, ref: r.application_id || '', client: r.client_name || '', risk: r.risk_level || 'Low', lastReview: r.completed_at ? r.completed_at.split('T')[0].split(' ')[0] : '—', nextDue: r.due_date || '—', trigger: r.trigger_reason || r.trigger_type || '', status: (function() { if (r.status === 'completed') return 'Completed'; if (!r.due_date) return 'Upcoming'; var due = new Date(r.due_date); var now = new Date(); var diff = (due - now) / 86400000; if (diff < 0) return 'Overdue'; if (diff <= 14) return 'Due Soon'; return 'Upcoming'; })() };
-        });
+        PERIODIC_REVIEWS = reviewsResp.reviews.map(normalizePeriodicReview);
       }
     } catch(e) {}
     renderPeriodicReviews();

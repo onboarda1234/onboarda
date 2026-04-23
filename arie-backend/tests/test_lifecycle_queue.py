@@ -493,6 +493,56 @@ class TestFindingsPresent(_LifecycleQueueBase):
 
 
 # ───────────────────────────────────────────────────────────────────
+# Fixture payload normalization (seeded read path)
+# ───────────────────────────────────────────────────────────────────
+class TestFixturePayloadNormalization(_LifecycleQueueBase):
+    def test_fixture_review_payload_maps_to_completed_and_linkage(self):
+        import lifecycle_queue as lq
+        alert_id = self._alert(status="in_review", source_reference="FIX_SCEN04_ALERT")
+        payload = json.dumps({
+            "status": "fixture_completed",
+            "source_alert_id": alert_id,
+            "review_memo": "fixture memo body",
+            "outcome": "continue_monitoring",
+        })
+        self._review(
+            status="pending",
+            trigger_type="fixture_completed",
+            trigger_reason="FIX_SCEN04_REVIEW FIX_REVIEW_JSON:" + payload,
+            decision="continue_monitoring",
+        )
+        result = lq.build_lifecycle_queue(self._conn, include="historical", types=("review",))
+        self.assertEqual(len(result["items"]), 1)
+        review = result["items"][0]
+        self.assertEqual(review["state"], "completed")
+        self.assertEqual(review["linked_monitoring_alert_id"], alert_id)
+        self.assertEqual(review["outcome"], "continue_monitoring")
+        self.assertTrue(review["is_historical"])
+
+    def test_fixture_edd_payload_surfaces_origin_and_review_link(self):
+        import lifecycle_queue as lq
+        review_id = self._review(status="completed")
+        payload = json.dumps({
+            "kind": "periodic_review",
+            "source_review_id": review_id,
+            "source_alert_id": None,
+        })
+        self._edd(
+            stage="analysis",
+            trigger_source="periodic_review",
+            trigger_notes="FIX_SCEN03_EDD FIX_EDD_JSON:" + payload,
+            origin_context=None,
+            linked_periodic_review_id=None,
+        )
+        result = lq.build_lifecycle_queue(self._conn, include="active", types=("edd",))
+        self.assertEqual(len(result["items"]), 1)
+        edd = result["items"][0]
+        self.assertEqual(edd["origin_context"], "periodic_review")
+        self.assertEqual(edd["linked_periodic_review_id"], review_id)
+        self.assertEqual((edd.get("memo_context") or {}).get("kind"), "periodic_review")
+
+
+# ───────────────────────────────────────────────────────────────────
 # Application-summary linkage edges
 # ───────────────────────────────────────────────────────────────────
 class TestApplicationSummary(_LifecycleQueueBase):

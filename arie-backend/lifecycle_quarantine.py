@@ -92,6 +92,15 @@ def _row_get(row, key, default=None):
     return default
 
 
+def _is_seeded_in_review(row) -> bool:
+    """Treat seeded legacy 'in_review' alerts as mappable, not ghost."""
+    status = str(_row_get(row, "status", "") or "").strip().lower()
+    if status != "in_review":
+        return False
+    src = str(_row_get(row, "source_reference", "") or "").strip().upper()
+    return src.startswith("FIX_SCEN")
+
+
 def is_legacy_unmapped(row) -> Tuple[bool, List[str]]:
     """Classify a single ``monitoring_alerts`` row.
 
@@ -108,6 +117,7 @@ def is_legacy_unmapped(row) -> Tuple[bool, List[str]]:
     if (
         status is not None
         and status not in CANONICAL_ALERT_VOCABULARY
+        and not _is_seeded_in_review(row)
         and linked_review is None
         and linked_edd is None
     ):
@@ -134,6 +144,8 @@ def legacy_unmapped_where_clause() -> Tuple[str, List[Any]]:
         "("
         # vocabulary_ghost: status outside canonical AND no downstream linkage.
         f"(status NOT IN ({placeholders}) "
+        "  AND NOT (LOWER(COALESCE(status, '')) = 'in_review' "
+        "           AND UPPER(COALESCE(source_reference, '')) LIKE 'FIX_SCEN%') "
         "  AND linked_periodic_review_id IS NULL "
         "  AND linked_edd_case_id IS NULL)"
         " OR "
@@ -159,6 +171,8 @@ def active_or_historical_exclude_legacy_clause() -> Tuple[str, List[Any]]:
     fragment = (
         "NOT ("
         f"(status NOT IN ({placeholders}) "
+        "  AND NOT (LOWER(COALESCE(status, '')) = 'in_review' "
+        "           AND UPPER(COALESCE(source_reference, '')) LIKE 'FIX_SCEN%') "
         "  AND linked_periodic_review_id IS NULL "
         "  AND linked_edd_case_id IS NULL)"
         " OR "
