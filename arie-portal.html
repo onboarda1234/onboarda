@@ -5061,6 +5061,8 @@ async function startNewApplication() {
       return;
     }
     if (choice === 'D') {
+      var discardConfirmed = await _showDraftDiscardConfirmDialog(label, 'Discard draft and start new');
+      if (!discardConfirmed) return;
       await _discardDraftFromGuard(activeDraft);
       showToast('success', 'Draft Discarded', 'Your previous draft was discarded.');
     }
@@ -6909,7 +6911,7 @@ function _confirmDiscardUnsavedChangesForNavigation(targetView) {
   if (!_hasUnsavedPreSubmitChanges()) return true;
   if (!_isPreSubmitEditingViewActive()) return true;
   if (targetView === 'prescreening' || targetView === 'onboarding') return true;
-  return confirm('You have unsaved draft changes. Leave this page and lose those unsaved changes?');
+  return false;
 }
 
 function _attachDraftDirtyListener() {
@@ -7390,26 +7392,40 @@ function startAutoSave() {
 
 // Update save bar when entering onboarding view
 var origShowView = showView;
-showView = function(name) {
-  if (!_confirmDiscardUnsavedChangesForNavigation(name)) return;
-  origShowView(name);
-  // Priority C: Save & Resume — autosave runs during pre-screening and
-  // onboarding (the two long client-edit views). Stop on terminal/passive
-  // views so we don't churn the API after submission.
-  if (name === 'prescreening' || name === 'onboarding') {
-    var refDisplay = document.getElementById('save-ref-display');
-    if (refDisplay) refDisplay.textContent = appRef ? 'Ref: ' + appRef : '';
-    var bar = document.getElementById('save-draft-bar');
-    if (bar) bar.style.display = '';
-    _attachDraftDirtyListener();
-    _attachBeforeUnloadGuard();
-    startAutoSave();
-  } else if (autoSaveTimer) {
-    clearInterval(autoSaveTimer);
-    autoSaveTimer = null;
+showView = async function(name) {
+  var canNavigateWithoutConfirm = _confirmDiscardUnsavedChangesForNavigation(name);
+  function continueNavigation() {
+    origShowView(name);
+    // Priority C: Save & Resume — autosave runs during pre-screening and
+    // onboarding (the two long client-edit views). Stop on terminal/passive
+    // views so we don't churn the API after submission.
+    if (name === 'prescreening' || name === 'onboarding') {
+      var refDisplay = document.getElementById('save-ref-display');
+      if (refDisplay) refDisplay.textContent = appRef ? 'Ref: ' + appRef : '';
+      var bar = document.getElementById('save-draft-bar');
+      if (bar) bar.style.display = '';
+      _attachDraftDirtyListener();
+      _attachBeforeUnloadGuard();
+      startAutoSave();
+    } else if (autoSaveTimer) {
+      clearInterval(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+    if (name === 'client-notifications') {
+      loadClientNotifications();
+    }
   }
-  if (name === 'client-notifications') {
-    loadClientNotifications();
+  if (canNavigateWithoutConfirm) {
+    continueNavigation();
+    return;
+  }
+  try {
+    var confirmed = await _showDraftDiscardConfirmDialog('your unsaved draft changes', 'Leave without saving');
+    if (!confirmed) return;
+    _draftDirty = false;
+    continueNavigation();
+  } catch (err) {
+    console.warn('navigation discard confirmation failed:', err);
   }
 };
 

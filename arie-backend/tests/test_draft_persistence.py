@@ -690,7 +690,11 @@ def test_kyc_submit_clears_active_draft(api_server, tmp_path):
 
 def test_form_data_is_encrypted_at_rest_when_pii_key_configured(api_server):
     from db import get_db
-    from server import _pii_encryptor, DRAFT_FORM_DATA_ENCRYPTED_PREFIX
+    from server import (
+        _pii_encryptor,
+        DRAFT_FORM_DATA_ENCRYPTED_PREFIX,
+        DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY,
+    )
 
     if _pii_encryptor is None:
         pytest.skip("PII encryptor not configured in this environment")
@@ -726,8 +730,22 @@ def test_form_data_is_encrypted_at_rest_when_pii_key_configured(api_server):
     if isinstance(raw, (bytes, bytearray)):
         raw = raw.decode("utf-8", "ignore")
     raw = str(raw)
-    assert raw.startswith(DRAFT_FORM_DATA_ENCRYPTED_PREFIX), \
-        f"form_data must be encrypted at rest, got: {raw[:40]!r}"
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:
+        decoded = raw
+    if isinstance(decoded, dict):
+        token = decoded.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY, "")
+        assert isinstance(token, str) and token.strip(), \
+            "form_data must store encrypted draft payload in JSON envelope"
+        assert sentinel not in token, \
+            "Plaintext PII must not be visible in encrypted token"
+    else:
+        # Backward-compatible safety for legacy storage format.
+        assert decoded.startswith(DRAFT_FORM_DATA_ENCRYPTED_PREFIX), \
+            f"form_data must be encrypted at rest, got: {str(decoded)[:40]!r}"
+        assert sentinel not in str(decoded), \
+            "Plaintext PII must not be visible in client_sessions.form_data"
     assert sentinel not in raw, \
         "Plaintext PII must not be visible in client_sessions.form_data"
 
@@ -930,11 +948,15 @@ def test_portal_draft_discard_uses_in_app_confirmation_not_native():
     src = _portal_html()
     delete_fn = src.split("async function deleteApplication(ref, companyName) {", 1)[1].split("async function discardActiveDraft()", 1)[0]
     discard_fn = src.split("async function discardActiveDraft() {", 1)[1].split("function renderRecentActivity(apps) {", 1)[0]
+    start_new_fn = src.split("async function startNewApplication() {", 1)[1].split("function buildDraftDataFromApplication(app) {", 1)[0]
     assert "function _showDraftDiscardConfirmDialog(" in src
     assert "draft-discard-confirm-overlay" in src
     assert "Discard draft?" in src
     assert "This action is irreversible." in src
     assert "await _showDraftDiscardConfirmDialog(label, 'Delete draft')" in delete_fn
     assert "await _showDraftDiscardConfirmDialog(name, 'Discard draft')" in discard_fn
+    assert "await _showDraftDiscardConfirmDialog(label, 'Discard draft and start new')" in start_new_fn
+    assert "return confirm(" not in src
+    assert "window.confirm(" not in src
     assert "Discard your in-progress draft for " not in src
     assert "Delete ' + label + '? This cannot be undone." not in src
