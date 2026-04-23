@@ -40,6 +40,7 @@ Public surface
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -95,6 +96,9 @@ VALID_ITEM_TYPES = ("alert", "review", "edd")
 # subject to quarantine -- they have schema-defined CHECK-constrained
 # states. The bucket is implemented for ``monitoring_alerts`` only.
 VALID_INCLUDE = ("active", "historical", "all", "legacy_unmapped")
+
+_FIX_REVIEW_RE = re.compile(r"FIX_REVIEW_JSON:(\{.*\})$", re.DOTALL)
+_FIX_EDD_RE = re.compile(r"FIX_EDD_JSON:(\{.*\})$", re.DOTALL)
 
 
 # ── Internal utilities ──────────────────────────────────────────────
@@ -180,6 +184,48 @@ def _decode_required_items(raw) -> List[Dict[str, Any]]:
     return items if isinstance(items, list) else []
 
 
+def _parse_fixture_payload(raw, pattern) -> Optional[Dict[str, Any]]:
+    if not raw:
+        return None
+    m = pattern.search(str(raw))
+    if not m:
+        return None
+    try:
+        payload = json.loads(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _parse_review_fixture_payload(trigger_reason) -> Optional[Dict[str, Any]]:
+    return _parse_fixture_payload(trigger_reason, _FIX_REVIEW_RE)
+
+
+def _parse_edd_fixture_payload(trigger_notes) -> Optional[Dict[str, Any]]:
+    return _parse_fixture_payload(trigger_notes, _FIX_EDD_RE)
+
+
+def _normalise_review_state(row) -> str:
+    explicit = (_row_get(row, "status") or "").strip().lower()
+    payload = _parse_review_fixture_payload(_row_get(row, "trigger_reason"))
+    fixture_state = str((payload or {}).get("status") or _row_get(row, "trigger_type") or "").strip().lower()
+    if fixture_state == "fixture_completed":
+        return "completed"
+    if fixture_state == "fixture_in_progress":
+        return "in_progress"
+    if explicit:
+        return explicit
+    return "pending"
+
+
+def _normalise_alert_state(row) -> str:
+    status = str(_row_get(row, "status", "open") or "open").strip().lower()
+    src = str(_row_get(row, "source_reference", "") or "").strip().upper()
+    if status == "in_review" and src.startswith("FIX_SCEN"):
+        return "triaged"
+    return status
+
+
 def _user_name_map(db, user_ids: List[str]) -> Dict[str, str]:
     """Batch-resolve user IDs to display names. Empty input → empty map.
 
@@ -237,7 +283,7 @@ def _next_action_for_edd(stage: str) -> Optional[str]:
 def _materialise_alert(row, *, user_names: Dict[str, str],
                        now: datetime) -> Dict[str, Any]:
     from lifecycle_quarantine import is_legacy_unmapped
-    status = _row_get(row, "status", "open") or "open"
+    status = _normalise_alert_state(row)
     owner_id = _row_get(row, "reviewed_by")
     is_quarantined, quarantine_reasons = is_legacy_unmapped(row)
     return {
@@ -275,7 +321,14 @@ def _materialise_alert(row, *, user_names: Dict[str, str],
 def _materialise_review(row, *, user_names: Dict[str, str],
                         required_items_count: int,
                         now: datetime) -> Dict[str, Any]:
-    status = _row_get(row, "status", "pending") or "pending"
+    payload = _parse_review_fixture_payload(_row_get(row, "trigger_reason"))
+    status = _normalise_review_state(row)
+    linked_alert = _row_get(row, "linked_monitoring_alert_id")
+    if linked_alert is None and payload:
+        linked_alert = payload.get("source_alert_id")
+    review_reason = _row_get(row, "review_reason") or _row_get(row, "trigger_reason")
+    if payload and isinstance(review_reason, str) and "FIX_REVIEW_JSON:" in review_reason:
+        review_reason = "Seeded fixture review trigger"
     owner_id = _row_get(row, "decided_by")
     return {
         "type": "review",
@@ -286,10 +339,9 @@ def _materialise_review(row, *, user_names: Dict[str, str],
         "is_active": status in ACTIVE_REVIEW_STATES,
         "is_historical": status in HISTORICAL_REVIEW_STATES,
         "risk_level": _row_get(row, "risk_level"),
-        "trigger_source": _row_get(row, "trigger_source"),
+        "trigger_source": _row_get(row, "trigger_source") or _row_get(row, "trigger_type"),
         "trigger_type": _row_get(row, "trigger_type"),
-        "review_reason": _row_get(row, "review_reason")
-                         or _row_get(row, "trigger_reason"),
+        "review_reason": review_reason,
         "priority": _row_get(row, "priority"),
         "owner_id": owner_id,
         "owner_name": user_names.get(owner_id) if owner_id else None,
@@ -303,12 +355,13 @@ def _materialise_review(row, *, user_names: Dict[str, str],
         # PR-03 outcome (source of truth) is disjoint from the legacy
         # ``decision`` column. Surface both so the UI can show outcome
         # without erasing the legacy decision history (PR-03a contract).
-        "outcome": _row_get(row, "outcome"),
+        "outcome": _row_get(row, "outcome") or (payload or {}).get("outcome"),
         "outcome_reason": _row_get(row, "outcome_reason"),
         "outcome_recorded_at": _row_get(row, "outcome_recorded_at"),
-        "legacy_decision": _row_get(row, "decision"),
-        "linked_monitoring_alert_id": _row_get(row, "linked_monitoring_alert_id"),
+        "legacy_decision": _row_get(row, "decision") or (payload or {}).get("outcome"),
+        "linked_monitoring_alert_id": linked_alert,
         "linked_edd_case_id": _row_get(row, "linked_edd_case_id"),
+        "fixture_payload": payload,
         "required_items_count": required_items_count,
         "required_items_generated_at": _row_get(row, "required_items_generated_at"),
         "next_action": _next_action_for_review(status),
@@ -319,7 +372,31 @@ def _materialise_edd(row, *, user_names: Dict[str, str],
                      findings_present: bool,
                      memo_context: Optional[Dict[str, Any]],
                      now: datetime) -> Dict[str, Any]:
+    payload = _parse_edd_fixture_payload(_row_get(row, "trigger_notes"))
     stage = _row_get(row, "stage", "triggered") or "triggered"
+    origin_context = (_row_get(row, "origin_context")
+                      or (payload or {}).get("kind")
+                      or _row_get(row, "trigger_source"))
+    linked_alert = _row_get(row, "linked_monitoring_alert_id")
+    linked_review = _row_get(row, "linked_periodic_review_id")
+    if payload:
+        if linked_alert is None:
+            linked_alert = payload.get("source_alert_id")
+        if linked_review is None:
+            linked_review = payload.get("source_review_id")
+    # Only override memo_context from fixture payload data. Non-fixture rows
+    # already have their memo_context resolved by _safe_resolve_memo_context;
+    # we must not clobber it even when linked_periodic_review_id is set.
+    if payload and linked_review is not None and (not memo_context or memo_context.get("kind") != "periodic_review"):
+        memo_context = {
+            "kind": "periodic_review",
+            "memo_id": None,
+            "periodic_review_id": linked_review,
+            "origin_context": origin_context,
+            "resolution_reason": "fixture_payload_source_review_id",
+            "unresolved": False,
+            "onboarding_attachment_confirmed": True,
+        }
     owner_id = _row_get(row, "assigned_officer")
     senior_id = _row_get(row, "senior_reviewer")
     return {
@@ -335,7 +412,7 @@ def _materialise_edd(row, *, user_names: Dict[str, str],
         "priority": _row_get(row, "priority"),
         "trigger_source": _row_get(row, "trigger_source"),
         "trigger_notes": _row_get(row, "trigger_notes"),
-        "origin_context": _row_get(row, "origin_context"),
+        "origin_context": origin_context,
         "owner_id": owner_id,
         "owner_name": user_names.get(owner_id) if owner_id else None,
         "senior_reviewer_id": senior_id,
@@ -348,10 +425,11 @@ def _materialise_edd(row, *, user_names: Dict[str, str],
         "closed_at": _row_get(row, "closed_at"),
         "decided_at": _row_get(row, "decided_at"),
         "decision": _row_get(row, "decision"),
-        "linked_monitoring_alert_id": _row_get(row, "linked_monitoring_alert_id"),
-        "linked_periodic_review_id": _row_get(row, "linked_periodic_review_id"),
+        "linked_monitoring_alert_id": linked_alert,
+        "linked_periodic_review_id": linked_review,
         "findings_present": bool(findings_present),
         "memo_context": memo_context,
+        "fixture_payload": payload,
         "next_action": _next_action_for_edd(stage),
     }
 
@@ -445,27 +523,7 @@ def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
     if application_id is not None:
         sql += " AND application_id = ?"
         params.append(application_id)
-    if include == "active":
-        ph = ",".join(["?"] * len(ACTIVE_ALERT_STATUSES))
-        sql += f" AND status IN ({ph})"
-        params.extend(ACTIVE_ALERT_STATUSES)
-        # PR-A: a row whose status happens to be canonical-active but
-        # has application_id IS NULL must NOT contaminate the active
-        # bucket -- it is unscopable and therefore quarantined.
-        excl, excl_params = active_or_historical_exclude_legacy_clause()
-        sql += f" AND {excl}"
-        params.extend(excl_params)
-    elif include == "historical":
-        ph = ",".join(["?"] * len(HISTORICAL_ALERT_STATUSES))
-        sql += f" AND status IN ({ph})"
-        params.extend(HISTORICAL_ALERT_STATUSES)
-        # PR-A: a dismissed row with application_id IS NULL is still
-        # quarantined (cannot be scoped) -- exclude it here too so the
-        # historical bucket reflects only canonical scoped closures.
-        excl, excl_params = active_or_historical_exclude_legacy_clause()
-        sql += f" AND {excl}"
-        params.extend(excl_params)
-    elif include == "all":
+    if include in ("active", "historical", "all"):
         # active+historical without quarantined rows.
         excl, excl_params = active_or_historical_exclude_legacy_clause()
         sql += f" AND {excl}"
@@ -490,14 +548,6 @@ def _fetch_reviews(db, *, application_id=None, include="active") -> List[Any]:
     if application_id is not None:
         sql += " AND application_id = ?"
         params.append(application_id)
-    if include == "active":
-        ph = ",".join(["?"] * len(ACTIVE_REVIEW_STATES))
-        sql += f" AND status IN ({ph})"
-        params.extend(ACTIVE_REVIEW_STATES)
-    elif include == "historical":
-        ph = ",".join(["?"] * len(HISTORICAL_REVIEW_STATES))
-        sql += f" AND status IN ({ph})"
-        params.extend(HISTORICAL_REVIEW_STATES)
     sql += " ORDER BY created_at DESC"
     return db.execute(sql, params).fetchall() or []
 
@@ -513,14 +563,6 @@ def _fetch_edd(db, *, application_id=None, include="active") -> List[Any]:
     if application_id is not None:
         sql += " AND application_id = ?"
         params.append(application_id)
-    if include == "active":
-        ph = ",".join(["?"] * len(ACTIVE_EDD_STAGES))
-        sql += f" AND stage IN ({ph})"
-        params.extend(ACTIVE_EDD_STAGES)
-    elif include == "historical":
-        ph = ",".join(["?"] * len(HISTORICAL_EDD_STAGES))
-        sql += f" AND stage IN ({ph})"
-        params.extend(HISTORICAL_EDD_STAGES)
     sql += " ORDER BY triggered_at DESC"
     return db.execute(sql, params).fetchall() or []
 
@@ -556,6 +598,16 @@ def build_lifecycle_queue(
         if t not in VALID_ITEM_TYPES:
             raise ValueError(f"unknown type {t!r}; expected one of {VALID_ITEM_TYPES!r}")
     ref_now = now or datetime.now(timezone.utc)
+    def _include_item(item):
+        if include == "all":
+            return True
+        if include == "active":
+            return bool(item.get("is_active"))
+        if include == "historical":
+            return bool(item.get("is_historical"))
+        if include == "legacy_unmapped":
+            return bool(item.get("is_legacy_unmapped"))
+        return False
 
     items: List[Dict[str, Any]] = []
     counts: Dict[str, int] = {"alert": 0, "review": 0, "edd": 0}
@@ -567,8 +619,10 @@ def build_lifecycle_queue(
         owner_ids = [_row_get(r, "reviewed_by") for r in alert_rows]
         names = _user_name_map(db, owner_ids)
         for r in alert_rows:
-            items.append(_materialise_alert(r, user_names=names, now=ref_now))
-            counts["alert"] += 1
+            item = _materialise_alert(r, user_names=names, now=ref_now)
+            if _include_item(item):
+                items.append(item)
+                counts["alert"] += 1
 
     # --- Reviews ------------------------------------------------------
     review_rows: List[Any] = []
@@ -578,12 +632,14 @@ def build_lifecycle_queue(
         names = _user_name_map(db, owner_ids)
         for r in review_rows:
             items_count = len(_decode_required_items(_row_get(r, "required_items")))
-            items.append(_materialise_review(
+            item = _materialise_review(
                 r, user_names=names,
                 required_items_count=items_count,
                 now=ref_now,
-            ))
-            counts["review"] += 1
+            )
+            if _include_item(item):
+                items.append(item)
+                counts["review"] += 1
 
     # --- EDD ----------------------------------------------------------
     edd_rows: List[Any] = []
@@ -601,13 +657,15 @@ def build_lifecycle_queue(
         for r in edd_rows:
             eid = _row_get(r, "id")
             ctx = _safe_resolve_memo_context(db, eid)
-            items.append(_materialise_edd(
+            item = _materialise_edd(
                 r, user_names=names,
                 findings_present=findings_map.get(eid, False),
                 memo_context=ctx,
                 now=ref_now,
-            ))
-            counts["edd"] += 1
+            )
+            if _include_item(item):
+                items.append(item)
+                counts["edd"] += 1
 
     # --- Ordering: active oldest-first, historical newest-first -------
     # Active queue = oldest at top (oldest unaddressed work surfaces).

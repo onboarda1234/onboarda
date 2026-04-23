@@ -202,6 +202,18 @@ class TestPureClassifier(unittest.TestCase):
         self.assertFalse(is_q)
         self.assertEqual(reasons, [])
 
+    def test_seeded_in_review_fixture_row_is_not_quarantined(self):
+        import lifecycle_quarantine as lq
+        is_q, reasons = lq.is_legacy_unmapped(
+            self._row(
+                status="in_review",
+                application_id="app-1",
+                source_reference="FIX_SCEN04_ALERT",
+            )
+        )
+        self.assertFalse(is_q)
+        self.assertEqual(reasons, [])
+
     def test_unscopable_dismissed_row_is_quarantined(self):
         # The brief's id=2: dismissed (canonical) but application_id IS NULL.
         import lifecycle_quarantine as lq
