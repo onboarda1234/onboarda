@@ -513,16 +513,31 @@ def _findings_present_map(db, edd_case_ids: List[int]) -> Dict[int, bool]:
 
 
 # ── Public API ───────────────────────────────────────────────────────
+def _is_missing_column_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    if "no such column" in msg or "undefined column" in msg:
+        return True
+    if "column" in msg and "does not exist" in msg:
+        return True
+    if getattr(exc, "pgcode", None) == "42703":
+        return True
+    if exc.__class__.__name__.lower() == "undefinedcolumn":
+        return True
+    return False
+
+
 def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
     from lifecycle_quarantine import (
         legacy_unmapped_where_clause,
         active_or_historical_exclude_legacy_clause,
     )
-    sql = "SELECT * FROM monitoring_alerts WHERE 1=1"
-    params: List[Any] = []
+    base_sql = "SELECT * FROM monitoring_alerts WHERE 1=1"
+    base_params: List[Any] = []
     if application_id is not None:
-        sql += " AND application_id = ?"
-        params.append(application_id)
+        base_sql += " AND application_id = ?"
+        base_params.append(application_id)
+    sql = base_sql
+    params = list(base_params)
     if include in ("active", "historical", "all"):
         # active+historical without quarantined rows.
         excl, excl_params = active_or_historical_exclude_legacy_clause()
@@ -534,7 +549,15 @@ def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
         sql += f" AND {legacy}"
         params.extend(legacy_params)
     sql += " ORDER BY created_at DESC"
-    return db.execute(sql, params).fetchall() or []
+    try:
+        return db.execute(sql, params).fetchall() or []
+    except Exception as exc:
+        # Legacy/stale schemas may lack linkage columns used by quarantine SQL.
+        # Fall back to a base select and let Python materialisation classify rows.
+        if _is_missing_column_error(exc):
+            fallback_sql = base_sql + " ORDER BY created_at DESC"
+            return db.execute(fallback_sql, base_params).fetchall() or []
+        raise
 
 
 def _fetch_reviews(db, *, application_id=None, include="active") -> List[Any]:

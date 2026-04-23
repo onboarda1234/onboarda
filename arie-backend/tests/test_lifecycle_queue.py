@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -632,6 +633,92 @@ class TestApplicationSummary(_LifecycleQueueBase):
         import lifecycle_queue as lq
         with self.assertRaises(ValueError):
             lq.build_application_lifecycle_summary(self._conn, "")
+
+
+class TestLegacySchemaFallback(unittest.TestCase):
+    """Regression: lifecycle reads must not crash on legacy alert schema."""
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute(
+            """
+            CREATE TABLE monitoring_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                application_id TEXT,
+                client_name TEXT,
+                alert_type TEXT,
+                severity TEXT,
+                summary TEXT,
+                status TEXT,
+                source_reference TEXT,
+                created_at TEXT,
+                reviewed_by TEXT
+            )
+            """
+        )
+        # Minimal tables expected by lifecycle_queue read path.
+        self.conn.execute(
+            """
+            CREATE TABLE periodic_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                application_id TEXT,
+                client_name TEXT,
+                status TEXT,
+                trigger_type TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE edd_cases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                application_id TEXT,
+                client_name TEXT,
+                stage TEXT,
+                trigger_source TEXT,
+                triggered_at TEXT
+            )
+            """
+        )
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_queue_handles_missing_linkage_columns(self):
+        import lifecycle_queue as lq
+        self.conn.execute(
+            """
+            INSERT INTO monitoring_alerts
+            (application_id, client_name, alert_type, severity, summary, status, source_reference, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """,
+            ("app-legacy", "Legacy Co", "manual", "High", "seed", "open", "FIX_SCEN_08"),
+        )
+        self.conn.commit()
+
+        result = lq.build_lifecycle_queue(self.conn, include="active")
+        self.assertEqual(result["counts"]["alert"], 1)
+        self.assertEqual(result["counts"]["total"], 1)
+        self.assertEqual(result["items"][0]["state"], "open")
+
+    def test_summary_handles_missing_linkage_columns(self):
+        import lifecycle_queue as lq
+        self.conn.execute(
+            """
+            INSERT INTO monitoring_alerts
+            (application_id, client_name, alert_type, severity, summary, status, source_reference, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            """,
+            ("app-legacy", "Legacy Co", "manual", "High", "seed", "dismissed", "FIX_SCEN_08"),
+        )
+        self.conn.commit()
+
+        summary = lq.build_application_lifecycle_summary(self.conn, "app-legacy")
+        self.assertEqual(summary["application_id"], "app-legacy")
+        self.assertEqual(summary["historical"]["counts"]["alert"], 1)
 
 
 if __name__ == "__main__":
