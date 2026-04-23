@@ -845,7 +845,8 @@ def test_portal_new_application_has_duplicate_draft_guard():
     src = _portal_html()
     assert "_loadExistingDraftForNewApplicationGuard" in src
     assert "_discardDraftFromGuard" in src
-    assert "_promptDraftGuardChoice" in src
+    assert "_showDraftGuardChoiceDialog" in src
+    assert "draft-start-guard-overlay" in src
     assert "choice === 'R'" in src
     assert "choice === 'D'" in src
 

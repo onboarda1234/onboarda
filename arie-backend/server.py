@@ -796,6 +796,8 @@ def _draft_value_is_meaningful(value) -> bool:
         return any(_draft_value_is_meaningful(v) for v in value)
     if isinstance(value, bool):
         return value
+    if isinstance(value, (int, float)):
+        return value != 0
     return True
 
 
@@ -6289,10 +6291,12 @@ class SaveResumeHandler(BaseHandler):
     def _ensure_pre_submit_draft_application(self, db, client_id, form_data):
         """Create or reuse a draft application shell before first submit."""
         normalized_from_session = normalize_saved_session_prescreening(form_data) or {}
+        normalized_prescreening = normalize_prescreening_data(form_data or {})
         if normalized_from_session:
-            normalized_prescreening = normalize_prescreening_data({"prescreening_data": normalized_from_session})
-        else:
-            normalized_prescreening = normalize_prescreening_data(form_data or {})
+            normalized_prescreening = normalize_prescreening_data(
+                {"prescreening_data": normalized_from_session},
+                existing=normalized_prescreening,
+            )
         if not isinstance(normalized_prescreening, dict):
             normalized_prescreening = {}
 

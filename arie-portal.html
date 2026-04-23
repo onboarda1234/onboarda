@@ -4977,28 +4977,50 @@ async function _loadExistingDraftForNewApplicationGuard() {
   }
 }
 
-function _promptDraftGuardChoice(label) {
-  var msg =
-    'You already have an in-progress draft for ' + label + '.\n\n' +
-    'Choose one option:\n' +
-    'R = Resume existing draft\n' +
-    'D = Discard existing draft and start new\n' +
-    'N = Start new and keep existing draft\n\n' +
-    'Press Cancel to keep your current state.';
-  var raw = window.prompt(msg, 'R');
-  if (raw == null) return '';
-  var choice = String(raw).trim().toUpperCase();
-  if (choice === 'RESUME') choice = 'R';
-  if (choice === 'DISCARD') choice = 'D';
-  if (choice === 'NEW') choice = 'N';
-  return (choice === 'R' || choice === 'D' || choice === 'N') ? choice : '';
+function _showDraftGuardChoiceDialog(label) {
+  return new Promise(function(resolve) {
+    var existing = document.getElementById('draft-start-guard-overlay');
+    if (existing) existing.remove();
+
+    var overlay = document.createElement('div');
+    overlay.id = 'draft-start-guard-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:12000;display:flex;align-items:center;justify-content:center;padding:16px;';
+    overlay.innerHTML =
+      '<div role="dialog" aria-modal="true" style="max-width:520px;width:100%;background:#fff;border-radius:12px;padding:18px 18px 14px;border:1px solid rgba(15,23,42,0.12);box-shadow:0 24px 50px rgba(15,23,42,0.3);">' +
+        '<div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:8px;">Existing draft found</div>' +
+        '<div style="font-size:13px;color:#475569;line-height:1.5;">You already have an in-progress draft for <strong>' + escapeHtml(label) + '</strong>. Choose how to proceed.</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;">' +
+          '<button type="button" id="draft-guard-resume" style="padding:9px 12px;border-radius:8px;border:1px solid #2563eb;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;">Resume existing draft</button>' +
+          '<button type="button" id="draft-guard-discard" style="padding:9px 12px;border-radius:8px;border:1px solid #ef4444;background:#fff;color:#ef4444;font-weight:600;cursor:pointer;">Discard draft and start new</button>' +
+          '<button type="button" id="draft-guard-new" style="padding:9px 12px;border-radius:8px;border:1px solid #334155;background:#fff;color:#334155;font-weight:600;cursor:pointer;">Start new and keep draft</button>' +
+          '<button type="button" id="draft-guard-cancel" style="padding:9px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-weight:600;cursor:pointer;margin-left:auto;">Cancel</button>' +
+        '</div>' +
+      '</div>';
+
+    function close(choice) {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      resolve(choice || '');
+    }
+    overlay.addEventListener('click', function(evt) {
+      if (evt.target === overlay) close('');
+    });
+    document.body.appendChild(overlay);
+    var resumeBtn = document.getElementById('draft-guard-resume');
+    var discardBtn = document.getElementById('draft-guard-discard');
+    var newBtn = document.getElementById('draft-guard-new');
+    var cancelBtn = document.getElementById('draft-guard-cancel');
+    if (resumeBtn) resumeBtn.onclick = function() { close('R'); };
+    if (discardBtn) discardBtn.onclick = function() { close('D'); };
+    if (newBtn) newBtn.onclick = function() { close('N'); };
+    if (cancelBtn) cancelBtn.onclick = function() { close(''); };
+  });
 }
 
 async function startNewApplication() {
   var activeDraft = await _loadExistingDraftForNewApplicationGuard();
   if (activeDraft && activeDraft.ref) {
     var label = activeDraft.company_name || activeDraft.ref;
-    var choice = _promptDraftGuardChoice(label);
+    var choice = await _showDraftGuardChoiceDialog(label);
     if (choice === 'R') {
       await resumeApplication(activeDraft.ref, activeDraft.status || 'draft');
       return;
@@ -7003,7 +7025,34 @@ var SELECT_RESTORE_ALIASES = {
     'british': 'United Kingdom',
     'us': 'United States',
     'usa': 'United States',
-    'american': 'United States'
+    'american': 'United States',
+    'ca': 'Canada',
+    'can': 'Canada',
+    'canadian': 'Canada',
+    'au': 'Australia',
+    'aus': 'Australia',
+    'australian': 'Australia',
+    'fr': 'France',
+    'fra': 'France',
+    'french': 'France',
+    'de': 'Germany',
+    'deu': 'Germany',
+    'german': 'Germany',
+    'ie': 'Ireland',
+    'irl': 'Ireland',
+    'irish': 'Ireland',
+    'in': 'India',
+    'ind': 'India',
+    'indian': 'India',
+    'sg': 'Singapore',
+    'sgp': 'Singapore',
+    'singaporean': 'Singapore',
+    'za': 'South Africa',
+    'zaf': 'South Africa',
+    'south african': 'South Africa',
+    'ae': 'United Arab Emirates',
+    'are': 'United Arab Emirates',
+    'emirati': 'United Arab Emirates'
   }
 };
 
