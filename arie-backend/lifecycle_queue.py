@@ -565,6 +565,10 @@ def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
         sql += f" AND {legacy}"
         params.extend(legacy_params)
     sql += " ORDER BY created_at DESC"
+    if getattr(db, "is_postgres", False):
+        # psycopg2 treats `%` in SQL as pyformat control unless escaped.
+        # Quarantine clauses include LIKE 'FIX_SCEN%'; make it safe.
+        sql = sql.replace("%", "%%")
     try:
         return db.execute(sql, params).fetchall() or []
     except Exception as exc:
