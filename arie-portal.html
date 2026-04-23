@@ -4898,6 +4898,7 @@ function resetPortalApplicationState() {
   // the navigation guard or carry over stale "Unsaved changes" UI.
   _draftDirty = false;
   _draftSubmitting = false;
+  _autoSaveInFlight = false;
   resetPortalPricingState();
   resetPortalDocumentState();
   var form = document.getElementById('prescreening-form');
@@ -4952,7 +4953,45 @@ function resetPortalApplicationState() {
   if (typeof resetLookup === 'function') resetLookup();
 }
 
-function startNewApplication() {
+async function _discardDraftFromGuard(app) {
+  var appId = (app && (app.id || app.application_id)) || '';
+  var ref = app && app.ref ? app.ref : '';
+  if (appId) {
+    try { await apiCall('DELETE', '/save-resume?application_id=' + encodeURIComponent(appId)); } catch (e) { console.warn('guard discard session failed:', e); }
+  }
+  if (ref) {
+    try { await apiCall('DELETE', '/applications/' + encodeURIComponent(ref)); } catch (e) { console.warn('guard discard application failed:', e); }
+  }
+}
+
+async function _loadExistingDraftForNewApplicationGuard() {
+  if (!AUTH_TOKEN) return null;
+  try {
+    var resp = await apiCall('GET', '/applications?status=draft');
+    var drafts = (resp && resp.applications) ? resp.applications : [];
+    if (!drafts.length) return null;
+    return drafts[0];
+  } catch (e) {
+    console.warn('draft guard list failed:', e);
+    return null;
+  }
+}
+
+async function startNewApplication() {
+  var activeDraft = await _loadExistingDraftForNewApplicationGuard();
+  if (activeDraft && activeDraft.ref) {
+    var label = activeDraft.company_name || activeDraft.ref;
+    if (confirm('You already have an in-progress draft for ' + label + '.\n\nChoose OK to resume it now.\nChoose Cancel for other options.')) {
+      await resumeApplication(activeDraft.ref, activeDraft.status || 'draft');
+      return;
+    }
+    if (confirm('Discard the existing draft for ' + label + ' and start a new application?\n\nPress OK to discard and start new.\nPress Cancel to keep it.')) {
+      await _discardDraftFromGuard(activeDraft);
+      showToast('success', 'Draft Discarded', 'Your previous draft was discarded.');
+    } else {
+      if (!confirm('Start a new application and keep the existing draft?')) return;
+    }
+  }
   resetPortalApplicationState();
   showView('prescreening');
 }
@@ -6749,6 +6788,7 @@ var autoSaveTimer = null;
 // Priority C: dirty-flag tracking + navigation guard state
 var _draftDirty = false;
 var _draftSubmitting = false;
+var _autoSaveInFlight = false;
 var _draftDirtyListenerAttached = false;
 var _draftBeforeUnloadAttached = false;
 
@@ -6776,6 +6816,26 @@ function _markDraftDirty() {
                 && statusEl.textContent.indexOf('Saving') === -1) {
     _setSaveStatus('● Unsaved changes', 'var(--amber)');
   }
+}
+
+function _hasUnsavedPreSubmitChanges() {
+  return (_draftDirty && !_draftSubmitting);
+}
+
+function _isViewVisible(name) {
+  var el = document.getElementById('view-' + name);
+  return !!(el && !el.classList.contains('hidden'));
+}
+
+function _isPreSubmitEditingViewActive() {
+  return _isViewVisible('prescreening') || _isViewVisible('onboarding');
+}
+
+function _confirmDiscardUnsavedChangesForNavigation(targetView) {
+  if (!_hasUnsavedPreSubmitChanges()) return true;
+  if (!_isPreSubmitEditingViewActive()) return true;
+  if (targetView === 'prescreening' || targetView === 'onboarding') return true;
+  return confirm('You have unsaved draft changes. Leave this page and lose those unsaved changes?');
 }
 
 function _attachDraftDirtyListener() {
@@ -6887,27 +6947,23 @@ function collectFormData() {
 }
 
 async function saveDraft() {
-  // Priority C: server-side save with dirty-flag reset and graceful no-op
-  // when there is no application_id yet (form is pre-application).
+  // Priority C follow-up: save must persist both pre-submit and post-submit.
   var data = collectFormData();
 
   if (!AUTH_TOKEN) {
     showToast('error', 'Sign In Required', 'Please sign in to save your draft.');
     return;
   }
-  if (!currentApplicationId) {
-    // No app exists yet — saving needs a server-side application record.
-    showToast('info', 'Save Unavailable Yet', 'Your draft is saved automatically once your application is created (after the first submit step).');
-    return;
-  }
-
   _setSaveStatus('Saving…', 'var(--text3)');
   try {
-    var resp = await apiCall('POST', '/save-resume', {
-      application_id: currentApplicationId,
+    var payload = {
       form_data: data,
       last_step: getCurrentStep()
-    });
+    };
+    if (currentApplicationId) payload.application_id = currentApplicationId;
+    var resp = await apiCall('POST', '/save-resume', payload);
+    if (resp && resp.application_id) currentApplicationId = resp.application_id;
+    if (resp && resp.application_ref) appRef = resp.application_ref;
     _draftDirty = false;
     var savedAt = (resp && resp.last_saved_at)
       ? ' ' + new Date(resp.last_saved_at + (String(resp.last_saved_at).indexOf('Z') === -1 ? 'Z' : '')).toLocaleTimeString()
@@ -7125,19 +7181,21 @@ function startAutoSave() {
   if (autoSaveTimer) clearInterval(autoSaveTimer);
   _attachDraftDirtyListener();
   _attachBeforeUnloadGuard();
-  var inFlight = false;
   autoSaveTimer = setInterval(async function() {
-    if (inFlight) return;
+    if (_autoSaveInFlight) return;
     if (!_draftDirty) return;
-    if (!AUTH_TOKEN || !currentApplicationId) return;
-    inFlight = true;
+    if (!AUTH_TOKEN) return;
+    _autoSaveInFlight = true;
     var data = collectFormData();
     try {
-      var resp = await apiCall('POST', '/save-resume', {
-        application_id: currentApplicationId,
+      var payload = {
         form_data: data,
         last_step: getCurrentStep()
-      });
+      };
+      if (currentApplicationId) payload.application_id = currentApplicationId;
+      var resp = await apiCall('POST', '/save-resume', payload);
+      if (resp && resp.application_id) currentApplicationId = resp.application_id;
+      if (resp && resp.application_ref) appRef = resp.application_ref;
       _draftDirty = false;
       var ts = (resp && resp.last_saved_at)
         ? new Date(resp.last_saved_at + (String(resp.last_saved_at).indexOf('Z') === -1 ? 'Z' : '')).toLocaleTimeString()
@@ -7146,7 +7204,7 @@ function startAutoSave() {
     } catch(e) {
       _setSaveStatus('⚠ Save failed — will retry', 'var(--amber)');
     } finally {
-      inFlight = false;
+      _autoSaveInFlight = false;
     }
   }, 30000); // Auto-save every 30 seconds
 }
@@ -7154,6 +7212,7 @@ function startAutoSave() {
 // Update save bar when entering onboarding view
 var origShowView = showView;
 showView = function(name) {
+  if (!_confirmDiscardUnsavedChangesForNavigation(name)) return;
   origShowView(name);
   // Priority C: Save & Resume — autosave runs during pre-screening and
   // onboarding (the two long client-edit views). Stop on terminal/passive
