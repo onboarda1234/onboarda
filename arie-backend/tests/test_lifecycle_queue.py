@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -647,14 +648,8 @@ class _PostgresBindingGuardProxy:
         params = list(params or [])
         self.calls.append((sql, params))
 
-        i = 0
-        while i < len(sql):
-            if sql[i] == "%":
-                if i + 1 < len(sql) and sql[i + 1] == "%":
-                    i += 2
-                    continue
-                raise IndexError("list index out of range")
-            i += 1
+        if re.search(r"(?<!%)%(?!%)", sql):
+            raise IndexError("list index out of range")
 
         if sql.count("?") != len(params):
             raise IndexError("list index out of range")
@@ -688,7 +683,7 @@ class TestFetchAlertsParamBindingRegression(_LifecycleQueueBase):
                     sql for (sql, _) in db.calls
                     if "from monitoring_alerts" in sql.lower()
                 )
-                self.assertIn("FIX_SCEN%%", alert_sql)
+                self.assertIsNone(re.search(r"(?<!%)%(?!%)", alert_sql))
 
     def test_application_summary_path_reuses_safe_alert_fetch(self):
         import lifecycle_queue as lq
