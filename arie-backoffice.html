@@ -3134,7 +3134,7 @@ function normalizeAlertStatusLabel(status) {
     dismissed: 'Dismissed',
     routed_to_review: 'Routed to Review',
     routed_to_edd: 'Routed to EDD',
-    in_review: 'Triaged'
+    in_review: 'In Review'
   };
   return map[s] || (s ? (s.charAt(0).toUpperCase() + s.slice(1)) : 'Open');
 }
@@ -3394,7 +3394,7 @@ async function loadFromAPI() {
       MONITORING_ALERTS = [];
       var alertsResp = await boApiCall('GET', '/monitoring/alerts');
       if (alertsResp.alerts) {
-        MONITORING_ALERTS = alertsResp.alerts.map(normalizeMonitoringAlert);
+        MONITORING_ALERTS = alertsResp.alerts.filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
       }
     } catch(e) { console.warn('Could not load monitoring alerts:', e); }
 
@@ -3403,7 +3403,7 @@ async function loadFromAPI() {
       PERIODIC_REVIEWS = [];
       var reviewsResp = await boApiCall('GET', '/monitoring/reviews');
       if (reviewsResp.reviews) {
-        PERIODIC_REVIEWS = reviewsResp.reviews.map(normalizePeriodicReview);
+        PERIODIC_REVIEWS = reviewsResp.reviews.filter(function(r){ return !!r; }).map(normalizePeriodicReview);
       }
     } catch(e) { console.warn('Could not load periodic reviews:', e); }
 
@@ -7411,7 +7411,7 @@ function renderMonitoringAlerts() {
     var tr = document.createElement('tr');
     var severityColor = { 'Critical':'red', 'High':'amber', 'Medium':'blue', 'Low':'green' }[alert.severity] || 'gray';
     var statusBadgeClass = (function() {
-      if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned') return 'pending';
+      if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'In Review') return 'pending';
       if (alert.status === 'Dismissed') return 'draft';
       if (alert.status === 'Routed to Review' || alert.status === 'Routed to EDD' || alert.status === 'Reviewed') return 'approved';
       return 'in-review';
@@ -7605,7 +7605,7 @@ async function triggerAgentRun(agentId) {
     try {
       var alertsResp = await boApiCall('GET', '/monitoring/alerts');
       if (alertsResp.alerts) {
-        MONITORING_ALERTS = alertsResp.alerts.map(normalizeMonitoringAlert);
+        MONITORING_ALERTS = alertsResp.alerts.filter(function(a){ return !!a; }).map(normalizeMonitoringAlert);
       }
     } catch(e) {}
     try {
@@ -7757,7 +7757,7 @@ function renderAlertDismissalSection(alert) {
 function showAlertDetail(alert) {
   currentAlertRef = alert;
   var statusClass = (function() {
-    if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned') return 'pending';
+    if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'In Review') return 'pending';
     if (alert.status === 'Dismissed') return 'draft';
     if (alert.status === 'Reviewed' || alert.status === 'Routed to Review' || alert.status === 'Routed to EDD') return 'approved';
     return 'in-review';
@@ -7792,14 +7792,14 @@ function showAlertDetail(alert) {
   var escBtn = document.getElementById('alert-modal-escalate-btn');
   var dimBtn = document.getElementById('alert-modal-dismiss-btn');
   var sarBtn = document.getElementById('alert-modal-sar-btn');
-  if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned') {
+  if (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'In Review') {
     escBtn.style.display = ''; dimBtn.style.display = '';
   } else {
     escBtn.style.display = 'none'; dimBtn.style.display = 'none';
   }
   // Show SAR button only for Critical/High severity alerts that are Open or Escalated
   if (sarBtn) {
-    var showSar = (alert.severity === 'Critical' || alert.severity === 'High') && (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'Escalated');
+    var showSar = (alert.severity === 'Critical' || alert.severity === 'High') && (alert.status === 'Open' || alert.status === 'Triaged' || alert.status === 'Assigned' || alert.status === 'In Review' || alert.status === 'Escalated');
     sarBtn.style.display = showSar ? '' : 'none';
   }
 
@@ -8226,7 +8226,7 @@ async function schedulePeriodicReviews() {
     try {
       var reviewsResp = await boApiCall('GET', '/monitoring/reviews');
       if (reviewsResp.reviews) {
-        PERIODIC_REVIEWS = reviewsResp.reviews.map(normalizePeriodicReview);
+        PERIODIC_REVIEWS = reviewsResp.reviews.filter(function(r){ return !!r; }).map(normalizePeriodicReview);
       }
     } catch(e) {}
     renderPeriodicReviews();
