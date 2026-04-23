@@ -6307,6 +6307,17 @@ class SaveResumeHandler(BaseHandler):
     def _normalize_company_key(name):
         return re.sub(r"\s+", " ", (name or "").strip()).lower()
 
+    @staticmethod
+    def _is_missing_column_error(exc, column_name):
+        msg = str(exc or "").lower()
+        col = str(column_name or "").lower()
+        if not msg or not col:
+            return False
+        return (
+            ("no such column" in msg and col in msg)
+            or ("does not exist" in msg and col in msg)
+        )
+
     def _ensure_pre_submit_draft_application(self, db, client_id, form_data):
         """Create or reuse a draft application shell before first submit."""
         normalized_from_session = normalize_saved_session_prescreening(form_data) or {}
@@ -6328,10 +6339,19 @@ class SaveResumeHandler(BaseHandler):
             return None
 
         normalized_name = self._normalize_company_key(company_name)
-        existing_drafts = db.execute(
-            "SELECT id, ref, company_name FROM applications WHERE client_id=? AND status='draft' ORDER BY updated_at DESC",
-            (client_id,)
-        ).fetchall()
+        try:
+            existing_drafts = db.execute(
+                "SELECT id, ref, company_name FROM applications WHERE client_id=? AND status='draft' ORDER BY updated_at DESC",
+                (client_id,)
+            ).fetchall()
+        except Exception as exc:
+            if not self._is_missing_column_error(exc, "updated_at"):
+                raise
+            # Legacy-schema fallback: older staging databases can miss applications.updated_at.
+            existing_drafts = db.execute(
+                "SELECT id, ref, company_name FROM applications WHERE client_id=? AND status='draft' ORDER BY created_at DESC, id DESC",
+                (client_id,)
+            ).fetchall()
         for row in existing_drafts:
             candidate = self._normalize_company_key(row.get("company_name"))
             if candidate == normalized_name:
@@ -6424,11 +6444,19 @@ class SaveResumeHandler(BaseHandler):
             if existing:
                 # Single active draft per (client, application) — updates in place,
                 # never inserts a duplicate row.
-                db.execute(
-                    "UPDATE client_sessions SET form_data=?, last_step=?, "
-                    "updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (stored_form_data, last_step, existing["id"]),
-                )
+                try:
+                    db.execute(
+                        "UPDATE client_sessions SET form_data=?, last_step=?, "
+                        "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (stored_form_data, last_step, existing["id"]),
+                    )
+                except Exception as exc:
+                    if not self._is_missing_column_error(exc, "updated_at"):
+                        raise
+                    db.execute(
+                        "UPDATE client_sessions SET form_data=?, last_step=? WHERE id=?",
+                        (stored_form_data, last_step, existing["id"]),
+                    )
             else:
                 db.execute(
                     "INSERT INTO client_sessions (client_id, application_id, form_data, last_step) "
@@ -6436,10 +6464,15 @@ class SaveResumeHandler(BaseHandler):
                     (user["sub"], real_id, stored_form_data, last_step),
                 )
             db.commit()
-            saved_at = db.execute(
-                "SELECT updated_at FROM client_sessions WHERE client_id=? AND application_id=?",
-                (user["sub"], real_id),
-            ).fetchone()
+            try:
+                saved_at = db.execute(
+                    "SELECT updated_at FROM client_sessions WHERE client_id=? AND application_id=?",
+                    (user["sub"], real_id),
+                ).fetchone()
+            except Exception as exc:
+                if not self._is_missing_column_error(exc, "updated_at"):
+                    raise
+                saved_at = None
         finally:
             db.close()
         self.success({

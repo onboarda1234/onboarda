@@ -1846,7 +1846,7 @@
             <div style="margin-top:12px;font-size:11px;opacity:0.8;" id="resume-cta-ref"></div>
             <div style="margin-top:10px;display:flex;gap:8px;">
               <button type="button" id="resume-cta-discard" class="btn-resume-discard"
-                      style="display:none;background:transparent;border:1px solid rgba(255,255,255,0.4);color:#fff;padding:4px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;"
+                      style="background:transparent;border:1px solid rgba(255,255,255,0.4);color:#fff;padding:4px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;"
                       onclick="event.stopPropagation();discardActiveDraft();">Discard draft</button>
             </div>
             <div class="dash-cta-arrow">→</div>
@@ -9682,6 +9682,9 @@ function renderResumeCTA(apps) {
   var refEl = document.getElementById('resume-cta-ref');
   if (desc) desc.textContent = (app.company_name || 'Your application') + ' · Awaiting action';
   if (refEl) refEl.textContent = 'Ref: ' + ref;
+  cta.setAttribute('data-app-id', app.id || '');
+  cta.setAttribute('data-app-ref', ref);
+  cta.setAttribute('data-app-name', app.company_name || ref);
 
   // Priority C: surface explicit Discard control only when there is a true
   // server-side draft for this application (status === 'draft'). Other
@@ -9690,12 +9693,15 @@ function renderResumeCTA(apps) {
   var discardBtn = document.getElementById('resume-cta-discard');
   if (discardBtn) {
     if (app.status === 'draft') {
-      discardBtn.style.display = '';
+      discardBtn.style.display = 'inline-flex';
       discardBtn.setAttribute('data-app-id', app.id || '');
       discardBtn.setAttribute('data-app-ref', ref);
       discardBtn.setAttribute('data-app-name', app.company_name || ref);
     } else {
       discardBtn.style.display = 'none';
+      discardBtn.removeAttribute('data-app-id');
+      discardBtn.removeAttribute('data-app-ref');
+      discardBtn.removeAttribute('data-app-name');
     }
   }
 }
@@ -9706,13 +9712,16 @@ async function discardActiveDraft() {
   // the banner does not reappear after a reload.
   var btn = document.getElementById('resume-cta-discard');
   if (!btn) return;
-  var appId = btn.getAttribute('data-app-id') || '';
-  var ref = btn.getAttribute('data-app-ref') || '';
-  var name = btn.getAttribute('data-app-name') || ref || 'this draft';
+  var cta = document.getElementById('resume-cta');
+  var appId = btn.getAttribute('data-app-id') || (cta ? cta.getAttribute('data-app-id') : '') || '';
+  var ref = btn.getAttribute('data-app-ref') || (cta ? cta.getAttribute('data-app-ref') : '') || '';
+  var name = btn.getAttribute('data-app-name') || (cta ? cta.getAttribute('data-app-name') : '') || ref || 'this draft';
   if (!appId && !ref) return;
   var confirmed = await _showDraftDiscardConfirmDialog(name, 'Discard draft');
   if (!confirmed) return;
   try {
+    _draftDirty = false;
+    _draftSubmitting = false;
     if (appId) {
       try {
         await apiCall('DELETE', '/save-resume?application_id=' + encodeURIComponent(appId));
@@ -9726,8 +9735,12 @@ async function discardActiveDraft() {
       } catch (e) { console.warn('discard draft application failed:', e); }
     }
     showToast('success', 'Draft Discarded', 'Your in-progress draft has been removed.');
-    var cta = document.getElementById('resume-cta');
-    if (cta) cta.style.display = 'none';
+    if (cta) {
+      cta.style.display = 'none';
+      cta.removeAttribute('data-app-id');
+      cta.removeAttribute('data-app-ref');
+      cta.removeAttribute('data-app-name');
+    }
     if (typeof loadDashboardApplications === 'function') {
       try { loadDashboardApplications(); } catch (e) {}
     } else if (typeof loadClientApplications === 'function') {
