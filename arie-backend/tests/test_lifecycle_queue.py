@@ -687,7 +687,7 @@ class TestLegacySchemaFallback(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
-    def test_queue_active_does_not_crash_when_alert_linkage_columns_missing(self):
+    def test_queue_handles_missing_linkage_columns(self):
         import lifecycle_queue as lq
         self.conn.execute(
             """
@@ -704,7 +704,7 @@ class TestLegacySchemaFallback(unittest.TestCase):
         self.assertEqual(result["counts"]["total"], 1)
         self.assertEqual(result["items"][0]["state"], "open")
 
-    def test_summary_does_not_crash_when_alert_linkage_columns_missing(self):
+    def test_summary_handles_missing_linkage_columns(self):
         import lifecycle_queue as lq
         self.conn.execute(
             """

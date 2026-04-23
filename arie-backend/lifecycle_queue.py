@@ -515,7 +515,15 @@ def _findings_present_map(db, edd_case_ids: List[int]) -> Dict[int, bool]:
 # ── Public API ───────────────────────────────────────────────────────
 def _is_missing_column_error(exc: Exception) -> bool:
     msg = str(exc).lower()
-    return ("no such column" in msg) or ("column" in msg and "does not exist" in msg)
+    if "no such column" in msg or "undefined column" in msg:
+        return True
+    if "column" in msg and "does not exist" in msg:
+        return True
+    if getattr(exc, "pgcode", None) == "42703":
+        return True
+    if exc.__class__.__name__.lower() == "undefinedcolumn":
+        return True
+    return False
 
 
 def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
