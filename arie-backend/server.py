@@ -735,6 +735,7 @@ def safe_json_loads(val):
 # rows so deployment requires no data migration.
 
 DRAFT_FORM_DATA_ENCRYPTED_PREFIX = "enc:v1:"
+DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY = "__draft_form_data_enc_v1"
 
 
 def encrypt_draft_form_data(payload) -> str:
@@ -747,7 +748,8 @@ def encrypt_draft_form_data(payload) -> str:
     except Exception as exc:
         logger.warning("Draft form_data encryption failed, falling back to plaintext: %s", exc)
         return raw
-    return DRAFT_FORM_DATA_ENCRYPTED_PREFIX + token
+    # Store encrypted payloads as JSON so PostgreSQL JSONB columns accept them.
+    return json.dumps({DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY: token})
 
 
 def decrypt_draft_form_data(stored) -> dict:
@@ -762,6 +764,17 @@ def decrypt_draft_form_data(stored) -> dict:
     if stored is None or stored == "":
         return {}
     if isinstance(stored, dict):
+        token = stored.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY)
+        if isinstance(token, str) and token.strip():
+            if _pii_encryptor is None:
+                logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
+                return {}
+            try:
+                plaintext = _pii_encryptor.decrypt(token)
+            except Exception as exc:
+                logger.warning("Draft form_data decryption failed: %s", exc)
+                return {}
+            return safe_json_loads(plaintext) or {}
         return stored
     if isinstance(stored, (bytes, bytearray)):
         try:
@@ -781,8 +794,33 @@ def decrypt_draft_form_data(stored) -> dict:
             logger.warning("Draft form_data decryption failed: %s", exc)
             return {}
         return safe_json_loads(plaintext) or {}
+    decoded = safe_json_loads(stored)
+    if isinstance(decoded, dict):
+        token = decoded.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY)
+        if isinstance(token, str) and token.strip():
+            if _pii_encryptor is None:
+                logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
+                return {}
+            try:
+                plaintext = _pii_encryptor.decrypt(token)
+            except Exception as exc:
+                logger.warning("Draft form_data decryption failed: %s", exc)
+                return {}
+            return safe_json_loads(plaintext) or {}
+        return decoded
     # Legacy plaintext JSON (or raw dict-like string)
-    return safe_json_loads(stored) or {}
+    if isinstance(decoded, str) and decoded.startswith(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):
+        token = decoded[len(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):]
+        if _pii_encryptor is None:
+            logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
+            return {}
+        try:
+            plaintext = _pii_encryptor.decrypt(token)
+        except Exception as exc:
+            logger.warning("Draft form_data decryption failed: %s", exc)
+            return {}
+        return safe_json_loads(plaintext) or {}
+    return {}
 
 
 def _draft_value_is_meaningful(value) -> bool:
