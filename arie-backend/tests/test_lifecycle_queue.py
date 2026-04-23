@@ -634,5 +634,123 @@ class TestApplicationSummary(_LifecycleQueueBase):
             lq.build_application_lifecycle_summary(self._conn, "")
 
 
+class _StaticCursor:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+class _LegacySchemaDB:
+    """Minimal fake DB to force missing-column fallback paths."""
+
+    def __init__(self, *, alert_rows=None, review_rows=None):
+        self._alert_rows = list(alert_rows or [])
+        self._review_rows = list(review_rows or [])
+        self.calls = []
+
+    def execute(self, sql, params=None):
+        params = list(params or [])
+        self.calls.append((sql, params))
+        lower = sql.lower()
+
+        if "from monitoring_alerts" in lower:
+            # Simulate a stale schema where quarantine SQL references columns
+            # not present yet.
+            if "linked_periodic_review_id" in lower or "linked_edd_case_id" in lower:
+                raise Exception("no such column: linked_periodic_review_id")
+            return _StaticCursor(self._alert_rows)
+        if "from periodic_reviews" in lower:
+            # If _fetch_reviews starts referencing linkage columns, this fake DB
+            # simulates the legacy-schema failure mode.
+            if "linked_periodic_review_id" in lower or "linked_edd_case_id" in lower:
+                raise Exception("no such column: linked_edd_case_id")
+            return _StaticCursor(self._review_rows)
+        if "from users" in lower:
+            return _StaticCursor([])
+        if "from edd_cases" in lower:
+            return _StaticCursor([])
+        if "from edd_findings" in lower:
+            return _StaticCursor([])
+        raise AssertionError(f"Unexpected SQL in test harness: {sql}")
+
+
+class TestLegacySchemaFallbacks(unittest.TestCase):
+    def test_alert_fallback_path_is_exercised_and_include_modes_remain_correct(self):
+        import lifecycle_queue as lq
+
+        rows = [
+            {
+                "id": 1,
+                "application_id": "app-1",
+                "status": "open",
+                "created_at": "2026-01-01 00:00:00",
+                "linked_periodic_review_id": None,
+                "linked_edd_case_id": None,
+            },
+            {
+                "id": 2,
+                "application_id": "app-1",
+                "status": "dismissed",
+                "created_at": "2026-01-02 00:00:00",
+                "linked_periodic_review_id": None,
+                "linked_edd_case_id": None,
+            },
+            {
+                "id": 3,
+                "application_id": "app-1",
+                "status": "escalated",
+                "created_at": "2026-01-03 00:00:00",
+                "linked_periodic_review_id": None,
+                "linked_edd_case_id": None,
+            },
+            {
+                "id": 4,
+                "application_id": None,
+                "status": "open",
+                "created_at": "2026-01-04 00:00:00",
+                "linked_periodic_review_id": None,
+                "linked_edd_case_id": None,
+            },
+        ]
+
+        expected = {
+            "active": {1},
+            "historical": {2},
+            "legacy_unmapped": {3, 4},
+            "all": {1, 2},
+        }
+
+        for include, expected_ids in expected.items():
+            db = _LegacySchemaDB(alert_rows=rows)
+            result = lq.build_lifecycle_queue(db, include=include, types=("alert",))
+            returned_ids = {it["id"] for it in result["items"]}
+            self.assertEqual(returned_ids, expected_ids, f"include={include}")
+
+            alert_sql = [s for (s, _) in db.calls if "from monitoring_alerts" in s.lower()]
+            self.assertEqual(len(alert_sql), 2, f"include={include} should hit fallback")
+            self.assertIn("linked_periodic_review_id", alert_sql[0])
+            self.assertNotIn("linked_periodic_review_id", alert_sql[1])
+
+    def test_fetch_reviews_is_safe_on_legacy_schema_without_quarantine_columns(self):
+        import lifecycle_queue as lq
+
+        db = _LegacySchemaDB(
+            review_rows=[{
+                "id": 10,
+                "application_id": "app-1",
+                "status": "pending",
+                "created_at": "2026-01-01 00:00:00",
+            }]
+        )
+        rows = lq._fetch_reviews(db, include="active")
+        self.assertEqual([r["id"] for r in rows], [10])
+        review_sql = [s for (s, _) in db.calls if "from periodic_reviews" in s.lower()]
+        self.assertEqual(len(review_sql), 1)
+        self.assertNotIn("linked_periodic_review_id", review_sql[0])
+        self.assertNotIn("linked_edd_case_id", review_sql[0])
+
+
 if __name__ == "__main__":
     unittest.main()
