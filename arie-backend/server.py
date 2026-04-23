@@ -6407,7 +6407,7 @@ class SaveResumeHandler(BaseHandler):
                 # never inserts a duplicate row.
                 db.execute(
                     "UPDATE client_sessions SET form_data=?, last_step=?, "
-                    "updated_at=datetime('now') WHERE id=?",
+                    "updated_at=CURRENT_TIMESTAMP WHERE id=?",
                     (stored_form_data, last_step, existing["id"]),
                 )
             else:

@@ -379,6 +379,65 @@ def test_pre_submit_manual_then_autosave_updates_same_draft_identity(api_server)
     assert second.json()["application_id"] == app_id
 
 
+def test_pre_submit_step2_key_fields_round_trip_and_update_without_500(api_server):
+    """Pre-submit Step 2 key compliance fields must persist, update, and resume cleanly."""
+    from db import get_db
+
+    conn = get_db()
+    _ensure_client(conn, "draftuser_step2_roundtrip", "draftstep2roundtrip@test.com")
+    conn.close()
+
+    token = _client_token("draftuser_step2_roundtrip")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    first_payload = {
+        "prescreening": {
+            "f-reg-name": "Step2 Roundtrip Ltd",
+            "f-entity-type": "SME / Private Company",
+            "f-ownership-structure": "1–2 ownership layers",
+            "f-sector": "Software / SaaS",
+        },
+        "directors": [{"first_name": "Mia", "last_name": "Director", "nationality": "MU"}],
+        "ubos": [{"first_name": "Uma", "last_name": "Beneficial", "nationality": "GB", "ownership_pct": "55"}],
+    }
+
+    manual_save = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"form_data": first_payload, "last_step": 0},
+        timeout=5,
+    )
+    assert manual_save.status_code == 200, manual_save.text
+    app_id = manual_save.json()["application_id"]
+
+    autosave_payload = json.loads(json.dumps(first_payload))
+    autosave_payload["prescreening"]["f-sector"] = "Fintech / Payments"
+    autosave_payload["directors"][0]["nationality"] = "Mauritius"
+    autosave_payload["ubos"][0]["nationality"] = "United Kingdom"
+
+    autosave = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"application_id": app_id, "form_data": autosave_payload, "last_step": 1},
+        timeout=5,
+    )
+    assert autosave.status_code == 200, autosave.text
+    assert autosave.json()["application_id"] == app_id
+
+    resumed = http_requests.get(
+        f"{api_server}/api/save-resume?application_id={app_id}",
+        headers=headers,
+        timeout=5,
+    )
+    assert resumed.status_code == 200, resumed.text
+    form_data = resumed.json()["form_data"]
+    assert form_data["prescreening"]["f-entity-type"] == "SME / Private Company"
+    assert form_data["prescreening"]["f-ownership-structure"] == "1–2 ownership layers"
+    assert form_data["prescreening"]["f-sector"] == "Fintech / Payments"
+    assert form_data["directors"][0]["nationality"] == "Mauritius"
+    assert form_data["ubos"][0]["nationality"] == "United Kingdom"
+
+
 def test_resume_returns_saved_form_data(api_server):
     from db import get_db
 
@@ -865,3 +924,17 @@ def test_portal_restore_normalizes_key_dropdowns_and_nationality():
     assert "'f-sector'" in src
     assert "'nat-select'" in src
     assert "_restoreSelectValue(natSel, rowData.nationality || '', 'nat-select')" in src
+
+
+def test_portal_draft_discard_uses_in_app_confirmation_not_native():
+    src = _portal_html()
+    delete_fn = src.split("async function deleteApplication(ref, companyName) {", 1)[1].split("async function discardActiveDraft()", 1)[0]
+    discard_fn = src.split("async function discardActiveDraft() {", 1)[1].split("function renderRecentActivity(apps) {", 1)[0]
+    assert "function _showDraftDiscardConfirmDialog(" in src
+    assert "draft-discard-confirm-overlay" in src
+    assert "Discard draft?" in src
+    assert "This action is irreversible." in src
+    assert "await _showDraftDiscardConfirmDialog(label, 'Delete draft')" in delete_fn
+    assert "await _showDraftDiscardConfirmDialog(name, 'Discard draft')" in discard_fn
+    assert "Discard your in-progress draft for " not in src
+    assert "Delete ' + label + '? This cannot be undone." not in src

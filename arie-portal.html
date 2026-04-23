@@ -5016,6 +5016,41 @@ function _showDraftGuardChoiceDialog(label) {
   });
 }
 
+function _showDraftDiscardConfirmDialog(label, confirmLabel) {
+  return new Promise(function(resolve) {
+    var existing = document.getElementById('draft-discard-confirm-overlay');
+    if (existing) existing.remove();
+    var safeLabel = (label || 'this draft application').toString();
+    var confirmText = (confirmLabel || 'Discard draft').toString();
+
+    var overlay = document.createElement('div');
+    overlay.id = 'draft-discard-confirm-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:12020;display:flex;align-items:center;justify-content:center;padding:16px;';
+    overlay.innerHTML =
+      '<div role="dialog" aria-modal="true" style="max-width:520px;width:100%;background:#fff;border-radius:12px;padding:18px 18px 14px;border:1px solid rgba(15,23,42,0.12);box-shadow:0 24px 50px rgba(15,23,42,0.3);">' +
+        '<div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:8px;">Discard draft?</div>' +
+        '<div style="font-size:13px;color:#334155;line-height:1.5;">You are about to permanently discard <strong>' + escapeHtml(safeLabel) + '</strong>. This action is irreversible.</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;">' +
+          '<button type="button" id="draft-discard-confirm-cancel" style="padding:9px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-weight:600;cursor:pointer;margin-left:auto;">Cancel</button>' +
+          '<button type="button" id="draft-discard-confirm-submit" style="padding:9px 12px;border-radius:8px;border:1px solid #ef4444;background:#ef4444;color:#fff;font-weight:600;cursor:pointer;">' + escapeHtml(confirmText) + '</button>' +
+        '</div>' +
+      '</div>';
+
+    function close(choice) {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      resolve(!!choice);
+    }
+    overlay.addEventListener('click', function(evt) {
+      if (evt.target === overlay) close(false);
+    });
+    document.body.appendChild(overlay);
+    var cancelBtn = document.getElementById('draft-discard-confirm-cancel');
+    var confirmBtn = document.getElementById('draft-discard-confirm-submit');
+    if (cancelBtn) cancelBtn.onclick = function() { close(false); };
+    if (confirmBtn) confirmBtn.onclick = function() { close(true); };
+  });
+}
+
 async function startNewApplication() {
   var activeDraft = await _loadExistingDraftForNewApplicationGuard();
   if (activeDraft && activeDraft.ref) {
@@ -9558,7 +9593,8 @@ async function resumeApplication(ref, stage) {
 async function deleteApplication(ref, companyName) {
   if (!AUTH_TOKEN || !ref) return;
   var label = companyName || 'this draft application';
-  if (!window.confirm('Delete ' + label + '? This cannot be undone.')) return;
+  var confirmed = await _showDraftDiscardConfirmDialog(label, 'Delete draft');
+  if (!confirmed) return;
   try {
     await apiCall('DELETE', '/applications/' + encodeURIComponent(ref));
     if (currentApplicationId === ref || appRef === ref) {
@@ -9658,7 +9694,8 @@ async function discardActiveDraft() {
   var ref = btn.getAttribute('data-app-ref') || '';
   var name = btn.getAttribute('data-app-name') || ref || 'this draft';
   if (!appId && !ref) return;
-  if (!confirm('Discard your in-progress draft for ' + name + '? This cannot be undone.')) return;
+  var confirmed = await _showDraftDiscardConfirmDialog(name, 'Discard draft');
+  if (!confirmed) return;
   try {
     if (appId) {
       try {
