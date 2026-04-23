@@ -297,6 +297,88 @@ def test_pre_submit_autosave_without_id_reuses_same_draft(api_server):
     assert len(sessions) == 1
 
 
+def test_pre_submit_save_accepts_root_payload_shape_without_form_data(api_server):
+    """Meaningful pre-submit payloads must save even when sent in root/canonical shape."""
+    from db import get_db
+
+    conn = get_db()
+    _ensure_client(conn, "draftuser_rootshape", "draftrootshape@test.com")
+    conn.close()
+
+    token = _client_token("draftuser_rootshape")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    root_payload = {
+        "registered_entity_name": "Root Shape Holdings Ltd",
+        "company_name": "Root Shape Holdings Ltd",
+        "country": "Mauritius",
+        "sector": "Technology",
+        "entity_type": "SME",
+        "ownership_structure": "Simple ownership",
+        "prescreening_data": {
+            "registered_entity_name": "Root Shape Holdings Ltd",
+            "country_of_incorporation": "Mauritius",
+            "sector": "Technology",
+            "entity_type": "SME",
+            "ownership_structure": "Simple ownership",
+        },
+        "directors": [{"first_name": "Rita", "last_name": "Draft", "nationality": "MU"}],
+    }
+
+    save_resp = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={**root_payload, "last_step": 0},
+        timeout=5,
+    )
+    assert save_resp.status_code == 200, save_resp.text
+    body = save_resp.json()
+    assert body["status"] == "saved"
+    assert body["application_id"]
+
+    get_resp = http_requests.get(
+        f"{api_server}/api/save-resume?application_id={body['application_id']}",
+        headers=headers,
+        timeout=5,
+    )
+    assert get_resp.status_code == 200, get_resp.text
+    form_data = get_resp.json()["form_data"]
+    assert isinstance(form_data, dict)
+    assert form_data.get("directors"), "Saved draft must persist meaningful party data"
+
+
+def test_pre_submit_manual_then_autosave_updates_same_draft_identity(api_server):
+    """Manual save and subsequent autosave must update the same pre-submit draft."""
+    from db import get_db
+
+    conn = get_db()
+    _ensure_client(conn, "draftuser_same_identity", "draftsameidentity@test.com")
+    conn.close()
+
+    token = _client_token("draftuser_same_identity")
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = _meaningful_form_data("SameIdentity")
+    payload["prescreening"]["f-reg-name"] = "Same Identity Co"
+
+    first = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"form_data": payload, "last_step": 0},
+        timeout=5,
+    )
+    assert first.status_code == 200, first.text
+    app_id = first.json()["application_id"]
+
+    second = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"application_id": app_id, "form_data": payload, "last_step": 1},
+        timeout=5,
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["application_id"] == app_id
+
+
 def test_resume_returns_saved_form_data(api_server):
     from db import get_db
 
@@ -755,10 +837,31 @@ def test_portal_save_draft_is_truthful_for_pre_submit_flow():
     assert "Save Unavailable Yet" not in src
     # Save path should allow saving without a pre-existing application id.
     assert "if (currentApplicationId) payload.application_id = currentApplicationId;" in src
+    # Manual save + autosave must share the same request serializer.
+    assert "function buildSaveResumePayload()" in src
 
 
 def test_portal_new_application_has_duplicate_draft_guard():
     src = _portal_html()
     assert "_loadExistingDraftForNewApplicationGuard" in src
     assert "_discardDraftFromGuard" in src
-    assert "resumeApplication(activeDraft.ref" in src
+    assert "_showDraftGuardChoiceDialog" in src
+    assert "draft-start-guard-overlay" in src
+    assert "choice === 'R'" in src
+    assert "choice === 'D'" in src
+
+
+def test_portal_resume_cta_prefers_active_pre_submit_draft():
+    src = _portal_html()
+    assert "var drafts = inProgress.filter(function(a) { return (a.status || '') === 'draft'; });" in src
+    assert "var app = drafts.length ? drafts[0] : inProgress[0];" in src
+
+
+def test_portal_restore_normalizes_key_dropdowns_and_nationality():
+    src = _portal_html()
+    assert "SELECT_RESTORE_ALIASES" in src
+    assert "'f-entity-type'" in src
+    assert "'f-ownership-structure'" in src
+    assert "'f-sector'" in src
+    assert "'nat-select'" in src
+    assert "_restoreSelectValue(natSel, rowData.nationality || '', 'nat-select')" in src

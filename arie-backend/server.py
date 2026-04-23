@@ -785,28 +785,88 @@ def decrypt_draft_form_data(stored) -> dict:
     return safe_json_loads(stored) or {}
 
 
+def _draft_value_is_meaningful(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    if isinstance(value, dict):
+        return any(_draft_value_is_meaningful(v) for v in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_draft_value_is_meaningful(v) for v in value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return True
+
+
 def _draft_payload_is_meaningful(payload) -> bool:
     """Reject completely empty drafts (no form fields, no party rows)."""
     if not isinstance(payload, dict) or not payload:
         return False
-    # last_step / timestamp alone don't count as user content
+    # Metadata-only payloads must not count as real draft content.
     interesting_keys = (
-        "prescreening", "directors", "ubos", "intermediaries",
-        "servicesRequired", "accountPurposes", "currencies",
-        "countriesOfOperation", "targetMarkets", "kycPersons",
+        "prescreening",
+        "prescreening_data",
+        "directors",
+        "ubos",
+        "intermediaries",
+        "intermediary_shareholders",
+        "servicesRequired",
+        "accountPurposes",
+        "currencies",
+        "countriesOfOperation",
+        "targetMarkets",
+        "kycPersons",
         "uploadedDocs",
+        "company_name",
+        "entity_name",
+        "registered_entity_name",
+        "country",
+        "sector",
+        "entity_type",
+        "ownership_structure",
+        "brn",
     )
-    for key in interesting_keys:
-        val = payload.get(key)
-        if isinstance(val, dict) and any(v not in (None, "", False, [], {}) for v in val.values()):
-            return True
-        if isinstance(val, (list, tuple)) and any(
-            (isinstance(item, dict) and any(v not in (None, "", False, [], {}) for v in item.values()))
-            or (not isinstance(item, dict) and item not in (None, "", False))
-            for item in val
-        ):
-            return True
-    return False
+    return any(_draft_value_is_meaningful(payload.get(key)) for key in interesting_keys)
+
+
+def _extract_save_resume_form_data(payload) -> dict:
+    """Accept both modern {form_data: {...}} and legacy/root payload shapes."""
+    if not isinstance(payload, dict):
+        return {}
+    form_data = payload.get("form_data")
+    if isinstance(form_data, dict):
+        return form_data
+
+    extracted = {}
+    for key in (
+        "prescreening",
+        "prescreening_data",
+        "directors",
+        "ubos",
+        "intermediaries",
+        "intermediary_shareholders",
+        "servicesRequired",
+        "accountPurposes",
+        "currencies",
+        "countriesOfOperation",
+        "targetMarkets",
+        "kycPersons",
+        "uploadedDocs",
+        "company_name",
+        "entity_name",
+        "registered_entity_name",
+        "country",
+        "sector",
+        "entity_type",
+        "ownership_structure",
+        "brn",
+    ):
+        if key in payload:
+            extracted[key] = payload.get(key)
+    return extracted
 
 
 def first_non_empty(*values):
@@ -6231,11 +6291,16 @@ class SaveResumeHandler(BaseHandler):
     def _ensure_pre_submit_draft_application(self, db, client_id, form_data):
         """Create or reuse a draft application shell before first submit."""
         normalized_from_session = normalize_saved_session_prescreening(form_data) or {}
-        normalized_prescreening = normalize_prescreening_data({"prescreening_data": normalized_from_session})
+        normalized_prescreening = normalize_prescreening_data(form_data or {})
+        if normalized_from_session:
+            normalized_prescreening = normalize_prescreening_data(
+                {"prescreening_data": normalized_from_session},
+                existing=normalized_prescreening,
+            )
         if not isinstance(normalized_prescreening, dict):
             normalized_prescreening = {}
 
-        company_name = resolve_application_company_name({}, normalized_prescreening)
+        company_name = resolve_application_company_name(form_data if isinstance(form_data, dict) else {}, normalized_prescreening)
         if not company_name:
             self.error(
                 "Registered entity name is required before saving your first draft.",
@@ -6313,7 +6378,7 @@ class SaveResumeHandler(BaseHandler):
             return
         data = self.get_json() or {}
         app_id = data.get("application_id")
-        form_data = data.get("form_data", {}) or {}
+        form_data = _extract_save_resume_form_data(data)
         last_step = data.get("last_step", 0)
 
         # Reject drafts with no meaningful content — prevents noisy empty

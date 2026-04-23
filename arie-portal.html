@@ -4977,20 +4977,59 @@ async function _loadExistingDraftForNewApplicationGuard() {
   }
 }
 
+function _showDraftGuardChoiceDialog(label) {
+  return new Promise(function(resolve) {
+    var existing = document.getElementById('draft-start-guard-overlay');
+    if (existing) existing.remove();
+
+    var overlay = document.createElement('div');
+    overlay.id = 'draft-start-guard-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:12000;display:flex;align-items:center;justify-content:center;padding:16px;';
+    overlay.innerHTML =
+      '<div role="dialog" aria-modal="true" style="max-width:520px;width:100%;background:#fff;border-radius:12px;padding:18px 18px 14px;border:1px solid rgba(15,23,42,0.12);box-shadow:0 24px 50px rgba(15,23,42,0.3);">' +
+        '<div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:8px;">Existing draft found</div>' +
+        '<div style="font-size:13px;color:#475569;line-height:1.5;">You already have an in-progress draft for <strong>' + escapeHtml(label) + '</strong>. Choose how to proceed.</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;">' +
+          '<button type="button" id="draft-guard-resume" style="padding:9px 12px;border-radius:8px;border:1px solid #2563eb;background:#2563eb;color:#fff;font-weight:600;cursor:pointer;">Resume existing draft</button>' +
+          '<button type="button" id="draft-guard-discard" style="padding:9px 12px;border-radius:8px;border:1px solid #ef4444;background:#fff;color:#ef4444;font-weight:600;cursor:pointer;">Discard draft and start new</button>' +
+          '<button type="button" id="draft-guard-new" style="padding:9px 12px;border-radius:8px;border:1px solid #334155;background:#fff;color:#334155;font-weight:600;cursor:pointer;">Start new and keep draft</button>' +
+          '<button type="button" id="draft-guard-cancel" style="padding:9px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-weight:600;cursor:pointer;margin-left:auto;">Cancel</button>' +
+        '</div>' +
+      '</div>';
+
+    function close(choice) {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      resolve(choice || '');
+    }
+    overlay.addEventListener('click', function(evt) {
+      if (evt.target === overlay) close('');
+    });
+    document.body.appendChild(overlay);
+    var resumeBtn = document.getElementById('draft-guard-resume');
+    var discardBtn = document.getElementById('draft-guard-discard');
+    var newBtn = document.getElementById('draft-guard-new');
+    var cancelBtn = document.getElementById('draft-guard-cancel');
+    if (resumeBtn) resumeBtn.onclick = function() { close('R'); };
+    if (discardBtn) discardBtn.onclick = function() { close('D'); };
+    if (newBtn) newBtn.onclick = function() { close('N'); };
+    if (cancelBtn) cancelBtn.onclick = function() { close(''); };
+  });
+}
+
 async function startNewApplication() {
   var activeDraft = await _loadExistingDraftForNewApplicationGuard();
   if (activeDraft && activeDraft.ref) {
     var label = activeDraft.company_name || activeDraft.ref;
-    if (confirm('You already have an in-progress draft for ' + label + '.\n\nChoose OK to resume it now.\nChoose Cancel for other options.')) {
+    var choice = await _showDraftGuardChoiceDialog(label);
+    if (choice === 'R') {
       await resumeApplication(activeDraft.ref, activeDraft.status || 'draft');
       return;
     }
-    if (confirm('Discard the existing draft for ' + label + ' and start a new application?\n\nPress OK to discard and start new.\nPress Cancel to keep it.')) {
+    if (choice === 'D') {
       await _discardDraftFromGuard(activeDraft);
       showToast('success', 'Draft Discarded', 'Your previous draft was discarded.');
-    } else {
-      if (!confirm('Start a new application and keep the existing draft?')) return;
     }
+    if (!choice) return;
   }
   resetPortalApplicationState();
   showView('prescreening');
@@ -6946,21 +6985,118 @@ function collectFormData() {
   return data;
 }
 
+function buildSaveResumePayload() {
+  var payload = {
+    form_data: collectFormData(),
+    last_step: getCurrentStep()
+  };
+  if (currentApplicationId) payload.application_id = currentApplicationId;
+  return payload;
+}
+
+var SELECT_RESTORE_ALIASES = {
+  'f-entity-type': {
+    'sme': 'SME / Private Company',
+    'private company': 'SME / Private Company',
+    'newly incorporated company': 'Newly Incorporated Company (< 1 year)',
+    'spv': 'Shell Company / Special Purpose Vehicle'
+  },
+  'f-ownership-structure': {
+    'simple ownership': 'Simple — direct identifiable UBOs',
+    'simple': 'Simple — direct identifiable UBOs',
+    '1-2 ownership layers': '1–2 ownership layers',
+    '1 to 2 ownership layers': '1–2 ownership layers',
+    '3+ ownership layers': '3+ ownership layers / nominee shareholders',
+    'complex': 'Complex multi-jurisdiction / opaque structure'
+  },
+  'f-sector': {
+    'technology': 'Software / SaaS',
+    'tech': 'Software / SaaS',
+    'financial services': 'Fintech / Payments',
+    'fintech': 'Fintech / Payments'
+  },
+  'nat-select': {
+    'mu': 'Mauritius',
+    'mus': 'Mauritius',
+    'mauritian': 'Mauritius',
+    'gb': 'United Kingdom',
+    'gbr': 'United Kingdom',
+    'uk': 'United Kingdom',
+    'british': 'United Kingdom',
+    'us': 'United States',
+    'usa': 'United States',
+    'american': 'United States',
+    'ca': 'Canada',
+    'can': 'Canada',
+    'canadian': 'Canada',
+    'au': 'Australia',
+    'aus': 'Australia',
+    'australian': 'Australia',
+    'fr': 'France',
+    'fra': 'France',
+    'french': 'France',
+    'de': 'Germany',
+    'deu': 'Germany',
+    'german': 'Germany',
+    'ie': 'Ireland',
+    'irl': 'Ireland',
+    'irish': 'Ireland',
+    'in': 'India',
+    'ind': 'India',
+    'indian': 'India',
+    'sg': 'Singapore',
+    'sgp': 'Singapore',
+    'singaporean': 'Singapore',
+    'za': 'South Africa',
+    'zaf': 'South Africa',
+    'south african': 'South Africa',
+    'ae': 'United Arab Emirates',
+    'are': 'United Arab Emirates',
+    'emirati': 'United Arab Emirates'
+  }
+};
+
+function _normalizeSelectToken(val) {
+  return String(val || '')
+    .toLowerCase()
+    .replace(/[()]/g, ' ')
+    .replace(/[—–-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function _restoreSelectValue(selectEl, rawValue, aliasKey) {
+  if (!selectEl) return;
+  var raw = String(rawValue == null ? '' : rawValue).trim();
+  if (!raw) { selectEl.value = ''; return; }
+  var options = Array.from(selectEl.options || []);
+  if (options.some(function(opt) { return opt.value === raw; })) {
+    selectEl.value = raw;
+    return;
+  }
+  var normRaw = _normalizeSelectToken(raw);
+  var aliasMap = SELECT_RESTORE_ALIASES[aliasKey] || {};
+  var aliasTarget = aliasMap[normRaw] || '';
+  if (aliasTarget && options.some(function(opt) { return opt.value === aliasTarget; })) {
+    selectEl.value = aliasTarget;
+    return;
+  }
+  var match = options.find(function(opt) {
+    var normOpt = _normalizeSelectToken(opt.value || opt.text || '');
+    return normOpt && (normOpt === normRaw || normOpt.indexOf(normRaw) !== -1 || normRaw.indexOf(normOpt) !== -1);
+  });
+  selectEl.value = match ? match.value : '';
+}
+
 async function saveDraft() {
   // Priority C follow-up: save must persist both pre-submit and post-submit.
-  var data = collectFormData();
-
   if (!AUTH_TOKEN) {
     showToast('error', 'Sign In Required', 'Please sign in to save your draft.');
     return;
   }
   _setSaveStatus('Saving…', 'var(--text3)');
   try {
-    var payload = {
-      form_data: data,
-      last_step: getCurrentStep()
-    };
-    if (currentApplicationId) payload.application_id = currentApplicationId;
+    var payload = buildSaveResumePayload();
     var resp = await apiCall('POST', '/save-resume', payload);
     if (resp && resp.application_id) currentApplicationId = resp.application_id;
     if (resp && resp.application_ref) appRef = resp.application_ref;
@@ -6996,12 +7132,25 @@ function restoreDraftFromData(data) {
     if (Array.isArray(data.uploadedDocs)) uploadedDocs = new Set(data.uploadedDocs);
 
     // Restore simple form fields by element ID
-    if (data.prescreening && typeof data.prescreening === 'object') {
-      Object.keys(data.prescreening).forEach(function(id) {
+    var prescreeningData = (data.prescreening && typeof data.prescreening === 'object') ? data.prescreening : {};
+    if ((!prescreeningData || !Object.keys(prescreeningData).length) && data.prescreening_data && typeof data.prescreening_data === 'object') {
+      var projected = {};
+      Object.keys(PRESCREENING_FIELD_BINDINGS).forEach(function(id) {
+        var normalizedKey = PRESCREENING_FIELD_BINDINGS[id];
+        if (data.prescreening_data[normalizedKey] != null) projected[id] = data.prescreening_data[normalizedKey];
+      });
+      prescreeningData = projected;
+    }
+    if (prescreeningData && typeof prescreeningData === 'object') {
+      Object.keys(prescreeningData).forEach(function(id) {
         var el = document.getElementById(id);
         if (el) {
-          if (el.type === 'checkbox') el.checked = !!data.prescreening[id];
-          else el.value = data.prescreening[id] || '';
+          if (el.type === 'checkbox') el.checked = !!prescreeningData[id];
+          else if (el.tagName === 'SELECT') {
+            _restoreSelectValue(el, prescreeningData[id], id);
+          } else {
+            el.value = prescreeningData[id] || '';
+          }
         }
       });
     }
@@ -7141,7 +7290,7 @@ function restorePartyRows(tbodyId, rows, partyType) {
       var natSel = lastRow.querySelector('select.nat-select');
       var numInput = lastRow.querySelector('input[type="number"]');
       if (textInput) textInput.value = rowData.entity_name || '';
-      if (natSel) natSel.value = rowData.jurisdiction || '';
+      if (natSel) _restoreSelectValue(natSel, rowData.jurisdiction || '', 'nat-select');
       if (numInput) numInput.value = rowData.ownership_pct || '';
     } else {
       var texts = lastRow.querySelectorAll('input[type="text"]');
@@ -7149,7 +7298,7 @@ function restorePartyRows(tbodyId, rows, partyType) {
       var pepSel = lastRow.querySelector('select.pep-select');
       if (texts[0]) texts[0].value = rowData.first_name || '';
       if (texts[1]) texts[1].value = rowData.last_name || '';
-      if (natSel) natSel.value = rowData.nationality || '';
+      if (natSel) _restoreSelectValue(natSel, rowData.nationality || '', 'nat-select');
       var dobInput = lastRow.querySelector('.dob-input') || lastRow.querySelector('input[type="date"]');
       if (dobInput) dobInput.value = rowData.date_of_birth || '';
       if (pepSel) pepSel.value = rowData.is_pep || 'No';
@@ -7186,13 +7335,8 @@ function startAutoSave() {
     if (!_draftDirty) return;
     if (!AUTH_TOKEN) return;
     _autoSaveInFlight = true;
-    var data = collectFormData();
     try {
-      var payload = {
-        form_data: data,
-        last_step: getCurrentStep()
-      };
-      if (currentApplicationId) payload.application_id = currentApplicationId;
+      var payload = buildSaveResumePayload();
       var resp = await apiCall('POST', '/save-resume', payload);
       if (resp && resp.application_id) currentApplicationId = resp.application_id;
       if (resp && resp.application_ref) appRef = resp.application_ref;
@@ -9468,7 +9612,14 @@ function renderResumeCTA(apps) {
     cta.style.display = 'none';
     return;
   }
-  var app = inProgress[0];
+  var drafts = inProgress.filter(function(a) { return (a.status || '') === 'draft'; });
+  function _asTime(v) {
+    var t = Date.parse(v || '');
+    return Number.isNaN(t) ? 0 : t;
+  }
+  drafts.sort(function(a, b) { return _asTime(b.updated_at || b.created_at) - _asTime(a.updated_at || a.created_at); });
+  inProgress.sort(function(a, b) { return _asTime(b.updated_at || b.created_at) - _asTime(a.updated_at || a.created_at); });
+  var app = drafts.length ? drafts[0] : inProgress[0];
   var ref = app.ref || app.id || '';
   var stage = app.status || 'pending';
   var refJs = JSON.stringify(ref).replace(/"/g, '&quot;');
