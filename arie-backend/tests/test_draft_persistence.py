@@ -184,6 +184,119 @@ def test_save_creates_new_draft_then_update_in_place(api_server):
     assert rows[0]["last_step"] == 2
 
 
+def test_pre_submit_save_without_application_id_creates_draft_shell(api_server):
+    from db import get_db
+
+    conn = get_db()
+    _ensure_client(conn, "draftuser_presubmit", "draftpresubmit@test.com")
+    conn.close()
+
+    token = _client_token("draftuser_presubmit")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    payload = _meaningful_form_data("PreSubmit")
+    payload["prescreening"]["f-reg-name"] = "PreSubmit Holdings Ltd"
+    payload["prescreening"]["f-inc-country"] = "Mauritius"
+
+    save_resp = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"form_data": payload, "last_step": 0},
+        timeout=5,
+    )
+    assert save_resp.status_code == 200, save_resp.text
+    body = save_resp.json()
+    assert body["status"] == "saved"
+    assert body["application_id"]
+    assert body["application_ref"]
+
+    app_id = body["application_id"]
+    app_ref = body["application_ref"]
+
+    # Same draft identity is resumable and not duplicated.
+    save_again = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"application_id": app_id, "form_data": _meaningful_form_data("PreSubmit2"), "last_step": 1},
+        timeout=5,
+    )
+    assert save_again.status_code == 200, save_again.text
+    assert save_again.json()["application_id"] == app_id
+
+    conn = get_db()
+    app_rows = conn.execute(
+        "SELECT id, ref, status, company_name FROM applications WHERE client_id=?",
+        ("draftuser_presubmit",),
+    ).fetchall()
+    session_rows = conn.execute(
+        "SELECT id, application_id FROM client_sessions WHERE client_id=?",
+        ("draftuser_presubmit",),
+    ).fetchall()
+    conn.close()
+    assert len(app_rows) == 1
+    assert app_rows[0]["id"] == app_id
+    assert app_rows[0]["ref"] == app_ref
+    assert app_rows[0]["status"] == "draft"
+    assert len(session_rows) == 1
+    assert session_rows[0]["application_id"] == app_id
+
+    # Resume works by app id and by app ref after navigation/refresh.
+    get_by_id = http_requests.get(
+        f"{api_server}/api/applications/{app_id}",
+        headers=headers, timeout=5,
+    )
+    assert get_by_id.status_code == 200, get_by_id.text
+
+    get_by_ref = http_requests.get(
+        f"{api_server}/api/applications/{app_ref}",
+        headers=headers, timeout=5,
+    )
+    assert get_by_ref.status_code == 200, get_by_ref.text
+
+
+def test_pre_submit_autosave_without_id_reuses_same_draft(api_server):
+    from db import get_db
+
+    conn = get_db()
+    _ensure_client(conn, "draftuser_presubmit_reuse", "draftpresubmitreuse@test.com")
+    conn.close()
+
+    token = _client_token("draftuser_presubmit_reuse")
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = _meaningful_form_data("Reuse")
+    payload["prescreening"]["f-reg-name"] = "Reuse Draft Co"
+
+    first = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"form_data": payload, "last_step": 0},
+        timeout=5,
+    )
+    assert first.status_code == 200, first.text
+
+    second = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"form_data": payload, "last_step": 1},
+        timeout=5,
+    )
+    assert second.status_code == 200, second.text
+    assert first.json()["application_id"] == second.json()["application_id"]
+
+    conn = get_db()
+    apps = conn.execute(
+        "SELECT id FROM applications WHERE client_id=?",
+        ("draftuser_presubmit_reuse",),
+    ).fetchall()
+    sessions = conn.execute(
+        "SELECT id FROM client_sessions WHERE client_id=?",
+        ("draftuser_presubmit_reuse",),
+    ).fetchall()
+    conn.close()
+    assert len(apps) == 1
+    assert len(sessions) == 1
+
+
 def test_resume_returns_saved_form_data(api_server):
     from db import get_db
 
@@ -624,6 +737,8 @@ def test_portal_has_beforeunload_navigation_guard():
     assert "_attachBeforeUnloadGuard" in src
     # Guard must short-circuit during legitimate submission flows.
     assert "_draftSubmitting" in src
+    # In-app navigation should also guard against unsaved pre-submit changes.
+    assert "_confirmDiscardUnsavedChangesForNavigation" in src
 
 
 def test_portal_dashboard_resume_cta_has_discard_action():
@@ -632,3 +747,18 @@ def test_portal_dashboard_resume_cta_has_discard_action():
     assert "discardActiveDraft" in src
     # Discard must hit the server-side delete endpoint.
     assert "/save-resume?application_id=" in src
+
+
+def test_portal_save_draft_is_truthful_for_pre_submit_flow():
+    src = _portal_html()
+    # Save Draft should not claim unavailable before first submit anymore.
+    assert "Save Unavailable Yet" not in src
+    # Save path should allow saving without a pre-existing application id.
+    assert "if (currentApplicationId) payload.application_id = currentApplicationId;" in src
+
+
+def test_portal_new_application_has_duplicate_draft_guard():
+    src = _portal_html()
+    assert "_loadExistingDraftForNewApplicationGuard" in src
+    assert "_discardDraftFromGuard" in src
+    assert "resumeApplication(activeDraft.ref" in src

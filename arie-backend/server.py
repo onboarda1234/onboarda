@@ -6212,7 +6212,7 @@ class SaveResumeHandler(BaseHandler):
             self.error("application_id required", 400)
             return None
         row = db.execute(
-            "SELECT id, client_id FROM applications WHERE id=? OR ref=?",
+            "SELECT id, ref, client_id, status, company_name FROM applications WHERE id=? OR ref=?",
             (app_id, app_id),
         ).fetchone()
         if not row:
@@ -6223,6 +6223,60 @@ class SaveResumeHandler(BaseHandler):
             self.error("Application not found", 404)
             return None
         return row
+
+    @staticmethod
+    def _normalize_company_key(name):
+        return re.sub(r"\s+", " ", (name or "").strip()).lower()
+
+    def _ensure_pre_submit_draft_application(self, db, client_id, form_data):
+        """Create or reuse a draft application shell before first submit."""
+        normalized_from_session = normalize_saved_session_prescreening(form_data) or {}
+        normalized_prescreening = normalize_prescreening_data({"prescreening_data": normalized_from_session})
+        if not isinstance(normalized_prescreening, dict):
+            normalized_prescreening = {}
+
+        company_name = resolve_application_company_name({}, normalized_prescreening)
+        if not company_name:
+            self.error(
+                "Registered entity name is required before saving your first draft.",
+                400
+            )
+            return None
+
+        normalized_name = self._normalize_company_key(company_name)
+        existing_drafts = db.execute(
+            "SELECT id, ref, company_name FROM applications WHERE client_id=? AND status='draft' ORDER BY updated_at DESC",
+            (client_id,)
+        ).fetchall()
+        for row in existing_drafts:
+            candidate = self._normalize_company_key(row.get("company_name"))
+            if candidate == normalized_name:
+                return row
+
+        app_id = uuid.uuid4().hex[:16]
+        ref = generate_ref()
+        db.execute(
+            """
+            INSERT INTO applications (
+                id, ref, client_id, company_name, brn, country, sector,
+                entity_type, ownership_structure, prescreening_data, status
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                app_id,
+                ref,
+                client_id,
+                company_name,
+                first_non_empty(normalized_prescreening.get("brn"), ""),
+                first_non_empty(normalized_prescreening.get("country_of_incorporation"), ""),
+                first_non_empty(normalized_prescreening.get("sector"), ""),
+                first_non_empty(normalized_prescreening.get("entity_type"), ""),
+                first_non_empty(normalized_prescreening.get("ownership_structure"), ""),
+                json.dumps(normalized_prescreening),
+                "draft",
+            )
+        )
+        return {"id": app_id, "ref": ref, "company_name": company_name, "status": "draft"}
 
     # ── HTTP methods ────────────────────────────────────────────
     def get(self):
@@ -6269,7 +6323,11 @@ class SaveResumeHandler(BaseHandler):
 
         db = get_db()
         try:
-            app_row = self._assert_app_belongs_to_client(db, app_id, user["sub"])
+            app_row = None
+            if app_id:
+                app_row = self._assert_app_belongs_to_client(db, app_id, user["sub"])
+            else:
+                app_row = self._ensure_pre_submit_draft_application(db, user["sub"], form_data)
             if not app_row:
                 return
             real_id = app_row["id"]
@@ -6302,7 +6360,8 @@ class SaveResumeHandler(BaseHandler):
             db.close()
         self.success({
             "status": "saved",
-            "application_id": app_id,
+            "application_id": real_id,
+            "application_ref": app_row.get("ref"),
             "last_saved_at": saved_at["updated_at"] if saved_at else None,
         })
 
