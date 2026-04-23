@@ -7392,8 +7392,8 @@ function startAutoSave() {
 
 // Update save bar when entering onboarding view
 var origShowView = showView;
-showView = function(name) {
-  var proceed = _confirmDiscardUnsavedChangesForNavigation(name);
+showView = async function(name) {
+  var canNavigateWithoutConfirm = _confirmDiscardUnsavedChangesForNavigation(name);
   function continueNavigation() {
     origShowView(name);
     // Priority C: Save & Resume — autosave runs during pre-screening and
@@ -7415,17 +7415,18 @@ showView = function(name) {
       loadClientNotifications();
     }
   }
-  if (proceed) {
+  if (canNavigateWithoutConfirm) {
     continueNavigation();
     return;
   }
-  _showDraftDiscardConfirmDialog('your unsaved draft changes', 'Leave without saving').then(function(confirmed) {
+  try {
+    var confirmed = await _showDraftDiscardConfirmDialog('your unsaved draft changes', 'Leave without saving');
     if (!confirmed) return;
     _draftDirty = false;
     continueNavigation();
-  }).catch(function(err) {
+  } catch (err) {
     console.warn('navigation discard confirmation failed:', err);
-  });
+  }
 };
 
 // ─── Pre-Submission Review ────────────────────────────────

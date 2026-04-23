@@ -732,7 +732,7 @@ def test_form_data_is_encrypted_at_rest_when_pii_key_configured(api_server):
     raw = str(raw)
     try:
         decoded = json.loads(raw)
-    except Exception:
+    except json.JSONDecodeError:
         decoded = raw
     if isinstance(decoded, dict):
         token = decoded.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY, "")

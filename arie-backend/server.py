@@ -761,20 +761,27 @@ def decrypt_draft_form_data(stored) -> dict:
       * "enc:v1:<fernet_token>" strings written by encrypt_draft_form_data
     Always returns a dict; never raises.
     """
+    no_token = object()
+
+    def _decrypt_token(token):
+        if not isinstance(token, str) or not token.strip():
+            return no_token
+        if _pii_encryptor is None:
+            logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
+            return {}
+        try:
+            plaintext = _pii_encryptor.decrypt(token)
+        except Exception as exc:
+            logger.warning("Draft form_data decryption failed: %s", exc)
+            return {}
+        return safe_json_loads(plaintext) or {}
+
     if stored is None or stored == "":
         return {}
     if isinstance(stored, dict):
-        token = stored.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY)
-        if isinstance(token, str) and token.strip():
-            if _pii_encryptor is None:
-                logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
-                return {}
-            try:
-                plaintext = _pii_encryptor.decrypt(token)
-            except Exception as exc:
-                logger.warning("Draft form_data decryption failed: %s", exc)
-                return {}
-            return safe_json_loads(plaintext) or {}
+        decrypted = _decrypt_token(stored.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY))
+        if decrypted is not no_token:
+            return decrypted
         return stored
     if isinstance(stored, (bytes, bytearray)):
         try:
@@ -784,42 +791,16 @@ def decrypt_draft_form_data(stored) -> dict:
     if not isinstance(stored, str):
         return {}
     if stored.startswith(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):
-        token = stored[len(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):]
-        if _pii_encryptor is None:
-            logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
-            return {}
-        try:
-            plaintext = _pii_encryptor.decrypt(token)
-        except Exception as exc:
-            logger.warning("Draft form_data decryption failed: %s", exc)
-            return {}
-        return safe_json_loads(plaintext) or {}
+        return _decrypt_token(stored[len(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):]) or {}
     decoded = safe_json_loads(stored)
     if isinstance(decoded, dict):
-        token = decoded.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY)
-        if isinstance(token, str) and token.strip():
-            if _pii_encryptor is None:
-                logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
-                return {}
-            try:
-                plaintext = _pii_encryptor.decrypt(token)
-            except Exception as exc:
-                logger.warning("Draft form_data decryption failed: %s", exc)
-                return {}
-            return safe_json_loads(plaintext) or {}
+        decrypted = _decrypt_token(decoded.get(DRAFT_FORM_DATA_ENCRYPTED_JSON_KEY))
+        if decrypted is not no_token:
+            return decrypted
         return decoded
     # Legacy plaintext JSON (or raw dict-like string)
     if isinstance(decoded, str) and decoded.startswith(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):
-        token = decoded[len(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):]
-        if _pii_encryptor is None:
-            logger.warning("Encrypted draft form_data encountered but PII encryptor is not configured")
-            return {}
-        try:
-            plaintext = _pii_encryptor.decrypt(token)
-        except Exception as exc:
-            logger.warning("Draft form_data decryption failed: %s", exc)
-            return {}
-        return safe_json_loads(plaintext) or {}
+        return _decrypt_token(decoded[len(DRAFT_FORM_DATA_ENCRYPTED_PREFIX):]) or {}
     return {}
 
 
