@@ -985,7 +985,7 @@ def test_portal_discard_flow_uses_in_app_confirm_and_cancel_path():
 
 def test_portal_resume_cta_discard_reachability_wiring_present():
     src = _portal_html()
-    assert "discardBtn.style.display = '';" in src
+    assert "discardBtn.style.display = 'inline-flex';" in src
     assert "discardBtn.setAttribute('data-app-id'" in src
     assert "discardBtn.setAttribute('data-app-ref'" in src
     assert "discardBtn.setAttribute('data-app-name'" in src
