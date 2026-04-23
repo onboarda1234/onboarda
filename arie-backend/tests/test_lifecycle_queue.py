@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -633,6 +634,67 @@ class TestApplicationSummary(_LifecycleQueueBase):
         import lifecycle_queue as lq
         with self.assertRaises(ValueError):
             lq.build_application_lifecycle_summary(self._conn, "")
+
+
+class _PostgresBindingGuardProxy:
+    """Proxy DB wrapper that simulates psycopg2 `%` binding behavior."""
+
+    def __init__(self, db):
+        self._db = db
+        self.is_postgres = True
+        self.calls = []
+
+    def execute(self, sql, params=None):
+        params = list(params or [])
+        self.calls.append((sql, params))
+
+        if re.search(r"(?<!%)%(?!%)", sql):
+            raise IndexError("list index out of range")
+
+        if sql.count("?") != len(params):
+            raise IndexError("list index out of range")
+
+        return self._db.execute(sql, params)
+
+
+class TestFetchAlertsParamBindingRegression(_LifecycleQueueBase):
+    def test_build_queue_alert_include_modes_do_not_raise_binding_error(self):
+        import lifecycle_queue as lq
+
+        active_id = self._alert(status="open")
+        historical_id = self._alert(status="dismissed")
+        ghost_vocab_id = self._alert(status="escalated")
+        ghost_unscopable_id = self._alert(status="open", application_id=None)
+
+        expected = {
+            "active": {active_id},
+            "historical": {historical_id},
+            "legacy_unmapped": {ghost_vocab_id, ghost_unscopable_id},
+            "all": {active_id, historical_id},
+        }
+
+        for include, expected_ids in expected.items():
+            with self.subTest(include=include):
+                db = _PostgresBindingGuardProxy(self._conn)
+                result = lq.build_lifecycle_queue(db, include=include, types=("alert",))
+                returned_ids = {it["id"] for it in result["items"]}
+                self.assertEqual(returned_ids, expected_ids)
+                alert_sql = next(
+                    sql for (sql, _) in db.calls
+                    if "from monitoring_alerts" in sql.lower()
+                )
+                self.assertIsNone(re.search(r"(?<!%)%(?!%)", alert_sql))
+
+    def test_application_summary_path_reuses_safe_alert_fetch(self):
+        import lifecycle_queue as lq
+
+        self._alert(status="open")
+        self._alert(status="dismissed")
+        db = _PostgresBindingGuardProxy(self._conn)
+        summary = lq.build_application_lifecycle_summary(db, self._app_id)
+        self.assertEqual(summary["application_id"], self._app_id)
+        self.assertGreaterEqual(summary["active"]["counts"]["alert"], 0)
+        self.assertGreaterEqual(summary["historical"]["counts"]["alert"], 0)
 
 
 class _StaticCursor:
