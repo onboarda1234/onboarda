@@ -16,8 +16,10 @@ Covers:
 """
 
 import json
+import inspect
 import os
 import socket
+import sqlite3
 import tempfile
 import threading
 import time
@@ -436,6 +438,71 @@ def test_pre_submit_step2_key_fields_round_trip_and_update_without_500(api_serve
     assert form_data["prescreening"]["f-sector"] == "Fintech / Payments"
     assert form_data["directors"][0]["nationality"] == "Mauritius"
     assert form_data["ubos"][0]["nationality"] == "United Kingdom"
+
+
+def test_pre_submit_draft_lookup_falls_back_when_applications_updated_at_missing():
+    """Legacy schema safety: missing applications.updated_at must not 500 pre-submit save."""
+    import server
+
+    class _FakeResult:
+        def __init__(self, rows=None):
+            self._rows = rows or []
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class _FakeDB:
+        def __init__(self):
+            self.queries = []
+
+        def execute(self, sql, params=()):
+            self.queries.append(sql)
+            if "FROM applications WHERE client_id=?" in sql and "ORDER BY updated_at DESC" in sql:
+                raise sqlite3.OperationalError("no such column: updated_at")
+            if "FROM applications WHERE client_id=?" in sql and "ORDER BY created_at DESC, id DESC" in sql:
+                return _FakeResult(rows=[{
+                    "id": "legacy_app_1",
+                    "ref": "ARF-LEGACY-1",
+                    "company_name": "Legacy Stage Draft Ltd",
+                }])
+            raise AssertionError(f"Unexpected SQL in fake DB: {sql}")
+
+    class _FakeHandler:
+        def __init__(self):
+            self.errors = []
+
+        _normalize_company_key = staticmethod(server.SaveResumeHandler._normalize_company_key)
+        _is_missing_column_error = staticmethod(server.SaveResumeHandler._is_missing_column_error)
+
+        def error(self, message, status=400):
+            self.errors.append((message, status))
+
+    db = _FakeDB()
+    handler = _FakeHandler()
+    row = server.SaveResumeHandler._ensure_pre_submit_draft_application(
+        handler,
+        db,
+        "draftuser_legacy_schema",
+        {
+            "prescreening": {"f-reg-name": "Legacy Stage Draft Ltd"},
+            "directors": [{"first_name": "Lia", "last_name": "Stage", "nationality": "MU"}],
+        },
+    )
+
+    assert row is not None
+    assert row["id"] == "legacy_app_1"
+    assert handler.errors == []
+    assert any("ORDER BY created_at DESC, id DESC" in q for q in db.queries)
+
+
+def test_save_resume_post_has_legacy_client_sessions_updated_at_fallback():
+    """Autosave/manual updates must still work if client_sessions.updated_at is absent."""
+    import server
+
+    src = inspect.getsource(server.SaveResumeHandler.post)
+    assert "UPDATE client_sessions SET form_data=?, last_step=? WHERE id=?" in src
+    assert "SELECT updated_at FROM client_sessions" in src
+    assert "_is_missing_column_error(exc, \"updated_at\")" in src
 
 
 def test_resume_returns_saved_form_data(api_server):
@@ -906,6 +973,22 @@ def test_portal_dashboard_resume_cta_has_discard_action():
     assert "discardActiveDraft" in src
     # Discard must hit the server-side delete endpoint.
     assert "/save-resume?application_id=" in src
+
+
+def test_portal_discard_flow_uses_in_app_confirm_and_cancel_path():
+    src = _portal_html()
+    assert "async function discardActiveDraft()" in src
+    assert "_showDraftDiscardConfirmDialog" in src
+    assert "if (!confirmed) return;" in src
+    assert "Discard draft" in src
+
+
+def test_portal_resume_cta_discard_reachability_wiring_present():
+    src = _portal_html()
+    assert "discardBtn.style.display = 'inline-flex';" in src
+    assert "discardBtn.setAttribute('data-app-id'" in src
+    assert "discardBtn.setAttribute('data-app-ref'" in src
+    assert "discardBtn.setAttribute('data-app-name'" in src
 
 
 def test_portal_save_draft_is_truthful_for_pre_submit_flow():
