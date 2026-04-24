@@ -856,10 +856,24 @@ class TestSeederSetsIsFixture(unittest.TestCase):
         import inspect
         from fixtures.seeder import _upsert_application
         src = inspect.getsource(_upsert_application)
-        # The literal value must be present — either as '1' in INSERT or
-        # SET is_fixture=1 in UPDATE.
-        self.assertIn("is_fixture=1", src.replace(" ", ""),
-                      "_upsert_application INSERT/UPDATE must set is_fixture=1")
+        # is_fixture must be written by the seeder on both INSERT and UPDATE
+        # paths. Historically this was a hardcoded integer literal
+        # (is_fixture=1) but that form is rejected by psycopg2 against a
+        # Postgres BOOLEAN column (DatatypeMismatch). The correct form is
+        # to reference the column and pass Python True as a bind parameter
+        # so the DB driver adapts per-dialect. Accept either form here so
+        # this regression test stays valid across SQLite and Postgres.
+        collapsed = src.replace(" ", "").replace("\n", "")
+        legacy_literal = "is_fixture=1" in collapsed
+        parameterised = ("is_fixture=?" in collapsed) or (
+            "is_fixture," in collapsed and "True," in collapsed
+        )
+        self.assertTrue(
+            legacy_literal or parameterised,
+            "_upsert_application INSERT/UPDATE must set is_fixture "
+            "(either via literal is_fixture=1 or via parameterised "
+            "bind with Python True for dialect-safe handling)",
+        )
 
     def test_fixture_filter_rogue_refs_constant_has_all_8(self):
         """ROGUE_FIXTURE_REFS must contain exactly the 8 known rogue refs."""
