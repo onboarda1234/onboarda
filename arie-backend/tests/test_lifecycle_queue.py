@@ -861,6 +861,15 @@ class TestLegacySchemaFallback(unittest.TestCase):
             )
             """
         )
+        # fixture_app_id_exclude_clause subquery requires applications.is_fixture
+        self.conn.execute(
+            """
+            CREATE TABLE applications (
+                id TEXT PRIMARY KEY,
+                is_fixture INTEGER DEFAULT 0
+            )
+            """
+        )
         self.conn.commit()
 
     def tearDown(self):
