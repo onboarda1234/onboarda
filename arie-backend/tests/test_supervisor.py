@@ -338,3 +338,315 @@ class TestMemoVerdict:
         result = run_memo_supervisor(memo)
         for field in ["verdict", "contradictions", "warnings", "recommendation", "supervisor_confidence"]:
             assert field in result, f"Missing field: {field}"
+
+
+
+# ═══════════════════════════════════════════════════════════════
+# PART C: Supervisor Audit Hash-Chain Hardening Tests (Priority E)
+# ═══════════════════════════════════════════════════════════════
+
+class TestAuditChainEntry:
+    """Tests for append_verdict_chain_entry and the hash-chain guarantee.
+
+    All tests use the shared temp_db fixture.  Tests that need a clean
+    supervisor_audit_log table call _clear_chain() at the start so they
+    do not observe entries written by earlier tests.
+    """
+
+    def _clear_chain(self, temp_db):
+        """Delete all rows from supervisor_audit_log for a clean slate."""
+        import sqlite3
+        conn = sqlite3.connect(temp_db)
+        conn.execute("DELETE FROM supervisor_audit_log")
+        conn.commit()
+        conn.close()
+
+    def _get_chain_rows(self, temp_db, application_id=None):
+        """Return supervisor_audit_log rows ordered by timestamp ASC."""
+        import sqlite3
+        conn = sqlite3.connect(temp_db)
+        conn.row_factory = sqlite3.Row
+        if application_id:
+            rows = conn.execute(
+                "SELECT * FROM supervisor_audit_log WHERE application_id = ? ORDER BY timestamp ASC",
+                (application_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM supervisor_audit_log ORDER BY timestamp ASC"
+            ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def test_append_verdict_chain_entry_creates_row(self, temp_db):
+        """A single verdict write produces exactly one supervisor_audit_log row."""
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry
+        db = get_db()
+        entry_hash = append_verdict_chain_entry(
+            db=db,
+            application_id="app-ce-001",
+            verdict="CONSISTENT",
+            contradiction_count=0,
+            supervisor_confidence=0.95,
+            memo_id="memo-ce-001",
+            actor_id="co-1",
+            actor_name="Test Officer",
+            actor_role="co",
+        )
+        db.commit()
+        db.close()
+
+        rows = self._get_chain_rows(temp_db, application_id="app-ce-001")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["event_type"] == "supervisor_verdict"
+        assert row["application_id"] == "app-ce-001"
+        assert row["entry_hash"] == entry_hash
+        assert row["entry_hash"] is not None
+        assert len(row["entry_hash"]) == 64  # SHA-256 hex
+
+    def test_genesis_entry_has_null_previous_hash(self, temp_db):
+        """The first chain entry has previous_hash = NULL (genesis)."""
+        self._clear_chain(temp_db)
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry
+        db = get_db()
+        append_verdict_chain_entry(
+            db=db,
+            application_id="app-genesis",
+            verdict="CONSISTENT",
+            contradiction_count=0,
+            supervisor_confidence=1.0,
+            memo_id="memo-genesis",
+        )
+        db.commit()
+        db.close()
+
+        rows = self._get_chain_rows(temp_db)
+        assert len(rows) == 1
+        assert rows[0]["previous_hash"] is None
+
+    def test_multiple_verdicts_form_linked_chain(self, temp_db):
+        """Multiple verdict writes form a properly hash-linked chain."""
+        self._clear_chain(temp_db)
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry
+        for i in range(3):
+            db = get_db()
+            append_verdict_chain_entry(
+                db=db,
+                application_id=f"app-chain-{i}",
+                verdict="CONSISTENT",
+                contradiction_count=i,
+                supervisor_confidence=0.9 - i * 0.05,
+                memo_id=f"memo-chain-{i}",
+            )
+            db.commit()
+            db.close()
+
+        rows = self._get_chain_rows(temp_db)
+        assert len(rows) == 3
+        assert rows[0]["previous_hash"] is None
+        assert rows[1]["previous_hash"] == rows[0]["entry_hash"]
+        assert rows[2]["previous_hash"] == rows[1]["entry_hash"]
+
+    def test_verify_chain_succeeds_on_intact_chain(self, temp_db):
+        """verify_chain_integrity() returns verified=True for an intact chain."""
+        self._clear_chain(temp_db)
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry, AuditLogger
+        for i in range(4):
+            db = get_db()
+            append_verdict_chain_entry(
+                db=db,
+                application_id="app-verify",
+                verdict="CONSISTENT_WITH_WARNINGS",
+                contradiction_count=1,
+                supervisor_confidence=0.85,
+                memo_id=f"memo-v{i}",
+            )
+            db.commit()
+            db.close()
+
+        al = AuditLogger(db_path=temp_db)
+        result = al.verify_chain_integrity(limit=100)
+        assert result["verified"] is True
+        assert result["entries_checked"] == 4
+        assert result.get("broken_links", []) == []
+
+    def test_deliberate_hash_tampering_detected(self, temp_db):
+        """verify_chain_integrity() detects a tampered entry_hash."""
+        import sqlite3
+        self._clear_chain(temp_db)
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry, AuditLogger
+        db = get_db()
+        append_verdict_chain_entry(
+            db=db,
+            application_id="app-tamper",
+            verdict="CONSISTENT",
+            contradiction_count=0,
+            supervisor_confidence=1.0,
+            memo_id="memo-tamper",
+        )
+        db.commit()
+        db.close()
+
+        # Tamper: overwrite entry_hash with garbage
+        conn = sqlite3.connect(temp_db)
+        conn.execute("UPDATE supervisor_audit_log SET entry_hash = 'deadbeef'")
+        conn.commit()
+        conn.close()
+
+        al = AuditLogger(db_path=temp_db)
+        result = al.verify_chain_integrity(limit=100)
+        assert result["verified"] is False
+        assert len(result.get("broken_links", [])) >= 1
+
+    def test_deliberate_chain_link_tampering_detected(self, temp_db):
+        """verify_chain_integrity() detects a broken chain link (previous_hash mismatch)."""
+        import sqlite3
+        self._clear_chain(temp_db)
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry, AuditLogger
+        for i in range(2):
+            db = get_db()
+            append_verdict_chain_entry(
+                db=db,
+                application_id="app-linkbreak",
+                verdict="CONSISTENT",
+                contradiction_count=0,
+                supervisor_confidence=1.0,
+                memo_id=f"memo-linkbreak-{i}",
+            )
+            db.commit()
+            db.close()
+
+        # Tamper: corrupt the previous_hash of the second entry
+        conn = sqlite3.connect(temp_db)
+        conn.execute(
+            "UPDATE supervisor_audit_log SET previous_hash = 'badhash' "
+            "WHERE previous_hash IS NOT NULL"
+        )
+        conn.commit()
+        conn.close()
+
+        al = AuditLogger(db_path=temp_db)
+        result = al.verify_chain_integrity(limit=100)
+        assert result["verified"] is False
+        assert len(result.get("broken_links", [])) >= 1
+
+    def test_chain_append_failure_prevents_commit(self, temp_db):
+        """If append_verdict_chain_entry raises, the verdict UPDATE is not committed."""
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry
+
+        app_id = "app-fail-test"
+        # Insert a real compliance_memo row using auto-increment id
+        db = get_db()
+        try:
+            db.execute(
+                "INSERT OR IGNORE INTO compliance_memos "
+                "(application_id, memo_data, review_status) VALUES (?, '{}', 'draft')",
+                (app_id,),
+            )
+            db.commit()
+            memo_row = db.execute(
+                "SELECT id FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+                (app_id,),
+            ).fetchone()
+            memo_id = str(memo_row["id"])
+        finally:
+            db.close()
+
+        import unittest.mock as mock
+        import supervisor.audit as sa
+
+        verdict_committed = []
+        db2 = get_db()
+        try:
+            db2.execute(
+                "UPDATE compliance_memos SET supervisor_status = 'CONSISTENT' WHERE id = ?",
+                (memo_id,),
+            )
+            # Simulate a chain write failure — exception must propagate
+            with mock.patch.object(
+                sa,
+                "append_verdict_chain_entry",
+                side_effect=RuntimeError("Simulated chain write failure"),
+            ):
+                sa.append_verdict_chain_entry(
+                    db=db2,
+                    application_id=app_id,
+                    verdict="CONSISTENT",
+                    contradiction_count=0,
+                    supervisor_confidence=1.0,
+                    memo_id=memo_id,
+                )
+            db2.commit()
+            verdict_committed.append(True)
+        except RuntimeError:
+            pass  # Expected — do NOT commit
+        finally:
+            db2.close()
+
+        db3 = get_db()
+        row = db3.execute(
+            "SELECT supervisor_status FROM compliance_memos WHERE id = ?", (memo_id,)
+        ).fetchone()
+        db3.close()
+        assert verdict_committed == [], "commit must not have been reached"
+        # supervisor_status must still be the default (never updated to 'CONSISTENT')
+        assert row["supervisor_status"] != "CONSISTENT"
+
+    def test_verdict_event_type_is_supervisor_verdict(self, temp_db):
+        """Entries written by append_verdict_chain_entry use SUPERVISOR_VERDICT event type."""
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry
+        db = get_db()
+        append_verdict_chain_entry(
+            db=db,
+            application_id="app-evtype",
+            verdict="INCONSISTENT",
+            contradiction_count=2,
+            supervisor_confidence=0.7,
+            memo_id="memo-evtype",
+        )
+        db.commit()
+        db.close()
+
+        rows = self._get_chain_rows(temp_db, application_id="app-evtype")
+        assert len(rows) == 1
+        assert rows[0]["event_type"] == "supervisor_verdict"
+
+    def test_get_entries_returns_verdict_entries(self, temp_db):
+        """AuditLogger.get_entries() returns rows written by append_verdict_chain_entry."""
+        from db import get_db
+        from supervisor.audit import append_verdict_chain_entry, AuditLogger
+        db = get_db()
+        append_verdict_chain_entry(
+            db=db,
+            application_id="app-getentries",
+            verdict="CONSISTENT",
+            contradiction_count=0,
+            supervisor_confidence=0.99,
+            memo_id="memo-ge",
+        )
+        db.commit()
+        db.close()
+
+        al = AuditLogger(db_path=temp_db)
+        entries = al.get_entries(application_id="app-getentries", limit=10)
+        assert len(entries) == 1
+        assert entries[0]["application_id"] == "app-getentries"
+        assert entries[0]["event_type"] == "supervisor_verdict"
+
+    def test_verify_chain_on_empty_table_returns_verified(self, temp_db):
+        """verify_chain_integrity() on an empty table returns verified=True, entries_checked=0."""
+        self._clear_chain(temp_db)
+        from supervisor.audit import AuditLogger
+        al = AuditLogger(db_path=temp_db)
+        result = al.verify_chain_integrity(limit=100)
+        assert result["verified"] is True
+        assert result["entries_checked"] == 0

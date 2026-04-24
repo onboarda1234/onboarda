@@ -8798,6 +8798,25 @@ class MemoSupervisorHandler(BaseHandler):
             except Exception as rec_err:
                 logger.error("Failed to record supervisor decision record for %s: %s", app_id, rec_err)
 
+            # ── Append hash-chain audit entry (fail-closed) ──
+            # This call uses the same open DB connection so the INSERT
+            # participates in the current transaction.  If it raises,
+            # the exception propagates out of the try-block and db.commit()
+            # is never reached, preventing a verdict-without-chain-entry.
+            from supervisor.audit import append_verdict_chain_entry
+            append_verdict_chain_entry(
+                db=db,
+                application_id=app_id,
+                verdict=supervisor_result["verdict"],
+                contradiction_count=supervisor_result.get("contradiction_count", 0),
+                supervisor_confidence=supervisor_result.get("supervisor_confidence", 0.0),
+                memo_id=str(memo_row["id"]),
+                actor_id=user.get("sub", ""),
+                actor_name=user.get("name", ""),
+                actor_role=user.get("role", ""),
+                ip_address=self.get_client_ip(),
+            )
+
             db.commit()
         except Exception as e:
             logger.error(f"Failed to store memo supervisor results for {app_id}: {e}", exc_info=True)
