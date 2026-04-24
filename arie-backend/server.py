@@ -6246,23 +6246,23 @@ class DashboardHandler(BaseHandler):
             stats["recent"] = [dict(r) for r in recent]
         else:
             # Priority D: use a local alias for fixture exclusion params
-            _fp = FIXTURE_APP_FILTER_PARAMS
-            _fwhere = EXCLUDE_FIXTURE_APPS_SQL
-            _fand = f"AND {EXCLUDE_FIXTURE_APPS_SQL}"
-            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE {_fwhere}", _fp).fetchone()["c"]
-            stats["early_stage_applications"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') {_fand}", _fp).fetchone()["c"]
-            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review' {_fand}", _fp).fetchone()["c"]
-            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' {_fand}", _fp).fetchone()["c"]
-            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') {_fand}", _fp).fetchone()["c"]
-            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved' {_fand}", _fp).fetchone()["c"]
-            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected' {_fand}", _fp).fetchone()["c"]
-            stats["edd"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='edd_required' {_fand}", _fp).fetchone()["c"]
+            fixture_params = FIXTURE_APP_FILTER_PARAMS
+            fixture_where = EXCLUDE_FIXTURE_APPS_SQL
+            fixture_and = f"AND {EXCLUDE_FIXTURE_APPS_SQL}"
+            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE {fixture_where}", fixture_params).fetchone()["c"]
+            stats["early_stage_applications"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') {fixture_and}", fixture_params).fetchone()["c"]
+            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review' {fixture_and}", fixture_params).fetchone()["c"]
+            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' {fixture_and}", fixture_params).fetchone()["c"]
+            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') {fixture_and}", fixture_params).fetchone()["c"]
+            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved' {fixture_and}", fixture_params).fetchone()["c"]
+            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected' {fixture_and}", fixture_params).fetchone()["c"]
+            stats["edd"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='edd_required' {fixture_and}", fixture_params).fetchone()["c"]
 
             # Risk distribution
-            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' {_fand}", _fp).fetchone()["c"]
-            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' {_fand}", _fp).fetchone()["c"]
-            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' {_fand}", _fp).fetchone()["c"]
-            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' {_fand}", _fp).fetchone()["c"]
+            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' {fixture_and}", fixture_params).fetchone()["c"]
+            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' {fixture_and}", fixture_params).fetchone()["c"]
+            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' {fixture_and}", fixture_params).fetchone()["c"]
+            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' {fixture_and}", fixture_params).fetchone()["c"]
 
             # Recent applications
             recent = db.execute(f"""
@@ -10362,20 +10362,20 @@ class EDDStatsHandler(BaseHandler):
 
         db = get_db()
         # Priority D: exclude fixture/demo/test EDD cases from pipeline stats
-        _fp = FIXTURE_APP_FILTER_PARAMS
-        _fand = f"AND {EXCLUDE_FIXTURE_LIFECYCLE_SQL}"
-        active = db.execute(f"SELECT COUNT(*) as c FROM edd_cases WHERE stage NOT IN ('edd_approved','edd_rejected') {_fand}", _fp).fetchone()["c"]
-        pending_senior = db.execute(f"SELECT COUNT(*) as c FROM edd_cases WHERE stage = 'pending_senior_review' {_fand}", _fp).fetchone()["c"]
+        fixture_params = FIXTURE_APP_FILTER_PARAMS
+        fixture_and = f"AND {EXCLUDE_FIXTURE_LIFECYCLE_SQL}"
+        active = db.execute(f"SELECT COUNT(*) as c FROM edd_cases WHERE stage NOT IN ('edd_approved','edd_rejected') {fixture_and}", fixture_params).fetchone()["c"]
+        pending_senior = db.execute(f"SELECT COUNT(*) as c FROM edd_cases WHERE stage = 'pending_senior_review' {fixture_and}", fixture_params).fetchone()["c"]
         if USE_POSTGRES:
             completed_month = db.execute(f"""
                 SELECT COUNT(*) as c FROM edd_cases
-                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date_trunc('month', CURRENT_DATE) {_fand}
-            """, _fp).fetchone()["c"]
+                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date_trunc('month', CURRENT_DATE) {fixture_and}
+            """, fixture_params).fetchone()["c"]
         else:
             completed_month = db.execute(f"""
                 SELECT COUNT(*) as c FROM edd_cases
-                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date('now','start of month') {_fand}
-            """, _fp).fetchone()["c"]
+                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date('now','start of month') {fixture_and}
+            """, fixture_params).fetchone()["c"]
         db.close()
 
         self.success({

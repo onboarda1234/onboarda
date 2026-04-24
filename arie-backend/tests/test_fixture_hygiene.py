@@ -45,10 +45,10 @@ def _make_db(path):
     test isolation: each test gets its own schema regardless of the module-level
     DB_PATH cached at import time.
     """
-    import sqlite3 as _sqlite3
+    import sqlite3
     from db import DBConnection, _get_sqlite_schema, _run_migrations
-    raw = _sqlite3.connect(path)
-    raw.row_factory = _sqlite3.Row
+    raw = sqlite3.connect(path)
+    raw.row_factory = sqlite3.Row
     dbc = DBConnection(raw, is_postgres=False)
     # Bootstrap schema and inline migrations
     schema = _get_sqlite_schema()
@@ -136,7 +136,7 @@ class TestFixtureFilterModule:
         assert "a.id LIKE ?" in frag
         assert params == ["f1xed%", "demo-scenario-%"]
 
-        frag_no_alias, params2 = exclude_fixture_applications_fragment("")
+        frag_no_alias, params_no_alias = exclude_fixture_applications_fragment("")
         assert "id LIKE ?" in frag_no_alias
         assert "a.id" not in frag_no_alias
 
