@@ -492,7 +492,12 @@ class AuditLogger:
             ).fetchall()
 
             if not rows:
-                return {"verified": True, "entries_checked": 0}
+                return {
+                    "verified": False,
+                    "status": "no_entries",
+                    "entries_checked": 0,
+                    "reason": "Audit chain is empty — no entries to verify.",
+                }
 
             broken_links = []
             prev_hash = None

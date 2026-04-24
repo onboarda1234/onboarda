@@ -12374,10 +12374,12 @@ async function verifySupervisorAuditChain() {
     var statusEl = document.getElementById('sv-audit-chain-status');
     if (data.error) {
       statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;">Chain verification error: ' + data.error + '</div>';
-    } else if (data.intact || data.valid) {
-      statusEl.innerHTML = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">🔗 Audit chain integrity verified — ' + (data.entries_checked || data.count || 0) + ' entries checked, no tampering detected.</div>';
+    } else if (data.status === 'no_entries') {
+      statusEl.innerHTML = '<div style="padding:10px;background:#fef3c7;border-radius:6px;font-size:12px;color:#92400e;font-weight:600;">⚠️ Audit chain is empty — no supervisor runs have been recorded yet. Run the supervisor on at least one case to populate the chain.</div>';
+    } else if (data.verified && data.entries_checked > 0) {
+      statusEl.innerHTML = '<div style="padding:10px;background:#dcfce7;border-radius:6px;font-size:12px;color:#166534;font-weight:600;">🔗 Audit chain integrity verified — ' + data.entries_checked + ' entries checked, no tampering detected.</div>';
     } else {
-      statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;font-weight:600;">⚠️ Chain integrity issue detected at entry ' + (data.broken_at || 'unknown') + '. ' + (data.message || '') + '</div>';
+      statusEl.innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;font-weight:600;">⚠️ Chain integrity issue detected. ' + (data.broken_links && data.broken_links.length ? data.broken_links.length + ' broken link(s).' : data.reason || '') + '</div>';
     }
   } catch (e) {
     document.getElementById('sv-audit-chain-status').innerHTML = '<div style="padding:10px;background:#fee2e2;border-radius:6px;font-size:12px;color:#991b1b;">Verification failed: ' + e.message + '</div>';
