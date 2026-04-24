@@ -156,6 +156,7 @@ class AuditEventType(str, Enum):
     PIPELINE_STARTED = "pipeline_started"
     PIPELINE_COMPLETED = "pipeline_completed"
     PIPELINE_FAILED = "pipeline_failed"
+    SUPERVISOR_VERDICT = "supervisor_verdict"
     CONFIG_CHANGED = "config_changed"
     AGENT_VERSION_CHANGED = "agent_version_changed"
     PROMPT_VERSION_CHANGED = "prompt_version_changed"

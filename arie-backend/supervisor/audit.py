@@ -36,6 +36,121 @@ from .schemas import (
     Severity,
 )
 
+# ---------------------------------------------------------------------------
+# Standalone transactional helper — does NOT open its own connection
+# ---------------------------------------------------------------------------
+
+def append_verdict_chain_entry(
+    db,
+    application_id: str,
+    verdict: str,
+    contradiction_count: int,
+    supervisor_confidence: float,
+    memo_id: str,
+    actor_id: str = "",
+    actor_name: str = "",
+    actor_role: str = "",
+    ip_address: Optional[str] = None,
+) -> str:
+    """Append a hash-chained audit entry for a memo-supervisor verdict.
+
+    This function operates on the *caller's* open DB connection so the
+    insert participates in the same transaction as the verdict write.
+    The caller must NOT commit before calling this; the function does not
+    commit itself.  If the insert fails the exception propagates to the
+    caller so the outer transaction is never committed (fail-closed).
+
+    The hash payload is byte-for-byte identical to what
+    ``AuditLogger.verify_chain_integrity()`` reconstructs, so entries
+    written here are fully verifiable by the existing verification path.
+
+    Returns:
+        entry_hash (str) — the SHA-256 hex digest of the new entry.
+    Raises:
+        Exception — propagated from the INSERT on failure.
+    """
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    # Retrieve the most recent entry_hash to link the chain.
+    row = db.execute(
+        "SELECT entry_hash FROM supervisor_audit_log ORDER BY timestamp DESC LIMIT 1"
+    ).fetchone()
+    previous_hash: Optional[str] = row["entry_hash"] if row else None
+
+    audit_id = str(uuid4())
+    # Timestamp format must stay identical to AuditEntry.timestamp (schemas.py line ~734)
+    # so that verify_chain_integrity() can reconstruct the same hash.
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    event_type_val = AuditEventType.SUPERVISOR_VERDICT.value
+    severity_val = Severity.INFO.value
+    action = f"Supervisor verdict: {verdict}"
+    detail = f"Contradictions: {contradiction_count}, Confidence: {supervisor_confidence:.3f}"
+    data: Dict[str, Any] = {
+        "verdict": verdict,
+        "contradiction_count": contradiction_count,
+        "supervisor_confidence": supervisor_confidence,
+        "memo_id": memo_id,
+    }
+
+    # Canonical content — structure and key ordering must exactly match the
+    # entry_data dict reconstructed in AuditLogger.verify_chain_integrity().
+    # Rules:
+    #   - Null optional fields are serialised as "" (empty string), not null.
+    #   - previous_hash for the genesis entry is "" (no prior entry).
+    #   - hash_version=2 is the current algorithm version.
+    #   - actor_type is always "officer": memo-supervisor runs are always
+    #     triggered by a human compliance officer via the backoffice UI.
+    #   - sort_keys=True ensures deterministic JSON regardless of dict ordering.
+    content = json.dumps({
+        "audit_id": audit_id,
+        "timestamp": timestamp,
+        "event_type": event_type_val,
+        "severity": severity_val,
+        "pipeline_id": "",
+        "application_id": application_id or "",
+        "run_id": "",
+        "agent_type": "",
+        "actor_type": "officer",
+        "actor_id": actor_id or "",
+        "actor_name": actor_name or "",
+        "actor_role": actor_role or "",
+        "action": action,
+        "detail": detail,
+        "data": data,
+        "previous_hash": previous_hash or "",
+        "hash_version": 2,
+    }, sort_keys=True)
+    entry_hash = hashlib.sha256(content.encode()).hexdigest()
+
+    db.execute(
+        """
+        INSERT INTO supervisor_audit_log (
+            id, timestamp, event_type, severity,
+            pipeline_id, application_id, run_id, agent_type,
+            actor_type, actor_id, actor_name, actor_role,
+            action, detail, data_json,
+            ip_address, session_id,
+            previous_hash, entry_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            audit_id, timestamp, event_type_val, severity_val,
+            None, application_id, None, None,
+            "officer", actor_id or None, actor_name or None, actor_role or None,
+            action, detail, json.dumps(data),
+            ip_address, None,
+            previous_hash, entry_hash,
+        ),
+    )
+
+    logger.info(
+        "AUDIT CHAIN: verdict=%s app=%s entry_hash=%.16s previous_hash=%.16s",
+        verdict, application_id, entry_hash,
+        previous_hash or "GENESIS",
+    )
+    return entry_hash
+
 logger = logging.getLogger("arie.supervisor.audit")
 
 
@@ -364,8 +479,6 @@ class AuditLogger:
         Verify the hash chain integrity of the last N entries.
         Detects tampered or deleted entries.
         """
-        if not self.db_path:
-            return {"verified": False, "reason": "No database configured"}
 
         db = None
         try:
@@ -451,7 +564,7 @@ class AuditLogger:
     ) -> List[Dict[str, Any]]:
         """Query audit entries (read-only)."""
         if not self.db_path:
-            # Return from memory buffer
+            # Fallback: return from in-memory buffer
             entries = list(self._buffer)
             if application_id:
                 entries = [e for e in entries if e.application_id == application_id]
