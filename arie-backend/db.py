@@ -3089,22 +3089,51 @@ def _run_migrations(db: DBConnection):
         "ARF-2026-100428",  # test 2
         "ARF-2026-100427",  # test [QA-R10-mnyuuv7q]
     )
+    # Dialect-aware truthy/falsy literals for the is_fixture column.
+    # PostgreSQL declares the column as BOOLEAN, SQLite as INTEGER.  Writing
+    # an integer literal to a BOOLEAN column raises psycopg2 DatatypeMismatch
+    # and rolls ba which would also
+    # undo the ADD COLUMN and leave every fixture-filter WHERE clause
+    # broken.  Using TRUE/FALSE on Postgres and 1/0 on SQLite is safe in
+    # both dialects.
+    _TRUE_LIT = "TRUE" if db.is_postgres else "1"
+    _FALSE_LIT = "FALSE" if db.is_postgres else "0"
+
+    # Step 1 — schema change in its own transaction.  Committing before the
+    # backfill means a later UPDATE failure cannot rollback the ADD COLUMN
+    # and leave the DB without the column that fixture_filter queries
+    # depend on.
     try:
         if not _safe_column_exists(db, "applications", "is_fixture"):
             if db.is_postgres:
                 db.execute(
-                    "ALTER TABLE applications ADD COLUMN is_fixture BOOLEAN DEFAULT FALSE"
+                    "ALTER TABLE applications ADD COLUMN is_fixture BOOLEAN DEFAULT FALSE NOT NULL"
                 )
             else:
                 db.execute(
-                    "ALTER TABLE applications ADD COLUMN is_fixture INTEGER DEFAULT 0"
+                    "ALTER TABLE applications ADD COLUMN is_fixture INTEGER DEFAULT 0 NOT NULL"
                 )
+            db.commit()
             logger.info("Migration v2.29: Added is_fixture column to applications")
+    except Exception as e:
+        logger.error(
+            "Migration v2.29 schema step failed: %s", e, exc_info=True
+        )
+        try:
+            db.conn.rollback()
+        except Exception:
+            pass
+        # Without the column the backfill cannot run; bail out of v2.29.
+        return
+
+    # Step 2 — data backfill in its own transaction.  A failure here no
+    # longer takes the schema down with it.
+    try:
         # Belt-and-suspenders: mark all existing f1xed% rows as is_fixture.
         # This is safe in every environment: real UUID IDs can never start
         # with 'f1xed' (it contains the letter 'x' absent from hex digits).
         db.execute(
-            "UPDATE applications SET is_fixture = 1 WHERE id LIKE ?",
+            f"UPDATE applications SET is_fixture = {_TRUE_LIT} WHERE id LIKE ?",
             ("f1xed%",),
         )
         # Rogue-ref marking is ENVIRONMENT-SCOPED to prevent hiding real data.
@@ -3126,7 +3155,7 @@ def _run_migrations(db: DBConnection):
             if _is_demo_or_staging_env:
                 # demo/staging: mark the 8 known rogue test rows as fixtures.
                 rows_updated = db.execute(
-                    f"UPDATE applications SET is_fixture = 1 WHERE ref IN ({placeholders})",
+                    f"UPDATE applications SET is_fixture = {_TRUE_LIT} WHERE ref IN ({placeholders})",
                     list(_ROGUE_FIXTURE_REFS),
                 ).rowcount
                 logger.info(
@@ -3136,12 +3165,12 @@ def _run_migrations(db: DBConnection):
                 )
             else:
                 # production / development / testing: restore any real
-                # applications that were incorrectly marked as is_fixture=1
+                # applications that were incorrectly marked as is_fixture=TRUE
                 # by a previous migration run of this block.  Only rows
                 # whose IDs do NOT match the f1xed% namespace are reset;
                 # genuine seeded rows (f1xed%) remain correctly marked.
                 rows_reset = db.execute(
-                    f"UPDATE applications SET is_fixture = 0 "
+                    f"UPDATE applications SET is_fixture = {_FALSE_LIT} "
                     f"WHERE ref IN ({placeholders}) AND id NOT LIKE ?",
                     list(_ROGUE_FIXTURE_REFS) + ["f1xed%"],
                 ).rowcount
@@ -3157,7 +3186,7 @@ def _run_migrations(db: DBConnection):
             "Migration v2.29: is_fixture column ensured and backfill complete"
         )
     except Exception as e:
-        logger.error("Migration v2.29 failed: %s", e, exc_info=True)
+        logger.error("Migration v2.29 backfill failed: %s", e, exc_info=True)
         try:
             db.conn.rollback()
         except Exception:

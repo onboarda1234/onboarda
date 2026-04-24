@@ -182,11 +182,15 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
     status_value = "in_review"
 
     if existing:
+        # NB: is_fixture is BOOLEAN on Postgres / INTEGER on SQLite.  Pass the
+        # value as a parameter so the DB driver adapts it correctly rather
+        # than embedding an integer literal (which psycopg2 rejects against
+        # a BOOLEAN column with DatatypeMismatch).
         db.execute(
             "UPDATE applications SET ref=?, company_name=?, brn=?, country=?, "
             "sector=?, entity_type=?, ownership_structure=?, prescreening_data=?, "
             "risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?, "
-            "status=?, is_fixture=1, updated_at=? WHERE id=?",
+            "status=?, is_fixture=?, updated_at=? WHERE id=?",
             (
                 ref,
                 scen.company_name,
@@ -201,6 +205,7 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
                 risk_dimensions,
                 "standard",
                 status_value,
+                True,
                 now,
                 app_id,
             ),
@@ -213,12 +218,13 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
         )
         return app_id
 
+    # Parameterise is_fixture (see comment in the UPDATE branch above).
     db.execute(
         "INSERT INTO applications "
         "(id, ref, company_name, brn, country, sector, entity_type, "
         "ownership_structure, prescreening_data, risk_score, risk_level, "
         "risk_dimensions, onboarding_lane, status, is_fixture, created_at, updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             app_id,
             ref,
@@ -234,6 +240,7 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
             risk_dimensions,
             "standard",
             status_value,
+            True,
             now,
             now,
         ),
