@@ -9741,10 +9741,8 @@ async function discardActiveDraft() {
       cta.removeAttribute('data-app-ref');
       cta.removeAttribute('data-app-name');
     }
-    if (typeof loadDashboardApplications === 'function') {
-      try { loadDashboardApplications(); } catch (e) {}
-    } else if (typeof loadClientApplications === 'function') {
-      try { loadClientApplications(); } catch (e) {}
+    if (typeof loadMyApplications === 'function') {
+      try { loadMyApplications(); } catch (e) { console.warn('discard refresh failed:', e); }
     }
   } catch (err) {
     console.error('discardActiveDraft failed:', err);

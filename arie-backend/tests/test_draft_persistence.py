@@ -1043,3 +1043,300 @@ def test_portal_draft_discard_uses_in_app_confirmation_not_native():
     assert "window.confirm(" not in src
     assert "Discard your in-progress draft for " not in src
     assert "Delete ' + label + '? This cannot be undone." not in src
+
+
+# ── generate_ref() collision safety (root-cause regression suite) ──────────
+
+def test_generate_ref_uses_max_not_count_after_deletion(api_server):
+    """generate_ref() must return a ref that does not already exist in the DB
+    even after one or more applications are deleted (COUNT-based generation
+    would regenerate a previously-issued ref, causing a UNIQUE violation on
+    INSERT and returning HTTP 500).
+    """
+    from db import get_db
+    import server
+
+    year = __import__('datetime').datetime.now().year
+    prefix = f"ARF-{year}-"
+
+    conn = get_db()
+    _ensure_client(conn, "draftuser_refmax", "draftrefmax@test.com")
+
+    # Find the current max numeric suffix so our inserted refs are safely above it.
+    rows = conn.execute(
+        "SELECT ref FROM applications WHERE ref LIKE ?", (f"{prefix}%",)
+    ).fetchall()
+    existing_max = 100420
+    for r in rows:
+        try:
+            n = int(str(r["ref"])[len(prefix):])
+            if n > existing_max:
+                existing_max = n
+        except (ValueError, IndexError):
+            pass
+
+    # Insert three consecutive refs above the current max.
+    base = existing_max + 1000
+    for i in range(3):
+        ref = f"{prefix}{base + i}"
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO applications
+            (id, ref, client_id, company_name, status, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"refmax_app_{i}", ref, "draftuser_refmax",
+                f"RefMax Corp {i}", "draft", "{}",
+            ),
+        )
+    conn.commit()
+
+    # Delete the middle app — COUNT-based generation would return base+1 (which
+    # still exists), causing a UNIQUE violation.  MAX-based generation must
+    # return base+3 (max existing = base+2, so next = base+3).
+    conn.execute("DELETE FROM applications WHERE id='refmax_app_1'")
+    conn.commit()
+    conn.close()
+
+    ref = server.generate_ref()
+    expected = f"{prefix}{base + 3}"
+    assert ref == expected, (
+        f"generate_ref returned {ref!r} after deletion — expected {expected!r}. "
+        f"COUNT-based generation would return {prefix}{base + 1!s} which already exists."
+    )
+    # Double-check: the returned ref must not already exist in the DB.
+    conn = get_db()
+    collision = conn.execute(
+        "SELECT id FROM applications WHERE ref=?", (ref,)
+    ).fetchone()
+    conn.close()
+    assert collision is None, f"generate_ref() returned {ref!r} which already exists"
+
+
+def test_generate_ref_starts_at_base_when_no_refs_exist():
+    """When the DB is empty (or has no current-year refs) generate_ref() must
+    return the base ref ARF-<year>-100421 without errors."""
+    import server
+    from db import get_db
+
+    # Use the current test DB — just verify the ref has the right prefix/shape
+    ref = server.generate_ref()
+    year = __import__('datetime').datetime.now().year
+    assert ref.startswith(f"ARF-{year}-"), f"ref {ref!r} missing year prefix"
+    suffix = ref.split("-")[-1]
+    assert suffix.isdigit(), f"ref suffix {suffix!r} is not numeric"
+    assert int(suffix) >= 100421
+
+
+def test_pre_submit_save_with_full_real_frontend_payload(api_server):
+    """POST /api/save-resume must return 200 for the exact form_data shape
+    that the real portal frontend sends, including all boolean checkbox states,
+    empty string form fields, and extra metadata keys like appRef and timestamp.
+    """
+    from db import get_db
+
+    conn = get_db()
+    _ensure_client(conn, "draftuser_realshape", "draftrealshape@test.com")
+    conn.close()
+
+    token = _client_token("draftuser_realshape")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Mirrors the exact collectFormData() output from arie-portal.html.
+    real_frontend_form_data = {
+        "appRef": "",
+        "computedRiskLevel": "",
+        "uploadedDocs": [],
+        "timestamp": "2026-04-24T03:15:27.777Z",
+        "prescreening": {
+            "f-reg-name": "Real Shape Holdings Ltd",
+            "f-trade-name": "",
+            "f-reg-address": "",
+            "f-hq-address": "",
+            "f-contact-first": "",
+            "f-contact-last": "",
+            "f-email": "",
+            "f-phone-code": "",
+            "f-mobile": "",
+            "f-website": "",
+            "f-is-licensed": False,
+            "f-licences": "",
+            "f-licence-number": "",
+            "f-licence-authority": "",
+            "f-licence-type": "",
+            "f-inc-country": "Mauritius",
+            "f-inc-date": "",
+            "f-brn": "",
+            "f-sector": "Fintech / Payments",
+            "f-entity-type": "SME / Private Company",
+            "f-ownership-structure": "Simple — direct identifiable UBOs",
+            "f-monthly-volume": "",
+            "f-txn-complexity": "",
+            "f-biz-overview": "",
+            "f-source-wealth-type": "",
+            "f-source-wealth": "",
+            "f-source-init-type": "",
+            "f-source-init": "",
+            "f-source-ongoing-type": "",
+            "f-source-ongoing": "",
+            "f-mgmt": "",
+            "f-intro-method": "",
+            "f-referrer-name": "",
+            "f-authorised-share-capital": "",
+            "f-consent-declaration": False,
+            "f-consent-pricing": False,
+            "f-consent-terms": False,
+        },
+        "kycPersons": {},
+        "servicesRequired": [],
+        "accountPurposes": [],
+        "currencies": [],
+        "countriesOfOperation": [],
+        "targetMarkets": [],
+        "directors": [],
+        "ubos": [],
+        "intermediaries": [],
+    }
+
+    resp = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"form_data": real_frontend_form_data, "last_step": 0},
+        timeout=5,
+    )
+    assert resp.status_code == 200, (
+        f"POST /api/save-resume returned {resp.status_code} for real frontend "
+        f"payload shape. Expected 200. Body: {resp.text}"
+    )
+    body = resp.json()
+    assert body["status"] == "saved"
+    assert body["application_id"]
+    assert body["application_ref"]
+    app_id = body["application_id"]
+
+    # Autosave with application_id must also return 200 (not 500).
+    real_frontend_form_data["prescreening"]["f-biz-overview"] = "Updated overview"
+    autosave_resp = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={
+            "application_id": app_id,
+            "form_data": real_frontend_form_data,
+            "last_step": 0,
+        },
+        timeout=5,
+    )
+    assert autosave_resp.status_code == 200, (
+        f"Autosave (with application_id) returned {autosave_resp.status_code}. "
+        f"Body: {autosave_resp.text}"
+    )
+    assert autosave_resp.json()["application_id"] == app_id
+
+    # Resumed data must persist the updated field.
+    resume_resp = http_requests.get(
+        f"{api_server}/api/save-resume?application_id={app_id}",
+        headers=headers,
+        timeout=5,
+    )
+    assert resume_resp.status_code == 200
+    assert resume_resp.json()["form_data"]["prescreening"]["f-biz-overview"] == "Updated overview"
+
+
+def test_pre_submit_save_reuses_same_draft_across_multiple_autosaves(api_server):
+    """Repeated autosaves without application_id must reuse the same draft
+    application shell — not create a new application on every tick."""
+    from db import get_db
+
+    conn = get_db()
+    _ensure_client(conn, "draftuser_multisave", "draftmultisave@test.com")
+    conn.close()
+
+    token = _client_token("draftuser_multisave")
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {"prescreening": {"f-reg-name": "MultiSave Corp Ltd"}}
+
+    first = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"form_data": payload, "last_step": 0},
+        timeout=5,
+    )
+    assert first.status_code == 200, first.text
+    app_id = first.json()["application_id"]
+
+    # Second and third autosave — omit application_id to simulate autosave
+    # before the frontend has received the first response.
+    for _ in range(2):
+        r = http_requests.post(
+            f"{api_server}/api/save-resume",
+            headers=headers,
+            json={"form_data": payload, "last_step": 0},
+            timeout=5,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["application_id"] == app_id, (
+            "Repeated autosaves must return the same application_id"
+        )
+
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id FROM applications WHERE client_id=? AND status='draft'",
+        ("draftuser_multisave",),
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 1, (
+        f"Expected exactly 1 draft application, found {len(rows)}"
+    )
+
+
+def test_is_unique_constraint_error_helper():
+    """_is_unique_constraint_error must classify real SQLite and PostgreSQL
+    unique-violation messages correctly."""
+    import server
+
+    h = server.SaveResumeHandler
+
+    # SQLite
+    assert h._is_unique_constraint_error(
+        Exception("UNIQUE constraint failed: applications.ref")
+    )
+    # PostgreSQL (psycopg2 IntegrityError string)
+    assert h._is_unique_constraint_error(
+        Exception("duplicate key value violates unique constraint")
+    )
+    assert h._is_unique_constraint_error(
+        Exception('unique violation: Key (ref)=(ARF-2026-100421) already exists')
+    )
+    # Non-unique errors must not be misclassified
+    assert not h._is_unique_constraint_error(
+        Exception("no such column: updated_at")
+    )
+    assert not h._is_unique_constraint_error(None)
+    assert not h._is_unique_constraint_error(Exception(""))
+
+
+# ── Portal wiring: post-discard refresh via loadMyApplications ────────────
+
+def test_portal_discard_active_draft_calls_load_my_applications():
+    """discardActiveDraft() must call loadMyApplications() after a successful
+    discard so the dashboard table and CTA card refresh immediately without
+    requiring the user to navigate away and back."""
+    src = _portal_html()
+    # Find the body of discardActiveDraft (between function start and next fn)
+    discard_fn = src.split("async function discardActiveDraft() {", 1)[1].split(
+        "function renderRecentActivity(apps) {", 1
+    )[0]
+    assert "loadMyApplications()" in discard_fn, (
+        "discardActiveDraft() must call loadMyApplications() to refresh the "
+        "dashboard after a successful discard. "
+        "Previously it called the undefined loadDashboardApplications()."
+    )
+    # Must not call the undefined legacy refresh functions
+    assert "loadDashboardApplications()" not in discard_fn, (
+        "discardActiveDraft() must not call the undefined loadDashboardApplications()"
+    )
+    assert "loadClientApplications()" not in discard_fn, (
+        "discardActiveDraft() must not call the undefined loadClientApplications()"
+    )
+
