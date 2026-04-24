@@ -6262,8 +6262,9 @@ class DashboardHandler(BaseHandler):
 
         if user.get("type") == "client":
             client_id = user["sub"]
-            # Client branch is scoped by client_id; fixtures have no real
-            # client_id so they cannot appear here. No fixture filter needed.
+            # Client branch is scoped by client_id. Fixtures are never assigned
+            # a real client_id, so the client_id WHERE clause acts as an implicit
+            # fixture filter — no explicit fixture exclusion needed here.
             stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE client_id=?", (client_id,)).fetchone()["c"]
             stats["early_stage_applications"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') AND client_id=?", (client_id,)).fetchone()["c"]
             stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?", (client_id,)).fetchone()["c"]
@@ -6311,11 +6312,11 @@ class DashboardHandler(BaseHandler):
             stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'{fx_clause}", fp).fetchone()["c"]
 
             # Recent applications
-            fx_join_clause = "" if show_fx else f" AND {fx_excl}"
+            fx_where_clause = "" if show_fx else f" AND {fx_excl}"
             recent = db.execute(f"""
                 SELECT a.*, u.full_name as assigned_name FROM applications a
                 LEFT JOIN users u ON a.assigned_to = u.id
-                WHERE 1=1{fx_join_clause}
+                WHERE 1=1{fx_where_clause}
                 ORDER BY a.created_at DESC LIMIT 10
             """, fp).fetchall()
             stats["recent"] = [dict(r) for r in recent]

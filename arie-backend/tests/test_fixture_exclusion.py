@@ -212,7 +212,9 @@ class TestFixtureFilterModule(unittest.TestCase):
         sql, params = fixture_app_exclude_clause(table_alias="")
         self.assertIn("id NOT LIKE", sql)
         self.assertIn("is_fixture", sql)
-        # No alias prefix on is_fixture when table_alias is empty
+        # When table_alias is an empty string, columns are referenced directly
+        # without a prefix, so the fragment must contain 'is_fixture' but not
+        # 'a.is_fixture' (which would be the alias-prefixed form).
         self.assertNotIn("a.is_fixture", sql)
 
     def test_fixture_app_id_exclude_clause(self):
