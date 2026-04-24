@@ -74,12 +74,34 @@ def _get_db():
         return None
 
 
-def persist_pipeline_result(result: SupervisorPipelineResult, trigger_type: str = None, trigger_source: str = None):
-    """Persist a pipeline result to the database."""
-    db = _get_db()
-    if db is None:
-        logger.warning("Cannot persist pipeline result: DB not available")
-        return
+def persist_pipeline_result(
+    result: SupervisorPipelineResult,
+    trigger_type: str = None,
+    trigger_source: str = None,
+    _db=None,
+):
+    """Persist a pipeline result to the database.
+
+    Args:
+        result: The completed pipeline result.
+        trigger_type: e.g. "onboarding".
+        trigger_source: e.g. "backoffice:<user_id>".
+        _db: Optional caller-owned DB connection.  When provided the function
+             uses it (no open / close / commit — caller is responsible for all
+             three).  When None the function opens its own connection, commits,
+             and closes it.  Pass an external connection when you need the
+             pipeline-result INSERT and an audit-chain entry to share one
+             transaction (fail-closed transactionality).
+    """
+    _own_db = _db is None
+    if _own_db:
+        db = _get_db()
+        if db is None:
+            logger.warning("Cannot persist pipeline result: DB not available")
+            return
+    else:
+        db = _db
+
     try:
         result_dict = result.to_dict()
         # Include agent_results in the persisted JSON for the detail tab
@@ -141,15 +163,20 @@ def persist_pipeline_result(result: SupervisorPipelineResult, trigger_type: str 
                     result_json,
                 )
             )
-        db.commit()
+        if _own_db:
+            db.commit()
         logger.info("Pipeline result %s persisted to DB for app %s", result.pipeline_id, result.application_id)
     except Exception as e:
         logger.error("Failed to persist pipeline result %s: %s", result.pipeline_id, e)
+        if not _own_db:
+            # Propagate so the caller's transaction is not committed
+            raise
     finally:
-        try:
-            db.close()
-        except Exception:
-            pass
+        if _own_db:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 def load_latest_pipeline_result(application_id: str) -> Optional[Dict[str, Any]]:

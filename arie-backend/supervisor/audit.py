@@ -46,13 +46,17 @@ def append_verdict_chain_entry(
     verdict: str,
     contradiction_count: int,
     supervisor_confidence: float,
-    memo_id: str,
+    memo_id: str = "",
+    pipeline_id: Optional[str] = None,
     actor_id: str = "",
     actor_name: str = "",
     actor_role: str = "",
     ip_address: Optional[str] = None,
 ) -> str:
-    """Append a hash-chained audit entry for a memo-supervisor verdict.
+    """Append a hash-chained audit entry for a supervisor verdict.
+
+    Covers both the memo-supervisor path (MemoSupervisorHandler /
+    ComplianceMemoHandler) and the full pipeline path (SupervisorRunHandler).
 
     This function operates on the *caller's* open DB connection so the
     insert participates in the same transaction as the verdict write.
@@ -63,6 +67,17 @@ def append_verdict_chain_entry(
     The hash payload is byte-for-byte identical to what
     ``AuditLogger.verify_chain_integrity()`` reconstructs, so entries
     written here are fully verifiable by the existing verification path.
+
+    Args:
+        db: Open DB connection (caller-owned transaction).
+        application_id: Application being supervised.
+        verdict: Supervisor verdict string (e.g. CONSISTENT, AWAITING_REVIEW).
+        contradiction_count: Number of contradictions detected.
+        supervisor_confidence: Aggregate confidence score [0.0–1.0].
+        memo_id: Compliance memo row ID (empty string for pipeline-only runs).
+        pipeline_id: Supervisor pipeline ID (None for memo-only runs).
+        actor_id / actor_name / actor_role: Officer context.
+        ip_address: Request IP for audit trail.
 
     Returns:
         entry_hash (str) — the SHA-256 hex digest of the new entry.
@@ -90,7 +105,8 @@ def append_verdict_chain_entry(
         "verdict": verdict,
         "contradiction_count": contradiction_count,
         "supervisor_confidence": supervisor_confidence,
-        "memo_id": memo_id,
+        "memo_id": memo_id or "",
+        "pipeline_id": pipeline_id or "",
     }
 
     # Canonical content — structure and key ordering must exactly match the
@@ -99,15 +115,15 @@ def append_verdict_chain_entry(
     #   - Null optional fields are serialised as "" (empty string), not null.
     #   - previous_hash for the genesis entry is "" (no prior entry).
     #   - hash_version=2 is the current algorithm version.
-    #   - actor_type is always "officer": memo-supervisor runs are always
-    #     triggered by a human compliance officer via the backoffice UI.
+    #   - actor_type is always "officer": supervisor runs are always triggered
+    #     by a human compliance officer via the back-office UI.
     #   - sort_keys=True ensures deterministic JSON regardless of dict ordering.
     content = json.dumps({
         "audit_id": audit_id,
         "timestamp": timestamp,
         "event_type": event_type_val,
         "severity": severity_val,
-        "pipeline_id": "",
+        "pipeline_id": pipeline_id or "",
         "application_id": application_id or "",
         "run_id": "",
         "agent_type": "",
@@ -136,7 +152,7 @@ def append_verdict_chain_entry(
         """,
         (
             audit_id, timestamp, event_type_val, severity_val,
-            None, application_id, None, None,
+            pipeline_id or None, application_id, None, None,
             "officer", actor_id or None, actor_name or None, actor_role or None,
             action, detail, json.dumps(data),
             ip_address, None,
@@ -492,7 +508,12 @@ class AuditLogger:
             ).fetchall()
 
             if not rows:
-                return {"verified": True, "entries_checked": 0}
+                return {
+                    "verified": False,
+                    "status": "no_entries",
+                    "entries_checked": 0,
+                    "reason": "Audit chain is empty — no entries to verify.",
+                }
 
             broken_links = []
             prev_hash = None

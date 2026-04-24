@@ -8027,6 +8027,7 @@ class ComplianceMemoHandler(BaseHandler):
         # Store memo in compliance_memos table
         rule_violations_json = json.dumps(rule_violations) if rule_violations else None
         memo_json = json.dumps(memo)
+        _memo_inserted = False
         try:
             db.execute(
                 "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -8035,6 +8036,7 @@ class ComplianceMemoHandler(BaseHandler):
                  supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json,
                  memo.get("metadata", {}).get("model_version", "v1.0"))
             )
+            _memo_inserted = True
         except Exception as e:
             # Fallback if rule_violations column doesn't exist yet
             logger.warning(f"Memo insert with rule_violations failed (column may not exist): {e}")
@@ -8045,6 +8047,7 @@ class ComplianceMemoHandler(BaseHandler):
                      validation_result["quality_score"], validation_result["validation_status"],
                      supervisor_result["verdict"], supervisor_result["recommendation"])
                 )
+                _memo_inserted = True
             except Exception as e2:
                 logger.warning(f"Memo insert with supervisor columns failed: {e2}")
                 try:
@@ -8052,6 +8055,7 @@ class ComplianceMemoHandler(BaseHandler):
                         "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status) VALUES (?,?,?,?,?)",
                         (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft")
                     )
+                    _memo_inserted = True
                 except Exception as e3:
                     logger.error(f"All memo insert attempts failed for application {real_id}: {e3}", exc_info=True)
 
@@ -8063,6 +8067,26 @@ class ComplianceMemoHandler(BaseHandler):
                     + " | Rule Engine: " + rule_engine_result["engine_status"]
                     + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
                     self.get_client_ip()))
+
+        # ── Append supervisor verdict to audit chain (fail-closed) ──
+        # Only when the memo was successfully inserted so there is a real
+        # persisted supervisor verdict to back.  Uses the same open connection
+        # so the INSERT participates in the current transaction.  If it raises,
+        # the exception propagates and db.commit() is never reached — no
+        # verdict-bearing memo without a corresponding chain entry.
+        if _memo_inserted:
+            from supervisor.audit import append_verdict_chain_entry
+            append_verdict_chain_entry(
+                db=db,
+                application_id=real_id,
+                verdict=supervisor_result["verdict"],
+                contradiction_count=supervisor_result.get("contradiction_count", 0),
+                supervisor_confidence=supervisor_result.get("supervisor_confidence", 0.0),
+                actor_id=user.get("sub", ""),
+                actor_name=user.get("name", ""),
+                actor_role=user.get("role", ""),
+                ip_address=self.get_client_ip(),
+            )
 
         # ── Priority B / Workstream C: audit-log the EDD routing decision ──
         try:
@@ -8138,12 +8162,55 @@ class SupervisorRunHandler(BaseHandler):
                          app_id, e, type(e).__name__, traceback.format_exc())
             return self.error(f"Pipeline execution failed: {type(e).__name__}: {str(e)}", 500)
 
-        # Persist to database (survives restarts)
+        # Persist pipeline result + append audit-chain entry in one transaction
+        # (fail-closed: both commit or neither does).
+        _persist_ok = False
+        db = get_db()
         try:
             from supervisor.api import persist_pipeline_result
-            persist_pipeline_result(result, trigger_type=trigger_type, trigger_source=trigger_source)
+            from supervisor.audit import append_verdict_chain_entry
+            persist_pipeline_result(
+                result,
+                trigger_type=trigger_type,
+                trigger_source=trigger_source,
+                _db=db,
+            )
+            # Derive a canonical verdict string from the pipeline outcome.
+            pipeline_verdict = (result.status or "UNKNOWN").upper()
+            contradiction_count = len(result.contradictions) if result.contradictions else 0
+            aggregate_confidence = (
+                result.case_aggregate.aggregate_confidence
+                if result.case_aggregate else 0.0
+            )
+            append_verdict_chain_entry(
+                db=db,
+                application_id=app["id"],
+                verdict=pipeline_verdict,
+                contradiction_count=contradiction_count,
+                supervisor_confidence=float(aggregate_confidence),
+                pipeline_id=result.pipeline_id,
+                actor_id=user.get("sub", ""),
+                actor_name=user.get("name", ""),
+                actor_role=user.get("role", ""),
+                ip_address=self.get_client_ip(),
+            )
+            db.commit()
+            _persist_ok = True
         except Exception as persist_err:
-            logger.error("Failed to persist pipeline result: %s", persist_err)
+            logger.error(
+                "AUDIT CHAIN WRITE FAILURE for %s: pipeline result and chain entry "
+                "were NOT persisted. Error: %s",
+                app_id, persist_err, exc_info=True,
+            )
+        finally:
+            db.close()
+
+        if not _persist_ok:
+            return self.error(
+                "Supervisor run could not be persisted: the pipeline result and "
+                "audit-chain entry were rolled back. Please retry.",
+                500,
+            )
 
         # Serialize and return results — separate try/except for clearer diagnostics
         try:
@@ -8734,6 +8801,7 @@ class MemoSupervisorHandler(BaseHandler):
         supervisor_result = run_memo_supervisor(memo_data)
 
         # Update memo with supervisor results
+        _persist_ok = False
         try:
             memo_data["supervisor"] = supervisor_result
             memo_data["metadata"]["supervisor_status"] = supervisor_result["verdict"]
@@ -8818,10 +8886,21 @@ class MemoSupervisorHandler(BaseHandler):
             )
 
             db.commit()
+            _persist_ok = True
         except Exception as e:
-            logger.error(f"Failed to store memo supervisor results for {app_id}: {e}", exc_info=True)
+            logger.error(
+                "AUDIT CHAIN WRITE FAILURE for %s: verdict and chain entry were NOT persisted. "
+                "Error: %s",
+                app_id, e, exc_info=True,
+            )
         db.close()
 
+        if not _persist_ok:
+            return self.error(
+                "Supervisor verdict could not be persisted: the memo update and audit-chain "
+                "entry were rolled back. Please retry.",
+                500,
+            )
         self.success(supervisor_result)
 
 
