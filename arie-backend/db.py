@@ -327,6 +327,7 @@ def _get_postgres_schema() -> str:
         pre_approval_officer_id TEXT REFERENCES users(id),
         pre_approval_timestamp TIMESTAMP,
         screening_mode TEXT DEFAULT 'live',
+        is_fixture BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         inputs_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -929,6 +930,7 @@ def _get_sqlite_schema() -> str:
         pre_approval_officer_id TEXT REFERENCES users(id),
         pre_approval_timestamp TEXT,
         screening_mode TEXT DEFAULT 'live',
+        is_fixture INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
         inputs_updated_at TEXT DEFAULT (datetime('now'))
@@ -3043,6 +3045,81 @@ def _run_migrations(db: DBConnection):
             except Exception:
                 pass
 
+    # Migration v2.29: Add is_fixture column to applications and mark rogue
+    # historical test rows.
+    #
+    # Background: Eight historical test rows exist in staging with normal
+    # UUID-like IDs that bypass the canonical ``id LIKE 'f1xed%'`` fixture
+    # filter introduced in Priority D.  They are:
+    #
+    #   ARF-2026-100454  EX06 DualApproval Test Corp
+    #   ARF-2026-100456  EX06 Validation TestCo Ltd
+    #   ARF-2026-100455  HighRisk Dual Approval Test Ltd
+    #   ARF-2026-100421  Pipeline Test Corp Ltd
+    #   ARF-2026-100424  Portal Audit Test Ltd
+    #   ARF-2026-100430  Probe Test Co
+    #   ARF-2026-100428  test 2
+    #   ARF-2026-100427  test [QA-R10-mnyuuv7q]
+    #
+    # These were created before the ``f1xed`` namespace was established.
+    #
+    # Fix: Add an explicit ``is_fixture`` boolean marker column, backfill
+    # all existing ``f1xed%`` rows (belt-and-suspenders), and mark the 8
+    # rogue rows by their stable ``ref`` value.  The fixture_filter module
+    # combines both signals: ``id LIKE 'f1xed%' OR is_fixture``.
+    #
+    # The UPDATE by ref is idempotent and safe in any environment — if the
+    # rogue rows do not exist (fresh dev/test DB), the UPDATE matches
+    # zero rows and succeeds silently.
+    _ROGUE_FIXTURE_REFS = (
+        "ARF-2026-100454",  # EX06 DualApproval Test Corp
+        "ARF-2026-100456",  # EX06 Validation TestCo Ltd
+        "ARF-2026-100455",  # HighRisk Dual Approval Test Ltd
+        "ARF-2026-100421",  # Pipeline Test Corp Ltd
+        "ARF-2026-100424",  # Portal Audit Test Ltd
+        "ARF-2026-100430",  # Probe Test Co
+        "ARF-2026-100428",  # test 2
+        "ARF-2026-100427",  # test [QA-R10-mnyuuv7q]
+    )
+    try:
+        if not _safe_column_exists(db, "applications", "is_fixture"):
+            if db.is_postgres:
+                db.execute(
+                    "ALTER TABLE applications ADD COLUMN is_fixture BOOLEAN DEFAULT FALSE"
+                )
+            else:
+                db.execute(
+                    "ALTER TABLE applications ADD COLUMN is_fixture INTEGER DEFAULT 0"
+                )
+            logger.info("Migration v2.29: Added is_fixture column to applications")
+        # Belt-and-suspenders: mark all existing f1xed% rows as is_fixture.
+        # This makes the column consistent with the ID rule for any seeded
+        # rows that pre-date the column.
+        db.execute(
+            "UPDATE applications SET is_fixture = 1 WHERE id LIKE ?",
+            ("f1xed%",),
+        )
+        # Mark the 8 rogue historical test rows by their stable ref value.
+        if _ROGUE_FIXTURE_REFS:
+            placeholders = ",".join(["?"] * len(_ROGUE_FIXTURE_REFS))
+            rows_updated = db.execute(
+                f"UPDATE applications SET is_fixture = 1 WHERE ref IN ({placeholders})",
+                list(_ROGUE_FIXTURE_REFS),
+            ).rowcount
+            logger.info(
+                "Migration v2.29: Marked %d rogue historical test row(s) as is_fixture",
+                rows_updated or 0,
+            )
+        db.commit()
+        logger.info(
+            "Migration v2.29: is_fixture column ensured and rogue rows marked"
+        )
+    except Exception as e:
+        logger.error("Migration v2.29 failed: %s", e, exc_info=True)
+        try:
+            db.conn.rollback()
+        except Exception:
+            pass
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.

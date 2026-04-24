@@ -186,7 +186,7 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
             "UPDATE applications SET ref=?, company_name=?, brn=?, country=?, "
             "sector=?, entity_type=?, ownership_structure=?, prescreening_data=?, "
             "risk_score=?, risk_level=?, risk_dimensions=?, onboarding_lane=?, "
-            "status=?, updated_at=? WHERE id=?",
+            "status=?, is_fixture=1, updated_at=? WHERE id=?",
             (
                 ref,
                 scen.company_name,
@@ -217,8 +217,8 @@ def _upsert_application(db, audit, scen: ScenarioDef) -> str:
         "INSERT INTO applications "
         "(id, ref, company_name, brn, country, sector, entity_type, "
         "ownership_structure, prescreening_data, risk_score, risk_level, "
-        "risk_dimensions, onboarding_lane, status, created_at, updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "risk_dimensions, onboarding_lane, status, is_fixture, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
         (
             app_id,
             ref,
