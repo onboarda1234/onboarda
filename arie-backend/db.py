@@ -3115,10 +3115,15 @@ def _run_migrations(db: DBConnection):
                     is_demo as _is_demo_env,
                     is_staging as _is_staging_env,
                 )
-                _mark_rogue_refs = _is_demo_env() or _is_staging_env()
-            except Exception:
-                _mark_rogue_refs = False
-            if _mark_rogue_refs:
+                _is_demo_or_staging_env = _is_demo_env() or _is_staging_env()
+            except Exception as _env_err:
+                logger.warning(
+                    "Migration v2.29: could not determine environment from environment.py"
+                    " (%s) — defaulting to non-demo/staging (rogue refs will be reset)",
+                    _env_err,
+                )
+                _is_demo_or_staging_env = False
+            if _is_demo_or_staging_env:
                 # demo/staging: mark the 8 known rogue test rows as fixtures.
                 rows_updated = db.execute(
                     f"UPDATE applications SET is_fixture = 1 WHERE ref IN ({placeholders})",
