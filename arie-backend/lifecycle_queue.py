@@ -44,6 +44,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from fixture_filter import build_exclude_lifecycle_sql, is_fixture_app
+
 # ── Active / historical vocabularies ─────────────────────────────────
 # These mirror the engines' terminal sets (kept in this module so the
 # aggregator is self-contained and trivially testable). The engines remain
@@ -542,7 +544,7 @@ def _python_filter_alert_rows(rows: List[Any], include: str) -> List[Any]:
     return [row for row in rows if _row_matches_alert_include(row, include)]
 
 
-def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
+def _fetch_alerts(db, *, application_id=None, include="active", show_fixtures=False) -> List[Any]:
     from lifecycle_quarantine import (
         legacy_unmapped_where_clause,
         active_or_historical_exclude_legacy_clause,
@@ -564,10 +566,17 @@ def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
         legacy, legacy_params = legacy_unmapped_where_clause()
         sql += f" AND {legacy}"
         params.extend(legacy_params)
+    # Priority D: exclude fixture/demo alerts unless explicitly requested.
+    if not show_fixtures:
+        fxl, fxl_params = build_exclude_lifecycle_sql(alert_sentinel=True)
+        sql += f" AND {fxl}"
+        params.extend(fxl_params)
     sql += " ORDER BY created_at DESC"
     if getattr(db, "is_postgres", False):
         # psycopg2 treats `%` in SQL as pyformat control unless escaped.
         # Quarantine clauses include LIKE 'FIX_SCEN%'; make it safe.
+        # Note: fixture_filter uses parameterised LIKE (?) so its % chars
+        # are in the param values, not the SQL text — no conflict here.
         sql = sql.replace("%", "%%")
     try:
         return db.execute(sql, params).fetchall() or []
@@ -579,7 +588,7 @@ def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
         return _python_filter_alert_rows(rows, include)
 
 
-def _fetch_reviews(db, *, application_id=None, include="active") -> List[Any]:
+def _fetch_reviews(db, *, application_id=None, include="active", show_fixtures=False) -> List[Any]:
     # PR-A: periodic_reviews are NOT subject to quarantine (they have
     # schema-defined CHECK-constrained states). The legacy_unmapped
     # bucket is monitoring_alerts-only.
@@ -590,11 +599,20 @@ def _fetch_reviews(db, *, application_id=None, include="active") -> List[Any]:
     if application_id is not None:
         sql += " AND application_id = ?"
         params.append(application_id)
+    # Priority D: exclude fixture/demo reviews unless explicitly requested.
+    # Use application_id-only exclusion (no trigger_reason sentinel) so that
+    # the query remains compatible with legacy schemas where trigger_reason
+    # may not exist.  All production fixture reviews have f1xed… app IDs,
+    # so the ID-based check is canonical and sufficient.
+    if not show_fixtures:
+        fxl, fxl_params = build_exclude_lifecycle_sql()
+        sql += f" AND {fxl}"
+        params.extend(fxl_params)
     sql += " ORDER BY created_at DESC"
     return db.execute(sql, params).fetchall() or []
 
 
-def _fetch_edd(db, *, application_id=None, include="active") -> List[Any]:
+def _fetch_edd(db, *, application_id=None, include="active", show_fixtures=False) -> List[Any]:
     # PR-A: edd_cases are NOT subject to quarantine (schema-defined
     # CHECK-constrained stages). The legacy_unmapped bucket is
     # monitoring_alerts-only.
@@ -605,6 +623,14 @@ def _fetch_edd(db, *, application_id=None, include="active") -> List[Any]:
     if application_id is not None:
         sql += " AND application_id = ?"
         params.append(application_id)
+    # Priority D: exclude fixture/demo EDD cases unless explicitly requested.
+    # Use application_id-only exclusion (no trigger_notes sentinel) for
+    # legacy schema compatibility.  All production fixture EDD cases have
+    # f1xed… application IDs.
+    if not show_fixtures:
+        fxl, fxl_params = build_exclude_lifecycle_sql()
+        sql += f" AND {fxl}"
+        params.extend(fxl_params)
     sql += " ORDER BY triggered_at DESC"
     return db.execute(sql, params).fetchall() or []
 
@@ -616,6 +642,7 @@ def build_lifecycle_queue(
     types: Optional[Tuple[str, ...]] = None,
     application_id: Optional[str] = None,
     now: Optional[datetime] = None,
+    show_fixtures: bool = False,
 ) -> Dict[str, Any]:
     """Aggregate monitoring alerts, periodic reviews and EDD cases.
 
@@ -626,6 +653,9 @@ def build_lifecycle_queue(
         application_id: scope to a single application or None for all.
         now:            override the reference time for age calculations
                         (test convenience).
+        show_fixtures:  when True, include fixture/demo/test rows and mark
+                        them with ``is_fixture=True``.  Default False
+                        (Priority D containment).
 
     Returns:
         ``{"items": [...], "counts": {...}, "filter": {...}}`` where
@@ -657,19 +687,24 @@ def build_lifecycle_queue(
     # --- Alerts -------------------------------------------------------
     alert_rows: List[Any] = []
     if "alert" in selected_types:
-        alert_rows = _fetch_alerts(db, application_id=application_id, include=include)
+        alert_rows = _fetch_alerts(db, application_id=application_id, include=include, show_fixtures=show_fixtures)
         owner_ids = [_row_get(r, "reviewed_by") for r in alert_rows]
         names = _user_name_map(db, owner_ids)
         for r in alert_rows:
             item = _materialise_alert(r, user_names=names, now=ref_now)
             if _include_item(item):
+                if show_fixtures and is_fixture_app(
+                    str(_row_get(r, "application_id") or ""),
+                    str(_row_get(r, "source_reference") or ""),
+                ):
+                    item["is_fixture"] = True
                 items.append(item)
                 counts["alert"] += 1
 
     # --- Reviews ------------------------------------------------------
     review_rows: List[Any] = []
     if "review" in selected_types:
-        review_rows = _fetch_reviews(db, application_id=application_id, include=include)
+        review_rows = _fetch_reviews(db, application_id=application_id, include=include, show_fixtures=show_fixtures)
         owner_ids = [_row_get(r, "decided_by") for r in review_rows]
         names = _user_name_map(db, owner_ids)
         for r in review_rows:
@@ -680,13 +715,17 @@ def build_lifecycle_queue(
                 now=ref_now,
             )
             if _include_item(item):
+                if show_fixtures and is_fixture_app(
+                    str(_row_get(r, "application_id") or ""),
+                ):
+                    item["is_fixture"] = True
                 items.append(item)
                 counts["review"] += 1
 
     # --- EDD ----------------------------------------------------------
     edd_rows: List[Any] = []
     if "edd" in selected_types:
-        edd_rows = _fetch_edd(db, application_id=application_id, include=include)
+        edd_rows = _fetch_edd(db, application_id=application_id, include=include, show_fixtures=show_fixtures)
         officer_ids: List[str] = []
         for r in edd_rows:
             for k in ("assigned_officer", "senior_reviewer"):
@@ -706,6 +745,10 @@ def build_lifecycle_queue(
                 now=ref_now,
             )
             if _include_item(item):
+                if show_fixtures and is_fixture_app(
+                    str(_row_get(r, "application_id") or ""),
+                ):
+                    item["is_fixture"] = True
                 items.append(item)
                 counts["edd"] += 1
 
@@ -739,6 +782,7 @@ def build_lifecycle_queue(
             "include": include,
             "types": list(selected_types),
             "application_id": application_id,
+            "show_fixtures": show_fixtures,
         },
     }
 
