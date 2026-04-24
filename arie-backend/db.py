@@ -3048,7 +3048,7 @@ def _run_migrations(db: DBConnection):
     # Migration v2.29: Add is_fixture column to applications and mark rogue
     # historical test rows.
     #
-    # Background: Eight historical test rows exist in staging with normal
+    # Background: Eight historical test rows exist in demo/staging with normal
     # UUID-like IDs that bypass the canonical ``id LIKE 'f1xed%'`` fixture
     # filter introduced in Priority D.  They are:
     #
@@ -3068,9 +3068,17 @@ def _run_migrations(db: DBConnection):
     # rogue rows by their stable ``ref`` value.  The fixture_filter module
     # combines both signals: ``id LIKE 'f1xed%' OR is_fixture``.
     #
-    # The UPDATE by ref is idempotent and safe in any environment — if the
-    # rogue rows do not exist (fresh dev/test DB), the UPDATE matches
-    # zero rows and succeeds silently.
+    # IMPORTANT — environment guard on the rogue-ref UPDATE:
+    # The rogue refs share the same sequential ref range as the first real
+    # customer applications created in any environment (since
+    # _REF_BASE_NUMBER = 100421).  Unconditionally marking these refs as
+    # is_fixture=1 on every startup will hide real production/pilot
+    # applications from every Back Office query.
+    # The rogue-ref UPDATE therefore runs ONLY in demo/staging environments
+    # (where those rows are known test data).  In all other environments
+    # (production, development, testing) the code instead resets any rows
+    # that were incorrectly marked by a previous migration run, restoring
+    # Back Office visibility for real applications.
     _ROGUE_FIXTURE_REFS = (
         "ARF-2026-100454",  # EX06 DualApproval Test Corp
         "ARF-2026-100456",  # EX06 Validation TestCo Ltd
@@ -3093,26 +3101,60 @@ def _run_migrations(db: DBConnection):
                 )
             logger.info("Migration v2.29: Added is_fixture column to applications")
         # Belt-and-suspenders: mark all existing f1xed% rows as is_fixture.
-        # This makes the column consistent with the ID rule for any seeded
-        # rows that pre-date the column.
+        # This is safe in every environment: real UUID IDs can never start
+        # with 'f1xed' (it contains the letter 'x' absent from hex digits).
         db.execute(
             "UPDATE applications SET is_fixture = 1 WHERE id LIKE ?",
             ("f1xed%",),
         )
-        # Mark the 8 rogue historical test rows by their stable ref value.
+        # Rogue-ref marking is ENVIRONMENT-SCOPED to prevent hiding real data.
         if _ROGUE_FIXTURE_REFS:
             placeholders = ",".join(["?"] * len(_ROGUE_FIXTURE_REFS))
-            rows_updated = db.execute(
-                f"UPDATE applications SET is_fixture = 1 WHERE ref IN ({placeholders})",
-                list(_ROGUE_FIXTURE_REFS),
-            ).rowcount
-            logger.info(
-                "Migration v2.29: Marked %d rogue historical test row(s) as is_fixture",
-                rows_updated or 0,
-            )
+            try:
+                from environment import (
+                    is_demo as _is_demo_env,
+                    is_staging as _is_staging_env,
+                )
+                _is_demo_or_staging_env = _is_demo_env() or _is_staging_env()
+            except Exception as _env_err:
+                logger.warning(
+                    "Migration v2.29: could not determine environment from environment.py"
+                    " (%s) — defaulting to non-demo/staging (rogue refs will be reset)",
+                    _env_err,
+                )
+                _is_demo_or_staging_env = False
+            if _is_demo_or_staging_env:
+                # demo/staging: mark the 8 known rogue test rows as fixtures.
+                rows_updated = db.execute(
+                    f"UPDATE applications SET is_fixture = 1 WHERE ref IN ({placeholders})",
+                    list(_ROGUE_FIXTURE_REFS),
+                ).rowcount
+                logger.info(
+                    "Migration v2.29: Marked %d rogue historical test row(s) as is_fixture"
+                    " (demo/staging environment)",
+                    rows_updated or 0,
+                )
+            else:
+                # production / development / testing: restore any real
+                # applications that were incorrectly marked as is_fixture=1
+                # by a previous migration run of this block.  Only rows
+                # whose IDs do NOT match the f1xed% namespace are reset;
+                # genuine seeded rows (f1xed%) remain correctly marked.
+                rows_reset = db.execute(
+                    f"UPDATE applications SET is_fixture = 0 "
+                    f"WHERE ref IN ({placeholders}) AND id NOT LIKE ?",
+                    list(_ROGUE_FIXTURE_REFS) + ["f1xed%"],
+                ).rowcount
+                if rows_reset:
+                    logger.warning(
+                        "Migration v2.29: Restored %d real application(s) incorrectly "
+                        "marked as is_fixture — rogue-ref reset applied "
+                        "(non-demo/staging environment)",
+                        rows_reset,
+                    )
         db.commit()
         logger.info(
-            "Migration v2.29: is_fixture column ensured and rogue rows marked"
+            "Migration v2.29: is_fixture column ensured and backfill complete"
         )
     except Exception as e:
         logger.error("Migration v2.29 failed: %s", e, exc_info=True)
