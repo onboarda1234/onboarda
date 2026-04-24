@@ -1066,7 +1066,7 @@ def test_generate_ref_uses_max_not_count_after_deletion(api_server):
     rows = conn.execute(
         "SELECT ref FROM applications WHERE ref LIKE ?", (f"{prefix}%",)
     ).fetchall()
-    existing_max = 100420
+    existing_max = server._REF_BASE_NUMBER - 1
     for r in rows:
         try:
             n = int(str(r["ref"])[len(prefix):])
@@ -1126,7 +1126,7 @@ def test_generate_ref_starts_at_base_when_no_refs_exist():
     assert ref.startswith(f"ARF-{year}-"), f"ref {ref!r} missing year prefix"
     suffix = ref.split("-")[-1]
     assert suffix.isdigit(), f"ref suffix {suffix!r} is not numeric"
-    assert int(suffix) >= 100421
+    assert int(suffix) >= server._REF_BASE_NUMBER
 
 
 def test_pre_submit_save_with_full_real_frontend_payload(api_server):

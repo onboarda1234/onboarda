@@ -1413,6 +1413,9 @@ def init_db():
 # ── Extracted modules: auth.py, rule_engine.py, screening.py, memo_handler.py,
 # ── validation_engine.py, supervisor_engine.py (see Sprint 2 architecture)
 
+_REF_BASE_NUMBER = 100421  # First issued ref suffix — all refs start from ARF-YYYY-100421
+
+
 def generate_ref():
     """Generate a unique application reference like ARF-2026-100429.
 
@@ -1433,7 +1436,7 @@ def generate_ref():
         ).fetchall()
     finally:
         db.close()
-    max_num = 100420
+    max_num = _REF_BASE_NUMBER - 1  # one below the first valid ref
     for row in rows:
         ref_val = row["ref"] if isinstance(row, dict) else row[0]
         try:
