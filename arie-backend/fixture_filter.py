@@ -43,9 +43,10 @@ from typing import List, Optional, Tuple
 
 # The reserved application-id prefix.  All fixture scenario rows share
 # IDs that start with this literal string.  Real UUIDs (hex-only) cannot
-# collide with it because ``f1xed`` contains the digit ``1`` in position
-# two, making it visually distinct from a random UUID hex, and because the
-# seeder documentation explicitly marks this as a *reserved namespace*.
+# collide with it because ``f1xed`` contains the digit ``1`` as its second
+# character (index 1), making it visually distinct from a random UUID hex,
+# and because the seeder documentation explicitly marks this as a
+# *reserved namespace*.
 FIXTURE_APP_ID_PATTERN: str = "f1xed%"
 
 

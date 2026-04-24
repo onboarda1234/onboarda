@@ -6263,7 +6263,7 @@ class DashboardHandler(BaseHandler):
         if user.get("type") == "client":
             client_id = user["sub"]
             # Client branch is scoped by client_id; fixtures have no real
-            # client_id so they cannot appear here.  No fixture filter needed.
+            # client_id so they cannot appear here. No fixture filter needed.
             stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE client_id=?", (client_id,)).fetchone()["c"]
             stats["early_stage_applications"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') AND client_id=?", (client_id,)).fetchone()["c"]
             stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?", (client_id,)).fetchone()["c"]
