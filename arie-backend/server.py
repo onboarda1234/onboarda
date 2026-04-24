@@ -1413,13 +1413,39 @@ def init_db():
 # ── Extracted modules: auth.py, rule_engine.py, screening.py, memo_handler.py,
 # ── validation_engine.py, supervisor_engine.py (see Sprint 2 architecture)
 
+_REF_BASE_NUMBER = 100421  # First issued ref suffix — all refs start from ARF-YYYY-100421
+
+
 def generate_ref():
-    """Generate application reference like ARF-2026-100429"""
-    db = get_db()
-    count = db.execute("SELECT COUNT(*) as c FROM applications").fetchone()["c"]
-    db.close()
+    """Generate a unique application reference like ARF-2026-100429.
+
+    Uses the maximum existing numeric suffix for the current year rather than
+    COUNT(*) so that refs remain monotonically increasing even after
+    application deletions. COUNT-based generation regenerates previously-issued
+    refs when applications are deleted, causing UNIQUE constraint violations
+    (HTTP 500) on staging databases where draft discard and demo resets delete
+    rows.  MAX-based generation is safe regardless of deletion history.
+    """
     year = datetime.now().year
-    return f"ARF-{year}-{100421 + count}"
+    prefix = f"ARF-{year}-"
+    db = get_db()
+    try:
+        rows = db.execute(
+            "SELECT ref FROM applications WHERE ref LIKE ?",
+            (f"{prefix}%",),
+        ).fetchall()
+    finally:
+        db.close()
+    max_num = _REF_BASE_NUMBER - 1  # one below the first valid ref
+    for row in rows:
+        ref_val = row["ref"] if isinstance(row, dict) else row[0]
+        try:
+            num = int(str(ref_val)[len(prefix):])
+            if num > max_num:
+                max_num = num
+        except (ValueError, IndexError, TypeError):
+            pass
+    return f"{prefix}{max_num + 1}"
 
 from screening import (
     screen_sumsub_aml, _simulate_aml_screen,
@@ -6318,6 +6344,17 @@ class SaveResumeHandler(BaseHandler):
             or ("does not exist" in msg and col in msg)
         )
 
+    @staticmethod
+    def _is_unique_constraint_error(exc):
+        """Detect UNIQUE constraint violations in both SQLite and PostgreSQL."""
+        msg = str(exc or "").lower()
+        return (
+            "unique constraint failed" in msg       # SQLite
+            or "unique violation" in msg            # PostgreSQL (psycopg2)
+            or "duplicate key value" in msg         # PostgreSQL (detail message)
+            or "already exists" in msg              # PostgreSQL (some messages)
+        )
+
     def _ensure_pre_submit_draft_application(self, db, client_id, form_data):
         """Create or reuse a draft application shell before first submit."""
         normalized_from_session = normalize_saved_session_prescreening(form_data) or {}
@@ -6357,29 +6394,44 @@ class SaveResumeHandler(BaseHandler):
             if candidate == normalized_name:
                 return row
 
+        # Insert the new draft application shell.  Retry up to 3 times on the
+        # rare UNIQUE ref collision that can still occur under high concurrency
+        # (the MAX-based generate_ref() already eliminates the deletion-caused
+        # systematic collision; this loop covers the concurrent-create window).
         app_id = uuid.uuid4().hex[:16]
-        ref = generate_ref()
-        db.execute(
-            """
-            INSERT INTO applications (
-                id, ref, client_id, company_name, brn, country, sector,
-                entity_type, ownership_structure, prescreening_data, status
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                app_id,
-                ref,
-                client_id,
-                company_name,
-                first_non_empty(normalized_prescreening.get("brn"), ""),
-                first_non_empty(normalized_prescreening.get("country_of_incorporation"), ""),
-                first_non_empty(normalized_prescreening.get("sector"), ""),
-                first_non_empty(normalized_prescreening.get("entity_type"), ""),
-                first_non_empty(normalized_prescreening.get("ownership_structure"), ""),
-                json.dumps(normalized_prescreening),
-                "draft",
-            )
-        )
+        for _ref_attempt in range(3):
+            ref = generate_ref()
+            try:
+                db.execute(
+                    """
+                    INSERT INTO applications (
+                        id, ref, client_id, company_name, brn, country, sector,
+                        entity_type, ownership_structure, prescreening_data, status
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        app_id,
+                        ref,
+                        client_id,
+                        company_name,
+                        first_non_empty(normalized_prescreening.get("brn"), ""),
+                        first_non_empty(normalized_prescreening.get("country_of_incorporation"), ""),
+                        first_non_empty(normalized_prescreening.get("sector"), ""),
+                        first_non_empty(normalized_prescreening.get("entity_type"), ""),
+                        first_non_empty(normalized_prescreening.get("ownership_structure"), ""),
+                        json.dumps(normalized_prescreening),
+                        "draft",
+                    )
+                )
+                break  # INSERT succeeded
+            except Exception as exc:
+                if self._is_unique_constraint_error(exc) and _ref_attempt < 2:
+                    logger.warning(
+                        "generate_ref collision on attempt %d (ref=%s) — retrying",
+                        _ref_attempt + 1, ref,
+                    )
+                    continue
+                raise
         return {"id": app_id, "ref": ref, "company_name": company_name, "status": "draft"}
 
     # ── HTTP methods ────────────────────────────────────────────
