@@ -602,7 +602,7 @@ def _fetch_reviews(db, *, application_id=None, include="active", show_fixtures=F
     # Priority D: exclude fixture/demo reviews unless explicitly requested.
     # Use application_id-only exclusion (no trigger_reason sentinel) so that
     # the query remains compatible with legacy schemas where trigger_reason
-    # may not exist.  All production fixture reviews have f1xed… app IDs,
+    # may not exist.  All production fixture reviews have f1xed... app IDs,
     # so the ID-based check is canonical and sufficient.
     if not show_fixtures:
         fxl, fxl_params = build_exclude_lifecycle_sql()
@@ -626,7 +626,7 @@ def _fetch_edd(db, *, application_id=None, include="active", show_fixtures=False
     # Priority D: exclude fixture/demo EDD cases unless explicitly requested.
     # Use application_id-only exclusion (no trigger_notes sentinel) for
     # legacy schema compatibility.  All production fixture EDD cases have
-    # f1xed… application IDs.
+    # f1xed... application IDs.
     if not show_fixtures:
         fxl, fxl_params = build_exclude_lifecycle_sql()
         sql += f" AND {fxl}"

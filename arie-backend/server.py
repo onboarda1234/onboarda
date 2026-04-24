@@ -6318,7 +6318,7 @@ class DashboardHandler(BaseHandler):
                 f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND {_fx}",
                 _fparams).fetchone()["c"]
 
-            # Recent applications — fixture/demo rows excluded by default
+            # Recent applications -- fixture/demo rows excluded by default
             _fxa, _fxaparams = build_exclude_apps_sql("a")
             recent = db.execute(f"""
                 SELECT a.*, u.full_name as assigned_name FROM applications a
