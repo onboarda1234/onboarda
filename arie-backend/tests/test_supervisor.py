@@ -720,10 +720,6 @@ class TestAuditChainEntry:
         supervisor_result = run_memo_supervisor(memo_data)
         from supervisor.audit import append_verdict_chain_entry
         db2 = get_db()
-        db2.execute(
-            "SELECT id FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
-            (app_id,),
-        )
         memo_row = db2.execute(
             "SELECT id FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
             (app_id,),
