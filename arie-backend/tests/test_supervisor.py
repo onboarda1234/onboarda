@@ -1097,12 +1097,13 @@ class TestRealRuntimeAuditChainPaths:
         verifies that the three supervisor routes exist and map to the expected
         handler class names in server.py.
         """
-        server_src = open(
+        with open(
             __import__("os").path.join(
                 __import__("os").path.dirname(__import__("os").path.dirname(__file__)),
                 "server.py",
             )
-        ).read()
+        ) as fh:
+            server_src = fh.read()
 
         # Route 1: POST /api/applications/{id}/supervisor/run → SupervisorRunHandler
         assert 'supervisor/run", SupervisorRunHandler' in server_src, \
