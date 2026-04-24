@@ -8734,6 +8734,7 @@ class MemoSupervisorHandler(BaseHandler):
         supervisor_result = run_memo_supervisor(memo_data)
 
         # Update memo with supervisor results
+        _persist_ok = False
         try:
             memo_data["supervisor"] = supervisor_result
             memo_data["metadata"]["supervisor_status"] = supervisor_result["verdict"]
@@ -8818,10 +8819,22 @@ class MemoSupervisorHandler(BaseHandler):
             )
 
             db.commit()
+            _persist_ok = True
         except Exception as e:
-            logger.error(f"Failed to store memo supervisor results for {app_id}: {e}", exc_info=True)
+            logger.error(
+                "AUDIT CHAIN WRITE FAILURE for %s: verdict and chain entry were NOT persisted. "
+                "Error: %s",
+                app_id, e, exc_info=True,
+            )
+            _persist_ok = False
         db.close()
 
+        if not _persist_ok:
+            return self.error(
+                "Supervisor verdict could not be persisted: the memo update and audit-chain "
+                "entry were rolled back. Please retry.",
+                500,
+            )
         self.success(supervisor_result)
 
 
