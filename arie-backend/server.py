@@ -137,6 +137,15 @@ from edd_routing_policy import (
     emit_routing_audit as _emit_edd_routing_audit,
 )
 
+# Priority D — Fixture Hygiene: exclude seeder/demo/test applications from
+# all normal officer-facing and externally-visible surfaces.
+from fixture_filter import (
+    EXCLUDE_FIXTURE_APPS_SQL,
+    EXCLUDE_FIXTURE_APPS_SQL_A,
+    EXCLUDE_FIXTURE_LIFECYCLE_SQL,
+    FIXTURE_APP_FILTER_PARAMS,
+)
+
 
 # ── Priority B.2 / Workstream A: EDD route actuation ─────────────────
 # When the deterministic EDD routing policy returns route="edd", this
@@ -2034,6 +2043,9 @@ class ApplicationsHandler(BaseHandler):
             WHERE 1=1
         """
         params = []
+        # Priority D: exclude fixture/demo/test applications by default
+        query += f" AND {EXCLUDE_FIXTURE_APPS_SQL_A}"
+        params.extend(FIXTURE_APP_FILTER_PARAMS)
 
         # Clients can only see their own
         if user["type"] == "client":
@@ -5365,6 +5377,9 @@ class ReportHandler(BaseHandler):
         # Build query
         conditions = []
         params = []
+        # Priority D: exclude fixture/demo/test applications from reports
+        conditions.append(EXCLUDE_FIXTURE_APPS_SQL_A)
+        params.extend(FIXTURE_APP_FILTER_PARAMS)
         if status:
             conditions.append("a.status=?")
             params.append(status)
@@ -5458,6 +5473,9 @@ class ReportAnalyticsHandler(BaseHandler):
             # Build dynamic WHERE clause for applications
             conditions = []
             params = []
+            # Priority D: exclude fixture/demo/test applications from analytics
+            conditions.append(EXCLUDE_FIXTURE_APPS_SQL_A)
+            params.extend(FIXTURE_APP_FILTER_PARAMS)
             if date_from:
                 conditions.append("a.created_at >= ?")
                 params.append(date_from)
@@ -5631,6 +5649,9 @@ class ReportAnalyticsHandler(BaseHandler):
                 # EDD stats respect all active filters via application join
                 edd_conditions = []
                 edd_params = []
+                # Priority D: exclude fixture/demo/test applications from EDD stats
+                edd_conditions.append(EXCLUDE_FIXTURE_APPS_SQL_A)
+                edd_params.extend(FIXTURE_APP_FILTER_PARAMS)
                 if date_from:
                     edd_conditions.append("a.created_at >= ?")
                     edd_params.append(date_from)
@@ -6224,27 +6245,32 @@ class DashboardHandler(BaseHandler):
             """, (client_id,)).fetchall()
             stats["recent"] = [dict(r) for r in recent]
         else:
-            stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications").fetchone()["c"]
-            stats["early_stage_applications"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted')").fetchone()["c"]
-            stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review'").fetchone()["c"]
-            stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'").fetchone()["c"]
-            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted')").fetchone()["c"]
-            stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved'").fetchone()["c"]
-            stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected'").fetchone()["c"]
-            stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required'").fetchone()["c"]
+            # Priority D: use a local alias for fixture exclusion params
+            _fp = FIXTURE_APP_FILTER_PARAMS
+            _fwhere = EXCLUDE_FIXTURE_APPS_SQL
+            _fand = f"AND {EXCLUDE_FIXTURE_APPS_SQL}"
+            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE {_fwhere}", _fp).fetchone()["c"]
+            stats["early_stage_applications"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') {_fand}", _fp).fetchone()["c"]
+            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review' {_fand}", _fp).fetchone()["c"]
+            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' {_fand}", _fp).fetchone()["c"]
+            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') {_fand}", _fp).fetchone()["c"]
+            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved' {_fand}", _fp).fetchone()["c"]
+            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected' {_fand}", _fp).fetchone()["c"]
+            stats["edd"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='edd_required' {_fand}", _fp).fetchone()["c"]
 
             # Risk distribution
-            stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'").fetchone()["c"]
-            stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'").fetchone()["c"]
-            stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'").fetchone()["c"]
-            stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'").fetchone()["c"]
+            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' {_fand}", _fp).fetchone()["c"]
+            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' {_fand}", _fp).fetchone()["c"]
+            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' {_fand}", _fp).fetchone()["c"]
+            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' {_fand}", _fp).fetchone()["c"]
 
             # Recent applications
-            recent = db.execute("""
+            recent = db.execute(f"""
                 SELECT a.*, u.full_name as assigned_name FROM applications a
                 LEFT JOIN users u ON a.assigned_to = u.id
+                WHERE {EXCLUDE_FIXTURE_APPS_SQL_A}
                 ORDER BY a.created_at DESC LIMIT 10
-            """).fetchall()
+            """, FIXTURE_APP_FILTER_PARAMS).fetchall()
             stats["recent"] = [dict(r) for r in recent]
 
         db.close()
@@ -6614,8 +6640,9 @@ def upsert_screening_review(db, application_id, subject_type, subject_name, disp
 
 
 def _build_screening_queue_payload(db, user):
-    query = "SELECT * FROM applications WHERE 1=1"
-    params = []
+    # Priority D: exclude fixture/demo/test applications from screening queue
+    query = f"SELECT * FROM applications WHERE {EXCLUDE_FIXTURE_APPS_SQL}"
+    params = list(FIXTURE_APP_FILTER_PARAMS)
     if user["type"] == "client":
         query += " AND client_id = ?"
         params.append(user["sub"])
@@ -7781,20 +7808,20 @@ class MonitoringDashboardHandler(BaseHandler):
             "periodic_review_due": 0
         }
 
-        # Count applications pending compliance review
-        compliance_review = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted')").fetchone()["c"]
+        # Count applications pending compliance review (Priority D: exclude fixtures)
+        compliance_review = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND {EXCLUDE_FIXTURE_APPS_SQL}", FIXTURE_APP_FILTER_PARAMS).fetchone()["c"]
         stats["clients_under_review"] = compliance_review
 
-        # Count high-risk alerts
-        high_risk = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level IN ('HIGH','VERY_HIGH')").fetchone()["c"]
+        # Count high-risk alerts (Priority D: exclude fixtures)
+        high_risk = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level IN ('HIGH','VERY_HIGH') AND {EXCLUDE_FIXTURE_APPS_SQL}", FIXTURE_APP_FILTER_PARAMS).fetchone()["c"]
         stats["alerts"] = high_risk
 
-        # Get recent high-risk applications for alert summary
-        recent_alerts = db.execute("""
+        # Get recent high-risk applications for alert summary (Priority D: exclude fixtures)
+        recent_alerts = db.execute(f"""
             SELECT ref, company_name, risk_level, risk_score, created_at FROM applications
-            WHERE risk_level IN ('HIGH','VERY_HIGH')
+            WHERE risk_level IN ('HIGH','VERY_HIGH') AND {EXCLUDE_FIXTURE_APPS_SQL}
             ORDER BY created_at DESC LIMIT 10
-        """).fetchall()
+        """, FIXTURE_APP_FILTER_PARAMS).fetchall()
         stats["high_risk_alerts"] = [dict(a) for a in recent_alerts]
 
         db.close()
@@ -7810,14 +7837,15 @@ class MonitoringClientsHandler(BaseHandler):
 
         db = get_db()
 
-        # Get all applications grouped by status/stage
-        applications = db.execute("""
+        # Get all applications grouped by status/stage (Priority D: exclude fixtures)
+        applications = db.execute(f"""
             SELECT a.id, a.ref, a.company_name, a.status, a.risk_level, a.risk_score,
                    a.created_at, u.full_name as assigned_to
             FROM applications a
             LEFT JOIN users u ON a.assigned_to = u.id
+            WHERE {EXCLUDE_FIXTURE_APPS_SQL_A}
             ORDER BY a.created_at DESC
-        """).fetchall()
+        """, FIXTURE_APP_FILTER_PARAMS).fetchall()
 
         clients = {}
         for app in applications:
@@ -7843,8 +7871,9 @@ class MonitoringAlertCreateHandler(BaseHandler):
         client_id = self.get_argument("client", None)
 
         db = get_db()
-        query = "SELECT * FROM monitoring_alerts WHERE 1=1"
-        params = []
+        # Priority D: exclude fixture/demo/test alerts from normal officer views
+        query = f"SELECT * FROM monitoring_alerts WHERE {EXCLUDE_FIXTURE_LIFECYCLE_SQL}"
+        params = list(FIXTURE_APP_FILTER_PARAMS)
 
         if severity:
             query += " AND severity = ?"
@@ -9425,8 +9454,9 @@ class PeriodicReviewsListHandler(BaseHandler):
         status_filter = self.get_argument("status", None)
         db = get_db()
 
-        query = "SELECT * FROM periodic_reviews WHERE 1=1"
-        params = []
+        # Priority D: exclude fixture/demo/test reviews from normal officer views
+        query = f"SELECT * FROM periodic_reviews WHERE {EXCLUDE_FIXTURE_LIFECYCLE_SQL}"
+        params = list(FIXTURE_APP_FILTER_PARAMS)
 
         if status_filter:
             query += " AND status = ?"
@@ -10137,8 +10167,9 @@ class EDDListHandler(BaseHandler):
         assigned = self.get_argument("assigned_officer", None)
 
         db = get_db()
-        query = "SELECT * FROM edd_cases WHERE 1=1"
-        params = []
+        # Priority D: exclude fixture/demo/test EDD cases from normal officer views
+        query = f"SELECT * FROM edd_cases WHERE {EXCLUDE_FIXTURE_LIFECYCLE_SQL}"
+        params = list(FIXTURE_APP_FILTER_PARAMS)
 
         if stage:
             query += " AND stage = ?"
@@ -10330,18 +10361,21 @@ class EDDStatsHandler(BaseHandler):
             return
 
         db = get_db()
-        active = db.execute("SELECT COUNT(*) as c FROM edd_cases WHERE stage NOT IN ('edd_approved','edd_rejected')").fetchone()["c"]
-        pending_senior = db.execute("SELECT COUNT(*) as c FROM edd_cases WHERE stage = 'pending_senior_review'").fetchone()["c"]
+        # Priority D: exclude fixture/demo/test EDD cases from pipeline stats
+        _fp = FIXTURE_APP_FILTER_PARAMS
+        _fand = f"AND {EXCLUDE_FIXTURE_LIFECYCLE_SQL}"
+        active = db.execute(f"SELECT COUNT(*) as c FROM edd_cases WHERE stage NOT IN ('edd_approved','edd_rejected') {_fand}", _fp).fetchone()["c"]
+        pending_senior = db.execute(f"SELECT COUNT(*) as c FROM edd_cases WHERE stage = 'pending_senior_review' {_fand}", _fp).fetchone()["c"]
         if USE_POSTGRES:
-            completed_month = db.execute("""
+            completed_month = db.execute(f"""
                 SELECT COUNT(*) as c FROM edd_cases
-                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date_trunc('month', CURRENT_DATE)
-            """).fetchone()["c"]
+                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date_trunc('month', CURRENT_DATE) {_fand}
+            """, _fp).fetchone()["c"]
         else:
-            completed_month = db.execute("""
+            completed_month = db.execute(f"""
                 SELECT COUNT(*) as c FROM edd_cases
-                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date('now','start of month')
-            """).fetchone()["c"]
+                WHERE stage IN ('edd_approved','edd_rejected') AND decided_at >= date('now','start of month') {_fand}
+            """, _fp).fetchone()["c"]
         db.close()
 
         self.success({

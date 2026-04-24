@@ -44,6 +44,9 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+# Priority D: Fixture Hygiene — exclude fixture/demo rows from officer-facing queues.
+from fixture_filter import exclude_fixture_lifecycle_fragment
+
 # ── Active / historical vocabularies ─────────────────────────────────
 # These mirror the engines' terminal sets (kept in this module so the
 # aggregator is self-contained and trivially testable). The engines remain
@@ -552,6 +555,11 @@ def _fetch_alerts(db, *, application_id=None, include="active") -> List[Any]:
     if application_id is not None:
         base_sql += " AND application_id = ?"
         base_params.append(application_id)
+    else:
+        # Priority D: exclude fixture/demo alerts from the global officer queue
+        fix_frag, fix_params = exclude_fixture_lifecycle_fragment("")
+        base_sql += f" AND {fix_frag}"
+        base_params.extend(fix_params)
     sql = base_sql
     params = list(base_params)
     if include in ("active", "historical", "all"):
@@ -590,6 +598,11 @@ def _fetch_reviews(db, *, application_id=None, include="active") -> List[Any]:
     if application_id is not None:
         sql += " AND application_id = ?"
         params.append(application_id)
+    else:
+        # Priority D: exclude fixture/demo reviews from the global officer queue
+        fix_frag, fix_params = exclude_fixture_lifecycle_fragment("")
+        sql += f" AND {fix_frag}"
+        params.extend(fix_params)
     sql += " ORDER BY created_at DESC"
     return db.execute(sql, params).fetchall() or []
 
@@ -605,6 +618,11 @@ def _fetch_edd(db, *, application_id=None, include="active") -> List[Any]:
     if application_id is not None:
         sql += " AND application_id = ?"
         params.append(application_id)
+    else:
+        # Priority D: exclude fixture/demo EDD cases from the global officer queue
+        fix_frag, fix_params = exclude_fixture_lifecycle_fragment("")
+        sql += f" AND {fix_frag}"
+        params.extend(fix_params)
     sql += " ORDER BY triggered_at DESC"
     return db.execute(sql, params).fetchall() or []
 
