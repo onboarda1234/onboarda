@@ -355,27 +355,26 @@ class TestAuditChainEntry:
 
     def _clear_chain(self, temp_db):
         """Delete all rows from supervisor_audit_log for a clean slate."""
-        import sqlite3
-        conn = sqlite3.connect(temp_db)
-        conn.execute("DELETE FROM supervisor_audit_log")
-        conn.commit()
-        conn.close()
+        from db import get_db
+        db = get_db()
+        db.execute("DELETE FROM supervisor_audit_log")
+        db.commit()
+        db.close()
 
     def _get_chain_rows(self, temp_db, application_id=None):
         """Return supervisor_audit_log rows ordered by timestamp ASC."""
-        import sqlite3
-        conn = sqlite3.connect(temp_db)
-        conn.row_factory = sqlite3.Row
+        from db import get_db
+        db = get_db()
         if application_id:
-            rows = conn.execute(
+            rows = db.execute(
                 "SELECT * FROM supervisor_audit_log WHERE application_id = ? ORDER BY timestamp ASC",
                 (application_id,),
             ).fetchall()
         else:
-            rows = conn.execute(
+            rows = db.execute(
                 "SELECT * FROM supervisor_audit_log ORDER BY timestamp ASC"
             ).fetchall()
-        conn.close()
+        db.close()
         return [dict(r) for r in rows]
 
     def test_append_verdict_chain_entry_creates_row(self, temp_db):
@@ -493,7 +492,8 @@ class TestAuditChainEntry:
         db.commit()
         db.close()
 
-        # Tamper: overwrite entry_hash with garbage
+        # Use raw sqlite3 to bypass the application DB layer and corrupt the
+        # entry_hash directly — simulating an out-of-band tampering attack.
         conn = sqlite3.connect(temp_db)
         conn.execute("UPDATE supervisor_audit_log SET entry_hash = 'deadbeef'")
         conn.commit()
@@ -523,7 +523,8 @@ class TestAuditChainEntry:
             db.commit()
             db.close()
 
-        # Tamper: corrupt the previous_hash of the second entry
+        # Use raw sqlite3 to bypass the application DB layer and corrupt the
+        # previous_hash directly — simulating an out-of-band chain-link attack.
         conn = sqlite3.connect(temp_db)
         conn.execute(
             "UPDATE supervisor_audit_log SET previous_hash = 'badhash' "

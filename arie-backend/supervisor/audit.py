@@ -79,6 +79,8 @@ def append_verdict_chain_entry(
     previous_hash: Optional[str] = row["entry_hash"] if row else None
 
     audit_id = str(uuid4())
+    # Timestamp format must stay identical to AuditEntry.timestamp (schemas.py line ~734)
+    # so that verify_chain_integrity() can reconstruct the same hash.
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     event_type_val = AuditEventType.SUPERVISOR_VERDICT.value
     severity_val = Severity.INFO.value
@@ -91,7 +93,15 @@ def append_verdict_chain_entry(
         "memo_id": memo_id,
     }
 
-    # Canonical content must match verify_chain_integrity() reconstruction.
+    # Canonical content — structure and key ordering must exactly match the
+    # entry_data dict reconstructed in AuditLogger.verify_chain_integrity().
+    # Rules:
+    #   - Null optional fields are serialised as "" (empty string), not null.
+    #   - previous_hash for the genesis entry is "" (no prior entry).
+    #   - hash_version=2 is the current algorithm version.
+    #   - actor_type is always "officer": memo-supervisor runs are always
+    #     triggered by a human compliance officer via the backoffice UI.
+    #   - sort_keys=True ensures deterministic JSON regardless of dict ordering.
     content = json.dumps({
         "audit_id": audit_id,
         "timestamp": timestamp,
