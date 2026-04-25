@@ -41,11 +41,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import screening_provider as _sp_module
 from screening_provider import (
     ProviderNotRegistered,
+    SUMSUB_PROVIDER_NAME,
     get_provider,
     list_providers,
     register_provider,
     screening_abstraction_enabled,
 )
+from screening_adapter_sumsub import SumsubScreeningAdapter
 
 
 # ---------------------------------------------------------------------------
@@ -366,3 +368,54 @@ def test_register_empty_name_raises():
     """register_provider() must reject empty name strings."""
     with pytest.raises(ValueError, match="must not be empty"):
         register_provider("", lambda: None)
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — Phase A6: SUMSUB_PROVIDER_NAME constant and Sumsub registration
+# ---------------------------------------------------------------------------
+
+def test_sumsub_provider_name_constant_value():
+    """SUMSUB_PROVIDER_NAME must equal the canonical string "sumsub".
+
+    Pins the constant against accidental rename or typo.
+    """
+    assert SUMSUB_PROVIDER_NAME == "sumsub"
+
+
+def test_register_sumsub_factory_via_constant():
+    """Registering SumsubScreeningAdapter under SUMSUB_PROVIDER_NAME must make
+    it visible in list_providers() and retrievable via get_provider().
+    """
+    register_provider(SUMSUB_PROVIDER_NAME, SumsubScreeningAdapter)
+    assert list_providers() == [SUMSUB_PROVIDER_NAME]
+    assert get_provider(SUMSUB_PROVIDER_NAME) is SumsubScreeningAdapter
+
+
+def test_get_provider_constructs_sumsub_adapter_instance():
+    """get_provider(SUMSUB_PROVIDER_NAME)() must return a SumsubScreeningAdapter.
+
+    Proves the factory is callable and produces the expected concrete type.
+    """
+    register_provider(SUMSUB_PROVIDER_NAME, SumsubScreeningAdapter)
+    factory = get_provider(SUMSUB_PROVIDER_NAME)
+    instance = factory()
+    assert isinstance(instance, SumsubScreeningAdapter)
+
+
+def test_register_sumsub_idempotency_policy():
+    """Calling register_provider() twice for the same name silently overwrites
+    the first registration (Policy A).
+
+    Policy A was chosen because register_provider() performs a plain dict
+    assignment (_factory_registry[name] = factory) with no duplicate guard.
+    This means a second call with the same name replaces the factory without
+    raising.  At startup there is only one registration call, so in practice
+    this path is not exercised at runtime — but the behaviour must be
+    explicitly documented and tested so future callers know what to expect.
+    """
+    sentinel_a = object()
+    sentinel_b = object()
+    register_provider(SUMSUB_PROVIDER_NAME, sentinel_a)
+    register_provider(SUMSUB_PROVIDER_NAME, sentinel_b)  # silent overwrite
+    assert get_provider(SUMSUB_PROVIDER_NAME) is sentinel_b
+    assert list_providers() == [SUMSUB_PROVIDER_NAME]
