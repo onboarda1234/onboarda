@@ -74,7 +74,8 @@ class TestMigrationBackfillReplay:
             versions = {r["version"] for r in db.execute("SELECT version FROM schema_version").fetchall()}
             assert {"014", "015"} <= versions
         finally:
-            db.close(); db_module.close_pg_pool()
+            db.close()
+            db_module.close_pg_pool()
 
     def test_migration_015_restores_screening_reports_normalized(self, monkeypatch):
         db_module, db = self._fresh_pg(monkeypatch)
@@ -95,7 +96,8 @@ class TestMigrationBackfillReplay:
             ).fetchall()
             assert any("is_authoritative = 0" in r["def"] for r in checks)
         finally:
-            db.close(); db_module.close_pg_pool()
+            db.close()
+            db_module.close_pg_pool()
 
     def test_migration_015_check_constraint_blocks_authoritative_writes(self, monkeypatch):
         db_module, db = self._fresh_pg(monkeypatch)

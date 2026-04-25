@@ -16,6 +16,8 @@ A2 and A4 added schema changes to `init_db()` only. Production databases that pr
 
 Every schema change must include both an `init_db` update, for fresh installs, and a migration file, for long-lived databases. New migrations go in `arie-backend/migrations/scripts/`; inline `_run_migrations` is deprecated. The CI guard in `lint-and-test` enforces this for changes inside `db.py`'s `_get_postgres_schema()` and `_get_sqlite_schema()` functions.
 
+Migration 015 preserves Phase A4's temporary `CHECK(is_authoritative = 0)` constraint on `screening_reports_normalized`; Phase E activation is the future point at which that constraint may be lifted by a new migration.
+
 ## Consequences
 
 - Positive: production databases can be brought up to current schema deterministically. Audit trail is complete. Investor diligence has a clean answer.
