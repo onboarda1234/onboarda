@@ -14,6 +14,21 @@ jobs:
       run:
         working-directory: arie-backend
 
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +44,51 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install flake8 pytest-cov
+
+      - name: Enable SSL on PostgreSQL service container
+        run: |
+          # Generate a self-signed certificate on the runner (sslmode=require does not verify CA)
+          openssl req -new -x509 -days 365 -nodes \
+            -out /tmp/pg-server.crt \
+            -keyout /tmp/pg-server.key \
+            -subj '/CN=localhost' 2>/dev/null
+
+          # Locate the postgres service container
+          PG_CTR=$(docker ps -q --filter "ancestor=postgres:15" | head -1)
+          echo "PostgreSQL container: $PG_CTR"
+
+          # Copy cert files into the postgres data directory inside the container
+          docker cp /tmp/pg-server.crt "$PG_CTR:/var/lib/postgresql/data/server.crt"
+          docker cp /tmp/pg-server.key "$PG_CTR:/var/lib/postgresql/data/server.key"
+
+          # Set correct permissions and enable ssl=on in postgresql.conf
+          docker exec "$PG_CTR" bash -c "
+            chmod 600 /var/lib/postgresql/data/server.key &&
+            chown postgres:postgres /var/lib/postgresql/data/server.crt &&
+            chown postgres:postgres /var/lib/postgresql/data/server.key &&
+            echo 'ssl = on' >> /var/lib/postgresql/data/postgresql.conf
+          "
+
+          # ssl=on requires a server restart (not just reload) to take effect
+          docker restart "$PG_CTR"
+
+          # Wait for postgres to accept connections again (up to 30 s)
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 -U postgres 2>/dev/null; then
+              echo "PostgreSQL ready with SSL after ${i}s"
+              break
+            fi
+            [ "$i" -lt 30 ] || { echo "ERROR: PostgreSQL SSL restart timed out"; docker logs "$PG_CTR"; exit 1; }
+            sleep 1
+          done
+
+      - name: Create fresh PostgreSQL test database
+        env:
+          PGPASSWORD: postgres
+        run: |
+          DB_NAME="onboarda_test_${{ github.run_id }}"
+          psql -h localhost -U postgres -c "CREATE DATABASE \"${DB_NAME}\";"
+          echo "TEST_POSTGRES_DSN=postgresql://postgres:postgres@localhost:5432/${DB_NAME}" >> $GITHUB_ENV
 
       - name: Syntax check (all Python files)
         run: |
