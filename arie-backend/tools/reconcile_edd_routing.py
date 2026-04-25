@@ -54,7 +54,7 @@ def _scan(db, ref: Optional[str] = None) -> List[Dict[str, Any]]:
     from routing_actuator import build_routing_facts
 
     where = (
-        "WHERE COALESCE(is_fixture, 0) = 0 "
+        "WHERE is_fixture IS NOT TRUE "
         "AND status NOT IN ('approved','rejected','withdrawn','cancelled')"
     )
     params: tuple = ()

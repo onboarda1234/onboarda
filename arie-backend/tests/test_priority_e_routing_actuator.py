@@ -377,3 +377,18 @@ def test_j_k_reconciliation_detects_drift_and_skips_fixtures(monkeypatch):
     # At least one finding for the live case must be lane_drift_to_edd
     kinds = {(f["ref"], f["kind"]) for f in findings}
     assert ("ARF-LIVE-1", "lane_drift_to_edd") in kinds
+
+
+def test_l_reconciler_sql_uses_dialect_neutral_bool_filter():
+    """Reconciler must not use COALESCE(is_fixture, 0) - PG bool can't COALESCE with int 0."""
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[1] / "tools" / "reconcile_edd_routing.py"
+    text = src.read_text(encoding="utf-8")
+    assert "COALESCE(is_fixture, 0)" not in text, (
+        "Reconciler must use dialect-neutral fixture filter; "
+        "COALESCE(boolean, 0) raises DatatypeMismatch on PostgreSQL."
+    )
+    assert "is_fixture IS NOT TRUE" in text, (
+        "Reconciler should filter with `is_fixture IS NOT TRUE` "
+        "(works for PG BOOLEAN and SQLite INTEGER)."
+    )
