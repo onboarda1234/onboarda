@@ -29,6 +29,12 @@ import logging
 
 logger = logging.getLogger("arie.screening_provider")
 
+#: Canonical provider name string for Sumsub.
+#: Use this constant when registering or resolving the Sumsub provider.
+#: Inline string literals elsewhere in the codebase will be migrated in a
+#: separate sweep.
+SUMSUB_PROVIDER_NAME = "sumsub"
+
 
 class ScreeningProvider:
     """
