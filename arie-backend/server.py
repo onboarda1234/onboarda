@@ -2841,6 +2841,32 @@ class SubmitApplicationHandler(BaseHandler):
             risk["level"] = classify_risk_level(risk["score"])
             risk["final_risk_level"] = risk["level"]
             risk["lane"] = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}[risk["level"]]
+        # Priority E: policy-driven EDD routing on prescreening submit.
+        # Even when level=MEDIUM, sector/jurisdiction/PEP/ownership can
+        # mandate EDD. Run the deterministic v1 policy now so the case
+        # is on the EDD lane and an edd_cases row is created
+        # before the application reaches the officer queue.
+        try:
+            from routing_actuator import (
+                apply_routing_decision,
+                SOURCE_PRESCREENING_SUBMIT,
+            )
+            _routing_outcome = apply_routing_decision(
+                db=db,
+                app_row=app,
+                risk_dict=risk,
+                screening_summary=None,
+                user=user,
+                client_ip=self.get_client_ip() if hasattr(self, 'get_client_ip') else '',
+                source=SOURCE_PRESCREENING_SUBMIT,
+            )
+            if _routing_outcome.get('route') == 'edd':
+                risk['lane'] = 'EDD'
+        except Exception as _routing_err:
+            logger.warning(
+                'apply_routing_decision (prescreening_submit) failed: %s',
+                _routing_err,
+            )
             risk["screening_elevated"] = True
             risk["screening_hits"] = screening_report["total_hits"]
 
