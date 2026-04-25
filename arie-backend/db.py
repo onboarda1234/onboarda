@@ -905,6 +905,59 @@ def _get_postgres_schema() -> str:
     );
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_client_app ON screening_reports_normalized(client_id, application_id);
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_app_id ON screening_reports_normalized(application_id);
+
+    -- ComplyAdvantage Search Events (Phase C1: scaffolding-only sidecar table)
+    -- Captures raw per-search request/response interactions with the ComplyAdvantage
+    -- API. Populated by the future C2/C3 adapter; no runtime code reads this table yet.
+    -- CHECK(is_shadow = 1) locks all rows to shadow-mode until Track E activates.
+    CREATE TABLE IF NOT EXISTS complyadvantage_search_events (
+        id SERIAL PRIMARY KEY,
+        client_id TEXT,                    -- Platform client identifier
+        application_id TEXT,               -- Platform application identifier
+        normalized_report_id INTEGER,      -- FK-style ref to screening_reports_normalized.id (NULL-able)
+        ca_search_id TEXT,                 -- CA-assigned search/case identifier (e.g. "12345678")
+        ca_ref TEXT,                       -- CA client_ref / ref field (caller-supplied reference)
+        search_type TEXT,                  -- Entity type: "person" or "company"
+        request_payload_json TEXT,         -- Full CA search request body (JSON-as-string)
+        response_payload_json TEXT,        -- Full CA search response body (JSON-as-string)
+        response_status_code INTEGER,      -- HTTP status code returned by CA API
+        error_class TEXT,                  -- Error classification if the request failed
+        error_detail TEXT,                 -- Human-readable error detail
+        is_shadow INTEGER NOT NULL DEFAULT 1 CHECK(is_shadow = 1),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_ca_search_events_client_id ON complyadvantage_search_events(client_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_search_events_application_id ON complyadvantage_search_events(application_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_search_events_ca_search_id ON complyadvantage_search_events(ca_search_id);
+
+    -- ComplyAdvantage Monitor Events (Phase C1: scaffolding-only sidecar table)
+    -- Captures raw monitor/webhook events received from ComplyAdvantage.
+    -- ca_event_id carries a UNIQUE constraint for C4 idempotency.
+    -- signature_verified tracks HMAC verification outcome (C4).
+    -- CHECK(is_shadow = 1) locks all rows to shadow-mode until Track E activates.
+    CREATE TABLE IF NOT EXISTS complyadvantage_monitor_events (
+        id SERIAL PRIMARY KEY,
+        ca_monitor_id TEXT,                -- CA monitor identifier
+        ca_event_id TEXT,                  -- CA event identifier (UNIQUE for C4 idempotency)
+        client_id TEXT,                    -- Platform client identifier (NULL-able)
+        application_id TEXT,               -- Platform application identifier (NULL-able)
+        event_type TEXT,                   -- CA event type (e.g. "monitor.match_status_updated")
+        event_payload_json TEXT,           -- Full CA webhook event body (JSON-as-string)
+        signature_header TEXT,             -- Raw value of the CA webhook signature header (NULL-able)
+        signature_verified INTEGER NOT NULL DEFAULT 0 CHECK(signature_verified IN (0, 1)),
+        received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        processed_at TIMESTAMP,            -- NULL until the event is processed
+        processing_status TEXT,            -- "pending", "processed", "skipped", "error"
+        processing_error TEXT,             -- Error detail when processing_status = "error" (NULL-able)
+        is_shadow INTEGER NOT NULL DEFAULT 1 CHECK(is_shadow = 1),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ca_monitor_events_ca_event_id ON complyadvantage_monitor_events(ca_event_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_monitor_events_ca_monitor_id ON complyadvantage_monitor_events(ca_monitor_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_monitor_events_client_id ON complyadvantage_monitor_events(client_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_monitor_events_application_id ON complyadvantage_monitor_events(application_id);
     """
 
 
@@ -1524,6 +1577,59 @@ def _get_sqlite_schema() -> str:
     );
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_client_app ON screening_reports_normalized(client_id, application_id);
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_app_id ON screening_reports_normalized(application_id);
+
+    -- ComplyAdvantage Search Events (Phase C1: scaffolding-only sidecar table)
+    -- Captures raw per-search request/response interactions with the ComplyAdvantage
+    -- API. Populated by the future C2/C3 adapter; no runtime code reads this table yet.
+    -- CHECK(is_shadow = 1) locks all rows to shadow-mode until Track E activates.
+    CREATE TABLE IF NOT EXISTS complyadvantage_search_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id TEXT,                    -- Platform client identifier
+        application_id TEXT,               -- Platform application identifier
+        normalized_report_id INTEGER,      -- FK-style ref to screening_reports_normalized.id (NULL-able)
+        ca_search_id TEXT,                 -- CA-assigned search/case identifier (e.g. "12345678")
+        ca_ref TEXT,                       -- CA client_ref / ref field (caller-supplied reference)
+        search_type TEXT,                  -- Entity type: "person" or "company"
+        request_payload_json TEXT,         -- Full CA search request body (JSON-as-string)
+        response_payload_json TEXT,        -- Full CA search response body (JSON-as-string)
+        response_status_code INTEGER,      -- HTTP status code returned by CA API
+        error_class TEXT,                  -- Error classification if the request failed
+        error_detail TEXT,                 -- Human-readable error detail
+        is_shadow INTEGER NOT NULL DEFAULT 1 CHECK(is_shadow = 1),
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ca_search_events_client_id ON complyadvantage_search_events(client_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_search_events_application_id ON complyadvantage_search_events(application_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_search_events_ca_search_id ON complyadvantage_search_events(ca_search_id);
+
+    -- ComplyAdvantage Monitor Events (Phase C1: scaffolding-only sidecar table)
+    -- Captures raw monitor/webhook events received from ComplyAdvantage.
+    -- ca_event_id carries a UNIQUE constraint for C4 idempotency.
+    -- signature_verified tracks HMAC verification outcome (C4).
+    -- CHECK(is_shadow = 1) locks all rows to shadow-mode until Track E activates.
+    CREATE TABLE IF NOT EXISTS complyadvantage_monitor_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ca_monitor_id TEXT,                -- CA monitor identifier
+        ca_event_id TEXT,                  -- CA event identifier (UNIQUE for C4 idempotency)
+        client_id TEXT,                    -- Platform client identifier (NULL-able)
+        application_id TEXT,               -- Platform application identifier (NULL-able)
+        event_type TEXT,                   -- CA event type (e.g. "monitor.match_status_updated")
+        event_payload_json TEXT,           -- Full CA webhook event body (JSON-as-string)
+        signature_header TEXT,             -- Raw value of the CA webhook signature header (NULL-able)
+        signature_verified INTEGER NOT NULL DEFAULT 0 CHECK(signature_verified IN (0, 1)),
+        received_at TEXT DEFAULT (datetime('now')),
+        processed_at TEXT,                 -- NULL until the event is processed
+        processing_status TEXT,            -- "pending", "processed", "skipped", "error"
+        processing_error TEXT,             -- Error detail when processing_status = "error" (NULL-able)
+        is_shadow INTEGER NOT NULL DEFAULT 1 CHECK(is_shadow = 1),
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ca_monitor_events_ca_event_id ON complyadvantage_monitor_events(ca_event_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_monitor_events_ca_monitor_id ON complyadvantage_monitor_events(ca_monitor_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_monitor_events_client_id ON complyadvantage_monitor_events(client_id);
+    CREATE INDEX IF NOT EXISTS idx_ca_monitor_events_application_id ON complyadvantage_monitor_events(application_id);
     """
 
 
