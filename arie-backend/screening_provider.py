@@ -189,7 +189,7 @@ class ProviderNotRegistered(Exception):
 # Mapping of provider name → factory callable.
 # Initialises EMPTY at module load.  No provider registers itself here.
 # The first registration happens in Track C, not in this phase.
-_factory_registry: dict = {}
+_factory_registry: dict[str, object] = {}
 
 # Read the feature flag once at module import for the startup log line.
 # The exported helper ``screening_abstraction_enabled()`` performs a fresh
@@ -253,7 +253,7 @@ def get_provider(name: str):
     return _factory_registry[name]
 
 
-def list_providers() -> list:
+def list_providers() -> list[str]:
     """Return a list of registered provider names (may be empty).
 
     The list is a snapshot; mutations to the registry after this call

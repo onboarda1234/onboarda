@@ -1,5 +1,5 @@
 """
-Phase A5 — Provider registry bootstrap regression tests  (SCR-013)
+Phase A5 — Provider registry bootstrap regression tests (SCR-013)
 ===================================================================
 Guards the following invariants established in Phase A5:
 
@@ -70,14 +70,21 @@ def _sqlite_srn_ddl() -> str:
     return m.group(1)
 
 
+# Module-level variable to hold any ephemeral testing.postgresql server
+# created by _try_get_pg_dsn(). Using a module-level variable avoids
+# fragile function-attribute assignment.
+_pg_test_server = None
+
+
 def _try_get_pg_dsn() -> str | None:
     """Return a DSN for a live PostgreSQL database, or None.
     Mirrors the helper in test_screening_reports_normalized_parity.py."""
+    global _pg_test_server
     try:
         import testing.postgresql  # type: ignore
         pg = testing.postgresql.Postgresql()
         dsn = pg.url()
-        _try_get_pg_dsn._pg_server = pg  # type: ignore[attr-defined]
+        _pg_test_server = pg
         return dsn
     except Exception:
         pass
@@ -316,22 +323,22 @@ def test_authoritative_write_blocked_by_check_constraint_pg(tmp_path, monkeypatc
                     conn.commit()
 
     finally:
-        for var, value in (("DATABASE_URL", orig_db_url),):
-            if value is None:
-                os.environ.pop(var, None)
-            else:
-                os.environ[var] = value
+        if orig_db_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = orig_db_url
         try:
             importlib.reload(config_module)   # type: ignore[possibly-undefined]
             importlib.reload(db_module)       # type: ignore[possibly-undefined]
         except Exception:
             pass
-        pg_server = getattr(_try_get_pg_dsn, "_pg_server", None)
-        if pg_server is not None:
+        global _pg_test_server
+        if _pg_test_server is not None:
             try:
-                pg_server.stop()
+                _pg_test_server.stop()
             except Exception:
                 pass
+            _pg_test_server = None
 
 
 # ---------------------------------------------------------------------------
