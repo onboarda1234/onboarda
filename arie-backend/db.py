@@ -885,6 +885,26 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_dec_rec_app ON decision_records(application_ref);
     CREATE INDEX IF NOT EXISTS idx_dec_rec_type ON decision_records(decision_type);
     CREATE INDEX IF NOT EXISTS idx_dec_rec_ts ON decision_records(timestamp);
+
+    -- Screening Reports Normalized (Phase A4: dialect-safe DDL consolidated into init_db)
+    -- IF NOT EXISTS guarantees existing production tables are untouched.
+    CREATE TABLE IF NOT EXISTS screening_reports_normalized (
+        id SERIAL PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'sumsub',
+        normalized_version TEXT NOT NULL DEFAULT '1.0',
+        source_screening_report_hash TEXT,
+        normalized_report_json TEXT,
+        normalization_status TEXT NOT NULL DEFAULT 'success' CHECK(normalization_status IN ('success', 'failed')),
+        normalization_error TEXT,
+        is_authoritative INTEGER NOT NULL DEFAULT 0 CHECK(is_authoritative = 0),
+        source TEXT NOT NULL DEFAULT 'migration_scaffolding',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_screening_normalized_client_app ON screening_reports_normalized(client_id, application_id);
+    CREATE INDEX IF NOT EXISTS idx_screening_normalized_app_id ON screening_reports_normalized(application_id);
     """
 
 
@@ -1484,6 +1504,26 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_dec_rec_app ON decision_records(application_ref);
     CREATE INDEX IF NOT EXISTS idx_dec_rec_type ON decision_records(decision_type);
     CREATE INDEX IF NOT EXISTS idx_dec_rec_ts ON decision_records(timestamp);
+
+    -- Screening Reports Normalized (Phase A4: dialect-safe DDL consolidated into init_db)
+    -- IF NOT EXISTS guarantees existing production tables are untouched.
+    CREATE TABLE IF NOT EXISTS screening_reports_normalized (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'sumsub',
+        normalized_version TEXT NOT NULL DEFAULT '1.0',
+        source_screening_report_hash TEXT,
+        normalized_report_json TEXT,
+        normalization_status TEXT NOT NULL DEFAULT 'success' CHECK(normalization_status IN ('success', 'failed')),
+        normalization_error TEXT,
+        is_authoritative INTEGER NOT NULL DEFAULT 0 CHECK(is_authoritative = 0),
+        source TEXT NOT NULL DEFAULT 'migration_scaffolding',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_screening_normalized_client_app ON screening_reports_normalized(client_id, application_id);
+    CREATE INDEX IF NOT EXISTS idx_screening_normalized_app_id ON screening_reports_normalized(application_id);
     """
 
 
