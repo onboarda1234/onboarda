@@ -3154,10 +3154,14 @@ def _run_migrations(db: DBConnection):
                 _is_demo_or_staging_env = False
             if _is_demo_or_staging_env:
                 # demo/staging: mark the 8 known rogue test rows as fixtures.
-                rows_updated = db.execute(
+                db.execute(
                     f"UPDATE applications SET is_fixture = {_TRUE_LIT} WHERE ref IN ({placeholders})",
                     list(_ROGUE_FIXTURE_REFS),
-                ).rowcount
+                )
+                # NB: db.execute() returns the DBConnection wrapper, not a cursor.
+                # rowcount lives on the underlying cursor (db._cursor); read it via
+                # getattr so this stays safe across DBAPI adapters.
+                rows_updated = getattr(db._cursor, "rowcount", -1)
                 logger.info(
                     "Migration v2.29: Marked %d rogue historical test row(s) as is_fixture"
                     " (demo/staging environment)",
@@ -3169,11 +3173,15 @@ def _run_migrations(db: DBConnection):
                 # by a previous migration run of this block.  Only rows
                 # whose IDs do NOT match the f1xed% namespace are reset;
                 # genuine seeded rows (f1xed%) remain correctly marked.
-                rows_reset = db.execute(
+                db.execute(
                     f"UPDATE applications SET is_fixture = {_FALSE_LIT} "
                     f"WHERE ref IN ({placeholders}) AND id NOT LIKE ?",
                     list(_ROGUE_FIXTURE_REFS) + ["f1xed%"],
-                ).rowcount
+                )
+                # NB: db.execute() returns the DBConnection wrapper, not a cursor.
+                # rowcount lives on the underlying cursor (db._cursor); read it via
+                # getattr so this stays safe across DBAPI adapters.
+                rows_reset = getattr(db._cursor, "rowcount", -1)
                 if rows_reset:
                     logger.warning(
                         "Migration v2.29: Restored %d real application(s) incorrectly "
