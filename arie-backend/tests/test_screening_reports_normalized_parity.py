@@ -81,7 +81,7 @@ def _column_names_ordered(ddl_body: str) -> list:
     name.
     """
     skip_prefixes = ("primary", "unique", "check", "foreign", "constraint")
-    names: list = []
+    names: list[str] = []
     for raw_line in ddl_body.splitlines():
         line = raw_line.strip().rstrip(",").strip()
         if not line or line.startswith("--"):
@@ -95,7 +95,7 @@ def _column_names_ordered(ddl_body: str) -> list:
     return names
 
 
-def _try_get_pg_dsn() -> "str | None":
+def _try_get_pg_dsn() -> str | None:
     """Return a DSN for a fresh PostgreSQL test database, or None."""
     try:
         import testing.postgresql  # type: ignore
