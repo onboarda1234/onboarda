@@ -214,6 +214,20 @@ class DBConnection:
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
+    @property
+    def lastrowid(self):
+        """Return the row id of the last INSERT executed on this connection.
+
+        ``DBConnection.execute()`` returns ``self`` rather than a raw cursor
+        so that callers can chain ``.fetchone()`` / ``.fetchall()``.  Some
+        persistence helpers (e.g. ``screening_storage.persist_normalized_report``)
+        call ``cursor.lastrowid`` on the object returned by ``execute()``.
+        This property makes that pattern work correctly with the wrapper.
+        """
+        if self._cursor is not None:
+            return self._cursor.lastrowid
+        return None
+
     def commit(self) -> None:
         """Commit transaction."""
         self.conn.commit()

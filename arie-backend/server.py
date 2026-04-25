@@ -7730,6 +7730,7 @@ class SumsubWebhookHandler(BaseHandler):
             return
 
         # ── Mutating path (applicantReviewed) ────────────────────────────
+        matched_app_ids = set()  # SCR-013: hoisted; post-commit renorm block reads this
         db = get_db()
         try:
             # ── EX-04: Idempotency guard ────────────────────────────────
@@ -7785,7 +7786,6 @@ class SumsubWebhookHandler(BaseHandler):
             # Finding 12: Deterministic applicant→application lookup via mapping table.
             # F-7: the legacy substring scan has been removed — unmatched
             # deliveries go to the DLQ for manual triage.
-            matched_app_ids = set()
             mapping_lookup_failed = False
 
             try:
@@ -7882,6 +7882,69 @@ class SumsubWebhookHandler(BaseHandler):
             db.commit()
         finally:
             db.close()
+
+        # SCR-013: Post-commit re-normalization of screening_reports_normalized.
+        # Reads the committed legacy prescreening_data.screening_report for each
+        # matched application and inserts a fresh normalized record.
+        #
+        # Key invariants:
+        # * Runs AFTER db.close() — the legacy write has already committed.
+        # * Opens a new DB connection so reads see committed state.
+        # * Gated behind ENABLE_SCREENING_ABSTRACTION — zero-cost when OFF.
+        # * Per-app and outer failures are caught — NEVER blocks webhook 200.
+        # * No PII in log lines.
+        try:
+            from screening_config import is_abstraction_enabled
+            if matched_app_ids and is_abstraction_enabled():
+                from screening_normalizer import normalize_screening_report
+                from screening_storage import (
+                    ensure_normalized_table, persist_normalized_report,
+                    compute_report_hash,
+                )
+                _renorm_db = get_db()
+                try:
+                    ensure_normalized_table(_renorm_db)
+                    for _renorm_app_id in matched_app_ids:
+                        try:
+                            _renorm_row = _renorm_db.execute(
+                                "SELECT id, client_id, prescreening_data "
+                                "FROM applications WHERE id=? OR ref=?",
+                                (_renorm_app_id, _renorm_app_id),
+                            ).fetchone()
+                            if not _renorm_row:
+                                continue
+                            _renorm_pdict = safe_json_loads(
+                                _renorm_row["prescreening_data"] or "{}"
+                            )
+                            _renorm_legacy = _renorm_pdict.get("screening_report")
+                            if not _renorm_legacy:
+                                continue
+                            _renorm_hash = compute_report_hash(_renorm_legacy)
+                            _renorm_normalized = normalize_screening_report(_renorm_legacy)
+                            persist_normalized_report(
+                                _renorm_db,
+                                _renorm_row["client_id"] or "",
+                                _renorm_row["id"],
+                                _renorm_normalized,
+                                _renorm_hash,
+                            )
+                            _renorm_db.commit()
+                            logger.info(
+                                "Webhook renorm: upserted normalized record app_id=%s",
+                                _renorm_row["id"],
+                            )
+                        except Exception as _renorm_app_exc:
+                            logger.warning(
+                                "Webhook renorm: failed for app_id=%s error_type=%s",
+                                _renorm_app_id, type(_renorm_app_exc).__name__,
+                            )
+                finally:
+                    _renorm_db.close()
+        except Exception as _renorm_exc:
+            logger.warning(
+                "Webhook renorm: outer error error_type=%s",
+                type(_renorm_exc).__name__,
+            )
 
         self.set_status(200)
         self.write(json.dumps({"status": "ok"}))
