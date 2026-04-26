@@ -582,7 +582,12 @@ def _get_postgres_schema() -> str:
         officer_notes TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         reviewed_at TIMESTAMP,
-        reviewed_by TEXT REFERENCES users(id)
+        reviewed_by TEXT REFERENCES users(id),
+        linked_periodic_review_id INTEGER,
+        linked_edd_case_id INTEGER,
+        triaged_at TIMESTAMP,
+        assigned_at TIMESTAMP,
+        resolved_at TIMESTAMP
     );
 
     -- Periodic Reviews
@@ -593,6 +598,10 @@ def _get_postgres_schema() -> str:
         risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         trigger_type TEXT,
         trigger_reason TEXT,
+        trigger_source TEXT,
+        linked_monitoring_alert_id INTEGER,
+        linked_edd_case_id INTEGER,
+        review_reason TEXT,
         previous_risk_level TEXT CHECK(previous_risk_level IS NULL OR previous_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         new_risk_level TEXT CHECK(new_risk_level IS NULL OR new_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         review_memo TEXT,
@@ -600,11 +609,36 @@ def _get_postgres_schema() -> str:
         due_date TEXT,
         started_at TIMESTAMP,
         completed_at TIMESTAMP,
+        assigned_at TIMESTAMP,
+        closed_at TIMESTAMP,
+        sla_due_at TIMESTAMP,
+        priority TEXT,
         decision TEXT,
         decision_reason TEXT,
+        outcome TEXT,
+        outcome_reason TEXT,
+        outcome_recorded_at TIMESTAMP,
+        required_items TEXT,
+        required_items_generated_at TIMESTAMP,
+        state_changed_at TIMESTAMP,
         decided_by TEXT REFERENCES users(id),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS periodic_review_memos (
+        id SERIAL PRIMARY KEY,
+        periodic_review_id INTEGER NOT NULL,
+        application_id TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        memo_data TEXT NOT NULL,
+        memo_context TEXT NOT NULL,
+        generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        generated_by TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'generated',
+        UNIQUE(periodic_review_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_prm_review ON periodic_review_memos(periodic_review_id);
+    CREATE INDEX IF NOT EXISTS idx_prm_app ON periodic_review_memos(application_id);
 
     -- Monitoring Agent Status
     CREATE TABLE IF NOT EXISTS monitoring_agent_status (
@@ -691,6 +725,14 @@ def _get_postgres_schema() -> str:
         senior_reviewer TEXT REFERENCES users(id),
         trigger_source TEXT DEFAULT 'officer_decision',
         trigger_notes TEXT,
+        origin_context TEXT,
+        linked_monitoring_alert_id INTEGER,
+        linked_periodic_review_id INTEGER,
+        assigned_at TIMESTAMP,
+        escalated_at TIMESTAMP,
+        closed_at TIMESTAMP,
+        sla_due_at TIMESTAMP,
+        priority TEXT,
         edd_notes JSONB DEFAULT '[]',
         decision TEXT,
         decision_reason TEXT,
@@ -699,6 +741,9 @@ def _get_postgres_schema() -> str:
         triggered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE INDEX IF NOT EXISTS idx_edd_cases_linked_alert ON edd_cases(linked_monitoring_alert_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_cases_linked_review ON edd_cases(linked_periodic_review_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_cases_origin_context ON edd_cases(origin_context);
 
     -- Compliance Memo Versions
     CREATE TABLE IF NOT EXISTS compliance_memos (
@@ -730,6 +775,49 @@ def _get_postgres_schema() -> str:
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS edd_findings (
+        id SERIAL PRIMARY KEY,
+        edd_case_id INTEGER NOT NULL UNIQUE,
+        findings_summary TEXT,
+        key_concerns TEXT DEFAULT '[]',
+        mitigating_evidence TEXT DEFAULT '[]',
+        conditions TEXT DEFAULT '[]',
+        rationale TEXT,
+        supporting_notes TEXT DEFAULT '[]',
+        recommended_outcome TEXT,
+        created_by TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_edd_findings_edd_case_id ON edd_findings(edd_case_id);
+
+    CREATE TABLE IF NOT EXISTS edd_memo_attachments (
+        id SERIAL PRIMARY KEY,
+        edd_case_id INTEGER NOT NULL,
+        application_id TEXT NOT NULL,
+        memo_context_kind TEXT NOT NULL,
+        memo_id INTEGER,
+        periodic_review_id INTEGER,
+        attached_by TEXT,
+        attached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        detached_at TIMESTAMP,
+        detached_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_edd_case ON edd_memo_attachments(edd_case_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_app ON edd_memo_attachments(application_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_kind ON edd_memo_attachments(memo_context_kind);
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_memo ON edd_memo_attachments(memo_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_review ON edd_memo_attachments(periodic_review_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uix_edd_memo_attachments_active_identity
+        ON edd_memo_attachments (
+            edd_case_id,
+            memo_context_kind,
+            COALESCE(memo_id, 0),
+            COALESCE(periodic_review_id, 0)
+        )
+        WHERE detached_at IS NULL;
+
     -- Create indexes for better query performance
     CREATE INDEX IF NOT EXISTS idx_applications_client_id ON applications(client_id);
     CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
@@ -742,7 +830,14 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_application_id ON monitoring_alerts(application_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_edd ON monitoring_alerts(linked_edd_case_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_review ON monitoring_alerts(linked_periodic_review_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_application_id ON periodic_reviews(application_id);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_linked_alert ON periodic_reviews(linked_monitoring_alert_id);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_linked_edd ON periodic_reviews(linked_edd_case_id);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_trigger_source ON periodic_reviews(trigger_source);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_status ON periodic_reviews(status);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_outcome ON periodic_reviews(outcome);
     CREATE INDEX IF NOT EXISTS idx_sar_reports_application_id ON sar_reports(application_id);
     CREATE INDEX IF NOT EXISTS idx_edd_cases_application_id ON edd_cases(application_id);
     CREATE INDEX IF NOT EXISTS idx_edd_cases_stage ON edd_cases(stage);
@@ -1208,7 +1303,12 @@ def _get_sqlite_schema() -> str:
         officer_notes TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         reviewed_at TEXT,
-        reviewed_by TEXT REFERENCES users(id)
+        reviewed_by TEXT REFERENCES users(id),
+        linked_periodic_review_id INTEGER,
+        linked_edd_case_id INTEGER,
+        triaged_at TEXT,
+        assigned_at TEXT,
+        resolved_at TEXT
     );
 
     -- Periodic Reviews
@@ -1219,6 +1319,10 @@ def _get_sqlite_schema() -> str:
         risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         trigger_type TEXT,
         trigger_reason TEXT,
+        trigger_source TEXT,
+        linked_monitoring_alert_id INTEGER,
+        linked_edd_case_id INTEGER,
+        review_reason TEXT,
         previous_risk_level TEXT CHECK(previous_risk_level IS NULL OR previous_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         new_risk_level TEXT CHECK(new_risk_level IS NULL OR new_risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
         review_memo TEXT,
@@ -1226,11 +1330,36 @@ def _get_sqlite_schema() -> str:
         due_date TEXT,
         started_at TEXT,
         completed_at TEXT,
+        assigned_at TEXT,
+        closed_at TEXT,
+        sla_due_at TEXT,
+        priority TEXT,
         decision TEXT,
         decision_reason TEXT,
+        outcome TEXT,
+        outcome_reason TEXT,
+        outcome_recorded_at TEXT,
+        required_items TEXT,
+        required_items_generated_at TEXT,
+        state_changed_at TEXT,
         decided_by TEXT REFERENCES users(id),
         created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS periodic_review_memos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        periodic_review_id INTEGER NOT NULL,
+        application_id TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
+        memo_data TEXT NOT NULL,
+        memo_context TEXT NOT NULL,
+        generated_at TEXT DEFAULT (datetime('now')),
+        generated_by TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'generated',
+        UNIQUE(periodic_review_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_prm_review ON periodic_review_memos(periodic_review_id);
+    CREATE INDEX IF NOT EXISTS idx_prm_app ON periodic_review_memos(application_id);
 
     -- Monitoring Agent Status
     CREATE TABLE IF NOT EXISTS monitoring_agent_status (
@@ -1317,6 +1446,14 @@ def _get_sqlite_schema() -> str:
         senior_reviewer TEXT REFERENCES users(id),
         trigger_source TEXT DEFAULT 'officer_decision',
         trigger_notes TEXT,
+        origin_context TEXT,
+        linked_monitoring_alert_id INTEGER,
+        linked_periodic_review_id INTEGER,
+        assigned_at TEXT,
+        escalated_at TEXT,
+        closed_at TEXT,
+        sla_due_at TEXT,
+        priority TEXT,
         edd_notes TEXT DEFAULT '[]',
         decision TEXT,
         decision_reason TEXT,
@@ -1325,6 +1462,9 @@ def _get_sqlite_schema() -> str:
         triggered_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
     );
+    CREATE INDEX IF NOT EXISTS idx_edd_cases_linked_alert ON edd_cases(linked_monitoring_alert_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_cases_linked_review ON edd_cases(linked_periodic_review_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_cases_origin_context ON edd_cases(origin_context);
 
     -- Compliance Memo Versions
     CREATE TABLE IF NOT EXISTS compliance_memos (
@@ -1356,6 +1496,49 @@ def _get_sqlite_schema() -> str:
         created_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS edd_findings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        edd_case_id INTEGER NOT NULL UNIQUE,
+        findings_summary TEXT,
+        key_concerns TEXT DEFAULT '[]',
+        mitigating_evidence TEXT DEFAULT '[]',
+        conditions TEXT DEFAULT '[]',
+        rationale TEXT,
+        supporting_notes TEXT DEFAULT '[]',
+        recommended_outcome TEXT,
+        created_by TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_by TEXT,
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_edd_findings_edd_case_id ON edd_findings(edd_case_id);
+
+    CREATE TABLE IF NOT EXISTS edd_memo_attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        edd_case_id INTEGER NOT NULL,
+        application_id TEXT NOT NULL,
+        memo_context_kind TEXT NOT NULL,
+        memo_id INTEGER,
+        periodic_review_id INTEGER,
+        attached_by TEXT,
+        attached_at TEXT DEFAULT (datetime('now')),
+        detached_at TEXT,
+        detached_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_edd_case ON edd_memo_attachments(edd_case_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_app ON edd_memo_attachments(application_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_kind ON edd_memo_attachments(memo_context_kind);
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_memo ON edd_memo_attachments(memo_id);
+    CREATE INDEX IF NOT EXISTS idx_edd_memo_attachments_review ON edd_memo_attachments(periodic_review_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uix_edd_memo_attachments_active_identity
+        ON edd_memo_attachments (
+            edd_case_id,
+            memo_context_kind,
+            COALESCE(memo_id, 0),
+            COALESCE(periodic_review_id, 0)
+        )
+        WHERE detached_at IS NULL;
+
     CREATE INDEX IF NOT EXISTS idx_compliance_memos_application_id ON compliance_memos(application_id);
     CREATE INDEX IF NOT EXISTS idx_compliance_memos_review_status ON compliance_memos(review_status);
     CREATE INDEX IF NOT EXISTS idx_compliance_memos_validation_status ON compliance_memos(validation_status);
@@ -1375,6 +1558,13 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_edd ON monitoring_alerts(linked_edd_case_id);
+    CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_review ON monitoring_alerts(linked_periodic_review_id);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_linked_alert ON periodic_reviews(linked_monitoring_alert_id);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_linked_edd ON periodic_reviews(linked_edd_case_id);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_trigger_source ON periodic_reviews(trigger_source);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_status ON periodic_reviews(status);
+    CREATE INDEX IF NOT EXISTS idx_periodic_reviews_outcome ON periodic_reviews(outcome);
 
     -- Sprint 3: GDPR Data Retention Policy
     CREATE TABLE IF NOT EXISTS data_retention_policies (
@@ -1585,6 +1775,15 @@ def init_db():
         db.commit()
         logger.info("startup: schema DDL committed — Database schema initialized")
 
+        # Fresh installs are already on the current schema because init_db()
+        # creates it in one shot. Mark every known file migration as covered
+        # before the file-based runner can replay legacy ALTER TABLE steps
+        # against that modern schema (for example migration 014's status /
+        # due_date additions to periodic_reviews).
+        logger.info("startup: marking known file migrations as applied")
+        _mark_known_migrations_as_applied(db)
+        db.commit()
+
         # ── Migration: Add pre-approval columns if missing (v2.1) ──
         logger.info("startup: entering _run_migrations (inline)")
         _run_migrations(db)
@@ -1635,6 +1834,37 @@ def init_db():
         raise
     finally:
         db.close()
+
+
+def _mark_known_migrations_as_applied(db: DBConnection):
+    """On fresh installs, record file migrations already represented by init_db.
+
+    ``init_db`` creates the complete current schema, so the file-based
+    migration runner must treat every existing migration file as already
+    applied. Long-lived databases keep their existing rows and only missing
+    versions are inserted here.
+    """
+    from migrations.runner import MIGRATIONS_DIR, ensure_schema_version_table
+
+    ensure_schema_version_table(db)
+
+    for path in sorted(MIGRATIONS_DIR.glob("migration_*.sql")):
+        parts = path.stem.split("_", 2)
+        if len(parts) < 2:
+            continue
+        version = parts[1]
+        existing = db.execute(
+            "SELECT 1 FROM schema_version WHERE version = ?",
+            (version,),
+        ).fetchone()
+        if existing is not None:
+            continue
+        db.execute(
+            "INSERT INTO schema_version (version, filename, description, checksum) "
+            "VALUES (?, ?, ?, ?)",
+            (version, path.name, "covered by init_db", "init_db"),
+        )
+    db.commit()
 
 
 def _ensure_default_compliance_resources(db: DBConnection):

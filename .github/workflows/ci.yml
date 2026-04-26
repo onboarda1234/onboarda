@@ -31,6 +31,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -102,6 +104,11 @@ jobs:
           find . -name "*.py" -not -path "./tests/*" -not -path "./.venv/*" | xargs flake8 --count --select=E9,F63,F7,F82 --show-source --statistics
         continue-on-error: false
 
+      - name: Schema migration policy check
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: python scripts/check_schema_migration_policy.py
+
       - name: Run tests with coverage
         env:
           ENVIRONMENT: testing
@@ -153,6 +160,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Copy HTML files into backend dir
         run: |

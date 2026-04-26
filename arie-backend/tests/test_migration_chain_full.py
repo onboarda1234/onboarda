@@ -5,12 +5,12 @@ End-to-end assertions that exercise the file-based migration runner
 across the three operationally-relevant ``schema_version`` starting
 states the deployment surface actually presents:
 
-  1. Fresh database (no schema_version rows): exactly 12 migrations
-     should apply, in order, with no FAILED log line.
-  2. Staging-style partial-applied state (001..009 marked applied):
-     exactly 3 migrations (010, 011, 012) should apply.
-  3. Half-applied state (001..005 marked applied): exactly 7
-     migrations (006..012) should apply.
+  1. Fresh database: init_db pre-marks every known migration, so the
+     file-based runner applies zero migrations.
+  2. Staging-style partial-applied state (001..013 marked applied):
+     exactly 2 migrations (014, 015) should apply.
+  3. Half-applied state (001..014 marked applied): exactly 1
+     migration (015) should apply.
 
 These tests are the contract for PR #128's docker-validate CI job:
 the chain must be green from any of the three starting states.
@@ -22,9 +22,12 @@ DB_PATH isolation and config / db module reload teardown.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import sys
+
+import pytest
 
 # Make arie-backend importable regardless of pytest's cwd.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -46,25 +49,32 @@ _CHAIN_FILES = [
     ("011", "migration_011_edd_memo_attachment_uniqueness.sql"),
     ("012", "migration_012_legacy_unmapped_audit_classification.sql"),
     ("013", "migration_013_periodic_review_memos.sql"),
+    ("014", "migration_014_periodic_reviews_status_due_date.sql"),
+    ("015", "migration_015_screening_reports_normalized.sql"),
 ]
 
 
+def _remove_modern_backfills(db, keep_count):
+    kept_versions = {v for v, _ in _CHAIN_FILES[:keep_count]}
+    if "014" not in kept_versions:
+        db.execute("DROP INDEX IF EXISTS idx_periodic_reviews_status")
+        for column in ("status", "due_date"):
+            try:
+                db.execute(f"ALTER TABLE periodic_reviews DROP COLUMN {column}")
+            except Exception:
+                pass
+    if "015" not in kept_versions:
+        db.execute("DROP TABLE IF EXISTS screening_reports_normalized")
+    db.commit()
+
+
 def _apply_full_chain_then_rewind(db, keep_count):
-    """Apply the full migration chain, then DELETE the trailing
-    ``schema_version`` rows so only the first ``keep_count`` versions
-    are recorded. The actual schema is in the post-012 state, so the
-    runner will (re-)apply migrations N+1..12. **Only safe** when the
-    re-applied migrations are idempotent against the post-012 schema
-    (CREATE TABLE / INDEX IF NOT EXISTS, INSERT WHERE NOT EXISTS).
-    Migrations 010 / 011 / 012 satisfy this; 008 / 009 do not (they
-    use plain ALTER TABLE ADD COLUMN). Use ``_preseed_schema_version``
-    instead when re-applying 008 or 009."""
-    from migrations.runner import run_all_migrations_with_connection
-    run_all_migrations_with_connection(db)
+    """Rewind schema_version and remove modern backfills for legacy replay."""
     db.execute(
         "DELETE FROM schema_version WHERE version > ?",
         (_CHAIN_FILES[keep_count - 1][0],),
     )
+    _remove_modern_backfills(db, keep_count)
     db.commit()
 
 
@@ -87,6 +97,7 @@ def _preseed_schema_version(db, prefix):
             "VALUES (?, ?, ?, ?)",
             (version, filename, "preseeded by test", "preseed"),
         )
+    _remove_modern_backfills(db, len(prefix))
     db.commit()
 
 
@@ -116,35 +127,94 @@ def _applied_versions(db):
     return [r["version"] for r in rows]
 
 
+def _dsn():
+    return os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
+
+
+def _fresh_pg(monkeypatch):
+    dsn = _dsn()
+    if not dsn:
+        pytest.skip(
+            "Set TEST_POSTGRES_DSN or DATABASE_URL_TEST to enable live PG migration tests."
+        )
+    import psycopg2
+    if "db" in sys.modules:
+        sys.modules["db"].close_pg_pool()
+    with psycopg2.connect(dsn) as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("DROP SCHEMA public CASCADE")
+            cur.execute("CREATE SCHEMA public")
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    import config as config_module
+    import db as db_module
+    importlib.reload(config_module)
+    importlib.reload(db_module)
+    db_module.init_db()
+    return db_module, db_module.get_db()
+
+
 def test_fresh_db_applies_all_migrations(
     tmp_path, monkeypatch, caplog
 ):
-    """Step 4 case 1: fresh init_db then runner; all chained migrations apply."""
-    expected = len(_CHAIN_FILES)
+    """Step 4 case 1: fresh init_db then runner; migrations are pre-marked."""
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         applied, messages = _run_and_capture(db, caplog)
         _assert_no_failed_log(messages)
-        assert applied == expected, (
-            f"Expected {expected} migrations applied on fresh DB; got {applied}"
+        assert applied == 0, (
+            f"Expected 0 migrations applied on fresh DB; got {applied}"
         )
-        assert any(
-            m.startswith(f"Applied {expected} migration(s) successfully")
-            for m in messages
-        ), f"Missing summary log; got: {messages}"
+        assert any("up to date" in m.lower() for m in messages), (
+            f"Missing up-to-date summary log; got: {messages}"
+        )
         assert _applied_versions(db) == [v for v, _ in _CHAIN_FILES]
+
+
+def test_init_db_marks_all_known_migrations_as_applied(monkeypatch):
+    """init_db's contract: after running, every migration_*.sql file is
+    pre-marked as applied in schema_version. The file-based runner is a
+    no-op on a fresh DB.
+
+    This is the regression test for the bug where migration 014's
+    ADD COLUMN status would collide with init_db's own status column."""
+    db_module, db = _fresh_pg(monkeypatch)
+    try:
+        from migrations.runner import (
+            MIGRATIONS_DIR,
+            run_all_migrations_with_connection,
+        )
+
+        expected_versions = {
+            f.stem.split("_", 2)[1]
+            for f in MIGRATIONS_DIR.glob("migration_*.sql")
+        }
+        actual_versions = {
+            r["version"]
+            for r in db.execute("SELECT version FROM schema_version").fetchall()
+        }
+
+        assert expected_versions <= actual_versions, (
+            "init_db did not mark these migrations as applied: "
+            f"{expected_versions - actual_versions}"
+        )
+
+        applied_count = run_all_migrations_with_connection(db)
+        assert applied_count == 0, (
+            f"Expected 0 migrations to apply on fresh init_db, got {applied_count}"
+        )
+    finally:
+        db.close()
+        db_module.close_pg_pool()
 
 
 def test_staging_partial_chain_applies_only_remaining(
     tmp_path, monkeypatch, caplog
 ):
-    """Step 4 case 2: simulate staging where 001..009 are already
-    recorded; runner should apply only 010..latest. Migrations 010..
-    latest are idempotent against an existing post-009 schema (CREATE
-    ... IF NOT EXISTS, INSERT ... WHERE NOT EXISTS), so the
-    re-application succeeds."""
-    expected = len(_CHAIN_FILES) - 9
+    """Step 4 case 2: simulate a long-lived DB before A7 backfills."""
+    expected = len(_CHAIN_FILES) - 13
     with fresh_migration_db(tmp_path, monkeypatch) as db:
-        _apply_full_chain_then_rewind(db, keep_count=9)  # keep 001..009
+        _apply_full_chain_then_rewind(db, keep_count=13)
         applied, messages = _run_and_capture(db, caplog)
         _assert_no_failed_log(messages)
         assert applied == expected, (
@@ -161,18 +231,10 @@ def test_staging_partial_chain_applies_only_remaining(
 def test_half_applied_chain_applies_remaining(
     tmp_path, monkeypatch, caplog
 ):
-    """Step 4 case 3: half-applied state where 001..005 are already
-    recorded; runner should apply 006..latest.
-
-    Strategy: ``init_db`` already provides the schema 001..005 would
-    establish (those migrations are no-ops or duplicate init_db
-    tables post-fix), so it is safe to mark them applied without
-    running. The runner then applies 006..latest against a schema that
-    does not yet have 008's added columns, which keeps 008's plain
-    ALTER TABLE statements valid."""
-    expected = len(_CHAIN_FILES) - 5
+    """Step 4 case 3: simulate a long-lived DB before A4 backfill."""
+    expected = len(_CHAIN_FILES) - 14
     with fresh_migration_db(tmp_path, monkeypatch) as db:
-        _preseed_schema_version(db, _CHAIN_FILES[:5])  # 001..005
+        _apply_full_chain_then_rewind(db, keep_count=14)
         applied, messages = _run_and_capture(db, caplog)
         _assert_no_failed_log(messages)
         assert applied == expected, (
