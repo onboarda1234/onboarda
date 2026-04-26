@@ -15,6 +15,7 @@ regressing — that is a critical compliance-trust regression.
 """
 
 import json
+import uuid
 import pytest
 
 
@@ -73,7 +74,7 @@ def test_queue_declared_pep_chip_robust_to_noncanonical_truthy(db, temp_db, is_p
     green 'Not Declared' chip while the underlying record is a PEP."""
     from server import _build_screening_queue_payload
 
-    ref = "PEPNORM" + str(abs(hash(is_pep_value)) % 1000)
+    ref = f"PEPNORM-{is_pep_value}-{uuid.uuid4().hex[:8]}"
     _insert_pep_app(db, ref, is_pep_value)
     db.commit()
 
