@@ -21,8 +21,18 @@ GDPR / DSAR Treatment (Sprint 3 Obj 2b):
 import hashlib
 import json
 import logging
+import sqlite3
+
+try:
+    import psycopg2
+except ImportError:  # pragma: no cover - optional outside PostgreSQL installs
+    psycopg2 = None
 
 logger = logging.getLogger("arie.screening_storage")
+
+_OPERATIONAL_ERRORS = (sqlite3.Error, RuntimeError) + (
+    (psycopg2.Error,) if psycopg2 is not None else ()
+)
 
 # Table DDL for creating the screening_reports_normalized table
 # Used by migration script and by test setup
@@ -47,6 +57,7 @@ CREATE TABLE IF NOT EXISTS screening_reports_normalized (
 _CREATE_INDEXES_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_screening_normalized_client_app ON screening_reports_normalized(client_id, application_id)",
     "CREATE INDEX IF NOT EXISTS idx_screening_normalized_app_id ON screening_reports_normalized(application_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_screening_normalized_app_provider_hash ON screening_reports_normalized(application_id, provider, source_screening_report_hash)",
 ]
 
 
@@ -85,9 +96,10 @@ def persist_normalized_report(
     normalized_version: str = "1.0",
 ) -> int:
     """
-    Persist a normalized screening report.
+    Persist a normalized screening report using an idempotent upsert.
 
-    Returns the row ID of the inserted record.
+    Returns the row ID of the inserted or updated record where the driver
+    exposes it.
 
     Raises on database errors (caller must handle).
     """
@@ -98,11 +110,73 @@ def persist_normalized_report(
            (client_id, application_id, provider, normalized_version,
             source_screening_report_hash, normalized_report_json,
             normalization_status, source)
-           VALUES (?, ?, ?, ?, ?, ?, 'success', 'migration_scaffolding')""",
+           VALUES (?, ?, ?, ?, ?, ?, 'success', 'migration_scaffolding')
+           ON CONFLICT(application_id, provider, source_screening_report_hash)
+           DO UPDATE SET
+             normalized_report_json = EXCLUDED.normalized_report_json,
+             updated_at = CURRENT_TIMESTAMP""",
         (client_id, application_id, provider, normalized_version,
          source_report_hash, report_json),
     )
     return cursor.lastrowid
+
+
+def webhook_renormalize_from_committed_legacy(legacy_db, application_id) -> None:
+    """
+    Re-normalize one application's committed legacy screening report.
+
+    Opens a fresh connection so webhook post-commit reads observe committed
+    state. Operational database/runtime failures are logged and swallowed;
+    programmer errors from normalization logic propagate.
+    """
+    _ = legacy_db
+    from db import get_db
+    from screening_normalizer import normalize_screening_report
+
+    db = get_db()
+    try:
+        ensure_normalized_table(db)
+        row = db.execute(
+            "SELECT id, client_id, prescreening_data "
+            "FROM applications WHERE id=? OR ref=?",
+            (application_id, application_id),
+        ).fetchone()
+        if not row:
+            return None
+
+        prescreening = json.loads(row["prescreening_data"] or "{}")
+        legacy_report = prescreening.get("screening_report")
+        if not legacy_report:
+            return None
+
+        source_hash = compute_report_hash(legacy_report)
+        normalized = normalize_screening_report(legacy_report)
+        persist_normalized_report(
+            db,
+            row["client_id"] or "",
+            row["id"],
+            normalized,
+            source_hash,
+        )
+        db.commit()
+        logger.info(
+            "Webhook renorm: upserted normalized record app_id=%s",
+            row["id"],
+        )
+        return None
+    except _OPERATIONAL_ERRORS as exc:
+        try:
+            db.rollback()
+        except _OPERATIONAL_ERRORS:
+            pass
+        logger.warning(
+            "Webhook renorm: operational failure app_id=%s error_type=%s",
+            application_id,
+            type(exc).__name__,
+        )
+        return None
+    finally:
+        db.close()
 
 
 def persist_normalization_failure(
