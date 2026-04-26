@@ -7,7 +7,6 @@ import os
 import json
 import sqlite3
 import logging
-import hashlib
 from datetime import datetime, timedelta
 from typing import Any, Optional, Dict, List, Tuple
 import secrets
@@ -1776,6 +1775,11 @@ def init_db():
         db.commit()
         logger.info("startup: schema DDL committed — Database schema initialized")
 
+        # Fresh installs are already on the current schema because init_db()
+        # creates it in one shot. Mark every known file migration as covered
+        # before the file-based runner can replay legacy ALTER TABLE steps
+        # against that modern schema (for example migration 014's status /
+        # due_date additions to periodic_reviews).
         logger.info("startup: marking known file migrations as applied")
         _mark_known_migrations_as_applied(db)
         db.commit()
@@ -1835,31 +1839,32 @@ def init_db():
 def _mark_known_migrations_as_applied(db: DBConnection):
     """On fresh installs, record file migrations already represented by init_db.
 
-    ``init_db`` creates the complete current schema. If ``schema_version`` is
-    empty after that fresh create, the file-based migration runner must not
-    replay historical ALTER TABLE migrations against the modern schema.
-    Existing long-lived databases already have schema_version rows and are left
-    untouched so pending migrations still apply incrementally.
+    ``init_db`` creates the complete current schema, so the file-based
+    migration runner must treat every existing migration file as already
+    applied. Long-lived databases keep their existing rows and only missing
+    versions are inserted here.
     """
     from migrations.runner import MIGRATIONS_DIR, ensure_schema_version_table
 
     ensure_schema_version_table(db)
-    row = db.execute("SELECT COUNT(*) AS count FROM schema_version").fetchone()
-    if row and int(row["count"]) > 0:
-        return
 
     for path in sorted(MIGRATIONS_DIR.glob("migration_*.sql")):
         parts = path.stem.split("_", 2)
         if len(parts) < 2:
             continue
         version = parts[1]
-        description = parts[2].replace("_", " ") if len(parts) > 2 else ""
-        checksum = hashlib.sha256(path.read_text(encoding="utf-8").encode()).hexdigest()
+        existing = db.execute(
+            "SELECT 1 FROM schema_version WHERE version = ?",
+            (version,),
+        ).fetchone()
+        if existing is not None:
+            continue
         db.execute(
-            "INSERT OR IGNORE INTO schema_version "
-            "(version, filename, description, checksum) VALUES (?, ?, ?, ?)",
-            (version, path.name, description, checksum),
+            "INSERT INTO schema_version (version, filename, description, checksum) "
+            "VALUES (?, ?, ?, ?)",
+            (version, path.name, "covered by init_db", "init_db"),
         )
+    db.commit()
 
 
 def _ensure_default_compliance_resources(db: DBConnection):
