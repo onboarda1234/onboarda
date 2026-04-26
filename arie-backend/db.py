@@ -1854,7 +1854,7 @@ def _mark_known_migrations_as_applied(db: DBConnection):
             continue
         version = parts[1]
         description = parts[2].replace("_", " ") if len(parts) > 2 else ""
-        checksum = hashlib.sha256(path.read_text(encoding="utf-8").encode()).hexdigest()[:16]
+        checksum = hashlib.sha256(path.read_text(encoding="utf-8").encode()).hexdigest()
         db.execute(
             "INSERT OR IGNORE INTO schema_version "
             "(version, filename, description, checksum) VALUES (?, ?, ?, ?)",

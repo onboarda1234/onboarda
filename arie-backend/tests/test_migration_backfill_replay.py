@@ -119,4 +119,5 @@ class TestMigrationBackfillReplay:
                     with pytest.raises(psycopg2.IntegrityError):
                         cur.execute("UPDATE screening_reports_normalized SET is_authoritative=1 WHERE client_id=%s", ("c1",))
         finally:
-            db.close(); db_module.close_pg_pool()
+            db.close()
+            db_module.close_pg_pool()
