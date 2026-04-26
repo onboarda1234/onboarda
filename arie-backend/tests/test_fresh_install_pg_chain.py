@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Helpers
 # ---------------------------------------------------------------------------
 
-_TOTAL_MIGRATIONS = 15
+_TOTAL_MIGRATIONS = 16
 
 
 def _extract_periodic_reviews_ddl(schema_sql: str) -> str:

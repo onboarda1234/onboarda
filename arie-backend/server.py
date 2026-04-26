@@ -7883,67 +7883,24 @@ class SumsubWebhookHandler(BaseHandler):
         finally:
             db.close()
 
-        # SCR-013: Post-commit re-normalization of screening_reports_normalized.
-        # Reads the committed legacy prescreening_data.screening_report for each
-        # matched application and inserts a fresh normalized record.
-        #
-        # Key invariants:
-        # * Runs AFTER db.close() — the legacy write has already committed.
-        # * Opens a new DB connection so reads see committed state.
-        # * Gated behind ENABLE_SCREENING_ABSTRACTION — zero-cost when OFF.
-        # * Per-app and outer failures are caught — NEVER blocks webhook 200.
-        # * No PII in log lines.
+        # SCR-013: Post-commit re-normalization. Helper enforces narrow-except;
+        # operational errors are swallowed, programmer errors propagate.
+        import sqlite3 as _sqlite3
+        try:
+            import psycopg2 as _psycopg2
+            _renorm_operational_errors = (_sqlite3.Error, _psycopg2.Error)
+        except ImportError:
+            _renorm_operational_errors = (_sqlite3.Error,)
         try:
             from screening_config import is_abstraction_enabled
             if matched_app_ids and is_abstraction_enabled():
-                from screening_normalizer import normalize_screening_report
-                from screening_storage import (
-                    ensure_normalized_table, persist_normalized_report,
-                    compute_report_hash,
-                )
-                _renorm_db = get_db()
-                try:
-                    ensure_normalized_table(_renorm_db)
-                    for _renorm_app_id in matched_app_ids:
-                        try:
-                            _renorm_row = _renorm_db.execute(
-                                "SELECT id, client_id, prescreening_data "
-                                "FROM applications WHERE id=? OR ref=?",
-                                (_renorm_app_id, _renorm_app_id),
-                            ).fetchone()
-                            if not _renorm_row:
-                                continue
-                            _renorm_pdict = safe_json_loads(
-                                _renorm_row["prescreening_data"] or "{}"
-                            )
-                            _renorm_legacy = _renorm_pdict.get("screening_report")
-                            if not _renorm_legacy:
-                                continue
-                            _renorm_hash = compute_report_hash(_renorm_legacy)
-                            _renorm_normalized = normalize_screening_report(_renorm_legacy)
-                            persist_normalized_report(
-                                _renorm_db,
-                                _renorm_row["client_id"] or "",
-                                _renorm_row["id"],
-                                _renorm_normalized,
-                                _renorm_hash,
-                            )
-                            _renorm_db.commit()
-                            logger.info(
-                                "Webhook renorm: upserted normalized record app_id=%s",
-                                _renorm_row["id"],
-                            )
-                        except Exception as _renorm_app_exc:
-                            logger.warning(
-                                "Webhook renorm: failed for app_id=%s error_type=%s",
-                                _renorm_app_id, type(_renorm_app_exc).__name__,
-                            )
-                finally:
-                    _renorm_db.close()
-        except Exception as _renorm_exc:
+                from screening_storage import webhook_renormalize_from_committed_legacy
+                for app_id in matched_app_ids:
+                    webhook_renormalize_from_committed_legacy(db, app_id)
+        except _renorm_operational_errors as outer_op_err:
             logger.warning(
-                "Webhook renorm: outer error error_type=%s",
-                type(_renorm_exc).__name__,
+                "Webhook renorm: outer operational error error_type=%s",
+                type(outer_op_err).__name__,
             )
 
         self.set_status(200)

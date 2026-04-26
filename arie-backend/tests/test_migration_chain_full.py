@@ -51,6 +51,7 @@ _CHAIN_FILES = [
     ("013", "migration_013_periodic_review_memos.sql"),
     ("014", "migration_014_periodic_reviews_status_due_date.sql"),
     ("015", "migration_015_screening_reports_normalized.sql"),
+    ("016", "migration_016_screening_reports_normalized_uniqueness.sql"),
 ]
 
 
