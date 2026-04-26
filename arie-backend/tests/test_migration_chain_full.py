@@ -5,12 +5,12 @@ End-to-end assertions that exercise the file-based migration runner
 across the three operationally-relevant ``schema_version`` starting
 states the deployment surface actually presents:
 
-  1. Fresh database (no schema_version rows): exactly 12 migrations
-     should apply, in order, with no FAILED log line.
-  2. Staging-style partial-applied state (001..009 marked applied):
-     exactly 3 migrations (010, 011, 012) should apply.
-  3. Half-applied state (001..005 marked applied): exactly 7
-     migrations (006..012) should apply.
+  1. Fresh database: init_db pre-marks every known migration, so the
+     file-based runner applies zero migrations.
+  2. Staging-style partial-applied state (001..013 marked applied):
+     exactly 2 migrations (014, 015) should apply.
+  3. Half-applied state (001..014 marked applied): exactly 1
+     migration (015) should apply.
 
 These tests are the contract for PR #128's docker-validate CI job:
 the chain must be green from any of the three starting states.
@@ -22,9 +22,12 @@ DB_PATH isolation and config / db module reload teardown.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import sys
+
+import pytest
 
 # Make arie-backend importable regardless of pytest's cwd.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -124,18 +127,85 @@ def _applied_versions(db):
     return [r["version"] for r in rows]
 
 
+def _dsn():
+    return os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
+
+
+def _fresh_pg(monkeypatch):
+    dsn = _dsn()
+    if not dsn:
+        pytest.skip(
+            "Set TEST_POSTGRES_DSN or DATABASE_URL_TEST to enable live PG migration tests."
+        )
+    import psycopg2
+    if "db" in sys.modules:
+        sys.modules["db"].close_pg_pool()
+    with psycopg2.connect(dsn) as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("DROP SCHEMA public CASCADE")
+            cur.execute("CREATE SCHEMA public")
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    import config as config_module
+    import db as db_module
+    importlib.reload(config_module)
+    importlib.reload(db_module)
+    db_module.init_db()
+    return db_module, db_module.get_db()
+
+
 def test_fresh_db_applies_all_migrations(
     tmp_path, monkeypatch, caplog
 ):
-    """Step 4 case 1: fresh init_db then runner; all migrations are pre-marked."""
+    """Step 4 case 1: fresh init_db then runner; migrations are pre-marked."""
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         applied, messages = _run_and_capture(db, caplog)
         _assert_no_failed_log(messages)
-        assert applied == 0, f"Expected 0 migrations applied on fresh DB; got {applied}"
+        assert applied == 0, (
+            f"Expected 0 migrations applied on fresh DB; got {applied}"
+        )
         assert any("up to date" in m.lower() for m in messages), (
             f"Missing up-to-date summary log; got: {messages}"
         )
         assert _applied_versions(db) == [v for v, _ in _CHAIN_FILES]
+
+
+def test_init_db_marks_all_known_migrations_as_applied(monkeypatch):
+    """init_db's contract: after running, every migration_*.sql file is
+    pre-marked as applied in schema_version. The file-based runner is a
+    no-op on a fresh DB.
+
+    This is the regression test for the bug where migration 014's
+    ADD COLUMN status would collide with init_db's own status column."""
+    db_module, db = _fresh_pg(monkeypatch)
+    try:
+        from migrations.runner import (
+            MIGRATIONS_DIR,
+            run_all_migrations_with_connection,
+        )
+
+        expected_versions = {
+            f.stem.split("_", 2)[1]
+            for f in MIGRATIONS_DIR.glob("migration_*.sql")
+        }
+        actual_versions = {
+            r["version"]
+            for r in db.execute("SELECT version FROM schema_version").fetchall()
+        }
+
+        assert expected_versions <= actual_versions, (
+            "init_db did not mark these migrations as applied: "
+            f"{expected_versions - actual_versions}"
+        )
+
+        applied_count = run_all_migrations_with_connection(db)
+        assert applied_count == 0, (
+            f"Expected 0 migrations to apply on fresh init_db, got {applied_count}"
+        )
+    finally:
+        db.close()
+        db_module.close_pg_pool()
 
 
 def test_staging_partial_chain_applies_only_remaining(
