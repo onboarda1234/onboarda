@@ -62,6 +62,7 @@ class TestMigrationBackfillReplay:
         db_module, db = self._fresh_pg(monkeypatch)
         try:
             self._mark_applied(db, 13)
+            db.execute("DELETE FROM schema_version WHERE version IN ('014','015')")
             db.execute("ALTER TABLE periodic_reviews DROP COLUMN status")
             db.execute("ALTER TABLE periodic_reviews DROP COLUMN due_date")
             db.commit()
@@ -104,6 +105,7 @@ class TestMigrationBackfillReplay:
         try:
             self._mark_applied(db, 14)
             db.execute("DROP TABLE screening_reports_normalized")
+            db.execute("DELETE FROM schema_version WHERE version='015'")
             db.commit()
             self._run_pending(db)
             import psycopg2

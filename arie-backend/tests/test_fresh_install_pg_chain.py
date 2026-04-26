@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Helpers
 # ---------------------------------------------------------------------------
 
-_TOTAL_MIGRATIONS = 13
+_TOTAL_MIGRATIONS = 15
 
 
 def _extract_periodic_reviews_ddl(schema_sql: str) -> str:
@@ -153,9 +153,9 @@ def test_fresh_pg_init_and_migration_chain(tmp_path, monkeypatch, caplog):
             assert not any("failed" in m.lower() for m in messages), (
                 f"Migration runner emitted a FAILED log on PG: {messages}"
             )
-            # All 13 applied
-            assert applied == _TOTAL_MIGRATIONS, (
-                f"Expected {_TOTAL_MIGRATIONS} migrations applied; got {applied}. "
+            # Fresh init_db pre-populates schema_version, so runner is a no-op.
+            assert applied == 0, (
+                f"Expected 0 migrations applied; got {applied}. "
                 f"Messages: {messages}"
             )
             # Migration 003 specifically must be in the applied list
@@ -166,7 +166,7 @@ def test_fresh_pg_init_and_migration_chain(tmp_path, monkeypatch, caplog):
             assert "003" in applied_versions, (
                 f"Migration 003 not in applied list: {applied_versions}"
             )
-            # All 13 versions present
+            # All known versions present
             expected_versions = [str(i).zfill(3) for i in range(1, _TOTAL_MIGRATIONS + 1)]
             assert applied_versions == expected_versions, (
                 f"Applied versions mismatch: got {applied_versions}"
@@ -238,9 +238,9 @@ def test_fresh_sqlite_init_and_migration_chain(tmp_path, monkeypatch, caplog):
         assert not any("failed" in m.lower() for m in messages), (
             f"Migration runner emitted a FAILED log on SQLite: {messages}"
         )
-        # All 13 applied
-        assert applied == _TOTAL_MIGRATIONS, (
-            f"Expected {_TOTAL_MIGRATIONS} migrations applied on SQLite; got {applied}. "
+        # Fresh init_db pre-populates schema_version, so runner is a no-op.
+        assert applied == 0, (
+            f"Expected 0 migrations applied on SQLite; got {applied}. "
             f"Messages: {messages}"
         )
         # Migration 003 must be in the applied list
@@ -251,7 +251,7 @@ def test_fresh_sqlite_init_and_migration_chain(tmp_path, monkeypatch, caplog):
         assert "003" in applied_versions, (
             f"Migration 003 not in applied list on SQLite: {applied_versions}"
         )
-        # All 13 versions present
+        # All known versions present
         expected_versions = [str(i).zfill(3) for i in range(1, _TOTAL_MIGRATIONS + 1)]
         assert applied_versions == expected_versions, (
             f"Applied versions mismatch on SQLite: got {applied_versions}"

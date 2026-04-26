@@ -113,8 +113,7 @@ def assert_fresh_init_then_runner_clean(
     post_condition=None,
 ):
     """Run init_db then the file-based runner against a fresh SQLite
-    database. Assert no FAILED log, "Applied N migration(s)
-    successfully" emitted, ``version`` recorded in schema_version, and
+    database. Assert no FAILED log, "up to date" emitted, ``version`` recorded in schema_version, and
     ``post_condition(db)`` (if provided) returns truthy."""
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         from migrations.runner import run_all_migrations_with_connection
@@ -129,13 +128,9 @@ def assert_fresh_init_then_runner_clean(
         assert not any("failed" in m.lower() for m in messages), (
             f"Migration runner emitted a FAILED log: {messages}"
         )
-        # Summary log present.
-        assert any(
-            m.startswith(f"Applied {applied} migration(s) successfully")
-            for m in messages
-        ), (
-            "Expected 'Applied N migration(s) successfully' summary log; "
-            f"got: {messages}"
+        assert applied == 0, f"Expected fresh init_db runner no-op; got {applied}"
+        assert any("up to date" in m.lower() for m in messages), (
+            f"Expected 'Database schema is up to date' log; got: {messages}"
         )
         # Target version recorded in schema_version.
         rows = db.execute(
