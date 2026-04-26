@@ -16,6 +16,7 @@ Verifies:
 """
 
 import json
+import logging
 import os
 import sys
 import sqlite3
@@ -88,7 +89,8 @@ def _ext_user_id(applicant_id: str) -> str:
 
 def _make_payload(applicant_id: str,
                   event_type: str = "applicantReviewed",
-                  review_answer: str = "GREEN") -> bytes:
+                  review_answer: str = "GREEN",
+                  created_at_ms: int = None) -> bytes:
     return json.dumps({
         "type": event_type,
         "applicantId": applicant_id,
@@ -99,7 +101,7 @@ def _make_payload(applicant_id: str,
             "moderationComment": "",
         },
         # Unique per call so the idempotency digest is different every time.
-        "createdAtMs": int(uuid.uuid4().int % (10 ** 13)),
+        "createdAtMs": created_at_ms if created_at_ms is not None else int(uuid.uuid4().int % (10 ** 13)),
     }).encode("utf-8")
 
 
@@ -205,10 +207,22 @@ def _get_normalized_rows_for_app(app_id: str) -> list:
     conn = _open_real_db()
     try:
         rows = conn.execute(
-            "SELECT * FROM screening_reports_normalized WHERE application_id=?",
+            "SELECT * FROM screening_reports_normalized WHERE application_id=? ORDER BY id",
             (app_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _set_legacy_screening_report(app_id: str, report: dict) -> None:
+    conn = _open_real_db()
+    try:
+        conn.execute(
+            "UPDATE applications SET prescreening_data=? WHERE id=?",
+            (json.dumps({"screening_report": report}), app_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -363,3 +377,136 @@ class TestWebhookNormalizedUpsert:
         assert row_count == 0, (
             "Unmatched delivery must not produce any normalized record"
         )
+
+    def test_renormalize_is_idempotent_on_replay(self, temp_db, monkeypatch):
+        monkeypatch.setenv("ENABLE_SCREENING_ABSTRACTION", "true")
+
+        applicant_id = _make_unique_applicant_id()
+        app_id = _seed_application_with_mapping(applicant_id)
+        body = _make_payload(applicant_id, created_at_ms=123456789)
+
+        first = _call_handler(body)
+        second = _call_handler(body)
+        assert first._status_code == 200
+        assert second._status_code == 200
+        assert _response_json(second).get("status") == "already_processed"
+        assert len(_get_normalized_rows_for_app(app_id)) == 1
+
+        from screening_storage import webhook_renormalize_from_committed_legacy
+        webhook_renormalize_from_committed_legacy(None, app_id)
+        webhook_renormalize_from_committed_legacy(None, app_id)
+        assert len(_get_normalized_rows_for_app(app_id)) == 1
+
+        changed = _call_handler(_make_payload(applicant_id, review_answer="RED"))
+        assert changed._status_code == 200
+        rows = _get_normalized_rows_for_app(app_id)
+        assert len(rows) == 2
+        assert len({r["source_screening_report_hash"] for r in rows}) == 2
+
+    def test_renormalize_reflects_legacy_update(self, temp_db, monkeypatch):
+        monkeypatch.setenv("ENABLE_SCREENING_ABSTRACTION", "true")
+
+        applicant_id = _make_unique_applicant_id()
+        app_id = _seed_application_with_mapping(applicant_id)
+
+        handler_1 = _call_handler(_make_payload(applicant_id, review_answer="GREEN"))
+        assert handler_1._status_code == 200
+        rows_a = _get_normalized_rows_for_app(app_id)
+        assert len(rows_a) == 1
+
+        report_b = {
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "overall_flags": ["manual legacy update"],
+            "company_screening": {},
+            "screened_at": "2026-01-02T00:00:00",
+            "sumsub_webhook": {"review_answer": "RED", "event_type": "applicantReviewed"},
+        }
+        _set_legacy_screening_report(app_id, report_b)
+
+        from screening_storage import webhook_renormalize_from_committed_legacy
+        webhook_renormalize_from_committed_legacy(None, app_id)
+        rows_b = _get_normalized_rows_for_app(app_id)
+        assert len(rows_b) == 2
+        assert rows_a[0]["source_screening_report_hash"] != rows_b[1]["source_screening_report_hash"]
+        assert "manual legacy update" in json.loads(rows_b[1]["normalized_report_json"])["overall_flags"]
+
+    def test_renormalize_reraises_programmer_errors(self, temp_db, monkeypatch):
+        applicant_id = _make_unique_applicant_id()
+        app_id = _seed_application_with_mapping(applicant_id)
+
+        import screening_normalizer as _snorm
+        from screening_storage import webhook_renormalize_from_committed_legacy
+
+        def _type_error(_report):
+            raise TypeError("simulated programmer bug")
+
+        monkeypatch.setattr(_snorm, "normalize_screening_report", _type_error)
+        with pytest.raises(TypeError):
+            webhook_renormalize_from_committed_legacy(None, app_id)
+
+        def _attr_error(_report):
+            raise AttributeError("simulated programmer bug")
+
+        monkeypatch.setattr(_snorm, "normalize_screening_report", _attr_error)
+        with pytest.raises(AttributeError):
+            webhook_renormalize_from_committed_legacy(None, app_id)
+
+    def test_renormalize_logs_no_pii(self, temp_db, monkeypatch, caplog):
+        applicant_id = _make_unique_applicant_id()
+        app_id = _seed_application_with_mapping(applicant_id)
+        pii_values = [
+            "Alice", "Example", "1980-02-03", "P1234567",
+            "12 Sensitive Street", "alice@example.test",
+        ]
+        _set_legacy_screening_report(app_id, {
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "overall_flags": [],
+            "company_screening": {},
+            "screened_at": "2026-01-01T00:00:00",
+            "sumsub_webhook": {
+                "firstName": "Alice",
+                "lastName": "Example",
+                "dob": "1980-02-03",
+                "documentNumber": "P1234567",
+                "address": "12 Sensitive Street",
+                "email": "alice@example.test",
+            },
+        })
+
+        import screening_storage as _storage
+
+        def _raise_operational(*_args, **_kwargs):
+            raise sqlite3.OperationalError("simulated operational failure")
+
+        monkeypatch.setattr(_storage, "persist_normalized_report", _raise_operational)
+
+        with caplog.at_level(logging.WARNING, logger="arie.screening_storage"):
+            _storage.webhook_renormalize_from_committed_legacy(None, app_id)
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert messages
+        for message in messages:
+            for pii in pii_values:
+                assert pii not in message
+
+    def test_no_raw_payload_in_normalized_write_path(self):
+        server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
+        with open(server_path, encoding="utf-8") as f:
+            src = f.read()
+
+        wh_start = src.find("class SumsubWebhookHandler")
+        assert wh_start != -1
+        wh_end = src.find("\nclass ", wh_start + 10)
+        wh_code = src[wh_start:wh_end]
+
+        assert "webhook_renormalize_from_committed_legacy" in wh_code
+        assert "persist_normalized_report(" not in wh_code
+        forbidden = (
+            "persist_normalized_report(payload",
+            "persist_normalized_report(kyc_data",
+            "persist_normalized_report(safe_json_loads",
+        )
+        for needle in forbidden:
+            assert needle not in wh_code

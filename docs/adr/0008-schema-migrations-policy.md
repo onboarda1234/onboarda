@@ -28,6 +28,23 @@ This is the architectural invariant that makes the lockstep policy actually work
 
 *Regression test:* `tests/test_migration_chain_full.py::test_init_db_marks_all_known_migrations_as_applied` asserts this invariant.
 
+## Idempotent normalized writes
+
+Migration 016 adds a UNIQUE INDEX on `screening_reports_normalized
+(application_id, provider, source_screening_report_hash)`. The
+`persist_normalized_report` function uses `INSERT ... ON CONFLICT DO
+UPDATE` to enforce idempotency on lifecycle webhook re-deliveries.
+
+The SCR-013 webhook re-normalization path was extracted from inline
+code in `SumsubWebhookHandler` into the helper
+`screening_storage.webhook_renormalize_from_committed_legacy`. The
+helper applies a narrow-except pattern: operational errors are
+caught and logged; programmer errors (`TypeError`, `AttributeError`)
+propagate so latent bugs surface loudly.
+
+The same helper will be reused by the ComplyAdvantage webhook
+handler in Track C (Phase C4).
+
 ## Consequences
 
 - Positive: production databases can be brought up to current schema deterministically. Audit trail is complete. Investor diligence has a clean answer.

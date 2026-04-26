@@ -76,6 +76,53 @@ class TestRunFullScreening:
         errors = validate_normalized_report(result)
         assert errors == []
 
+    def test_adapter_run_full_screening_parity_with_screening_module(self, monkeypatch):
+        import screening
+        from datetime import datetime, timezone
+        from screening_normalizer import normalize_screening_report
+
+        class FixedDateTime:
+            @staticmethod
+            def now(tz=None):
+                return datetime(2026, 1, 1, 12, 0, 0, tzinfo=tz or timezone.utc)
+
+        company_result = {
+            "found": True,
+            "companies": [],
+            "total_results": 0,
+            "source": "mocked",
+            "api_status": "live",
+            "searched_at": "2026-01-01T12:00:00",
+        }
+        aml_result = {
+            "matched": False,
+            "results": [],
+            "source": "sumsub",
+            "api_status": "live",
+            "screened_at": "2026-01-01T12:00:00",
+        }
+        applicant_result = {
+            "applicant_id": "mock-applicant",
+            "review_answer": "GREEN",
+            "source": "mocked",
+            "api_status": "live",
+        }
+
+        monkeypatch.setattr(screening, "datetime", FixedDateTime)
+        monkeypatch.setattr(screening, "lookup_opencorporates", lambda *a, **kw: company_result)
+        monkeypatch.setattr(screening, "geolocate_ip", lambda *a, **kw: {"source": "mocked"})
+        monkeypatch.setattr(screening, "sumsub_create_applicant", lambda *a, **kw: applicant_result)
+        monkeypatch.setattr(screening, "screen_sumsub_aml", lambda *a, **kw: aml_result)
+
+        application_data = {"company_name": "Acme Co", "country": "MU"}
+        result_raw = screening.run_full_screening(application_data, [], [])
+        expected_normalized = normalize_screening_report(result_raw)
+        result_via_adapter = SumsubScreeningAdapter().run_full_screening(
+            application_data, [], []
+        )
+
+        assert result_via_adapter == expected_normalized
+
 
 class TestScreenPerson:
     def test_returns_normalized_person(self, monkeypatch):
