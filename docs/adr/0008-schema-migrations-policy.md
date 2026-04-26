@@ -18,6 +18,16 @@ Every schema change must include both an `init_db` update, for fresh installs, a
 
 Migration 015 preserves Phase A4's temporary `CHECK(is_authoritative = 0)` constraint on `screening_reports_normalized`; Phase E activation is the future point at which that constraint may be lifted by a new migration.
 
+## Fresh-install behaviour
+
+On fresh install, `init_db()` builds the complete current schema in one shot. After schema creation, `init_db()` pre-populates the `schema_version` table with every existing `migration_*.sql` file's version, marked with `description="covered by init_db"` and `checksum="init_db"`.
+
+This means the file-based migration runner is a no-op on fresh installs — every known migration is already marked as applied. Migrations are only executed on long-lived databases that pre-date one or more schema changes.
+
+This is the architectural invariant that makes the lockstep policy actually work: when init_db is updated to mirror a migration's schema changes, the migration must not also try to apply those changes on a fresh DB. Pre-populating `schema_version` resolves the conflict.
+
+*Regression test:* `tests/test_migration_chain_full.py::test_init_db_marks_all_known_migrations_as_applied` asserts this invariant.
+
 ## Consequences
 
 - Positive: production databases can be brought up to current schema deterministically. Audit trail is complete. Investor diligence has a clean answer.
