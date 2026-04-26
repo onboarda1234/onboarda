@@ -165,10 +165,12 @@ def webhook_renormalize_from_committed_legacy(legacy_db, application_id) -> None
         )
         return None
     except _OPERATIONAL_ERRORS as exc:
-        try:
-            db.rollback()
-        except _OPERATIONAL_ERRORS:
-            pass
+        rollback = getattr(db, "rollback", None)
+        if rollback is not None:
+            try:
+                rollback()
+            except _OPERATIONAL_ERRORS:
+                pass
         logger.warning(
             "Webhook renorm: operational failure app_id=%s error_type=%s",
             application_id,
