@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS screening_monitoring_subscriptions (
     last_event_at TEXT,
     last_webhook_type TEXT,
     monitoring_event_count INTEGER NOT NULL DEFAULT 0,
+    -- ADR 0008: Track E activation will lift this scaffolding lock.
     is_authoritative INTEGER NOT NULL DEFAULT 0
         CHECK(is_authoritative = 0),
     source TEXT NOT NULL DEFAULT 'migration_scaffolding',

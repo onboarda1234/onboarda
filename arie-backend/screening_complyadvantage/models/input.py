@@ -51,13 +51,13 @@ class CACustomerPersonInput(BaseModel):
     addresses: list[CAAddress] = Field(default_factory=list)
     occupation: Optional[str] = None
     employer: Optional[str] = None
-    salary: Optional[dict] = None  # TODO: tighten after real CA payloads stabilize.
-    net_worth: Optional[dict] = None  # TODO: tighten after real CA payloads stabilize.
+    salary: Optional[dict] = None  # TODO: tighten expected {amount, currency} after payload recon.
+    net_worth: Optional[dict] = None  # TODO: tighten expected {amount, currency} after payload recon.
     source_of_wealth: Optional[str] = None
     source_of_funds: Optional[str] = None
     external_identifier: Optional[str] = None
     customer_reference: Optional[str] = None
-    custom_fields: Optional[dict] = None  # TODO: tighten after real CA payloads stabilize.
+    custom_fields: Optional[dict] = None  # TODO: tighten CA field map after payload recon.
     metadata: Optional[dict] = None
 
 
@@ -72,7 +72,7 @@ class CACustomerCompanyInput(BaseModel):
     addresses: list[CAAddress] = Field(default_factory=list)
     external_identifier: Optional[str] = None
     customer_reference: Optional[str] = None
-    custom_fields: Optional[dict] = None  # TODO: tighten after real CA payloads stabilize.
+    custom_fields: Optional[dict] = None  # TODO: tighten CA field map after payload recon.
     metadata: Optional[dict] = None
 
 

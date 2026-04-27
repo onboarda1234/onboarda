@@ -261,12 +261,7 @@ def validate_normalized_report(report: dict) -> list:
     if "provenance" in report and report["provenance"] is not None:
         provenance = report["provenance"]
         try:
-            if isinstance(provenance, TwoPassProvenance):
-                pass
-            elif isinstance(provenance, dict):
-                TwoPassProvenance.model_validate(provenance)
-            else:
-                raise TypeError(type(provenance).__name__)
+            TwoPassProvenance.model_validate(provenance)
         except Exception as exc:
             errors.append(f"provenance must be compatible with TwoPassProvenance: {exc}")
 
