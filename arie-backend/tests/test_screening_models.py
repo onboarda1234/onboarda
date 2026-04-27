@@ -9,6 +9,7 @@ from screening_models import (
     NORMALIZED_PERSON_SCREENING_SCHEMA,
     NORMALIZED_COMPANY_SCREENING_SCHEMA,
     NORMALIZED_SCREENING_REPORT_SCHEMA,
+    TwoPassProvenance,
     create_normalized_person_screening,
     create_normalized_company_screening,
     create_normalized_screening_report,
@@ -302,3 +303,66 @@ class TestValidator:
             errors = validate_normalized_report(r)
             cov_errors = [e for e in errors if "coverage" in e or "hit" in e]
             assert cov_errors == [], f"coverage='{cov}' errors: {cov_errors}"
+
+
+def test_drift_fix_report_schema_includes_any_non_terminal_subject():
+    assert NORMALIZED_SCREENING_REPORT_SCHEMA["any_non_terminal_subject"] is bool
+
+
+def test_drift_fix_report_schema_includes_company_screening_state():
+    assert NORMALIZED_SCREENING_REPORT_SCHEMA["company_screening_state"] is str
+
+
+def test_drift_fix_person_schema_includes_screening_state():
+    assert NORMALIZED_PERSON_SCREENING_SCHEMA["screening_state"] is str
+
+
+def test_drift_fix_person_schema_includes_requires_review():
+    assert NORMALIZED_PERSON_SCREENING_SCHEMA["requires_review"] is bool
+
+
+def test_extension_person_schema_supports_is_rca_nullable_bool():
+    assert NORMALIZED_PERSON_SCREENING_SCHEMA["is_rca"] == (bool, type(None))
+
+
+def test_extension_person_schema_supports_pep_classes_list():
+    assert NORMALIZED_PERSON_SCREENING_SCHEMA["pep_classes"] == (list, type(None))
+
+
+def test_extension_report_schema_supports_provenance_dict():
+    assert NORMALIZED_SCREENING_REPORT_SCHEMA["provenance"] == (dict, type(None))
+
+
+def test_validate_normalized_report_accepts_v1_sumsub_record_unchanged():
+    r = create_normalized_screening_report(screened_at="2025-01-01T00:00:00")
+    assert validate_normalized_report(r) == []
+
+
+def test_validate_normalized_report_accepts_v2_ca_shape_record():
+    r = create_normalized_screening_report(
+        provider="complyadvantage",
+        normalized_version="2.0",
+        screened_at="2026-01-01T00:00:00",
+        any_non_terminal_subject=False,
+        company_screening_state="completed_clear",
+        provenance=TwoPassProvenance(strict_match_count=1).model_dump(),
+    )
+    r["director_screenings"] = [
+        create_normalized_person_screening(
+            screening_state="completed_match",
+            requires_review=True,
+            is_rca=None,
+            pep_classes=["PEP_CLASS_1", "PEP_CLASS_2"],
+            adverse_media_coverage="partial",
+            has_adverse_media_hit=False,
+        )
+    ]
+    assert validate_normalized_report(r) == []
+
+
+def test_validate_normalized_report_warns_on_unknown_pep_class_value():
+    r = create_normalized_screening_report(screened_at="2025-01-01T00:00:00")
+    r["director_screenings"] = [
+        create_normalized_person_screening(pep_classes=["FUTURE_CA_CLASS"])
+    ]
+    assert validate_normalized_report(r) == []

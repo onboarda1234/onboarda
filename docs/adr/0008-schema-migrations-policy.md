@@ -45,6 +45,26 @@ propagate so latent bugs surface loudly.
 The same helper will be reused by the ComplyAdvantage webhook
 handler in Track C (Phase C4).
 
+## Migration 017 — screening_monitoring_subscriptions
+
+Migration 017 introduces `screening_monitoring_subscriptions` for tracking
+ComplyAdvantage monitoring subscription lifecycle. This table is intentionally
+separate from `screening_reports_normalized` because subscription state
+(active/paused/cancelled/expired) has its own lifecycle distinct from any
+single screening event.
+
+The `is_authoritative` CHECK constraint preserves the Track-A scaffolding
+lock pattern; will be lifted at Track E activation by a future migration.
+
+## Provider package layout — `screening_complyadvantage/`
+
+C1.a introduces `arie-backend/screening_complyadvantage/` as a nested
+package, deviating from the existing flat-module convention
+(`screening_adapter_sumsub.py` etc.). The deviation is deliberate:
+ComplyAdvantage's larger module footprint (input/output/webhook/normalizer/
+client/adapter — 9+ files) makes the flat naming convention unwieldy.
+Future provider integrations may follow this pattern.
+
 ## Consequences
 
 - Positive: production databases can be brought up to current schema deterministically. Audit trail is complete. Investor diligence has a clean answer.

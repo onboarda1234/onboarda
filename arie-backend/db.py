@@ -1001,6 +1001,34 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_client_app ON screening_reports_normalized(client_id, application_id);
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_app_id ON screening_reports_normalized(application_id);
     CREATE UNIQUE INDEX IF NOT EXISTS uq_screening_normalized_app_provider_hash ON screening_reports_normalized(application_id, provider, source_screening_report_hash);
+
+    -- Screening Monitoring Subscriptions (Phase C1.a: ComplyAdvantage scaffolding)
+    CREATE TABLE IF NOT EXISTS screening_monitoring_subscriptions (
+        id SERIAL PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        person_key TEXT,
+        customer_identifier TEXT NOT NULL,
+        external_subscription_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active'
+            CHECK(status IN ('active', 'paused', 'cancelled', 'expired')),
+        subscribed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_event_at TIMESTAMP,
+        last_webhook_type TEXT,
+        monitoring_event_count INTEGER NOT NULL DEFAULT 0,
+        is_authoritative INTEGER NOT NULL DEFAULT 0
+            CHECK(is_authoritative = 0),
+        source TEXT NOT NULL DEFAULT 'migration_scaffolding',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_screening_monitoring_subs_app
+        ON screening_monitoring_subscriptions (application_id);
+    CREATE INDEX IF NOT EXISTS idx_screening_monitoring_subs_client
+        ON screening_monitoring_subscriptions (client_id, application_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_screening_monitoring_subs_customer
+        ON screening_monitoring_subscriptions (client_id, provider, customer_identifier);
     """
 
 
@@ -1716,6 +1744,34 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_client_app ON screening_reports_normalized(client_id, application_id);
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_app_id ON screening_reports_normalized(application_id);
     CREATE UNIQUE INDEX IF NOT EXISTS uq_screening_normalized_app_provider_hash ON screening_reports_normalized(application_id, provider, source_screening_report_hash);
+
+    -- Screening Monitoring Subscriptions (Phase C1.a: ComplyAdvantage scaffolding)
+    CREATE TABLE IF NOT EXISTS screening_monitoring_subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id TEXT NOT NULL,
+        application_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        person_key TEXT,
+        customer_identifier TEXT NOT NULL,
+        external_subscription_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active'
+            CHECK(status IN ('active', 'paused', 'cancelled', 'expired')),
+        subscribed_at TEXT DEFAULT (datetime('now')),
+        last_event_at TEXT,
+        last_webhook_type TEXT,
+        monitoring_event_count INTEGER NOT NULL DEFAULT 0,
+        is_authoritative INTEGER NOT NULL DEFAULT 0
+            CHECK(is_authoritative = 0),
+        source TEXT NOT NULL DEFAULT 'migration_scaffolding',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_screening_monitoring_subs_app
+        ON screening_monitoring_subscriptions (application_id);
+    CREATE INDEX IF NOT EXISTS idx_screening_monitoring_subs_client
+        ON screening_monitoring_subscriptions (client_id, application_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_screening_monitoring_subs_customer
+        ON screening_monitoring_subscriptions (client_id, provider, customer_identifier);
     """
 
 
