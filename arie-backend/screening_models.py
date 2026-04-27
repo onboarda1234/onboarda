@@ -8,6 +8,22 @@ SAFETY: No imports from screening.py or sumsub_client.py.
 SAFETY: Uses plain dicts, not dataclasses.
 """
 
+from pydantic import BaseModel
+
+
+class TwoPassProvenance(BaseModel):
+    """Top-level metadata for two-pass screening (CA only). Sumsub never sets this."""
+
+    strict_workflow_id: str | None = None
+    relaxed_workflow_id: str | None = None
+    strict_match_count: int = 0
+    relaxed_match_count: int = 0
+    merged_match_count: int = 0
+    strict_only_count: int = 0
+    relaxed_only_count: int = 0
+    both_count: int = 0
+
+
 # ── Coverage Semantics ──
 # "none"    = not screened / not available from provider
 # "partial" = some checks performed, but not complete
@@ -28,6 +44,10 @@ NORMALIZED_PERSON_SCREENING_SCHEMA = {
     "has_adverse_media_hit": (bool, type(None)),
     "adverse_media_coverage": str,  # "none" | "partial" | "full"
     "screening": dict,          # Raw screening sub-object (pass-through)
+    "screening_state": str,     # values like "completed_clear" / "completed_pep" / "pending"
+    "requires_review": bool,
+    "is_rca": (bool, type(None)),
+    "pep_classes": (list, type(None)),
 }
 
 # ── Company Screening Schema ──
@@ -56,6 +76,9 @@ NORMALIZED_SCREENING_REPORT_SCHEMA = {
     "overall_flags": list,
     "total_hits": int,
     "degraded_sources": list,
+    "any_non_terminal_subject": bool,
+    "company_screening_state": str,
+    "provenance": (dict, type(None)),
 }
 
 
@@ -213,5 +236,38 @@ def validate_normalized_report(report: dict) -> list:
                                 f"{list_field}[{i}].{hit_f} must be bool or None, "
                                 f"got {type(val).__name__}"
                             )
+
+                if "is_rca" in person:
+                    val = person["is_rca"]
+                    if val is not None and not isinstance(val, bool):
+                        errors.append(
+                            f"{list_field}[{i}].is_rca must be bool or None, "
+                            f"got {type(val).__name__}"
+                        )
+
+                if "pep_classes" in person:
+                    val = person["pep_classes"]
+                    if val is not None:
+                        if not isinstance(val, list):
+                            errors.append(
+                                f"{list_field}[{i}].pep_classes must be list[str] or None, "
+                                f"got {type(val).__name__}"
+                            )
+                        elif not all(isinstance(item, str) for item in val):
+                            errors.append(
+                                f"{list_field}[{i}].pep_classes must contain only strings"
+                            )
+
+    if "provenance" in report and report["provenance"] is not None:
+        provenance = report["provenance"]
+        try:
+            if isinstance(provenance, TwoPassProvenance):
+                pass
+            elif isinstance(provenance, dict):
+                TwoPassProvenance.model_validate(provenance)
+            else:
+                raise TypeError(type(provenance).__name__)
+        except Exception as exc:
+            errors.append(f"provenance must be compatible with TwoPassProvenance: {exc}")
 
     return errors
