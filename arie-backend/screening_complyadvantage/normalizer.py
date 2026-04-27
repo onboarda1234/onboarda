@@ -244,17 +244,21 @@ def extract_pep_classes(match: MergedMatch) -> list[str] | None:
     return sorted(set(classes)) or None
 
 
-def derive_person_screening_from_match(match: MergedMatch, person_input, person_type: str) -> dict:
+def derive_person_screening_from_match(
+    match: MergedMatch,
+    application_context: ScreeningApplicationContext,
+    person_type: str,
+) -> dict:
     rollups = compute_match_rollups(match)
     profile = match.profile
     nationality = ""
     if profile is not None and profile.person is not None:
         nationality = profile.person.nationality or (profile.person.countries[0] if profile.person.countries else "")
     return {
-        "person_name": _profile_name(profile) or getattr(person_input, "full_name", None) or "",
+        "person_name": _profile_name(profile) or application_context.screening_subject_name,
         "person_type": person_type,
         "nationality": nationality,
-        "declared_pep": "Yes" if getattr(person_input, "declared_pep", False) else "No",
+        "declared_pep": "Yes" if application_context.declared_pep else "No",
         "has_pep_hit": rollups["has_pep_hit"],
         "has_sanctions_hit": rollups["has_sanctions_hit"],
         "has_adverse_media_hit": True if rollups["has_adverse_media_hit"] else None,

@@ -184,8 +184,8 @@ def test_two_pass_strict_misses_relaxed_catches_canonical():
     assert canonical["surfaced_by_pass"] == "relaxed"
 
 
-def test_indicator_type_drives_rollups_not_taxonomy():
-    match = _merged_fixture("sanctions_canonical.json")[0]
+def test_indicator_type_drives_pep_rollup_not_taxonomy():
+    match = _merged_fixture("pep_canonical.json")[0]
     assert compute_match_rollups(match)["has_pep_hit"] is True
 
 
@@ -231,7 +231,7 @@ def test_hash_changes_on_new_relationship():
     assert compute_ca_screening_hash(_merged_fixture("pep_canonical.json")) != compute_ca_screening_hash(_merged_fixture("rca_canonical.json"))
 
 
-def test_hash_excludes_workflow_ids_and_timestamps():
+def test_hash_excludes_surfaced_by_pass():
     matches = _merged_fixture("adverse_media_multi_source.json")
     changed = copy.deepcopy(matches)
     changed[0].surfaced_by_pass = "relaxed"
