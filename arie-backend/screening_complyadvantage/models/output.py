@@ -173,9 +173,11 @@ class CAStepDetail(BaseModel):
 
 
 class CAWorkflowResponse(BaseModel):
-    identifier: str
-    status: Optional[ScreeningStatus] = None
-    step_details: CAPaginatedCollection[CAStepDetail] = Field(default_factory=CAPaginatedCollection[CAStepDetail])
+    workflow_instance_identifier: str
+    workflow_type: str
+    steps: list[str] = Field(default_factory=list)
+    status: ScreeningStatus
+    step_details: dict[str, CAStepDetail] = Field(default_factory=dict)
 
 
 class CAAlertResponse(BaseModel):
