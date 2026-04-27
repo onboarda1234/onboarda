@@ -52,6 +52,7 @@ _CHAIN_FILES = [
     ("014", "migration_014_periodic_reviews_status_due_date.sql"),
     ("015", "migration_015_screening_reports_normalized.sql"),
     ("016", "migration_016_screening_reports_normalized_uniqueness.sql"),
+    ("017", "migration_017_screening_monitoring_subscriptions.sql"),
 ]
 
 
@@ -66,6 +67,8 @@ def _remove_modern_backfills(db, keep_count):
                 pass
     if "015" not in kept_versions:
         db.execute("DROP TABLE IF EXISTS screening_reports_normalized")
+    if "017" not in kept_versions:
+        db.execute("DROP TABLE IF EXISTS screening_monitoring_subscriptions")
     db.commit()
 
 
