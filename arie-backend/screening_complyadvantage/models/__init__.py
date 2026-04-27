@@ -6,7 +6,7 @@ from .input import (
 )
 from .output import (
     CAWorkflowResponse, CAStepDetail,
-    CAAlertResponse, CARiskDetail, CARiskDetailInner,
+    CAAlertResponse, CARiskDetail, CARiskDetailInner, CARiskIndicator,
     CAProfile, CAProfilePerson, CAProfileCompany,
     CAMatchDetails, CARiskType, CAAdditionalField,
     CASanctionIndicator, CAWatchlistIndicator, CAPEPIndicator, CAMediaIndicator,
