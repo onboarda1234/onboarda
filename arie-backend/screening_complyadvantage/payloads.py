@@ -64,8 +64,6 @@ def build_customer_person(person, *, strict=True):
         "middle_name": _first(person, "middle_name"),
         "full_name": full_name or " ".join(p for p in [first_name, last_name] if p),
         "date_of_birth": to_ca_dob(_first(person, "date_of_birth", "dob", "birth_date")),
-        "external_identifier": _first(person, "person_key", "id"),
-        "customer_reference": _first(person, "person_key", "id"),
     })
     if strict:
         customer.update(_drop_empty({
@@ -97,7 +95,7 @@ def build_customer_person(person, *, strict=True):
         })
         if metadata:
             customer["metadata"] = metadata
-    return {"person": customer}
+    return _customer_envelope(customer, "person", _first(person, "person_key", "id"))
 
 
 def build_customer_company(application_data, *, strict=True):
@@ -105,8 +103,6 @@ def build_customer_company(application_data, *, strict=True):
     name = _first(application_data, "company_name", "name", "legal_name") or "Unknown Company"
     company = _drop_empty({
         "name": name,
-        "external_identifier": _first(application_data, "application_id", "id", "ref"),
-        "customer_reference": _first(application_data, "application_id", "id", "ref"),
     })
     if strict:
         company.update(_drop_empty({
@@ -123,7 +119,7 @@ def build_customer_company(application_data, *, strict=True):
         )
         if address:
             company["addresses"] = [address]
-    return {"company": company}
+    return _customer_envelope(company, "company", _first(application_data, "application_id", "id", "ref"))
 
 
 def build_create_and_screen_payload(customer, *, monitoring_enabled=True, workflow_id=None, external_identifier=None):
@@ -136,7 +132,8 @@ def build_create_and_screen_payload(customer, *, monitoring_enabled=True, workfl
     if workflow_id:
         payload["screening"] = {"workflow_id": workflow_id}
     if external_identifier:
-        payload["external_identifier"] = external_identifier
+        payload["customer"].setdefault("external_identifier", external_identifier)
+        payload["customer"].setdefault("reference", external_identifier)
     return payload
 
 
@@ -177,3 +174,11 @@ def _split_name(full_name):
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], " ".join(parts[1:])
+
+
+def _customer_envelope(subject, subject_key, reference):
+    customer = {subject_key: subject}
+    if reference:
+        customer["external_identifier"] = reference
+        customer["reference"] = reference
+    return customer

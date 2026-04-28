@@ -4,7 +4,7 @@ from hashlib import sha256
 import os
 
 from screening_models import create_normalized_screening_report
-from screening_provider import ScreeningProvider
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME, ScreeningProvider
 
 from .client import ComplyAdvantageClient
 from .config import CAConfig
@@ -17,7 +17,7 @@ from .payloads import build_customer_company, build_customer_person
 class ComplyAdvantageScreeningAdapter(ScreeningProvider):
     """Thin ScreeningProvider wrapper around the CA workflow orchestrator."""
 
-    provider_name = "complyadvantage"
+    provider_name = COMPLYADVANTAGE_PROVIDER_NAME
 
     def __init__(self, client=None, config=None, orchestrator=None, poll_timeout_seconds=300, db=None):
         self._client = client

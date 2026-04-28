@@ -44,6 +44,19 @@ _SANCTIONS_EXPOSURE_PREFIX = "r_sanctions_exposure"
 
 
 @dataclass
+class _CreateAndScreenResult:
+    workflow_instance_identifier: str
+    customer_input: CACustomerInput
+    monitoring_enabled: bool
+
+
+@dataclass
+class _WorkflowPollResult:
+    workflow: CAWorkflowResponse
+    raw: dict
+
+
+@dataclass
 class _PassResult:
     workflow: CAWorkflowResponse
     alerts: list[CAAlertResponse]
@@ -114,20 +127,13 @@ class ComplyAdvantageScreeningOrchestrator:
             external_identifier=external_identifier,
         )
         raw = self.client.post("/v2/workflows/create-and-screen", json_body=payload)
-        workflow_raw = raw.get("workflow") or raw.get("workflow_instance") or raw.get("workflow_response")
-        customer_raw = raw.get("customer") or raw.get("customer_response")
-        if workflow_raw is None:
-            if "workflow_instance_identifier" in raw:
-                workflow_raw = raw
-            else:
-                raise CAUnexpectedResponse("ComplyAdvantage create-and-screen workflow missing")
-        if customer_raw is None:
-            raise CAUnexpectedResponse("ComplyAdvantage create-and-screen customer missing")
-        return (
-            CAWorkflowResponse.model_validate(workflow_raw),
-            CACustomerResponse.model_validate(customer_raw),
-            CACustomerInput.model_validate(payload["customer"]),
-            monitoring_enabled_from_payload(payload),
+        workflow_id = raw.get("workflow_instance_identifier")
+        if not workflow_id:
+            raise CAUnexpectedResponse("ComplyAdvantage create-and-screen workflow handle missing")
+        return _CreateAndScreenResult(
+            workflow_instance_identifier=workflow_id,
+            customer_input=CACustomerInput.model_validate(payload["customer"]),
+            monitoring_enabled=monitoring_enabled_from_payload(payload),
         )
 
     def poll_workflow_until_complete(self, workflow_id):
@@ -139,46 +145,50 @@ class ComplyAdvantageScreeningOrchestrator:
             raw = self.client.get(f"/v2/workflows/{workflow_id}")
             workflow = CAWorkflowResponse.model_validate(raw)
             if self._workflow_complete(workflow):
-                return workflow
+                return _WorkflowPollResult(workflow=workflow, raw=raw)
             if self.clock() >= deadline:
                 raise CATimeout("ComplyAdvantage workflow polling timed out")
             delay = 1.0 if delay <= 0 else min(delay * _POLL_MULTIPLIER, _POLL_INTERVAL_CAP)
 
-    def fetch_alerts_paginated(self, workflow_id, *, page_size=25):
-        path = f"/v2/workflows/{workflow_id}/alerts"
-        params = {"page_size": page_size}
-        alerts = []
+    def fetch_risks_paginated_for_alert(self, alert_id):
+        path = f"/v2/alerts/{alert_id}/risks?page=1"
+        risks = []
         while path:
-            raw = self.client.get(path, params=params)
-            params = None
-            values = raw.get("values", [])
-            alerts.extend(CAAlertResponse.model_validate(_normalise_alert(v)) for v in values)
+            raw = self.client.get(path)
+            risks.extend(raw.get("values", []))
             next_link = (raw.get("pagination") or {}).get("next")
             path = self._normalise_next_link(next_link)
-        return alerts
+        return risks
 
-    def fetch_deep_risks_for_alert(self, alert):
-        raw = self.client.get(f"/v2/entity-screening/risks/{alert.identifier}")
+    def fetch_deep_risk(self, risk_id):
+        raw = self.client.get(f"/v2/entity-screening/risks/{risk_id}")
         try:
             return _parse_risk_detail(raw)
         except Exception as exc:
             raise CAUnexpectedResponse("ComplyAdvantage deep-risk response malformed") from exc
 
     def _run_one_pass(self, customer, *, monitoring_enabled, workflow_id, external_identifier):
-        initial, customer_response, customer_input, enabled = self.create_and_screen(
+        initial = self.create_and_screen(
             customer,
             monitoring_enabled=monitoring_enabled,
             workflow_id=workflow_id,
             external_identifier=external_identifier,
         )
-        workflow = self.poll_workflow_until_complete(initial.workflow_instance_identifier)
+        polled = self.poll_workflow_until_complete(initial.workflow_instance_identifier)
+        workflow = polled.workflow
+        customer_identifier = _extract_customer_identifier(polled.raw)
+        customer_response = CACustomerResponse.model_validate({"identifier": customer_identifier})
         if self._case_creation_skipped(workflow):
-            return _PassResult(workflow, [], {}, customer_input, customer_response, enabled)
-        alerts = self.fetch_alerts_paginated(workflow.workflow_instance_identifier)
+            return _PassResult(workflow, [], {}, initial.customer_input, customer_response, initial.monitoring_enabled)
+        alert_ids = _extract_alert_ids(polled.raw)
+        alerts = []
         deep_risks = {}
-        for alert in alerts:
-            deep_risks[alert.identifier] = self.fetch_deep_risks_for_alert(alert)
-        return _PassResult(workflow, alerts, deep_risks, customer_input, customer_response, enabled)
+        for alert_id in alert_ids:
+            for risk in self.fetch_risks_paginated_for_alert(alert_id):
+                risk_id = _extract_risk_id(risk)
+                alerts.append(CAAlertResponse.model_validate(_normalise_risk_as_alert(risk_id, risk)))
+                deep_risks[risk_id] = self.fetch_deep_risk(risk_id)
+        return _PassResult(workflow, alerts, deep_risks, initial.customer_input, customer_response, initial.monitoring_enabled)
 
     def _normalise_next_link(self, next_link):
         if not next_link:
@@ -238,12 +248,47 @@ def _status_value(value):
     return getattr(value, "value", value)
 
 
-def _normalise_alert(raw):
-    data = dict(raw)
+def _normalise_risk_as_alert(risk_id, raw):
+    data = {"identifier": risk_id}
     if "profile" in data and data["profile"] is not None:
         data["profile"] = CAProfile.model_validate(data["profile"]).model_dump(mode="json")
+    elif raw.get("profile") is not None:
+        data["profile"] = CAProfile.model_validate(raw["profile"]).model_dump(mode="json")
     data.setdefault("risk_details", {"values": []})
     return data
+
+
+def _extract_alert_ids(workflow_raw):
+    alerts = workflow_raw.get("alerts") or []
+    ids = [_extract_identifier(item) for item in alerts]
+    return [value for value in ids if value]
+
+
+def _extract_risk_id(risk_raw):
+    risk_id = _extract_identifier(risk_raw) or risk_raw.get("risk_id")
+    if not risk_id:
+        raise CAUnexpectedResponse("ComplyAdvantage risk identifier missing")
+    return risk_id
+
+
+def _extract_identifier(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return value.get("identifier") or value.get("id")
+    return None
+
+
+def _extract_customer_identifier(workflow_raw):
+    step_details = workflow_raw.get("step_details") or {}
+    customer_creation = step_details.get("customer-creation") or {}
+    output = customer_creation.get("output") or {}
+    customer_identifier = output.get("customer_identifier") or output.get("identifier")
+    if not customer_identifier:
+        customer_identifier = workflow_raw.get("customer_identifier")
+    if not customer_identifier:
+        raise CAUnexpectedResponse("ComplyAdvantage workflow customer identifier missing")
+    return customer_identifier
 
 
 def _parse_risk_detail(raw):

@@ -53,9 +53,15 @@ def test_build_customer_person_strict_vs_relaxed():
         "address": {"full_address": "1 Road", "country_code": "MU"},
     }
 
-    strict = build_customer_person(party, strict=True)["person"]
-    relaxed = build_customer_person(party, strict=False)["person"]
+    strict_customer = build_customer_person(party, strict=True)
+    relaxed_customer = build_customer_person(party, strict=False)
+    strict = strict_customer["person"]
+    relaxed = relaxed_customer["person"]
 
+    assert strict_customer["external_identifier"] == "p-1"
+    assert strict_customer["reference"] == "p-1"
+    assert "external_identifier" not in strict
+    assert "customer_reference" not in strict
     assert strict["nationality"] == "MU"
     assert strict["addresses"][0]["full_address"] == "1 Road"
     assert strict["contact_information"]["email"] == "jane@example.test"
@@ -73,12 +79,20 @@ def test_build_customer_company_strict_vs_relaxed():
         "registered_address": "1 Company Road",
     }
 
-    strict = build_customer_company(app, strict=True)["company"]
-    relaxed = build_customer_company(app, strict=False)["company"]
+    app["application_id"] = "app-1"
+    strict_customer = build_customer_company(app, strict=True)
+    relaxed_customer = build_customer_company(app, strict=False)
+    strict = strict_customer["company"]
+    relaxed = relaxed_customer["company"]
 
+    assert strict_customer["external_identifier"] == "app-1"
+    assert strict_customer["reference"] == "app-1"
+    assert "external_identifier" not in strict
+    assert "customer_reference" not in strict
     assert strict["registration_number"] == "C123"
     assert strict["addresses"][0]["location_type"] == "registered_address"
     assert relaxed == {"name": "Acme Ltd"}
+    assert relaxed_customer["reference"] == "app-1"
 
 
 def test_monitoring_block_defaults_true_and_can_be_disabled():
@@ -90,3 +104,14 @@ def test_monitoring_block_defaults_true_and_can_be_disabled():
 
     assert monitoring_enabled_from_payload(default_payload) is True
     assert monitoring_enabled_from_payload(disabled_payload) is False
+
+
+def test_create_and_screen_external_identifier_override_stays_customer_level():
+    payload = build_create_and_screen_payload(
+        {"person": {"first_name": "Jane", "last_name": "Doe"}},
+        external_identifier="app-1",
+    )
+
+    assert payload["customer"]["external_identifier"] == "app-1"
+    assert payload["customer"]["reference"] == "app-1"
+    assert "external_identifier" not in payload["customer"]["person"]
