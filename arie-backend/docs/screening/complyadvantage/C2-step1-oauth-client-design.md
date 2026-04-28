@@ -68,7 +68,7 @@ The broader project has a centralized `config.py` for concrete environment value
 - `sumsub_client.py` still reads `SUMSUB_APP_TOKEN`, `SUMSUB_SECRET_KEY`, `SUMSUB_BASE_URL`, and `SUMSUB_WEBHOOK_SECRET` directly in `__init__()` at `arie-backend/sumsub_client.py:182-186`.
 - `screening_config.py` dynamically reads `ENABLE_SCREENING_ABSTRACTION` with `os.environ.get()` at `arie-backend/screening_config.py:38-52`.
 
-Recommendation: add a CA-specific config module under `screening_complyadvantage/` that reads the locked five env vars from `os.environ`. Do not extend `config_loader.py`; its scope is jurisdiction JSON, not secrets or external API config.
+Recommendation: add a CA-specific config module under `screening_complyadvantage/` with `CAConfig.from_env()` as the only env-reading boundary for C2. This intentionally does not extend `config_loader.py` because that module's scope is jurisdiction JSON, not secrets or external API config. Step 2 should either add these five locked values to centralized `config.py` and have `CAConfig.from_env()` read from `config.py`, or keep the reads local with an explicit comment that C2 is dormant and provider-scoped until Track E activation.
 
 ### 1.4 Structured logging and credential hygiene
 
@@ -385,7 +385,7 @@ Behavior:
 - Missing or empty values raise `CAConfigurationError` with the missing env var names only.
 - Do not log values during validation.
 - Normalize trailing slash on `api_base_url` and `auth_url` internally without changing env var names.
-- Validate `realm == "regmind"` and raise `CAConfigurationError` otherwise, because the realm is locked.
+- Validate `realm == "regmind"` and raise `CAConfigurationError` otherwise, because the realm is locked. This is a lowercase technical OAuth realm identifier confirmed by the CA contract, not a product-brand spelling of the internal back-office surface `RegMind`.
 
 ### 5.2 Startup vs lazy loading
 
