@@ -64,11 +64,11 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
         )
 
     def run_full_screening(self, application_data, directors, ubos, client_ip=None):
-        application_id = str(_first(application_data, "application_id", "id", "ref") or _stable_id("application", _first(application_data, "company_name", "name") or "unknown"))
+        company_name = _first(application_data, "company_name", "name", "legal_name")
+        application_id = _application_id(application_data, company_name)
         client_id = str(_first(application_data, "client_id") or "unknown")
         reports = []
 
-        company_name = _first(application_data, "company_name", "name", "legal_name")
         if company_name:
             reports.append(self._screen_subject(
                 strict_customer=build_customer_company(application_data, strict=True),
@@ -176,6 +176,11 @@ def _reports_hash(reports):
 
 def _stable_id(prefix, value):
     return f"{prefix}-{sha256(str(value).encode('utf-8')).hexdigest()[:12]}"
+
+
+def _application_id(application_data, company_name):
+    explicit_id = _first(application_data, "application_id", "id", "ref")
+    return str(explicit_id or _stable_id("application", company_name or "unknown"))
 
 
 def _first(data, *keys):

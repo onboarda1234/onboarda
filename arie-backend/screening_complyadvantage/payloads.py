@@ -4,6 +4,15 @@ from copy import deepcopy
 from datetime import date, datetime
 
 
+_FULL_ADDRESS_KEYS = (
+    "full_address",
+    "registered_address",
+    "registered_office_address",
+    "residential_address",
+    "address",
+)
+
+
 def to_ca_dob(value):
     """Convert an internal DOB value to CA's structured day/month/year shape."""
     if not value:
@@ -31,7 +40,7 @@ def to_ca_address(data, *, location_type):
         source = data
 
     mapped = {
-        "full_address": _first(source, "full_address", "registered_address", "registered_office_address", "residential_address", "address"),
+        "full_address": _first(source, *_FULL_ADDRESS_KEYS),
         "address_line1": _first(source, "address_line1", "address_line_1", "line1", "street"),
         "address_line2": _first(source, "address_line2", "address_line_2", "line2"),
         "town_name": _first(source, "town_name", "city", "town"),

@@ -36,6 +36,11 @@ _POLL_INITIAL_DELAY = 0.0
 _POLL_MULTIPLIER = 1.6
 _POLL_INTERVAL_CAP = 30.0
 _POLL_TOTAL_TIMEOUT = 300.0
+_PEP_RISK_PREFIX = "r_pep"
+_RCA_RISK_KEY = "r_rca"
+_ADVERSE_MEDIA_RISK_PREFIX = "r_adverse_media"
+_WATCHLIST_RISK_KEYS = frozenset({"r_watchlist", "r_law_enforcement"})
+_SANCTIONS_EXPOSURE_PREFIX = "r_sanctions_exposure"
 
 
 @dataclass
@@ -254,10 +259,10 @@ def _parse_risk_detail(raw):
 
 def _parse_indicator(risk_type, value):
     key = risk_type.key
-    if key.startswith("r_pep") or key == "r_rca":
+    if key.startswith(_PEP_RISK_PREFIX) or key == _RCA_RISK_KEY:
         return CAPEPIndicator(risk_type=risk_type, value=CAPEPValue.model_validate(value))
-    if key.startswith("r_adverse_media"):
+    if key.startswith(_ADVERSE_MEDIA_RISK_PREFIX):
         return CAMediaIndicator(risk_type=risk_type, value=CAMediaArticleValue.model_validate(value))
-    if key.startswith("r_sanctions_exposure") or key in {"r_watchlist", "r_law_enforcement"}:
+    if key.startswith(_SANCTIONS_EXPOSURE_PREFIX) or key in _WATCHLIST_RISK_KEYS:
         return CAWatchlistIndicator(risk_type=risk_type, value=CAWatchlistValue.model_validate(value))
     return CASanctionIndicator(risk_type=risk_type, value=CASanctionValue.model_validate(value))
