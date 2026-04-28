@@ -15,6 +15,7 @@ import logging
 import os
 import secrets
 import sys
+import time
 
 import tornado.web
 
@@ -28,6 +29,53 @@ ENVIRONMENT = _CFG_ENVIRONMENT
 
 # Module-level rate limiter instance — shared across all handlers
 rate_limiter = RateLimiter()
+
+
+def _upload_latency_route_context(method, path):
+    """Return telemetry context for upload-latency endpoints only."""
+    if method != "POST":
+        return None
+
+    parts = (path or "").strip("/").split("/")
+    if len(parts) == 4 and parts[0] == "api" and parts[1] == "applications" and parts[3] == "documents":
+        return {
+            "operation": "document_upload",
+            "path_template": "/api/applications/{application_id}/documents",
+            "application_id": parts[2],
+        }
+    if len(parts) == 4 and parts[0] == "api" and parts[1] == "documents" and parts[3] == "verify":
+        return {
+            "operation": "document_verify",
+            "path_template": "/api/documents/{document_id}/verify",
+            "document_id": parts[2],
+        }
+    return None
+
+
+def _parse_content_length(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed >= 0 else 0
+
+
+def _format_upload_latency_log_line(context, status, duration_ms, request_bytes, environment):
+    parts = [
+        "upload_latency_telemetry",
+        "event=upload_latency_request",
+        f"operation={context['operation']}",
+        f"path_template={context['path_template']}",
+        f"status={status}",
+        f"duration_ms={duration_ms:.2f}",
+        f"request_bytes={request_bytes}",
+        f"environment={environment}",
+    ]
+    if context.get("application_id"):
+        parts.append(f"application_id={context['application_id']}")
+    if context.get("document_id"):
+        parts.append(f"document_id={context['document_id']}")
+    return " ".join(parts)
 
 
 def get_db():
@@ -72,6 +120,7 @@ def snapshot_app_state(app):
 class BaseHandler(tornado.web.RequestHandler):
     def prepare(self):
         """Enforce HTTPS in production via X-Forwarded-Proto from reverse proxy."""
+        self._upload_latency_started_at = time.monotonic()
         if ENVIRONMENT == "production":
             forwarded_proto = self.request.headers.get("X-Forwarded-Proto", "")
             if forwarded_proto == "http":
@@ -79,6 +128,28 @@ class BaseHandler(tornado.web.RequestHandler):
                 url = self.request.full_url().replace("http://", "https://", 1)
                 self.redirect(url, permanent=True)
                 return
+
+    def on_finish(self):
+        """Emit parse-ready timing logs for upload-latency endpoints only."""
+        context = _upload_latency_route_context(self.request.method, self.request.path)
+        if not context:
+            return
+
+        started_at = getattr(self, "_upload_latency_started_at", None)
+        if started_at is None:
+            return
+
+        duration_ms = (time.monotonic() - started_at) * 1000
+        request_bytes = _parse_content_length(self.request.headers.get("Content-Length"))
+        logger.info(
+            _format_upload_latency_log_line(
+                context=context,
+                status=self.get_status(),
+                duration_ms=duration_ms,
+                request_bytes=request_bytes,
+                environment=ENVIRONMENT,
+            )
+        )
 
     def check_rate_limit(self, endpoint_key, max_attempts=30, window_seconds=60):
         """
