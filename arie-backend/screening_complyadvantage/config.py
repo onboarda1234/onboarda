@@ -23,7 +23,6 @@ class CAConfig:
         realm = os.environ.get("COMPLYADVANTAGE_REALM")
         if realm is None or not realm.strip():
             raise CAConfigurationError("realm not configured")
-        realm = realm.strip()
         if realm != "regmind":
             raise CAConfigurationError("realm must be 'regmind'")
         username = _required_env("COMPLYADVANTAGE_USERNAME", "account identifier")
