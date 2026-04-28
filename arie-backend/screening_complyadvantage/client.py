@@ -113,14 +113,15 @@ class ComplyAdvantageClient:
         raise CAUnexpectedResponse("ComplyAdvantage API status unexpected")
 
     def _url(self, path):
-        if not path.startswith("/"):
-            path = f"/{path}"
-        return f"{self.config.api_base_url}{path}"
+        return f"{self.config.api_base_url}{self._normalize_path(path)}"
 
     def _log_path(self, path):
+        return self._normalize_path(path).split("?", 1)[0]
+
+    def _normalize_path(self, path):
         if not path.startswith("/"):
             path = f"/{path}"
-        return path.split("?", 1)[0]
+        return path
 
     def _log_error(self, method, path, attempt, exc):
         logger.warning(

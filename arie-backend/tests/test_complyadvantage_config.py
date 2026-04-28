@@ -46,7 +46,7 @@ def test_from_env_missing_or_empty_raises(monkeypatch, name):
 
 
 @pytest.mark.parametrize("realm", ["RegMind", "REGMIND", " regmind ", " regmind-other ", "demo"])
-def test_realm_is_strict_lowercase_regmind(monkeypatch, realm):
+def test_realm_is_exact_lowercase_regmind_without_variations(monkeypatch, realm):
     from screening_complyadvantage.config import CAConfig
     from screening_complyadvantage.exceptions import CAConfigurationError
 

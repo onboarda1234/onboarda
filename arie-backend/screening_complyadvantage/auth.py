@@ -118,8 +118,6 @@ class ComplyAdvantageTokenClient:
                 raise last_error
             self._sleep_before_retry(attempt)
 
-        raise CAUnexpectedResponse()
-
     def _handle_auth_response(self, response):
         status = response.status_code
         if 200 <= status < 300:
