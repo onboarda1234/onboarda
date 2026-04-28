@@ -7,5 +7,5 @@ fields @timestamp, @message
         pct(duration_ms, 50) as p50_ms,
         pct(duration_ms, 95) as p95_ms,
         max(duration_ms) as max_ms
-  by bin(5m), operation
-| sort bin(5m) desc
+  by bin(5m) as window, operation
+| sort window desc

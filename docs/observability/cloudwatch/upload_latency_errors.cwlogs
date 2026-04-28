@@ -6,5 +6,5 @@ fields @timestamp, @message
 | filter status >= 400
 | stats count(*) as error_count,
         pct(duration_ms, 95) as error_p95_ms
-  by bin(5m), operation, status
-| sort bin(5m) desc
+  by bin(5m) as window, operation, status
+| sort window desc
