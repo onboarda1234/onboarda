@@ -386,7 +386,7 @@ Behavior:
 - Missing or empty values raise `CAConfigurationError` with the missing env var names only.
 - Do not log values during validation.
 - Normalize trailing slash on `api_base_url` and `auth_url` internally without changing env var names.
-- Validate `realm == "regmind"` and raise `CAConfigurationError` otherwise, because the realm is locked. This is a lowercase technical OAuth realm identifier confirmed by the CA contract, not a product-brand spelling of the internal back-office surface `RegMind`.
+- Validate `realm == "regmind"` and raise `CAConfigurationError` otherwise, because the realm is locked. This is a lowercase external OAuth protocol constant confirmed by the CA contract, not user-facing branding and not a product-brand spelling of the internal back-office surface `RegMind`; it should live as a CA config validation constant, not in the shared `BRAND` dict.
 
 ### 5.2 Startup vs lazy loading
 
