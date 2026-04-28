@@ -10,6 +10,7 @@
   - `arie-backend/screening_complyadvantage/models/`
   - `normalize_two_pass_screening` and `normalize_single_pass` in `arie-backend/screening_complyadvantage/normalizer.py` lines 97 and 124
   - `arie-backend/migrations/scripts/migration_017_screening_monitoring_subscriptions.sql`
+- Locked CA OAuth context used for this design includes realm value `regmind` lowercase, live-confirmed against the CA sandbox on 2026-04-28.
 - This PR contains no production code. It is a design diagnosis for CTO review.
 
 ## 1. Existing patterns audit
