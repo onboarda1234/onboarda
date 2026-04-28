@@ -12,7 +12,7 @@
   - `arie-backend/screening_complyadvantage/normalizer.py`
   - `arie-backend/screening_complyadvantage/url_canonicalization.py`
   - `arie-backend/screening_complyadvantage/models/`
-  - `ComplyAdvantageTokenClient` and `ComplyAdvantageClient` exports in `arie-backend/screening_complyadvantage/__init__.py:3-4` and `arie-backend/screening_complyadvantage/__init__.py:28-29`
+  - `ComplyAdvantageTokenClient` and `ComplyAdvantageClient` exports in `arie-backend/screening_complyadvantage/__init__.py:3-4,28-29`
   - `arie-backend/migrations/scripts/migration_017_screening_monitoring_subscriptions.sql`
 - No production code in this PR. This is a design diagnosis for CTO review.
 - Load-bearing dependencies for the design: C2 `CAConfig`, `ComplyAdvantageTokenClient`, `ComplyAdvantageClient`, and `CAError` subclasses; C1 `normalize_two_pass_screening`, `ScreeningApplicationContext`, `CAPaginatedCollection`, `CAWorkflowResponse`, `CAAlertResponse`, `CARiskDetail`, `CACustomerInput`, and `CACustomerResponse`.
@@ -196,16 +196,16 @@ Recommendation:
 Pseudocode:
 
 ```python
-deadline = monotonic() + 180
+deadline = time.monotonic() + 180
 sleep = 0
 while True:
     if sleep:
-        time.sleep(jitter(sleep))
+        time.sleep(sleep * (0.9 + random.random() * 0.2))
     workflow = CAWorkflowResponse.model_validate(client.get(f"/v2/workflows/{workflow_id}"))
     case_status = workflow.step_details.get("case-creation", {}).status
     if workflow.status == "COMPLETED" and case_status in {"COMPLETED", "SKIPPED"}:
         return workflow
-    if monotonic() >= deadline:
+    if time.monotonic() >= deadline:
         raise CATimeout("ComplyAdvantage workflow polling timed out")
     sleep = 5 if sleep == 0 else min(sleep * 1.6, 30)
 ```
@@ -279,7 +279,10 @@ def to_ca_dob(value):
         return {"day": value.day, "month": value.month, "year": value.year}
     if isinstance(value, str):
         # accept YYYY-MM-DD only; return None for partial/invalid strings
-        parsed = datetime.strptime(value[:10], "%Y-%m-%d").date()
+        try:
+            parsed = datetime.strptime(value[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
         return {"day": parsed.day, "month": parsed.month, "year": parsed.year}
 ```
 
