@@ -1,6 +1,7 @@
 """ComplyAdvantage screening integration namespace."""
 
 from .auth import ComplyAdvantageTokenClient
+from .adapter import ComplyAdvantageScreeningAdapter
 from .client import ComplyAdvantageClient
 from .config import CAConfig
 from .exceptions import (
@@ -14,6 +15,8 @@ from .exceptions import (
     CAUnexpectedResponse,
 )
 from .url_canonicalization import canonicalize_url
+from .orchestrator import ComplyAdvantageScreeningOrchestrator
+from .subscriptions import seed_monitoring_subscription
 
 __all__ = [
     "CAAuthenticationFailed",
@@ -25,7 +28,10 @@ __all__ = [
     "CAServerError",
     "CATimeout",
     "CAUnexpectedResponse",
+    "ComplyAdvantageScreeningAdapter",
+    "ComplyAdvantageScreeningOrchestrator",
     "ComplyAdvantageClient",
     "ComplyAdvantageTokenClient",
     "canonicalize_url",
+    "seed_monitoring_subscription",
 ]
