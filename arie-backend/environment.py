@@ -10,6 +10,23 @@ import logging
 
 logger = logging.getLogger("arie.environment")
 
+UPLOAD_LATENCY_FLAGS = (
+    "FF_POLLING_SLOW",
+    "FF_SIZE_CAP_CLIENT_REJECT",
+    "FF_UX_SPLIT_UPLOAD_VERIFY",
+    "FF_UPLOAD_ASYNC",
+    "FF_ASYNC_VERIFY",
+    "FF_GATE03_INDEXED_DEDUP",
+    "FF_PRESIGNED_UPLOAD",
+)
+
+CLIENT_SAFE_UPLOAD_LATENCY_FLAGS = (
+    "FF_SIZE_CAP_CLIENT_REJECT",
+    "FF_UX_SPLIT_UPLOAD_VERIFY",
+)
+
+_UPLOAD_LATENCY_DEFAULTS = {flag: False for flag in UPLOAD_LATENCY_FLAGS}
+
 # ══════════════════════════════════════════════════════════════
 # 1. ENVIRONMENT DETECTION
 # ══════════════════════════════════════════════════════════════
@@ -137,6 +154,8 @@ _DEFAULT_FLAGS = {
 }
 
 _DEFAULT_FLAGS["testing"] = dict(_DEFAULT_FLAGS["development"])
+for _env_flags in _DEFAULT_FLAGS.values():
+    _env_flags.update(_UPLOAD_LATENCY_DEFAULTS)
 
 
 class FeatureFlags:
@@ -185,7 +204,12 @@ class FeatureFlags:
             "ENABLE_SAR_WORKFLOW", "ENABLE_AI_SUPERVISOR", "ENABLE_KPI_DEMO_DATA",
             "ENABLE_ROLE_SWITCHER", "ENABLE_DOCUMENT_AI_ANALYSIS",
         ]
+        safe_keys.extend(CLIENT_SAFE_UPLOAD_LATENCY_FLAGS)
         return {k: self._cache.get(k, False) for k in safe_keys}
+
+    def get_upload_latency_client_flags(self) -> dict:
+        """Return the exact upload-latency flag allowlist safe for clients."""
+        return {k: self._cache.get(k, False) for k in CLIENT_SAFE_UPLOAD_LATENCY_FLAGS}
 
 
 # Singleton
@@ -476,6 +500,7 @@ def get_environment_info() -> dict:
         "is_demo": is_demo(),
         "is_production": is_production(),
         "features": flags.get_client_safe_flags(),
+        "upload_latency_flags": flags.get_upload_latency_client_flags(),
         "version": os.environ.get("APP_VERSION", "1.0.0-pilot"),
     }
     # Demo credentials — only exposed in demo environments, read from env vars
