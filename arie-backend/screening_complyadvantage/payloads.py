@@ -5,7 +5,7 @@ from datetime import date, datetime
 
 
 def to_ca_dob(value):
-    """Convert a RegMind DOB value to CA's structured day/month/year shape."""
+    """Convert an internal DOB value to CA's structured day/month/year shape."""
     if not value:
         return None
     if isinstance(value, datetime):
@@ -45,7 +45,7 @@ def to_ca_address(data, *, location_type):
 
 
 def build_customer_person(person, *, strict=True):
-    """Build a CA customer.person dict from a RegMind party dict."""
+    """Build a CA customer.person dict from internal party data."""
     full_name = _first(person, "full_name", "name") or ""
     first_name = _first(person, "first_name") or _split_name(full_name)[0]
     last_name = _first(person, "last_name") or _split_name(full_name)[1]
@@ -92,7 +92,7 @@ def build_customer_person(person, *, strict=True):
 
 
 def build_customer_company(application_data, *, strict=True):
-    """Build a CA customer.company dict from RegMind application data."""
+    """Build a CA customer.company dict from internal application data."""
     name = _first(application_data, "company_name", "name", "legal_name") or "Unknown Company"
     company = _drop_empty({
         "name": name,

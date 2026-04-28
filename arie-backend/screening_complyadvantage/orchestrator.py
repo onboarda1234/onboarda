@@ -190,7 +190,8 @@ class ComplyAdvantageScreeningOrchestrator:
 
     def _workflow_complete(self, workflow):
         status = _status_value(workflow.status)
-        case_status = _status_value((workflow.step_details.get("case-creation") or object()).status) if workflow.step_details.get("case-creation") else None
+        case_detail = workflow.step_details.get("case-creation")
+        case_status = _status_value(case_detail.status) if case_detail else None
         if status == "COMPLETED" and case_status in (None, "COMPLETED", "SKIPPED"):
             return True
         if status == "IN-PROGRESS" or case_status == "IN-PROGRESS":

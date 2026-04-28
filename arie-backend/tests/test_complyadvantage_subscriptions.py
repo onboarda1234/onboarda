@@ -43,7 +43,6 @@ def test_seed_monitoring_subscription_writes_expected_columns_and_defaults():
     seed_monitoring_subscription(db, "client-1", "app-1", "cust-1", person_key="person-1")
 
     row = db.execute("SELECT * FROM screening_monitoring_subscriptions").fetchone()
-    assert dict(row) | {}  # sqlite row is dict-compatible by keys
     assert row["client_id"] == "client-1"
     assert row["application_id"] == "app-1"
     assert row["provider"] == "complyadvantage"
