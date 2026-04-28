@@ -250,9 +250,7 @@ def _status_value(value):
 
 def _normalise_risk_as_alert(risk_id, raw):
     data = {"identifier": risk_id}
-    if "profile" in data and data["profile"] is not None:
-        data["profile"] = CAProfile.model_validate(data["profile"]).model_dump(mode="json")
-    elif raw.get("profile") is not None:
+    if raw.get("profile") is not None:
         data["profile"] = CAProfile.model_validate(raw["profile"]).model_dump(mode="json")
     data.setdefault("risk_details", {"values": []})
     return data

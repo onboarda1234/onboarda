@@ -21,7 +21,7 @@ def seed_monitoring_subscription(
         columns.insert(3, "person_key")
         values.insert(3, person_key)
 
-    placeholders = ", ".join(_placeholder(db) for _ in columns)
+    placeholders = ", ".join(_placeholder() for _ in columns)
     sql = (
         f"INSERT INTO screening_monitoring_subscriptions "
         f"({', '.join(columns)}) VALUES ({placeholders})"
@@ -52,6 +52,6 @@ def _is_unique_violation(exc):
     )
 
 
-def _placeholder(db):
+def _placeholder():
     # The repository's DBConnection convention translates '?' for PostgreSQL.
     return "?"
