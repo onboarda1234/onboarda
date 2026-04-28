@@ -3,7 +3,7 @@
 ## Preflight
 
 - Branch required by prompt: `c3/adapter-step1-diagnosis`.
-- Operated against commit SHA: `457810952038350070cea462826a2f0d2220f778` (`4578109 [C2 Step 2] ComplyAdvantage OAuth client implementation (#185)`).
+- Operated against full 40-character commit SHA: `457810952038350070cea462826a2f0d2220f778` (`4578109 [C2 Step 2] ComplyAdvantage OAuth client implementation (#185)`).
 - Verified post-PR-#185 signposts before diagnosis:
   - `arie-backend/screening_complyadvantage/auth.py`
   - `arie-backend/screening_complyadvantage/client.py`
@@ -232,7 +232,7 @@ Alternative: degrade partial failures into `degraded_sources`. Reject for C3 bec
 
 ### 4.6 Merge-by-`profile.identifier`
 
-C1 already implements the merge. `merge_two_pass_results(strict_deep, relaxed_deep)` maps risks by profile id, unions profile ids, and assigns `surfaced_by_pass` at `arie-backend/screening_complyadvantage/normalizer.py:159-186`. It sets `"both"` when strict and relaxed contain the same profile at `arie-backend/screening_complyadvantage/normalizer.py:171-174`, `"strict"` for strict-only at `arie-backend/screening_complyadvantage/normalizer.py:174-176`, and `"relaxed"` for relaxed-only at `arie-backend/screening_complyadvantage/normalizer.py:177-179`. It also emits provenance counts at `arie-backend/screening_complyadvantage/normalizer.py:187-197`.
+C1 already implements the merge. In this context, `profile.identifier` means CA's unique matched-profile identifier from the API response, modeled as `CAProfile.identifier` at `arie-backend/screening_complyadvantage/models/output.py:142-149`, not a generic RegMind field. `merge_two_pass_results(strict_deep, relaxed_deep)` maps risks by that profile id, unions profile ids, and assigns `surfaced_by_pass` at `arie-backend/screening_complyadvantage/normalizer.py:159-186`. It sets `"both"` when strict and relaxed contain the same profile at `arie-backend/screening_complyadvantage/normalizer.py:171-174`, `"strict"` for strict-only at `arie-backend/screening_complyadvantage/normalizer.py:174-176`, and `"relaxed"` for relaxed-only at `arie-backend/screening_complyadvantage/normalizer.py:177-179`. It also emits provenance counts at `arie-backend/screening_complyadvantage/normalizer.py:187-197`.
 
 Adapter pseudocode should therefore not duplicate merge logic:
 
@@ -283,7 +283,7 @@ def to_ca_dob(value):
         return {"day": parsed.day, "month": parsed.month, "year": parsed.year}
 ```
 
-The CA primitive supports structured `day`, `month`, `year` fields at `arie-backend/screening_complyadvantage/models/primitives.py:36-42`. Tests already validate partial `CADateOfBirth(year=1975)` support at `arie-backend/tests/test_screening_complyadvantage_models.py:162-166`, but the locked C3 create-and-screen contract requires split ints, so C3 should emit full day/month/year only when available.
+The CA primitive supports structured `day`, `month`, `year` fields at `arie-backend/screening_complyadvantage/models/primitives.py:36-42`. Tests already validate partial `CADateOfBirth(year=1975)` support at `arie-backend/tests/test_screening_complyadvantage_models.py:162-166`, but the locked create-and-screen API contract from prior CA Mesh recon requires split integer DOB values for C3 create-and-screen requests, so C3 should emit full day/month/year only when available.
 
 ### 5.3 Address mapping
 
@@ -324,7 +324,7 @@ For companies, strict includes name plus registration number, jurisdiction, inco
 
 ### 5.5 Monitoring opt-in default and override
 
-The locked create-and-screen contract requires `monitoring.entity_screening.enabled: true` by default. Existing C1 `CAMonitoringConfig.enabled` defaults to `False` at `arie-backend/screening_complyadvantage/models/input.py:91-94`, so C3 must explicitly set monitoring true in payload construction rather than relying on model defaults.
+The locked create-and-screen contract requires `monitoring.entity_screening.enabled: true` by default. Existing C1 `CAMonitoringConfig.enabled` defaults to `False` at `arie-backend/screening_complyadvantage/models/input.py:91-94`, so C3 must explicitly set monitoring true in payload construction rather than relying on model defaults. This divergence is intentional for C3 because C1 models are stable and forbidden to modify in this step; a future C1 model-alignment PR can revisit the default if CTO wants the wire model to encode the C3 policy.
 
 Recommendation: expose a keyword-only override on adapter/orchestrator methods:
 
