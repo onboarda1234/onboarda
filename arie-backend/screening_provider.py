@@ -34,6 +34,7 @@ logger = logging.getLogger("arie.screening_provider")
 #: Inline string literals elsewhere in the codebase will be migrated in a
 #: separate sweep.
 SUMSUB_PROVIDER_NAME = "sumsub"
+COMPLYADVANTAGE_PROVIDER_NAME = "complyadvantage"
 
 
 class ScreeningProvider:

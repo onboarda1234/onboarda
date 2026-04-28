@@ -71,15 +71,25 @@ def _objects(data, prefix=""):
     context = ScreeningApplicationContext.model_validate(data["context"])
     alerts = []
     deep = {}
-    for raw in data.get(prefix + "alerts", data.get("alerts", [])):
-        profile = CAProfile.model_validate(raw["profile"])
-        risk = _risk(raw["risk_detail"])
-        alerts.append(CAAlertResponse(
-            identifier=raw["identifier"],
-            profile=profile,
-            risk_details=CAPaginatedCollection[CARiskDetail](values=[risk]),
-        ))
-        deep[raw["identifier"]] = risk
+    alerts_risks = data.get(prefix + "alerts_risks", data.get("alerts_risks"))
+    deep_risks = data.get(prefix + "deep_risks", data.get("deep_risks", {}))
+    if alerts_risks is None:
+        legacy_alerts = data.get(prefix + "alerts", data.get("alerts", []))
+        alerts_risks = {
+            raw["identifier"]: [{"identifier": raw["identifier"], "profile": raw["profile"]}]
+            for raw in legacy_alerts
+        }
+        deep_risks = {raw["identifier"]: raw["risk_detail"] for raw in legacy_alerts}
+    for risk_items in alerts_risks.values():
+        for raw in risk_items:
+            profile = CAProfile.model_validate(raw["profile"])
+            risk = _risk(deep_risks[raw["identifier"]])
+            alerts.append(CAAlertResponse(
+                identifier=raw["identifier"],
+                profile=profile,
+                risk_details=CAPaginatedCollection[CARiskDetail](values=[risk]),
+            ))
+            deep[raw["identifier"]] = risk
     return workflow, alerts, deep, customer_input, customer_response, context
 
 

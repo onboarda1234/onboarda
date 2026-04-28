@@ -11749,9 +11749,11 @@ if __name__ == "__main__":
     # Register Sumsub factory in the factory-based provider registry (A6).
     # Runs after config is loaded and before make_app() so the registry is
     # fully populated before any incoming request can reach the screening path.
-    from screening_provider import SUMSUB_PROVIDER_NAME, register_provider
+    from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME, SUMSUB_PROVIDER_NAME, register_provider
     from screening_adapter_sumsub import SumsubScreeningAdapter
+    from screening_complyadvantage.adapter import ComplyAdvantageScreeningAdapter
     register_provider(SUMSUB_PROVIDER_NAME, SumsubScreeningAdapter)
+    register_provider(COMPLYADVANTAGE_PROVIDER_NAME, ComplyAdvantageScreeningAdapter)
     logger.info("startup: registered screening provider: %s (+%s)", SUMSUB_PROVIDER_NAME, _elapsed())
 
     logger.info("startup: entering make_app (+%s)", _elapsed())
