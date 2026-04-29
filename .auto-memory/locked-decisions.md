@@ -41,3 +41,21 @@ queried immediately once staging traffic exists.
 After polling slowdown and client-side size rejection are deployed and enabled,
 hold a 48-72 hour staging soak before structural work. During the soak, observe
 telemetry, BO refresh behavior, size rejection, audit events, and error rates.
+
+## 2026-04-29 PR4 Backoffice Polling Slowdown
+
+- PR #192 keeps `FF_POLLING_SLOW` backend-only; it is not exposed through
+  frontend code.
+- Backoffice applications auto-refresh interval is 120 seconds.
+- Backoffice stale-data warning threshold is 180 seconds.
+- The 1-second freshness display tick remains local UI only and does not perform
+  network polling.
+- Existing `/api/applications` ETag / `If-None-Match` / `304` behavior remains
+  the hardening contract.
+
+## 2026-04-29 Protected File Override Guard
+
+- PR #194 repaired the protected-files guard so the `protected-file-override`
+  label can unblock the workflow only when explicit written project-lead approval
+  is also present.
+- The override label is an audit mechanism, not standalone approval.
