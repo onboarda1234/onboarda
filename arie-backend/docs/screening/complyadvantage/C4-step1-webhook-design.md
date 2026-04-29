@@ -263,7 +263,7 @@ Recommended resolution:
 1. Use `envelope.customer.identifier` as `customer_identifier`.
 2. Query active subscriptions where `provider='complyadvantage' AND customer_identifier=?`.
 3. If zero rows: warn and return 202; no normalized or alert writes.
-4. If multiple rows across clients: log ERROR and return 202 without writes. Step 2 should not implement a `customer.external_identifier` parser unless CTO separately confirms that C3 encoded a stable tenant/application format. Do not guess tenant.
+4. If multiple rows across clients: log ERROR and return 202 without writes. Step 2 should not implement a `customer.external_identifier` parser unless CTO separately confirms that C3 encoded a stable tenant/application format. Do not guess tenant; see the related open risk in §12.2.
 5. If exactly one row: use `client_id`, `application_id`, `person_key`, and status from subscription for `ScreeningApplicationContext`.
 6. Use `case_identifier` and `alert_identifiers` to fetch current case/alert state. If the existing C3 client lacks a clean case endpoint wrapper, call `client.get()` directly with CA Mesh paths from locked contract; validate response with C1 output models where possible.
 
@@ -373,7 +373,7 @@ Existing helper:
 
 Proposed complementary helper for Step 2:
 
-`update_monitoring_subscription_event(db, *, client_id, customer_identifier, webhook_type, event_at) -> None`
+`update_monitoring_subscription_event(db, *, client_id, customer_identifier, webhook_type, last_event_at) -> None`
 
 It should update the existing row where `client_id=? AND provider='complyadvantage' AND customer_identifier=?`, increment `monitoring_event_count`, set `last_event_at`, `last_webhook_type`, `updated_at`, and not commit unless matching the existing helper's explicit commit pattern is chosen. Because it is best-effort, callers catch/log operational errors.
 
