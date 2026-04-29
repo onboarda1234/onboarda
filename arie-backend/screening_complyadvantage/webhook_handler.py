@@ -45,9 +45,8 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
         signature_status = _signature_status(body, signature)
         if signature_status == "invalid":
             logger.warning(
-                "ca_webhook_signature signature_mode=strict signature_invalid=true body_len=%d signature_present=%s",
+                "ca_webhook_signature signature_mode=strict signature_invalid=true body_len=%d",
                 len(body),
-                bool(signature),
             )
             self.set_status(401)
             return
