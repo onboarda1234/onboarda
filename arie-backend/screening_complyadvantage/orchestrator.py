@@ -137,35 +137,19 @@ class ComplyAdvantageScreeningOrchestrator:
         )
 
     def poll_workflow_until_complete(self, workflow_id):
-        deadline = self.clock() + float(self.poll_timeout_seconds)
-        delay = _POLL_INITIAL_DELAY
-        while True:
-            if delay > 0:
-                self.sleep_fn(delay)
-            raw = self.client.get(f"/v2/workflows/{workflow_id}")
-            workflow = CAWorkflowResponse.model_validate(raw)
-            if self._workflow_complete(workflow):
-                return _WorkflowPollResult(workflow=workflow, raw=raw)
-            if self.clock() >= deadline:
-                raise CATimeout("ComplyAdvantage workflow polling timed out")
-            delay = 1.0 if delay <= 0 else min(delay * _POLL_MULTIPLIER, _POLL_INTERVAL_CAP)
+        return _poll_workflow_until_complete(
+            self.client,
+            workflow_id,
+            poll_timeout_seconds=self.poll_timeout_seconds,
+            clock=self.clock,
+            sleep_fn=self.sleep_fn,
+        )
 
     def fetch_risks_paginated_for_alert(self, alert_id):
-        path = f"/v2/alerts/{alert_id}/risks?page=1"
-        risks = []
-        while path:
-            raw = self.client.get(path)
-            risks.extend(raw.get("values", []))
-            next_link = (raw.get("pagination") or {}).get("next")
-            path = self._normalise_next_link(next_link)
-        return risks
+        return _fetch_risks_paginated_for_alert(self.client, alert_id)
 
     def fetch_deep_risk(self, risk_id):
-        raw = self.client.get(f"/v2/entity-screening/risks/{risk_id}")
-        try:
-            return _parse_risk_detail(raw)
-        except Exception as exc:
-            raise CAUnexpectedResponse("ComplyAdvantage deep-risk response malformed") from exc
+        return _fetch_deep_risk(self.client, risk_id)
 
     def _run_one_pass(self, customer, *, monitoring_enabled, workflow_id, external_identifier):
         initial = self.create_and_screen(
@@ -180,38 +164,14 @@ class ComplyAdvantageScreeningOrchestrator:
         customer_response = CACustomerResponse.model_validate({"identifier": customer_identifier})
         if self._case_creation_skipped(workflow):
             return _PassResult(workflow, [], {}, initial.customer_input, customer_response, initial.monitoring_enabled)
-        alert_ids = _extract_alert_ids(polled.raw)
-        alerts = []
-        deep_risks = {}
-        for alert_id in alert_ids:
-            for risk in self.fetch_risks_paginated_for_alert(alert_id):
-                risk_id = _extract_risk_id(risk)
-                alerts.append(CAAlertResponse.model_validate(_normalise_risk_as_alert(risk_id, risk)))
-                deep_risks[risk_id] = self.fetch_deep_risk(risk_id)
+        alerts, deep_risks = _fetch_alerts_and_deep_risks(self.client, polled.raw)
         return _PassResult(workflow, alerts, deep_risks, initial.customer_input, customer_response, initial.monitoring_enabled)
 
     def _normalise_next_link(self, next_link):
-        if not next_link:
-            return None
-        parsed = urlparse(next_link)
-        if not parsed.scheme and not parsed.netloc:
-            return next_link
-        base = getattr(getattr(self.client, "config", None), "api_base_url", "")
-        base_parsed = urlparse(base)
-        if (parsed.scheme, parsed.netloc) != (base_parsed.scheme, base_parsed.netloc):
-            raise CAUnexpectedResponse("ComplyAdvantage pagination next host unexpected")
-        path = parsed.path or "/"
-        return f"{path}?{parsed.query}" if parsed.query else path
+        return _normalise_next_link(self.client, next_link)
 
     def _workflow_complete(self, workflow):
-        status = _status_value(workflow.status)
-        case_detail = workflow.step_details.get("case-creation")
-        case_status = _status_value(case_detail.status) if case_detail else None
-        if status == "COMPLETED" and case_status in (None, "COMPLETED", "SKIPPED"):
-            return True
-        if status == "IN-PROGRESS" or case_status == "IN-PROGRESS":
-            return False
-        raise CAUnexpectedResponse("ComplyAdvantage workflow status unexpected")
+        return _workflow_complete(workflow)
 
     def _case_creation_skipped(self, workflow):
         detail = workflow.step_details.get("case-creation")
@@ -246,6 +206,85 @@ class ComplyAdvantageScreeningOrchestrator:
 
 def _status_value(value):
     return getattr(value, "value", value)
+
+
+def _poll_workflow_until_complete(
+    client,
+    workflow_id,
+    *,
+    poll_timeout_seconds=_POLL_TOTAL_TIMEOUT,
+    clock=None,
+    sleep_fn=None,
+):
+    clock = clock or time.monotonic
+    sleep_fn = sleep_fn or time.sleep
+    deadline = clock() + float(poll_timeout_seconds)
+    delay = _POLL_INITIAL_DELAY
+    while True:
+        if delay > 0:
+            sleep_fn(delay)
+        raw = client.get(f"/v2/workflows/{workflow_id}")
+        workflow = CAWorkflowResponse.model_validate(raw)
+        if _workflow_complete(workflow):
+            return _WorkflowPollResult(workflow=workflow, raw=raw)
+        if clock() >= deadline:
+            raise CATimeout("ComplyAdvantage workflow polling timed out")
+        delay = 1.0 if delay <= 0 else min(delay * _POLL_MULTIPLIER, _POLL_INTERVAL_CAP)
+
+
+def _fetch_risks_paginated_for_alert(client, alert_id):
+    path = f"/v2/alerts/{alert_id}/risks?page=1"
+    risks = []
+    while path:
+        raw = client.get(path)
+        risks.extend(raw.get("values", []))
+        next_link = (raw.get("pagination") or {}).get("next")
+        path = _normalise_next_link(client, next_link)
+    return risks
+
+
+def _fetch_deep_risk(client, risk_id):
+    raw = client.get(f"/v2/entity-screening/risks/{risk_id}")
+    try:
+        return _parse_risk_detail(raw)
+    except Exception as exc:
+        raise CAUnexpectedResponse("ComplyAdvantage deep-risk response malformed") from exc
+
+
+def _fetch_alerts_and_deep_risks(client, workflow_raw, alert_ids=None):
+    alerts = []
+    deep_risks = {}
+    for alert_id in (alert_ids or _extract_alert_ids(workflow_raw)):
+        for risk in _fetch_risks_paginated_for_alert(client, alert_id):
+            risk_id = _extract_risk_id(risk)
+            alerts.append(CAAlertResponse.model_validate(_normalise_risk_as_alert(risk_id, risk)))
+            deep_risks[risk_id] = _fetch_deep_risk(client, risk_id)
+    return alerts, deep_risks
+
+
+def _normalise_next_link(client, next_link):
+    if not next_link:
+        return None
+    parsed = urlparse(next_link)
+    if not parsed.scheme and not parsed.netloc:
+        return next_link
+    base = getattr(getattr(client, "config", None), "api_base_url", "")
+    base_parsed = urlparse(base)
+    if (parsed.scheme, parsed.netloc) != (base_parsed.scheme, base_parsed.netloc):
+        raise CAUnexpectedResponse("ComplyAdvantage pagination next host unexpected")
+    path = parsed.path or "/"
+    return f"{path}?{parsed.query}" if parsed.query else path
+
+
+def _workflow_complete(workflow):
+    status = _status_value(workflow.status)
+    case_detail = workflow.step_details.get("case-creation")
+    case_status = _status_value(case_detail.status) if case_detail else None
+    if status == "COMPLETED" and case_status in (None, "COMPLETED", "SKIPPED"):
+        return True
+    if status == "IN-PROGRESS" or case_status == "IN-PROGRESS":
+        return False
+    raise CAUnexpectedResponse("ComplyAdvantage workflow status unexpected")
 
 
 def _normalise_risk_as_alert(risk_id, raw):
