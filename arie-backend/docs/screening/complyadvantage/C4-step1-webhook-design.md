@@ -7,7 +7,9 @@
 - Operated against post-PR-#191 commit `c525cd0` (`[C1 Expansion Step 2] Model field-set expansion implementation (#191)`).
 - All required signposts succeeded: C1/C2/C3 design docs, CA `auth.py`, `client.py`, `adapter.py`, `orchestrator.py`, `payloads.py`, `subscriptions.py`, `normalizer.py`, `models/webhooks.py`, `screening_storage.py`, `ComplyAdvantageScreeningAdapter` registration/import in `server.py`, Sumsub webhook signposts, and migration 017.
 - Required reading completed, including `screening_config.py` for §9.3 and all eight synthetic CA fixtures listed in `arie-backend/tests/fixtures/complyadvantage/README.md:5-12`.
-- Locked recon context: s2/s3 establish CA webhook notification + fetch-back, `CASE_CREATED` and `CASE_ALERT_LIST_UPDATED`, HMAC-SHA256 header `x-complyadvantage-signature`, unsafe ordering, and unknown event fallback. s3 also observed long fetch-back latency; s2-s7 fixture/recon lineage is documented as synthetic CA response shapes in `arie-backend/tests/fixtures/complyadvantage/README.md:1-12` and C1's recon evidence summary at `arie-backend/docs/screening/complyadvantage/C1-expansion-step1-field-audit.md:34-37`.
+- Locked recon context: s2/s3 establish CA webhook notification + fetch-back, `CASE_CREATED` and `CASE_ALERT_LIST_UPDATED`, HMAC-SHA256 header `x-complyadvantage-signature`, unsafe ordering, and unknown event fallback.
+- Locked latency context: s3 observed long fetch-back latency.
+- Fixture/recon lineage: s2-s7 response shapes are represented by synthetic fixtures documented at `arie-backend/tests/fixtures/complyadvantage/README.md:1-12`; C1 summarizes the repo-local and prompt-only recon evidence at `arie-backend/docs/screening/complyadvantage/C1-expansion-step1-field-audit.md:34-37`.
 - This is documentation only. No production code, migrations, env values, C1/C2/C3 production behavior, Sumsub paths, or schema changes are modified.
 
 ## 1. Sumsub webhook handler precedent audit
@@ -176,7 +178,7 @@ C4 should mirror the Sumsub raw-body-first discipline but use the locked CA sche
 1. Read `body = self.request.body` before JSON parsing, as Sumsub does at `arie-backend/server.py:7636`.
 2. Read `x-complyadvantage-signature` from request headers. Tornado header lookup is case-insensitive, but use the locked lowercase name in constants/tests.
 3. Load `COMPLYADVANTAGE_WEBHOOK_SECRET` from `os.environ` at runtime. This env var does not exist today; see §12.
-4. If missing in any environment, reject fail-closed with HTTP 401 or 500? Recommendation: 401 for unauthenticated delivery with an ERROR log. Unlike legacy Sumsub's dev/demo bypass (`arie-backend/screening.py:616-624`), C4 should not add a dev bypass because CA webhook work is new security-sensitive code.
+4. If missing in any environment, reject fail-closed with HTTP 401 and an ERROR log. Unlike legacy Sumsub's dev/demo bypass (`arie-backend/screening.py:616-624`), C4 should not add a dev bypass because CA webhook work is new security-sensitive code.
 5. Compute `hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()`.
 6. Compare using `hmac.compare_digest(expected, header or '')`.
 7. On mismatch: WARNING log with event `ca_webhook_signature_invalid`, body length, and header presence only; return HTTP 401 with no sensitive body. Never log the raw signature, expected HMAC, or secret. Sumsub logs only prefixes (`arie-backend/server.py:7655-7671`, `arie-backend/screening.py:646-656`); CA can be stricter and log no prefixes.
@@ -198,7 +200,7 @@ Proposed handler sequence:
 2. Verify HMAC and return 401 before parsing on failure.
 3. Parse JSON; on malformed JSON return 400.
 4. Determine `webhook_type`; validate into `CACaseCreatedWebhook`, `CACaseAlertListUpdatedWebhook`, or `CAUnknownWebhookEnvelope`. Preserve raw JSON in local variables for logs/debug; do not silently drop unknown event payload.
-5. If unknown webhook type: log warning, return 202 or 200? Recommendation: HTTP 202 accepted/no processing because model fallback captured it but C4 has no locked fetch-back mapping. Do not write provider truth or monitoring alerts.
+5. If unknown webhook type: log warning and return HTTP 202 accepted/no processing because model fallback captured it but C4 has no locked fetch-back mapping. Do not write provider truth or monitoring alerts.
 6. Resolve subscription by `(client_id?, provider='complyadvantage', customer_identifier=envelope.customer.identifier)`. The schema unique key includes `client_id` (`migration_017...sql:49-50`), but webhook payload does not include `client_id`. Therefore Step 2 must either search provider/customer across tenants and require exactly one row, or derive `client_id` from `customer.external_identifier` if C3 populated it deterministically. This is a key input-resolution detail (§5.3, §12).
 7. If subscription missing: log warning and return HTTP 202 without normalized/alert writes (§6.2).
 8. Fetch back enriched case/current alert state.
@@ -261,7 +263,7 @@ Recommended resolution:
 1. Use `envelope.customer.identifier` as `customer_identifier`.
 2. Query active subscriptions where `provider='complyadvantage' AND customer_identifier=?`.
 3. If zero rows: warn and return 202; no normalized or alert writes.
-4. If multiple rows across clients: log ERROR and return 202 without writes unless C3 has encoded client/application in `customer.external_identifier` and a deterministic parser can narrow. Do not guess tenant.
+4. If multiple rows across clients: log ERROR and return 202 without writes. Step 2 should not implement a `customer.external_identifier` parser unless CTO separately confirms that C3 encoded a stable tenant/application format. Do not guess tenant.
 5. If exactly one row: use `client_id`, `application_id`, `person_key`, and status from subscription for `ScreeningApplicationContext`.
 6. Use `case_identifier` and `alert_identifiers` to fetch current case/alert state. If the existing C3 client lacks a clean case endpoint wrapper, call `client.get()` directly with CA Mesh paths from locked contract; validate response with C1 output models where possible.
 
@@ -323,7 +325,7 @@ Reasoning:
 - However §2.6 found no suitable existing webhook queue/worker. `ExternalTaskQueue` exists as an async SQLite helper (`resilience/task_queue.py:45-239`) but no production worker integrates it with webhooks, no scheduling/daemon lifecycle is wired, and no CA task schema exists.
 - A true async recommendation would imply new infrastructure, likely additional env/config, retry semantics, operator tooling, and deployment changes. C4 Step 1/2 hard rules forbid schema changes and ask for no hand-wavy infrastructure.
 
-Therefore Step 2 should implement the simpler synchronous path only if CTO accepts provider retry dependence for slow fetch-back. If CTO chooses async, that is an explicit scope expansion requiring a concrete worker design before Step 2.
+Therefore Step 2 implements the synchronous path as the default design, with provider retry dependence for slow fetch-back documented as an operational risk. Alternative: if CTO chooses async, that is an explicit scope expansion requiring a concrete worker design before Step 2.
 
 ## 8. `monitoring_alerts` mapping design
 
