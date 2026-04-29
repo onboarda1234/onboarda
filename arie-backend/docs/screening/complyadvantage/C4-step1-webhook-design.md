@@ -16,7 +16,7 @@
 
 ### 1.1 Implementation and route registration
 
-The Sumsub webhook handler is `SumsubWebhookHandler` in `arie-backend/server.py:7600-7907`. Its route is registered as `(r"/api/kyc/webhook", SumsubWebhookHandler)` at `arie-backend/server.py:11558-11563`, immediately after Sumsub applicant/token/status/document routes.
+The Sumsub webhook handler is `SumsubWebhookHandler` in `arie-backend/server.py:7600-7907`. Its route is registered as `(r"/api/kyc/webhook", SumsubWebhookHandler)` at `arie-backend/server.py:11558-11563`, following the Sumsub applicant/token/status/document route block: applicant, token, status, document, then webhook (`arie-backend/server.py:11558-11563`).
 
 The handler docstring records the current hardening intent: digest algorithm allowlist, removal of legacy substring scan, unmatched-webhook DLQ, applicant-id validation, event-type gate, and 503 on DLQ insert failure (`arie-backend/server.py:7600-7625`).
 
@@ -84,7 +84,7 @@ C4 should use direct handler invocation, fixture-backed fake CA clients, `monkey
 
 Columns: `id`, `application_id`, `client_name`, `alert_type`, `severity`, `detected_by`, `summary`, `source_reference`, `ai_recommendation`, `status`, `officer_action`, `officer_notes`, `created_at`, `reviewed_at`, `reviewed_by`, `linked_periodic_review_id`, `linked_edd_case_id`, `triaged_at`, `assigned_at`, `resolved_at` (`arie-backend/db.py:570-590`, `arie-backend/db.py:1320-1340`).
 
-Critical finding: there is **no** `provider` column, **no** `case_identifier` column, and **no UNIQUE constraint on `(provider, case_identifier)` or equivalent** in current DDL. C4's one-row-per-CA-case idempotency cannot be DB-enforced directly without schema changes. Since C4 hard rules forbid schema changes, Step 2 must either use application-level dedup via `source_reference` reads or surface a schema follow-up. This is a §12.5 downstream risk.
+Critical finding: there is **no** `provider` column, **no** `case_identifier` column, and **no UNIQUE constraint on `(provider, case_identifier)` or equivalent** in current DDL. C4's one-row-per-CA-case idempotency cannot be DB-enforced directly without schema changes. Since C4 hard rules forbid schema changes, Step 2 should use the best available application-level workaround: query candidate alerts for `application_id=?` and `detected_by='ComplyAdvantage'`, parse `source_reference` JSON in Python, update the row whose `provider=='complyadvantage'` and `case_identifier` matches, and insert only if none exists. This is not race-safe like a DB unique key, so the schema gap remains a §12.5 downstream risk.
 
 ### 2.2 `screening_reports_normalized` schema
 
@@ -201,7 +201,7 @@ Proposed handler sequence:
 3. Parse JSON; on malformed JSON return 400.
 4. Determine `webhook_type`; validate into `CACaseCreatedWebhook`, `CACaseAlertListUpdatedWebhook`, or `CAUnknownWebhookEnvelope`. Preserve raw JSON in local variables for logs/debug; do not silently drop unknown event payload.
 5. If unknown webhook type: log warning and return HTTP 202 accepted/no processing because model fallback captured it but C4 has no locked fetch-back mapping. Do not write provider truth or monitoring alerts.
-6. Resolve subscription by `(client_id?, provider='complyadvantage', customer_identifier=envelope.customer.identifier)`. The schema unique key includes `client_id` (`migration_017...sql:49-50`), but webhook payload does not include `client_id`. Therefore Step 2 must either search provider/customer across tenants and require exactly one row, or derive `client_id` from `customer.external_identifier` if C3 populated it deterministically. This is a key input-resolution detail (§5.3, §12).
+6. Resolve subscription by `provider='complyadvantage'` and `customer_identifier=envelope.customer.identifier`; `client_id` is unknown from the webhook but required for the schema unique key. The schema unique key includes `client_id` (`migration_017...sql:49-50`), but webhook payload does not include `client_id`. Therefore Step 2 must search provider/customer across tenants and require exactly one row; multi-row ambiguity returns 202 without writes unless CTO separately approves a stable `customer.external_identifier` parser. This is a key input-resolution detail (§5.3, §12.2).
 7. If subscription missing: log warning and return HTTP 202 without normalized/alert writes (§6.2).
 8. Fetch back enriched case/current alert state.
 9. Normalize with `normalize_single_pass` if a single-pass fetch entrypoint can produce `workflow`, `alerts`, `deep_risks`, `customer_input`, `customer_response`, `application_context`, and `resnapshot_context` (`normalizer.py:124-156`).
@@ -317,15 +317,15 @@ A single transaction would couple required and best-effort writes and would forc
 
 ### 7.3 Async vs sync handler recommendation
 
-Recommendation: **synchronous C4 handler for Step 2, with tight timeout/error handling and explicit §12 risk**, not async queue.
+Recommendation: **async receiver + worker is the correct production design**, but this repository currently lacks suitable infrastructure, so this is a CTO scope decision before Step 2.
 
 Reasoning:
 
-- Locked s3 recon says fetch-back can take ~146 seconds, while typical webhook timeouts are likely 10-30 seconds. Pure sync is operationally risky.
-- However §2.6 found no suitable existing webhook queue/worker. `ExternalTaskQueue` exists as an async SQLite helper (`resilience/task_queue.py:45-239`) but no production worker integrates it with webhooks, no scheduling/daemon lifecycle is wired, and no CA task schema exists.
-- A true async recommendation would imply new infrastructure, likely additional env/config, retry semantics, operator tooling, and deployment changes. C4 Step 1/2 hard rules forbid schema changes and ask for no hand-wavy infrastructure.
+- Locked s3 recon says fetch-back can take ~146 seconds, while typical webhook timeouts are likely 10-30 seconds. A synchronous production handler would predictably time out and should be treated as a production blocker, not the preferred design.
+- §2.6 found no suitable existing webhook queue/worker. `ExternalTaskQueue` exists as an async SQLite helper (`resilience/task_queue.py:45-239`) but no production worker integrates it with webhooks, no scheduling/daemon lifecycle is wired, and no CA task schema exists.
+- Therefore the recommended async design implies new infrastructure: durable receipt storage/queue, a worker process, retry/dead-letter policy, monitoring, and deployment/config ownership. C4 Step 1 does not design those changes because the prompt forbids schema changes and requires honest infrastructure claims.
 
-Therefore Step 2 implements the synchronous path as the default design, with provider retry dependence for slow fetch-back documented as an operational risk. Alternative: if CTO chooses async, that is an explicit scope expansion requiring a concrete worker design before Step 2.
+Fallback if CTO refuses new infrastructure: implement the synchronous path only as a constrained interim design and explicitly accept webhook timeout/retry risk. That fallback is implementable within C4 scope but is not production-robust for the observed 146-second fetch-back.
 
 ## 8. `monitoring_alerts` mapping design
 
@@ -383,7 +383,7 @@ Actual public executor found:
 
 `def execute_adverse_media_pep(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]` (`arie-backend/supervisor/agent_executors.py:3797-3802`). It reads app data, directors, UBOs, and monitoring alerts (`agent_executors.py:3803-3810`), then performs checks (`agent_executors.py:3812-3831`). Executors are registered through `register_all_executors(supervisor, db_path: str)`; wrappers inject `context['db_path']` and call each executor (`agent_executors.py:4585-4606`). Server startup calls `register_all_executors(supervisor_instance, DB_PATH)` (`arie-backend/server.py:11738-11744`).
 
-No entrypoint was found that accepts a normalized screening record or a `monitoring_alerts` row directly. The HTTP `/api/monitoring/agents/{id}/run` route is a manual/simulated run and does not invoke supervisor executor logic (`arie-backend/server.py:9586-9608`). Therefore the locked "push to Agent 7" intent has an entrypoint mismatch: Step 2 can call `execute_adverse_media_pep(application_id, {'db_path': DB_PATH})` only as a full application-level agent run, not normalized-record processing. This is a §12.5 downstream risk requiring CTO decision.
+No entrypoint was found that accepts a normalized screening record or a `monitoring_alerts` row directly. The HTTP `/api/monitoring/agents/{id}/run` route is a manual/simulated run and does not invoke supervisor executor logic (`arie-backend/server.py:9586-9608`). Therefore the locked "push to Agent 7" intent has an entrypoint mismatch: Step 2 can call `execute_adverse_media_pep(application_id, {'db_path': DB_PATH})` only as a full application-level agent run, not normalized-record processing. That is inappropriate as an automatic webhook push unless CTO explicitly accepts rerunning unrelated checks and any duplicate alert/notification side effects. Treat this as a blocker for Agent 7 push, while the provider-truth and monitoring-alert dual-write can still proceed.
 
 ### 9.3 `screening_primary_provider` flag
 
@@ -495,7 +495,6 @@ Target at least 80% coverage per new C4 module, consistent with C2/C3 coverage t
 ### 12.2 Unknown CA webhook behaviors blocking design
 
 - Exact CA fetch-back endpoints for case/current alert state need Step 2 sandbox confirmation; current C3 methods fetch workflows/alerts/risks but start from create-and-screen handles (`orchestrator.py:122-191`).
-- Whether CA encodes the HMAC-SHA256 output in `x-complyadvantage-signature` as a hex digest, base64 digest, or prefixed digest needs confirmation before implementation tests are finalized.
 - Whether `customer.external_identifier` reliably carries tenant/application context from C3 for webhook disambiguation.
 - Whether unknown event types should return 200 or 202; recommendation is 202 accepted/no processing.
 
@@ -522,7 +521,7 @@ C1 documents prompt-only/verbal recon not fully captured in fixtures: full s3 PE
 
 - `COMPLYADVANTAGE_WEBHOOK_SECRET` — required for CA HMAC verification.
 
-No additional env vars are recommended for the synchronous Step 2 design. `COMPLYADVANTAGE_WEBHOOK_SECRET` is therefore the only proposed new env var. If CTO chooses async queue infrastructure in §7.3, additional queue/worker configuration may be required, but this diagnosis does not design or name those env vars.
+No additional concrete env vars are named in this Step 1 document because no queue/worker technology exists in the repo or has been selected. Because §7.3 recommends async for production, a follow-up infrastructure decision may introduce queue/worker configuration env vars; those must be listed in that separate design before implementation. For the current C4 webhook surface, `COMPLYADVANTAGE_WEBHOOK_SECRET` is the only proposed new env var.
 
 ### Acceptance Signal Confirmations
 
@@ -530,9 +529,9 @@ No additional env vars are recommended for the synchronous Step 2 design. `COMPL
 - Signposts verified: yes, all required signposts succeeded.
 - Modules to create in Step 2: `webhook_handler.py`, `webhook_fetch.py`, `webhook_mapping.py`, `webhook_storage.py`, plus a thin `server.py` route and optional `__init__.py` exports (§10.1).
 - §5.2 recommendation: C4-specific fetch service by default; shared fetch extraction only with CTO approval because it changes C3 boundaries.
-- §7.3 recommendation: synchronous Step 2 handler unless CTO explicitly expands scope for real queue/worker infrastructure.
-- §12.5 downstream summary: C3 refactor risk applies if clean reuse is required; Agent 7 entrypoint mismatch applies; `monitoring_alerts` unique gap applies; generic webhook idempotency/DLQ infrastructure gap applies beyond normalized hash; async infrastructure gap applies if async is selected.
-- New env vars: only `COMPLYADVANTAGE_WEBHOOK_SECRET` for sync design.
+- §7.3 recommendation: async receiver + worker is the correct production design, but no suitable infrastructure exists; CTO must approve new infrastructure before Step 2, or explicitly accept synchronous fallback risk.
+- §12.5 downstream summary: C3 refactor risk applies if clean reuse is required; Agent 7 entrypoint mismatch/blocker applies; `monitoring_alerts` unique gap applies; generic webhook idempotency/DLQ infrastructure gap applies beyond normalized hash; async infrastructure gap applies because async is the production recommendation.
+- New env vars: `COMPLYADVANTAGE_WEBHOOK_SECRET` is the only concrete env var proposed for the current webhook surface; async queue/worker env vars require a separate infrastructure decision.
 - §2.5 idempotency/DLQ audit performed: found Sumsub-specific `webhook_processed_events` and `sumsub_unmatched_webhooks`; no suitable generic CA infrastructure.
 - §2.6 async audit performed: found no suitable running queue/worker; `ExternalTaskQueue` helper exists but is not integrated.
 - §4.6 route constraints audit performed: Sumsub auth/CSRF/raw-body pattern quoted and CA route position justified.
