@@ -6,7 +6,7 @@ plain-dict schema used by RegMind.
 
 import hashlib
 import json
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -507,7 +507,13 @@ def _indicator_payload(indicator):
     return base
 
 
-def _match_raw_extras(match) -> dict:
+def _match_raw_extras(match: MergedMatch) -> dict[str, Any]:
+    """Collect per-match unknown CA fields by source model family.
+
+    Returns a sparse raw_extras block with profile, risk_detail, and indicators
+    keys only when those source model trees contain Pydantic extra fields.
+    """
+
     raw_extras = {}
     profile_extras = _collect_raw_extras(match.profile)
     if profile_extras:
@@ -525,7 +531,9 @@ def _match_raw_extras(match) -> dict:
     return raw_extras
 
 
-def _collect_raw_extras(value):
+def _collect_raw_extras(value: Any) -> dict[str, Any]:
+    """Recursively collect only __pydantic_extra__ values from model trees."""
+
     if isinstance(value, BaseModel):
         result = {}
         extras = getattr(value, "__pydantic_extra__", None) or {}
@@ -553,7 +561,9 @@ def _collect_raw_extras(value):
     return {}
 
 
-def _jsonable_extra(value):
+def _jsonable_extra(value: Any) -> Any:
+    """Convert preserved extra values into JSON-compatible plain values."""
+
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json", by_alias=True)
     if isinstance(value, list):
