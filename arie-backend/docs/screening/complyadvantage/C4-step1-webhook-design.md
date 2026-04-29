@@ -387,7 +387,7 @@ No entrypoint was found that accepts a normalized screening record or a `monitor
 
 ### 9.3 `screening_primary_provider` flag
 
-`screening_config.py` has `is_abstraction_enabled()` and `get_active_provider_name()`; the active provider comes from `SCREENING_PROVIDER` and defaults to `sumsub` (`arie-backend/screening_config.py:38-67`). There is **no** `screening_primary_provider` symbol or env var in `arie-backend/`.
+`screening_config.py` has `is_abstraction_enabled()` and `get_active_provider_name()`; the active provider comes from `SCREENING_PROVIDER` and defaults to `sumsub` (`arie-backend/screening_config.py:38-67`). There is **no** `screening_primary_provider` variable, function, constant, or environment variable in `arie-backend/`.
 
 Recommendation: use `get_active_provider_name() == 'complyadvantage'` as the current real flag if CTO agrees it is equivalent to `screening_primary_provider`. Do not introduce a new provider flag in C4 Step 2 unless surfaced and approved.
 
@@ -495,7 +495,7 @@ Target at least 80% coverage per new C4 module, consistent with C2/C3 coverage t
 ### 12.2 Unknown CA webhook behaviors blocking design
 
 - Exact CA fetch-back endpoints for case/current alert state need Step 2 sandbox confirmation; current C3 methods fetch workflows/alerts/risks but start from create-and-screen handles (`orchestrator.py:122-191`).
-- Whether CA signs hex digest, base64 digest, or prefixed digest in `x-complyadvantage-signature` beyond locked HMAC-SHA256 needs confirmation before implementation tests are finalized.
+- Whether CA encodes the HMAC-SHA256 output in `x-complyadvantage-signature` as a hex digest, base64 digest, or prefixed digest needs confirmation before implementation tests are finalized.
 - Whether `customer.external_identifier` reliably carries tenant/application context from C3 for webhook disambiguation.
 - Whether unknown event types should return 200 or 202; recommendation is 202 accepted/no processing.
 
@@ -524,7 +524,7 @@ C1 documents prompt-only/verbal recon not fully captured in fixtures: full s3 PE
 
 No additional env vars are recommended for the synchronous Step 2 design. `COMPLYADVANTAGE_WEBHOOK_SECRET` is therefore the only proposed new env var. If CTO chooses async queue infrastructure in §7.3, additional queue/worker configuration may be required, but this diagnosis does not design or name those env vars.
 
-### Acceptance-signal confirmations
+### Acceptance Signal Confirmations
 
 - Commit SHA preflight: `c525cd0`.
 - Signposts verified: yes, all required signposts succeeded.
