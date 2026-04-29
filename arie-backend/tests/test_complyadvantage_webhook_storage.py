@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_complyadvantage.models.webhooks import CACaseAlertListUpdatedWebhook
 from screening_complyadvantage.webhook_storage import process_complyadvantage_webhook
 
@@ -80,7 +81,7 @@ def _db():
     )
     conn.execute(
         "INSERT INTO screening_monitoring_subscriptions (client_id, application_id, provider, person_key, customer_identifier) VALUES (?, ?, ?, ?, ?)",
-        ("client-1", "app-1", "complyadvantage", "person-1", "cust-1"),
+        ("client-1", "app-1", COMPLYADVANTAGE_PROVIDER_NAME, "person-1", "cust-1"),
     )
     conn.commit()
     return conn
@@ -100,10 +101,10 @@ def _envelope():
 
 def _normalized(hash_value="hash-1"):
     return {
-        "provider": "complyadvantage",
+        "provider": COMPLYADVANTAGE_PROVIDER_NAME,
         "source_screening_report_hash": hash_value,
         "provider_specific": {
-            "complyadvantage": {
+            COMPLYADVANTAGE_PROVIDER_NAME: {
                 "matches": [{"indicators": [{"type": "CAPEPIndicator", "taxonomy_key": "r_pep_class_2"}]}],
                 "workflows": {"strict": {"alerts": [{"identifier": "alert-1"}]}},
             }
@@ -115,7 +116,10 @@ def _normalized(hash_value="hash-1"):
 async def test_process_sequence_writes_normalized_alert_subscription_and_agent(monkeypatch):
     conn = _db()
     agent = MagicMock()
-    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "complyadvantage")
+    monkeypatch.setattr(
+        "screening_complyadvantage.webhook_storage.get_active_provider_name",
+        lambda: COMPLYADVANTAGE_PROVIDER_NAME,
+    )
     monkeypatch.setattr("screening_complyadvantage.webhook_storage._default_db_path", lambda: "/tmp/test.db")
 
     result = await process_complyadvantage_webhook(
@@ -129,7 +133,7 @@ async def test_process_sequence_writes_normalized_alert_subscription_and_agent(m
     assert result["status"] == "processed"
     assert conn.execute("SELECT COUNT(*) FROM screening_reports_normalized").fetchone()[0] == 1
     alert = conn.execute("SELECT * FROM monitoring_alerts").fetchone()
-    assert alert["provider"] == "complyadvantage"
+    assert alert["provider"] == COMPLYADVANTAGE_PROVIDER_NAME
     assert alert["case_identifier"] == "case-1"
     sub = conn.execute("SELECT monitoring_event_count, last_webhook_type FROM screening_monitoring_subscriptions").fetchone()
     assert sub["monitoring_event_count"] == 1
@@ -158,7 +162,10 @@ async def test_missing_subscription_halts_before_writes():
 async def test_normalized_write_failure_halts_best_effort_steps(monkeypatch):
     conn = _db()
     agent = MagicMock()
-    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "complyadvantage")
+    monkeypatch.setattr(
+        "screening_complyadvantage.webhook_storage.get_active_provider_name",
+        lambda: COMPLYADVANTAGE_PROVIDER_NAME,
+    )
 
     def fail_persist(*args, **kwargs):
         raise sqlite3.OperationalError("write failed")
@@ -182,7 +189,10 @@ async def test_monitoring_alert_failure_continues_to_subscription_update_and_age
     conn = _db()
     conn.execute("DROP TABLE monitoring_alerts")
     agent = MagicMock()
-    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "complyadvantage")
+    monkeypatch.setattr(
+        "screening_complyadvantage.webhook_storage.get_active_provider_name",
+        lambda: COMPLYADVANTAGE_PROVIDER_NAME,
+    )
     monkeypatch.setattr("screening_complyadvantage.webhook_storage._default_db_path", lambda: "/tmp/test.db")
 
     result = await process_complyadvantage_webhook(

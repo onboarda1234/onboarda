@@ -2,6 +2,7 @@ import json
 import os
 from dataclasses import dataclass
 
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_complyadvantage.models.webhooks import CACaseAlertListUpdatedWebhook
 from screening_complyadvantage.normalizer import ScreeningApplicationContext
 from screening_complyadvantage.webhook_fetch import fetch_webhook_single_pass
@@ -47,6 +48,6 @@ def test_fetch_webhook_single_pass_uses_shared_three_layer_paths():
 
     report = fetch_webhook_single_pass(FakeClient(routes), envelope, context)
 
-    assert report["provider"] == "complyadvantage"
+    assert report["provider"] == COMPLYADVANTAGE_PROVIDER_NAME
     assert report["total_hits"] == 1
-    assert report["provider_specific"]["complyadvantage"]["resnapshot"]["source_case_identifier"] == "case-pep"
+    assert report["provider_specific"][COMPLYADVANTAGE_PROVIDER_NAME]["resnapshot"]["source_case_identifier"] == "case-pep"

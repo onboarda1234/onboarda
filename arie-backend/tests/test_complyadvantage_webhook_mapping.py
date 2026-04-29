@@ -1,12 +1,13 @@
 import json
 
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_complyadvantage.webhook_mapping import map_normalized_to_monitoring_alert
 
 
 def _report(indicator_types):
     return {
         "provider_specific": {
-            "complyadvantage": {
+            COMPLYADVANTAGE_PROVIDER_NAME: {
                 "matches": [{"indicators": [{"type": t, "taxonomy_key": k} for t, k in indicator_types]}],
                 "workflows": {"strict": {"alerts": [{"identifier": "alert-1"}]}},
             }
@@ -22,13 +23,13 @@ def test_mapping_uses_locked_priority_and_summary():
         normalized_record_id=42,
     )
 
-    assert row["provider"] == "complyadvantage"
+    assert row["provider"] == COMPLYADVANTAGE_PROVIDER_NAME
     assert row["case_identifier"] == "case-1"
     assert row["alert_type"] == "pep"
     assert row["severity"] == "medium"
     assert row["summary"] == "CA case case-1 surfaced 1 match(es); top indicator: pep for customer cust-1"
     assert json.loads(row["source_reference"]) == {
-        "provider": "complyadvantage",
+        "provider": COMPLYADVANTAGE_PROVIDER_NAME,
         "case_identifier": "case-1",
         "alert_identifier": "alert-1",
         "normalized_record_id": 42,

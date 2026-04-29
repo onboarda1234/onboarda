@@ -34,7 +34,7 @@ def map_normalized_to_monitoring_alert(normalized_report, *, case_identifier, cu
         "client_name": customer_identifier,
         "alert_type": top_alert_type,
         "severity": _SEVERITY[top_alert_type],
-        "detected_by": "ComplyAdvantage",
+        "detected_by": _PROVIDER,
         "summary": (
             f"CA case {case_identifier} surfaced {len(matches)} match(es); "
             f"top indicator: {top_alert_type} for customer {customer_identifier}"
