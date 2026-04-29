@@ -41,15 +41,28 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
     def post(self):
         body = self.request.body
         signature = self.request.headers.get(_SIGNATURE_HEADER, "")
-        if not _verify_signature(body, signature):
+        signature_status = _signature_status(body, signature)
+        if signature_status == "invalid":
             logger.warning(
-                "ca_webhook_signature signature_invalid=true body_len=%d signature_present=%s",
+                "ca_webhook_signature signature_mode=strict signature_invalid=true body_len=%d signature_present=%s",
                 len(body),
                 bool(signature),
             )
             self.set_status(401)
             return
-        logger.info("ca_webhook_signature signature_valid=true body_len=%d", len(body))
+        if signature_status == "production_secret_missing":
+            logger.error(
+                "ca_webhook_signature signature_mode=production_fail_closed signature_secret_configured=false"
+            )
+            self.set_status(503)
+            return
+        if signature_status == "disabled_non_production":
+            logger.warning(
+                "ca_webhook_signature signature_mode=sandbox_fail_open signature_verification_disabled=true environment=%s",
+                _environment(),
+            )
+        else:
+            logger.info("ca_webhook_signature signature_mode=strict signature_valid=true body_len=%d", len(body))
 
         try:
             payload = json.loads(body)
@@ -101,6 +114,19 @@ def _verify_signature(body, signature):
         return False
     expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature or "")
+
+
+def _signature_status(body, signature):
+    secret = os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET", "")
+    if secret:
+        return "valid" if _verify_signature(body, signature) else "invalid"
+    if _environment() == "production":
+        return "production_secret_missing"
+    return "disabled_non_production"
+
+
+def _environment():
+    return os.environ.get("ENVIRONMENT", "development").strip().lower()
 
 
 def _parse_known_envelope(event_type, payload):
