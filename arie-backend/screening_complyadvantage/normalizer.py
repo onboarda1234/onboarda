@@ -6,7 +6,7 @@ plain-dict schema used by RegMind.
 
 import hashlib
 import json
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -407,7 +407,11 @@ def _indicator_key(indicator):
 
 def _indicator_label(indicator):
     risk_type = getattr(indicator, "risk_type", None)
-    return getattr(risk_type, "label", None)
+    return (
+        getattr(risk_type, "label", None)
+        or getattr(risk_type, "name", None)
+        or getattr(risk_type, "key", None)
+    )
 
 
 def _profile_name(profile):
@@ -472,6 +476,9 @@ def _provider_match(match, include_surfaced_by_pass):
     }
     if include_surfaced_by_pass:
         data["surfaced_by_pass"] = match.surfaced_by_pass
+    raw_extras = _match_raw_extras(match)
+    if raw_extras:
+        data["raw_extras"] = raw_extras
     return data
 
 
@@ -498,6 +505,72 @@ def _indicator_payload(indicator):
     else:
         base["value"] = _dump(getattr(indicator, "value", {}))
     return base
+
+
+def _match_raw_extras(match: MergedMatch) -> dict[str, Any]:
+    """Collect per-match unknown CA fields by source model family.
+
+    Returns a sparse raw_extras block with profile, risk_detail, and indicators
+    keys only when those source model trees contain Pydantic extra fields.
+    """
+
+    raw_extras = {}
+    profile_extras = _collect_raw_extras(match.profile)
+    if profile_extras:
+        raw_extras["profile"] = profile_extras
+    risk_detail_extras = _collect_raw_extras(match.risk)
+    if risk_detail_extras:
+        raw_extras["risk_detail"] = risk_detail_extras
+    indicator_extras = {}
+    for index, indicator in enumerate(_all_indicators(match.risk)):
+        extras = _collect_raw_extras(indicator)
+        if extras:
+            indicator_extras[str(index)] = extras
+    if indicator_extras:
+        raw_extras["indicators"] = indicator_extras
+    return raw_extras
+
+
+def _collect_raw_extras(value: Any) -> dict[str, Any]:
+    """Recursively collect only __pydantic_extra__ values from model trees."""
+
+    if isinstance(value, BaseModel):
+        result = {}
+        extras = getattr(value, "__pydantic_extra__", None) or {}
+        if extras:
+            result.update({key: _jsonable_extra(raw) for key, raw in extras.items()})
+        for field_name in value.__class__.model_fields:
+            nested = _collect_raw_extras(getattr(value, field_name, None))
+            if nested:
+                result[field_name] = nested
+        return result
+    if isinstance(value, list):
+        result = {}
+        for index, item in enumerate(value):
+            nested = _collect_raw_extras(item)
+            if nested:
+                result[str(index)] = nested
+        return result
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            nested = _collect_raw_extras(item)
+            if nested:
+                result[str(key)] = nested
+        return result
+    return {}
+
+
+def _jsonable_extra(value: Any) -> Any:
+    """Convert preserved extra values into JSON-compatible plain values."""
+
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", by_alias=True)
+    if isinstance(value, list):
+        return [_jsonable_extra(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _jsonable_extra(item) for key, item in value.items()}
+    return value
 
 
 def _canonicalize_article(article) -> dict:

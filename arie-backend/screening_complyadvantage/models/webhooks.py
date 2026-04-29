@@ -2,29 +2,31 @@
 
 from typing import Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
+
+from .primitives import CAWireModel
 
 
-class CAWebhookCustomer(BaseModel):
+class CAWebhookCustomer(CAWireModel):
     identifier: str
     external_identifier: str
     version: int
 
 
-class CAWebhookSubject(BaseModel):
+class CAWebhookSubject(CAWireModel):
     identifier: str
     external_identifier: str
     type: str
 
 
-class CAWebhookCaseStage(BaseModel):
+class CAWebhookCaseStage(CAWireModel):
     identifier: str
     display_name: Optional[str] = None
     display_order: Optional[int] = None
     stage_type: Optional[str] = None
 
 
-class CACaseCreatedWebhook(BaseModel):
+class CACaseCreatedWebhook(CAWireModel):
     """Per s2 recon — case-creation event."""
 
     webhook_type: Literal["CASE_CREATED"]
@@ -38,7 +40,7 @@ class CACaseCreatedWebhook(BaseModel):
     subjects: list[CAWebhookSubject]
 
 
-class CACaseAlertListUpdatedWebhook(BaseModel):
+class CACaseAlertListUpdatedWebhook(CAWireModel):
     """Per s2 recon — case-alert-list-updated event."""
 
     webhook_type: Literal["CASE_ALERT_LIST_UPDATED"]
@@ -50,7 +52,7 @@ class CACaseAlertListUpdatedWebhook(BaseModel):
     subjects: list[CAWebhookSubject]
 
 
-class CAUnknownWebhookEnvelope(BaseModel):
+class CAUnknownWebhookEnvelope(CAWireModel):
     """Fallback for webhook types not yet characterized."""
 
     webhook_type: str

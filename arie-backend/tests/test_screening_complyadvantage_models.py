@@ -8,14 +8,21 @@ from pydantic import TypeAdapter, ValidationError
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from screening_complyadvantage.models import input as ca_input_models
+from screening_complyadvantage.models import output as ca_output_models
+from screening_complyadvantage.models import primitives as ca_primitives
+from screening_complyadvantage.models import webhooks as ca_webhook_models
 from screening_models import TwoPassProvenance
 from screening_complyadvantage.models import (
+    CAAddress,
     CAAlertResponse,
+    CACaseCreatedWebhook,
     CACreateAndScreenRequest,
     CACustomerCompanyInput,
     CACustomerInput,
     CACustomerPersonInput,
     CADateOfBirth,
+    CAMediaArticleValue,
     CAMatchDetails,
     CAName,
     CAPEPValue,
@@ -27,8 +34,10 @@ from screening_complyadvantage.models import (
     CAProfileCompanyName,
     CAProfilePerson,
     CARiskType,
+    CASanctionValue,
     CAUnknownWebhookEnvelope,
     CAWebhookEnvelope,
+    CAWatchlistValue,
 )
 
 
@@ -84,8 +93,16 @@ def test_profile_subject_kind_returns_correct_discriminator():
 
 
 def test_unknown_aml_taxonomy_key_passes_through():
-    risk_type = CARiskType(key="brand_new_ca_taxonomy", label="Future key")
+    risk_type = CARiskType(
+        key="brand_new_ca_taxonomy",
+        label="Future key",
+        name="Future key name",
+        taxonomy="future.synthetic",
+    )
     assert risk_type.key == "brand_new_ca_taxonomy"
+    assert risk_type.label == "Future key"
+    assert risk_type.name == "Future key name"
+    assert risk_type.taxonomy == "future.synthetic"
 
 
 def test_unknown_webhook_type_falls_through_to_fallback_envelope():
@@ -113,6 +130,22 @@ def test_known_webhook_type_parses_as_typed_envelope():
     assert parsed.case_identifier == "case-1"
 
 
+def test_known_webhook_type_preserves_extras():
+    parsed = TypeAdapter(CAWebhookEnvelope).validate_python({
+        "webhook_type": "CASE_CREATED",
+        "api_version": "2",
+        "account_identifier": "acct",
+        "case_identifier": "case-1",
+        "case_type": "customer",
+        "customer": {"identifier": "cust", "external_identifier": "app", "version": 1, "tier": "fixture"},
+        "subjects": [{"identifier": "sub", "external_identifier": "person", "type": "person"}],
+        "delivery_attempt": 2,
+    })
+    assert isinstance(parsed, CACaseCreatedWebhook)
+    assert parsed.delivery_attempt == 2
+    assert parsed.customer.__pydantic_extra__ == {"tier": "fixture"}
+
+
 def test_input_models_minimal_request_validates():
     request = CACreateAndScreenRequest(
         customer=CACustomerInput(person=CACustomerPersonInput(first_name="Jane", last_name="Doe"))
@@ -134,7 +167,17 @@ def test_input_models_full_23_field_person_validates():
         residential_information={"country_of_residence": "MU"},
         personal_identification={"passport_number": "P123"},
         contact_information={"email": "jane@example.com"},
-        addresses=[{"city": "Port Louis", "country": "MU"}],
+        addresses=[{
+            "full_address": "1 Test Road",
+            "address_line1": "1 Test Road",
+            "address_line2": "Unit Test",
+            "town_name": "Port Louis",
+            "postal_code": "TST",
+            "country_subdivision": "Test District",
+            "country": "MU",
+            "country_code": "MU",
+            "location_type": "residential_address",
+        }],
         occupation="Director",
         employer="Acme",
         salary={"amount": 1},
@@ -148,6 +191,46 @@ def test_input_models_full_23_field_person_validates():
     )
     assert person.date_of_birth.year == 1980
     assert person.custom_fields == {"k": "v"}
+    assert person.addresses[0].town_name == "Port Louis"
+
+
+def test_address_fields_align_with_payload_emit_names():
+    address = CAAddress(
+        full_address="1 Test Road",
+        address_line1="1 Test Road",
+        address_line2="Unit Test",
+        town_name="Test Town",
+        postal_code="TST",
+        country_subdivision="Test District",
+        country="XX",
+        country_code="XX",
+        location_type="registered_address",
+    )
+    assert address.model_dump(exclude_none=True) == {
+        "full_address": "1 Test Road",
+        "address_line1": "1 Test Road",
+        "address_line2": "Unit Test",
+        "town_name": "Test Town",
+        "postal_code": "TST",
+        "country_subdivision": "Test District",
+        "country": "XX",
+        "country_code": "XX",
+        "location_type": "registered_address",
+    }
+    assert "address_line_1" not in CAAddress.model_fields
+    assert "city" not in CAAddress.model_fields
+    assert "state" not in CAAddress.model_fields
+
+
+def test_legacy_address_field_names_are_extras_not_explicit_fields():
+    address = CAAddress(address_line_1="Legacy Line", city="Legacy City", state="Legacy State")
+    assert address.__pydantic_extra__ == {
+        "address_line_1": "Legacy Line",
+        "city": "Legacy City",
+        "state": "Legacy State",
+    }
+    reparsed = CAAddress.model_validate(address.model_dump())
+    assert reparsed.__pydantic_extra__ == address.__pydantic_extra__
 
 
 def test_company_input_vs_profile_company_diverge_in_shape():
@@ -169,6 +252,131 @@ def test_pep_class_field_alias_works():
     pep = CAPEPValue.model_validate({"class": "PEP_CLASS_1", "position": "minister"})
     assert pep.class_ == "PEP_CLASS_1"
     assert pep.model_dump(by_alias=True)["class"] == "PEP_CLASS_1"
+
+
+def test_pep_value_expanded_s3_fields_validate():
+    pep = CAPEPValue.model_validate({
+        "class": "PEP_CLASS_1",
+        "position": "Synthetic Minister",
+        "country": "XX",
+        "level": "national",
+        "scope_of_influence": "synthetic jurisdiction",
+        "political_position_type": "synthetic_office",
+        "institution_type": "synthetic_institution",
+        "political_positions": [{"title": "Synthetic Minister"}],
+        "political_parties": [{"name": "Test Fixture Party"}],
+        "active_start_date": "2000-01-01",
+        "active_end_date": "2005-01-01",
+        "issuing_jurisdictions": [{"country": "XX"}],
+        "source_metadata": {"source_identifier": "TEST-PEP"},
+    })
+    assert pep.level == "national"
+    assert pep.political_positions == [{"title": "Synthetic Minister"}]
+    assert pep.political_parties == [{"name": "Test Fixture Party"}]
+    assert pep.issuing_jurisdictions == [{"country": "XX"}]
+    assert pep.source_metadata == {"source_identifier": "TEST-PEP"}
+
+
+def test_sanction_watchlist_and_media_expanded_fields_validate():
+    sanction = CASanctionValue(
+        program="TEST-SAN",
+        authority="TEST-AUTH",
+        listed_at="2000-01-01",
+        source_metadata={"source_identifier": "TEST-SAN-META"},
+        issuing_jurisdictions=[{"country": "XX"}],
+        start_date="2000-01-01",
+        status="active",
+        reason="Synthetic reason",
+    )
+    watchlist = CAWatchlistValue(
+        list_name="TEST-WATCH",
+        authority="TEST-WATCH-AUTH",
+        source_metadata={"source_identifier": "TEST-WATCH-META"},
+        issuing_jurisdictions=["XX"],
+        start_date="2001-01-01",
+        status="active",
+        reason="Synthetic watchlist reason",
+    )
+    media = CAMediaArticleValue(
+        title="Test Article",
+        source_name="Test Fixture Source",
+        source_type="synthetic_news",
+        publisher="Test Fixture Publisher",
+        language="en",
+        categories=["synthetic_adverse_media"],
+        source_metadata={"source_identifier": "TEST-MEDIA"},
+    )
+    assert sanction.source_metadata["source_identifier"] == "TEST-SAN-META"
+    assert watchlist.issuing_jurisdictions == ["XX"]
+    assert media.categories == ["synthetic_adverse_media"]
+
+
+def test_profile_expanded_entity_and_nested_fields_validate():
+    profile = CAProfile(
+        identifier="p1",
+        entity_type="person",
+        person=CAProfilePerson(
+            additional_fields={"values": [{"name": "fixture_profile_source", "value": "synthetic"}]},
+            risk_indicators=[{
+                "risk_type": {"key": "r_pep_class_1", "label": "PEP class 1"},
+                "value": {"class": "PEP_CLASS_1", "position": "Synthetic Minister", "country": "XX"},
+            }],
+        ),
+        match_details=CAMatchDetails(),
+        risk_types=[],
+        risk_indicators=[],
+    )
+    company = CAProfileCompany(
+        additional_fields={"values": [{"name": "fixture_company_source", "value": "synthetic"}]},
+        risk_indicators=[{
+            "risk_type": {"key": "r_direct_sanctions_exposure", "label": "Direct sanctions"},
+            "value": {"program": "TEST-SAN", "authority": "TEST-AUTH"},
+        }],
+    )
+    assert profile.entity_type == "person"
+    assert profile.person.additional_fields.values[0].name == "fixture_profile_source"
+    assert profile.person.risk_indicators[0].value.class_ == "PEP_CLASS_1"
+    assert company.additional_fields.values[0].value == "synthetic"
+    assert company.risk_indicators[0].value.program == "TEST-SAN"
+
+
+def test_ca_wire_models_allow_unknown_extras():
+    primitive = CADateOfBirth(year=1900, date_precision="year")
+    risk_type = CARiskType(key="r_future", future_taxonomy=True)
+    pep = CAPEPValue.model_validate({"class": "PEP_CLASS_1", "future_pep_field": "kept"})
+    address = CAAddress(full_address="1 Test Road", future_address_field="kept")
+    webhook = CACaseCreatedWebhook(
+        webhook_type="CASE_CREATED",
+        api_version="2",
+        account_identifier="acct",
+        case_identifier="case-1",
+        case_type="customer",
+        customer={"identifier": "cust", "external_identifier": "app", "version": 1},
+        subjects=[],
+        future_webhook_field="kept",
+    )
+    assert primitive.__pydantic_extra__ == {"date_precision": "year"}
+    assert risk_type.__pydantic_extra__ == {"future_taxonomy": True}
+    assert pep.__pydantic_extra__ == {"future_pep_field": "kept"}
+    assert address.__pydantic_extra__ == {"future_address_field": "kept"}
+    assert webhook.__pydantic_extra__ == {"future_webhook_field": "kept"}
+
+
+def test_unknown_extras_survive_model_dump_round_trip():
+    pep = CAPEPValue.model_validate({"class": "PEP_CLASS_1", "future_pep_field": {"kept": True}})
+    reparsed_pep = CAPEPValue.model_validate(pep.model_dump(mode="json", by_alias=True))
+    address = CAAddress(full_address="1 Test Road", future_address_field="kept")
+    reparsed_address = CAAddress.model_validate(address.model_dump(mode="json"))
+    assert reparsed_pep.__pydantic_extra__ == {"future_pep_field": {"kept": True}}
+    assert reparsed_address.__pydantic_extra__ == {"future_address_field": "kept"}
+
+
+def test_all_ca_pydantic_models_inherit_allow_extra_config():
+    modules = (ca_primitives, ca_input_models, ca_output_models, ca_webhook_models)
+    for module in modules:
+        for name, obj in vars(module).items():
+            if isinstance(obj, type) and hasattr(obj, "model_config") and obj.__module__ == module.__name__:
+                assert obj.model_config.get("extra") == "allow", name
 
 
 def test_two_pass_provenance_defaults_to_zero_counts():

@@ -15,6 +15,7 @@ from screening_complyadvantage.models import (
     CAPEPValue,
     CAPaginatedCollection,
     CAProfile,
+    CAProfilePerson,
     CARiskDetail,
     CARiskDetailInner,
     CARiskType,
@@ -31,6 +32,7 @@ from screening_complyadvantage.normalizer import (
     compute_ca_screening_hash,
     compute_match_rollups,
     extract_pep_classes,
+    _indicator_label,
     merge_two_pass_results,
     normalize_single_pass,
     normalize_two_pass_screening,
@@ -177,6 +179,95 @@ def test_normalize_adverse_media_via_fixture():
     assert articles[0]["value"]["snippets"] == [{"text": "Test snippet 1"}]
 
 
+def test_provider_match_raw_extras_surfaces_profile_risk_and_indicator_sources():
+    workflow = CAWorkflowResponse(
+        workflow_instance_identifier="wf-extra",
+        workflow_type="screening",
+        status="COMPLETED",
+        step_details={"case-creation": {"status": "COMPLETED"}},
+    )
+    profile = CAProfile(
+        identifier="prof-extra",
+        entity_type="person",
+        person=CAProfilePerson(person_extra={"kept": True}),
+        match_details={},
+        risk_types=[],
+        risk_indicators=[],
+        profile_extra="kept",
+    )
+    risk_type = CARiskType(
+        key="r_pep_class_1",
+        name="PEP class 1",
+        risk_type_extra="kept",
+    )
+    indicator = CAPEPIndicator(
+        risk_type=risk_type,
+        value=CAPEPValue.model_validate({"class": "PEP_CLASS_1", "pep_value_extra": "kept"}),
+        indicator_extra="kept",
+    )
+    risk = CARiskDetail(
+        values=[CARiskDetailInner(risk_type=risk_type, indicators=[indicator], inner_extra="kept")],
+        risk_detail_extra="kept",
+    )
+    report = normalize_single_pass(
+        workflow,
+        [CAAlertResponse(
+            identifier="alert-extra",
+            profile=profile,
+            risk_details=CAPaginatedCollection[CARiskDetail](values=[risk]),
+        )],
+        {"alert-extra": risk},
+        CACustomerInput(person={"first_name": "Test", "last_name": "Extra"}),
+        CACustomerResponse(identifier="cust-extra"),
+        ScreeningApplicationContext(
+            application_id="app-extra",
+            client_id="client-test",
+            screening_subject_kind="director",
+            screening_subject_name="Test Extra",
+        ),
+        ResnapshotContext(
+            webhook_type="CASE_ALERT_LIST_UPDATED",
+            source_case_identifier="case-extra",
+            received_at="2026-01-01T00:00:00Z",
+        ),
+    )
+    raw_extras = report["provider_specific"]["complyadvantage"]["matches"][0]["raw_extras"]
+    assert raw_extras == {
+        "profile": {
+            "profile_extra": "kept",
+            "person": {"person_extra": {"kept": True}},
+        },
+        "risk_detail": {
+            "risk_detail_extra": "kept",
+            "values": {
+                "0": {
+                    "inner_extra": "kept",
+                    "risk_type": {"risk_type_extra": "kept"},
+                    "indicators": {
+                        "0": {
+                            "indicator_extra": "kept",
+                            "risk_type": {"risk_type_extra": "kept"},
+                            "value": {"pep_value_extra": "kept"},
+                        },
+                    },
+                },
+            },
+        },
+        "indicators": {
+            "0": {
+                "indicator_extra": "kept",
+                "risk_type": {"risk_type_extra": "kept"},
+                "value": {"pep_value_extra": "kept"},
+            },
+        },
+    }
+
+
+def test_provider_match_omits_raw_extras_when_no_unknown_fields_exist():
+    match = _single("pep_canonical.json")["provider_specific"]["complyadvantage"]["matches"][0]
+    assert "raw_extras" not in match
+
+
 def test_normalize_company_via_fixture():
     report = _single("company_canonical.json")
     assert report["company_screening_coverage"] == "full"
@@ -197,6 +288,21 @@ def test_two_pass_strict_misses_relaxed_catches_canonical():
 def test_indicator_type_drives_pep_rollup_not_taxonomy():
     match = _merged_fixture("pep_canonical.json")[0]
     assert compute_match_rollups(match)["has_pep_hit"] is True
+
+
+def test_indicator_label_fallback_chain_label_name_key():
+    assert _indicator_label(CAPEPIndicator(
+        risk_type=CARiskType(key="r_pep_class_1", label="Label", name="Name"),
+        value=CAPEPValue.model_validate({"class": "PEP_CLASS_1"}),
+    )) == "Label"
+    assert _indicator_label(CAPEPIndicator(
+        risk_type=CARiskType(key="r_pep_class_1", name="Name"),
+        value=CAPEPValue.model_validate({"class": "PEP_CLASS_1"}),
+    )) == "Name"
+    assert _indicator_label(CAPEPIndicator(
+        risk_type=CARiskType(key="r_pep_class_1"),
+        value=CAPEPValue.model_validate({"class": "PEP_CLASS_1"}),
+    )) == "r_pep_class_1"
 
 
 def test_watchlist_taxonomy_disambiguation_for_sanctions():
