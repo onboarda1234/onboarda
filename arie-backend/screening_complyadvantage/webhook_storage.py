@@ -129,7 +129,12 @@ async def process_complyadvantage_webhook(
     try:
         # Step 8 — BEST-EFFORT (failure logs + metric, sequence continues): update subscription event metadata.
         try:
-            update_monitoring_subscription_event(db, customer_identifier, envelope.webhook_type)
+            update_monitoring_subscription_event(
+                db,
+                application_context.client_id,
+                customer_identifier,
+                envelope.webhook_type,
+            )
         except Exception:
             _rollback(db)
             logger.warning(

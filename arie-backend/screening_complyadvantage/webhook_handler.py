@@ -55,7 +55,7 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
             payload = json.loads(body)
         except Exception:
             logger.warning("ca_webhook_invalid_json body_len=%d", len(body))
-            self.set_status(202)
+            self.set_status(400)
             return
 
         event_type = payload.get("webhook_type") or payload.get("type") or ""

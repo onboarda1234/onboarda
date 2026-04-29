@@ -16,30 +16,16 @@ def build_default_client():
 
 def fetch_webhook_single_pass(client, envelope, application_context):
     """Fetch current CA workflow/alert/risk state and return a normalized report."""
-    workflow_raw = client.get(f"/v2/workflows/{envelope.case_identifier}")
-    workflow = CAWorkflowResponse.model_validate(workflow_raw)
-    alert_ids = _alert_ids_for_envelope(envelope, workflow_raw)
-    alerts, deep_risks = _fetch_alerts_and_deep_risks(client, workflow_raw, alert_ids=alert_ids)
-    customer_input = _customer_input_from_workflow_or_context(workflow_raw, application_context)
-    customer_response = CACustomerResponse.model_validate({
-        "identifier": _customer_identifier_from_envelope_or_workflow(envelope, workflow_raw),
-        "external_identifier": getattr(envelope.customer, "external_identifier", None),
-        "version": getattr(envelope.customer, "version", None),
-    })
-    resnapshot_context = ResnapshotContext(
-        webhook_type=envelope.webhook_type,
-        source_case_identifier=envelope.case_identifier,
-        received_at=datetime.now(timezone.utc).isoformat(),
+    raise FetchBackAnchorUnresolved(
+        "C4 fetch-back anchor unresolved: locked design says webhooks provide "
+        "case_identifier and exact CA fetch-back endpoints need Step 2 sandbox "
+        "confirmation; repo fixtures do not prove that case_identifier is a "
+        "workflow_instance_identifier."
     )
-    return normalize_single_pass(
-        workflow,
-        alerts,
-        deep_risks,
-        customer_input,
-        customer_response,
-        application_context,
-        resnapshot_context,
-    )
+
+
+class FetchBackAnchorUnresolved(RuntimeError):
+    """Raised when repo evidence is insufficient to choose a safe CA fetch-back endpoint."""
 
 
 def _alert_ids_for_envelope(envelope, workflow_raw):

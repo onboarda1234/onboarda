@@ -2,10 +2,10 @@ import json
 import os
 from dataclasses import dataclass
 
-from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
+import pytest
 from screening_complyadvantage.models.webhooks import CACaseAlertListUpdatedWebhook
 from screening_complyadvantage.normalizer import ScreeningApplicationContext
-from screening_complyadvantage.webhook_fetch import fetch_webhook_single_pass
+from screening_complyadvantage.webhook_fetch import FetchBackAnchorUnresolved, fetch_webhook_single_pass
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "complyadvantage")
 
@@ -33,7 +33,7 @@ def _fixture(name):
         return json.load(f)
 
 
-def test_fetch_webhook_single_pass_uses_shared_three_layer_paths():
+def test_fetch_webhook_single_pass_hard_stops_before_speculative_workflow_path():
     data = _fixture("pep_canonical.json")
     webhook = _fixture("webhook_case_alert_list_updated.json")
     webhook["case_identifier"] = "case-pep"
@@ -45,9 +45,8 @@ def test_fetch_webhook_single_pass_uses_shared_three_layer_paths():
         "/v2/entity-screening/risks/risk-pep": data["deep_risks"]["risk-pep"],
     }
     context = ScreeningApplicationContext.model_validate(data["context"])
+    client = FakeClient(routes)
 
-    report = fetch_webhook_single_pass(FakeClient(routes), envelope, context)
-
-    assert report["provider"] == COMPLYADVANTAGE_PROVIDER_NAME
-    assert report["total_hits"] == 1
-    assert report["provider_specific"][COMPLYADVANTAGE_PROVIDER_NAME]["resnapshot"]["source_case_identifier"] == "case-pep"
+    with pytest.raises(FetchBackAnchorUnresolved, match="fetch-back anchor unresolved"):
+        fetch_webhook_single_pass(client, envelope, context)
+    assert client.gets == []

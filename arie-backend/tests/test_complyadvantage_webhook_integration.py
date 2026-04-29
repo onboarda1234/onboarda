@@ -4,6 +4,7 @@ import sqlite3
 
 import pytest
 
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_complyadvantage.models.webhooks import CACaseAlertListUpdatedWebhook
 from screening_complyadvantage.webhook_storage import process_complyadvantage_webhook
 from tests.test_complyadvantage_webhook_storage import NoCloseDB, _db
@@ -45,6 +46,16 @@ async def test_fixture_driven_end_to_end_dual_write(monkeypatch):
         envelope,
         db_factory=lambda: NoCloseDB(conn),
         client_factory=lambda: FakeClient(routes),
+        fetch_normalized=lambda client, envelope, context: {
+            "provider": COMPLYADVANTAGE_PROVIDER_NAME,
+            "source_screening_report_hash": "hash-integration",
+            "provider_specific": {
+                COMPLYADVANTAGE_PROVIDER_NAME: {
+                    "matches": [{"indicators": [{"type": "CASanctionIndicator", "taxonomy_key": "r_direct_sanctions"}]}],
+                    "workflows": {"strict": {"alerts": [{"identifier": "alert-san"}]}},
+                }
+            },
+        },
     )
 
     assert result["status"] == "processed"

@@ -9,6 +9,7 @@ import pytest
 from tornado.httputil import HTTPHeaders, HTTPServerRequest
 from tornado.web import Application
 
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_complyadvantage.models.webhooks import CACaseCreatedWebhook
 from screening_complyadvantage.webhook_handler import ComplyAdvantageWebhookHandler, _verify_signature
 
@@ -26,6 +27,10 @@ def _signed(body, secret="fixture-secret"):
 
 def _call_handler(payload, *, secret="fixture-secret", signature=None, storage_callback=None):
     body = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return _call_handler_body(body, secret=secret, signature=signature, storage_callback=storage_callback)
+
+
+def _call_handler_body(body, *, secret="fixture-secret", signature=None, storage_callback=None):
     headers = {"x-complyadvantage-signature": signature if signature is not None else _signed(body, secret)}
     app = Application()
     mock_conn = MagicMock()
@@ -106,6 +111,18 @@ def test_bad_signature_returns_401_without_spawn_or_body(caplog):
     assert "fixture-secret" not in caplog.text
 
 
+def test_malformed_json_returns_400_without_spawn_or_body(caplog):
+    fake_loop = MagicMock()
+    with caplog.at_level(logging.WARNING, logger="screening_complyadvantage.webhook_handler"):
+        with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+            handler = _call_handler_body(b'{"webhook_type": "CASE_CREATED"', secret="fixture-secret")
+
+    assert handler._status_code == 400
+    assert b"".join(handler._write_buffer) == b""
+    fake_loop.spawn_callback.assert_not_called()
+    assert "ca_webhook_invalid_json" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_async_processing_failure_logs_and_emits_metric():
     async def failing_storage(envelope):
@@ -118,4 +135,4 @@ async def test_async_processing_failure_logs_and_emits_metric():
     with patch("screening_complyadvantage.webhook_storage.emit_metric") as metric:
         await handler._process_webhook_async(envelope)
 
-    metric.assert_called_once_with("webhook_async_processing_failure", provider="complyadvantage")
+    metric.assert_called_once_with("webhook_async_processing_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)

@@ -45,7 +45,7 @@ def seed_monitoring_subscription(
         raise
 
 
-def update_monitoring_subscription_event(db, customer_identifier, last_webhook_type):
+def update_monitoring_subscription_event(db, client_id, customer_identifier, last_webhook_type):
     """Record the latest CA monitoring webhook event for an existing subscription."""
     db.execute(
         """
@@ -54,9 +54,9 @@ def update_monitoring_subscription_event(db, customer_identifier, last_webhook_t
             last_event_at = CURRENT_TIMESTAMP,
             last_webhook_type = ?,
             updated_at = CURRENT_TIMESTAMP
-        WHERE provider = ? AND customer_identifier = ?
+        WHERE client_id = ? AND provider = ? AND customer_identifier = ?
         """,
-        (last_webhook_type, COMPLYADVANTAGE_PROVIDER_NAME, customer_identifier),
+        (last_webhook_type, client_id, COMPLYADVANTAGE_PROVIDER_NAME, customer_identifier),
     )
     commit = getattr(db, "commit", None)
     if callable(commit):

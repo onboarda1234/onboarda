@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_complyadvantage.subscriptions import seed_monitoring_subscription, update_monitoring_subscription_event
 
 
@@ -45,7 +46,7 @@ def test_seed_monitoring_subscription_writes_expected_columns_and_defaults():
     row = db.execute("SELECT * FROM screening_monitoring_subscriptions").fetchone()
     assert row["client_id"] == "client-1"
     assert row["application_id"] == "app-1"
-    assert row["provider"] == "complyadvantage"
+    assert row["provider"] == COMPLYADVANTAGE_PROVIDER_NAME
     assert row["person_key"] == "person-1"
     assert row["customer_identifier"] == "cust-1"
     assert row["source"] == "c3_create_and_screen"
@@ -77,8 +78,8 @@ def test_update_monitoring_subscription_event_increments_and_sets_last_fields():
     db = _db()
     seed_monitoring_subscription(db, "client-1", "app-1", "cust-1")
 
-    update_monitoring_subscription_event(db, "cust-1", "CASE_ALERT_LIST_UPDATED")
-    update_monitoring_subscription_event(db, "cust-1", "CASE_CREATED")
+    update_monitoring_subscription_event(db, "client-1", "cust-1", "CASE_ALERT_LIST_UPDATED")
+    update_monitoring_subscription_event(db, "client-1", "cust-1", "CASE_CREATED")
 
     row = db.execute(
         "SELECT monitoring_event_count, last_webhook_type, last_event_at "
@@ -87,3 +88,24 @@ def test_update_monitoring_subscription_event_increments_and_sets_last_fields():
     assert row["monitoring_event_count"] == 2
     assert row["last_webhook_type"] == "CASE_CREATED"
     assert row["last_event_at"] is not None
+
+
+def test_update_monitoring_subscription_event_uses_full_client_provider_customer_key():
+    db = _db()
+    seed_monitoring_subscription(db, "client-1", "app-1", "shared-cust")
+    seed_monitoring_subscription(db, "client-2", "app-2", "shared-cust")
+
+    update_monitoring_subscription_event(db, "client-2", "shared-cust", "CASE_ALERT_LIST_UPDATED")
+
+    rows = db.execute(
+        "SELECT client_id, monitoring_event_count, last_webhook_type "
+        "FROM screening_monitoring_subscriptions WHERE customer_identifier='shared-cust' "
+        "ORDER BY client_id"
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["client_id"] == "client-1"
+    assert rows[0]["monitoring_event_count"] == 0
+    assert rows[0]["last_webhook_type"] is None
+    assert rows[1]["client_id"] == "client-2"
+    assert rows[1]["monitoring_event_count"] == 1
+    assert rows[1]["last_webhook_type"] == "CASE_ALERT_LIST_UPDATED"
