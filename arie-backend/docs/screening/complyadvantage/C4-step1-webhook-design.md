@@ -8,7 +8,7 @@
 - All required signposts succeeded: C1/C2/C3 design docs, CA `auth.py`, `client.py`, `adapter.py`, `orchestrator.py`, `payloads.py`, `subscriptions.py`, `normalizer.py`, `models/webhooks.py`, `screening_storage.py`, `ComplyAdvantageScreeningAdapter` registration/import in `server.py`, Sumsub webhook signposts, and migration 017.
 - Required reading completed, including `screening_config.py` for §9.3 and all eight synthetic CA fixtures listed in `arie-backend/tests/fixtures/complyadvantage/README.md:5-12`.
 - Locked recon context: s2/s3 establish CA webhook notification + fetch-back, `CASE_CREATED` and `CASE_ALERT_LIST_UPDATED`, HMAC-SHA256 header `x-complyadvantage-signature`, unsafe ordering, and unknown event fallback.
-- Locked latency context: s3 observed long fetch-back latency.
+- Locked latency context: s3 observed fetch-back around ~146 seconds, materially above typical 10-30 second webhook timeout windows.
 - Fixture/recon lineage: s2-s7 response shapes are represented by synthetic fixtures documented at `arie-backend/tests/fixtures/complyadvantage/README.md:1-12`; C1 summarizes the repo-local and prompt-only recon evidence at `arie-backend/docs/screening/complyadvantage/C1-expansion-step1-field-audit.md:34-37`.
 - This is documentation only. No production code, migrations, env values, C1/C2/C3 production behavior, Sumsub paths, or schema changes are modified.
 
@@ -84,7 +84,7 @@ C4 should use direct handler invocation, fixture-backed fake CA clients, `monkey
 
 Columns: `id`, `application_id`, `client_name`, `alert_type`, `severity`, `detected_by`, `summary`, `source_reference`, `ai_recommendation`, `status`, `officer_action`, `officer_notes`, `created_at`, `reviewed_at`, `reviewed_by`, `linked_periodic_review_id`, `linked_edd_case_id`, `triaged_at`, `assigned_at`, `resolved_at` (`arie-backend/db.py:570-590`, `arie-backend/db.py:1320-1340`).
 
-Critical finding: there is **no** `provider` column, **no** `case_identifier` column, and **no UNIQUE constraint on `(provider, case_identifier)` or equivalent** in current DDL. C4's one-row-per-CA-case idempotency cannot be DB-enforced directly without schema changes. Since C4 hard rules forbid schema changes, Step 2 should use the best available application-level workaround: query candidate alerts for `application_id=?` and `detected_by='ComplyAdvantage'`, parse `source_reference` JSON in Python, update the row whose `provider=='complyadvantage'` and `case_identifier` matches, and insert only if none exists. This is not race-safe like a DB unique key, so the schema gap remains a §12.5 downstream risk.
+Critical finding: there is **no** `provider` column, **no** `case_identifier` column, and **no UNIQUE constraint on `(provider, case_identifier)` or equivalent** in current DDL. C4's one-row-per-CA-case idempotency cannot be DB-enforced directly without schema changes. Since C4 hard rules forbid schema changes, Step 2 should use the best available application-level workaround: query candidate alerts for `application_id=?` and `detected_by='ComplyAdvantage'`, parse `source_reference` JSON in Python, update the row whose `provider=='complyadvantage'` and `case_identifier` matches, and insert only if none exists. This is not race-safe like a DB unique key, so Step 2 should add a process-local per-case lock to reduce same-process duplicates and emit a duplicate-detected metric/log when more than one candidate row matches. Multi-process races remain a schema gap and §12.5 downstream risk.
 
 ### 2.2 `screening_reports_normalized` schema
 
@@ -179,7 +179,7 @@ C4 should mirror the Sumsub raw-body-first discipline but use the locked CA sche
 2. Read `x-complyadvantage-signature` from request headers. Tornado header lookup is case-insensitive, but use the locked lowercase name in constants/tests.
 3. Load `COMPLYADVANTAGE_WEBHOOK_SECRET` from `os.environ` at runtime. This env var does not exist today; see §12.
 4. If missing in any environment, reject fail-closed with HTTP 401 and an ERROR log. Unlike legacy Sumsub's dev/demo bypass (`arie-backend/screening.py:616-624`), C4 should not add a dev bypass because CA webhook work is new security-sensitive code.
-5. Compute `hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()`.
+5. Treat `COMPLYADVANTAGE_WEBHOOK_SECRET` as the literal UTF-8 shared secret string configured in CA; reject empty/non-string config before comparison. Compute `hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()`. If CA supplies a base64/hex-encoded secret rather than literal text, CTO must lock that encoding before Step 2 because the HMAC input bytes would differ.
 6. Compare using `hmac.compare_digest(expected, header or '')`.
 7. On mismatch: WARNING log with event `ca_webhook_signature_invalid`, body length, and header presence only; return HTTP 401 with no sensitive body. Never log the raw signature, expected HMAC, or secret. Sumsub logs only prefixes (`arie-backend/server.py:7655-7671`, `arie-backend/screening.py:646-656`); CA can be stricter and log no prefixes.
 8. Only after signature success, call `json.loads(body)` and validate into known/fallback envelope.
@@ -201,7 +201,7 @@ Proposed handler sequence:
 3. Parse JSON; on malformed JSON return 400.
 4. Determine `webhook_type`; validate into `CACaseCreatedWebhook`, `CACaseAlertListUpdatedWebhook`, or `CAUnknownWebhookEnvelope`. Preserve raw JSON in local variables for logs/debug; do not silently drop unknown event payload.
 5. If unknown webhook type: log warning and return HTTP 202 accepted/no processing because model fallback captured it but C4 has no locked fetch-back mapping. Do not write provider truth or monitoring alerts.
-6. Resolve subscription by `provider='complyadvantage'` and `customer_identifier=envelope.customer.identifier`; `client_id` is unknown from the webhook but required for the schema unique key. The schema unique key includes `client_id` (`migration_017...sql:49-50`), but webhook payload does not include `client_id`. Therefore Step 2 must search provider/customer across tenants and require exactly one row; multi-row ambiguity returns 202 without writes unless CTO separately approves a stable `customer.external_identifier` parser. This is a key input-resolution detail (§5.3, §12.2).
+6. Resolve subscription by `provider='complyadvantage'` and `customer_identifier=envelope.customer.identifier`; `client_id` is unknown from the webhook but required for the schema unique key. The schema unique key includes `client_id` (`migration_017...sql:49-50`), but webhook payload does not include `client_id`. Therefore Step 2 must search provider/customer across tenants and require exactly one row; this relies on the provider `customer_identifier` being globally unique within the CA account. Multi-row ambiguity must return HTTP 500 without writes to trigger retry after operator/CTO resolution, unless CTO separately approves a stable `customer.external_identifier` parser. This is a key input-resolution detail (§5.3, §12.2).
 7. If subscription missing: log warning and return HTTP 202 without normalized/alert writes (§6.2).
 8. Fetch back enriched case/current alert state.
 9. Normalize with `normalize_single_pass` if a single-pass fetch entrypoint can produce `workflow`, `alerts`, `deep_risks`, `customer_input`, `customer_response`, `application_context`, and `resnapshot_context` (`normalizer.py:124-156`).
@@ -263,7 +263,7 @@ Recommended resolution:
 1. Use `envelope.customer.identifier` as `customer_identifier`.
 2. Query active subscriptions where `provider='complyadvantage' AND customer_identifier=?`.
 3. If zero rows: warn and return 202; no normalized or alert writes.
-4. If multiple rows across clients: log ERROR and return 202 without writes. Step 2 should not implement a `customer.external_identifier` parser unless CTO separately confirms that C3 encoded a stable tenant/application format. Do not guess tenant; see the related open risk in §12.2.
+4. If multiple rows across clients: log ERROR and return HTTP 500 without writes so CA retries after the ambiguity is resolved. Step 2 should not implement a `customer.external_identifier` parser unless CTO separately confirms that C3 encoded a stable tenant/application format. Do not guess tenant; see the related open risk in §12.2.
 5. If exactly one row: use `client_id`, `application_id`, `person_key`, and status from subscription for `ScreeningApplicationContext`.
 6. Use `case_identifier` and `alert_identifiers` to fetch current case/alert state. If the existing C3 client lacks a clean case endpoint wrapper, call `client.get()` directly with CA Mesh paths from locked contract; validate response with C1 output models where possible.
 
@@ -325,7 +325,7 @@ Reasoning:
 - §2.6 found no suitable existing webhook queue/worker. `ExternalTaskQueue` exists as an async SQLite helper (`resilience/task_queue.py:45-239`) but no production worker integrates it with webhooks, no scheduling/daemon lifecycle is wired, and no CA task schema exists.
 - Therefore the recommended async design implies new infrastructure: durable receipt storage/queue, a worker process, retry/dead-letter policy, monitoring, and deployment/config ownership. C4 Step 1 does not design those changes because the prompt forbids schema changes and requires honest infrastructure claims.
 
-Fallback if CTO refuses new infrastructure: implement the synchronous path only as a constrained interim design and explicitly accept webhook timeout/retry risk. That fallback is implementable within C4 scope but is not production-robust for the observed 146-second fetch-back.
+Fallback if CTO refuses new infrastructure: implement the synchronous path only as a constrained interim design and explicitly accept webhook timeout/retry risk. That fallback must include a per-case in-process circuit breaker/backoff guard to avoid concurrent duplicate fetch-backs during provider retries, but it remains non-production-robust for the observed 146-second fetch-back.
 
 ## 8. `monitoring_alerts` mapping design
 
@@ -383,7 +383,7 @@ Actual public executor found:
 
 `def execute_adverse_media_pep(application_id: str, context: Dict[str, Any]) -> Dict[str, Any]` (`arie-backend/supervisor/agent_executors.py:3797-3802`). It reads app data, directors, UBOs, and monitoring alerts (`agent_executors.py:3803-3810`), then performs checks (`agent_executors.py:3812-3831`). Executors are registered through `register_all_executors(supervisor, db_path: str)`; wrappers inject `context['db_path']` and call each executor (`agent_executors.py:4585-4606`). Server startup calls `register_all_executors(supervisor_instance, DB_PATH)` (`arie-backend/server.py:11738-11744`).
 
-No entrypoint was found that accepts a normalized screening record or a `monitoring_alerts` row directly. The HTTP `/api/monitoring/agents/{id}/run` route is a manual/simulated run and does not invoke supervisor executor logic (`arie-backend/server.py:9586-9608`). Therefore the locked "push to Agent 7" intent has an entrypoint mismatch: Step 2 can call `execute_adverse_media_pep(application_id, {'db_path': DB_PATH})` only as a full application-level agent run, not normalized-record processing. That is inappropriate as an automatic webhook push unless CTO explicitly accepts rerunning unrelated checks and any duplicate alert/notification side effects. Treat this as a blocker for Agent 7 push, while the provider-truth and monitoring-alert dual-write can still proceed.
+No entrypoint was found that accepts a normalized screening record or a `monitoring_alerts` row directly. The HTTP `/api/monitoring/agents/{id}/run` route is a manual/simulated run and does not invoke supervisor executor logic (`arie-backend/server.py:9586-9608`). Therefore the locked "push to Agent 7" intent has an entrypoint mismatch: Step 2 can call `execute_adverse_media_pep(application_id, {'db_path': DB_PATH})` only as a full application-level agent run, not normalized-record processing. That is inappropriate as an automatic webhook push unless CTO explicitly accepts rerunning unrelated checks and any duplicate alert/notification side effects. Treat this as a blocker for Agent 7 push, while the provider-truth and monitoring-alert dual-write can still proceed. The safer follow-up design is a lightweight Agent 7 entrypoint that accepts `application_id` plus the new `monitoring_alerts` row/normalized record id and processes only that signal.
 
 ### 9.3 `screening_primary_provider` flag
 
@@ -495,7 +495,7 @@ Target at least 80% coverage per new C4 module, consistent with C2/C3 coverage t
 ### 12.2 Unknown CA webhook behaviors blocking design
 
 - Exact CA fetch-back endpoints for case/current alert state need Step 2 sandbox confirmation; current C3 methods fetch workflows/alerts/risks but start from create-and-screen handles (`orchestrator.py:122-191`).
-- Whether `customer.external_identifier` reliably carries tenant/application context from C3 for webhook disambiguation.
+- Whether CA `customer.identifier` is globally unique across all RegMind clients in the shared CA account, or whether `customer.external_identifier` must carry tenant/application context from C3 for webhook disambiguation.
 - Whether unknown event types should return 200 or 202; recommendation is 202 accepted/no processing.
 
 ### 12.3 Scope-creep risks
