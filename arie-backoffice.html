@@ -3566,9 +3566,9 @@ var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:nul
 var _applicationsLastRefreshed = null;   // timestamp of last successful refresh
 var _applicationsEtag = '';              // last ETag from /api/applications
 var _applicationsRefreshInterval = null; // setInterval handle
-var _applicationsRefreshMs = 30000;      // 30 seconds default
+var _applicationsRefreshMs = 120000;     // 2 minutes
 var _stalenessTickInterval = null;       // 1-second UI tick for freshness display
-var _STALE_THRESHOLD_S = 60;             // show stale warning after 60 seconds
+var _STALE_THRESHOLD_S = 180;            // show stale warning after 3 minutes
 
 function _updateFreshnessIndicator() {
   var textEl = document.getElementById('applications-freshness-text');
