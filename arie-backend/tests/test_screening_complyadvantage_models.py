@@ -222,6 +222,17 @@ def test_address_fields_align_with_payload_emit_names():
     assert "state" not in CAAddress.model_fields
 
 
+def test_legacy_address_field_names_are_extras_not_explicit_fields():
+    address = CAAddress(address_line_1="Legacy Line", city="Legacy City", state="Legacy State")
+    assert address.__pydantic_extra__ == {
+        "address_line_1": "Legacy Line",
+        "city": "Legacy City",
+        "state": "Legacy State",
+    }
+    reparsed = CAAddress.model_validate(address.model_dump())
+    assert reparsed.__pydantic_extra__ == address.__pydantic_extra__
+
+
 def test_company_input_vs_profile_company_diverge_in_shape():
     input_company = CACustomerCompanyInput(name="Acme Ltd", registration_number="BRN")
     profile_company = CAProfileCompany(
@@ -349,6 +360,15 @@ def test_ca_wire_models_allow_unknown_extras():
     assert pep.__pydantic_extra__ == {"future_pep_field": "kept"}
     assert address.__pydantic_extra__ == {"future_address_field": "kept"}
     assert webhook.__pydantic_extra__ == {"future_webhook_field": "kept"}
+
+
+def test_unknown_extras_survive_model_dump_round_trip():
+    pep = CAPEPValue.model_validate({"class": "PEP_CLASS_1", "future_pep_field": {"kept": True}})
+    reparsed_pep = CAPEPValue.model_validate(pep.model_dump(mode="json", by_alias=True))
+    address = CAAddress(full_address="1 Test Road", future_address_field="kept")
+    reparsed_address = CAAddress.model_validate(address.model_dump(mode="json"))
+    assert reparsed_pep.__pydantic_extra__ == {"future_pep_field": {"kept": True}}
+    assert reparsed_address.__pydantic_extra__ == {"future_address_field": "kept"}
 
 
 def test_all_ca_pydantic_models_inherit_allow_extra_config():
