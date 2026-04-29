@@ -1,4 +1,4 @@
-from .primitives import CAPaginatedCollection, CAPagination, CAPaginationMeta, CADateOfBirth
+from .primitives import CAWireModel, CAPaginatedCollection, CAPagination, CAPaginationMeta, CADateOfBirth
 from .input import (
     CACustomerInput, CACustomerPersonInput, CACustomerCompanyInput,
     CACreateAndScreenRequest, CAMonitoringConfig, CAEntityScreeningConfig,

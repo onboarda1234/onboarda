@@ -2,40 +2,43 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import Field, model_validator
 
-from .primitives import CADateOfBirth
+from .primitives import CADateOfBirth, CAWireModel
 
 
-class CAResidentialInformation(BaseModel):
+class CAResidentialInformation(CAWireModel):
     country_of_residence: Optional[str] = None
     residential_address: Optional[str] = None
     postcode: Optional[str] = None
 
 
-class CAPersonalIdentification(BaseModel):
+class CAPersonalIdentification(CAWireModel):
     national_id: Optional[str] = None
     passport_number: Optional[str] = None
     document_number: Optional[str] = None
     issuing_country: Optional[str] = None
 
 
-class CAContactInformation(BaseModel):
+class CAContactInformation(CAWireModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     mobile: Optional[str] = None
 
 
-class CAAddress(BaseModel):
-    address_line_1: Optional[str] = None
-    address_line_2: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
+class CAAddress(CAWireModel):
+    full_address: Optional[str] = None
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    town_name: Optional[str] = None
     postal_code: Optional[str] = None
+    country_subdivision: Optional[str] = None
     country: Optional[str] = None
+    country_code: Optional[str] = None
+    location_type: Optional[str] = None
 
 
-class CACustomerPersonInput(BaseModel):
+class CACustomerPersonInput(CAWireModel):
     first_name: str
     last_name: str
     middle_name: Optional[str] = None
@@ -61,7 +64,7 @@ class CACustomerPersonInput(BaseModel):
     metadata: Optional[dict] = None
 
 
-class CACustomerCompanyInput(BaseModel):
+class CACustomerCompanyInput(CAWireModel):
     name: str
     registration_number: Optional[str] = None
     jurisdiction: Optional[str] = None
@@ -76,7 +79,7 @@ class CACustomerCompanyInput(BaseModel):
     metadata: Optional[dict] = None
 
 
-class CACustomerInput(BaseModel):
+class CACustomerInput(CAWireModel):
     person: Optional[CACustomerPersonInput] = None
     company: Optional[CACustomerCompanyInput] = None
 
@@ -88,19 +91,19 @@ class CACustomerInput(BaseModel):
         return self
 
 
-class CAMonitoringConfig(BaseModel):
+class CAMonitoringConfig(CAWireModel):
     enabled: bool = False
     frequency: Optional[str] = None
     notification_url: Optional[str] = None
 
 
-class CAEntityScreeningConfig(BaseModel):
+class CAEntityScreeningConfig(CAWireModel):
     workflow_id: Optional[str] = None
     monitoring: Optional[CAMonitoringConfig] = None
     entity_type: Optional[str] = None
 
 
-class CACreateAndScreenRequest(BaseModel):
+class CACreateAndScreenRequest(CAWireModel):
     customer: CACustomerInput
     screening: CAEntityScreeningConfig = Field(default_factory=CAEntityScreeningConfig)
     external_identifier: Optional[str] = None

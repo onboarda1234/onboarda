@@ -2,12 +2,18 @@
 
 from typing import Generic, Optional, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 T = TypeVar("T")
 
 
-class CAPaginationMeta(BaseModel):
+class CAWireModel(BaseModel):
+    """Forward-compatible base for ComplyAdvantage wire models."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class CAPaginationMeta(CAWireModel):
     """Inner meta object on initial-fetch responses; absent on pagination follow-ups."""
 
     page_number: int
@@ -15,7 +21,7 @@ class CAPaginationMeta(BaseModel):
     total_count: int
 
 
-class CAPagination(BaseModel):
+class CAPagination(CAWireModel):
     """CA's pagination envelope. Same shape across every collection in CA's API."""
 
     self: Optional[str] = None
@@ -26,14 +32,14 @@ class CAPagination(BaseModel):
     meta: Optional[CAPaginationMeta] = None
 
 
-class CAPaginatedCollection(BaseModel, Generic[T]):
+class CAPaginatedCollection(CAWireModel, Generic[T]):
     """Generic { values: [...], pagination: {...} } envelope."""
 
     values: list[T] = Field(default_factory=list)
     pagination: Optional[CAPagination] = None
 
 
-class CADateOfBirth(BaseModel):
+class CADateOfBirth(CAWireModel):
     """CA's structured DOB. All fields nullable on output."""
 
     year: Optional[int] = None
