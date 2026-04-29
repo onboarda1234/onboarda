@@ -2,7 +2,7 @@
   "webhook_type": "CASE_CREATED",
   "api_version": "2.0",
   "account_identifier": "acct-test-fixture",
-  "case_identifier": "case-pep",
+  "case_identifier": "11111111-1111-4111-8111-111111111111",
   "case_type": "screening",
   "case_state": "open",
   "case_stage": {"identifier": "stage-review", "display_name": "Review", "display_order": 1, "stage_type": "manual_review"},

@@ -24,6 +24,7 @@ from base_handler import BaseHandler
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 
 from .models.webhooks import CACaseAlertListUpdatedWebhook, CACaseCreatedWebhook, CAUnknownWebhookEnvelope
+from .webhook_fetch import WebhookEnvelopeError, extract_case_identifier, validate_alert_identifiers
 from .webhook_storage import process_complyadvantage_webhook
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,12 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
 
         event_type = payload.get("webhook_type") or payload.get("type") or ""
         if event_type not in _KNOWN_TYPES:
-            envelope = CAUnknownWebhookEnvelope.model_validate({**payload, "webhook_type": event_type})
+            try:
+                envelope = CAUnknownWebhookEnvelope.model_validate({**payload, "webhook_type": event_type})
+            except ValidationError:
+                logger.warning("ca_webhook_unknown_envelope_invalid event_type=%s", event_type, exc_info=True)
+                self.set_status(400)
+                return
             customer = getattr(envelope, "customer", None)
             logger.info(
                 "ca_webhook_unknown_event event_type=%s case_identifier=%s customer_identifier=%s",
@@ -85,9 +91,19 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
             return
 
         try:
+            _validate_known_payload(event_type, payload)
             envelope = _parse_known_envelope(event_type, payload)
-        except ValidationError:
+        except (ValidationError, WebhookEnvelopeError):
             logger.warning("ca_webhook_envelope_invalid event_type=%s", event_type, exc_info=True)
+            self.set_status(400)
+            return
+
+        if event_type == "CASE_ALERT_LIST_UPDATED" and not envelope.alert_identifiers:
+            logger.info(
+                "ca_webhook_empty_alert_identifiers event_type=%s case_identifier=%s no_op=true",
+                event_type,
+                envelope.case_identifier,
+            )
             self.set_status(202)
             return
 
@@ -134,3 +150,9 @@ def _parse_known_envelope(event_type, payload):
     if event_type == "CASE_CREATED":
         return CACaseCreatedWebhook.model_validate(payload)
     return CACaseAlertListUpdatedWebhook.model_validate(payload)
+
+
+def _validate_known_payload(event_type, payload):
+    extract_case_identifier(payload)
+    if event_type == "CASE_ALERT_LIST_UPDATED":
+        validate_alert_identifiers(payload)

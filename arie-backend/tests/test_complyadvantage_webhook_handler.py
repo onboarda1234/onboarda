@@ -130,6 +130,62 @@ def test_unknown_event_returns_202_without_spawn(caplog):
     assert "ca_webhook_unknown_event" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload.pop("case_identifier"),
+        lambda payload: payload.update({"case_identifier": "short"}),
+        lambda payload: payload.update({"case_identifier": 123}),
+    ],
+)
+def test_known_event_invalid_case_identifier_returns_400_without_spawn(mutate):
+    payload = _fixture("webhook_case_created.json")
+    mutate(payload)
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler(payload)
+
+    assert handler._status_code == 400
+    assert b"".join(handler._write_buffer) == b""
+    fake_loop.spawn_callback.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, "alert-one", ["alert-one", 123]],
+)
+def test_case_alert_list_updated_invalid_alert_identifiers_returns_400_without_spawn(value):
+    payload = _fixture("webhook_case_alert_list_updated.json")
+    if value is None:
+        payload.pop("alert_identifiers")
+    else:
+        payload["alert_identifiers"] = value
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler(payload)
+
+    assert handler._status_code == 400
+    assert b"".join(handler._write_buffer) == b""
+    fake_loop.spawn_callback.assert_not_called()
+
+
+def test_case_alert_list_updated_empty_alert_identifiers_is_noop_without_spawn_or_storage(caplog):
+    payload = _fixture("webhook_case_alert_list_updated.json")
+    payload["alert_identifiers"] = []
+    storage = MagicMock()
+    fake_loop = MagicMock()
+    with caplog.at_level(logging.INFO, logger="screening_complyadvantage.webhook_handler"):
+        with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+            handler = _call_handler(payload, storage_callback=storage)
+
+    assert handler._status_code == 202
+    assert b"".join(handler._write_buffer) == b""
+    fake_loop.spawn_callback.assert_not_called()
+    storage.assert_not_called()
+    assert "ca_webhook_empty_alert_identifiers" in caplog.text
+    assert "no_op=true" in caplog.text
+
+
 def test_bad_signature_returns_401_without_spawn_or_body(caplog):
     fake_loop = MagicMock()
     with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
