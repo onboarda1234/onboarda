@@ -53,6 +53,7 @@ _CHAIN_FILES = [
     ("015", "migration_015_screening_reports_normalized.sql"),
     ("016", "migration_016_screening_reports_normalized_uniqueness.sql"),
     ("017", "migration_017_screening_monitoring_subscriptions.sql"),
+    ("018", "migration_018_monitoring_alerts_provider_case_unique.sql"),
 ]
 
 
@@ -69,6 +70,13 @@ def _remove_modern_backfills(db, keep_count):
         db.execute("DROP TABLE IF EXISTS screening_reports_normalized")
     if "017" not in kept_versions:
         db.execute("DROP TABLE IF EXISTS screening_monitoring_subscriptions")
+    if "018" not in kept_versions:
+        db.execute("DROP INDEX IF EXISTS uq_monitoring_alerts_provider_case")
+        for column in ("provider", "case_identifier"):
+            try:
+                db.execute(f"ALTER TABLE monitoring_alerts DROP COLUMN {column}")
+            except Exception:
+                pass
     db.commit()
 
 

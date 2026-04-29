@@ -1480,6 +1480,7 @@ from screening_state import (
 
 # Sprint 3.5: BaseHandler extracted to base_handler.py to reduce server.py concentration risk
 from base_handler import BaseHandler, rate_limiter, get_db as _bh_get_db, snapshot_app_state, _safe_json  # noqa: F401
+from screening_complyadvantage.webhook_handler import ComplyAdvantageWebhookHandler
 
 # Public API v1 — versioned external endpoints
 from public_api import (
@@ -11561,6 +11562,7 @@ def make_app():
         (r"/api/kyc/status/([^/]+)", SumsubStatusHandler),
         (r"/api/kyc/document", SumsubDocumentHandler),
         (r"/api/kyc/webhook", SumsubWebhookHandler),
+        (r"/api/webhooks/complyadvantage", ComplyAdvantageWebhookHandler),
 
         # Sumsub Diagnostics (admin only)
         (r"/api/admin/sumsub-diagnostics", SumsubDiagnosticsHandler),

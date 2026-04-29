@@ -43,6 +43,24 @@ def seed_monitoring_subscription(
         raise
 
 
+def update_monitoring_subscription_event(db, customer_identifier, last_webhook_type):
+    """Record the latest CA monitoring webhook event for an existing subscription."""
+    db.execute(
+        """
+        UPDATE screening_monitoring_subscriptions
+        SET monitoring_event_count = monitoring_event_count + 1,
+            last_event_at = CURRENT_TIMESTAMP,
+            last_webhook_type = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE provider = ? AND customer_identifier = ?
+        """,
+        (last_webhook_type, "complyadvantage", customer_identifier),
+    )
+    commit = getattr(db, "commit", None)
+    if callable(commit):
+        commit()
+
+
 def _is_unique_violation(exc):
     text = f"{exc.__class__.__name__}: {exc}".lower()
     return (
