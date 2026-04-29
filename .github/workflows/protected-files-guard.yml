@@ -3,6 +3,7 @@ name: Protected Files Guard
 on:
   pull_request:
     branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -26,6 +27,8 @@ jobs:
           echo "$FILES"
 
       - name: Check for protected file modifications
+        env:
+          HAS_PROTECTED_FILE_OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'protected-file-override') }}
         run: |
           PROTECTED_FILES=(
             "arie-backend/memo_handler.py"
@@ -59,6 +62,17 @@ jobs:
           done <<< "${{ steps.changed.outputs.files }}"
 
           if [ -n "$VIOLATIONS" ]; then
+            if [ "$HAS_PROTECTED_FILE_OVERRIDE" = "true" ]; then
+              echo "PROTECTED FILE GUARD OVERRIDE"
+              echo "============================="
+              echo "Protected files were modified, but the protected-file-override label is present."
+              echo "Changed protected files:"
+              echo -e "$VIOLATIONS"
+              echo ""
+              echo "Merge still requires explicit written approval from the project lead."
+              exit 0
+            fi
+
             echo "::error::Protected files were modified without override:$VIOLATIONS"
             echo ""
             echo "PROTECTED FILE GUARD FAILURE"
