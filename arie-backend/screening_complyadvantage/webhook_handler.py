@@ -21,6 +21,7 @@ import tornado.ioloop
 from pydantic import ValidationError
 
 from base_handler import BaseHandler
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 
 from .models.webhooks import CACaseAlertListUpdatedWebhook, CACaseCreatedWebhook, CAUnknownWebhookEnvelope
 from .webhook_storage import process_complyadvantage_webhook
@@ -91,7 +92,7 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
                 getattr(envelope, "case_identifier", None),
                 exc_info=True,
             )
-            emit_metric("webhook_async_processing_failure", provider="complyadvantage")
+            emit_metric("webhook_async_processing_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
 
 
 def _verify_signature(body, signature):

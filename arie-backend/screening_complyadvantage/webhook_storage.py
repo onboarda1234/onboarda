@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from screening_config import get_active_provider_name
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_storage import persist_normalized_report
 
 from .normalizer import ScreeningApplicationContext
@@ -80,7 +81,7 @@ async def process_complyadvantage_webhook(
                 application_context.application_id,
                 normalized_report,
                 source_hash,
-                provider="complyadvantage",
+                provider=COMPLYADVANTAGE_PROVIDER_NAME,
                 normalized_version="2.0",
             )
             _commit(db)
@@ -92,7 +93,7 @@ async def process_complyadvantage_webhook(
                 customer_identifier,
                 exc_info=True,
             )
-            emit_metric("normalized_write_failure", provider="complyadvantage")
+            emit_metric("normalized_write_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
             return {"status": "normalized_write_failure"}
     finally:
         _close(db)
@@ -120,7 +121,7 @@ async def process_complyadvantage_webhook(
                 customer_identifier,
                 exc_info=True,
             )
-            emit_metric("monitoring_alerts_write_failure", provider="complyadvantage")
+            emit_metric("monitoring_alerts_write_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
     finally:
         _close(db)
 
@@ -141,7 +142,7 @@ async def process_complyadvantage_webhook(
         _close(db)
 
     # Step 9 — BEST-EFFORT (failure logs + metric, sequence continues): flag-aware Agent 7 push.
-    if get_active_provider_name() == "complyadvantage":
+    if get_active_provider_name() == COMPLYADVANTAGE_PROVIDER_NAME:
         try:
             executor = agent_executor or _default_agent_executor()
             context = {"db_path": _default_db_path()}
@@ -153,7 +154,7 @@ async def process_complyadvantage_webhook(
                 case_identifier,
                 exc_info=True,
             )
-            emit_metric("agent_7_push_failure", provider="complyadvantage")
+            emit_metric("agent_7_push_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
     return {"status": "processed", "normalized_record_id": normalized_record_id}
 
 
@@ -164,7 +165,7 @@ def _lookup_subscription(db, customer_identifier):
         FROM screening_monitoring_subscriptions
         WHERE provider = ? AND customer_identifier = ?
         """,
-        ("complyadvantage", customer_identifier),
+        (COMPLYADVANTAGE_PROVIDER_NAME, customer_identifier),
     ).fetchall()
     if not rows:
         return None

@@ -214,3 +214,30 @@ async def test_sumsub_provider_flag_skips_agent_push(monkeypatch):
     )
 
     agent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_double_fire_idempotency_dedups_rows_but_counts_each_delivery(monkeypatch):
+    conn = _db()
+    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "sumsub")
+
+    kwargs = {
+        "db_factory": lambda: NoCloseDB(conn),
+        "client_factory": lambda: object(),
+        "fetch_normalized": lambda client, envelope, context: _normalized("hash-double-fire"),
+    }
+
+    first = await process_complyadvantage_webhook(_envelope(), **kwargs)
+    second = await process_complyadvantage_webhook(_envelope(), **kwargs)
+
+    assert first["status"] == "processed"
+    assert second["status"] == "processed"
+    assert conn.execute("SELECT COUNT(*) FROM screening_reports_normalized").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM monitoring_alerts").fetchone()[0] == 1
+    sub = conn.execute(
+        "SELECT monitoring_event_count, last_webhook_type "
+        "FROM screening_monitoring_subscriptions WHERE customer_identifier = ?",
+        ("cust-1",),
+    ).fetchone()
+    assert sub["monitoring_event_count"] == 2
+    assert sub["last_webhook_type"] == "CASE_ALERT_LIST_UPDATED"

@@ -2,7 +2,9 @@
 
 import json
 
-_PROVIDER = "complyadvantage"
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
+
+_PROVIDER = COMPLYADVANTAGE_PROVIDER_NAME
 _PRIORITY = {"sanctions": 0, "watchlist": 1, "pep": 2, "media": 3}
 _SEVERITY = {
     "sanctions": "critical",
@@ -43,7 +45,7 @@ def map_normalized_to_monitoring_alert(normalized_report, *, case_identifier, cu
 
 
 def _matches(normalized_report):
-    provider = normalized_report.get("provider_specific", {}).get("complyadvantage", {})
+    provider = normalized_report.get("provider_specific", {}).get(_PROVIDER, {})
     return list(provider.get("matches") or [])
 
 
@@ -78,7 +80,7 @@ def _indicator_kind(indicator):
 
 
 def _first_alert_identifier(normalized_report):
-    workflow = normalized_report.get("provider_specific", {}).get("complyadvantage", {}).get("workflows", {}).get("strict", {})
+    workflow = normalized_report.get("provider_specific", {}).get(_PROVIDER, {}).get("workflows", {}).get("strict", {})
     alerts = workflow.get("alerts") or []
     if not alerts:
         return None
