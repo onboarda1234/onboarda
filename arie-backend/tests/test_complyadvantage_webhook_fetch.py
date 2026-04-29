@@ -80,6 +80,26 @@ def _listing(risk_id="risk-pep"):
     }
 
 
+def _alert_risks_page(
+    alert_id="alert-san",
+    risks=None,
+    next_link=None,
+    prev_link=None,
+    total_count=None,
+    self_link=None,
+):
+    risks = list(risks or [])
+    path = f"/v2/alerts/{alert_id}/risks"
+    return {
+        "first": path,
+        "next": next_link,
+        "prev": prev_link,
+        "self": self_link or path,
+        "total_count": len(risks) if total_count is None else total_count,
+        "risks": risks,
+    }
+
+
 def _deep(risk_id="risk-pep"):
     return {
         "match_details": {
@@ -154,9 +174,13 @@ def test_case_alert_list_updated_fetches_listing_then_deep_without_alert_or_work
     webhook = _fixture("webhook_case_alert_list_updated.json")
     envelope = CACaseAlertListUpdatedWebhook.model_validate(webhook)
     case_id = webhook["case_identifier"]
+    listing_page = _alert_risks_page(risks=[_listing("risk-san")])
+    assert {"risks", "next", "first", "prev", "self", "total_count"} <= set(listing_page)
+    assert "values" not in listing_page
+    assert "pagination" not in listing_page
     routes = {
         f"/v2/cases/{case_id}": _case(),
-        "/v2/alerts/alert-san/risks": {"values": [_listing("risk-san")], "pagination": {"next": None}},
+        "/v2/alerts/alert-san/risks": listing_page,
         "/v2/entity-screening/risks/risk-san": _deep("risk-san"),
         f"/v2/workflows/{case_id}": AssertionError("workflow path must not be called"),
         "/v2/alerts/alert-san": AssertionError("alert detail path must not be called"),
@@ -203,10 +227,11 @@ def test_alert_listing_page_cap_stops_at_50_pages_and_logs(caplog):
         page = 1
         if "page=" in path:
             page = int(path.rsplit("page=", 1)[1])
-        return {
-            "values": [],
-            "pagination": {"next": f"/v2/alerts/alert-san/risks?page={page + 1}"},
-        }
+        return _alert_risks_page(
+            risks=[],
+            next_link=f"/v2/alerts/alert-san/risks?page={page + 1}",
+            self_link=path,
+        )
 
     client = FakeClient({
         f"/v2/cases/{case_id}": _case(),
@@ -232,10 +257,10 @@ def test_api_call_budget_stops_gracefully_without_raising_and_logs(caplog):
     routes = {f"/v2/cases/{case_id}": _case()}
     for alert_index in range(5):
         alert_id = f"alert-{alert_index}"
-        routes[f"/v2/alerts/{alert_id}/risks"] = {
-            "values": [_listing(f"risk-{alert_index}-{risk_index}") for risk_index in range(100)],
-            "pagination": {"next": None},
-        }
+        routes[f"/v2/alerts/{alert_id}/risks"] = _alert_risks_page(
+            alert_id=alert_id,
+            risks=[_listing(f"risk-{alert_index}-{risk_index}") for risk_index in range(100)],
+        )
         for risk_index in range(100):
             routes[f"/v2/entity-screening/risks/risk-{alert_index}-{risk_index}"] = _deep(
                 f"risk-{alert_index}-{risk_index}"
@@ -265,7 +290,7 @@ def test_nested_deep_pagination_warns_without_fetching_nested_pages(caplog):
     }
     client = FakeClient({
         f"/v2/cases/{case_id}": _case(),
-        "/v2/alerts/alert-san/risks": {"values": [_listing("risk-san")], "pagination": {"next": None}},
+        "/v2/alerts/alert-san/risks": _alert_risks_page(risks=[_listing("risk-san")]),
         "/v2/entity-screening/risks/risk-san": deep,
     })
 

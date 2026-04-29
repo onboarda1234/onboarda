@@ -147,9 +147,9 @@ def _fetch_risk_listings_for_alert(guard, alert_id):
         raw = guard.get(path, resource="alert_risks", identifier=alert_id, page=page_count)
         if raw is None:
             break
-        for listing in raw.get("values", []):
+        for listing in raw.get("risks", []):
             yield listing
-        next_link = (raw.get("pagination") or {}).get("next")
+        next_link = raw.get("next")
         path = _normalise_next_link(getattr(guard, "client", guard), next_link)
 
 
