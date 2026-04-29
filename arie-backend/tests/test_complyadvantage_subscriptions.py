@@ -1,7 +1,7 @@
 import logging
 import sqlite3
 
-from screening_complyadvantage.subscriptions import seed_monitoring_subscription
+from screening_complyadvantage.subscriptions import seed_monitoring_subscription, update_monitoring_subscription_event
 
 
 CREATE_TABLE = """
@@ -71,3 +71,19 @@ def test_seed_monitoring_subscription_uses_injected_handle_only(monkeypatch):
 
     assert "sqlite3" not in subscriptions.__dict__
     assert "psycopg2" not in subscriptions.__dict__
+
+
+def test_update_monitoring_subscription_event_increments_and_sets_last_fields():
+    db = _db()
+    seed_monitoring_subscription(db, "client-1", "app-1", "cust-1")
+
+    update_monitoring_subscription_event(db, "cust-1", "CASE_ALERT_LIST_UPDATED")
+    update_monitoring_subscription_event(db, "cust-1", "CASE_CREATED")
+
+    row = db.execute(
+        "SELECT monitoring_event_count, last_webhook_type, last_event_at "
+        "FROM screening_monitoring_subscriptions WHERE customer_identifier='cust-1'"
+    ).fetchone()
+    assert row["monitoring_event_count"] == 2
+    assert row["last_webhook_type"] == "CASE_CREATED"
+    assert row["last_event_at"] is not None

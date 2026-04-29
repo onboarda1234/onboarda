@@ -1,0 +1,9 @@
+{
+  "webhook_type": "CASE_ALERT_LIST_UPDATED",
+  "api_version": "2.0",
+  "account_identifier": "acct-test-fixture",
+  "case_identifier": "case-san",
+  "alert_identifiers": ["alert-san"],
+  "customer": {"identifier": "cust-test", "external_identifier": "app-test", "version": 1},
+  "subjects": [{"identifier": "subj-test", "external_identifier": "person-test", "type": "person"}]
+}
