@@ -10,3 +10,6 @@ These fixtures model the s2-s7 CA response shapes used by C1.b tests. They are f
 - `company_canonical.json` — company profile match shape.
 - `monitoring_on_full_optional_fields.json` — full optional customer input fields with clean response.
 - `two_pass_strict_misses_relaxed_catches.json` — synthetic two-pass rationale where relaxed finds the canonical match.
+- `webhook_case_created.json` — synthetic `CASE_CREATED` webhook envelope.
+- `webhook_case_alert_list_updated.json` — synthetic `CASE_ALERT_LIST_UPDATED` webhook envelope.
+- `webhook_unknown_type.json` — synthetic unknown webhook envelope for accepted-and-ignored behavior.

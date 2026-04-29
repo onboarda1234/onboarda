@@ -84,12 +84,14 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
         try:
             await self._storage_callback(envelope)
         except Exception:
+            from .webhook_storage import emit_metric
             logger.error(
                 "ca_webhook_async_processing_failure webhook_type=%s case_identifier=%s",
                 getattr(envelope, "webhook_type", None),
                 getattr(envelope, "case_identifier", None),
                 exc_info=True,
             )
+            emit_metric("webhook_async_processing_failure", provider="complyadvantage")
 
 
 def _verify_signature(body, signature):

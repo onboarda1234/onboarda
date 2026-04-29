@@ -5,9 +5,11 @@ import logging
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
 from tornado.httputil import HTTPHeaders, HTTPServerRequest
 from tornado.web import Application
 
+from screening_complyadvantage.models.webhooks import CACaseCreatedWebhook
 from screening_complyadvantage.webhook_handler import ComplyAdvantageWebhookHandler, _verify_signature
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "complyadvantage")
@@ -102,3 +104,18 @@ def test_bad_signature_returns_401_without_spawn_or_body(caplog):
     assert "signature_invalid" in caplog.text
     assert "bad-signature" not in caplog.text
     assert "fixture-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_processing_failure_logs_and_emits_metric():
+    async def failing_storage(envelope):
+        raise RuntimeError("boom")
+
+    with patch("tornado.ioloop.IOLoop.current", return_value=MagicMock()):
+        handler = _call_handler(_fixture("webhook_case_created.json"), storage_callback=failing_storage)
+    envelope = CACaseCreatedWebhook.model_validate(_fixture("webhook_case_created.json"))
+
+    with patch("screening_complyadvantage.webhook_storage.emit_metric") as metric:
+        await handler._process_webhook_async(envelope)
+
+    metric.assert_called_once_with("webhook_async_processing_failure", provider="complyadvantage")
