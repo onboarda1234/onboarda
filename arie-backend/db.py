@@ -832,9 +832,6 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_application_id ON monitoring_alerts(application_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_alerts_provider_case
-        ON monitoring_alerts(provider, case_identifier)
-        WHERE provider IS NOT NULL AND case_identifier IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_edd ON monitoring_alerts(linked_edd_case_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_review ON monitoring_alerts(linked_periodic_review_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_application_id ON periodic_reviews(application_id);
@@ -1594,9 +1591,6 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_alerts_provider_case
-        ON monitoring_alerts(provider, case_identifier)
-        WHERE provider IS NOT NULL AND case_identifier IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_edd ON monitoring_alerts(linked_edd_case_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_review ON monitoring_alerts(linked_periodic_review_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_linked_alert ON periodic_reviews(linked_monitoring_alert_id);
@@ -3263,6 +3257,41 @@ def _run_migrations(db: DBConnection):
         logger.error("Migration v2.24 failed: %s", e, exc_info=True)
         try:
             db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.24a: Ensure ComplyAdvantage monitoring alert identity columns.
+    #
+    # Long-lived staging databases can have a legacy monitoring_alerts table
+    # that predates provider/case_identifier.  CREATE TABLE IF NOT EXISTS does
+    # not add missing columns, so the provider/case unique index must be created
+    # only after this inline repair has run.
+    try:
+        cols_added = []
+        if not _safe_column_exists(db, "monitoring_alerts", "provider"):
+            db.execute("ALTER TABLE monitoring_alerts ADD COLUMN provider TEXT")
+            cols_added.append("provider")
+        if not _safe_column_exists(db, "monitoring_alerts", "case_identifier"):
+            db.execute("ALTER TABLE monitoring_alerts ADD COLUMN case_identifier TEXT")
+            cols_added.append("case_identifier")
+
+        db.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_alerts_provider_case
+            ON monitoring_alerts(provider, case_identifier)
+            WHERE provider IS NOT NULL AND case_identifier IS NOT NULL
+        """)
+        db.commit()
+        if cols_added:
+            logger.info(
+                "Migration v2.24a: Added monitoring_alerts columns %s and ensured provider/case index",
+                cols_added,
+            )
+        else:
+            logger.info("Migration v2.24a: monitoring_alerts provider/case index ensured")
+    except Exception as e:
+        logger.error("Migration v2.24a failed: %s", e, exc_info=True)
+        try:
+            db.conn.rollback()
         except Exception:
             pass
 
