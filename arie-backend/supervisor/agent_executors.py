@@ -3375,6 +3375,7 @@ _MEDIA_SEVERITY_MATRIX = {
     "negative_press": 1,
     "unknown": 1,
 }
+_MEDIA_ALERT_TYPES = {"adverse_media", "media_alert", "news_alert", "media"}
 
 
 def _retrieve_new_media(app: Dict, alerts: List[Dict]) -> Dict[str, Any]:
@@ -3385,7 +3386,7 @@ def _retrieve_new_media(app: Dict, alerts: List[Dict]) -> Dict[str, Any]:
     """
     media_alerts = [
         a for a in alerts
-        if (a.get("alert_type") or "").lower() in ("adverse_media", "media_alert", "news_alert", "media")
+        if (a.get("alert_type") or "").lower() in _MEDIA_ALERT_TYPES
     ]
     return {
         "check": "New adverse media retrieval",

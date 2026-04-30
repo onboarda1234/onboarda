@@ -154,6 +154,8 @@ def _schedule_historical_backfill(*, application_id, client_id, customer_identif
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
+        # Seed can be called from synchronous onboarding code; use a one-shot
+        # daemon thread only as the no-loop fallback, not as a recurring sweep.
         thread = threading.Thread(target=lambda: asyncio.run(_runner()), daemon=True)
         thread.start()
         return thread

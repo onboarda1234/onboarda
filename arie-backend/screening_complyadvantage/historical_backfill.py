@@ -462,6 +462,9 @@ def _upsert_monitoring_alert_with_provenance(db, row, *, discovered_via, backfil
             summary = EXCLUDED.summary,
             source_reference = EXCLUDED.source_reference,
             status = EXCLUDED.status,
+            -- Live webhook discovery is the stronger provenance signal; a
+            -- historical rerun may refresh operational fields but must not
+            -- reclassify a live-discovered case as backfilled.
             discovered_via = CASE
                 WHEN monitoring_alerts.discovered_via = 'webhook_live' THEN monitoring_alerts.discovered_via
                 ELSE EXCLUDED.discovered_via
@@ -518,6 +521,7 @@ def _maybe_push_agent7(*, application_id, client_id, customer_identifier, trace_
         result["agent7_push"] = "attempted"
     except Exception as exc:
         result["agent7_push"] = "failed"
+        result["agent7_error"] = exc.__class__.__name__
         emit_metric(
             "backfill_agent7_push_failed",
             metric_name="BackfillAgent7PushFailed",
