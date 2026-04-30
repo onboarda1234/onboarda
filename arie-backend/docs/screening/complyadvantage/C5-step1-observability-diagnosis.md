@@ -33,7 +33,7 @@ arie-backend/screening_complyadvantage/webhook_storage.py:124:            emit_m
 arie-backend/screening_complyadvantage/webhook_storage.py:162:            emit_metric("agent_7_push_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
 arie-backend/screening_complyadvantage/webhook_handler.py:116:            from .webhook_storage import emit_metric
 arie-backend/screening_complyadvantage/webhook_handler.py:123:            emit_metric("webhook_async_processing_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
-Sandbox-confirmed CA shape grep count: 1
+grep -c "Sandbox-confirmed CA shape" arie-backend/screening_complyadvantage/webhook_fetch.py returned: 1
 ```
 
 - This document is design-only. No production code, application files, migrations, contracts, Agent 7 logic, schema, or CA business logic are changed.
