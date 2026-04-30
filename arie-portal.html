@@ -5183,7 +5183,16 @@ function setSidebarActive(viewName) {
   // Application-specific active states are set by resumeApplication()
 }
 
-function clientSignOut() {
+async function clientSignOut() {
+  var tokenForLogout = AUTH_TOKEN;
+  try {
+    await fetch(API_BASE + '/auth/logout', {
+      method: 'POST',
+      headers: tokenForLogout ? { 'Authorization': 'Bearer ' + tokenForLogout } : {}
+    });
+  } catch(e) {
+    console.warn('Server logout failed; clearing local session state:', e);
+  }
   clearAuth();
   document.getElementById('global-client-sidebar').classList.remove('open');
   document.body.classList.remove('sidebar-active');

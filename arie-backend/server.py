@@ -3176,46 +3176,65 @@ class PreApprovalDecisionHandler(BaseHandler):
 
         data = self.get_json()
         db = get_db()
+        attempt_summary = _governance_summary(data, ("decision", "notes"))
+        attempt_target = app_id
 
         app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
         if not app:
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 404,
+                "Application not found", attempt_summary, db=db)
             db.close()
             return self.error("Application not found", 404)
 
         real_id = app["id"]
+        attempt_target = app["ref"]
 
         # EX-05: Capture before-state for audit trail
         _before = snapshot_app_state(app)
 
         # Enforce: only allowed when status = pre_approval_review
         if app["status"] != "pre_approval_review":
-            db.close()
-            return self.error(
+            reason = (
                 f"Pre-approval decision not allowed: application is in '{app['status']}' status. "
-                "Only applications in 'pre_approval_review' can receive pre-approval decisions.",
-                400
+                "Only applications in 'pre_approval_review' can receive pre-approval decisions."
             )
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 400,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 400)
 
         # Validate decision
         decision = (data.get("decision") or "").upper()
         valid_decisions = ["PRE_APPROVE", "REJECT", "REQUEST_INFO"]
         if decision not in valid_decisions:
+            reason = f"Invalid pre-approval decision. Must be one of: {', '.join(valid_decisions)}"
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 400,
+                reason, attempt_summary, db=db)
             db.close()
-            return self.error(f"Invalid pre-approval decision. Must be one of: {', '.join(valid_decisions)}", 400)
+            return self.error(reason, 400)
 
         notes = sanitize_input(data.get("notes", ""))
         if not notes:
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 400,
+                "Pre-approval decision notes are required", attempt_summary, db=db)
             db.close()
             return self.error("Pre-approval decision notes are required", 400)
 
         # Idempotency: check if a decision was already recorded
         if app.get("pre_approval_decision"):
-            db.close()
-            return self.error(
+            reason = (
                 f"Pre-approval decision already recorded: {app['pre_approval_decision']}. "
-                "Duplicate decisions are blocked for audit integrity.",
-                409
+                "Duplicate decisions are blocked for audit integrity."
             )
+            self.log_governance_attempt(
+                user, "application.pre_approval_decision", attempt_target, "rejected", 409,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 409)
 
         # Apply decision
         if decision == "PRE_APPROVE":
@@ -3306,6 +3325,9 @@ class PreApprovalDecisionHandler(BaseHandler):
 
         self.log_audit(user, f"Pre-Approval {decision}", app["ref"],
                        f"Pre-approval decision: {decision} — {notes}")
+        self.log_governance_attempt(
+            user, "application.pre_approval_decision", attempt_target, "accepted", 201,
+            "", attempt_summary)
 
         self.success({
             "status": "decision_recorded",
@@ -7076,16 +7098,37 @@ class ScreeningReviewHandler(BaseHandler):
         subject_name = (data.get("subject_name") or "").strip()
         disposition = (data.get("disposition") or "").strip().lower()
         notes = (data.get("notes") or "").strip()
+        attempt_summary = _governance_summary(
+            {
+                "application_id": app_id,
+                "subject_type": subject_type,
+                "subject_name": subject_name,
+                "disposition": disposition,
+                "notes": notes,
+            },
+            ("application_id", "subject_type", "subject_name", "disposition", "notes"),
+        )
 
         if not app_id or not subject_type or not subject_name or not disposition:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id or "screening-review",
+                "rejected", 400,
+                "application_id, subject_type, subject_name, and disposition are required",
+                attempt_summary)
             return self.error("application_id, subject_type, subject_name, and disposition are required")
 
         if disposition not in ("cleared", "escalated", "follow_up_required"):
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id, "rejected", 400,
+                "Unsupported screening review disposition", attempt_summary)
             return self.error("Unsupported screening review disposition", 400)
 
         db = get_db()
         app = db.execute("SELECT id, ref FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
         if not app:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id, "rejected", 404,
+                "Application not found", attempt_summary, db=db)
             db.close()
             return self.error("Application not found", 404)
 
@@ -7111,6 +7154,9 @@ class ScreeningReviewHandler(BaseHandler):
 
         disposition_label = disposition.replace("_", " ")
         self.log_audit(user, "Screening Review", app["ref"], f"{subject_type}:{subject_name} -> {disposition_label}", db=db)
+        self.log_governance_attempt(
+            user, "screening.review_disposition", app["ref"], "accepted", 200,
+            "", attempt_summary, db=db)
         review = dict(db.execute(
             """
             SELECT application_id, subject_type, subject_name, disposition, notes, reviewer_name, created_at, updated_at
@@ -8401,6 +8447,24 @@ class MemoValidateHandler(BaseHandler):
 _VALID_SIGNOFF_SCOPES = {"decision", "override", "memo"}
 
 
+def _governance_summary(payload, keys):
+    """Build a compact, non-secret payload summary for governance audit rows."""
+    summary = {}
+    if not isinstance(payload, dict):
+        return summary
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str):
+            summary[key] = value[:160]
+        elif isinstance(value, (list, tuple)):
+            summary[key] = {"count": len(value)}
+        elif isinstance(value, dict):
+            summary[key] = {"keys": sorted(str(k) for k in value.keys())[:12]}
+        elif value is not None:
+            summary[key] = value
+    return summary
+
+
 def _validate_officer_signoff(signoff, expected_scope):
     """Validate the officer_signoff object in a request payload.
 
@@ -8999,6 +9063,11 @@ class ApplicationDecisionHandler(BaseHandler):
 
         data = self.get_json()
         db = get_db()
+        attempt_summary = _governance_summary(
+            data,
+            ("decision", "override_ai", "documents_list", "officer_signoff"),
+        )
+        attempt_target = app_id
 
         # ── EX-06: Row-level locking for approval path ──
         # PostgreSQL: SELECT ... FOR UPDATE serializes concurrent approval attempts.
@@ -9020,10 +9089,14 @@ class ApplicationDecisionHandler(BaseHandler):
             ).fetchone()
 
         if not app:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 404,
+                "Application not found", attempt_summary, db=db)
             db.close()
             return self.error("Application not found", 404)
 
         real_id = app["id"]
+        attempt_target = app["ref"]
 
         # EX-05: Capture before-state for audit trail
         _before = snapshot_app_state(app)
@@ -9031,12 +9104,15 @@ class ApplicationDecisionHandler(BaseHandler):
         # ── C-03 FIX: Prevent decision replay on terminal-state applications ──
         terminal_states = ("approved", "rejected")
         if app["status"] in terminal_states:
-            db.close()
-            return self.error(
-                f"Decision replay blocked: application {app['ref']} is already in terminal state '{app['status']}'. "
-                "Decisions cannot be replayed once an application has reached a final state.",
-                409
+            reason = (
+                f"Decision replay blocked: application {app['ref']} is already in terminal state "
+                f"'{app['status']}'. Decisions cannot be replayed once an application has reached a final state."
             )
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 409,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 409)
 
         # Validate required fields
         decision = data.get("decision")
@@ -9046,14 +9122,24 @@ class ApplicationDecisionHandler(BaseHandler):
 
         valid_decisions = ["approve", "reject", "escalate_edd", "request_documents"]
         if decision not in valid_decisions:
+            reason = f"Invalid decision. Must be one of: {', '.join(valid_decisions)}"
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 400,
+                reason, attempt_summary, db=db)
             db.close()
-            return self.error(f"Invalid decision. Must be one of: {', '.join(valid_decisions)}", 400)
+            return self.error(reason, 400)
 
         if not decision_reason:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 400,
+                "decision_reason is required", attempt_summary, db=db)
             db.close()
             return self.error("decision_reason is required", 400)
 
         if override_ai and not override_reason:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 400,
+                "override_reason is required when override_ai is true", attempt_summary, db=db)
             db.close()
             return self.error("override_reason is required when override_ai is true", 400)
 
@@ -9061,6 +9147,9 @@ class ApplicationDecisionHandler(BaseHandler):
         signoff_scope = "override" if override_ai else "decision"
         signoff_error = _validate_officer_signoff(data.get("officer_signoff"), signoff_scope)
         if signoff_error:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 400,
+                signoff_error, attempt_summary, db=db)
             db.close()
             return self.error(signoff_error, 400)
 
@@ -9068,29 +9157,39 @@ class ApplicationDecisionHandler(BaseHandler):
         if decision == "approve":
             # ── H-1 FIX: Enforce ROLE_PERMISSION_MATRIX — CO cannot approve HIGH/VERY_HIGH ──
             if user.get("role") == "co" and app["risk_level"] in ("HIGH", "VERY_HIGH"):
-                db.close()
-                return self.error(
+                reason = (
                     "Approval blocked: Compliance Officers cannot approve HIGH or VERY_HIGH risk applications. "
-                    "Only Admin or Senior Compliance Officer roles may approve at this risk level.",
-                    403
+                    "Only Admin or Senior Compliance Officer roles may approve at this risk level."
                 )
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 403,
+                    reason, attempt_summary, db=db)
+                db.close()
+                return self.error(reason, 403)
 
             # ── C-05 FIX: Enforce compliance memo existence via DB lookup on ALL approval paths ──
             memo_exists = db.execute(
                 "SELECT id FROM compliance_memos WHERE application_id = ?", (real_id,)
             ).fetchone()
             if not memo_exists:
-                db.close()
-                return self.error(
+                reason = (
                     "Approval blocked: compliance memo must be generated before approval. "
-                    "Generate a memo via POST /api/applications/{id}/memo first.",
-                    400
+                    "Generate a memo via POST /api/applications/{id}/memo first."
                 )
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    reason, attempt_summary, db=db)
+                db.close()
+                return self.error(reason, 400)
 
             can_approve, gate_error = ApprovalGateValidator.validate_approval(app, db)
             if not can_approve:
+                reason = f"Approval blocked: {gate_error}"
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    reason, attempt_summary, db=db)
                 db.close()
-                return self.error(f"Approval blocked: {gate_error}", 400)
+                return self.error(reason, 400)
 
             # ── EX-06: Dual-approval for high-risk cases using structured fields ──
             if app["risk_level"] in ("HIGH", "VERY_HIGH"):
@@ -9098,12 +9197,15 @@ class ApplicationDecisionHandler(BaseHandler):
                 if not can_approve:
                     # Distinguish: same-officer retry vs genuine first approval
                     if dual_error == "DUAL_SAME_OFFICER":
-                        db.close()
-                        return self.error(
+                        reason = (
                             "Dual-approval conflict: you already recorded the first approval. "
-                            "A different authorized officer must complete the second approval.",
-                            409
+                            "A different authorized officer must complete the second approval."
                         )
+                        self.log_governance_attempt(
+                            user, "application.decision", attempt_target, "rejected", 409,
+                            reason, attempt_summary, db=db)
+                        db.close()
+                        return self.error(reason, 409)
                     # Record first approval in structured application fields
                     db.execute(
                         "UPDATE applications SET first_approver_id = ?, first_approved_at = datetime('now'), "
@@ -9119,6 +9221,9 @@ class ApplicationDecisionHandler(BaseHandler):
                                 "First Approval (Pending Second)", app["ref"],
                                 f"Decision: approve | Reason: {decision_reason} | Awaiting second approver",
                                 self.get_client_ip(), _safe_json(_before), _safe_json(_first_after)))
+                    self.log_governance_attempt(
+                        user, "application.decision", attempt_target, "accepted", 202,
+                        "First approval recorded; awaiting second approver", attempt_summary, db=db)
                     db.commit()
                     db.close()
                     return self.success({"status": "first_approval_recorded", "message": dual_error}, 202)
@@ -9128,6 +9233,9 @@ class ApplicationDecisionHandler(BaseHandler):
         if decision == "request_documents":
             required_documents = data.get("documents_list", [])
             if not required_documents:
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    "documents_list is required for request_documents decision", attempt_summary, db=db)
                 db.close()
                 return self.error("documents_list is required for request_documents decision", 400)
 
@@ -9205,6 +9313,10 @@ class ApplicationDecisionHandler(BaseHandler):
 
         db.commit()
         db.close()
+
+        self.log_governance_attempt(
+            user, "application.decision", attempt_target, "accepted", 201,
+            "", attempt_summary)
 
         self.success({"status": "decision_recorded", "decision": decision, "application_status": new_status}, 201)
 

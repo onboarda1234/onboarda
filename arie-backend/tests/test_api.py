@@ -582,3 +582,135 @@ class TestPasswordRotationGuard:
         assert "dedicated password-change flow" in body.get("error", ""), (
             f"Expected password-change flow message, got: {body}"
         )
+
+
+# ═══════════════════════════════════════════════════════════
+# Phase 1B — Governance Rejection Audit Logging
+# ═══════════════════════════════════════════════════════════
+
+class TestGovernanceAttemptAudit:
+    def test_failed_approval_attempt_is_audited(self, api_server):
+        """Approval gate rejections must be visible in audit_log with outcome=rejected."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_failed_approval"
+        app_ref = "ARF-2026-PHASE1B-FAIL"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            app_ref,
+            "phase1b_client",
+            "Phase 1B Failed Approval Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "in_review",
+            "LOW",
+            20,
+            json.dumps({
+                "screening_report": {
+                    "screening_mode": "live",
+                    "screened_at": "2026-04-30T10:00:00",
+                    "sanctions": {"api_status": "live"},
+                    "company_registry": {"api_status": "live"},
+                    "ip_geolocation": {"api_status": "live"},
+                    "kyc": {"api_status": "live"},
+                },
+                "screening_valid_until": "2026-07-29T10:00:00",
+                "screening_validity_days": 90,
+            }),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/decision",
+            json={
+                "decision": "approve",
+                "decision_reason": "Testing approval gate rejection audit.",
+                "officer_signoff": {
+                    "acknowledged": True,
+                    "scope": "decision",
+                    "source_context": "ai_advisory",
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+        assert "compliance memo" in resp.json().get("error", "").lower()
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "application.decision"
+        assert detail["outcome"] == "rejected"
+        assert detail["response_code"] == 400
+        assert "compliance memo" in detail["rejection_reason"].lower()
+
+    def test_failed_screening_review_attempt_is_audited(self, api_server):
+        """Screening disposition rejections must leave an audit row."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_screening_review"
+        app_ref = "ARF-2026-PHASE1B-SCREEN"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (app_id, app_ref, "phase1b_client", "Phase 1B Screening Ltd", "in_review"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_id,
+                "subject_type": "company",
+                "subject_name": "Phase 1B Screening Ltd",
+                "disposition": "unsupported",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_id,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "screening.review_disposition"
+        assert detail["outcome"] == "rejected"
+        assert detail["response_code"] == 400
