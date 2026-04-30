@@ -2,6 +2,8 @@
 
 import logging
 
+from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +18,7 @@ def seed_monitoring_subscription(
 ):
     """Insert one monitoring subscription row using only the injected DB handle."""
     columns = ["client_id", "application_id", "provider", "customer_identifier", "source"]
-    values = [client_id, application_id, "complyadvantage", customer_identifier, source]
+    values = [client_id, application_id, COMPLYADVANTAGE_PROVIDER_NAME, customer_identifier, source]
     if person_key:
         columns.insert(3, "person_key")
         values.insert(3, person_key)
@@ -35,12 +37,30 @@ def seed_monitoring_subscription(
         if _is_unique_violation(exc):
             logger.warning(
                 "ca_monitoring_subscription_duplicate provider=%s client_id=%s customer_identifier=%s",
-                "complyadvantage",
+                COMPLYADVANTAGE_PROVIDER_NAME,
                 client_id,
                 customer_identifier,
             )
             return
         raise
+
+
+def update_monitoring_subscription_event(db, client_id, customer_identifier, last_webhook_type):
+    """Record the latest CA monitoring webhook event for an existing subscription."""
+    db.execute(
+        """
+        UPDATE screening_monitoring_subscriptions
+        SET monitoring_event_count = monitoring_event_count + 1,
+            last_event_at = CURRENT_TIMESTAMP,
+            last_webhook_type = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE client_id = ? AND provider = ? AND customer_identifier = ?
+        """,
+        (last_webhook_type, client_id, COMPLYADVANTAGE_PROVIDER_NAME, customer_identifier),
+    )
+    commit = getattr(db, "commit", None)
+    if callable(commit):
+        commit()
 
 
 def _is_unique_violation(exc):

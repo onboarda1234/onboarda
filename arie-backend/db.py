@@ -570,6 +570,8 @@ def _get_postgres_schema() -> str:
     CREATE TABLE IF NOT EXISTS monitoring_alerts (
         id SERIAL PRIMARY KEY,
         application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
+        provider TEXT,
+        case_identifier TEXT,
         client_name TEXT,
         alert_type TEXT,
         severity TEXT,
@@ -830,6 +832,9 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_application_id ON monitoring_alerts(application_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_alerts_provider_case
+        ON monitoring_alerts(provider, case_identifier)
+        WHERE provider IS NOT NULL AND case_identifier IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_edd ON monitoring_alerts(linked_edd_case_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_review ON monitoring_alerts(linked_periodic_review_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_application_id ON periodic_reviews(application_id);
@@ -1320,6 +1325,8 @@ def _get_sqlite_schema() -> str:
     CREATE TABLE IF NOT EXISTS monitoring_alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
+        provider TEXT,
+        case_identifier TEXT,
         client_name TEXT,
         alert_type TEXT,
         severity TEXT,
@@ -1587,6 +1594,9 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_created_at ON regulatory_documents(created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_monitoring_alerts_provider_case
+        ON monitoring_alerts(provider, case_identifier)
+        WHERE provider IS NOT NULL AND case_identifier IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_edd ON monitoring_alerts(linked_edd_case_id);
     CREATE INDEX IF NOT EXISTS idx_monitoring_alerts_linked_review ON monitoring_alerts(linked_periodic_review_id);
     CREATE INDEX IF NOT EXISTS idx_periodic_reviews_linked_alert ON periodic_reviews(linked_monitoring_alert_id);

@@ -76,16 +76,26 @@ def _workflow_post(workflow):
     return {"workflow_instance_identifier": workflow["workflow_instance_identifier"]}
 
 
+def _alert_risks_page(alert_id, risks=None, next_link=None, prev_link=None, total_count=None, self_link=None):
+    risks = list(risks or [])
+    path = f"/v2/alerts/{alert_id}/risks?page=1"
+    return {
+        "first": f"/v2/alerts/{alert_id}/risks?page=1",
+        "next": next_link,
+        "prev": prev_link,
+        "risks": risks,
+        "self": self_link or path,
+        "total_count": len(risks) if total_count is None else total_count,
+    }
+
+
 def _routes_for_fixture(data, *, prefix="", deep_failure=False):
     workflow = data[prefix + "workflow"] if prefix else data["workflow"]
     alerts_key = prefix + "alerts_risks" if prefix else "alerts_risks"
     deep_key = prefix + "deep_risks" if prefix else "deep_risks"
     get_routes = {f"/v2/workflows/{workflow['workflow_instance_identifier']}": workflow}
     for alert_id, risks in data.get(alerts_key, {}).items():
-        get_routes[f"/v2/alerts/{alert_id}/risks?page=1"] = {
-            "values": risks,
-            "pagination": {"next": None},
-        }
+        get_routes[f"/v2/alerts/{alert_id}/risks?page=1"] = _alert_risks_page(alert_id, risks)
         for risk in risks:
             risk_id = risk["identifier"]
             get_routes[f"/v2/entity-screening/risks/{risk_id}"] = (
@@ -229,14 +239,17 @@ def test_pagination_boundary_uses_alert_risk_layer_and_includes_26th_match():
     workflow["workflow_instance_identifier"] = "wf-boundary"
     workflow["alerts"] = [{"identifier": "alert-pep-1"}]
     workflow["step_details"]["customer-creation"]["output"]["customer_identifier"] = "cust-boundary"
-    first_page = {
-        "values": [{"identifier": f"risk-dummy-{i}", "profile": canonical_risk["profile"]} for i in range(25)],
-        "pagination": {"next": "/v2/alerts/alert-pep-1/risks?page=2"},
-    }
-    second_page = {
-        "values": [{"identifier": "risk-pep-26", "profile": canonical_risk["profile"]}],
-        "pagination": {"next": None},
-    }
+    first_page = _alert_risks_page(
+        "alert-pep-1",
+        [{"identifier": f"risk-dummy-{i}", "profile": canonical_risk["profile"]} for i in range(25)],
+        next_link="/v2/alerts/alert-pep-1/risks?page=2",
+    )
+    second_page = _alert_risks_page(
+        "alert-pep-1",
+        [{"identifier": "risk-pep-26", "profile": canonical_risk["profile"]}],
+        self_link="/v2/alerts/alert-pep-1/risks?page=2",
+        total_count=26,
+    )
     get_routes = {
         "/v2/workflows/wf-boundary": workflow,
         "/v2/alerts/alert-pep-1/risks?page=1": first_page,
@@ -271,11 +284,14 @@ def test_pagination_next_relative_absolute_and_wrong_host():
     client = PathStrictFakeCAClient(
         {},
         {
-            "/v2/alerts/alert-pep/risks?page=1": {
-                "values": [],
-                "pagination": {"next": "https://api.example.test/v2/alerts/alert-pep/risks?page=2"},
-            },
-            "/v2/alerts/alert-pep/risks?page=2": {"values": [], "pagination": {"next": None}},
+            "/v2/alerts/alert-pep/risks?page=1": _alert_risks_page(
+                "alert-pep",
+                next_link="https://api.example.test/v2/alerts/alert-pep/risks?page=2",
+            ),
+            "/v2/alerts/alert-pep/risks?page=2": _alert_risks_page(
+                "alert-pep",
+                self_link="/v2/alerts/alert-pep/risks?page=2",
+            ),
         },
     )
 
@@ -285,10 +301,10 @@ def test_pagination_next_relative_absolute_and_wrong_host():
     bad_client = PathStrictFakeCAClient(
         {},
         {
-            "/v2/alerts/alert-pep/risks?page=1": {
-                "values": [],
-                "pagination": {"next": "https://evil.example.test/v2/alerts/alert-pep/risks?page=2"},
-            }
+            "/v2/alerts/alert-pep/risks?page=1": _alert_risks_page(
+                "alert-pep",
+                next_link="https://evil.example.test/v2/alerts/alert-pep/risks?page=2",
+            )
         },
     )
     with pytest.raises(CAUnexpectedResponse):

@@ -16,7 +16,8 @@ from .exceptions import (
 )
 from .url_canonicalization import canonicalize_url
 from .orchestrator import ComplyAdvantageScreeningOrchestrator
-from .subscriptions import seed_monitoring_subscription
+from .subscriptions import seed_monitoring_subscription, update_monitoring_subscription_event
+from .webhook_handler import ComplyAdvantageWebhookHandler
 
 __all__ = [
     "CAAuthenticationFailed",
@@ -33,5 +34,7 @@ __all__ = [
     "ComplyAdvantageClient",
     "ComplyAdvantageTokenClient",
     "canonicalize_url",
+    "ComplyAdvantageWebhookHandler",
     "seed_monitoring_subscription",
+    "update_monitoring_subscription_event",
 ]
