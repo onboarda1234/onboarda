@@ -2,11 +2,40 @@
 
 ## Preflight
 
-- Branch prepared locally: `c5/observability-step1-diagnosis`.
+- Branch prepared locally: `c5/observability-step1-diagnosis`; fixups applied on `copilot/c5observability-step1-diagnosis` on top of `160a76d`.
 - Source-of-truth preflight executed before analysis: `git fetch origin main`, `git checkout FETCH_HEAD`, `git --no-pager log --oneline -10`.
-- Operated against commit SHA `2e1a7928567983b9702dd747f0473ef7d3be1e82` (`2e1a792 [C4 Step 2] Webhook handler + dual-write implementation (#195)`).
-- Required post-PR-#195 signposts succeeded for C1-C4 design docs, CA webhook/client/auth/adapter/orchestrator/subscription modules, normalized storage, screening config, Agent 7 executor surface, and server route wiring.
-- Critical parser-fix signposts succeeded in `arie-backend/screening_complyadvantage/webhook_fetch.py`: `/v2/alerts/{alert_id}/risks` reads top-level `raw.get("risks", [])` and top-level `raw.get("next")`.
+- Operated against post-PR-#195 base commit SHA `2e1a7928567983b9702dd747f0473ef7d3be1e82` (`2e1a792 [C4 Step 2] Webhook handler + dual-write implementation (#195)`), with this diagnosis fixup committed on top of `160a76d`.
+- Required signpost output:
+
+```text
+arie-backend/docs/screening/complyadvantage/C4-step1-webhook-design.md
+arie-backend/docs/screening/complyadvantage/C3-step1-adapter-design.md
+arie-backend/docs/screening/complyadvantage/C2-step1-oauth-client-design.md
+arie-backend/docs/screening/complyadvantage/C1-expansion-step1-field-audit.md
+arie-backend/screening_complyadvantage/webhook_handler.py
+arie-backend/screening_complyadvantage/webhook_fetch.py
+arie-backend/screening_complyadvantage/webhook_mapping.py
+arie-backend/screening_complyadvantage/webhook_storage.py
+arie-backend/screening_complyadvantage/client.py
+arie-backend/screening_complyadvantage/auth.py
+arie-backend/screening_complyadvantage/adapter.py
+arie-backend/screening_complyadvantage/orchestrator.py
+arie-backend/screening_complyadvantage/subscriptions.py
+arie-backend/screening_storage.py
+arie-backend/screening_config.py
+arie-backend/supervisor/agent_executors.py
+1483:from screening_complyadvantage.webhook_handler import ComplyAdvantageWebhookHandler
+11565:        (r"/api/webhooks/complyadvantage", ComplyAdvantageWebhookHandler),
+arie-backend/tests/test_complyadvantage_webhook_handler.py:269:    with patch("screening_complyadvantage.webhook_storage.emit_metric") as metric:
+arie-backend/screening_complyadvantage/webhook_storage.py:18:def emit_metric(name, **fields):
+arie-backend/screening_complyadvantage/webhook_storage.py:96:            emit_metric("normalized_write_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
+arie-backend/screening_complyadvantage/webhook_storage.py:124:            emit_metric("monitoring_alerts_write_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
+arie-backend/screening_complyadvantage/webhook_storage.py:162:            emit_metric("agent_7_push_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
+arie-backend/screening_complyadvantage/webhook_handler.py:116:            from .webhook_storage import emit_metric
+arie-backend/screening_complyadvantage/webhook_handler.py:123:            emit_metric("webhook_async_processing_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
+Sandbox-confirmed CA shape grep count: 1
+```
+
 - This document is design-only. No production code, application files, migrations, contracts, Agent 7 logic, schema, or CA business logic are changed.
 
 ## 1. Scope and locked assumptions
@@ -25,48 +54,137 @@ C5 exists because the C4 webhook path is functionally present but not yet produc
 
 ### 2.1 CA implementation logs already present
 
-| Surface | Current events | Current fields | Gap |
-|---|---|---|---|
-| `auth.py` | `ca_auth_response`, `ca_auth_error` | method, path, status, duration, attempt, realm, username fingerprint | No metric, no token-cache hit/miss metric, no explicit latency alarm. |
-| `client.py` | `ca_api_response`, `ca_api_error` | method, path, status, duration, attempt, realm, username fingerprint | No CloudWatch metric, no endpoint category, no status-family rollup. |
-| `orchestrator.py` | `ca_monitoring_subscription_seeded`, `ca_monitoring_subscription_skipped` | workflow/customer identifiers and reason | No workflow/polling/fetch-count metrics. |
-| `webhook_handler.py` | signature mode/result, malformed JSON, unknown events, invalid envelopes, empty alert IDs, async processing failure | body length, environment, webhook type, case/customer identifiers | No trace ID across HTTP 202 boundary; no counters for most outcomes. |
-| `webhook_fetch.py` | `ca_webhook_fetch_call`, `ca_webhook_fetch_page_cap_reached`, `ca_webhook_fetch_api_call_budget_exceeded`, `ca_webhook_nested_pagination` | path, call count, resource, identifier, page, truncation reason | No per-hop latency, no success/failure counters by hop, no page-count distribution. |
-| `webhook_storage.py` | subscription missing/ambiguous, normalized write failure, monitoring-alert write failure, subscription update failure, Agent 7 push failure | webhook type, case/customer/application identifiers | Only three failure metrics plus async failure; no success metrics, step latency, or subscription-update metric. |
-| `subscriptions.py` | duplicate subscription warning | provider, client, customer identifier | No metric for duplicate subscriptions or update failures. |
-| `screening_config.py` | none | active provider resolved from `SCREENING_PROVIDER`, default `sumsub` | No mode/drift observability. |
+Current CA logging is useful but uneven. The exact existing log and metric surfaces are:
 
-Security posture is broadly correct: CA auth/client logs include path, status, duration, realm, and username fingerprint, but not passwords, bearer tokens, authorization headers, raw token bodies, signatures, or secrets. Webhook signature handling logs body length and mode only.
+> `screening_complyadvantage/auth.py:95` passes event name `ca_auth_response` into the auth logger path after token responses; `screening_complyadvantage/auth.py:160-170` emits it at INFO level with fields `method`, `path`, `status`, `duration_ms`, `attempt`, `realm`, and `username_fp`.
+
+> `screening_complyadvantage/auth.py:172-181` emits `ca_auth_error` at WARNING level with fields `method`, `path`, `attempt`, `realm`, `username_fp`, and `exception`.
+
+> `screening_complyadvantage/client.py:88-97` emits `ca_api_response` at INFO level with fields `method`, `path`, `status`, `duration_ms`, `attempt`, `realm`, and `username_fp`.
+
+> `screening_complyadvantage/client.py:126-135` emits `ca_api_error` at WARNING level with fields `method`, `path`, `attempt`, `realm`, `username_fp`, and `exception`.
+
+> `screening_complyadvantage/orchestrator.py:186-190` emits `ca_monitoring_subscription_skipped` at WARNING level with fields `workflow_id`, `customer_identifier`, and `reason`.
+
+> `screening_complyadvantage/orchestrator.py:200-203` emits `ca_monitoring_subscription_seeded` at INFO level with fields `workflow_id` and `customer_identifier`.
+
+> `screening_complyadvantage/webhook_handler.py:47-50` emits `ca_webhook_signature` at WARNING level for strict signature failures with fields `signature_mode=strict`, `signature_invalid=true`, and `body_len`.
+
+> `screening_complyadvantage/webhook_handler.py:54-55` emits `ca_webhook_signature` at ERROR level when production is fail-closed because the webhook secret is missing, with fields `signature_mode=production_fail_closed` and `signature_secret_configured=false`.
+
+> `screening_complyadvantage/webhook_handler.py:60-62` emits `ca_webhook_signature` at WARNING level when non-production signature verification is disabled, with fields `signature_mode=sandbox_fail_open`, `signature_verification_disabled=true`, and `environment`.
+
+> `screening_complyadvantage/webhook_handler.py:65` emits `ca_webhook_signature` at INFO level for valid strict signatures with fields `signature_mode=strict`, `signature_valid=true`, and `body_len`.
+
+> `screening_complyadvantage/webhook_handler.py:70` emits `ca_webhook_invalid_json` at WARNING level with field `body_len`.
+
+> `screening_complyadvantage/webhook_handler.py:79` emits `ca_webhook_unknown_envelope_invalid` at WARNING level with field `event_type` and exception info.
+
+> `screening_complyadvantage/webhook_handler.py:83-88` emits `ca_webhook_unknown_event` at INFO level with fields `event_type`, `case_identifier`, and `customer_identifier`.
+
+> `screening_complyadvantage/webhook_handler.py:96` emits `ca_webhook_envelope_invalid` at WARNING level with field `event_type` and exception info.
+
+> `screening_complyadvantage/webhook_handler.py:101-105` emits `ca_webhook_empty_alert_identifiers` at INFO level with fields `event_type`, `case_identifier`, and `no_op=true`.
+
+> `screening_complyadvantage/webhook_handler.py:117-123` emits `ca_webhook_async_processing_failure` at ERROR level with fields `webhook_type` and `case_identifier`, then emits metric `webhook_async_processing_failure` tagged with provider `complyadvantage`.
+
+> `screening_complyadvantage/webhook_fetch.py:139-144` emits `ca_webhook_fetch_page_cap_reached` at WARNING level with fields `alert_id`, `page_cap`, and `next_present=true`.
+
+> `screening_complyadvantage/webhook_fetch.py:172-176` emits `ca_webhook_nested_pagination` at WARNING level with fields `risk_id`, `path`, and `next_present=true`.
+
+> `screening_complyadvantage/webhook_fetch.py:200-206` emits `ca_webhook_fetch_api_call_budget_exceeded` at ERROR level with fields `max_calls`, `attempted_path`, `resource`, and `identifier`.
+
+> `screening_complyadvantage/webhook_fetch.py:209-217` emits `ca_webhook_fetch_call` at INFO level with fields `method`, `path`, `call_number`, `max_calls`, `resource`, `identifier`, and `page`.
+
+> `screening_complyadvantage/webhook_storage.py:44-49` emits `ca_webhook_subscription_missing` at WARNING level with fields `webhook_type`, `case_identifier`, and `customer_identifier`.
+
+> `screening_complyadvantage/webhook_storage.py:52-58` emits `ca_webhook_subscription_ambiguous` at ERROR level with fields `webhook_type`, `case_identifier`, and `customer_identifier`.
+
+> `screening_complyadvantage/webhook_storage.py:90-96` emits `ca_webhook_normalized_write_failure` at ERROR level with fields `case_identifier` and `customer_identifier`, then emits metric `normalized_write_failure` tagged with provider `complyadvantage`.
+
+> `screening_complyadvantage/webhook_storage.py:118-124` emits `ca_webhook_monitoring_alerts_write_failure` at ERROR level with fields `case_identifier` and `customer_identifier`, then emits metric `monitoring_alerts_write_failure` tagged with provider `complyadvantage`.
+
+> `screening_complyadvantage/webhook_storage.py:140-145` emits `ca_webhook_subscription_update_failure` at WARNING level with fields `case_identifier` and `customer_identifier`.
+
+> `screening_complyadvantage/webhook_storage.py:156-162` emits `ca_webhook_agent_7_push_failure` at ERROR level with fields `application_id` and `case_identifier`, then emits metric `agent_7_push_failure` tagged with provider `complyadvantage`.
+
+> `screening_complyadvantage/subscriptions.py:38-43` emits `ca_monitoring_subscription_duplicate` at WARNING level with fields `provider`, `client_id`, and `customer_identifier`.
+
+No structured logging in `screening_complyadvantage/adapter.py`: the file has no logger event surface relevant to CA observability today.
+
+No structured logging in `screening_complyadvantage/webhook_mapping.py`: mapping is currently pure transformation logic with no log or metric emission.
+
+No structured logging in `screening_config.py`: `screening_config.py:12-14` imports and creates a logger, and `screening_config.py:55-67` resolves `SCREENING_PROVIDER`, but the file emits no log or metric when the active provider changes or drifts.
+
+Security posture is broadly correct: CA auth/client logs include path, status, duration, realm, and username fingerprint, but not passwords, bearer tokens, authorization headers, raw token bodies, signatures, or secrets. Webhook signature handling logs body length and mode only, with the signature branches cited above.
 
 ### 2.2 Existing metric emission
 
-Current `emit_metric(name, **fields)` in `webhook_storage.py` logs a parseable line, `ca_webhook_metric metric=<name> fields=<dict>`. It is currently used for:
+> `screening_complyadvantage/webhook_storage.py:18-19` defines `emit_metric(name, **fields)` and logs `ca_webhook_metric metric=%s fields=%s` at INFO level.
 
-- `webhook_async_processing_failure`
-- `normalized_write_failure`
-- `monitoring_alerts_write_failure`
-- `agent_7_push_failure`
+Current metric call sites are:
 
-This is not yet a complete metrics system. There are no in-repo CloudWatch metric filters, alarms, dashboards, or CA-specific Logs Insights queries for these events.
+> `screening_complyadvantage/webhook_handler.py:116-123` imports `emit_metric` in the async failure handler and emits `webhook_async_processing_failure` tagged with provider `complyadvantage`.
+
+> `screening_complyadvantage/webhook_storage.py:90-96` emits `normalized_write_failure` after normalized provider-truth persistence fails.
+
+> `screening_complyadvantage/webhook_storage.py:118-124` emits `monitoring_alerts_write_failure` after monitoring-alert upsert fails.
+
+> `screening_complyadvantage/webhook_storage.py:156-162` emits `agent_7_push_failure` after Agent 7 push fails.
+
+This is not yet a complete metrics system. There are no success counters, latency values, CloudWatch metric filters, dashboards, or CA-specific Logs Insights query definitions for these events in the current repo.
 
 ### 2.3 Existing CloudWatch / deployment monitoring
 
-- `docs/observability/upload-latency-cloudwatch.md` documents CloudWatch Logs Insights queries for upload latency against log group `/ecs/regmind-staging`.
-- `docs/observability/cloudwatch/*.cwlogs` contains upload latency query definitions only.
-- `.github/workflows/deploy-staging.yml` deploys to ECS/Fargate staging, updates the task definition, waits for service stabilization, then probes `/api/readiness`, `/api/health`, `/portal`, and `/backoffice`.
-- `.github/workflows/seed-staging-fixtures.yml` references Fargate task logs and extracts CloudWatch log pointers for fixture seeding.
-- `render.yaml` defines Render live/demo web services with `/api/health` checks, but it does not define CA secrets, CA observability, metrics, alerts, or dashboards.
-- No Terraform/CDK/CloudFormation dashboard, metric-filter, alarm, log-retention, or CA-specific scheduled reconcile job was found in-repo.
+> `docs/observability/upload-latency-cloudwatch.md:3-15` documents CloudWatch Logs Insights usage for log group `/ecs/regmind-staging` and lists only upload-latency query definitions.
+
+> `docs/observability/upload-latency-cloudwatch.md:17-23` shows manual `aws logs put-query-definition` usage for saved Logs Insights queries; it does not define alarms or dashboards.
+
+> `docs/observability/cloudwatch/upload_latency_p50_p95.cwlogs:1-11`, `docs/observability/cloudwatch/upload_latency_errors.cwlogs:1-10`, and `docs/observability/cloudwatch/upload_latency_slow_requests.cwlogs:1-10` filter `upload_latency_telemetry`, not CA webhook or CA API events.
+
+> `.github/workflows/deploy-staging.yml:126-149` verifies deployment health through `/api/readiness` and `/api/health`, but it does not create CA metrics, alarms, or dashboards.
+
+> `.github/workflows/seed-staging-fixtures.yml:240-326` extracts CloudWatch log pointers for fixture-seeding operations; it does not define CA alarms or dashboards.
+
+> `.github/workflows/ci.yml:184-229` performs container startup, `/api/health`, `/api/readiness`, and security-header smoke checks; it does not validate CA observability resources.
+
+> `render.yaml:21` and `render.yaml:110` configure `/api/health` health checks for live and demo Render services; `render.yaml:40-98` and `render.yaml:133-181` define secrets and feature flags, but no CA-specific observability, metric, alarm, or dashboard resource.
+
+No Terraform, CDK, CloudFormation, CloudWatch dashboard JSON, CloudWatch alarm definition, metric-filter definition, or CA-specific scheduled reconcile job was found in-repo during this pass.
 
 ### 2.4 Existing test coverage relevant to C5
 
 CA tests already assert several observability-adjacent behaviors:
 
-- Webhook handler tests cover valid signature, bad signature, missing secret fail-open/fail-closed, malformed JSON, unknown events, empty `alert_identifiers`, and async processing failure metric emission.
-- Webhook fetch tests cover page-cap warning, API-call budget exhaustion warning/error, and nested pagination warning.
-- Webhook storage tests cover happy-path dual-write, missing subscription halt, normalized write failure halt, monitoring-alert failure continuation, provider flag skipping Agent 7 while active provider is Sumsub, and duplicate webhook idempotency.
-- Auth/client tests cover status handling, one-refresh-on-401 behavior, and credential redaction / username fingerprint logging.
-- Orchestrator/subscription tests cover monitoring subscription seeding and duplicate subscription warning.
+> `tests/test_complyadvantage_webhook_handler.py:189-199` asserts bad signatures return 401, log `signature_invalid`, and do not leak the raw signature or secret.
+
+> `tests/test_complyadvantage_webhook_handler.py:213-228` asserts missing webhook secrets in non-production fail open with `signature_mode=sandbox_fail_open` and `signature_verification_disabled=true` logged.
+
+> `tests/test_complyadvantage_webhook_handler.py:231-245` asserts missing webhook secrets in production fail closed with `signature_mode=production_fail_closed` logged.
+
+> `tests/test_complyadvantage_webhook_handler.py:248-257` asserts malformed JSON logs `ca_webhook_invalid_json` and does not spawn storage work.
+
+> `tests/test_complyadvantage_webhook_handler.py:261-272` asserts async processing failure emits metric `webhook_async_processing_failure` tagged with provider `complyadvantage`.
+
+> `tests/test_complyadvantage_webhook_fetch.py:240-268` asserts page-cap truncation logs `ca_webhook_fetch_page_cap_reached` and the relevant `alert_id`.
+
+> `tests/test_complyadvantage_webhook_fetch.py:271-294` asserts API-call budget exhaustion logs `ca_webhook_fetch_api_call_budget_exceeded`.
+
+> `tests/test_complyadvantage_webhook_fetch.py:297-322` asserts nested deep pagination logs `ca_webhook_nested_pagination` with `risk_id` and nested `path`.
+
+> `tests/test_complyadvantage_webhook_storage.py:162-184` asserts normalized write failure returns `normalized_write_failure` and halts best-effort steps.
+
+> `tests/test_complyadvantage_webhook_storage.py:188-211` asserts monitoring-alert failure continues to subscription update and Agent 7 push.
+
+> `tests/test_complyadvantage_webhook_storage.py:213-228` asserts the Sumsub active-provider flag skips Agent 7 push.
+
+> `tests/test_complyadvantage_client.py:131-144` asserts CA client logs include username fingerprint and do not leak username, password, access token, or authorization header.
+
+> `tests/test_complyadvantage_orchestrator.py:349-364` asserts subscription seeding logs `ca_monitoring_subscription_seeded`.
+
+> `tests/test_complyadvantage_orchestrator.py:367-381` asserts missing DB injection logs a warning reason `db_handle_not_injected`.
+
+> `tests/test_complyadvantage_subscriptions.py:59-66` asserts duplicate subscription seeding logs `ca_monitoring_subscription_duplicate`.
 
 Gaps: current tests do not assert a full metric taxonomy, success counters, step durations, correlation ID propagation, structured JSON fields, CloudWatch metric-filter compatibility, provider-pair divergence, or alarm/dashboard definitions.
 
@@ -74,9 +192,13 @@ Gaps: current tests do not assert a full metric taxonomy, success counters, step
 
 Post-PR-#195 state includes the storage anchors C5 can use for traceability without schema changes:
 
-- `monitoring_alerts` now includes nullable `provider` and `case_identifier` columns plus a partial unique index on `(provider, case_identifier)` where both are non-null.
-- `screening_reports_normalized` includes provider-aware idempotency through `(application_id, provider, source_screening_report_hash)`.
-- `screening_monitoring_subscriptions` links CA `customer_identifier` to internal `client_id`, `application_id`, and optional `person_key`, and records `last_event_at`, `last_webhook_type`, and `monitoring_event_count`.
+> `db.py:570-590` defines `monitoring_alerts` with nullable `provider` and `case_identifier` columns in the PostgreSQL DDL, and `db.py:834-837` defines partial unique index `uq_monitoring_alerts_provider_case` on `(provider, case_identifier)` where both are non-null.
+
+> `db.py:1325-1345` defines the same nullable `provider` and `case_identifier` columns in the SQLite `monitoring_alerts` DDL, and `db.py:1597-1599` defines the equivalent partial unique index.
+
+> `screening_storage.py:89-121` persists normalized reports using provider-aware arguments, and `db.py:1008` / `db.py:1756` define unique index `uq_screening_normalized_app_provider_hash` on `(application_id, provider, source_screening_report_hash)`.
+
+> `db.py:1015-1036` and `db.py:1763-1784` define `screening_monitoring_subscriptions` with `client_id`, `application_id`, `provider`, optional `person_key`, `customer_identifier`, `last_event_at`, `last_webhook_type`, and `monitoring_event_count` plus the unique customer index.
 
 C5 should therefore use existing storage identifiers for correlation and dashboards, but should not add new tables, indexes, columns, or trace-ID persistence in Step 2.
 
@@ -495,10 +617,36 @@ Recommended C5 Step 2 order:
 11. Add unit/static tests for metrics/logging behavior and safe-log constraints.
 12. Document retention and runbook links for each alarm before production enablement.
 
-## 15. CTO decisions requested before Step 2
+## 15. CTO inputs before Step 2
+
+These inputs shape implementation details, but they are not a dispatch blocker for the recommendation below:
 
 1. Confirm log-first CloudWatch metrics as the C5 transport, rather than direct AWS `PutMetricData` calls.
 2. Confirm the namespace `RegMind/Screening/ComplyAdvantage` and low-cardinality dimension policy.
 3. Confirm whether Step 2 may add CloudWatch dashboard/alarm definition files in-repo, or whether those remain manual console setup for D1.
 4. Confirm retention split: 90-day operational logs and 7-year production audit logs.
 5. Confirm D2 provider-pair divergence categories and critical mismatch rules before shadow-mode dispatch.
+
+## 16. Step 2 Dispatch Recommendation
+
+**GO** — dispatch C5 Step 2 with explicit scope cuts.
+
+Ship in C5 Step 2:
+
+- CA-local structured operational/audit logging helper and upgrade/wrap of existing `emit_metric()`.
+- Trace ID generation and propagation through webhook handler, async storage, fetch-back helpers, and metric logs.
+- Webhook intake metrics/logs for signature results, malformed JSON/envelopes, unknown events, empty alert identifiers, async processing failures, and env-mode drift.
+- Three-hop fetch-chain metrics/logs for case-shell fetch, alert-risks listing fetch, deep-risk fetch, page-cap truncation, nested pagination, and API-call budget exhaustion.
+- Auth/client metrics/logs for CA API status family, latency, timeout/network errors, 401 refresh, 429, 5xx, and token cache hit/miss.
+- Storage sequence metrics/logs for normalized write, monitoring-alert write, subscription update, Agent 7 push, Agent 7 skipped in shadow mode, and end-to-end webhook processing latency.
+- Initial CloudWatch Logs Insights query definitions plus dashboard and alarm definition artifacts under the repo's observability docs convention; Step 2 ships definitions and documented setup steps, not automatic alarm provisioning.
+- Unit/static tests for safe logging, metric schema, trace propagation, success/failure counters, and dashboard/alarm definition parsing where definitions are added.
+
+Defer to follow-up after C5 Step 2:
+
+- Direct AWS `PutMetricData` integration, unless log-derived metrics prove insufficient.
+- New webhook DLQ, queue/worker, reconcile job, or scheduler infrastructure.
+- Any schema changes for trace IDs, provider-pair comparison persistence, or CA webhook receipt tables.
+- D1 sandbox validation execution, D2 shadow-mode runbooks/execution, and Track E cutover controls.
+- Automatic CloudWatch alarm provisioning and production paging enablement until D1 establishes baseline rates and final alarm actions/SNS targets are approved.
+- Full provider-pair comparison implementation beyond D2-ready event schema and metric placeholders.
