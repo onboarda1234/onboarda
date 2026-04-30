@@ -121,7 +121,20 @@ def _alert_page(alert_id="alert-1", next_link=None):
 
 def _risk_page(risk_id="risk-1", next_link=None):
     return {
-        "risks": [{"identifier": risk_id, "profile": {"identifier": f"profile-{risk_id}", "entity_type": "person", "person": {"names": {"values": [{"name": "Synthetic Person", "type": "PRIMARY"}]}}}}],
+        "risks": [
+            {
+                "identifier": risk_id,
+                "match_score": 0.91,
+                "profile": {
+                    "identifier": f"profile-{risk_id}",
+                    "entity_type": "person",
+                    "match_details": {"match_score": 0.91, "matched_name": "Synthetic Person"},
+                    "risk_types": ["r_pep_class_2"],
+                    "risk_indicators": [],
+                    "person": {"names": {"values": [{"name": "Synthetic Person", "type": "PRIMARY"}]}},
+                },
+            }
+        ],
         "next": next_link,
         "first": "",
         "prev": None,

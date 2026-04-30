@@ -129,15 +129,23 @@ def _schedule_historical_backfill(*, application_id, client_id, customer_identif
 
         backfill_db = get_db()
         try:
-            await run_historical_backfill_for_subscription(
-                db=backfill_db,
-                ca_client=build_default_client(),
-                application_id=application_id,
-                client_id=client_id,
-                customer_identifier=customer_identifier,
-                discovered_via="webhook_backfill",
-                trigger_reason="subscription_seed",
-            )
+            try:
+                await run_historical_backfill_for_subscription(
+                    db=backfill_db,
+                    ca_client=build_default_client(),
+                    application_id=application_id,
+                    client_id=client_id,
+                    customer_identifier=customer_identifier,
+                    discovered_via="webhook_backfill",
+                    trigger_reason="subscription_seed",
+                )
+            except Exception:
+                logger.warning(
+                    "ca_historical_backfill_seed_schedule_failed client_id=%s application_id=%s",
+                    client_id,
+                    application_id,
+                    exc_info=True,
+                )
         finally:
             close = getattr(backfill_db, "close", None)
             if callable(close):

@@ -3513,14 +3513,18 @@ def _compare_historical_media(app: Dict, media_check: Dict) -> Dict[str, Any]:
     baseline_count = len(baseline_media.get("hits", [])) if isinstance(baseline_media, dict) else 0
     hits = media_check.get("hits", [])
     current_count = media_check.get("media_alerts_found", 0)
-    historical_backfill_hits = sum(
-        1 for hit in hits
-        if hit.get("discovered_via") in ("webhook_backfill", "manual_backfill")
-    )
-    live_hits = sum(
-        1 for hit in hits
-        if hit.get("discovered_via", "webhook_live") == "webhook_live"
-    )
+    if hits:
+        historical_backfill_hits = sum(
+            1 for hit in hits
+            if hit.get("discovered_via") in ("webhook_backfill", "manual_backfill")
+        )
+        live_hits = sum(
+            1 for hit in hits
+            if hit.get("discovered_via", "webhook_live") == "webhook_live"
+        )
+    else:
+        historical_backfill_hits = 0
+        live_hits = current_count
     live_new_hits_since_baseline = max(0, live_hits - baseline_count)
 
     return {
