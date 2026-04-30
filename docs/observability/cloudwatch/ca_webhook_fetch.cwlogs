@@ -1,0 +1,9 @@
+fields @timestamp, @message
+| filter @message like /"metric_namespace":"RegMind\/Screening\/ComplyAdvantage"/
+| filter @message like /"metric_name":"WebhookFetch/
+| parse @message /"metric_name":"(?<metric_name>[^"]+)"/
+| parse @message /"endpoint_category":"(?<endpoint_category>[^"]+)"/
+| parse @message /"status_family":"(?<status_family>[^"]+)"/
+| parse @message /"outcome":"(?<outcome>[^"]+)"/
+| stats sum(1) as events by bin(5m) as window, metric_name, endpoint_category, status_family, outcome
+| sort window desc

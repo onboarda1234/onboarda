@@ -5,11 +5,13 @@ import os
 
 from screening_models import create_normalized_screening_report
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME, ScreeningProvider
+from screening_config import get_active_provider_name
 
 from .client import ComplyAdvantageClient
 from .config import CAConfig
 from .exceptions import CAConfigurationError
 from .normalizer import ScreeningApplicationContext
+from .observability import emit_metric
 from .orchestrator import ComplyAdvantageScreeningOrchestrator
 from .payloads import build_customer_company, build_customer_person
 
@@ -104,6 +106,14 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
         )
 
     def _screen_subject(self, *, strict_customer, relaxed_customer, context, external_identifier=None):
+        active_provider = get_active_provider_name()
+        emit_metric(
+            "ca_adapter_invocation",
+            metric_name="ShadowCaActivity" if active_provider != COMPLYADVANTAGE_PROVIDER_NAME else "CaAdapterInvocations",
+            component="adapter",
+            outcome="success",
+            active_provider=active_provider,
+        )
         return self._get_orchestrator().screen_customer_two_pass(
             strict_customer=strict_customer,
             relaxed_customer=relaxed_customer,

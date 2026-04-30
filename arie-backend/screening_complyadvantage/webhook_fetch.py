@@ -1,6 +1,7 @@
 """Fetch-back service for ComplyAdvantage webhook resnapshots."""
 
 import logging
+import time
 from datetime import datetime, timezone
 
 from .client import ComplyAdvantageClient
@@ -14,6 +15,7 @@ from .orchestrator import (
     _normalise_risk_as_alert,
     _parse_risk_detail,
 )
+from .observability import emit_metric, emit_operational, endpoint_category, status_family
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +28,10 @@ def build_default_client():
     return ComplyAdvantageClient(CAConfig.from_env())
 
 
-def fetch_webhook_single_pass(client, envelope, application_context):
+def fetch_webhook_single_pass(client, envelope, application_context, trace_id=None):
     """Fetch current CA workflow/alert/risk state and return a normalized report."""
     case_identifier = extract_case_identifier(envelope)
-    guard = _WebhookFetchGuard(client)
+    guard = _WebhookFetchGuard(client, trace_id=trace_id, webhook_type=getattr(envelope, "webhook_type", "none"))
     case_raw = fetch_case_for_webhook(case_identifier, guard)
     alerts = []
     deep_risks = {}
@@ -141,6 +143,26 @@ def _fetch_risk_listings_for_alert(guard, alert_id):
                 alert_id,
                 _MAX_PAGES_PER_RESOURCE,
             )
+            emit_metric(
+                "webhook_fetch_page_cap_reached",
+                metric_name="WebhookFetchPageCapReached",
+                trace_id=getattr(guard, "trace_id", None),
+                component="webhook_fetch",
+                outcome="truncated",
+                endpoint_category="alert_risks",
+                alert_id=alert_id,
+                page_cap=_MAX_PAGES_PER_RESOURCE,
+            )
+            emit_operational(
+                "ca_webhook_fetch_truncated",
+                trace_id=getattr(guard, "trace_id", None),
+                component="webhook_fetch",
+                outcome="truncated",
+                endpoint_category="alert_risks",
+                alert_id=alert_id,
+                page_cap=_MAX_PAGES_PER_RESOURCE,
+                truncation_reason="page_cap",
+            )
             guard.mark_truncated("page_cap", alert_id=alert_id, page_cap=_MAX_PAGES_PER_RESOURCE)
             break
         page_count += 1
@@ -174,6 +196,14 @@ def _warn_nested_pagination(risk_id, value, path="detail"):
                 risk_id,
                 path,
             )
+            emit_metric(
+                "webhook_fetch_nested_pagination_detected",
+                metric_name="WebhookFetchNestedPaginationDetected",
+                component="webhook_fetch",
+                outcome="truncated",
+                endpoint_category="deep_risk",
+                risk_id=risk_id,
+            )
         for key, item in value.items():
             _warn_nested_pagination(risk_id, item, f"{path}.{key}")
     elif isinstance(value, list):
@@ -188,13 +218,16 @@ class _WebhookFetchGuard:
     CA GET/POST 429/5xx retries are a separate C2 follow-up, not added here.
     """
 
-    def __init__(self, client, max_calls=_MAX_API_CALLS_PER_WEBHOOK):
+    def __init__(self, client, max_calls=_MAX_API_CALLS_PER_WEBHOOK, trace_id=None, webhook_type="none"):
         self.client = client
         self.max_calls = max_calls
         self.calls = 0
         self.truncation = None
+        self.trace_id = trace_id
+        self.webhook_type = webhook_type
 
     def get(self, path, *, resource=None, identifier=None, page=None):
+        category = endpoint_category(path)
         if self.calls >= self.max_calls:
             self.mark_truncated("api_call_budget", path=path)
             logger.error(
@@ -203,6 +236,17 @@ class _WebhookFetchGuard:
                 path,
                 resource,
                 identifier,
+            )
+            emit_metric(
+                "webhook_fetch_api_call_budget_exhausted",
+                metric_name="WebhookFetchApiCallBudgetExhausted",
+                trace_id=self.trace_id,
+                component="webhook_fetch",
+                outcome="truncated",
+                webhook_type=self.webhook_type,
+                endpoint_category=category,
+                api_call_budget=self.max_calls,
+                path_template=path,
             )
             return None
         self.calls += 1
@@ -215,11 +259,86 @@ class _WebhookFetchGuard:
             identifier,
             page,
         )
-        return self.client.get(path)
+        started = time.monotonic()
+        try:
+            result = self.client.get(path)
+        except Exception as exc:
+            # The shared CA client maps transport, timeout, auth, rate-limit, and provider
+            # response failures to package exceptions; catch all here so every failed hop
+            # emits the required C5 observability signal before preserving the exception.
+            family = status_family(error=exc)
+            emit_metric(
+                _failure_metric_for_category(category),
+                trace_id=self.trace_id,
+                component="webhook_fetch",
+                outcome="failure",
+                endpoint_category=category,
+                status_family=family,
+                api_call_number=self.calls,
+                api_call_budget=self.max_calls,
+            )
+            emit_metric(
+                "webhook_fetch_api_call",
+                metric_name="WebhookFetchApiCalls",
+                trace_id=self.trace_id,
+                component="webhook_fetch",
+                outcome="failure",
+                endpoint_category=category,
+                status_family=family,
+            )
+            emit_operational(
+                "ca_webhook_fetch_hop_failed",
+                trace_id=self.trace_id,
+                component="webhook_fetch",
+                outcome="failure",
+                endpoint_category=category,
+                status_family=family,
+                api_call_number=self.calls,
+                api_call_budget=self.max_calls,
+                exception_class=exc.__class__.__name__,
+            )
+            raise
+        emit_metric(
+            "webhook_fetch_api_call",
+            metric_name="WebhookFetchApiCalls",
+            trace_id=self.trace_id,
+            component="webhook_fetch",
+            outcome="success",
+            endpoint_category=category,
+            status_family="2xx",
+        )
+        emit_metric(
+            "webhook_step_result",
+            metric_name="WebhookStepLatencyMs",
+            value=int((time.monotonic() - started) * 1000),
+            unit="Milliseconds",
+            trace_id=self.trace_id,
+            component="webhook_fetch",
+            outcome="success",
+            step=_step_for_category(category),
+        )
+        return result
 
     def mark_truncated(self, reason, **fields):
         if self.truncation is None:
             self.truncation = {"reason": reason, "calls": self.calls, **fields}
+
+
+def _failure_metric_for_category(category):
+    return {
+        "case": "CaseFetchFailures",
+        "alert_risks": "AlertRisksFetchFailures",
+        "deep_risk": "DeepRiskFetchFailures",
+    }.get(category, "WebhookFetchFailures")
+
+
+def _step_for_category(category):
+    return {
+        "case": "case_fetch",
+        "alert_risks": "alert_risks_fetch",
+        "deep_risk": "deep_risk_fetch",
+        "workflow": "workflow_fetch",
+    }.get(category, "fetch")
 
 
 def _case_backed_workflow_compat(case_identifier, case_raw, envelope):
