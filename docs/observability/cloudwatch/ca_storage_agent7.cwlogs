@@ -1,0 +1,8 @@
+fields @timestamp, @message
+| filter @message like /"metric_namespace":"RegMind\/Screening\/ComplyAdvantage"/
+| filter @message like /NormalizedWrite/ or @message like /MonitoringAlertsWrite/ or @message like /SubscriptionUpdate/ or @message like /Agent7Push/
+| parse @message /"metric_name":"(?<metric_name>[^"]+)"/
+| parse @message /"outcome":"(?<outcome>[^"]+)"/
+| parse @message /"active_provider":"(?<active_provider>[^"]+)"/
+| stats sum(1) as events by bin(5m) as window, metric_name, outcome, active_provider
+| sort window desc

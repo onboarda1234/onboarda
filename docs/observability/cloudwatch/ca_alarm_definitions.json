@@ -1,0 +1,74 @@
+{
+  "namespace": "RegMind/Screening/ComplyAdvantage",
+  "logGroups": {
+    "operational": "/regmind/ca/operational/",
+    "audit": "/regmind/ca/audit/"
+  },
+  "alarms": [
+    {
+      "name": "CA production webhook secret missing",
+      "metric": "WebhookSignatureFailures",
+      "dimensions": {"Mode": "production_fail_closed"},
+      "threshold": 1,
+      "periodSeconds": 300,
+      "evaluationPeriods": 1,
+      "severity": "critical"
+    },
+    {
+      "name": "CA webhook async processing failure",
+      "metric": "WebhookAsyncProcessingFailures",
+      "threshold": 1,
+      "periodSeconds": 300,
+      "evaluationPeriods": 1,
+      "severity": "critical"
+    },
+    {
+      "name": "CA fetch API call budget exhausted",
+      "metric": "WebhookFetchApiCallBudgetExhausted",
+      "threshold": 1,
+      "periodSeconds": 900,
+      "evaluationPeriods": 1,
+      "severity": "critical"
+    },
+    {
+      "name": "CA alert risk page cap reached",
+      "metric": "WebhookFetchPageCapReached",
+      "threshold": 1,
+      "periodSeconds": 900,
+      "evaluationPeriods": 1,
+      "severity": "critical"
+    },
+    {
+      "name": "CA normalized write failure",
+      "metric": "NormalizedWriteFailures",
+      "threshold": 1,
+      "periodSeconds": 300,
+      "evaluationPeriods": 1,
+      "severity": "critical"
+    },
+    {
+      "name": "CA monitoring alert write failure",
+      "metric": "MonitoringAlertsWriteFailures",
+      "threshold": 1,
+      "periodSeconds": 900,
+      "evaluationPeriods": 1,
+      "severity": "warning"
+    },
+    {
+      "name": "CA subscription update failure",
+      "metric": "SubscriptionUpdateFailures",
+      "threshold": 1,
+      "periodSeconds": 900,
+      "evaluationPeriods": 1,
+      "severity": "warning"
+    },
+    {
+      "name": "CA Agent 7 push failure",
+      "metric": "Agent7PushFailures",
+      "threshold": 1,
+      "periodSeconds": 900,
+      "evaluationPeriods": 1,
+      "severity": "critical"
+    }
+  ]
+}

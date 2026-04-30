@@ -33,6 +33,7 @@ def _call_handler(
     include_signature=True,
     environment="development",
     storage_callback=None,
+    request_id=None,
 ):
     body = json.dumps(payload, sort_keys=True).encode("utf-8")
     return _call_handler_body(
@@ -42,6 +43,7 @@ def _call_handler(
         include_signature=include_signature,
         environment=environment,
         storage_callback=storage_callback,
+        request_id=request_id,
     )
 
 
@@ -53,12 +55,15 @@ def _call_handler_body(
     include_signature=True,
     environment="development",
     storage_callback=None,
+    request_id=None,
 ):
     headers = {}
     if include_signature:
         headers["x-complyadvantage-signature"] = (
             signature if signature is not None else _signed(body, secret or "fixture-secret")
         )
+    if request_id is not None:
+        headers["X-Request-ID"] = request_id
     app = Application()
     mock_conn = MagicMock()
     mock_conn.context = MagicMock()
@@ -116,6 +121,14 @@ def test_case_alert_list_updated_parses_and_spawns():
     envelope = fake_loop.spawn_callback.call_args.args[1]
     assert envelope.webhook_type == "CASE_ALERT_LIST_UPDATED"
     assert envelope.alert_identifiers == ["alert-san"]
+
+
+def test_known_webhook_propagates_bounded_trace_id_to_spawned_callback():
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        _call_handler(_fixture("webhook_case_created.json"), request_id="req-ca-123")
+
+    assert fake_loop.spawn_callback.call_args.kwargs["trace_id"] == "req-ca-123"
 
 
 def test_unknown_event_returns_202_without_spawn(caplog):
