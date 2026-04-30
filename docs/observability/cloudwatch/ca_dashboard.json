@@ -10,7 +10,7 @@
       "title": "CA Webhook Intake",
       "type": "log",
       "queryFile": "ca_webhook_intake.cwlogs",
-      "metrics": ["WebhookDeliveries", "WebhookSignatureFailures", "WebhookMalformedPayloads", "WebhookUnknownEvents"]
+      "metrics": ["WebhookDeliveries", "WebhookSignatureFailures", "WebhookMalformedPayloads", "WebhookUnknownEvents", "EnvModeDrift"]
     },
     {
       "title": "Webhook Background Processing",
@@ -23,6 +23,12 @@
       "type": "log",
       "queryFile": "ca_api_health.cwlogs",
       "metrics": ["CaApiRequests", "CaApiLatencyMs", "CaAuthRequests", "CaAuthLatencyMs", "CaTokenCacheHits", "CaTokenCacheMisses"]
+    },
+    {
+      "title": "CA Webhook Fetch Health",
+      "type": "log",
+      "queryFile": "ca_webhook_fetch.cwlogs",
+      "metrics": ["WebhookFetchApiCalls", "WebhookFetchApiCallBudgetExhausted", "WebhookFetchPageCapReached", "WebhookFetchNestedPaginationDetected"]
     },
     {
       "title": "Storage, Subscription, and Agent 7",
