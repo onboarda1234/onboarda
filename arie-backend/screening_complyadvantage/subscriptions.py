@@ -3,6 +3,7 @@
 import logging
 
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
+from .observability import emit_audit, emit_metric
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,21 @@ def seed_monitoring_subscription(
         commit = getattr(db, "commit", None)
         if callable(commit):
             commit()
+        emit_metric(
+            "monitoring_subscription_seeded",
+            metric_name="MonitoringSubscriptionSeeded",
+            component="subscriptions",
+            outcome="success",
+            step="subscription_seed",
+        )
+        emit_audit(
+            "ca_subscription_seeded",
+            component="subscriptions",
+            outcome="success",
+            application_id=application_id,
+            client_id=client_id,
+            customer_identifier=customer_identifier,
+        )
     except Exception as exc:
         if _is_unique_violation(exc):
             logger.warning(
@@ -41,11 +57,18 @@ def seed_monitoring_subscription(
                 client_id,
                 customer_identifier,
             )
+            emit_metric(
+                "monitoring_subscription_duplicate",
+                metric_name="MonitoringSubscriptionDuplicates",
+                component="subscriptions",
+                outcome="skipped",
+                step="subscription_seed",
+            )
             return
         raise
 
 
-def update_monitoring_subscription_event(db, client_id, customer_identifier, last_webhook_type):
+def update_monitoring_subscription_event(db, client_id, customer_identifier, last_webhook_type, trace_id=None):
     """Record the latest CA monitoring webhook event for an existing subscription."""
     db.execute(
         """
@@ -61,6 +84,15 @@ def update_monitoring_subscription_event(db, client_id, customer_identifier, las
     commit = getattr(db, "commit", None)
     if callable(commit):
         commit()
+    emit_metric(
+        "subscription_update_success",
+        metric_name="SubscriptionUpdateSuccesses",
+        trace_id=trace_id,
+        component="subscriptions",
+        outcome="success",
+        webhook_type=last_webhook_type,
+        step="subscription_update",
+    )
 
 
 def _is_unique_violation(exc):

@@ -26,6 +26,7 @@ from .models import (
     CAWorkflowResponse,
 )
 from .normalizer import normalize_two_pass_screening
+from .observability import emit_metric
 from .payloads import build_create_and_screen_payload, monitoring_enabled_from_payload
 from .subscriptions import seed_monitoring_subscription
 
@@ -189,6 +190,13 @@ class ComplyAdvantageScreeningOrchestrator:
                 customer_identifier,
                 "db_handle_not_injected",
             )
+            emit_metric(
+                "monitoring_subscription_skipped",
+                metric_name="MonitoringSubscriptionSkipped",
+                component="orchestrator",
+                outcome="skipped",
+                step="subscription_seed",
+            )
             return
         seed_monitoring_subscription(
             db,
@@ -201,6 +209,13 @@ class ComplyAdvantageScreeningOrchestrator:
             "ca_monitoring_subscription_seeded workflow_id=%s customer_identifier=%s",
             workflow_id,
             customer_identifier,
+        )
+        emit_metric(
+            "monitoring_subscription_seeded",
+            metric_name="MonitoringSubscriptionSeeded",
+            component="orchestrator",
+            outcome="success",
+            step="subscription_seed",
         )
 
 
@@ -223,7 +238,24 @@ def _poll_workflow_until_complete(
     while True:
         if delay > 0:
             sleep_fn(delay)
+        poll_started = clock()
         raw = client.get(f"/v2/workflows/{workflow_id}")
+        emit_metric(
+            "workflow_poll_attempt",
+            metric_name="WorkflowPollingAttempts",
+            component="orchestrator",
+            outcome="success",
+            step="workflow_poll",
+        )
+        emit_metric(
+            "workflow_poll_latency",
+            metric_name="WorkflowPollingLatencyMs",
+            value=int((clock() - poll_started) * 1000),
+            unit="Milliseconds",
+            component="orchestrator",
+            outcome="success",
+            step="workflow_poll",
+        )
         workflow = CAWorkflowResponse.model_validate(raw)
         if _workflow_complete(workflow):
             return _WorkflowPollResult(workflow=workflow, raw=raw)

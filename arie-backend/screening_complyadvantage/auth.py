@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import requests
 
+from .observability import emit_metric, path_template, status_family
 from .exceptions import (
     CAAuthenticationFailed,
     CABadRequest,
@@ -55,7 +56,9 @@ class ComplyAdvantageTokenClient:
     def get_token(self):
         with self._lock:
             if self._cache_is_fresh_locked():
+                emit_metric("ca_token_cache_hit", metric_name="CaTokenCacheHits", component="auth", outcome="success")
                 return self._cache.access_token
+            emit_metric("ca_token_cache_miss", metric_name="CaTokenCacheMisses", component="auth", outcome="success")
             return self._refresh_locked()
 
     def force_refresh(self):
@@ -98,6 +101,27 @@ class ComplyAdvantageTokenClient:
                     attempt=attempt,
                     status_code=response.status_code,
                     duration_ms=duration_ms,
+                )
+                family = status_family(response.status_code)
+                emit_metric(
+                    "ca_auth_request",
+                    metric_name="CaAuthRequests",
+                    component="auth",
+                    outcome="success" if 200 <= response.status_code < 400 else "failure",
+                    method="POST",
+                    path_template=path_template(_path_for_log(self.config.auth_url)),
+                    status_code=response.status_code,
+                    status_family=family,
+                    attempt=attempt,
+                )
+                emit_metric(
+                    "ca_auth_latency",
+                    metric_name="CaAuthLatencyMs",
+                    value=duration_ms,
+                    unit="Milliseconds",
+                    component="auth",
+                    outcome="success" if 200 <= response.status_code < 400 else "failure",
+                    status_family=family,
                 )
                 token = self._handle_auth_response(response)
                 return token
@@ -178,6 +202,17 @@ class ComplyAdvantageTokenClient:
             self.config.realm,
             _username_fingerprint(self.config.username),
             exc.__class__.__name__,
+        )
+        emit_metric(
+            "ca_auth_request",
+            metric_name="CaAuthRequests",
+            component="auth",
+            outcome="failure",
+            method=method,
+            path_template=path_template(path),
+            status_family=status_family(error=exc),
+            attempt=attempt,
+            exception_class=exc.__class__.__name__,
         )
 
 

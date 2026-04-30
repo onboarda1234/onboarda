@@ -14,6 +14,7 @@ from .exceptions import (
     CATimeout,
     CAUnexpectedResponse,
 )
+from .observability import emit_metric, endpoint_category, path_template, status_family
 
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,30 @@ class ComplyAdvantageClient:
             self.config.realm,
             _username_fingerprint(self.config.username),
         )
+        category = endpoint_category(log_path)
+        family = status_family(response.status_code)
+        emit_metric(
+            "ca_api_request",
+            metric_name="CaApiRequests",
+            component="client",
+            outcome="success" if 200 <= response.status_code < 400 else "failure",
+            method=method,
+            path_template=path_template(log_path),
+            status_code=response.status_code,
+            status_family=family,
+            endpoint_category=category,
+            attempt=attempt,
+        )
+        emit_metric(
+            "ca_api_latency",
+            metric_name="CaApiLatencyMs",
+            value=duration_ms,
+            unit="Milliseconds",
+            component="client",
+            outcome="success" if 200 <= response.status_code < 400 else "failure",
+            status_family=family,
+            endpoint_category=category,
+        )
         return response
 
     def _map_response(self, response, path):
@@ -132,4 +157,16 @@ class ComplyAdvantageClient:
             self.config.realm,
             _username_fingerprint(self.config.username),
             exc.__class__.__name__,
+        )
+        emit_metric(
+            "ca_api_request",
+            metric_name="CaApiRequests",
+            component="client",
+            outcome="failure",
+            method=method,
+            path_template=path_template(path),
+            status_family=status_family(error=exc),
+            endpoint_category=endpoint_category(path),
+            attempt=attempt,
+            exception_class=exc.__class__.__name__,
         )

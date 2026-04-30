@@ -16,6 +16,7 @@ import hmac
 import json
 import logging
 import os
+from inspect import Parameter, signature
 
 import tornado.ioloop
 from pydantic import ValidationError
@@ -24,6 +25,7 @@ from base_handler import BaseHandler
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 
 from .models.webhooks import CACaseAlertListUpdatedWebhook, CACaseCreatedWebhook, CAUnknownWebhookEnvelope
+from .observability import emit_metric, emit_operational, inbound_trace_id
 from .webhook_fetch import WebhookEnvelopeError, extract_case_identifier, validate_alert_identifiers
 from .webhook_storage import process_complyadvantage_webhook
 
@@ -42,17 +44,52 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
     def post(self):
         body = self.request.body
         signature = self.request.headers.get(_SIGNATURE_HEADER, "")
+        trace_id = inbound_trace_id(self.request.headers.get("X-Request-ID"))
         signature_status = _signature_status(body, signature)
         if signature_status == "invalid":
             logger.warning(
                 "ca_webhook_signature signature_mode=strict signature_invalid=true body_len=%d",
                 len(body),
             )
+            emit_metric(
+                "webhook_signature_failure",
+                metric_name="WebhookSignatureFailures",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure",
+                signature_mode="strict",
+                body_len=len(body),
+            )
+            emit_metric(
+                "webhook_delivery",
+                metric_name="WebhookDeliveries",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure",
+                signature_mode="strict",
+                webhook_type="none",
+            )
             self.set_status(401)
             return
         if signature_status == "production_secret_missing":
             logger.error(
                 "ca_webhook_signature signature_mode=production_fail_closed signature_secret_configured=false"
+            )
+            emit_metric(
+                "webhook_signature_failure",
+                metric_name="WebhookSignatureFailures",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure",
+                signature_mode="production_fail_closed",
+            )
+            emit_metric(
+                "env_mode_drift",
+                metric_name="EnvModeDrift",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure",
+                signature_mode="production_fail_closed",
             )
             self.set_status(503)
             return
@@ -61,13 +98,46 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
                 "ca_webhook_signature signature_mode=sandbox_fail_open signature_verification_disabled=true environment=%s",
                 _environment(),
             )
+            emit_metric(
+                "env_mode_drift",
+                metric_name="EnvModeDrift",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure" if _environment() == "production" else "skipped",
+                signature_mode="sandbox_fail_open",
+            )
         else:
             logger.info("ca_webhook_signature signature_mode=strict signature_valid=true body_len=%d", len(body))
+        emit_operational(
+            "ca_webhook_received",
+            trace_id=trace_id,
+            component="webhook_handler",
+            outcome="success",
+            signature_mode=_metric_signature_mode(signature_status),
+            body_len=len(body),
+        )
 
         try:
             payload = json.loads(body)
         except Exception:
             logger.warning("ca_webhook_invalid_json body_len=%d", len(body))
+            emit_metric(
+                "webhook_malformed_payload",
+                metric_name="WebhookMalformedPayloads",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure",
+                webhook_type="none",
+            )
+            emit_metric(
+                "webhook_delivery",
+                metric_name="WebhookDeliveries",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure",
+                signature_mode=_metric_signature_mode(signature_status),
+                webhook_type="none",
+            )
             self.set_status(400)
             return
 
@@ -86,6 +156,25 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
                 envelope.case_identifier,
                 getattr(customer, "identifier", None),
             )
+            emit_metric(
+                "webhook_unknown_event",
+                metric_name="WebhookUnknownEvents",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="success",
+                webhook_type="UNKNOWN",
+                case_identifier=envelope.case_identifier,
+                customer_identifier=getattr(customer, "identifier", None),
+            )
+            emit_metric(
+                "webhook_delivery",
+                metric_name="WebhookDeliveries",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="no_op",
+                signature_mode=_metric_signature_mode(signature_status),
+                webhook_type="UNKNOWN",
+            )
             self.set_status(202)
             return
 
@@ -94,6 +183,14 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
             envelope = _parse_known_envelope(event_type, payload)
         except (ValidationError, WebhookEnvelopeError):
             logger.warning("ca_webhook_envelope_invalid event_type=%s", event_type, exc_info=True)
+            emit_metric(
+                "webhook_malformed_payload",
+                metric_name="WebhookMalformedPayloads",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure",
+                webhook_type=event_type or "none",
+            )
             self.set_status(400)
             return
 
@@ -103,24 +200,53 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
                 event_type,
                 envelope.case_identifier,
             )
+            emit_metric(
+                "webhook_delivery",
+                metric_name="WebhookDeliveries",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="no_op",
+                signature_mode=_metric_signature_mode(signature_status),
+                webhook_type=event_type,
+            )
             self.set_status(202)
             return
 
+        emit_metric(
+            "webhook_delivery",
+            metric_name="WebhookDeliveries",
+            trace_id=trace_id,
+            component="webhook_handler",
+            outcome="success",
+            signature_mode=_metric_signature_mode(signature_status),
+            webhook_type=event_type,
+            case_identifier=envelope.case_identifier,
+            customer_identifier=getattr(envelope.customer, "identifier", None),
+        )
         self.set_status(202)
-        tornado.ioloop.IOLoop.current().spawn_callback(self._process_webhook_async, envelope)
+        tornado.ioloop.IOLoop.current().spawn_callback(self._process_webhook_async, envelope, trace_id=trace_id)
 
-    async def _process_webhook_async(self, envelope):
+    async def _process_webhook_async(self, envelope, trace_id=None):
         try:
-            await self._storage_callback(envelope)
+            await _call_storage_callback(self._storage_callback, envelope, trace_id)
         except Exception:
-            from .webhook_storage import emit_metric
             logger.error(
                 "ca_webhook_async_processing_failure webhook_type=%s case_identifier=%s",
                 getattr(envelope, "webhook_type", None),
                 getattr(envelope, "case_identifier", None),
                 exc_info=True,
             )
-            emit_metric("webhook_async_processing_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
+            metric_fields = {"provider": COMPLYADVANTAGE_PROVIDER_NAME}
+            if trace_id:
+                metric_fields.update({
+                    "trace_id": trace_id,
+                    "component": "webhook_handler",
+                    "outcome": "failure",
+                    "webhook_type": getattr(envelope, "webhook_type", None),
+                    "case_identifier": getattr(envelope, "case_identifier", None),
+                })
+            from .webhook_storage import emit_metric as storage_emit_metric
+            storage_emit_metric("webhook_async_processing_failure", **metric_fields)
 
 
 def _verify_signature(body, signature):
@@ -142,6 +268,32 @@ def _signature_status(body, signature):
 
 def _environment():
     return os.environ.get("ENVIRONMENT", "development").strip().lower()
+
+
+def _metric_signature_mode(signature_status):
+    return {
+        "valid": "strict",
+        "invalid": "strict",
+        "production_secret_missing": "production_fail_closed",
+        "disabled_non_production": "sandbox_fail_open",
+    }.get(signature_status, "strict")
+
+
+async def _call_storage_callback(callback, envelope, trace_id):
+    if _accepts_keyword(callback, "trace_id"):
+        return await callback(envelope, trace_id=trace_id)
+    return await callback(envelope)
+
+
+def _accepts_keyword(callable_obj, keyword):
+    try:
+        parameters = signature(callable_obj).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind == Parameter.VAR_KEYWORD or parameter.name == keyword
+        for parameter in parameters
+    )
 
 
 def _parse_known_envelope(event_type, payload):
