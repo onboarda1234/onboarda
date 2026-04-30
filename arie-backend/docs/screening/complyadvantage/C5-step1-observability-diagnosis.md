@@ -2,9 +2,9 @@
 
 ## Preflight
 
-- Branch prepared locally: `c5/observability-step1-diagnosis`; fixups applied on `copilot/c5observability-step1-diagnosis` on top of `160a76d`.
+- Branch prepared locally: `c5/observability-step1-diagnosis`; final fixup applied on `copilot/c5observability-step1-diagnosis` on top of `6e08e08`.
 - Source-of-truth preflight executed before analysis: `git fetch origin main`, `git checkout FETCH_HEAD`, `git --no-pager log --oneline -10`.
-- Operated against post-PR-#195 base commit SHA `2e1a7928567983b9702dd747f0473ef7d3be1e82` (`2e1a792 [C4 Step 2] Webhook handler + dual-write implementation (#195)`), with this diagnosis fixup committed on top of `160a76d`.
+- Operated against post-PR-#195 base commit SHA `2e1a7928567983b9702dd747f0473ef7d3be1e82` (`2e1a792 [C4 Step 2] Webhook handler + dual-write implementation (#195)`), with the final diagnosis fixup committed on top of `6e08e08`.
 - Required signpost output:
 
 ```text
@@ -75,6 +75,8 @@ Current CA logging is useful but uneven. The exact existing log and metric surfa
 > `screening_complyadvantage/webhook_handler.py:60-62` emits `ca_webhook_signature` at WARNING level when non-production signature verification is disabled, with fields `signature_mode=sandbox_fail_open`, `signature_verification_disabled=true`, and `environment`.
 
 > `screening_complyadvantage/webhook_handler.py:65` emits `ca_webhook_signature` at INFO level for valid strict signatures with fields `signature_mode=strict`, `signature_valid=true`, and `body_len`.
+
+> `screening_complyadvantage/webhook_handler.py:134` defines `_signature_status`; `screening_complyadvantage/webhook_handler.py:135` reads `COMPLYADVANTAGE_WEBHOOK_SECRET` to choose strict signature validation, and `screening_complyadvantage/webhook_handler.py:144` reads `ENVIRONMENT` to distinguish production fail-closed from non-production fail-open mode.
 
 > `screening_complyadvantage/webhook_handler.py:70` emits `ca_webhook_invalid_json` at WARNING level with field `body_len`.
 
@@ -309,7 +311,7 @@ Every CA observability log should include:
 
 ### 5.2 Operational log class
 
-Operational logs support on-call triage and short-term health monitoring. They may include internal correlation identifiers but never raw PII, CA secrets, request bodies, response bodies, bearer tokens, webhook signatures, or full HMAC values.
+Operational logs support on-call triage and short-term health monitoring. They must be emitted to the physically separate operational log group `/regmind/ca/operational/`. They may include internal correlation identifiers but never raw PII, CA secrets, request bodies, response bodies, bearer tokens, webhook signatures, or full HMAC values.
 
 Allowed operational fields:
 
@@ -351,7 +353,7 @@ Operational event examples:
 
 ### 5.3 Audit log class
 
-Audit logs support compliance review and provider cutover evidence. They should be lower volume and outcome-focused. They must still avoid raw CA payloads and secrets.
+Audit logs support compliance review and provider cutover evidence. They must be emitted to the physically separate audit log group `/regmind/ca/audit/`. They should be lower volume and outcome-focused. They must still avoid raw CA payloads and secrets.
 
 Audit events should include:
 
@@ -520,7 +522,7 @@ Recommended D2 comparison model:
 | CA debug/sandbox validation logs | temporary verbose D1 diagnostics | 14 days, disabled by default outside D1 windows | Minimizes sensitive operational metadata retention. |
 | Existing upload latency logs | upload/verify latency telemetry | Keep current policy; align to 90 days if formalized | Not CA-specific. |
 
-If log groups are shared, use event fields and metric filters to distinguish retention class until separate log groups are provisioned. If separate log groups are provisioned later, use `/regmind/ca/operational/<env>` and `/regmind/ca/audit/<env>`.
+C5 Step 2 must use physically separate CA log groups from launch: operational logs go to `/regmind/ca/operational/`, audit logs go to `/regmind/ca/audit/`, and debug/sandbox validation logs go to `/regmind/ca/debug/` only during approved D1 windows. Retention class must be enforced by log group, not by filtering mixed operational and audit events together.
 
 ## 12. Cost projection
 
