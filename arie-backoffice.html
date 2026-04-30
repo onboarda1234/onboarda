@@ -2632,6 +2632,8 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     <div class="modal-header"><h3>Record Decision Reason</h3><button class="modal-close" onclick="closeModal('modal-decision-reason')">&times;</button></div>
     <div class="modal-body">
       <div class="form-group"><div class="form-label">Decision</div><div style="padding:10px 12px;background:var(--brand-dim);border-radius:var(--radius-sm);font-weight:600;color:var(--text1);" id="decision-type-display">Approve</div></div>
+      <div id="decision-readiness-panel" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
+      <div id="decision-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;"></div>
       <div class="form-group"><div class="form-label">Reason (Required)</div><textarea class="form-input" rows="4" id="decision-reason" placeholder="Explain your decision and key factors considered..." style="resize:vertical;"></textarea></div>
       <div class="form-group"><div class="form-label">Additional Notes (Optional)</div><textarea class="form-input" rows="3" id="decision-notes" placeholder="Any additional information..." style="resize:vertical;"></textarea></div>
       <div class="officer-signoff-gate">
@@ -2646,7 +2648,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-decision-reason')">Cancel</button>
-      <button class="btn btn-primary" onclick="confirmDecision()">Confirm Decision</button>
+      <button class="btn btn-primary" id="decision-confirm-btn" onclick="confirmDecision()">Confirm Decision</button>
     </div>
   </div>
 </div>
@@ -8377,6 +8379,66 @@ async function loadDecisionRecords() {
 // ═══════════════════════════════════════════════════════════
 // ACTIONS
 // ═══════════════════════════════════════════════════════════
+function setDecisionError(message) {
+  var el = document.getElementById('decision-error');
+  if (!el) return;
+  if (!message) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
+  }
+  el.textContent = message;
+  el.style.display = 'block';
+}
+
+function getApprovalReadiness(app) {
+  var blockers = [];
+  if (!app) return { ready: false, blockers: ['No application is selected.'] };
+  if (!app.latestMemo) blockers.push('Compliance memo has not been generated.');
+  if (app.memoIsStale) blockers.push('Compliance memo is stale after application changes.');
+  var screening = getApplicationScreeningSummary(app);
+  if (!screening.screening_run_recorded) blockers.push('Screening has not been run.');
+  if (screening.screening_mode && screening.screening_mode !== 'live') blockers.push('Screening is not recorded as live.');
+  if (screening.screening_freshness) {
+    if (screening.screening_freshness.status === 'expired') blockers.push('Screening results are expired.');
+    if (screening.screening_freshness.status === 'parse_error') blockers.push('Screening freshness could not be verified.');
+  }
+  if ((app.risk === 'HIGH' || app.risk === 'VERY_HIGH') && currentUser && currentUser.role === 'co') {
+    blockers.push('High-risk approval requires Admin or Senior Compliance Officer.');
+  }
+  return { ready: blockers.length === 0, blockers: blockers };
+}
+
+function renderDecisionReadiness(decision) {
+  var panel = document.getElementById('decision-readiness-panel');
+  var confirmBtn = document.getElementById('decision-confirm-btn');
+  if (!panel || !confirmBtn) return;
+  confirmBtn.disabled = false;
+  panel.style.display = 'none';
+  panel.innerHTML = '';
+
+  if (decision !== 'Approve') return;
+
+  var readiness = getApprovalReadiness(currentApp);
+  if (readiness.ready) {
+    panel.style.display = 'block';
+    panel.style.background = '#dcfce7';
+    panel.style.borderColor = '#bbf7d0';
+    panel.style.color = '#166534';
+    panel.innerHTML = '<strong>Approval Readiness:</strong> No obvious client-side blockers detected. Backend gates will still perform final validation.';
+    return;
+  }
+
+  confirmBtn.disabled = true;
+  panel.style.display = 'block';
+  panel.style.background = '#fef3c7';
+  panel.style.borderColor = '#fde68a';
+  panel.style.color = '#92400e';
+  panel.innerHTML = '<strong>Approval blocked:</strong><ul style="margin:8px 0 0 18px;padding:0;">' +
+    readiness.blockers.map(function(b) { return '<li>' + escapeHtml(b) + '</li>'; }).join('') +
+    '</ul>';
+}
+
 function approveApplication() {
   if (!currentApp) return;
   if (!assertPermission('approve_low_medium')) return;
@@ -8384,7 +8446,9 @@ function approveApplication() {
   document.getElementById('decision-type-display').textContent = 'Approve';
   document.getElementById('decision-reason').value = '';
   document.getElementById('decision-notes').value = '';
+  setDecisionError('');
   var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
+  renderDecisionReadiness('Approve');
   document.getElementById('modal-decision-reason').classList.add('open');
 }
 
@@ -8395,7 +8459,9 @@ function rejectApplication() {
   document.getElementById('decision-type-display').textContent = 'Reject';
   document.getElementById('decision-reason').value = '';
   document.getElementById('decision-notes').value = '';
+  setDecisionError('');
   var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
+  renderDecisionReadiness('Reject');
   document.getElementById('modal-decision-reason').classList.add('open');
 }
 
@@ -8486,7 +8552,8 @@ async function confirmDecision() {
     }
   } catch (e) {
     console.warn('Decision submission failed:', e);
-    showToast(e.message || 'Decision submission failed');
+    setDecisionError(e.message || 'Decision submission failed');
+    showToast(e.message || 'Decision submission failed', 'error');
     return;
   }
 }
@@ -8600,7 +8667,9 @@ function requestMoreInfo() {
   document.getElementById('decision-type-display').textContent = 'Request Additional Documents';
   document.getElementById('decision-reason').value = '';
   document.getElementById('decision-notes').value = '';
+  setDecisionError('');
   var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
+  renderDecisionReadiness('Request Docs');
   document.getElementById('modal-decision-reason').classList.add('open');
 }
 
@@ -8638,7 +8707,9 @@ async function escalateCase() {
   document.getElementById('decision-type-display').textContent = 'Escalate to EDD';
   document.getElementById('decision-reason').value = '';
   document.getElementById('decision-notes').value = '';
+  setDecisionError('');
   var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
+  renderDecisionReadiness('EDD');
   document.getElementById('modal-decision-reason').classList.add('open');
 }
 
@@ -10400,8 +10471,17 @@ function exportAgentHealthReport() {
 // ═══════════════════════════════════════════════════════════
 // SIGN OUT
 // ═══════════════════════════════════════════════════════════
-function signOut() {
-  // httpOnly session cookie cleared by server on logout; no JS cookie to expire
+async function signOut() {
+  var tokenForLogout = BO_AUTH_TOKEN;
+  try {
+    await fetch(BO_API_BASE + '/auth/logout', {
+      method: 'POST',
+      headers: tokenForLogout ? { 'Authorization': 'Bearer ' + tokenForLogout } : {}
+    });
+  } catch(e) {
+    console.warn('Server logout failed; clearing local session state:', e);
+  }
+  // httpOnly session cookie is cleared by server logout; local state is cleared below.
   BO_AUTH_TOKEN = '';
   BO_AUTH_USER = null;
 

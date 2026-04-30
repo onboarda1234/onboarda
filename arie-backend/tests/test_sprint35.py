@@ -169,6 +169,41 @@ class TestLogout:
         assert resp.status_code == 200
         assert resp.json().get("status") == "logged_out"
 
+    def test_logout_revokes_bearer_token_for_protected_apis(self, api_server):
+        """After logout, the same bearer token must not access protected APIs."""
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        assert http_requests.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 200
+        logout = http_requests.post(f"{api_server}/api/auth/logout", headers=headers, timeout=3)
+        assert logout.status_code == 200
+
+        assert http_requests.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 401
+        assert http_requests.get(f"{api_server}/api/applications", headers=headers, timeout=3).status_code == 401
+
+    def test_logout_revokes_cookie_session_token(self, api_server):
+        """Logout using cookie auth must revoke the cookie token, not just clear local UI state."""
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        cookies = {"arie_session": token}
+
+        assert http_requests.get(f"{api_server}/api/auth/me", cookies=cookies, timeout=3).status_code == 200
+        logout = http_requests.post(f"{api_server}/api/auth/logout", cookies=cookies, timeout=3)
+        assert logout.status_code == 200
+
+        # Re-send the original cookie value to prove server-side revocation.
+        assert http_requests.get(f"{api_server}/api/auth/me", cookies=cookies, timeout=3).status_code == 401
+
+    def test_browser_signout_calls_server_logout(self):
+        """Back office and portal sign-out must call the server logout endpoint."""
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        backoffice = open(os.path.join(repo_root, "arie-backoffice.html"), encoding="utf-8").read()
+        portal = open(os.path.join(repo_root, "arie-portal.html"), encoding="utf-8").read()
+
+        assert "BO_API_BASE + '/auth/logout'" in backoffice
+        assert "API_BASE + '/auth/logout'" in portal
+
 
 # ═══════════════════════════════════════════════════════════
 # 3. CSRF Protection

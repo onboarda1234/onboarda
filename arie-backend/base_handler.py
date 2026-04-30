@@ -367,6 +367,50 @@ class BaseHandler(tornado.web.RequestHandler):
         if own_db:
             db.close()
 
+    def log_governance_attempt(self, user, action, target, outcome, status_code,
+                               reason="", payload_summary=None, db=None):
+        """Persist an audit row for success or rejection of governed actions.
+
+        This is intentionally separate from the business-event audit rows
+        ("Decision", "Screening Review", etc.) so failed attempts are visible
+        even when the guarded action is rejected before any state change.
+        """
+        detail = json.dumps({
+            "event": "governance_attempt",
+            "action": action,
+            "outcome": outcome,
+            "response_code": status_code,
+            "rejection_reason": reason or "",
+            "payload_summary": payload_summary or {},
+            "path": self.request.path if hasattr(self, "request") else "",
+            "method": self.request.method if hasattr(self, "request") else "",
+            "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        }, default=str)
+
+        own_db = db is None
+        try:
+            if own_db:
+                db = get_db()
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", "") if user else "",
+                    user.get("name", "") if user else "",
+                    user.get("role", "") if user else "",
+                    "Governance Attempt",
+                    target,
+                    detail,
+                    self.get_client_ip() if hasattr(self, "request") else "",
+                ),
+            )
+            db.commit()
+        except Exception:
+            logger.exception("Governance audit write failed for action=%s target=%s", action, target)
+        finally:
+            if own_db and db is not None:
+                db.close()
+
     def log_authz_denial(self, user, event, resource_id, context_dict, db=None):
         """Write a uniform audit row for any AuthZ denial.
 
