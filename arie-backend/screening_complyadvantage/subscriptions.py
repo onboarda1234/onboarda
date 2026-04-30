@@ -1,6 +1,8 @@
 """Monitoring subscription persistence for ComplyAdvantage screenings."""
 
 import logging
+import asyncio
+import threading
 
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from .observability import emit_audit, emit_metric
@@ -16,6 +18,8 @@ def seed_monitoring_subscription(
     customer_identifier,
     person_key=None,
     source="c3_create_and_screen",
+    schedule_backfill=True,
+    backfill_scheduler=None,
 ):
     """Insert one monitoring subscription row using only the injected DB handle."""
     columns = ["client_id", "application_id", "provider", "customer_identifier", "source"]
@@ -49,6 +53,13 @@ def seed_monitoring_subscription(
             client_id=client_id,
             customer_identifier=customer_identifier,
         )
+        if schedule_backfill:
+            scheduler = backfill_scheduler or _schedule_historical_backfill
+            scheduler(
+                application_id=application_id,
+                client_id=client_id,
+                customer_identifier=customer_identifier,
+            )
     except Exception as exc:
         if _is_unique_violation(exc):
             logger.warning(
@@ -107,3 +118,35 @@ def _is_unique_violation(exc):
 def _placeholder():
     # The repository's DBConnection convention translates '?' for PostgreSQL.
     return "?"
+
+
+def _schedule_historical_backfill(*, application_id, client_id, customer_identifier):
+    """Launch the one-shot CA historical backfill after a subscription seed."""
+    async def _runner():
+        from db import get_db
+        from .webhook_fetch import build_default_client
+        from .historical_backfill import run_historical_backfill_for_subscription
+
+        backfill_db = get_db()
+        try:
+            await run_historical_backfill_for_subscription(
+                db=backfill_db,
+                ca_client=build_default_client(),
+                application_id=application_id,
+                client_id=client_id,
+                customer_identifier=customer_identifier,
+                discovered_via="webhook_backfill",
+                trigger_reason="subscription_seed",
+            )
+        finally:
+            close = getattr(backfill_db, "close", None)
+            if callable(close):
+                close()
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        thread = threading.Thread(target=lambda: asyncio.run(_runner()), daemon=True)
+        thread.start()
+        return thread
+    return loop.create_task(_runner())

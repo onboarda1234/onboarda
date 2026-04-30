@@ -120,6 +120,10 @@ def _create_test_db(app_overrides=None, add_alerts=False, add_reviews=False):
     )""")
     db.execute("""CREATE TABLE monitoring_alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT, application_id TEXT,
+        provider TEXT, case_identifier TEXT,
+        discovered_via TEXT NOT NULL DEFAULT 'webhook_live',
+        discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        backfill_run_id TEXT,
         client_name TEXT, alert_type TEXT, severity TEXT, detected_by TEXT,
         summary TEXT, source_reference TEXT, ai_recommendation TEXT,
         status TEXT DEFAULT 'open', officer_action TEXT, officer_notes TEXT,
@@ -568,6 +572,25 @@ class TestHistoricalComparison:
         assert result["has_baseline"] is True
         assert result["new_since_baseline"] == 2
 
+    def test_distinguishes_baseline_historical_backfill_and_live_hits(self):
+        data = json.dumps({"screening_report": {"adverse_media": {"hits": [{"name": "baseline"}]}}})
+        media = {
+            "media_alerts_found": 3,
+            "hits": [
+                {"alert_id": 1, "discovered_via": "webhook_backfill"},
+                {"alert_id": 2, "discovered_via": "manual_backfill"},
+                {"alert_id": 3, "discovered_via": "webhook_live"},
+            ],
+        }
+
+        result = _compare_historical_media({"prescreening_data": data}, media)
+
+        assert result["baseline_media_count"] == 1
+        assert result["historical_backfill_hits"] == 2
+        assert result["live_monitoring_hits"] == 1
+        assert result["live_new_hits_since_baseline"] == 0
+        assert result["new_since_baseline"] == 0
+
 
 class TestMediaSeverity:
     def test_severity_scoring(self):
@@ -664,6 +687,39 @@ class TestAgent7Integration:
         db_path, app_id = _create_test_db(add_alerts=True)
         result = execute_adverse_media_pep(app_id, {"db_path": db_path})
         assert len(result["new_media_hits"]) > 0
+        os.unlink(db_path)
+
+    def test_historical_backfill_media_hit_is_not_clear(self):
+        db_path, app_id = _create_test_db()
+        db = sqlite3.connect(db_path)
+        db.execute(
+            """
+            INSERT INTO monitoring_alerts
+                (application_id, provider, case_identifier, alert_type, severity, summary,
+                 status, discovered_via, backfill_run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                "complyadvantage",
+                "case-historical-1",
+                "media",
+                "medium",
+                "Historical adverse media backfill finding",
+                "open",
+                "webhook_backfill",
+                "bf-test",
+            ),
+        )
+        db.commit()
+        db.close()
+
+        result = execute_adverse_media_pep(app_id, {"db_path": db_path})
+
+        assert result["disposition"]["disposition"] != "CLEAR"
+        assert result["status"] != "clean"
+        assert result["historical_comparison"]["historical_backfill_hits"] == 1
+        assert "historically discovered" in result["narrative"].lower()
         os.unlink(db_path)
 
     def test_with_pep_director(self):
