@@ -46,6 +46,11 @@ _PROTECTED_DIMENSION_KEYS = {
     "ApiKey",
 }
 
+_PROTECTED_DIMENSION_TOKENS = {
+    re.sub(r"[^a-z0-9]", "", key.lower())
+    for key in _PROTECTED_DIMENSION_KEYS
+}
+
 _METRIC_NAME_ALIASES = {
     "webhook_async_processing_failure": "WebhookAsyncProcessingFailures",
     "normalized_write_failure": "NormalizedWriteFailures",
@@ -242,15 +247,11 @@ def _default_dimensions(fields):
 
 def _safe_dimensions(dimensions):
     safe = {}
-    protected_tokens = {
-        re.sub(r"[^a-z0-9]", "", key.lower())
-        for key in _PROTECTED_DIMENSION_KEYS
-    }
     for key, value in dict(dimensions).items():
         if key in _HIGH_CARDINALITY_DIMENSIONS:
             continue
         normalized_key = re.sub(r"[^a-z0-9]", "", key.lower())
-        if any(token in normalized_key for token in protected_tokens):
+        if any(token in normalized_key for token in _PROTECTED_DIMENSION_TOKENS):
             continue
         if value is None:
             continue
