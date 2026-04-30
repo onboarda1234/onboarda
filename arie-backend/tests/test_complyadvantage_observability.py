@@ -139,7 +139,7 @@ def test_cloudwatch_observability_artifacts_parse_and_reference_known_metrics():
         for metric in widget["metrics"]
     }
     for alarm in alarms["alarms"]:
-        assert alarm["metric"] in dashboard_metrics or alarm["metric"].startswith("WebhookFetch")
+        assert alarm["metric"] in dashboard_metrics
 
     for query_file in cloudwatch.glob("ca_*.cwlogs"):
         query = query_file.read_text()

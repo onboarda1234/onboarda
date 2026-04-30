@@ -235,17 +235,14 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
                 getattr(envelope, "case_identifier", None),
                 exc_info=True,
             )
-            metric_fields = {"provider": COMPLYADVANTAGE_PROVIDER_NAME}
-            if trace_id:
-                metric_fields.update({
-                    "trace_id": trace_id,
-                    "component": "webhook_handler",
-                    "outcome": "failure",
-                    "webhook_type": getattr(envelope, "webhook_type", None),
-                    "case_identifier": getattr(envelope, "case_identifier", None),
-                })
-            from .webhook_storage import emit_metric as storage_emit_metric
-            storage_emit_metric("webhook_async_processing_failure", **metric_fields)
+            emit_metric(
+                "webhook_async_processing_failure",
+                trace_id=trace_id,
+                component="webhook_handler",
+                outcome="failure",
+                webhook_type=getattr(envelope, "webhook_type", None),
+                case_identifier=getattr(envelope, "case_identifier", None),
+            )
 
 
 def _verify_signature(body, signature):

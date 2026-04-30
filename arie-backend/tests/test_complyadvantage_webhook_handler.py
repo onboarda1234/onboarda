@@ -9,7 +9,6 @@ import pytest
 from tornado.httputil import HTTPHeaders, HTTPServerRequest
 from tornado.web import Application
 
-from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_complyadvantage.models.webhooks import CACaseCreatedWebhook
 from screening_complyadvantage.webhook_handler import ComplyAdvantageWebhookHandler, _verify_signature
 
@@ -279,7 +278,14 @@ async def test_async_processing_failure_logs_and_emits_metric():
         handler = _call_handler(_fixture("webhook_case_created.json"), storage_callback=failing_storage)
     envelope = CACaseCreatedWebhook.model_validate(_fixture("webhook_case_created.json"))
 
-    with patch("screening_complyadvantage.webhook_storage.emit_metric") as metric:
-        await handler._process_webhook_async(envelope)
+    with patch("screening_complyadvantage.webhook_handler.emit_metric") as metric:
+        await handler._process_webhook_async(envelope, trace_id="trace-safe")
 
-    metric.assert_called_once_with("webhook_async_processing_failure", provider=COMPLYADVANTAGE_PROVIDER_NAME)
+    metric.assert_called_once_with(
+        "webhook_async_processing_failure",
+        trace_id="trace-safe",
+        component="webhook_handler",
+        outcome="failure",
+        webhook_type="CASE_CREATED",
+        case_identifier=envelope.case_identifier,
+    )

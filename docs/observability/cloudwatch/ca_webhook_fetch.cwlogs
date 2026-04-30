@@ -1,0 +1,4 @@
+fields @timestamp, @message
+| filter @message like /"metric_namespace":"RegMind\/Screening\/ComplyAdvantage"/
+| filter @message like /"metric_name":"WebhookFetch/
+| parse @message /"metric_name":"(?

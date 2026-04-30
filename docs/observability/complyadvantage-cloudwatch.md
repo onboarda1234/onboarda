@@ -16,6 +16,7 @@ Pre-written query definitions live in:
 - `docs/observability/cloudwatch/ca_webhook_intake.cwlogs`
 - `docs/observability/cloudwatch/ca_processing_latency.cwlogs`
 - `docs/observability/cloudwatch/ca_api_health.cwlogs`
+- `docs/observability/cloudwatch/ca_webhook_fetch.cwlogs`
 - `docs/observability/cloudwatch/ca_storage_agent7.cwlogs`
 
 To save a query:
@@ -33,6 +34,10 @@ aws logs put-query-definition \
 - Alarm starter definitions: `docs/observability/cloudwatch/ca_alarm_definitions.json`
 
 These are checked-in definitions for D1/D2 setup and review. They are not automatic provisioning artifacts and intentionally have no alarm actions wired.
+
+## Deferred alarms
+
+The alarm starter definitions include webhook fetch-health metrics that are emitted as structured logs before CloudWatch alarm actions are wired. Keep these definitions action-free until D1/D2 setup validates thresholds and notification routing.
 
 ## Safety constraints
 
