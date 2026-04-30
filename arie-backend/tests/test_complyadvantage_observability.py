@@ -87,6 +87,7 @@ def test_observability_payloads_do_not_log_secret_material(caplog):
 def test_inbound_trace_id_accepts_bounded_safe_header_and_rejects_unsafe_values():
     assert inbound_trace_id("req-123_ABC") == "req-123_ABC"
     assert inbound_trace_id("contains space").startswith("ca-")
+    assert inbound_trace_id("path/like:value").startswith("ca-")
     assert inbound_trace_id("x" * 129).startswith("ca-")
 
 

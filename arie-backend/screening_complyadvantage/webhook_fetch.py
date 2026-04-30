@@ -323,10 +323,10 @@ class _WebhookFetchGuard:
 
 def _failure_metric_for_category(category):
     return {
-        "case": "case_fetch_failures",
-        "alert_risks": "alert_risks_fetch_failures",
-        "deep_risk": "deep_risk_fetch_failures",
-    }.get(category, "webhook_fetch_failures")
+        "case": "CaseFetchFailures",
+        "alert_risks": "AlertRisksFetchFailures",
+        "deep_risk": "DeepRiskFetchFailures",
+    }.get(category, "WebhookFetchFailures")
 
 
 def _step_for_category(category):

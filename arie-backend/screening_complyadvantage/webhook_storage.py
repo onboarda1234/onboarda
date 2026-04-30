@@ -3,14 +3,13 @@
 import logging
 import time
 from datetime import datetime, timezone
-from inspect import Parameter, signature
 
 from screening_config import get_active_provider_name
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 from screening_storage import persist_normalized_report
 
 from .normalizer import ScreeningApplicationContext
-from .observability import emit_audit, emit_metric as _emit_metric, emit_operational
+from .observability import accepts_keyword, emit_audit, emit_metric as _emit_metric, emit_operational
 from .subscriptions import update_monitoring_subscription_event
 from .webhook_fetch import build_default_client, fetch_webhook_single_pass
 from .webhook_mapping import map_normalized_to_monitoring_alert
@@ -41,6 +40,7 @@ async def process_complyadvantage_webhook(
     webhook_type = getattr(envelope, "webhook_type", "none")
     processing_started = time.monotonic()
     final_outcome = "failure"
+    best_effort_failed = False
 
     # Step 1 — Read-only: envelope already parsed by the route handler.
     db = db_factory()
@@ -174,6 +174,7 @@ async def process_complyadvantage_webhook(
             )
         except Exception:
             _rollback(db)
+            best_effort_failed = True
             logger.error(
                 "ca_webhook_normalized_write_failure case_identifier=%s customer_identifier=%s",
                 case_identifier,
@@ -253,6 +254,7 @@ async def process_complyadvantage_webhook(
             )
         except Exception:
             _rollback(db)
+            best_effort_failed = True
             logger.error(
                 "ca_webhook_monitoring_alerts_write_failure case_identifier=%s customer_identifier=%s",
                 case_identifier,
@@ -368,6 +370,7 @@ async def process_complyadvantage_webhook(
                 step="agent7_push",
             )
         except Exception:
+            best_effort_failed = True
             logger.error(
                 "ca_webhook_agent_7_push_failure application_id=%s case_identifier=%s",
                 application_context.application_id,
@@ -415,7 +418,7 @@ async def process_complyadvantage_webhook(
             customer_identifier=customer_identifier,
             decision_context="shadow_mode",
         )
-    final_outcome = "success"
+    final_outcome = "failure" if best_effort_failed else "success"
     emit_metric(
         "webhook_processing_latency",
         metric_name="WebhookProcessingLatencyMs",
@@ -509,7 +512,7 @@ def _default_db_factory():
 
 
 def _call_fetch_normalized(fetch_normalized, client, envelope, application_context, trace_id):
-    if _accepts_keyword(fetch_normalized, "trace_id"):
+    if accepts_keyword(fetch_normalized, "trace_id"):
         return fetch_normalized(client, envelope, application_context, trace_id=trace_id)
     return fetch_normalized(client, envelope, application_context)
 
@@ -528,17 +531,6 @@ def _value(row, key):
     if isinstance(row, dict):
         return row.get(key)
     return row[key]
-
-
-def _accepts_keyword(callable_obj, keyword):
-    try:
-        parameters = signature(callable_obj).parameters.values()
-    except (TypeError, ValueError):
-        return False
-    return any(
-        parameter.kind == Parameter.VAR_KEYWORD or parameter.name == keyword
-        for parameter in parameters
-    )
 
 
 def _elapsed_ms(started):

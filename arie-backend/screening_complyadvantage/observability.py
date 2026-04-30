@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
+from inspect import Parameter, signature
 from uuid import uuid4
 
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
@@ -52,9 +53,20 @@ def inbound_trace_id(value, *, max_len=128):
     value = str(value).strip()
     if not value or len(value) > max_len:
         return new_trace_id()
-    if not re.fullmatch(r"[A-Za-z0-9._:/@+-]+", value):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
         return new_trace_id()
     return value
+
+
+def accepts_keyword(callable_obj, keyword):
+    try:
+        parameters = signature(callable_obj).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind == Parameter.VAR_KEYWORD or parameter.name == keyword
+        for parameter in parameters
+    )
 
 
 def emit_operational(event_name, *, level=logging.INFO, trace_id=None, component="unknown", outcome="success", **fields):

@@ -16,7 +16,6 @@ import hmac
 import json
 import logging
 import os
-from inspect import Parameter, signature
 
 import tornado.ioloop
 from pydantic import ValidationError
@@ -25,7 +24,7 @@ from base_handler import BaseHandler
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME
 
 from .models.webhooks import CACaseAlertListUpdatedWebhook, CACaseCreatedWebhook, CAUnknownWebhookEnvelope
-from .observability import emit_metric, emit_operational, inbound_trace_id
+from .observability import accepts_keyword, emit_metric, emit_operational, inbound_trace_id
 from .webhook_fetch import WebhookEnvelopeError, extract_case_identifier, validate_alert_identifiers
 from .webhook_storage import process_complyadvantage_webhook
 
@@ -280,20 +279,9 @@ def _metric_signature_mode(signature_status):
 
 
 async def _call_storage_callback(callback, envelope, trace_id):
-    if _accepts_keyword(callback, "trace_id"):
+    if accepts_keyword(callback, "trace_id"):
         return await callback(envelope, trace_id=trace_id)
     return await callback(envelope)
-
-
-def _accepts_keyword(callable_obj, keyword):
-    try:
-        parameters = signature(callable_obj).parameters.values()
-    except (TypeError, ValueError):
-        return False
-    return any(
-        parameter.kind == Parameter.VAR_KEYWORD or parameter.name == keyword
-        for parameter in parameters
-    )
 
 
 def _parse_known_envelope(event_type, payload):

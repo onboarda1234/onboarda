@@ -51,7 +51,7 @@
       "metric": "MonitoringAlertsWriteFailures",
       "threshold": 1,
       "periodSeconds": 900,
-      "evaluationPeriods": 1,
+      "evaluationPeriods": 2,
       "severity": "warning"
     },
     {
@@ -59,7 +59,7 @@
       "metric": "SubscriptionUpdateFailures",
       "threshold": 1,
       "periodSeconds": 900,
-      "evaluationPeriods": 1,
+      "evaluationPeriods": 2,
       "severity": "warning"
     },
     {
