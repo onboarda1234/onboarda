@@ -158,5 +158,5 @@ def _schedule_historical_backfill(*, application_id, client_id, customer_identif
         # daemon thread only as the no-loop fallback, not as a recurring sweep.
         thread = threading.Thread(target=lambda: asyncio.run(_runner()), daemon=True)
         thread.start()
-        return thread
+        return None
     return loop.create_task(_runner())

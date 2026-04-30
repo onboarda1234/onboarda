@@ -462,11 +462,14 @@ def _upsert_monitoring_alert_with_provenance(db, row, *, discovered_via, backfil
             summary = EXCLUDED.summary,
             source_reference = EXCLUDED.source_reference,
             status = EXCLUDED.status,
-            -- Live webhook discovery is the stronger provenance signal; a
-            -- historical rerun may refresh operational fields but must not
-            -- reclassify a live-discovered case as backfilled.
+            -- Preserve stronger provenance: live webhook discovery must not
+            -- be reclassified as backfilled, and an operator-triggered manual
+            -- backfill must not be downgraded by an automatic seed backfill.
             discovered_via = CASE
                 WHEN monitoring_alerts.discovered_via = 'webhook_live' THEN monitoring_alerts.discovered_via
+                WHEN monitoring_alerts.discovered_via = 'manual_backfill'
+                     AND EXCLUDED.discovered_via = 'webhook_backfill'
+                    THEN monitoring_alerts.discovered_via
                 ELSE EXCLUDED.discovered_via
             END,
             discovered_at = COALESCE(monitoring_alerts.discovered_at, EXCLUDED.discovered_at),
@@ -550,10 +553,7 @@ class _BackfillGuard:
             self.mark_truncated("api_call_budget", resource=resource, identifier=identifier, api_call_budget=self.max_calls)
             return None
         self.calls += 1
-        try:
-            raw = self.client.get(path, params=params)
-        except TypeError:
-            raw = self.client.get(path)
+        raw = self.client.get(path, params=params)
         emit_metric(
             "backfill_api_calls_total",
             metric_name="BackfillApiCallsTotal",

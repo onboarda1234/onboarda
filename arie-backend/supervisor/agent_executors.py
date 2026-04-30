@@ -3375,6 +3375,8 @@ _MEDIA_SEVERITY_MATRIX = {
     "negative_press": 1,
     "unknown": 1,
 }
+# ComplyAdvantage monitoring rows use "media" as the normalized adverse-media
+# alert type; keep legacy monitoring aliases for existing rows.
 _MEDIA_ALERT_TYPES = {"adverse_media", "media_alert", "news_alert", "media"}
 
 
