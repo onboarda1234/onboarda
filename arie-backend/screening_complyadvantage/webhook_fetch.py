@@ -263,6 +263,9 @@ class _WebhookFetchGuard:
         try:
             result = self.client.get(path)
         except Exception as exc:
+            # The shared CA client maps transport, timeout, auth, rate-limit, and provider
+            # response failures to package exceptions; catch all here so every failed hop
+            # emits the required C5 observability signal before preserving the exception.
             family = status_family(error=exc)
             emit_metric(
                 _failure_metric_for_category(category),

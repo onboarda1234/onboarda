@@ -6,7 +6,7 @@
   },
   "alarms": [
     {
-      "name": "CA production webhook secret missing",
+      "name": "CA Production webhook secret missing",
       "metric": "WebhookSignatureFailures",
       "dimensions": {"Mode": "production_fail_closed"},
       "threshold": 1,

@@ -181,6 +181,8 @@ def path_template(path):
         return "unknown"
     path = str(path).split("?", 1)[0]
     path = re.sub(r"/[0-9a-fA-F-]{32,36}(?=/|$)", "/{id}", path)
+    # CA identifiers seen in paths may contain dots, colons, underscores, and hyphens;
+    # this only normalizes logged path templates and is not used for file or URL construction.
     path = re.sub(r"/(case|alert|risk|workflow|customer|profile)[A-Za-z0-9._:-]*(?=/|$)", r"/{\1_id}", path)
     return path
 
