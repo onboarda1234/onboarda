@@ -133,6 +133,20 @@ class TestAuthenticatedAccess:
                                  headers={"Authorization": f"Bearer {token}"}, timeout=3)
         assert resp.status_code == 200
 
+    def test_dashboard_returns_200_for_officer_with_fixture_filter(self, api_server):
+        """Officer dashboard must not use ambiguous columns in joined recent query."""
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/dashboard",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "recent" in body
+        assert "total" in body
+
     def test_login_with_empty_body_does_not_crash(self, api_server):
         """POST /api/auth/officer/login with empty JSON must not crash (4xx expected)."""
         resp = http_requests.post(f"{api_server}/api/auth/officer/login",

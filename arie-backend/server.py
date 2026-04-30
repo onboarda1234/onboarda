@@ -6339,13 +6339,15 @@ class DashboardHandler(BaseHandler):
             stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'{fx_clause}", fp).fetchone()["c"]
 
             # Recent applications
-            fx_where_clause = "" if show_fx else f" AND {fx_excl}"
+            recent_fx_excl, recent_fx_params = fixture_app_exclude_clause(table_alias="a")
+            fx_where_clause = "" if show_fx else f" AND {recent_fx_excl}"
+            recent_fp = [] if show_fx else recent_fx_params
             recent = db.execute(f"""
                 SELECT a.*, u.full_name as assigned_name FROM applications a
                 LEFT JOIN users u ON a.assigned_to = u.id
                 WHERE 1=1{fx_where_clause}
                 ORDER BY a.created_at DESC LIMIT 10
-            """, fp).fetchall()
+            """, recent_fp).fetchall()
             stats["recent"] = [dict(r) for r in recent]
             stats["show_fixtures"] = show_fx
 
