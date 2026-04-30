@@ -147,6 +147,8 @@ def _fetch_risk_listings_for_alert(guard, alert_id):
         raw = guard.get(path, resource="alert_risks", identifier=alert_id, page=page_count)
         if raw is None:
             break
+        # Sandbox-confirmed CA shape: /v2/alerts/{alert_id}/risks uses top-level risks + next,
+        # not the inner values + pagination.next envelope used inside deep-risk resources.
         for listing in raw.get("risks", []):
             yield listing
         next_link = raw.get("next")

@@ -21,6 +21,19 @@ class FakeClient:
         return self.routes[path]
 
 
+def _alert_risks_page(alert_id, risks=None):
+    risks = list(risks or [])
+    path = f"/v2/alerts/{alert_id}/risks?page=1"
+    return {
+        "first": path,
+        "next": None,
+        "prev": None,
+        "risks": risks,
+        "self": path,
+        "total_count": len(risks),
+    }
+
+
 def _fixture(name):
     with open(os.path.join(FIXTURES, name), encoding="utf-8") as f:
         return json.load(f)
@@ -37,7 +50,7 @@ async def test_fixture_driven_end_to_end_dual_write(monkeypatch):
     envelope = CACaseAlertListUpdatedWebhook.model_validate(webhook)
     routes = {
         "/v2/workflows/case-san": data["workflow"],
-        "/v2/alerts/alert-san/risks?page=1": {"values": data["alerts_risks"]["alert-san"], "pagination": {"next": None}},
+        "/v2/alerts/alert-san/risks?page=1": _alert_risks_page("alert-san", data["alerts_risks"]["alert-san"]),
         "/v2/entity-screening/risks/risk-san": data["deep_risks"]["risk-san"],
     }
     monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "sumsub")

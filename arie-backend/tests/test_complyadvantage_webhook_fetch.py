@@ -174,13 +174,9 @@ def test_case_alert_list_updated_fetches_listing_then_deep_without_alert_or_work
     webhook = _fixture("webhook_case_alert_list_updated.json")
     envelope = CACaseAlertListUpdatedWebhook.model_validate(webhook)
     case_id = webhook["case_identifier"]
-    listing_page = _alert_risks_page(risks=[_listing("risk-san")])
-    assert {"risks", "next", "first", "prev", "self", "total_count"} <= set(listing_page)
-    assert "values" not in listing_page
-    assert "pagination" not in listing_page
     routes = {
         f"/v2/cases/{case_id}": _case(),
-        "/v2/alerts/alert-san/risks": listing_page,
+        "/v2/alerts/alert-san/risks": _alert_risks_page(risks=[_listing("risk-san")]),
         "/v2/entity-screening/risks/risk-san": _deep("risk-san"),
         f"/v2/workflows/{case_id}": AssertionError("workflow path must not be called"),
         "/v2/alerts/alert-san": AssertionError("alert detail path must not be called"),
@@ -203,6 +199,29 @@ def test_case_alert_list_updated_fetches_listing_then_deep_without_alert_or_work
         == "risk-san"
     )
     assert match["risk_detail"]["alert_risk_listing"]["match_types"] == ["name_exact"]
+
+
+def test_alert_risks_listing_consumes_outer_risks_without_values_or_pagination():
+    webhook = _fixture("webhook_case_alert_list_updated.json")
+    envelope = CACaseAlertListUpdatedWebhook.model_validate(webhook)
+    case_id = webhook["case_identifier"]
+    listing_page = _alert_risks_page(risks=[_listing("risk-san")])
+    assert set(listing_page) == {"first", "next", "prev", "self", "total_count", "risks"}
+    assert "values" not in listing_page
+    assert "pagination" not in listing_page
+    client = FakeClient({
+        f"/v2/cases/{case_id}": _case(),
+        "/v2/alerts/alert-san/risks": listing_page,
+        "/v2/entity-screening/risks/risk-san": _deep("risk-san"),
+    })
+
+    report = fetch_webhook_single_pass(client, envelope, _context())
+
+    provider = report["provider_specific"]["complyadvantage"]
+    assert provider["alert_risk_listings"]["risk-san"]["identifier"] == "risk-san"
+    assert provider["matches"][0]["risk_detail"]["alert_risk_listing"]["added_mentions"][0]["snippet"] == (
+        "listing-only mention"
+    )
 
 
 def test_fetch_webhook_single_pass_accepts_early_case_with_no_alerts():

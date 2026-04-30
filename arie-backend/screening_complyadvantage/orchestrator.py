@@ -237,8 +237,10 @@ def _fetch_risks_paginated_for_alert(client, alert_id):
     risks = []
     while path:
         raw = client.get(path)
-        risks.extend(raw.get("values", []))
-        next_link = (raw.get("pagination") or {}).get("next")
+        # Sandbox-confirmed CA shape: /v2/alerts/{alert_id}/risks uses top-level risks + next,
+        # not the inner values + pagination.next envelope used inside deep-risk resources.
+        risks.extend(raw.get("risks", []))
+        next_link = raw.get("next")
         path = _normalise_next_link(client, next_link)
     return risks
 
