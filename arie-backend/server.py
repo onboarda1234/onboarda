@@ -8593,6 +8593,116 @@ class MonitoringAlertCreateHandler(BaseHandler):
 # COMPLIANCE MEMO ENDPOINT (Step 5)
 # ══════════════════════════════════════════════════════════
 
+_MEMO_APP_FINGERPRINT_FIELDS = (
+    "id", "ref", "company_name", "brn", "country", "sector", "entity_type",
+    "source_of_funds", "expected_volume", "ownership_structure", "risk_level",
+    "risk_score", "risk_escalations", "operating_countries",
+    "incorporation_date", "business_activity", "assigned_to",
+    "prescreening_data", "screening_reviews",
+)
+_MEMO_PARTY_FINGERPRINT_FIELDS = (
+    "id", "person_key", "full_name", "nationality", "date_of_birth",
+    "ownership_pct", "is_pep",
+)
+_MEMO_DOCUMENT_FINGERPRINT_FIELDS = (
+    "id", "doc_type", "person_id", "filename", "verification_status",
+    "verification_results", "review_notes", "reviewed_at", "updated_at",
+)
+
+
+def _normalise_memo_fingerprint_value(value):
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped[0] in "[{":
+            try:
+                return _normalise_memo_fingerprint_value(json.loads(stripped))
+            except Exception:
+                return value
+        return value
+    if isinstance(value, dict):
+        return {
+            str(k): _normalise_memo_fingerprint_value(value[k])
+            for k in sorted(value.keys(), key=lambda x: str(x))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalise_memo_fingerprint_value(v) for v in value]
+    if isinstance(value, (datetime,)):
+        return value.isoformat()
+    return value
+
+
+def _memo_row_subset(row, fields):
+    data = {}
+    source = dict(row or {})
+    for field in fields:
+        data[field] = _normalise_memo_fingerprint_value(source.get(field))
+    return data
+
+
+def _memo_generation_fingerprint(app, directors, ubos, documents):
+    """Stable input fingerprint for idempotent memo generation."""
+    payload = {
+        "fingerprint_version": "phase3_v1",
+        "application": _memo_row_subset(app, _MEMO_APP_FINGERPRINT_FIELDS),
+        "directors": sorted(
+            [_memo_row_subset(d, _MEMO_PARTY_FINGERPRINT_FIELDS) for d in directors],
+            key=lambda d: (str(d.get("person_key") or ""), str(d.get("id") or ""), str(d.get("full_name") or "")),
+        ),
+        "ubos": sorted(
+            [_memo_row_subset(u, _MEMO_PARTY_FINGERPRINT_FIELDS) for u in ubos],
+            key=lambda u: (str(u.get("person_key") or ""), str(u.get("id") or ""), str(u.get("full_name") or "")),
+        ),
+        "documents": sorted(
+            [_memo_row_subset(d, _MEMO_DOCUMENT_FINGERPRINT_FIELDS) for d in documents],
+            key=lambda d: (str(d.get("id") or ""), str(d.get("doc_type") or ""), str(d.get("person_id") or "")),
+        ),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return "memo-input-v1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _latest_compliance_memo_row(db, application_id):
+    return db.execute(
+        """
+        SELECT id, version, memo_data, review_status, validation_status, blocked,
+               block_reason, quality_score, memo_version, raw_output_hash, created_at
+        FROM compliance_memos
+        WHERE application_id = ?
+        ORDER BY version DESC, id DESC
+        LIMIT 1
+        """,
+        (application_id,),
+    ).fetchone()
+
+
+def _memo_payload_if_fingerprint_unchanged(latest_row, fingerprint):
+    if not latest_row or not fingerprint:
+        return None
+    row = dict(latest_row)
+    if row.get("raw_output_hash") != fingerprint:
+        return None
+    try:
+        memo = safe_json_loads(row.get("memo_data") or "{}")
+    except Exception:
+        memo = {}
+    if not isinstance(memo, dict):
+        return None
+    memo.setdefault("metadata", {})
+    memo["metadata"]["idempotency"] = {
+        "reused_existing_memo": True,
+        "memo_id": row.get("id"),
+        "version": row.get("version"),
+        "raw_output_hash": fingerprint,
+        "created_at": row.get("created_at"),
+    }
+    memo["review_status"] = row.get("review_status")
+    memo["validation_status"] = row.get("validation_status")
+    memo["memo_version"] = row.get("memo_version") or row.get("version")
+    memo["metadata"]["quality_score"] = row.get("quality_score")
+    memo["metadata"]["blocked"] = bool(row.get("blocked"))
+    memo["metadata"]["block_reason"] = row.get("block_reason")
+    return memo
+
 class ComplianceMemoHandler(BaseHandler):
     """POST /api/applications/:id/memo — Generate compliance memo from application data"""
     def post(self, app_id):
@@ -8659,37 +8769,66 @@ class ComplianceMemoHandler(BaseHandler):
         app["incorporation_date"] = ps.get("incorporation_date") or ""
         app["business_activity"] = ps.get("business_activity") or ps.get("business_description") or ""
 
+        memo_input_hash = _memo_generation_fingerprint(app, directors, ubos, documents)
+        latest_memo_row = _latest_compliance_memo_row(db, real_id)
+        reused_memo = _memo_payload_if_fingerprint_unchanged(latest_memo_row, memo_input_hash)
+        if reused_memo:
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                (
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    "Generate Memo",
+                    app["ref"],
+                    "Compliance memo generation reused existing memo "
+                    + str(reused_memo.get("metadata", {}).get("idempotency", {}).get("memo_id"))
+                    + " because source inputs were unchanged",
+                    self.get_client_ip(),
+                ),
+            )
+            db.commit()
+            db.close()
+            self.success(reused_memo)
+            return
+
         # Build compliance memo (pure computation — extracted to memo_handler.py)
         memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(app, directors, ubos, documents)
         rule_violations = rule_engine_result.get("violations", [])
+        latest_version = int((dict(latest_memo_row).get("version") if latest_memo_row else 0) or 0)
+        next_version = latest_version + 1
+        memo.setdefault("metadata", {})
+        memo["metadata"]["memo_input_hash"] = memo_input_hash
+        memo["metadata"]["memo_version"] = "v" + str(next_version)
+        memo["metadata"]["model_version"] = "v1.1"
 
         # Store memo in compliance_memos table
         rule_violations_json = json.dumps(rule_violations) if rule_violations else None
         memo_json = json.dumps(memo)
         try:
             db.execute(
-                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
+                "INSERT INTO compliance_memos (application_id, version, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version, raw_output_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (real_id, next_version, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
                  validation_result["quality_score"], validation_result["validation_status"],
                  supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json,
-                 memo.get("metadata", {}).get("model_version", "v1.0"))
+                 memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash)
             )
         except Exception as e:
             # Fallback if rule_violations column doesn't exist yet
             logger.warning(f"Memo insert with rule_violations failed (column may not exist): {e}")
             try:
                 db.execute(
-                    "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary) VALUES (?,?,?,?,?,?,?,?,?)",
-                    (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
+                    "INSERT INTO compliance_memos (application_id, version, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, raw_output_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (real_id, next_version, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
                      validation_result["quality_score"], validation_result["validation_status"],
-                     supervisor_result["verdict"], supervisor_result["recommendation"])
+                     supervisor_result["verdict"], supervisor_result["recommendation"], memo_input_hash)
                 )
             except Exception as e2:
                 logger.warning(f"Memo insert with supervisor columns failed: {e2}")
                 try:
                     db.execute(
-                        "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status) VALUES (?,?,?,?,?)",
-                        (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft")
+                        "INSERT INTO compliance_memos (application_id, version, memo_data, generated_by, ai_recommendation, review_status) VALUES (?,?,?,?,?,?)",
+                        (real_id, next_version, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft")
                     )
                 except Exception as e3:
                     logger.error(f"All memo insert attempts failed for application {real_id}: {e3}", exc_info=True)

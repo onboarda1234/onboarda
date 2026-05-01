@@ -1,0 +1,195 @@
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ.setdefault("ENVIRONMENT", "testing")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only")
+
+from memo_handler import build_compliance_memo
+from validation_engine import validate_compliance_memo
+from tests.conftest import make_base_memo
+
+
+def _terminal_screening_report(**overrides):
+    report = {
+        "screening_mode": "live",
+        "company_screening": {
+            "sanctions": {
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+                "source": "sumsub",
+            },
+        },
+        "director_screenings": [{
+            "person_name": "Jane Doe",
+            "screening": {
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+                "source": "sumsub",
+            },
+        }],
+        "ubo_screenings": [],
+        "adverse_media_coverage": "none",
+    }
+    report.update(overrides)
+    return report
+
+
+def _app(**overrides):
+    base = {
+        "id": "phase3-app",
+        "ref": "ARF-PHASE3",
+        "company_name": "Phase 3 Test Ltd",
+        "brn": "C123456",
+        "country": "Mauritius",
+        "sector": "Crypto Exchange",
+        "entity_type": "SME",
+        "source_of_funds": "Operating revenue",
+        "expected_volume": "USD 100,000 monthly",
+        "ownership_structure": "Simple",
+        "risk_level": "HIGH",
+        "risk_score": 68,
+        "assigned_to": "admin001",
+        "operating_countries": "Mauritius",
+        "incorporation_date": "2021-01-01",
+        "business_activity": "Digital asset exchange services",
+        "prescreening_data": {"screening_report": _terminal_screening_report()},
+    }
+    base.update(overrides)
+    return base
+
+
+def _directors():
+    return [{"full_name": "Jane Doe", "nationality": "Mauritius", "is_pep": "No"}]
+
+
+def _ubos():
+    return [{"full_name": "Jane Doe", "nationality": "Mauritius", "ownership_pct": 100, "is_pep": "No"}]
+
+
+def _documents():
+    return [{"id": "doc1", "doc_type": "cert_inc", "verification_status": "verified"}]
+
+
+def test_memo_has_deterministic_risk_evidence_and_no_false_adverse_clear():
+    memo, _, _, validation = build_compliance_memo(_app(), _directors(), _ubos(), _documents())
+
+    evidence = memo["metadata"]["risk_evidence"]
+    assert evidence["jurisdiction"]["source"] == "FATF/internal jurisdiction tables"
+    assert evidence["business"]["rating"] == "HIGH"
+    assert evidence["business"]["matched_keywords"] == ["crypto"]
+    assert "high_risk_keyword:crypto" in evidence["business"]["triggers"]
+    assert evidence["financial_crime"]["adverse_media_terminal"] is False
+
+    fc_content = memo["sections"]["risk_assessment"]["sub_sections"]["financial_crime_risk"]["content"]
+    screening_content = memo["sections"]["screening_results"]["content"]
+    assert "Deterministic financial-crime rating" in fc_content
+    assert "Adverse Media Screening: NOT COMPLETE" in fc_content
+    assert "no clean adverse-media conclusion is recorded" in screening_content
+    assert "Adverse media screening returned no relevant hits" not in fc_content
+    assert memo["metadata"]["adverse_media_state_summary"]["coverage"] == "none"
+
+    caps = {cap["code"]: cap for cap in memo["metadata"]["quality_caps"]}
+    assert caps["adverse_media_not_terminal"]["max_score"] == 7.5
+    assert validation["quality_score"] <= 7.5
+    assert validation["validation_status"] == "pass_with_fixes"
+
+
+def test_terminal_adverse_media_context_allows_clean_terminal_wording():
+    report = _terminal_screening_report(
+        adverse_media_coverage="full",
+        has_adverse_media_hit=False,
+    )
+    app = _app(prescreening_data={"screening_report": report})
+
+    memo, _, _, validation = build_compliance_memo(app, _directors(), _ubos(), _documents())
+
+    assert memo["metadata"]["adverse_media_state_summary"]["terminal"] is True
+    fc_content = memo["sections"]["risk_assessment"]["sub_sections"]["financial_crime_risk"]["content"]
+    assert "terminal full-coverage adverse-media review completed" in fc_content
+    assert "adverse_media_not_terminal" not in {cap["code"] for cap in memo["metadata"]["quality_caps"]}
+    assert validation["quality_score"] > 7.5
+
+
+def test_terminal_adverse_media_hit_elevates_fincrime_evidence():
+    report = _terminal_screening_report(
+        adverse_media_coverage="full",
+        has_adverse_media_hit=True,
+    )
+    app = _app(prescreening_data={"screening_report": report})
+
+    memo, _, _, _ = build_compliance_memo(app, _directors(), _ubos(), _documents())
+
+    fincrime = memo["metadata"]["risk_evidence"]["financial_crime"]
+    assert fincrime["rating"] == "HIGH"
+    assert "adverse_media_hit" in fincrime["triggers"]
+    assert memo["sections"]["risk_assessment"]["sub_sections"]["financial_crime_risk"]["rating"] == "HIGH"
+
+
+def test_validation_engine_enforces_metadata_quality_caps_on_revalidation():
+    memo = make_base_memo({
+        "metadata": {
+            "quality_caps": [{
+                "code": "screening_not_terminal",
+                "max_score": 6.4,
+                "severity": "warning",
+                "reason": "Provider screening is not terminal.",
+                "fix": "Complete screening and regenerate.",
+            }],
+        },
+    })
+
+    result = validate_compliance_memo(memo)
+
+    assert result["quality_score"] == 6.4
+    assert result["validation_status"] == "pass_with_fixes"
+    assert any(i.get("category") == "quality_cap" for i in result["issues"])
+
+
+def test_memo_fingerprint_is_stable_and_changes_on_source_input_change():
+    from server import _memo_generation_fingerprint
+
+    app = _app()
+    docs = _documents()
+    first = _memo_generation_fingerprint(app, _directors(), _ubos(), docs)
+    reordered_app = dict(reversed(list(app.items())))
+    second = _memo_generation_fingerprint(reordered_app, list(reversed(_directors())), _ubos(), docs)
+    changed = _memo_generation_fingerprint(
+        app,
+        _directors(),
+        _ubos(),
+        [dict(docs[0], verification_status="pending")],
+    )
+
+    assert first == second
+    assert first != changed
+    assert first.startswith("memo-input-v1:")
+
+
+def test_idempotent_memo_payload_marks_reused_existing_row():
+    from server import _memo_payload_if_fingerprint_unchanged
+
+    row = {
+        "id": 42,
+        "version": 3,
+        "memo_data": json.dumps({"metadata": {"memo_integrity_version": "phase3_v1"}}),
+        "review_status": "draft",
+        "validation_status": "pass_with_fixes",
+        "blocked": 0,
+        "block_reason": None,
+        "quality_score": 7.5,
+        "memo_version": "v3",
+        "raw_output_hash": "memo-input-v1:abc",
+        "created_at": "2026-05-01T10:00:00",
+    }
+
+    payload = _memo_payload_if_fingerprint_unchanged(row, "memo-input-v1:abc")
+
+    assert payload["metadata"]["idempotency"]["reused_existing_memo"] is True
+    assert payload["metadata"]["idempotency"]["memo_id"] == 42
+    assert payload["metadata"]["quality_score"] == 7.5
+    assert payload["memo_version"] == "v3"
+    assert _memo_payload_if_fingerprint_unchanged(row, "memo-input-v1:other") is None

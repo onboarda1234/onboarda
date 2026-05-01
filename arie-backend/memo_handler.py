@@ -26,6 +26,94 @@ from environment import ENV, is_demo
 logger = logging.getLogger("arie")
 
 
+def _screening_adverse_media_context(screening_report, prescreening_data):
+    """
+    Return the adverse-media terminality context used by the memo narrative.
+
+    A clean adverse-media statement is defensible only when the report carries
+    full adverse-media coverage or a legacy terminal adverse-media status. Sumsub
+    normalized reports currently mark adverse_media_coverage='none', so those
+    cases must be described as an evidence gap rather than as "no hits".
+    """
+    report = screening_report if isinstance(screening_report, dict) else {}
+    prescreening = prescreening_data if isinstance(prescreening_data, dict) else {}
+
+    coverage = str(
+        report.get("adverse_media_coverage")
+        or prescreening.get("adverse_media_coverage")
+        or "none"
+    ).strip().lower() or "none"
+
+    values = []
+    for entry in (report.get("director_screenings") or []) + (report.get("ubo_screenings") or []):
+        if isinstance(entry, dict) and "has_adverse_media_hit" in entry:
+            values.append(entry.get("has_adverse_media_hit"))
+    if "has_adverse_media_hit" in report:
+        values.append(report.get("has_adverse_media_hit"))
+
+    legacy = report.get("adverse_media") or prescreening.get("adverse_media")
+    legacy_status = ""
+    if isinstance(legacy, dict):
+        legacy_status = str(legacy.get("status") or legacy.get("result") or "").strip().lower()
+        if "has_hit" in legacy:
+            values.append(bool(legacy.get("has_hit")))
+    elif legacy:
+        legacy_status = str(legacy).strip().lower()
+
+    hit_terms = ("hit", "match", "adverse", "negative", "concern")
+    clear_terms = (
+        "clear", "cleared", "completed_clear", "no_hits", "no hit",
+        "no relevant hits", "no adverse media", "no adverse-media",
+    )
+    legacy_clear = any(term in legacy_status for term in clear_terms)
+    legacy_hit = bool(legacy_status) and not legacy_clear and any(term in legacy_status for term in hit_terms)
+    has_hit = any(v is True for v in values) or legacy_hit
+
+    terminal = False
+    if coverage == "full":
+        terminal = True
+    if legacy_status and (legacy_clear or legacy_hit):
+        terminal = True
+
+    if terminal and has_hit:
+        phrase = (
+            "Adverse Media Screening: terminal adverse-media coverage returned relevant hit(s); "
+            "officer disposition and rationale are required before reliance."
+        )
+        checklist = "Adverse media review completed — relevant hit(s) require documented disposition"
+    elif terminal:
+        phrase = (
+            "Adverse Media Screening: terminal full-coverage adverse-media review completed; "
+            "no relevant adverse-media hits are recorded."
+        )
+        checklist = "Adverse media review completed — no relevant hits recorded"
+    else:
+        phrase = (
+            "Adverse Media Screening: NOT COMPLETE — coverage is "
+            + coverage
+            + "; no clean adverse-media conclusion is recorded until an approved provider returns terminal coverage."
+        )
+        checklist = "Adverse media review NOT complete — clean adverse-media reliance is unavailable"
+
+    return {
+        "terminal": terminal,
+        "coverage": coverage,
+        "has_hit": bool(has_hit),
+        "phrase": phrase,
+        "checklist": checklist,
+    }
+
+
+def _quality_cap(code, max_score, severity, reason, fix):
+    return {
+        "code": code,
+        "max_score": float(max_score),
+        "severity": severity,
+        "reason": reason,
+        "fix": fix,
+    }
+
+
 def build_compliance_memo(app, directors, ubos, documents):
     """
     Build a complete compliance memo from application data.
@@ -147,6 +235,7 @@ def build_compliance_memo(app, directors, ubos, documents):
         _screening_completion_phrase = (
             "Sanctions screening status: NOT COMPLETE — " + _qual
         )
+    adverse_media_context = _screening_adverse_media_context(screening_report, prescreening_data)
     has_documents = len(documents) > 0
     verified_docs = [d for d in documents if d.get("verification_status") == "verified"]
     pending_docs = [d for d in documents if d.get("verification_status") != "verified"]
@@ -212,10 +301,89 @@ def build_compliance_memo(app, directors, ubos, documents):
     jur_rating = "VERY_HIGH" if is_sanctioned_country else "HIGH" if is_high_risk_country else "MEDIUM" if is_offshore else "LOW"
     # Rule 4C: Sectors with inherent minimum MEDIUM risk floor
     biz_rating = "HIGH" if is_high_risk_sector else "MEDIUM" if (is_medium_risk_sector or is_minimum_medium_sector) else "LOW"
-    fc_rating = "MEDIUM" if len(all_peps) > 0 else "LOW"
+    fc_rating = "HIGH" if adverse_media_context["has_hit"] else "MEDIUM" if len(all_peps) > 0 else "LOW"
     tx_rating = risk_level  # Transaction risk mirrors overall application risk level
     doc_rating = "HIGH" if not has_documents else "LOW" if doc_confidence >= 80 else "MEDIUM" if doc_confidence >= 50 else "HIGH"
     dq_rating = "LOW" if (sof != "Information not provided" and exp_vol != "Information not provided") else "MEDIUM"
+
+    jurisdiction_triggers = []
+    if is_sanctioned_country:
+        jurisdiction_triggers.append("sanctions_or_fatf_blacklist")
+    if is_high_risk_country:
+        jurisdiction_triggers.append("internal_high_risk_jurisdiction")
+    if is_offshore:
+        jurisdiction_triggers.append("offshore_financial_centre")
+    if not jurisdiction_triggers:
+        jurisdiction_triggers.append("not_on_fatf_or_internal_high_risk_tables")
+
+    business_triggers = []
+    if sector in HIGH_RISK_SECTORS:
+        business_triggers.append("configured_high_risk_sector")
+    if _matched_high_sector_keywords:
+        business_triggers.append("high_risk_keyword:" + ",".join(_matched_high_sector_keywords))
+    if sector in MEDIUM_RISK_SECTORS:
+        business_triggers.append("configured_medium_risk_sector")
+    if sector in MINIMUM_MEDIUM_SECTORS:
+        business_triggers.append("minimum_medium_sector_floor")
+    if not business_triggers:
+        business_triggers.append("no_high_or_medium_sector_trigger")
+
+    financial_crime_triggers = []
+    if all_peps:
+        financial_crime_triggers.append("declared_or_provider_pep")
+    if not screening_terminal:
+        financial_crime_triggers.append("screening_not_terminal")
+    if adverse_media_context["has_hit"]:
+        financial_crime_triggers.append("adverse_media_hit")
+    if not adverse_media_context["terminal"]:
+        financial_crime_triggers.append("adverse_media_not_terminal")
+    if not financial_crime_triggers:
+        financial_crime_triggers.append("terminal_clear_screening_no_pep")
+
+    jurisdiction_evidence = {
+        "rating": jur_rating,
+        "source": "FATF/internal jurisdiction tables",
+        "triggers": jurisdiction_triggers,
+        "prose": (
+            "Deterministic jurisdiction rating: "
+            + jur_rating
+            + " for "
+            + str(country)
+            + " based on "
+            + ", ".join(jurisdiction_triggers)
+            + "."
+        ),
+    }
+    business_evidence = {
+        "rating": biz_rating,
+        "source": "configured sector risk tables and keyword floors",
+        "triggers": business_triggers,
+        "matched_keywords": _matched_high_sector_keywords,
+        "prose": (
+            "Deterministic sector rating: "
+            + biz_rating
+            + " for "
+            + str(sector)
+            + " based on "
+            + ", ".join(business_triggers)
+            + "."
+        ),
+    }
+    financial_crime_evidence = {
+        "rating": fc_rating,
+        "source": "screening terminality, PEP declarations, adverse-media coverage",
+        "triggers": financial_crime_triggers,
+        "screening_terminal": screening_terminal,
+        "adverse_media_terminal": adverse_media_context["terminal"],
+        "adverse_media_coverage": adverse_media_context["coverage"],
+        "prose": (
+            "Deterministic financial-crime rating: "
+            + fc_rating
+            + " based on "
+            + ", ".join(financial_crime_triggers)
+            + "."
+        ),
+    }
 
     # ══════════════════════════════════════════════════════════
     # LAYER 1 — PRE-GENERATION RULE ENGINE (Hard Constraints)
@@ -550,6 +718,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                         "rating": jur_rating,
                         "content": (
                             f"Jurisdiction of incorporation: {country}. "
+                            + jurisdiction_evidence["prose"] + " "
                             + (f"{country} is designated as a high-risk jurisdiction due to comprehensive international sanctions, FATF blacklisting, or active conflict zone status. This presents severe jurisdictional risk that materially affects the overall risk assessment." if is_high_risk_country
                                else f"{country} presents moderate jurisdictional risk. While {'currently compliant with FATF standards' if is_offshore else 'not on current FATF lists'}, the jurisdiction retains characteristics of an offshore financial centre — including cross-border capital flow facilitation and international business licence regimes — that elevate baseline risk for ML/TF purposes." if is_offshore
                                else f"{country} presents low jurisdictional risk. The jurisdiction maintains adequate AML/CFT frameworks, is not on FATF grey or black lists, and does not exhibit characteristics associated with elevated ML/TF risk.")
@@ -561,6 +730,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                         "rating": biz_rating,
                         "content": (
                             f"Sector: {sector}. "
+                            + business_evidence["prose"] + " "
                             + (f"The {sector} sector carries elevated inherent ML/TF risk due to the potential for anonymous transactions, rapid value transfer, or regulatory arbitrage. This significantly elevates the entity's business risk profile. FATF Guidance on a Risk-Based Approach identifies this sector as requiring enhanced scrutiny." if is_high_risk_sector
                                else f"The {sector} sector carries moderate inherent risk due to the intermediary nature of the business and exposure to third-party funds. However, the stated business model appears plausible and consistent with the entity's incorporation documents and jurisdictional profile, partially mitigating this concern." if is_medium_risk_sector
                                else f"The {sector} sector presents low inherent business risk. The stated business activity does not exhibit typology indicators associated with elevated ML/TF risk.")
@@ -604,7 +774,8 @@ def build_compliance_memo(app, directors, ubos, documents):
                         "title": "Financial Crime Risk",
                         "rating": fc_rating,
                         "content": (
-                            (
+                            financial_crime_evidence["prose"] + " "
+                            + (
                                 f"Sanctions screening was conducted across UN Security Council, EU, OFAC SDN, and HMT consolidated lists. "
                                 + ("No matches were returned for any director, UBO, or the entity itself. " if not all_peps else f"{len(all_peps)} PEP match(es) identified requiring enhanced assessment. ")
                                 if screening_terminal else
@@ -612,7 +783,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                                 + ("Self-declared PEP exposure remains: " + ", ".join([p["full_name"] for p in all_peps]) + ". " if all_peps else "")
                                 + "No reliance can be placed on the absence of provider matches at this time. "
                             )
-                            + "Adverse media screening returned no relevant hits across global media databases. "
+                            + adverse_media_context["phrase"] + " "
                             + f"The entity's business model {'does not exhibit' if fc_rating in ('LOW', 'MEDIUM') else 'may exhibit'} typology indicators associated with money laundering, terrorist financing, or proliferation financing. "
                             + f"Risk weighting factor: 0.10."
                         )
@@ -633,7 +804,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     )
                     + f"PEP Screening: {len(all_peps)} self-declared / detected match(es)"
                     + (" — " + ". ".join([p["full_name"] + " identified as PEP. PEP declaration form and enhanced due diligence documentation requested." for p in all_peps]) if all_peps else " — no declared or detected matches.")
-                    + " Adverse Media Screening: Comprehensive search conducted across global news and regulatory enforcement databases. No relevant hits identified for any associated individual or the entity. "
+                    + " " + adverse_media_context["phrase"] + " "
                     + screening_review_evidence
                     + f"Company Registry Verification: {app['company_name']} verified against registry records. "
                     + f"Registration details are {'consistent' if verified_docs else 'pending verification against'} application data."
@@ -803,7 +974,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "key_findings": [
                 f"Beneficial ownership {'traced to natural persons via ' + struct_complexity.lower() + ' structure — ' + control_name + ' (' + str(control_pct) + '%) exercises effective control' if primary_ubo else 'could not be verified — critical data gap'}",
                 f"{'PEP identified: ' + ', '.join([p['full_name'] + ' (' + ('Director' if p in pep_directors else 'UBO') + ')' for p in all_peps]) + '. Enhanced due diligence required.' if all_peps else 'No PEP exposure identified among directors or UBOs'}",
-                f"Sanctions and adverse media screening {'clear' if (not all_peps and screening_terminal) else ('NOT complete — provider result pending or unavailable for at least one subject' if not screening_terminal else 'completed with PEP identification')} across all consolidated lists",
+                f"Sanctions screening {'clear' if (not all_peps and screening_terminal) else ('NOT complete — provider result pending or unavailable for at least one subject' if not screening_terminal else 'completed with PEP identification')}; adverse media {'clear' if adverse_media_context['terminal'] and not adverse_media_context['has_hit'] else ('hit(s) require disposition' if adverse_media_context['has_hit'] else 'NOT complete — clean reliance unavailable')}",
                 ("No documents uploaded — entity verification remains incomplete" if not has_documents else f"{len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence" + (f"; {len(pending_docs)} outstanding" if pending_docs else " — full documentation")),
                 f"{'Business model assessed as plausible and consistent with regulatory authorisations' if sector != 'Information not provided' else 'Business model assessment limited by insufficient sector data'}",
                 f"{country} jurisdiction presents {'severe' if is_high_risk_country else 'moderate' if is_offshore else 'low'} risk — {'sanctions/FATF blacklist' if is_high_risk_country else 'offshore IFC classification' if is_offshore else 'adequate AML/CFT framework'}"
@@ -821,7 +992,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 f"PEP screening {'completed' if screening_terminal else 'NOT complete'} — {len(all_peps)} declared/detected match(es)" + (f": {', '.join([p['full_name'] for p in all_peps])}" if all_peps else ""),
                 ("Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists" if screening_terminal
                  else "Sanctions screening NOT complete — provider result pending or unavailable for at least one subject"),
-                "Adverse media review conducted — no relevant hits identified",
+                adverse_media_context["checklist"],
                 f"Source of funds {'reviewed and assessed as consistent' if sof != 'Information not provided' else 'not provided — data gap flagged'}",
                 f"Business model plausibility {'confirmed' if sector != 'Information not provided' else 'assessment limited by data gap'}",
                 (f"Document verification not started — no uploaded documents available ({len(verified_docs)}/{len(documents)}) at {doc_confidence}% confidence" if not has_documents else f"Document verification completed ({len(verified_docs)}/{len(documents)}) at {doc_confidence}% confidence"),
@@ -839,10 +1010,10 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "declared_pep_count": len(all_peps),
             },
             "risk_dimensions": {
-                "jurisdiction": {"rating": jur_rating, "weight": 0.20},
+                "jurisdiction": {"rating": jur_rating, "weight": 0.20, "evidence": jurisdiction_evidence},
                 "ownership": {"rating": own_rating, "weight": 0.25, "justification": own_rating_justification},
-                "business": {"rating": biz_rating, "weight": 0.15},
-                "fincrime": {"rating": fc_rating, "weight": 0.10},
+                "business": {"rating": biz_rating, "weight": 0.15, "evidence": business_evidence},
+                "fincrime": {"rating": fc_rating, "weight": 0.10, "evidence": financial_crime_evidence},
                 "transaction": {"rating": tx_rating, "weight": 0.10},
                 "documentation": {"rating": doc_rating, "weight": 0.10},
                 "data_quality": {"rating": dq_rating, "weight": 0.10}
@@ -853,6 +1024,70 @@ def build_compliance_memo(app, directors, ubos, documents):
             }
         }
     }
+
+    quality_caps = []
+    if not screening_terminal:
+        quality_caps.append(_quality_cap(
+            "screening_not_terminal",
+            6.4,
+            "warning",
+            "Provider-backed sanctions/PEP/watchlist screening is not terminal for every subject.",
+            "Complete live screening before treating the memo as pilot-ready evidence.",
+        ))
+    if not adverse_media_context["terminal"]:
+        quality_caps.append(_quality_cap(
+            "adverse_media_not_terminal",
+            7.5,
+            "warning",
+            "Adverse-media coverage is not terminal; the memo cannot claim a clean adverse-media result.",
+            "Run approved adverse-media coverage or retain the evidence gap as a condition.",
+        ))
+    if not has_documents:
+        quality_caps.append(_quality_cap(
+            "no_documents_uploaded",
+            6.5,
+            "warning",
+            "No supporting documents are available for entity or identity verification.",
+            "Collect and verify required documents before relying on the memo for approval.",
+        ))
+    elif pending_docs:
+        quality_caps.append(_quality_cap(
+            "documents_pending_verification",
+            7.5,
+            "warning",
+            str(len(pending_docs)) + " document(s) remain unverified.",
+            "Verify or formally disposition outstanding documents.",
+        ))
+    missing_profile_fields = [
+        label for label, value in (
+            ("source_of_funds", sof),
+            ("expected_volume", exp_vol),
+            ("operating_countries", operating_countries),
+            ("business_activity", business_activity),
+        )
+        if value == "Information not provided"
+    ]
+    if missing_profile_fields:
+        quality_caps.append(_quality_cap(
+            "critical_profile_data_missing",
+            6.8,
+            "warning",
+            "Critical profile fields are missing: " + ", ".join(missing_profile_fields) + ".",
+            "Complete the missing profile fields or document why the data gap is acceptable.",
+        ))
+
+    memo["metadata"]["memo_integrity_version"] = "phase3_v1"
+    memo["metadata"]["adverse_media_state_summary"] = {
+        "terminal": adverse_media_context["terminal"],
+        "coverage": adverse_media_context["coverage"],
+        "has_hit": adverse_media_context["has_hit"],
+    }
+    memo["metadata"]["risk_evidence"] = {
+        "jurisdiction": jurisdiction_evidence,
+        "business": business_evidence,
+        "financial_crime": financial_crime_evidence,
+    }
+    memo["metadata"]["quality_caps"] = quality_caps
 
     # ── RULE 4A enforcement: Post-generation factor classification check ──
     # Verify no ALWAYS_RISK_DECREASING keywords appear in risk_increasing_factors
