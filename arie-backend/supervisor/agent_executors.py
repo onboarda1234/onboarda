@@ -3375,6 +3375,9 @@ _MEDIA_SEVERITY_MATRIX = {
     "negative_press": 1,
     "unknown": 1,
 }
+# ComplyAdvantage monitoring rows use "media" as the normalized adverse-media
+# alert type; keep legacy monitoring aliases for existing rows.
+_MEDIA_ALERT_TYPES = {"adverse_media", "media_alert", "news_alert", "media"}
 
 
 def _retrieve_new_media(app: Dict, alerts: List[Dict]) -> Dict[str, Any]:
@@ -3385,7 +3388,7 @@ def _retrieve_new_media(app: Dict, alerts: List[Dict]) -> Dict[str, Any]:
     """
     media_alerts = [
         a for a in alerts
-        if (a.get("alert_type") or "").lower() in ("adverse_media", "media_alert", "news_alert")
+        if (a.get("alert_type") or "").lower() in _MEDIA_ALERT_TYPES
     ]
     return {
         "check": "New adverse media retrieval",
@@ -3398,6 +3401,9 @@ def _retrieve_new_media(app: Dict, alerts: List[Dict]) -> Dict[str, Any]:
             "severity": a.get("severity"),
             "source": a.get("source_reference"),
             "status": a.get("status"),
+            "discovered_via": a.get("discovered_via", "webhook_live"),
+            "discovered_at": a.get("discovered_at"),
+            "backfill_run_id": a.get("backfill_run_id"),
         } for a in media_alerts[:10]],
     }
 
@@ -3508,7 +3514,21 @@ def _compare_historical_media(app: Dict, media_check: Dict) -> Dict[str, Any]:
     baseline_report = prescreening.get("screening_report", {})
     baseline_media = baseline_report.get("adverse_media", {})
     baseline_count = len(baseline_media.get("hits", [])) if isinstance(baseline_media, dict) else 0
+    hits = media_check.get("hits", [])
     current_count = media_check.get("media_alerts_found", 0)
+    if hits:
+        historical_backfill_hits = sum(
+            1 for hit in hits
+            if hit.get("discovered_via") in ("webhook_backfill", "manual_backfill")
+        )
+        live_hits = sum(
+            1 for hit in hits
+            if hit.get("discovered_via", "webhook_live") == "webhook_live"
+        )
+    else:
+        historical_backfill_hits = 0
+        live_hits = current_count
+    live_new_hits_since_baseline = max(0, live_hits - baseline_count)
 
     return {
         "check": "Historical media comparison",
@@ -3516,7 +3536,10 @@ def _compare_historical_media(app: Dict, media_check: Dict) -> Dict[str, Any]:
         "status": "completed" if baseline_report else "no_baseline",
         "baseline_media_count": baseline_count,
         "current_media_count": current_count,
-        "new_since_baseline": max(0, current_count - baseline_count),
+        "historical_backfill_hits": historical_backfill_hits,
+        "live_monitoring_hits": live_hits,
+        "live_new_hits_since_baseline": live_new_hits_since_baseline,
+        "new_since_baseline": live_new_hits_since_baseline,
         "has_baseline": bool(baseline_report),
     }
 
@@ -3645,6 +3668,10 @@ def _aggregate_risk_signals(all_checks: List[Dict]) -> Dict[str, Any]:
         check = cr.get("check", "").lower()
         if "severity" in check:
             signals["media_risk"] = max(signals["media_risk"], cr.get("max_adjusted_severity", 0))
+        if "historical media comparison" in check and cr.get("historical_backfill_hits", 0) > 0:
+            signals["media_risk"] = max(signals["media_risk"], 1)
+        if "historical media comparison" in check and cr.get("live_new_hits_since_baseline", 0) > 0:
+            signals["media_risk"] = max(signals["media_risk"], 1)
         if "pep proximity" in check:
             signals["pep_risk"] = cr.get("max_proximity", 0) * 4  # scale to 0-4
         if "sanctions" in check:
@@ -3679,6 +3706,7 @@ def _generate_media_narrative(app: Dict, all_checks: List[Dict]) -> Dict[str, An
 
     # Collect key facts for narrative
     media_count = 0
+    historical_count = 0
     pep_count = 0
     sanctions_count = 0
     risk_level = "low"
@@ -3692,6 +3720,8 @@ def _generate_media_narrative(app: Dict, all_checks: List[Dict]) -> Dict[str, An
             sanctions_count = cr.get("sanctions_alerts_found", 0)
         if "signal aggregation" in check:
             risk_level = cr.get("risk_level", "low")
+        if "historical media comparison" in check:
+            historical_count = cr.get("historical_backfill_hits", 0)
 
     # Try AI narrative
     narrative = None
@@ -3719,7 +3749,12 @@ def _generate_media_narrative(app: Dict, all_checks: List[Dict]) -> Dict[str, An
         else:
             parts = []
             if media_count > 0:
-                parts.append(f"{media_count} adverse media alert(s)")
+                if historical_count:
+                    parts.append(
+                        f"{media_count} adverse media alert(s), including {historical_count} historically discovered backfill hit(s)"
+                    )
+                else:
+                    parts.append(f"{media_count} adverse media alert(s)")
             if pep_count > 0:
                 parts.append(f"{pep_count} PEP-exposed person(s)")
             if sanctions_count > 0:

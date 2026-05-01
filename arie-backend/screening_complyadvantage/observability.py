@@ -180,6 +180,10 @@ def endpoint_category(path):
     path = path_template(path)
     if path.startswith("/oauth") or "token" in path:
         return "auth"
+    if path == "/v2/cases":
+        return "cases"
+    if path.startswith("/v2/cases/") and path.endswith("/alerts"):
+        return "case_alerts"
     if path.startswith("/v2/cases/"):
         return "case"
     if path.startswith("/v2/alerts/") and path.endswith("/risks"):

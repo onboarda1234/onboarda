@@ -572,6 +572,10 @@ def _get_postgres_schema() -> str:
         application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         provider TEXT,
         case_identifier TEXT,
+        discovered_via TEXT NOT NULL DEFAULT 'webhook_live'
+            CHECK(discovered_via IN ('webhook_live','webhook_backfill','manual_backfill')),
+        discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        backfill_run_id TEXT,
         client_name TEXT,
         alert_type TEXT,
         severity TEXT,
@@ -1324,6 +1328,10 @@ def _get_sqlite_schema() -> str:
         application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         provider TEXT,
         case_identifier TEXT,
+        discovered_via TEXT NOT NULL DEFAULT 'webhook_live'
+            CHECK(discovered_via IN ('webhook_live','webhook_backfill','manual_backfill')),
+        discovered_at TEXT DEFAULT (datetime('now')),
+        backfill_run_id TEXT,
         client_name TEXT,
         alert_type TEXT,
         severity TEXT,
@@ -3292,6 +3300,34 @@ def _run_migrations(db: DBConnection):
         logger.error("Migration v2.24a failed: %s", e, exc_info=True)
         try:
             db.conn.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.24b: Add monitoring_alerts provenance for CA historical backfill.
+    try:
+        cols_added = []
+        if not _safe_column_exists(db, "monitoring_alerts", "discovered_via"):
+            db.execute(
+                "ALTER TABLE monitoring_alerts ADD COLUMN discovered_via TEXT NOT NULL "
+                "DEFAULT 'webhook_live' CHECK(discovered_via IN "
+                "('webhook_live','webhook_backfill','manual_backfill'))"
+            )
+            cols_added.append("discovered_via")
+        if not _safe_column_exists(db, "monitoring_alerts", "discovered_at"):
+            db.execute("ALTER TABLE monitoring_alerts ADD COLUMN discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            cols_added.append("discovered_at")
+        if not _safe_column_exists(db, "monitoring_alerts", "backfill_run_id"):
+            db.execute("ALTER TABLE monitoring_alerts ADD COLUMN backfill_run_id TEXT")
+            cols_added.append("backfill_run_id")
+        db.commit()
+        if cols_added:
+            logger.info("Migration v2.24b: Added monitoring_alerts provenance columns %s", cols_added)
+        else:
+            logger.info("Migration v2.24b: monitoring_alerts provenance columns already exist")
+    except Exception as e:
+        logger.error("Migration v2.24b failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
         except Exception:
             pass
 

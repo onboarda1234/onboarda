@@ -17,6 +17,7 @@ from .exceptions import (
 from .url_canonicalization import canonicalize_url
 from .orchestrator import ComplyAdvantageScreeningOrchestrator
 from .subscriptions import seed_monitoring_subscription, update_monitoring_subscription_event
+from .historical_backfill import run_historical_backfill_for_subscription, rerun_historical_backfill_for_customer
 from .webhook_handler import ComplyAdvantageWebhookHandler
 
 __all__ = [
@@ -37,4 +38,6 @@ __all__ = [
     "ComplyAdvantageWebhookHandler",
     "seed_monitoring_subscription",
     "update_monitoring_subscription_event",
+    "run_historical_backfill_for_subscription",
+    "rerun_historical_backfill_for_customer",
 ]
