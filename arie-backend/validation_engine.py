@@ -553,6 +553,34 @@ def validate_compliance_memo(memo_data):
     max_possible = 14.5  # 13.5 (15 original rules) + 1.0 (rule #16 declared_pep_truthfulness, A.2)
     quality_score = round(min(total / max_possible * 10, 10), 1)
 
+    # ── 17. MEMO QUALITY HARD CAPS (Phase 3) ──
+    # The memo builder can attach deterministic caps for cases where the
+    # narrative is structurally complete but the evidence base is not strong
+    # enough for a high-quality/pass-clean memo (for example non-terminal
+    # screening or unavailable adverse-media coverage). Re-validation must
+    # enforce the same caps stored on the memo metadata.
+    quality_caps = []
+    for cap in metadata.get("quality_caps") or []:
+        if not isinstance(cap, dict):
+            continue
+        try:
+            max_score = float(cap.get("max_score"))
+        except (TypeError, ValueError):
+            continue
+        quality_caps.append((max_score, cap))
+        issues.append({
+            "category": "quality_cap",
+            "severity": cap.get("severity") or "warning",
+            "description": cap.get("reason") or ("Memo quality capped at " + str(max_score)),
+            "fix": cap.get("fix") or "Resolve the capped evidence gap and regenerate the memo.",
+            "code": cap.get("code"),
+        })
+
+    if quality_caps:
+        cap_score = min(score for score, _ in quality_caps)
+        quality_score = round(min(quality_score, cap_score), 1)
+        scores["quality_cap"] = 0.0
+
     # Determine status
     critical_issues = [i for i in issues if i["severity"] == "critical"]
     warning_issues = [i for i in issues if i["severity"] == "warning"]
@@ -565,6 +593,9 @@ def validate_compliance_memo(memo_data):
         validation_status = "pass_with_fixes"
     else:
         validation_status = "pass"
+
+    if quality_caps and validation_status == "pass":
+        validation_status = "pass_with_fixes"
 
     summary_parts = []
     if critical_issues:

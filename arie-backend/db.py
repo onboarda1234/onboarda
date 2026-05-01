@@ -3833,6 +3833,55 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.31: Ensure long-lived compliance_memos tables have the
+    # memo-integrity metadata columns used for idempotent generation and PDF
+    # evidence. Fresh schemas already include these columns; this backfills
+    # older staging/demo databases without rewriting existing memo rows.
+    try:
+        added = False
+        memo_columns = [
+            ("version", "INTEGER DEFAULT 1"),
+            ("quality_score", "REAL DEFAULT 0"),
+            (
+                "validation_status",
+                "TEXT DEFAULT 'pending' CHECK(validation_status IN ('pending','pass','pass_with_fixes','fail'))",
+            ),
+            ("validation_issues", "TEXT DEFAULT '[]'"),
+            ("validation_run_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
+            ("memo_version", "TEXT DEFAULT '1.0'"),
+            ("raw_output_hash", "TEXT"),
+            ("supervisor_status", "TEXT DEFAULT 'pending'"),
+            ("supervisor_summary", "TEXT"),
+            ("supervisor_contradictions", "TEXT DEFAULT '[]'"),
+            ("rule_violations", "TEXT DEFAULT '[]'"),
+            ("rule_engine_status", "TEXT DEFAULT 'pending'"),
+            ("blocked", "BOOLEAN DEFAULT FALSE" if db.is_postgres else "INTEGER DEFAULT 0"),
+            ("block_reason", "TEXT"),
+            ("pdf_generated_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
+        ]
+        for column, definition in memo_columns:
+            if not _safe_column_exists(db, "compliance_memos", column):
+                db.execute(f"ALTER TABLE compliance_memos ADD COLUMN {column} {definition}")
+                added = True
+        for index_name, column in (
+            ("idx_compliance_memos_application_id", "application_id"),
+            ("idx_compliance_memos_review_status", "review_status"),
+            ("idx_compliance_memos_validation_status", "validation_status"),
+            ("idx_compliance_memos_blocked", "blocked"),
+            ("idx_compliance_memos_created_at", "created_at"),
+        ):
+            if _safe_column_exists(db, "compliance_memos", column):
+                db.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON compliance_memos({column})")
+        db.commit()
+        if added:
+            logger.info("Migration v2.31: Ensured compliance_memos memo-integrity columns")
+    except Exception as e:
+        logger.error("Migration v2.31 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.
 
