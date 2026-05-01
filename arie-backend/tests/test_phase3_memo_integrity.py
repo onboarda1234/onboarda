@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -193,3 +194,57 @@ def test_idempotent_memo_payload_marks_reused_existing_row():
     assert payload["metadata"]["quality_score"] == 7.5
     assert payload["memo_version"] == "v3"
     assert _memo_payload_if_fingerprint_unchanged(row, "memo-input-v1:other") is None
+
+
+def test_idempotent_memo_payload_audit_keeps_blocked_state_visible():
+    from server import _memo_payload_if_fingerprint_unchanged
+
+    row = {
+        "id": 43,
+        "version": 1,
+        "memo_data": json.dumps({"metadata": {"blocked": True, "block_reason": "EDD required"}}),
+        "review_status": "draft",
+        "validation_status": "fail",
+        "blocked": 1,
+        "block_reason": "EDD required",
+        "quality_score": 3.5,
+        "memo_version": "v1",
+        "raw_output_hash": "memo-input-v1:block",
+        "created_at": "2026-05-01T10:00:00",
+    }
+
+    payload = _memo_payload_if_fingerprint_unchanged(row, "memo-input-v1:block")
+
+    assert payload["metadata"]["idempotency"]["reused_existing_memo"] is True
+    assert payload["metadata"]["blocked"] is True
+    assert payload["metadata"]["block_reason"] == "EDD required"
+    assert payload["validation_status"] == "fail"
+
+
+def test_memo_fingerprint_keeps_non_json_brace_prefixed_text_stable():
+    from server import _normalise_memo_fingerprint_value
+
+    text = "{not json} but a legitimate free-text business activity"
+
+    assert _normalise_memo_fingerprint_value(text) == text
+
+
+def test_compliance_memo_schema_has_idempotency_columns_for_real_db():
+    from db import DBConnection, _get_sqlite_schema
+
+    raw = sqlite3.connect(":memory:")
+    raw.row_factory = sqlite3.Row
+    conn = DBConnection(raw)
+    conn.executescript(_get_sqlite_schema())
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(compliance_memos)").fetchall()}
+    conn.close()
+
+    assert {
+        "version",
+        "raw_output_hash",
+        "memo_version",
+        "pdf_generated_at",
+        "blocked",
+        "block_reason",
+        "quality_score",
+    }.issubset(columns)

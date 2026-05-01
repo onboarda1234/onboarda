@@ -8773,6 +8773,7 @@ class ComplianceMemoHandler(BaseHandler):
         latest_memo_row = _latest_compliance_memo_row(db, real_id)
         reused_memo = _memo_payload_if_fingerprint_unchanged(latest_memo_row, memo_input_hash)
         if reused_memo:
+            reused_blocked = bool(reused_memo.get("metadata", {}).get("blocked"))
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                 (
@@ -8783,7 +8784,8 @@ class ComplianceMemoHandler(BaseHandler):
                     app["ref"],
                     "Compliance memo generation reused existing memo "
                     + str(reused_memo.get("metadata", {}).get("idempotency", {}).get("memo_id"))
-                    + " because source inputs were unchanged",
+                    + " because source inputs were unchanged"
+                    + (" | reused_blocked_memo=true" if reused_blocked else ""),
                     self.get_client_ip(),
                 ),
             )
@@ -8813,34 +8815,22 @@ class ComplianceMemoHandler(BaseHandler):
                  supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json,
                  memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash)
             )
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"],
+                        "Compliance memo generated for " + app["company_name"]
+                        + " | Supervisor: " + supervisor_result["verdict"]
+                        + " | Quality: " + str(validation_result["quality_score"]) + "/10"
+                        + " | Rule Engine: " + rule_engine_result["engine_status"]
+                        + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
+                        self.get_client_ip()))
         except Exception as e:
-            # Fallback if rule_violations column doesn't exist yet
-            logger.warning(f"Memo insert with rule_violations failed (column may not exist): {e}")
+            logger.error("Failed to persist compliance memo/audit for %s: %s", real_id, e, exc_info=True)
             try:
-                db.execute(
-                    "INSERT INTO compliance_memos (application_id, version, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, raw_output_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (real_id, next_version, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
-                     validation_result["quality_score"], validation_result["validation_status"],
-                     supervisor_result["verdict"], supervisor_result["recommendation"], memo_input_hash)
-                )
-            except Exception as e2:
-                logger.warning(f"Memo insert with supervisor columns failed: {e2}")
-                try:
-                    db.execute(
-                        "INSERT INTO compliance_memos (application_id, version, memo_data, generated_by, ai_recommendation, review_status) VALUES (?,?,?,?,?,?)",
-                        (real_id, next_version, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft")
-                    )
-                except Exception as e3:
-                    logger.error(f"All memo insert attempts failed for application {real_id}: {e3}", exc_info=True)
-
-        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"],
-                    "Compliance memo generated for " + app["company_name"]
-                    + " | Supervisor: " + supervisor_result["verdict"]
-                    + " | Quality: " + str(validation_result["quality_score"]) + "/10"
-                    + " | Rule Engine: " + rule_engine_result["engine_status"]
-                    + (" | BLOCKED" if memo["metadata"].get("blocked") else ""),
-                    self.get_client_ip()))
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to persist compliance memo", 500)
 
         # ── Priority B / Workstream C: audit-log the EDD routing decision ──
         try:
