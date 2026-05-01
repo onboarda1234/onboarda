@@ -223,3 +223,14 @@ class TestStatusLabels:
     def test_get_status_label_empty_string(self):
         from branding import get_status_label
         assert get_status_label("") == "Unknown"
+
+
+class TestRiskLabels:
+    def test_get_risk_label_known_values(self):
+        from branding import get_risk_label
+        assert get_risk_label("LOW") == "Low Risk"
+        assert get_risk_label("VERY_HIGH") == "Very High Risk"
+
+    def test_get_risk_label_unknown_fallback(self):
+        from branding import get_risk_label
+        assert get_risk_label("CUSTOM_RISK") == "Custom Risk"

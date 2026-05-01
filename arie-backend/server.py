@@ -342,7 +342,7 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
         # cannot silently leak through.
         logger.error("EDD route actuation failed: %s", _err, exc_info=True)
     return result
-from branding import BRAND, get_status_label
+from branding import BRAND, get_risk_label, get_status_label
 from party_utils import (
     _pii_encryptor, _pii_encryption_ok,
     extract_fernet_token, encrypt_pii_fields, decrypt_pii_fields,
@@ -2122,6 +2122,8 @@ class ApplicationsHandler(BaseHandler):
         # Stitch results back into each application
         for app in apps:
             app["status_label"] = get_status_label(app.get("status"))
+            app["risk_level_label"] = get_risk_label(app.get("risk_level"))
+            app["final_risk_level_label"] = get_risk_label(app.get("final_risk_level") or app.get("risk_level"))
             parties = parties_by_app.get(app["id"], ([], [], []))
             app["directors"] = parties[0]
             app["ubos"] = parties[1]
@@ -2294,6 +2296,31 @@ def cleanup_application_delete_artifacts(db, application_id, application_ref):
     delete_normalized_reports_for_application(db, application_id)
 
 
+def _memo_final_status(memo_row):
+    """Return a canonical final memo status for UI and API consumers."""
+    if not memo_row:
+        return "not_generated"
+    review_status = (memo_row.get("review_status") or "draft").lower()
+    validation_status = (memo_row.get("validation_status") or "pending").lower()
+    if memo_row.get("blocked"):
+        return "blocked"
+    if review_status == "approved":
+        if validation_status == "pass_with_fixes":
+            return "approved_with_findings"
+        return "approved"
+    if review_status == "rejected":
+        return "rejected"
+    if validation_status == "fail":
+        return "validation_failed"
+    if validation_status == "pass_with_fixes":
+        return "requires_fixes"
+    if validation_status == "pass":
+        return "validated"
+    if review_status == "draft":
+        return "draft"
+    return "draft"
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -2313,6 +2340,8 @@ class ApplicationDetailHandler(BaseHandler):
 
         result = dict(app)
         result["status_label"] = get_status_label(result.get("status"))
+        result["risk_level_label"] = get_risk_label(result.get("risk_level"))
+        result["final_risk_level_label"] = get_risk_label(result.get("final_risk_level") or result.get("risk_level"))
         result["assigned_name"] = resolve_user_display_name(db, result.get("assigned_to"))
         result["directors"], result["ubos"], result["intermediaries"] = get_application_parties(db, result["id"])
         result["documents"] = [dict(d) for d in db.execute(
@@ -2337,10 +2366,12 @@ class ApplicationDetailHandler(BaseHandler):
         """, (result["id"],)).fetchone()
         if latest_memo:
             latest_memo_dict = dict(latest_memo)
+            latest_memo_final_status = _memo_final_status(latest_memo_dict)
             latest_memo_data = parse_json_field(latest_memo_dict.get("memo_data"), {})
             latest_memo_data.setdefault("metadata", {})
             latest_memo_data["review_status"] = latest_memo_dict.get("review_status")
             latest_memo_data["validation_status"] = latest_memo_dict.get("validation_status")
+            latest_memo_data["final_status"] = latest_memo_final_status
             latest_memo_data["approved_by"] = latest_memo_dict.get("approved_by")
             latest_memo_data["approved_at"] = latest_memo_dict.get("approved_at")
             latest_memo_data["memo_version"] = latest_memo_dict.get("memo_version") or latest_memo_dict.get("version")
@@ -2351,6 +2382,7 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_data["metadata"]["quality_score"] = latest_memo_dict.get("quality_score")
 
             latest_memo_dict.pop("memo_data", None)
+            latest_memo_dict["final_status"] = latest_memo_final_status
             result["latest_memo"] = latest_memo_dict
             result["latest_memo_data"] = latest_memo_data
             # Memo staleness detection: compare memo creation vs application input update
@@ -3407,7 +3439,13 @@ class DocumentUploadHandler(BaseHandler):
             db.close()
             return
 
-        requested_doc_type = _normalize_document_type(self.get_argument("doc_type", "general"))
+        requested_doc_type, doc_type_error = _validate_document_type(
+            self.get_argument("doc_type", "general"),
+            allow_general=False,
+        )
+        if doc_type_error:
+            db.close()
+            return self.error(doc_type_error, 400)
         rmi_item_id = self.get_argument("rmi_item_id", None)
         if rmi_item_id:
             rmi_target, rmi_target_error = _validate_rmi_upload_target(db, app["id"], rmi_item_id)
@@ -3434,6 +3472,7 @@ class DocumentUploadHandler(BaseHandler):
             db.close()
             return self.error("No file provided")
 
+        doc_type = requested_doc_type
         file_info = self.request.files["file"][0]
         filename = file_info["filename"]
         # Sanitize filename
@@ -3468,7 +3507,7 @@ class DocumentUploadHandler(BaseHandler):
                 success, key_or_error = s3.upload_document(
                     file_data=body,
                     client_id=app["id"],
-                    doc_type=self.get_argument("doc_type", "general"),
+                    doc_type=doc_type,
                     filename=safe_name,
                     content_type=content_type,
                     metadata={"original_name": filename}
@@ -3505,7 +3544,6 @@ class DocumentUploadHandler(BaseHandler):
                 503
             )
 
-        doc_type = requested_doc_type
         person_id = self.get_argument("person_id", None)
 
         # Validate person_id refers to an existing person if provided
@@ -4141,6 +4179,9 @@ class DocumentAIVerifyHandler(BaseHandler):
 
         if not doc_type or not file_name:
             return self.error("doc_type and file_name are required", 400)
+        doc_type, doc_type_error = _validate_document_type(doc_type, allow_general=False)
+        if doc_type_error:
+            return self.error(doc_type_error, 400)
 
         # If pre-screening context not provided in request, look it up from the application
         if (not entity_name or not directors) and app_id:
@@ -9162,6 +9203,11 @@ def _governance_summary(payload, keys, max_total_chars=1200):
 
 DOCUMENT_TYPE_NORMALIZE = {
     "doc-coi": "cert_inc",
+    "certificate_of_incorporation": "cert_inc",
+    "proof_of_address": "poa",
+    "financial_statements": "fin_stmt",
+    "source_of_wealth": "source_wealth",
+    "source_of_funds": "source_funds",
     "doc-memarts": "memarts",
     "doc-shareholders": "reg_sh",
     "doc-directors-reg": "reg_dir",
@@ -9176,6 +9222,39 @@ DOCUMENT_TYPE_NORMALIZE = {
     "doc-source-funds-proof": "source_funds",
     "doc-bank-statements": "bank_statements",
     "doc-aml-policy": "aml_policy",
+    "general": "supporting_document",
+}
+
+DOCUMENT_TYPE_ALLOWLIST = {
+    "aml_policy",
+    "bank_statements",
+    "bankref",
+    "board_res",
+    "cert_gs",
+    "cert_inc",
+    "contracts",
+    "cv",
+    "director_id",
+    "drivers_license",
+    "fin_stmt",
+    "general",
+    "id_card",
+    "licence",
+    "memarts",
+    "national_id",
+    "passport",
+    "pep_declaration",
+    "poa",
+    "reg_dir",
+    "reg_sh",
+    "regulatory_intelligence",
+    "sow",
+    "source_funds",
+    "source_wealth",
+    "structure_chart",
+    "supporting_document",
+    "trust_deed",
+    "ubo_id",
 }
 
 
@@ -9185,6 +9264,29 @@ def _normalize_document_type(value):
     normalized = DOCUMENT_TYPE_NORMALIZE.get(raw, raw)
     normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", normalized).strip("_").lower()
     return (normalized or "general")[:80]
+
+
+def _document_type_base(doc_type):
+    """Strip dynamic party suffixes before allowlist checks."""
+    base = str(doc_type or "")
+    if base.startswith("intermediary_"):
+        base = base[len("intermediary_"):]
+    return re.sub(r"_(dir|ubo|inter)\d+$", "", base)
+
+
+def _validate_document_type(value, *, allow_general=False):
+    """Normalize and validate a document type against the canonical allowlist."""
+    normalized = _normalize_document_type(value)
+    base = _document_type_base(normalized)
+    allowed = base in DOCUMENT_TYPE_ALLOWLIST or normalized in DOCUMENT_TYPE_ALLOWLIST
+    if normalized == "general" and not allow_general:
+        allowed = False
+    if not allowed:
+        return normalized, (
+            "Invalid doc_type. Use one of the configured document types or "
+            "'supporting_document' for custom RMI evidence."
+        )
+    return normalized, None
 
 
 def _normalize_rmi_text(value, max_len=1000):
@@ -9206,7 +9308,7 @@ def _normalize_rmi_deadline(value):
     return deadline, None
 
 
-def _normalize_rmi_items(data):
+def _normalize_rmi_items(data, errors=None):
     """Normalize structured RMI items from rmi_items or legacy documents_list."""
     raw_items = data.get("rmi_items") if isinstance(data.get("rmi_items"), list) else None
     if raw_items is None:
@@ -9215,7 +9317,7 @@ def _normalize_rmi_items(data):
             if isinstance(item, dict):
                 raw_items.append(item)
             else:
-                raw_items.append({"label": str(item or ""), "doc_type": str(item or "")})
+                raw_items.append({"label": str(item or "")})
 
     items = []
     seen = set()
@@ -9223,7 +9325,15 @@ def _normalize_rmi_items(data):
         if not isinstance(raw, dict):
             raw = {"label": str(raw or ""), "doc_type": str(raw or "")}
         label = _normalize_rmi_text(raw.get("label") or raw.get("name") or raw.get("doc_type"), 160)
-        doc_type = _normalize_document_type(raw.get("doc_type") or label)
+        raw_doc_type = raw.get("doc_type")
+        if raw_doc_type:
+            doc_type, doc_type_error = _validate_document_type(raw_doc_type, allow_general=False)
+            if doc_type_error:
+                if errors is not None:
+                    errors.append(f"Invalid RMI doc_type for '{label or raw_doc_type}'")
+                continue
+        else:
+            doc_type = "supporting_document"
         description = _normalize_rmi_text(raw.get("description") or raw.get("reason") or "", 500)
         if not label:
             continue
@@ -10214,8 +10324,16 @@ class ApplicationDecisionHandler(BaseHandler):
         rmi_deadline = ""
         rmi_request_id = None
         if decision == "request_documents":
-            rmi_items = _normalize_rmi_items(data)
+            rmi_item_errors = []
+            rmi_items = _normalize_rmi_items(data, errors=rmi_item_errors)
             required_documents = [item["label"] for item in rmi_items]
+            if rmi_item_errors:
+                reason = "; ".join(rmi_item_errors[:3])
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    reason, attempt_summary, db=db)
+                db.close()
+                return self.error(reason, 400)
             if not rmi_items:
                 self.log_governance_attempt(
                     user, "application.decision", attempt_target, "rejected", 400,
@@ -11480,6 +11598,68 @@ class SARAutoTriggerHandler(BaseHandler):
 # EDD (ENHANCED DUE DILIGENCE) PIPELINE ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
+_EDD_VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
+_EDD_REVIEW_OR_TERMINAL_STAGES = {"pending_senior_review", "edd_approved", "edd_rejected"}
+
+
+def _parse_edd_sla_due_at(value):
+    """Parse a date or datetime SLA value into an aware UTC datetime."""
+    if not value:
+        return None, None
+    raw = str(value).strip()
+    try:
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+            parsed = datetime.strptime(raw, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc
+            )
+        else:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None, "sla_due_at must be a valid ISO date or datetime"
+    return parsed, None
+
+
+def _edd_sla_is_breached(value):
+    due_at, error = _parse_edd_sla_due_at(value)
+    if error or due_at is None:
+        return False
+    return due_at < datetime.now(timezone.utc)
+
+
+def _edd_findings_are_complete(db, case_id):
+    """EDD closure requires structured findings, not free-text notes alone."""
+    try:
+        from edd_memo_integration import get_edd_findings
+        findings = get_edd_findings(db, case_id)
+    except Exception:
+        findings = None
+    if not findings:
+        return False
+    recommended = str(findings.get("recommended_outcome") or "").strip()
+    if not recommended:
+        return False
+
+    def _structured_list_has_content(value):
+        if isinstance(value, str):
+            try:
+                value = safe_json_loads(value)
+            except Exception:
+                value = [value]
+        if not isinstance(value, list):
+            value = [value]
+        return any(str(item or "").strip() for item in value)
+
+    summary = str(findings.get("findings_summary") or "").strip()
+    return (
+        len(summary) >= 12
+        or _structured_list_has_content(findings.get("key_concerns"))
+        or _structured_list_has_content(findings.get("mitigating_evidence"))
+    )
+
+
 class EDDListHandler(BaseHandler):
     """GET /api/edd/cases — List EDD cases; POST — Create a new EDD case"""
     def get(self):
@@ -11606,6 +11786,7 @@ class EDDDetailHandler(BaseHandler):
         if not case:
             db.close()
             return self.error("EDD case not found", 404)
+        case_dict = dict(case)
 
         # Prevent updates on closed cases
         if case["stage"] in ("edd_approved", "edd_rejected"):
@@ -11633,6 +11814,34 @@ class EDDDetailHandler(BaseHandler):
                 db.close()
                 return self.error(f"Invalid transition: {case['stage']} → {new_stage}. Allowed: {', '.join(allowed)}", 400)
 
+        priority = str(data.get("priority") or "").strip().lower()
+        if priority and priority not in _EDD_VALID_PRIORITIES:
+            db.close()
+            return self.error(f"Invalid priority. Must be one of: {', '.join(sorted(_EDD_VALID_PRIORITIES))}", 400)
+
+        sla_due_at = data.get("sla_due_at")
+        parsed_sla_due_at = None
+        if sla_due_at:
+            parsed_sla_due_at, sla_error = _parse_edd_sla_due_at(sla_due_at)
+            if sla_error:
+                db.close()
+                return self.error(sla_error, 400)
+
+        effective_sla_due_at = sla_due_at or case_dict.get("sla_due_at")
+        if new_stage in _EDD_REVIEW_OR_TERMINAL_STAGES:
+            if not effective_sla_due_at:
+                db.close()
+                return self.error("EDD SLA due date is required before senior review or closure", 400)
+            if not _edd_findings_are_complete(db, case_id):
+                db.close()
+                return self.error("Structured EDD findings are required before senior review or closure", 400)
+
+        sla_breach_reason = str(data.get("sla_breach_reason") or "").strip()
+        if new_stage in ("edd_approved", "edd_rejected") and _edd_sla_is_breached(effective_sla_due_at):
+            if len(sla_breach_reason) < 12:
+                db.close()
+                return self.error("sla_breach_reason is required when closing an overdue EDD case", 400)
+
         # Build update fields
         updates = ["updated_at=datetime('now')"]
         params = []
@@ -11649,6 +11858,14 @@ class EDDDetailHandler(BaseHandler):
             updates.append("senior_reviewer=?")
             params.append(data["senior_reviewer"])
 
+        if priority:
+            updates.append("priority=?")
+            params.append(priority)
+
+        if parsed_sla_due_at is not None:
+            updates.append("sla_due_at=?")
+            params.append(parsed_sla_due_at.isoformat())
+
         # Handle decision for terminal stages
         if new_stage in ("edd_approved", "edd_rejected"):
             decision_reason = data.get("decision_reason", "")
@@ -11664,27 +11881,46 @@ class EDDDetailHandler(BaseHandler):
             updates.append("decided_at=datetime('now')")
 
         params.append(case_id)
-        db.execute(f"UPDATE edd_cases SET {', '.join(updates)} WHERE id=?", params)
-
-        # Append note if provided
         note_text = data.get("note")
-        if note_text:
-            existing_notes = safe_json_loads(case.get("edd_notes", "[]"))
-            existing_notes.append({
-                "ts": datetime.now().isoformat(),
-                "author": user.get("name", "System"),
-                "note": note_text
-            })
-            db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
+        try:
+            db.execute(f"UPDATE edd_cases SET {', '.join(updates)} WHERE id=?", params)
 
-        # Audit trail
-        detail = f"Stage: {case['stage']} → {new_stage}" if new_stage else "EDD case updated"
-        if note_text:
-            detail += f" | Note: {note_text[:100]}"
-        self.log_audit(user, "EDD Update", f"EDD-{case_id}", detail, db=db)
+            # Append note if provided
+            if note_text:
+                existing_notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
+                existing_notes.append({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "author": user.get("name", "System"),
+                    "note": note_text
+                })
+                db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
+            elif sla_breach_reason:
+                existing_notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
+                existing_notes.append({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "author": user.get("name", "System"),
+                    "note": f"SLA breach acknowledged: {sla_breach_reason}"
+                })
+                db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
 
-        db.commit()
-        db.close()
+            # Audit trail
+            detail = f"Stage: {case['stage']} → {new_stage}" if new_stage else "EDD case updated"
+            if note_text:
+                detail += f" | Note: {note_text[:100]}"
+            if sla_breach_reason:
+                detail += f" | SLA breach acknowledged: {sla_breach_reason[:100]}"
+            self.log_audit(user, "EDD Update", f"EDD-{case_id}", detail, db=db, commit=False)
+
+            db.commit()
+            db.close()
+        except Exception as e:
+            logger.error("Failed to update EDD case %s: %s", case_id, e, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to update EDD case", 500)
 
         self.success({"status": "updated", "stage": new_stage or case["stage"]})
 

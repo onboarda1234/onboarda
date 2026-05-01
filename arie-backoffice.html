@@ -1291,12 +1291,12 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
               <option value="bankref">Bank Reference Letter</option>
               <option value="source_wealth">Source of Wealth</option>
               <option value="source_funds">Source of Funds</option>
-              <option value="other">Other</option>
+              <option value="supporting_document">Other Supporting Document</option>
             </select>
           </div>
           <div class="form-group" style="margin:0;">
             <div class="form-label">File</div>
-            <input class="form-input" type="file" id="bo-upload-file" />
+            <input class="form-input" type="file" id="bo-upload-file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" />
           </div>
         </div>
         <div class="form-group" style="margin:10px 0 0;">
@@ -2456,7 +2456,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     </div>
     <div style="border:2px dashed var(--border2);border-radius:var(--radius);padding:30px;text-align:center;background:var(--surface2);">
       <p style="font-size:14px;color:var(--text2);margin-bottom:10px;">Drag & drop files here, or click to browse</p>
-      <input type="file" id="resource-upload" style="display:none;" multiple onchange="handleResourceUpload(this)" />
+      <input type="file" id="resource-upload" style="display:none;" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" multiple onchange="handleResourceUpload(this)" />
       <button class="btn btn-primary" onclick="document.getElementById('resource-upload').click()">Choose Files</button>
       <p style="font-size:11px;color:var(--text3);margin-top:8px;">Accepted formats: PDF, DOCX, XLSX, PPTX (max 25MB)</p>
     </div>
@@ -8800,7 +8800,7 @@ function addRMICustomDoc(value) {
 }
 
 function slugRMIDocType(label) {
-  return String(label || 'document').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80) || 'document';
+  return 'supporting_document';
 }
 
 function collectRMIItems() {
