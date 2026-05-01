@@ -32,6 +32,7 @@ from config import (
 )
 from rule_engine import SANCTIONED, FATF_BLACK, FATF_GREY
 from sumsub_client import get_sumsub_client
+from provider_errors import sanitize_provider_error
 from environment import (
     ENV, is_production, is_staging, is_demo,
     get_sumsub_base_url, get_sumsub_app_token, get_sumsub_secret_key,
@@ -735,17 +736,19 @@ def _safe_future_result(future, timeout, source_label, company_name=""):
         result = future.result(timeout=timeout)
         return result, None
     except Exception as e:
+        safe_error = sanitize_provider_error(e, max_len=200)
         logger.error(
             "Screening source '%s' failed: %s (company=%s)",
-            source_label, str(e)[:300], company_name,
+            source_label, safe_error, company_name,
         )
         degraded = {
             "source": source_label,
             "api_status": "unavailable",
-            "error": f"Provider temporarily unavailable: {str(e)[:200]}",
+            "error": "Provider temporarily unavailable",
+            "provider_error": safe_error,
             "degraded": True,
         }
-        return degraded, str(e)[:300]
+        return degraded, sanitize_provider_error(e, max_len=300)
 
 
 def run_full_screening(application_data, directors, ubos, client_ip=None):

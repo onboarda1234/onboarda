@@ -113,9 +113,25 @@ STATUS_LABELS = {
 }
 
 
+RISK_LABELS = {
+    "LOW": "Low Risk",
+    "MEDIUM": "Medium Risk",
+    "HIGH": "High Risk",
+    "VERY_HIGH": "Very High Risk",
+}
+
+
 def get_status_label(status):
     """Return a human-readable label for an application status code.
 
     Falls back to a title-cased version of the status if no mapping exists.
     """
     return STATUS_LABELS.get(status, status.replace("_", " ").title() if status else "Unknown")
+
+
+def get_risk_label(risk_level):
+    """Return the canonical display label for a risk level."""
+    key = str(risk_level or "").strip().upper()
+    if not key:
+        return "Unknown"
+    return RISK_LABELS.get(key, key.replace("_", " ").title())

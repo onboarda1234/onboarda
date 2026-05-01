@@ -36,6 +36,7 @@ import requests
 from requests.exceptions import RequestException, Timeout
 
 from environment import is_production, get_sumsub_individual_level_name
+from provider_errors import public_provider_error, sanitize_provider_error
 
 
 logger = logging.getLogger("sumsub_client")
@@ -1159,9 +1160,9 @@ class SumsubClient:
         logger.warning(
             "Sumsub non-2xx response: endpoint=%s status=%d body=%s "
             "applicant_id=%s application_id=%s person_id=%s",
-            endpoint,
+            sanitize_provider_error(endpoint, max_len=240),
             status_code,
-            (response_body or "")[:500],
+            sanitize_provider_error(response_body, max_len=500),
             applicant_id or "(none)",
             application_id or "(none)",
             person_id or "(none)",
@@ -1175,17 +1176,24 @@ class SumsubClient:
         Return a clearly-errored result instead of simulated data when live API fails.
         This prevents fabricated KYC data from being stored as real.
         """
+        safe_reason = sanitize_provider_error(reason, max_len=240)
+        sanitized_extra = {}
+        for key, value in extra.items():
+            if key in ("response_body", "endpoint"):
+                sanitized_extra[key] = sanitize_provider_error(value, max_len=500 if key == "response_body" else 240)
+            else:
+                sanitized_extra[key] = value
         result = {
             "applicant_id": "",
             "status": "error",
             "review_answer": "",
             "source": "sumsub",
             "api_status": "error",
-            "error": f"{operation} failed: {reason}",
-            "note": reason,
+            "error": public_provider_error(operation),
+            "note": safe_reason,
             "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         }
-        result.update(extra)
+        result.update(sanitized_extra)
         return result
 
     # ── Simulation Fallbacks (for when Sumsub is not configured) ──
