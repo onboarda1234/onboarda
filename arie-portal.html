@@ -3991,6 +3991,7 @@
           </div>
         </div>
 
+        <div id="rmi-requests-container" style="margin-top:16px;display:flex;flex-direction:column;gap:12px;"></div>
         <div id="notifications-container" style="margin-top:16px;display:flex;flex-direction:column;gap:12px;">
           <div style="padding:16px;border:1px dashed var(--border2);border-radius:8px;color:var(--text3);font-size:12px;text-align:center;">
             Loading live notifications...
@@ -4756,6 +4757,7 @@ function clearAuth() {
 // ─── State ───────────────────────────────────────────────
 let appRef = '';
 let uploadedDocs = new Set();
+let currentRMIRequests = [];
 var TOTAL_REQUIRED_DOCS = 11;
 var APP_TABLE_COLSPAN = 7;
 var PRESCREENING_FIELD_BINDINGS = {
@@ -8155,11 +8157,89 @@ function updateClientStatusTracker(status) {
     stageDecision.style.color = 'var(--red)';
     stageDecision.innerHTML = '✗';
     summary.innerHTML = '<strong>Current Status:</strong> Your application was declined.';
-  } else if (normalized === 'kyc_documents') {
+  } else if (normalized === 'kyc_documents' || normalized === 'rmi_sent') {
     stageReview.innerHTML = '📄';
-    summary.innerHTML = '<strong>Current Status:</strong> Additional KYC documents are required before review can continue.';
+    summary.innerHTML = '<strong>Current Status:</strong> Additional documents are required before review can continue.';
   } else {
     summary.innerHTML = '<strong>Current Status:</strong> Your application is under compliance review. We will notify you when a decision has been made.';
+  }
+}
+
+function rmiItemTone(status) {
+  var s = String(status || 'requested').toLowerCase();
+  if (s === 'accepted') return { cls: 'uploaded', text: 'Accepted' };
+  if (s === 'uploaded') return { cls: 'warning', text: 'Uploaded' };
+  if (s === 'rejected') return { cls: 'missing', text: 'Re-upload requested' };
+  return { cls: 'missing', text: 'Requested' };
+}
+
+function renderRMIRequests(requests) {
+  currentRMIRequests = Array.isArray(requests) ? requests : [];
+  var container = document.getElementById('rmi-requests-container');
+  if (!container) return;
+  var active = currentRMIRequests.filter(function(req) {
+    var sameApp = !currentApplicationId || String(req.application_id || '') === String(currentApplicationId);
+    return sameApp && String(req.status || '').toLowerCase() !== 'cancelled';
+  });
+  if (!active.length) {
+    container.innerHTML = '';
+    return;
+  }
+  container.innerHTML = active.map(function(req) {
+    var items = Array.isArray(req.items) ? req.items : [];
+    var itemHtml = items.map(function(item) {
+      var tone = rmiItemTone(item.status);
+      var inputId = 'rmi-upload-' + String(item.id || '').replace(/[^a-zA-Z0-9_-]/g, '');
+      var disabled = item.status === 'accepted' ? ' disabled' : '';
+      var uploadControl = item.status === 'accepted'
+        ? '<span style="font-size:11px;color:var(--text3);">No further upload needed</span>'
+        : '<input type="file" id="' + escapeHtml(inputId) + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" onchange="uploadRMIItem(\'' + escapeHtml(item.id || '') + '\',\'' + escapeHtml(item.doc_type || 'general') + '\',this)" />' +
+          '<button type="button" class="btn btn-outline" style="padding:7px 10px;font-size:11px;" onclick="document.getElementById(\'' + escapeHtml(inputId) + '\').click()"' + disabled + '>Upload</button>';
+      return '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--border);">' +
+        '<div>' +
+          '<div style="font-size:13px;font-weight:700;color:var(--text);">' + escapeHtml(item.label || item.doc_type || 'Requested document') + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(item.description || '') + '</div>' +
+          '<span class="review-status ' + tone.cls + '" style="display:inline-block;margin-top:6px;">' + escapeHtml(tone.text) + '</span>' +
+        '</div>' +
+        '<div>' + uploadControl + '</div>' +
+      '</div>';
+    }).join('');
+    return '<div style="padding:14px 16px;background:var(--amber-dim);border-left:4px solid var(--amber);border-radius:6px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">' +
+        '<div style="font-size:14px;font-weight:800;color:var(--amber);">Additional Documents Required</div>' +
+        '<span class="review-status warning">' + escapeHtml(String(req.status || 'open').replace(/_/g, ' ')) + '</span>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;">' + escapeHtml(req.reason || '') + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-bottom:8px;">Deadline: <strong>' + escapeHtml(req.deadline || '-') + '</strong></div>' +
+      itemHtml +
+    '</div>';
+  }).join('');
+}
+
+async function uploadRMIItem(itemId, docType, input) {
+  if (!AUTH_TOKEN || !currentApplicationId || !input || !input.files || !input.files[0]) {
+    showToast('error', 'Authentication Required', 'Please sign in before uploading documents.');
+    return;
+  }
+  var file = input.files[0];
+  var fd = new FormData();
+  fd.append('file', file);
+  fd.append('doc_type', docType || 'general');
+  try {
+    var url = '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(docType || 'general') + '&rmi_item_id=' + encodeURIComponent(itemId);
+    var resp = await apiCall('POST', url, fd, true);
+    if (resp && resp.id) {
+      showToast('success', 'Document Uploaded', 'The requested document has been submitted.');
+      await loadClientNotifications();
+      try {
+        var app = await apiCall('GET', '/applications/' + encodeURIComponent(appRef || currentApplicationId));
+        syncPersistedApplicationDocuments(app);
+      } catch(e) {}
+    }
+  } catch (err) {
+    showToast('error', 'Upload Failed', err.message || 'Could not upload this document.');
+  } finally {
+    input.value = '';
   }
 }
 
@@ -8176,6 +8256,7 @@ function renderClientNotifications(notifications) {
     approved: { bg: 'var(--green-dim)', border: 'var(--green)', color: 'var(--green)', icon: '✓' },
     rejected: { bg: 'var(--red-dim)', border: 'var(--red)', color: 'var(--red)', icon: '✗' },
     request_documents: { bg: 'var(--amber-dim)', border: 'var(--amber)', color: 'var(--amber)', icon: '⚠️' },
+    documents_required: { bg: 'var(--amber-dim)', border: 'var(--amber)', color: 'var(--amber)', icon: '⚠️' },
     pre_approval: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: '📋' },
     pre_approved: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: '📋' },
     default: { bg: 'var(--blue-dim)', border: 'var(--blue)', color: 'var(--blue)', icon: 'ℹ️' }
@@ -8201,6 +8282,7 @@ async function loadClientNotifications() {
   if (!container) return;
 
   if (!AUTH_TOKEN) {
+    renderRMIRequests([]);
     container.innerHTML = '<div style="padding:16px;border:1px dashed var(--border2);border-radius:8px;color:var(--text3);font-size:12px;text-align:center;">Sign in to view live compliance messages.</div>';
     updateClientStatusTracker('');
     return;
@@ -8211,13 +8293,14 @@ async function loadClientNotifications() {
   try {
     const resp = await apiCall('GET', '/notifications');
     const notifications = resp.notifications || [];
+    renderRMIRequests(resp.rmi_requests || []);
     renderClientNotifications(notifications);
     if (notifications.length > 0) {
       const latest = notifications[0];
       let inferredStatus = '';
       if (latest.notification_type === 'approved') inferredStatus = 'approved';
       else if (latest.notification_type === 'rejected') inferredStatus = 'rejected';
-      else if (latest.notification_type === 'request_documents') inferredStatus = 'kyc_documents';
+      else if (latest.notification_type === 'request_documents' || latest.notification_type === 'documents_required') inferredStatus = 'rmi_sent';
       else if (latest.notification_type === 'pre_approval' || latest.notification_type === 'pre_approved') inferredStatus = 'pre_approved';
       else inferredStatus = 'in_review';
       updateClientStatusTracker(inferredStatus);
@@ -8225,6 +8308,7 @@ async function loadClientNotifications() {
       updateClientStatusTracker('in_review');
     }
   } catch (err) {
+    renderRMIRequests([]);
     container.innerHTML = '<div style="padding:16px;border:1px dashed var(--border2);border-radius:8px;color:var(--red);font-size:12px;text-align:center;">Could not load notifications right now.</div>';
     updateClientStatusTracker('');
   }
@@ -9430,7 +9514,7 @@ function getApplicationView(status) {
     approved: 'approved',
     rejected: 'rejected',
     edd_required: 'pending',
-    rmi_sent: 'pending',
+    rmi_sent: 'client-notifications',
     withdrawn: 'withdrawn'
   };
   return stageMap[status] || 'pending';
@@ -9592,6 +9676,7 @@ async function resumeApplication(ref, stage) {
         try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on resume:', e); }
       }
       syncPersistedApplicationDocuments(app);
+      renderRMIRequests(app.rmi_requests || []);
       buildReviewScreen();
     }
   } catch (err) {
@@ -9612,6 +9697,9 @@ async function resumeApplication(ref, stage) {
     showToast('success', 'Draft Restored', 'Ref: ' + ref + ' — your saved form data, documents, and party details have been restored.');
   } else {
     showToast('info', 'Application Loaded', 'Ref: ' + ref + ' — view restored to the latest saved stage.');
+  }
+  if (target === 'client-notifications') {
+    loadClientNotifications();
   }
 }
 

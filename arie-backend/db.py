@@ -681,10 +681,44 @@ def _get_postgres_schema() -> str:
         title TEXT NOT NULL,
         message TEXT,
         documents_list TEXT,
+        rmi_request_id TEXT,
         read_status BOOLEAN DEFAULT false,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         read_at TIMESTAMP
     );
+
+    -- Structured Request for More Information (RMI)
+    CREATE TABLE IF NOT EXISTS rmi_requests (
+        id TEXT PRIMARY KEY,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        client_id TEXT REFERENCES clients(id),
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','partially_fulfilled','fulfilled','cancelled')),
+        reason TEXT NOT NULL,
+        deadline TEXT NOT NULL,
+        created_by TEXT REFERENCES users(id),
+        created_by_name TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        fulfilled_at TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_rmi_requests_app ON rmi_requests(application_id);
+    CREATE INDEX IF NOT EXISTS idx_rmi_requests_client ON rmi_requests(client_id);
+    CREATE INDEX IF NOT EXISTS idx_rmi_requests_status ON rmi_requests(status);
+
+    CREATE TABLE IF NOT EXISTS rmi_request_items (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES rmi_requests(id) ON DELETE CASCADE,
+        doc_type TEXT NOT NULL,
+        label TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN ('requested','uploaded','accepted','rejected')),
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        uploaded_at TIMESTAMP,
+        reviewed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_rmi_items_request ON rmi_request_items(request_id);
+    CREATE INDEX IF NOT EXISTS idx_rmi_items_doc ON rmi_request_items(document_id);
 
     -- Suspicious Activity Reports (SAR)
     CREATE TABLE IF NOT EXISTS sar_reports (
@@ -1446,10 +1480,44 @@ def _get_sqlite_schema() -> str:
         title TEXT NOT NULL,
         message TEXT,
         documents_list TEXT,
+        rmi_request_id TEXT,
         read_status INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
         read_at TEXT
     );
+
+    -- Structured Request for More Information (RMI)
+    CREATE TABLE IF NOT EXISTS rmi_requests (
+        id TEXT PRIMARY KEY,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        client_id TEXT REFERENCES clients(id),
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','partially_fulfilled','fulfilled','cancelled')),
+        reason TEXT NOT NULL,
+        deadline TEXT NOT NULL,
+        created_by TEXT REFERENCES users(id),
+        created_by_name TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        fulfilled_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_rmi_requests_app ON rmi_requests(application_id);
+    CREATE INDEX IF NOT EXISTS idx_rmi_requests_client ON rmi_requests(client_id);
+    CREATE INDEX IF NOT EXISTS idx_rmi_requests_status ON rmi_requests(status);
+
+    CREATE TABLE IF NOT EXISTS rmi_request_items (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL REFERENCES rmi_requests(id) ON DELETE CASCADE,
+        doc_type TEXT NOT NULL,
+        label TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN ('requested','uploaded','accepted','rejected')),
+        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        uploaded_at TEXT,
+        reviewed_at TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_rmi_items_request ON rmi_request_items(request_id);
+    CREATE INDEX IF NOT EXISTS idx_rmi_items_doc ON rmi_request_items(document_id);
 
     -- Suspicious Activity Reports (SAR)
     CREATE TABLE IF NOT EXISTS sar_reports (
@@ -3672,6 +3740,96 @@ def _run_migrations(db: DBConnection):
         logger.error("Migration v2.29 backfill failed: %s", e, exc_info=True)
         try:
             db.conn.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.30: Structured RMI request tracking.
+    #
+    # Older "request documents" decisions only wrote free text into
+    # client_notifications.documents_list.  The RMI loop needs durable
+    # request/item rows so the portal can render requested slots and the
+    # back office can track line-item fulfillment.
+    try:
+        if not _safe_column_exists(db, "client_notifications", "rmi_request_id"):
+            db.execute("ALTER TABLE client_notifications ADD COLUMN rmi_request_id TEXT")
+
+        if not _safe_table_exists(db, "rmi_requests"):
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE rmi_requests (
+                        id TEXT PRIMARY KEY,
+                        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                        client_id TEXT REFERENCES clients(id),
+                        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','partially_fulfilled','fulfilled','cancelled')),
+                        reason TEXT NOT NULL,
+                        deadline TEXT NOT NULL,
+                        created_by TEXT REFERENCES users(id),
+                        created_by_name TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        fulfilled_at TIMESTAMP
+                    )
+                """)
+            else:
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS rmi_requests (
+                        id TEXT PRIMARY KEY,
+                        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                        client_id TEXT REFERENCES clients(id),
+                        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','partially_fulfilled','fulfilled','cancelled')),
+                        reason TEXT NOT NULL,
+                        deadline TEXT NOT NULL,
+                        created_by TEXT REFERENCES users(id),
+                        created_by_name TEXT,
+                        created_at TEXT DEFAULT (datetime('now')),
+                        updated_at TEXT DEFAULT (datetime('now')),
+                        fulfilled_at TEXT
+                    )
+                """)
+
+        if not _safe_table_exists(db, "rmi_request_items"):
+            if db.is_postgres:
+                db.execute("""
+                    CREATE TABLE rmi_request_items (
+                        id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL REFERENCES rmi_requests(id) ON DELETE CASCADE,
+                        doc_type TEXT NOT NULL,
+                        label TEXT NOT NULL,
+                        description TEXT,
+                        status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN ('requested','uploaded','accepted','rejected')),
+                        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+                        uploaded_at TIMESTAMP,
+                        reviewed_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+            else:
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS rmi_request_items (
+                        id TEXT PRIMARY KEY,
+                        request_id TEXT NOT NULL REFERENCES rmi_requests(id) ON DELETE CASCADE,
+                        doc_type TEXT NOT NULL,
+                        label TEXT NOT NULL,
+                        description TEXT,
+                        status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN ('requested','uploaded','accepted','rejected')),
+                        document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+                        uploaded_at TEXT,
+                        reviewed_at TEXT,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+
+        db.execute("CREATE INDEX IF NOT EXISTS idx_rmi_requests_app ON rmi_requests(application_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_rmi_requests_client ON rmi_requests(client_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_rmi_requests_status ON rmi_requests(status)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_rmi_items_request ON rmi_request_items(request_id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_rmi_items_doc ON rmi_request_items(document_id)")
+        db.commit()
+        logger.info("Migration v2.30: Structured RMI tables and notification linkage ensured")
+    except Exception as e:
+        logger.error("Migration v2.30 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
         except Exception:
             pass
 

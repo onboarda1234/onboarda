@@ -2117,6 +2117,8 @@ class ApplicationsHandler(BaseHandler):
             for d in doc_rows:
                 docs_by_app.setdefault(d["application_id"], []).append(dict(d))
 
+        rmi_by_app = _load_rmi_requests_for_apps(db, app_ids) if app_ids else {}
+
         # Stitch results back into each application
         for app in apps:
             app["status_label"] = get_status_label(app.get("status"))
@@ -2129,6 +2131,7 @@ class ApplicationsHandler(BaseHandler):
             for doc in app_docs:
                 doc.pop("application_id", None)
             app["documents"] = app_docs
+            app["rmi_requests"] = rmi_by_app.get(app["id"], [])
             # Bug #4: Parse risk_dimensions from JSON string for API consumers
             if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
                 app["risk_dimensions"] = safe_json_loads(app["risk_dimensions"])
@@ -2254,6 +2257,14 @@ def cleanup_application_delete_artifacts(db, application_id, application_ref):
             except Exception as exc:
                 logger.warning("S3 deletion failed for draft application doc %s: %s", doc["s3_key"], exc)
 
+    # RMI rows are explicitly removed before generic child cleanup so the later
+    # client_notifications delete cannot leave stale rmi_request_id mirrors.
+    db.execute(
+        "DELETE FROM rmi_request_items WHERE request_id IN (SELECT id FROM rmi_requests WHERE application_id=?)",
+        (application_id,),
+    )
+    db.execute("DELETE FROM rmi_requests WHERE application_id=?", (application_id,))
+
     for table in (
         "client_sessions",
         "documents",
@@ -2309,6 +2320,7 @@ class ApplicationDetailHandler(BaseHandler):
         for doc in result["documents"]:
             doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+        result["rmi_requests"] = _load_rmi_requests(db, result["id"])
         stored_prescreening = parse_json_field(result.get("prescreening_data"), {})
         saved_session_prescreening = load_saved_session_prescreening(db, result)
         result["prescreening_data"] = merge_prescreening_sources(stored_prescreening, saved_session_prescreening)
@@ -3395,6 +3407,17 @@ class DocumentUploadHandler(BaseHandler):
             db.close()
             return
 
+        requested_doc_type = _normalize_document_type(self.get_argument("doc_type", "general"))
+        rmi_item_id = self.get_argument("rmi_item_id", None)
+        if rmi_item_id:
+            rmi_target, rmi_target_error = _validate_rmi_upload_target(db, app["id"], rmi_item_id)
+            if rmi_target_error:
+                db.close()
+                return self.error(rmi_target_error, 400)
+            if rmi_target and rmi_target.get("doc_type") != requested_doc_type:
+                db.close()
+                return self.error("Uploaded document type does not match the requested document slot", 400)
+
         # v2.1: KYC access control — HIGH/VERY_HIGH risk requires pre-approval before document upload
         # In production, this gate is enforced; in staging, allow uploads for testing
         risk_level = (app.get("risk_level") or "").upper()
@@ -3482,20 +3505,8 @@ class DocumentUploadHandler(BaseHandler):
                 503
             )
 
-        doc_type = self.get_argument("doc_type", "general")
+        doc_type = requested_doc_type
         person_id = self.get_argument("person_id", None)
-
-        # Defense-in-depth: normalize portal HTML IDs to canonical doc_type values
-        _DOC_TYPE_NORMALIZE = {
-            "doc-coi": "cert_inc", "doc-memarts": "memarts", "doc-shareholders": "reg_sh",
-            "doc-directors-reg": "reg_dir", "doc-financials": "fin_stmt", "doc-proof-address": "poa",
-            "doc-board-res": "board_res", "doc-structure-chart": "structure_chart",
-            "doc-bank-ref": "bankref", "doc-license-cert": "licence",
-            "doc-contracts": "contracts", "doc-source-wealth-proof": "source_wealth",
-            "doc-source-funds-proof": "source_funds", "doc-bank-statements": "bank_statements",
-            "doc-aml-policy": "aml_policy",
-        }
-        doc_type = _DOC_TYPE_NORMALIZE.get(doc_type, doc_type)
 
         # Validate person_id refers to an existing person if provided
         person_resolved = None
@@ -3517,14 +3528,29 @@ class DocumentUploadHandler(BaseHandler):
             INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, s3_key, file_size, mime_type)
             VALUES (?,?,?,?,?,?,?,?,?)
         """, (doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key, len(body), content_type))
+        rmi_fulfilled_item_id, rmi_error = _mark_rmi_item_uploaded(
+            db, app["id"], doc_id, doc_type, rmi_item_id=rmi_item_id
+        )
+        if rmi_error:
+            db.close()
+            return self.error(rmi_error, 400)
         db.commit()
         db.close()
 
         audit_detail = f"Document uploaded: {filename} ({doc_type})"
         if person_id:
             audit_detail += f" person_id={person_id}"
+        if rmi_fulfilled_item_id:
+            audit_detail += f" rmi_item_id={rmi_fulfilled_item_id}"
         self.log_audit(user, "Upload", app["ref"], audit_detail)
-        self.success({"id": doc_id, "doc_name": filename, "doc_type": doc_type, "file_size": len(body), "s3_key": s3_key}, 201)
+        self.success({
+            "id": doc_id,
+            "doc_name": filename,
+            "doc_type": doc_type,
+            "file_size": len(body),
+            "s3_key": s3_key,
+            "rmi_item_id": rmi_fulfilled_item_id,
+        }, 201)
 
 
 class DocumentDeleteHandler(BaseHandler):
@@ -3549,7 +3575,7 @@ class DocumentDeleteHandler(BaseHandler):
 
         # Only allow deletion in pre-submission statuses (post-submission documents
         # are part of the compliance audit trail and must not be removed)
-        allowed_statuses = ("draft", "kyc_documents", "pricing_accepted", "pricing_review", "pre_approved")
+        allowed_statuses = ("draft", "kyc_documents", "rmi_sent", "pricing_accepted", "pricing_review", "pre_approved")
         if app["status"] not in allowed_statuses:
             db.close()
             return self.error("Documents cannot be deleted after submission.", 403)
@@ -3561,6 +3587,17 @@ class DocumentDeleteHandler(BaseHandler):
         if not doc:
             db.close()
             return self.error("Document not found", 404)
+
+        linked_rmi_items = db.execute(
+            """SELECT i.id, i.request_id, i.status
+               FROM rmi_request_items i
+               JOIN rmi_requests r ON r.id = i.request_id
+               WHERE i.document_id = ? AND r.application_id = ?""",
+            (doc_id, app["id"]),
+        ).fetchall()
+        if any((item.get("status") or "") == "accepted" for item in linked_rmi_items):
+            db.close()
+            return self.error("Accepted requested documents cannot be deleted.", 403)
 
         # Delete local file if exists
         if doc["file_path"] and os.path.exists(doc["file_path"]):
@@ -3579,11 +3616,28 @@ class DocumentDeleteHandler(BaseHandler):
             except Exception as e:
                 logging.warning("S3 deletion failed for key %s: %s", doc["s3_key"], e)
 
+        affected_rmi_request_ids = sorted({item["request_id"] for item in linked_rmi_items})
+        if linked_rmi_items:
+            db.execute(
+                """UPDATE rmi_request_items
+                   SET status = 'requested',
+                       document_id = NULL,
+                       uploaded_at = NULL,
+                       reviewed_at = NULL
+                   WHERE document_id = ?""",
+                (doc_id,),
+            )
+
         db.execute("DELETE FROM documents WHERE id=? AND application_id=?", (doc_id, app["id"]))
+        for request_id in affected_rmi_request_ids:
+            _sync_rmi_request_status(db, request_id)
         db.commit()
         db.close()
 
-        self.log_audit(user, "Delete", app["ref"], f"Document deleted: {doc['doc_name']}")
+        audit_detail = f"Document deleted: {doc['doc_name']}"
+        if affected_rmi_request_ids:
+            audit_detail += " | linked RMI item reset"
+        self.log_audit(user, "Delete", app["ref"], audit_detail)
         self.success({"deleted": True, "id": doc_id})
 
 
@@ -3986,6 +4040,22 @@ class DocumentReviewHandler(BaseHandler):
             SET review_status = ?, review_comment = ?, reviewed_by = ?, reviewer_role = ?, reviewed_at = datetime('now')
             WHERE id = ?
         """, (review_status, review_comment, user.get("sub", ""), user_role, doc_id))
+        rmi_item = db.execute(
+            "SELECT id, request_id FROM rmi_request_items WHERE document_id = ? ORDER BY uploaded_at DESC LIMIT 1",
+            (doc_id,),
+        ).fetchone()
+        if rmi_item:
+            if review_status == "accepted":
+                db.execute(
+                    "UPDATE rmi_request_items SET status = 'accepted', reviewed_at = datetime('now') WHERE id = ?",
+                    (rmi_item["id"],),
+                )
+            elif review_status in ("rejected", "info_requested"):
+                db.execute(
+                    "UPDATE rmi_request_items SET status = 'rejected', reviewed_at = datetime('now') WHERE id = ?",
+                    (rmi_item["id"],),
+                )
+            _sync_rmi_request_status(db, rmi_item["request_id"])
         db.commit()
 
         reviewed_doc = db.execute("""
@@ -8877,6 +8947,269 @@ def _governance_summary(payload, keys, max_total_chars=1200):
     return summary
 
 
+DOCUMENT_TYPE_NORMALIZE = {
+    "doc-coi": "cert_inc",
+    "doc-memarts": "memarts",
+    "doc-shareholders": "reg_sh",
+    "doc-directors-reg": "reg_dir",
+    "doc-financials": "fin_stmt",
+    "doc-proof-address": "poa",
+    "doc-board-res": "board_res",
+    "doc-structure-chart": "structure_chart",
+    "doc-bank-ref": "bankref",
+    "doc-license-cert": "licence",
+    "doc-contracts": "contracts",
+    "doc-source-wealth-proof": "source_wealth",
+    "doc-source-funds-proof": "source_funds",
+    "doc-bank-statements": "bank_statements",
+    "doc-aml-policy": "aml_policy",
+}
+
+
+def _normalize_document_type(value):
+    """Return a canonical, bounded document type suitable for DB matching."""
+    raw = str(value or "general").strip()
+    normalized = DOCUMENT_TYPE_NORMALIZE.get(raw, raw)
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", normalized).strip("_").lower()
+    return (normalized or "general")[:80]
+
+
+def _normalize_rmi_text(value, max_len=1000):
+    text = str(value or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    return text[:max_len]
+
+
+def _normalize_rmi_deadline(value):
+    deadline = _normalize_rmi_text(value, 32)
+    if not deadline or not re.match(r"^\d{4}-\d{2}-\d{2}$", deadline):
+        return "", "rmi_deadline is required in YYYY-MM-DD format"
+    try:
+        parsed = datetime.strptime(deadline, "%Y-%m-%d").date()
+    except ValueError:
+        return "", "rmi_deadline must be a valid calendar date"
+    if parsed < datetime.now(timezone.utc).date():
+        return "", "rmi_deadline cannot be in the past"
+    return deadline, None
+
+
+def _normalize_rmi_items(data):
+    """Normalize structured RMI items from rmi_items or legacy documents_list."""
+    raw_items = data.get("rmi_items") if isinstance(data.get("rmi_items"), list) else None
+    if raw_items is None:
+        raw_items = []
+        for item in data.get("documents_list") or []:
+            if isinstance(item, dict):
+                raw_items.append(item)
+            else:
+                raw_items.append({"label": str(item or ""), "doc_type": str(item or "")})
+
+    items = []
+    seen = set()
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            raw = {"label": str(raw or ""), "doc_type": str(raw or "")}
+        label = _normalize_rmi_text(raw.get("label") or raw.get("name") or raw.get("doc_type"), 160)
+        doc_type = _normalize_document_type(raw.get("doc_type") or label)
+        description = _normalize_rmi_text(raw.get("description") or raw.get("reason") or "", 500)
+        if not label:
+            continue
+        key = (doc_type, label.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({"doc_type": doc_type, "label": label, "description": description})
+    return items[:25]
+
+
+def _load_rmi_requests_for_apps(db, app_ids):
+    """Return structured RMI requests grouped by application id."""
+    result = {app_id: [] for app_id in app_ids}
+    if not app_ids:
+        return result
+    placeholders = ",".join("?" for _ in app_ids)
+    request_rows = db.execute(
+        f"""SELECT * FROM rmi_requests
+            WHERE application_id IN ({placeholders})
+            ORDER BY created_at DESC, id DESC""",
+        list(app_ids),
+    ).fetchall()
+    request_ids = [row["id"] for row in request_rows]
+    items_by_request = {request_id: [] for request_id in request_ids}
+    if request_ids:
+        item_placeholders = ",".join("?" for _ in request_ids)
+        item_rows = db.execute(
+            f"""SELECT * FROM rmi_request_items
+                WHERE request_id IN ({item_placeholders})
+                ORDER BY created_at ASC, id ASC""",
+            request_ids,
+        ).fetchall()
+        for item in item_rows:
+            items_by_request.setdefault(item["request_id"], []).append(dict(item))
+    for row in request_rows:
+        req = dict(row)
+        req["items"] = items_by_request.get(req["id"], [])
+        result.setdefault(req["application_id"], []).append(req)
+    return result
+
+
+def _load_rmi_requests(db, application_id):
+    return _load_rmi_requests_for_apps(db, [application_id]).get(application_id, [])
+
+
+def _load_client_rmi_requests(db, client_id):
+    rows = db.execute(
+        """SELECT r.* FROM rmi_requests r
+           JOIN applications a ON a.id = r.application_id
+           WHERE r.client_id = ? OR a.client_id = ?
+           ORDER BY r.created_at DESC, r.id DESC""",
+        (client_id, client_id),
+    ).fetchall()
+    app_ids = sorted({row["application_id"] for row in rows})
+    grouped = _load_rmi_requests_for_apps(db, app_ids)
+    ordered = []
+    seen = {row["id"] for row in rows}
+    for row in rows:
+        for req in grouped.get(row["application_id"], []):
+            if req["id"] == row["id"] and req["id"] in seen:
+                ordered.append(req)
+                seen.remove(req["id"])
+                break
+    return ordered
+
+
+def _sync_rmi_request_status(db, request_id):
+    items = db.execute(
+        "SELECT status FROM rmi_request_items WHERE request_id = ?",
+        (request_id,),
+    ).fetchall()
+    if not items:
+        return
+    statuses = [str(item.get("status") or "requested") for item in items]
+    fulfilled = {"uploaded", "accepted"}
+    if all(status in fulfilled for status in statuses):
+        new_status = "fulfilled"
+        db.execute(
+            "UPDATE rmi_requests SET status = ?, fulfilled_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+            (new_status, request_id),
+        )
+    elif any(status in fulfilled for status in statuses):
+        new_status = "partially_fulfilled"
+        db.execute(
+            "UPDATE rmi_requests SET status = ?, fulfilled_at = NULL, updated_at = datetime('now') WHERE id = ?",
+            (new_status, request_id),
+        )
+    else:
+        new_status = "open"
+        db.execute(
+            "UPDATE rmi_requests SET status = ?, fulfilled_at = NULL, updated_at = datetime('now') WHERE id = ?",
+            (new_status, request_id),
+        )
+
+
+def _create_structured_rmi_request(db, app, user, reason, deadline, items):
+    request_id = uuid.uuid4().hex[:16]
+    db.execute(
+        """INSERT INTO rmi_requests
+           (id, application_id, client_id, status, reason, deadline, created_by, created_by_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            request_id,
+            app["id"],
+            app.get("client_id"),
+            "open",
+            reason,
+            deadline,
+            user.get("sub", ""),
+            user.get("name", ""),
+        ),
+    )
+    for item in items:
+        db.execute(
+            """INSERT INTO rmi_request_items
+               (id, request_id, doc_type, label, description, status)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                uuid.uuid4().hex[:16],
+                request_id,
+                item["doc_type"],
+                item["label"],
+                item.get("description", ""),
+                "requested",
+            ),
+        )
+
+    if app.get("client_id"):
+        # documents_list is a legacy notification mirror for older clients.
+        # rmi_request_items is the authoritative source for request state.
+        docs_list = [item["label"] for item in items]
+        message = (
+            f"Our compliance team requires additional documents for application {app['ref']} "
+            f"by {deadline}. Reason: {reason}"
+        )
+        db.execute(
+            """INSERT INTO client_notifications
+               (client_id, application_id, title, message, notification_type, documents_list, rmi_request_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                app["client_id"],
+                app["id"],
+                "Additional Documents Required",
+                message,
+                "documents_required",
+                json.dumps(docs_list),
+                request_id,
+            ),
+        )
+    return request_id
+
+
+def _validate_rmi_upload_target(db, application_id, rmi_item_id):
+    if not rmi_item_id:
+        return None, None
+    row = db.execute(
+        """SELECT i.*, r.application_id, r.status AS request_status
+           FROM rmi_request_items i
+           JOIN rmi_requests r ON r.id = i.request_id
+           WHERE i.id = ?""",
+        (rmi_item_id,),
+    ).fetchone()
+    if not row or row.get("application_id") != application_id:
+        return None, "Requested document slot not found for this application"
+    if row.get("request_status") == "cancelled":
+        return None, "Requested document slot is no longer active"
+    if row.get("status") == "accepted":
+        return None, "Requested document slot has already been accepted"
+    return row, None
+
+
+def _mark_rmi_item_uploaded(db, application_id, doc_id, doc_type, rmi_item_id=None):
+    """Mark an explicitly selected RMI item as uploaded.
+
+    RMI fulfillment is intentionally slot-based. Generic document uploads do not
+    auto-match open RMI items by doc_type because concurrent requests can ask
+    for the same document type.
+    """
+    item = None
+    if rmi_item_id:
+        item, error = _validate_rmi_upload_target(db, application_id, rmi_item_id)
+        if error:
+            return None, error
+        if item and item.get("doc_type") and item.get("doc_type") != doc_type:
+            return None, "Uploaded document type does not match the requested document slot"
+    if not item:
+        return None, None
+
+    db.execute(
+        """UPDATE rmi_request_items
+           SET status = 'uploaded', document_id = ?, uploaded_at = datetime('now')
+           WHERE id = ?""",
+        (doc_id, item["id"]),
+    )
+    _sync_rmi_request_status(db, item["request_id"])
+    return item["id"], None
+
+
 def _validate_officer_signoff(signoff, expected_scope):
     """Validate the officer_signoff object in a request payload.
 
@@ -9478,7 +9811,7 @@ class ApplicationDecisionHandler(BaseHandler):
         attempt_summary = _governance_summary(
             data,
             # Dict values, including officer_signoff, are summarized by key names only.
-            ("decision", "override_ai", "documents_list", "officer_signoff"),
+            ("decision", "override_ai", "documents_list", "rmi_items", "rmi_deadline", "officer_signoff"),
         )
         attempt_target = app_id
 
@@ -9644,21 +9977,36 @@ class ApplicationDecisionHandler(BaseHandler):
 
         # Handle request_documents
         required_documents = []
+        rmi_items = []
+        rmi_deadline = ""
+        rmi_request_id = None
         if decision == "request_documents":
-            required_documents = data.get("documents_list", [])
-            if not required_documents:
+            rmi_items = _normalize_rmi_items(data)
+            required_documents = [item["label"] for item in rmi_items]
+            if not rmi_items:
                 self.log_governance_attempt(
                     user, "application.decision", attempt_target, "rejected", 400,
-                    "documents_list is required for request_documents decision", attempt_summary, db=db)
+                    "At least one requested document item is required for request_documents decision",
+                    attempt_summary, db=db)
                 db.close()
-                return self.error("documents_list is required for request_documents decision", 400)
+                return self.error("At least one requested document item is required", 400)
+            rmi_deadline, deadline_error = _normalize_rmi_deadline(
+                data.get("rmi_deadline") or data.get("deadline") or data.get("due_date"),
+            )
+            if deadline_error:
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    f"{deadline_error} for request_documents decision",
+                    attempt_summary, db=db)
+                db.close()
+                return self.error(deadline_error, 400)
 
         # Update application status
         new_status = {
             "approve": "approved",
             "reject": "rejected",
             "escalate_edd": "edd_required",
-            "request_documents": "kyc_documents"
+            "request_documents": "rmi_sent"
         }[decision]
 
         detail_info = {
@@ -9666,8 +10014,20 @@ class ApplicationDecisionHandler(BaseHandler):
             "decision_reason": decision_reason,
             "override_ai": override_ai,
             "override_reason": override_reason if override_ai else None,
-            "required_documents": required_documents if decision == "request_documents" else None
+            "required_documents": required_documents if decision == "request_documents" else None,
+            "rmi_deadline": rmi_deadline if decision == "request_documents" else None,
         }
+
+        if decision == "request_documents":
+            rmi_request_id = _create_structured_rmi_request(
+                db,
+                app,
+                user,
+                decision_reason,
+                rmi_deadline,
+                rmi_items,
+            )
+            detail_info["rmi_request_id"] = rmi_request_id
 
         db.execute("""
             UPDATE applications SET
@@ -9683,9 +10043,11 @@ class ApplicationDecisionHandler(BaseHandler):
             audit_detail += f" | AI Override: {override_reason}"
         if required_documents:
             audit_detail += f" | Documents Required: {', '.join(required_documents)}"
+        if rmi_request_id:
+            audit_detail += f" | RMI Request: {rmi_request_id} | Deadline: {rmi_deadline}"
 
         _after = {"status": new_status, "decision": decision, "decision_reason": decision_reason,
-                  "override_ai": override_ai}
+                  "override_ai": override_ai, "rmi_request_id": rmi_request_id}
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip(),
                     _safe_json(_before), _safe_json(_after)))
@@ -9731,7 +10093,12 @@ class ApplicationDecisionHandler(BaseHandler):
         db.commit()
         db.close()
 
-        self.success({"status": "decision_recorded", "decision": decision, "application_status": new_status}, 201)
+        self.success({
+            "status": "decision_recorded",
+            "decision": decision,
+            "application_status": new_status,
+            "rmi_request_id": rmi_request_id,
+        }, 201)
 
 
 class DecisionRecordsHandler(BaseHandler):
@@ -9795,7 +10162,7 @@ class ClientNotificationHandler(BaseHandler):
         message = data.get("message")
         documents_list = data.get("documents_list", [])
 
-        valid_types = ["approved", "documents_required", "rejected"]
+        valid_types = ["approved", "documents_required", "request_documents", "rejected"]
         if notification_type not in valid_types:
             db.close()
             return self.error(f"Invalid notification_type. Must be one of: {', '.join(valid_types)}", 400)
@@ -9818,7 +10185,7 @@ class ClientNotificationHandler(BaseHandler):
         db.execute("""
             INSERT INTO client_notifications (application_id, client_id, notification_type, title, message, documents_list, read_status, created_at)
             VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))
-        """, (app["id"], app.get("client_id"), notification_type, title_map[notification_type], message,
+        """, (app["id"], app.get("client_id"), notification_type, title_map.get(notification_type, "Documents Required"), message,
               json.dumps(documents_list) if documents_list else None))
 
         # Log audit trail
@@ -9845,19 +10212,23 @@ class GetClientNotificationsHandler(BaseHandler):
 
         db = get_db()
         notifications = db.execute("""
-            SELECT id, application_id, notification_type, title, message, documents_list, read_status, created_at
+            SELECT id, application_id, notification_type, title, message, documents_list, rmi_request_id, read_status, created_at
             FROM client_notifications
             WHERE client_id = ?
             ORDER BY created_at DESC
         """, (user["sub"],)).fetchall()
 
         result = [dict(n) for n in notifications]
+        rmi_requests = _load_client_rmi_requests(db, user["sub"])
+        rmi_by_id = {req["id"]: req for req in rmi_requests}
         for n in result:
             if n["documents_list"]:
                 n["documents_list"] = safe_json_loads(n["documents_list"])
+            if n.get("rmi_request_id"):
+                n["rmi_request"] = rmi_by_id.get(n["rmi_request_id"])
 
         db.close()
-        self.success({"notifications": result})
+        self.success({"notifications": result, "rmi_requests": rmi_requests})
 
 
 class MarkNotificationReadHandler(BaseHandler):
@@ -9882,6 +10253,31 @@ class MarkNotificationReadHandler(BaseHandler):
         db.close()
 
         self.success({"status": "marked_read"})
+
+
+class ApplicationRMIRequestsHandler(BaseHandler):
+    """GET /api/applications/:id/rmi — Structured RMI requests for an application."""
+    def get(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute(
+            "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+            (app_id, app_id),
+        ).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        requests = _load_rmi_requests(db, app["id"])
+        db.close()
+        self.success({"requests": requests, "count": len(requests)})
 
 
 STATUS_LOOKUP_PUBLIC_FIELDS = ("ref", "status", "updated_at")
@@ -12043,6 +12439,7 @@ def make_app():
         (r"/api/applications/([^/]+)/audit-log", ApplicationAuditLogHandler),
         (r"/api/applications/([^/]+)/notes", ApplicationNotesHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
+        (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),
         (r"/api/applications/([^/]+)/documents/([^/]+)", DocumentDeleteHandler),
         (r"/api/applications/([^/]+)/documents", DocumentUploadHandler),
         (r"/api/applications/([^/]+)", ApplicationDetailHandler),
