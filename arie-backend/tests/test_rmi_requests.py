@@ -295,7 +295,7 @@ def test_rmi_upload_requires_matching_item_and_application(rmi_api_server):
         timeout=5,
     )
     assert generic_upload_resp.status_code == 201, generic_upload_resp.text
-    assert generic_upload_resp.json()["rmi_item_id"] is None
+    assert "rmi_item_id" not in generic_upload_resp.json()
 
     conn = get_db()
     unchanged_item = conn.execute("SELECT status, document_id FROM rmi_request_items WHERE id=?", (item["id"],)).fetchone()

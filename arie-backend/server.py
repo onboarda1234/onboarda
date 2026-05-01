@@ -3542,15 +3542,17 @@ class DocumentUploadHandler(BaseHandler):
             audit_detail += f" person_id={person_id}"
         if rmi_fulfilled_item_id:
             audit_detail += f" rmi_item_id={rmi_fulfilled_item_id}"
-        self.log_audit(user, "Upload", app["ref"], audit_detail)
-        self.success({
+        response = {
             "id": doc_id,
             "doc_name": filename,
             "doc_type": doc_type,
             "file_size": len(body),
             "s3_key": s3_key,
-            "rmi_item_id": rmi_fulfilled_item_id,
-        }, 201)
+        }
+        if rmi_fulfilled_item_id:
+            response["rmi_item_id"] = rmi_fulfilled_item_id
+        self.log_audit(user, "Upload", app["ref"], audit_detail)
+        self.success(response, 201)
 
 
 class DocumentDeleteHandler(BaseHandler):

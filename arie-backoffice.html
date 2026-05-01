@@ -9021,6 +9021,7 @@ async function confirmOverride() {
 function requestMoreInfo() {
   if (!currentApp) return;
   if (!assertPermission('request_more_information')) return;
+  var legacySignoff = document.getElementById('decision-officer-signoff'); if (legacySignoff) legacySignoff.checked = false;
   renderRMIDocOptions();
   document.getElementById('rmi-reason').value = '';
   document.getElementById('rmi-deadline').value = defaultRMIDeadline();
