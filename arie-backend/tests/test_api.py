@@ -624,6 +624,80 @@ class TestGovernanceAttemptAudit:
             "CONSISTENT",
         ))
 
+    def test_governance_attempt_audit_failure_is_best_effort(self, monkeypatch, caplog):
+        """Audit insert failures must log the marker and not raise to the handler."""
+        import logging
+        import base_handler
+        from base_handler import BaseHandler
+
+        class FailingDb:
+            closed = False
+
+            def execute(self, *_args, **_kwargs):
+                raise RuntimeError("forced audit insert failure")
+
+            def commit(self):
+                raise AssertionError("commit should not run after failed insert")
+
+            def close(self):
+                self.closed = True
+
+        failing_db = FailingDb()
+        monkeypatch.setattr(base_handler, "get_db", lambda: failing_db)
+        handler = object.__new__(BaseHandler)
+
+        caplog.set_level(logging.ERROR)
+        handler.log_governance_attempt(
+            {"sub": "admin001", "name": "Test Admin", "role": "admin"},
+            "application.decision",
+            "ARF-TEST",
+            "rejected",
+            400,
+            "forced rejection",
+        )
+
+        assert failing_db.closed is True
+        assert "governance_audit_write_failed=true" in caplog.text
+        assert "application.decision" in caplog.text
+
+    def test_governance_attempt_rejection_reason_is_capped(self, monkeypatch):
+        """Long rejection reasons must not defeat the bounded audit detail size."""
+        import base_handler
+        from base_handler import BaseHandler
+
+        class CapturingDb:
+            params = None
+            committed = False
+            closed = False
+
+            def execute(self, _sql, params):
+                self.params = params
+
+            def commit(self):
+                self.committed = True
+
+            def close(self):
+                self.closed = True
+
+        capture_db = CapturingDb()
+        monkeypatch.setattr(base_handler, "get_db", lambda: capture_db)
+        handler = object.__new__(BaseHandler)
+
+        handler.log_governance_attempt(
+            {"sub": "admin001", "name": "Test Admin", "role": "admin"},
+            "application.decision",
+            "ARF-TEST",
+            "rejected",
+            400,
+            "r" * 2000,
+        )
+
+        assert capture_db.committed is True
+        assert capture_db.closed is True
+        detail = json.loads(capture_db.params[5])
+        assert len(detail["rejection_reason"]) == 512
+        assert detail["rejection_reason_truncated"] is True
+
     def test_failed_approval_attempt_is_audited(self, api_server):
         """Approval gate rejections must be visible in audit_log with outcome=rejected."""
         from auth import create_token

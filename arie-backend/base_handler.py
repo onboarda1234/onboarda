@@ -354,7 +354,13 @@ class BaseHandler(tornado.web.RequestHandler):
         self.write({"error": message})
 
     def log_audit(self, user, action, target, detail, db=None,
-                  before_state=None, after_state=None):
+                  before_state=None, after_state=None, commit=True):
+        """Write a standard audit row.
+
+        When a caller supplies db and commit=False, the caller must commit
+        before closing the connection. Callers that need autonomous persistence
+        should use the default commit=True.
+        """
         own_db = db is None
         if own_db:
             db = get_db()
@@ -363,7 +369,8 @@ class BaseHandler(tornado.web.RequestHandler):
             (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip(),
              _safe_json(before_state), _safe_json(after_state))
         )
-        db.commit()
+        if own_db or commit:
+            db.commit()
         if own_db:
             db.close()
 
@@ -384,19 +391,28 @@ class BaseHandler(tornado.web.RequestHandler):
         The write is best-effort: failures are logged with a structured marker
         and never replace the original user-visible handler response. Rejected
         attempts should generally use the default commit=True; accepted attempts
-        that share a caller transaction can pass commit=False.
+        that share a caller transaction can pass commit=False. Do not use
+        commit=False unless the caller will commit the supplied db before close.
         """
         target = self._governance_audit_target(target)
         summary = payload_summary if isinstance(payload_summary, dict) else {}
+        reason_text = str(reason or "")
+        reason_truncated = len(reason_text) > 512
+        if reason_truncated:
+            reason_text = reason_text[:512]
+        path = self.request.path if hasattr(self, "request") else ""
+        method = self.request.method if hasattr(self, "request") else ""
+
         detail_obj = {
             "event": "governance_attempt",
             "action": action,
             "outcome": outcome,
             "response_code": status_code,
-            "rejection_reason": reason or "",
+            "rejection_reason": reason_text,
+            "rejection_reason_truncated": reason_truncated,
             "payload_summary": summary,
-            "path": self.request.path if hasattr(self, "request") else "",
-            "method": self.request.method if hasattr(self, "request") else "",
+            "path": str(path)[:512],
+            "method": str(method)[:32],
             "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         }
         detail = json.dumps(detail_obj, default=str)

@@ -7143,30 +7143,8 @@ class ScreeningReviewHandler(BaseHandler):
             user.get("name") or user.get("full_name") or user["sub"],
         )
 
-        def _screening_audit_in_tx(audit_user, action, target, detail, db=None,
-                                   before_state=None, after_state=None):
-            audit_db = db or get_db()
-            try:
-                audit_db.execute(
-                    "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) "
-                    "VALUES (?,?,?,?,?,?,?,?,?)",
-                    (
-                        audit_user.get("sub", ""),
-                        audit_user.get("name", ""),
-                        audit_user.get("role", ""),
-                        action,
-                        target,
-                        detail,
-                        self.get_client_ip(),
-                        _safe_json(before_state),
-                        _safe_json(after_state),
-                    ),
-                )
-                if db is None:
-                    audit_db.commit()
-            finally:
-                if db is None:
-                    audit_db.close()
+        def _screening_audit_in_tx(audit_user, action, target, detail, **kwargs):
+            self.log_audit(audit_user, action, target, detail, commit=False, **kwargs)
 
         # EX-09: Recompute risk when screening review indicates escalation
         risk_recomputed = False
@@ -7176,9 +7154,9 @@ class ScreeningReviewHandler(BaseHandler):
             risk_recomputed = rr.get("recomputed", False)
 
         disposition_label = disposition.replace("_", " ")
-        _screening_audit_in_tx(
+        self.log_audit(
             user, "Screening Review", app["ref"],
-            f"{subject_type}:{subject_name} -> {disposition_label}", db=db)
+            f"{subject_type}:{subject_name} -> {disposition_label}", db=db, commit=False)
         self.log_governance_attempt(
             user, "screening.review_disposition", app["ref"], "accepted", 200,
             "", attempt_summary, db=db, commit=False)
