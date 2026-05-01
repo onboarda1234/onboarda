@@ -81,7 +81,7 @@ class _Phase4ReportingHTTPBase(AsyncHTTPTestCase):
         rows = [
             (f"phase4-report-{suffix}-1", self.report_ref_1, "Phase Four One Ltd", "rmi_sent", "MEDIUM", 44, "Mauritius", "SME"),
             (f"phase4-report-{suffix}-2", self.report_ref_2, "Phase Four Two Ltd", "compliance_review", "HIGH", 72, "Mauritius", "Company"),
-            (f"phase4-report-{suffix}-3", self.report_ref_3, "Phase Four Three Ltd", "approved", "LOW", 20, "United Kingdom", "SME"),
+            (f"phase4-report-{suffix}-3", self.report_ref_3, "=Phase Four Three Ltd", "approved", "LOW", 20, "United Kingdom", "SME"),
         ]
         for row in rows:
             db.execute(
@@ -103,11 +103,14 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
 
         assert resp.code == 200
         assert "text/csv" in resp.headers.get("Content-Type", "")
-        reader = csv.reader(io.StringIO(resp.body.decode()))
+        assert resp.body.startswith("\ufeff".encode("utf-8"))
+        reader = csv.reader(io.StringIO(resp.body.decode("utf-8-sig")))
         rows = list(reader)
         assert rows[0] == ["ref", "company_name", "status"]
         assert "prescreening_data" not in rows[0]
         assert any(row[0] == self.report_ref_1 for row in rows[1:])
+        injected = next(row for row in rows[1:] if row[0] == self.report_ref_3)
+        assert injected[1] == "'=Phase Four Three Ltd"
 
         from db import get_db
         db = get_db()
@@ -117,6 +120,43 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         db.close()
         assert audit is not None
         assert "format=csv" in audit["detail"]
+
+    def test_report_generate_rejects_unsupported_format(self):
+        resp = self.fetch(
+            "/api/reports/generate?format=xlsx",
+            headers=self._admin_headers(),
+        )
+
+        assert resp.code == 400
+        body = json.loads(resp.body.decode())
+        assert "Unsupported report format" in body["error"]
+
+    def test_report_generate_uses_application_id_not_joined_user_id(self):
+        from db import get_db
+
+        db = get_db()
+        db.execute(
+            "UPDATE applications SET assigned_to=? WHERE ref=?",
+            ("admin001", self.report_ref_1),
+        )
+        db.commit()
+        app_id = db.execute(
+            "SELECT id FROM applications WHERE ref=?",
+            (self.report_ref_1,),
+        ).fetchone()["id"]
+        db.close()
+
+        resp = self.fetch(
+            f"/api/reports/generate?fields=id,ref,assigned_name&show_fixtures=true",
+            headers=self._admin_headers(),
+        )
+
+        assert resp.code == 200
+        body = json.loads(resp.body.decode())
+        row = next(item for item in body["data"] if item["ref"] == self.report_ref_1)
+        assert row["id"] == app_id
+        assert row["id"] != "admin001"
+        assert row["assigned_name"]
 
     def test_analytics_uses_canonical_pending_statuses_and_reports_scope(self):
         resp = self.fetch("/api/reports/analytics?jurisdiction=Mauritius", headers=self._admin_headers())

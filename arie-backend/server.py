@@ -5519,6 +5519,23 @@ _REPORT_DEFAULT_FIELDS = (
     "country", "entity_type", "created_at", "assigned_to",
 )
 
+_REPORT_APPLICATION_SELECT_COLUMNS = (
+    "a.id AS id",
+    "a.ref AS ref",
+    "a.company_name AS company_name",
+    "a.status AS status",
+    "a.risk_level AS risk_level",
+    "a.risk_score AS risk_score",
+    "a.country AS country",
+    "a.sector AS sector",
+    "a.entity_type AS entity_type",
+    "a.created_at AS created_at",
+    "a.submitted_at AS submitted_at",
+    "a.assigned_to AS assigned_to",
+    "a.onboarding_lane AS onboarding_lane",
+    "a.risk_dimensions AS risk_dimensions",
+)
+
 
 def _report_scope_from_request(handler, user):
     """Canonical application-report scope used by analytics and exports."""
@@ -5589,6 +5606,19 @@ def _report_record(row):
     return record
 
 
+def _csv_safe_value(value):
+    """Prevent spreadsheet formula execution while preserving CSV readability."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, sort_keys=True, default=str)
+    else:
+        text = str(value)
+    if text.startswith(("=", "+", "-", "@")):
+        return "'" + text
+    return text
+
+
 def _write_csv_response(handler, filename, field_list, rows):
     import csv
     import io
@@ -5597,12 +5627,12 @@ def _write_csv_response(handler, filename, field_list, rows):
     writer = csv.DictWriter(output, fieldnames=field_list, extrasaction="ignore")
     writer.writeheader()
     for row in rows:
-        writer.writerow({field: row.get(field, "") for field in field_list})
+        writer.writerow({field: _csv_safe_value(row.get(field, "")) for field in field_list})
 
     handler.set_header("Content-Type", "text/csv; charset=utf-8")
     handler.set_header("Content-Disposition", f'attachment; filename="{filename}"')
     handler.set_header("Cache-Control", "no-store")
-    handler.write(output.getvalue())
+    handler.write("\ufeff" + output.getvalue())
 
 
 class ReportHandler(BaseHandler):
@@ -5621,8 +5651,9 @@ class ReportHandler(BaseHandler):
             db.close()
             return self.error("Unsupported report format. Use json or csv.", 400)
 
+        application_columns = ",\n                   ".join(_REPORT_APPLICATION_SELECT_COLUMNS)
         query = f"""
-            SELECT a.*, u.full_name AS assigned_name,
+            SELECT {application_columns}, u.full_name AS assigned_name,
                    (SELECT COUNT(*) FROM directors WHERE application_id=a.id) as director_count,
                    (SELECT COUNT(*) FROM ubos WHERE application_id=a.id) as ubo_count,
                    (SELECT COUNT(*) FROM documents WHERE application_id=a.id) as document_count
