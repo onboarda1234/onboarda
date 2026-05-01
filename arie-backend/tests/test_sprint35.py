@@ -181,6 +181,9 @@ class TestLogout:
 
         assert http_requests.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 401
         assert http_requests.get(f"{api_server}/api/applications", headers=headers, timeout=3).status_code == 401
+        replay_client = http_requests.Session()
+        assert replay_client.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 401
+        assert http_requests.post(f"{api_server}/api/auth/logout", headers=headers, timeout=3).status_code == 200
 
     def test_logout_revokes_cookie_session_token(self, api_server):
         """Logout using cookie auth must revoke the cookie token, not just clear local UI state."""
@@ -194,6 +197,9 @@ class TestLogout:
 
         # Re-send the original cookie value to prove server-side revocation.
         assert http_requests.get(f"{api_server}/api/auth/me", cookies=cookies, timeout=3).status_code == 401
+        replay_client = http_requests.Session()
+        replay_client.cookies.set("arie_session", token)
+        assert replay_client.get(f"{api_server}/api/auth/me", timeout=3).status_code == 401
 
     def test_browser_signout_calls_server_logout(self):
         """Back office and portal sign-out must call the server logout endpoint."""
@@ -203,6 +209,29 @@ class TestLogout:
 
         assert "BO_API_BASE + '/auth/logout'" in backoffice
         assert "API_BASE + '/auth/logout'" in portal
+        bo_start = backoffice.index("async function signOut()")
+        bo_fn = backoffice[bo_start:backoffice.index("// EX-13", bo_start)]
+        assert "var tokenForLogout = BO_AUTH_TOKEN;" in bo_fn
+        assert "'Authorization': 'Bearer ' + tokenForLogout" in bo_fn
+        assert bo_fn.index("await fetch(BO_API_BASE + '/auth/logout'") < bo_fn.index("BO_AUTH_TOKEN = '';")
+
+        portal_start = portal.index("async function clientSignOut()")
+        portal_fn = portal[portal_start:portal.index("async function loadMyApplications()", portal_start)]
+        assert "var tokenForLogout = AUTH_TOKEN;" in portal_fn
+        assert "'Authorization': 'Bearer ' + tokenForLogout" in portal_fn
+        assert portal_fn.index("await fetch(API_BASE + '/auth/logout'") < portal_fn.index("clearAuth();")
+
+    def test_browser_decision_submit_rechecks_approval_readiness(self):
+        """The back-office modal must not rely only on the disabled confirm button."""
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        backoffice = open(os.path.join(repo_root, "arie-backoffice.html"), encoding="utf-8").read()
+
+        fn_start = backoffice.index("async function confirmDecision()")
+        fn = backoffice[fn_start:backoffice.index("var pendingNotificationType", fn_start)]
+        assert "var readiness = getApprovalReadiness(currentApp);" in fn
+        assert "setDecisionError('Approval is blocked: '" in fn
+        assert fn.index("getApprovalReadiness(currentApp)") < fn.index("boApiCall('POST'")
+        assert "if (id === 'modal-decision-reason') setDecisionError('');" in backoffice
 
 
 # ═══════════════════════════════════════════════════════════

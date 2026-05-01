@@ -8518,6 +8518,15 @@ async function confirmDecision() {
     return;
   }
 
+  if (apiDecision === 'approve') {
+    var readiness = getApprovalReadiness(currentApp);
+    if (!readiness.ready) {
+      renderDecisionReadiness('Approve');
+      setDecisionError('Approval is blocked: ' + readiness.blockers.join(' '));
+      return;
+    }
+  }
+
   var payload = {
     decision: apiDecision,
     decision_reason: reason + (notes ? ' | ' + notes : ''),
@@ -8801,7 +8810,10 @@ async function preApprovalRequestInfo() {
 // USER MANAGEMENT
 // ═══════════════════════════════════════════════════════════
 function openAddUserModal() { document.getElementById('modal-add-user').classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+  if (id === 'modal-decision-reason') setDecisionError('');
+}
 
 async function addUser() {
   var name = document.getElementById('new-user-name').value.trim();
