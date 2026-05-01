@@ -2316,7 +2316,9 @@ def _memo_final_status(memo_row):
         return "requires_fixes"
     if validation_status == "pass":
         return "validated"
-    return review_status or "draft"
+    if review_status == "draft":
+        return "draft"
+    return "draft"
 
 
 class ApplicationDetailHandler(BaseHandler):
@@ -9009,6 +9011,7 @@ DOCUMENT_TYPE_NORMALIZE = {
     "doc-source-funds-proof": "source_funds",
     "doc-bank-statements": "bank_statements",
     "doc-aml-policy": "aml_policy",
+    "general": "supporting_document",
 }
 
 DOCUMENT_TYPE_ALLOWLIST = {
@@ -11404,17 +11407,26 @@ def _edd_findings_are_complete(db, case_id):
         findings = None
     if not findings:
         return False
-    text_fields = (
-        findings.get("findings_summary"),
-        findings.get("rationale"),
-        findings.get("recommended_outcome"),
+    recommended = str(findings.get("recommended_outcome") or "").strip()
+    if not recommended:
+        return False
+
+    def _structured_list_has_content(value):
+        if isinstance(value, str):
+            try:
+                value = safe_json_loads(value)
+            except Exception:
+                value = [value]
+        if not isinstance(value, list):
+            value = [value]
+        return any(str(item or "").strip() for item in value)
+
+    summary = str(findings.get("findings_summary") or "").strip()
+    return (
+        len(summary) >= 12
+        or _structured_list_has_content(findings.get("key_concerns"))
+        or _structured_list_has_content(findings.get("mitigating_evidence"))
     )
-    list_fields = (
-        findings.get("key_concerns") or [],
-        findings.get("mitigating_evidence") or [],
-        findings.get("conditions") or [],
-    )
-    return any(str(value or "").strip() for value in text_fields) or any(len(values) for values in list_fields)
 
 
 class EDDListHandler(BaseHandler):
@@ -11638,37 +11650,46 @@ class EDDDetailHandler(BaseHandler):
             updates.append("decided_at=datetime('now')")
 
         params.append(case_id)
-        db.execute(f"UPDATE edd_cases SET {', '.join(updates)} WHERE id=?", params)
-
-        # Append note if provided
         note_text = data.get("note")
-        if note_text:
-            existing_notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
-            existing_notes.append({
-                "ts": datetime.now().isoformat(),
-                "author": user.get("name", "System"),
-                "note": note_text
-            })
-            db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
-        elif sla_breach_reason:
-            existing_notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
-            existing_notes.append({
-                "ts": datetime.now().isoformat(),
-                "author": user.get("name", "System"),
-                "note": f"SLA breach acknowledged: {sla_breach_reason}"
-            })
-            db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
+        try:
+            db.execute(f"UPDATE edd_cases SET {', '.join(updates)} WHERE id=?", params)
 
-        # Audit trail
-        detail = f"Stage: {case['stage']} → {new_stage}" if new_stage else "EDD case updated"
-        if note_text:
-            detail += f" | Note: {note_text[:100]}"
-        if sla_breach_reason:
-            detail += f" | SLA breach acknowledged: {sla_breach_reason[:100]}"
-        self.log_audit(user, "EDD Update", f"EDD-{case_id}", detail, db=db)
+            # Append note if provided
+            if note_text:
+                existing_notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
+                existing_notes.append({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "author": user.get("name", "System"),
+                    "note": note_text
+                })
+                db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
+            elif sla_breach_reason:
+                existing_notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
+                existing_notes.append({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "author": user.get("name", "System"),
+                    "note": f"SLA breach acknowledged: {sla_breach_reason}"
+                })
+                db.execute("UPDATE edd_cases SET edd_notes=? WHERE id=?", (json.dumps(existing_notes), case_id))
 
-        db.commit()
-        db.close()
+            # Audit trail
+            detail = f"Stage: {case['stage']} → {new_stage}" if new_stage else "EDD case updated"
+            if note_text:
+                detail += f" | Note: {note_text[:100]}"
+            if sla_breach_reason:
+                detail += f" | SLA breach acknowledged: {sla_breach_reason[:100]}"
+            self.log_audit(user, "EDD Update", f"EDD-{case_id}", detail, db=db, commit=False)
+
+            db.commit()
+            db.close()
+        except Exception as e:
+            logger.error("Failed to update EDD case %s: %s", case_id, e, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to update EDD case", 500)
 
         self.success({"status": "updated", "stage": new_stage or case["stage"]})
 

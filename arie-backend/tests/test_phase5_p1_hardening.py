@@ -172,6 +172,20 @@ def test_document_type_validation_rejects_unknown_upload(phase5_api_server):
     assert "Invalid doc_type" in resp.text
 
 
+def test_legacy_general_doc_type_maps_to_supporting_document(phase5_api_server):
+    client_id, app_id, _ = _seed_app(app_id="phase5_doc_general", ref="ARF-2026-P5-012", status="rmi_sent")
+
+    resp = requests.post(
+        f"{phase5_api_server}/api/applications/{app_id}/documents?doc_type=general",
+        headers=_client_headers(client_id),
+        files={"file": ("general.pdf", b"%PDF-1.4\n%EOF\n", "application/pdf")},
+        timeout=5,
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["doc_type"] == "supporting_document"
+
+
 def test_rmi_custom_items_use_supporting_document_and_invalid_explicit_type_rejected():
     import server
 
@@ -207,6 +221,13 @@ def test_provider_errors_are_sanitized_before_storage():
     assert "abc.def" not in degraded["provider_error"]
     assert "api_key=[redacted]" in sanitize_provider_error("api_key=abc")
     assert "super-secret" not in error
+    assert "/check" not in degraded["provider_error"]
+
+    class BadStr:
+        def __str__(self):
+            raise RuntimeError("cannot stringify")
+
+    assert sanitize_provider_error(BadStr()) == "unprintable provider error"
 
 
 def test_edd_requires_sla_and_findings_before_senior_review(phase5_api_server):
@@ -232,6 +253,49 @@ def test_edd_requires_sla_and_findings_before_senior_review(phase5_api_server):
     )
     assert accepted.status_code == 200, accepted.text
     assert accepted.json()["stage"] == "pending_senior_review"
+
+
+def test_edd_findings_require_recommendation_plus_evidence(phase5_api_server):
+    _, app_id, _ = _seed_app(app_id="phase5_edd_sparse", ref="ARF-2026-P5-013")
+    future_due = (datetime.now(timezone.utc) + timedelta(days=2)).date().isoformat()
+    case_id = _create_edd_case(app_id, stage="analysis", sla_due_at=future_due)
+
+    from db import get_db
+
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO edd_findings
+           (edd_case_id, findings_summary, key_concerns, mitigating_evidence, rationale, recommended_outcome)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (case_id, "", "[]", "[]", "", "approve"),
+    )
+    conn.commit()
+    conn.close()
+
+    sparse = requests.patch(
+        f"{phase5_api_server}/api/edd/cases/{case_id}",
+        json={"stage": "pending_senior_review"},
+        headers=_officer_headers(),
+        timeout=5,
+    )
+    assert sparse.status_code == 400
+    assert "Structured EDD findings" in sparse.text
+
+    conn = get_db()
+    conn.execute(
+        "UPDATE edd_findings SET key_concerns=? WHERE edd_case_id=?",
+        (json.dumps(["Source of wealth gap reviewed"]), case_id),
+    )
+    conn.commit()
+    conn.close()
+
+    accepted = requests.patch(
+        f"{phase5_api_server}/api/edd/cases/{case_id}",
+        json={"stage": "pending_senior_review"},
+        headers=_officer_headers(),
+        timeout=5,
+    )
+    assert accepted.status_code == 200, accepted.text
 
 
 def test_edd_closure_requires_sla_breach_reason_when_overdue(phase5_api_server):
@@ -303,9 +367,30 @@ def test_risk_labels_and_final_memo_status_are_canonical(phase5_api_server):
     assert body["latest_memo_data"]["final_status"] == "approved_with_findings"
 
 
+def test_memo_final_status_whitelists_unknown_values():
+    import server
+
+    assert server._memo_final_status({
+        "review_status": "approved",
+        "validation_status": "fail",
+        "blocked": 0,
+    }) == "approved"
+    assert server._memo_final_status({
+        "review_status": "draft",
+        "validation_status": "fail",
+        "blocked": 0,
+    }) == "validation_failed"
+    assert server._memo_final_status({
+        "review_status": "pending_review",
+        "validation_status": "pending",
+        "blocked": 0,
+    }) == "draft"
+
+
 def test_upload_accept_attributes_match_server_allowlist():
     from security_hardening import FileUploadValidator
 
+    assert FileUploadValidator.ALLOWED_EXTENSIONS == {".pdf", ".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg"}
     allowed = set(FileUploadValidator.ALLOWED_EXTENSIONS)
     for path in (Path("arie-portal.html"), Path("arie-backoffice.html")):
         html = path.read_text()

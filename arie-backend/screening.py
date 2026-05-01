@@ -736,7 +736,7 @@ def _safe_future_result(future, timeout, source_label, company_name=""):
         result = future.result(timeout=timeout)
         return result, None
     except Exception as e:
-        safe_error = sanitize_provider_error(e, max_len=200)
+        safe_error = sanitize_provider_error(e, max_len=120)
         logger.error(
             "Screening source '%s' failed: %s (company=%s)",
             source_label, safe_error, company_name,
@@ -748,7 +748,7 @@ def _safe_future_result(future, timeout, source_label, company_name=""):
             "provider_error": safe_error,
             "degraded": True,
         }
-        return degraded, sanitize_provider_error(e, max_len=300)
+        return degraded, sanitize_provider_error(e, max_len=160)
 
 
 def run_full_screening(application_data, directors, ubos, client_ip=None):
