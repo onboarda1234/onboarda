@@ -5502,6 +5502,139 @@ class VerificationChecksHandler(BaseHandler):
 # REPORT GENERATION ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
+_REPORT_PENDING_STATUSES = (
+    "pending", "submitted", "under_review", "compliance_review",
+    "kyc_submitted", "kyc_documents", "rmi_sent",
+)
+
+_REPORT_ALLOWED_FIELDS = {
+    "id", "ref", "company_name", "status", "status_label", "risk_level",
+    "risk_score", "risk_lane", "country", "sector", "entity_type",
+    "created_at", "submitted_at", "assigned_to", "assigned_name",
+    "director_count", "ubo_count", "document_count",
+}
+
+_REPORT_DEFAULT_FIELDS = (
+    "ref", "company_name", "status", "risk_level", "risk_score",
+    "country", "entity_type", "created_at", "assigned_to",
+)
+
+_REPORT_APPLICATION_SELECT_COLUMNS = (
+    "a.id AS id",
+    "a.ref AS ref",
+    "a.company_name AS company_name",
+    "a.status AS status",
+    "a.risk_level AS risk_level",
+    "a.risk_score AS risk_score",
+    "a.country AS country",
+    "a.sector AS sector",
+    "a.entity_type AS entity_type",
+    "a.created_at AS created_at",
+    "a.submitted_at AS submitted_at",
+    "a.assigned_to AS assigned_to",
+    "a.onboarding_lane AS onboarding_lane",
+    "a.risk_dimensions AS risk_dimensions",
+)
+
+
+def _report_scope_from_request(handler, user):
+    """Canonical application-report scope used by analytics and exports."""
+    from fixture_filter import fixture_app_exclude_clause, should_show_fixtures
+
+    filters = {
+        "date_from": handler.get_argument("date_from", None),
+        "date_to": handler.get_argument("date_to", None),
+        "status": handler.get_argument("status", None),
+        "risk_level": handler.get_argument("risk_level", None),
+        "jurisdiction": handler.get_argument("jurisdiction", None),
+        "entity_type": handler.get_argument("entity_type", None),
+        "assigned_to": handler.get_argument("assigned_to", None),
+    }
+
+    conditions = []
+    params = []
+    show_fixtures = should_show_fixtures(user, handler.get_argument("show_fixtures", None))
+    if not show_fixtures:
+        fx_excl, fx_params = fixture_app_exclude_clause()
+        conditions.append(fx_excl)
+        params.extend(fx_params)
+
+    mapping = (
+        ("date_from", "a.created_at >= ?"),
+        ("date_to", "a.created_at <= ?"),
+        ("status", "a.status = ?"),
+        ("risk_level", "a.risk_level = ?"),
+        ("jurisdiction", "a.country = ?"),
+        ("entity_type", "a.entity_type = ?"),
+        ("assigned_to", "a.assigned_to = ?"),
+    )
+    for key, clause in mapping:
+        value = filters.get(key)
+        if value:
+            conditions.append(clause)
+            params.append(value)
+
+    return {
+        "where": " AND ".join(conditions) if conditions else "1=1",
+        "params": params,
+        "filters": {k: v for k, v in filters.items() if v},
+        "show_fixtures": show_fixtures,
+        "pending_statuses": list(_REPORT_PENDING_STATUSES),
+    }
+
+
+def _report_field_list(fields):
+    requested = [f.strip() for f in (fields or "").split(",") if f.strip()]
+    if not requested:
+        requested = list(_REPORT_DEFAULT_FIELDS)
+    allowed = [f for f in requested if f in _REPORT_ALLOWED_FIELDS]
+    ignored = [f for f in requested if f not in _REPORT_ALLOWED_FIELDS]
+    return (allowed or list(_REPORT_DEFAULT_FIELDS)), ignored
+
+
+def _report_record(row):
+    record = dict(row)
+    record["status_label"] = get_status_label(record.get("status"))
+    record["risk_score"] = record.get("risk_score") or 0
+    record["risk_level"] = record.get("risk_level") or ""
+    record["risk_lane"] = record.get("onboarding_lane") or ""
+    if record.get("risk_dimensions") and isinstance(record["risk_dimensions"], str):
+        try:
+            record["risk_dimensions"] = safe_json_loads(record["risk_dimensions"])
+        except Exception:
+            record["risk_dimensions"] = {}
+    return record
+
+
+def _csv_safe_value(value):
+    """Prevent spreadsheet formula execution while preserving CSV readability."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, sort_keys=True, default=str)
+    else:
+        text = str(value)
+    if text.startswith(("=", "+", "-", "@")):
+        return "'" + text
+    return text
+
+
+def _write_csv_response(handler, filename, field_list, rows):
+    import csv
+    import io
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=field_list, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({field: _csv_safe_value(row.get(field, "")) for field in field_list})
+
+    handler.set_header("Content-Type", "text/csv; charset=utf-8")
+    handler.set_header("Content-Disposition", f'attachment; filename="{filename}"')
+    handler.set_header("Cache-Control", "no-store")
+    handler.write("\ufeff" + output.getvalue())
+
+
 class ReportHandler(BaseHandler):
     """GET /api/reports/generate — generate filtered report data"""
     def get(self):
@@ -5511,88 +5644,65 @@ class ReportHandler(BaseHandler):
 
         db = get_db()
 
-        # Get filter parameters
-        status = self.get_argument("status", None)
-        risk_level = self.get_argument("risk_level", None)
-        date_from = self.get_argument("date_from", None)
-        date_to = self.get_argument("date_to", None)
-        jurisdiction = self.get_argument("jurisdiction", None)
-        entity_type = self.get_argument("entity_type", None)
-        assigned_to = self.get_argument("assigned_to", None)
+        scope = _report_scope_from_request(self, user)
         fields = self.get_argument("fields", "ref,company_name,status,risk_level,created_at,assigned_to")
+        output_format = (self.get_argument("format", "json") or "json").strip().lower()
+        if output_format not in ("json", "csv"):
+            db.close()
+            return self.error("Unsupported report format. Use json or csv.", 400)
 
-        # Build query
-        conditions = []
-        params = []
-        if status:
-            conditions.append("a.status=?")
-            params.append(status)
-        if risk_level:
-            conditions.append("a.risk_level=?")
-            params.append(risk_level)
-        if date_from:
-            conditions.append("a.created_at >= ?")
-            params.append(date_from)
-        if date_to:
-            conditions.append("a.created_at <= ?")
-            params.append(date_to)
-        if jurisdiction:
-            conditions.append("a.country = ?")
-            params.append(jurisdiction)
-        if entity_type:
-            conditions.append("a.entity_type = ?")
-            params.append(entity_type)
-        if assigned_to:
-            conditions.append("a.assigned_to = ?")
-            params.append(assigned_to)
-
-        where = " AND ".join(conditions) if conditions else "1=1"
-
+        application_columns = ",\n                   ".join(_REPORT_APPLICATION_SELECT_COLUMNS)
         query = f"""
-            SELECT a.*,
+            SELECT {application_columns}, u.full_name AS assigned_name,
                    (SELECT COUNT(*) FROM directors WHERE application_id=a.id) as director_count,
                    (SELECT COUNT(*) FROM ubos WHERE application_id=a.id) as ubo_count,
                    (SELECT COUNT(*) FROM documents WHERE application_id=a.id) as document_count
             FROM applications a
-            WHERE {where}
+            LEFT JOIN users u ON a.assigned_to = u.id
+            WHERE {scope["where"]}
             ORDER BY a.created_at DESC
         """
 
-        rows = db.execute(query, params).fetchall()
+        rows = db.execute(query, scope["params"]).fetchall()
         db.close()
 
         # Parse field selection
-        field_list = [f.strip() for f in fields.split(",")]
+        field_list, ignored_fields = _report_field_list(fields)
 
         results = []
         for row in rows:
-            record = dict(row)
-            # Bug #4: Use actual DB columns for risk data (not prescreening_data which may lack these)
-            record["risk_score"] = record.get("risk_score") or 0
-            record["risk_level"] = record.get("risk_level") or ""
-            record["risk_lane"] = record.get("onboarding_lane") or ""
-            # Parse risk_dimensions from JSON string
-            if record.get("risk_dimensions") and isinstance(record["risk_dimensions"], str):
-                record["risk_dimensions"] = safe_json_loads(record["risk_dimensions"])
-
+            record = _report_record(row)
             # Filter to requested fields
             filtered = {}
             for f in field_list:
-                if f in record:
-                    filtered[f] = record[f]
-                elif f == "director_count":
-                    filtered[f] = record.get("director_count", 0)
-                elif f == "ubo_count":
-                    filtered[f] = record.get("ubo_count", 0)
-                elif f == "document_count":
-                    filtered[f] = record.get("document_count", 0)
+                filtered[f] = record.get(f, "")
             results.append(filtered)
 
-        self.log_audit(user, "Report", "Generate", f"Report generated: {len(results)} records, fields: {fields}")
+        generated_at = datetime.now(timezone.utc).isoformat()
+        self.log_audit(
+            user,
+            "Report",
+            "Generate",
+            f"Report generated: {len(results)} records, format={output_format}, fields={','.join(field_list)}",
+        )
+
+        if output_format == "csv":
+            safe_date = generated_at[:10]
+            _write_csv_response(self, f"regmind_report_{safe_date}.csv", field_list, results)
+            return
+
         self.success({
             "total": len(results),
             "fields": field_list,
-            "data": results
+            "ignored_fields": ignored_fields,
+            "data": results,
+            "report": {
+                "scope": "applications",
+                "generated_at": generated_at,
+                "filters": scope["filters"],
+                "show_fixtures": scope["show_fixtures"],
+                "record_count": len(results),
+            },
         })
 
 class ReportAnalyticsHandler(BaseHandler):
@@ -5602,58 +5712,22 @@ class ReportAnalyticsHandler(BaseHandler):
         if not user:
             return
 
-        from fixture_filter import (
-            fixture_app_exclude_clause,
-            should_show_fixtures,
-        )
-
         db = get_db()
 
         try:
-            # Collect filter parameters
-            date_from = self.get_argument("date_from", None)
-            date_to = self.get_argument("date_to", None)
-            status = self.get_argument("status", None)
-            risk_level = self.get_argument("risk_level", None)
-            jurisdiction = self.get_argument("jurisdiction", None)
-            entity_type = self.get_argument("entity_type", None)
-            assigned_to = self.get_argument("assigned_to", None)
-
-            # Build dynamic WHERE clause for applications
-            conditions = []
-            params = []
-
-            # Fixture exclusion (default: excluded; admin/sco may opt-in)
-            show_fx = should_show_fixtures(user, self.get_argument("show_fixtures", None))
-            if not show_fx:
-                fx_excl, fx_params = fixture_app_exclude_clause()
-                conditions.append(fx_excl)
-                params.extend(fx_params)
-
-            if date_from:
-                conditions.append("a.created_at >= ?")
-                params.append(date_from)
-            if date_to:
-                conditions.append("a.created_at <= ?")
-                params.append(date_to)
-            if status:
-                conditions.append("a.status = ?")
-                params.append(status)
-            if risk_level:
-                conditions.append("a.risk_level = ?")
-                params.append(risk_level)
-            if jurisdiction:
-                conditions.append("a.country = ?")
-                params.append(jurisdiction)
-            if entity_type:
-                conditions.append("a.entity_type = ?")
-                params.append(entity_type)
-            if assigned_to:
-                conditions.append("a.assigned_to = ?")
-                params.append(assigned_to)
-
-
-            where = " AND ".join(conditions) if conditions else "1=1"
+            scope = _report_scope_from_request(self, user)
+            filters = scope["filters"]
+            date_from = filters.get("date_from")
+            date_to = filters.get("date_to")
+            status = filters.get("status")
+            risk_level = filters.get("risk_level")
+            jurisdiction = filters.get("jurisdiction")
+            entity_type = filters.get("entity_type")
+            assigned_to = filters.get("assigned_to")
+            show_fx = scope["show_fixtures"]
+            where = scope["where"]
+            params = scope["params"]
+            from fixture_filter import fixture_app_exclude_clause
 
             # --- summary ---
             summary = {
@@ -5667,12 +5741,12 @@ class ReportAnalyticsHandler(BaseHandler):
                         COUNT(*) as total,
                         SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
                         SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected,
-                        SUM(CASE WHEN a.status='pending' OR a.status='submitted' OR a.status='under_review' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN a.status IN ({",".join(["?"] * len(_REPORT_PENDING_STATUSES))}) THEN 1 ELSE 0 END) as pending,
                         SUM(CASE WHEN a.status='edd_required' THEN 1 ELSE 0 END) as edd_required,
                         SUM(CASE WHEN a.status='withdrawn' THEN 1 ELSE 0 END) as withdrawn,
                         AVG(CASE WHEN a.risk_score IS NOT NULL THEN a.risk_score ELSE NULL END) as avg_risk_score
                     FROM applications a WHERE {where}
-                """, params).fetchone()
+                """, [*_REPORT_PENDING_STATUSES, *params]).fetchone()
                 if row:
                     r = dict(row)
                     total = r.get("total") or 0
@@ -5983,6 +6057,14 @@ class ReportAnalyticsHandler(BaseHandler):
                 "periodic_review_stats": periodic_review_stats,
                 "reviewer_workload": reviewer_workload,
                 "recent_decisions": recent_decisions,
+                "report": {
+                    "scope": "applications",
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "filters": scope["filters"],
+                    "show_fixtures": scope["show_fixtures"],
+                    "pending_statuses": scope["pending_statuses"],
+                    "canonical_view": "applications_report_v1",
+                },
             })
         finally:
             db.close()
@@ -9737,16 +9819,33 @@ class MemoPDFDownloadHandler(BaseHandler):
             db.close()
             return self.error(f"PDF generation failed: {str(e)}", 500)
 
+        pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+        pdf_generated_at = datetime.now(timezone.utc).isoformat()
+        memo_version = memo_row.get("memo_version") or (metadata or {}).get("memo_version") or str(memo_row.get("version") or "")
+
         # Update pdf_generated_at timestamp
         try:
             db.execute(
                 "UPDATE compliance_memos SET pdf_generated_at = ? WHERE id = ?",
-                (datetime.now().isoformat(), memo_row["id"])
+                (pdf_generated_at, memo_row["id"])
             )
+            audit_detail = json.dumps({
+                "event": "memo_pdf_generated",
+                "application_ref": app["ref"],
+                "company_name": app["company_name"],
+                "memo_id": memo_row["id"],
+                "memo_version": memo_version,
+                "pdf_sha256": pdf_sha256,
+                "pdf_bytes": len(pdf_bytes),
+                "validation_status": validation_result.get("validation_status"),
+                "quality_score": validation_result.get("quality_score"),
+                "supervisor_status": supervisor_result.get("verdict"),
+                "generated_at": pdf_generated_at,
+            })
             db.execute(
                 "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                 (user.get("sub",""), user.get("name",""), user.get("role",""), "Download Memo PDF", app["ref"],
-                 f"PDF generated for {app['company_name']} memo", self.get_client_ip())
+                 audit_detail, self.get_client_ip())
             )
             db.commit()
         except Exception as e:
@@ -9759,6 +9858,9 @@ class MemoPDFDownloadHandler(BaseHandler):
         self.set_header("Content-Type", "application/pdf")
         self.set_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.set_header("Content-Length", str(len(pdf_bytes)))
+        self.set_header("X-Memo-Id", str(memo_row["id"]))
+        self.set_header("X-Memo-Version", str(memo_version))
+        self.set_header("X-PDF-SHA256", pdf_sha256)
         self.set_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.write(pdf_bytes)
 
