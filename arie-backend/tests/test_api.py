@@ -589,6 +589,115 @@ class TestPasswordRotationGuard:
 # ═══════════════════════════════════════════════════════════
 
 class TestGovernanceAttemptAudit:
+    def _live_prescreening(self):
+        return json.dumps({
+            "screening_report": {
+                "screening_mode": "live",
+                "screened_at": "2026-04-30T10:00:00",
+                "sanctions": {"api_status": "live"},
+                "company_registry": {"api_status": "live"},
+                "ip_geolocation": {"api_status": "live"},
+                "kyc": {"api_status": "live"},
+            },
+            "screening_valid_until": "2026-07-29T10:00:00",
+            "screening_validity_days": 90,
+        })
+
+    def _insert_approved_memo(self, conn, app_id):
+        conn.execute("""
+            INSERT INTO compliance_memos (
+                application_id, memo_data, generated_by, ai_recommendation,
+                review_status, quality_score, validation_status, supervisor_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            json.dumps({
+                "ai_source": "deterministic",
+                "metadata": {"ai_source": "deterministic"},
+                "supervisor": {"verdict": "CONSISTENT", "can_approve": True},
+            }),
+            "system",
+            "APPROVE_WITH_CONDITIONS",
+            "approved",
+            8.5,
+            "pass",
+            "CONSISTENT",
+        ))
+
+    def test_governance_attempt_audit_failure_is_best_effort(self, monkeypatch, caplog):
+        """Audit insert failures must log the marker and not raise to the handler."""
+        import logging
+        import base_handler
+        from base_handler import BaseHandler
+
+        class FailingDb:
+            closed = False
+
+            def execute(self, *_args, **_kwargs):
+                raise RuntimeError("forced audit insert failure")
+
+            def commit(self):
+                raise AssertionError("commit should not run after failed insert")
+
+            def close(self):
+                self.closed = True
+
+        failing_db = FailingDb()
+        monkeypatch.setattr(base_handler, "get_db", lambda: failing_db)
+        handler = object.__new__(BaseHandler)
+
+        caplog.set_level(logging.ERROR)
+        handler.log_governance_attempt(
+            {"sub": "admin001", "name": "Test Admin", "role": "admin"},
+            "application.decision",
+            "ARF-TEST",
+            "rejected",
+            400,
+            "forced rejection",
+        )
+
+        assert failing_db.closed is True
+        assert "governance_audit_write_failed=true" in caplog.text
+        assert "application.decision" in caplog.text
+
+    def test_governance_attempt_rejection_reason_is_capped(self, monkeypatch):
+        """Long rejection reasons must not defeat the bounded audit detail size."""
+        import base_handler
+        from base_handler import BaseHandler
+
+        class CapturingDb:
+            params = None
+            committed = False
+            closed = False
+
+            def execute(self, _sql, params):
+                self.params = params
+
+            def commit(self):
+                self.committed = True
+
+            def close(self):
+                self.closed = True
+
+        capture_db = CapturingDb()
+        monkeypatch.setattr(base_handler, "get_db", lambda: capture_db)
+        handler = object.__new__(BaseHandler)
+
+        handler.log_governance_attempt(
+            {"sub": "admin001", "name": "Test Admin", "role": "admin"},
+            "application.decision",
+            "ARF-TEST",
+            "rejected",
+            400,
+            "r" * 2000,
+        )
+
+        assert capture_db.committed is True
+        assert capture_db.closed is True
+        detail = json.loads(capture_db.params[5])
+        assert len(detail["rejection_reason"]) == 512
+        assert detail["rejection_reason_truncated"] is True
+
     def test_failed_approval_attempt_is_audited(self, api_server):
         """Approval gate rejections must be visible in audit_log with outcome=rejected."""
         from auth import create_token
@@ -615,18 +724,7 @@ class TestGovernanceAttemptAudit:
             "in_review",
             "LOW",
             20,
-            json.dumps({
-                "screening_report": {
-                    "screening_mode": "live",
-                    "screened_at": "2026-04-30T10:00:00",
-                    "sanctions": {"api_status": "live"},
-                    "company_registry": {"api_status": "live"},
-                    "ip_geolocation": {"api_status": "live"},
-                    "kyc": {"api_status": "live"},
-                },
-                "screening_valid_until": "2026-07-29T10:00:00",
-                "screening_validity_days": 90,
-            }),
+            self._live_prescreening(),
         ))
         conn.commit()
         conn.close()
@@ -714,3 +812,250 @@ class TestGovernanceAttemptAudit:
         assert detail["action"] == "screening.review_disposition"
         assert detail["outcome"] == "rejected"
         assert detail["response_code"] == 400
+
+    def test_pre_approval_rejection_attempt_is_audited(self, api_server):
+        """Pre-approval gate rejections must write a Governance Attempt row."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_preapproval_reject"
+        app_ref = "ARF-2026-PHASE1B-PRE-REJ"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1b_client", "Phase 1B Pre Reject Ltd",
+            "Mauritius", "Technology", "SME", "draft", "HIGH", 72,
+            self._live_prescreening(),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/pre-approval-decision",
+            json={"decision": "PRE_APPROVE", "notes": "Testing rejected pre-approval audit."},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "application.pre_approval_decision"
+        assert detail["outcome"] == "rejected"
+        assert detail["response_code"] == 400
+
+    def test_accepted_pre_approval_attempt_is_audited(self, api_server):
+        """Accepted pre-approval decisions must be audited in the same handler path."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_preapproval_accept"
+        app_ref = "ARF-2026-PHASE1B-PRE-OK"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1b_client", "Phase 1B Pre Accept Ltd",
+            "Mauritius", "Technology", "SME", "pre_approval_review", "HIGH", 72,
+            self._live_prescreening(),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/pre-approval-decision",
+            json={"decision": "PRE_APPROVE", "notes": "Testing accepted pre-approval audit."},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 201
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "application.pre_approval_decision"
+        assert detail["outcome"] == "accepted"
+        assert detail["response_code"] == 201
+
+    def test_accepted_screening_review_attempt_is_audited(self, api_server):
+        """Accepted screening dispositions must write a Governance Attempt row."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_screening_accept"
+        app_ref = "ARF-2026-PHASE1B-SCREEN-OK"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (app_id, app_ref, "phase1b_client", "Phase 1B Screening Accept Ltd", "in_review"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_id,
+                "subject_type": "company",
+                "subject_name": "Phase 1B Screening Accept Ltd",
+                "disposition": "cleared",
+                "notes": "Testing accepted screening audit.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "screening.review_disposition"
+        assert detail["outcome"] == "accepted"
+        assert detail["response_code"] == 200
+
+    def test_first_approval_202_attempt_is_audited(self, api_server):
+        """Dual-approval first approval must leave a 202 Governance Attempt row."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1b_dual_approval"
+        app_ref = "ARF-2026-PHASE1B-DUAL"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1b_client", "Phase 1B Dual Approval Ltd",
+            "Mauritius", "Banking", "NBFI", "compliance_review", "HIGH", 80,
+            self._live_prescreening(),
+        ))
+        self._insert_approved_memo(conn, app_id)
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/decision",
+            json={
+                "decision": "approve",
+                "decision_reason": "Testing first dual-approval audit.",
+                "officer_signoff": {
+                    "acknowledged": True,
+                    "scope": "decision",
+                    "source_context": "ai_advisory",
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 202
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "application.decision"
+        assert detail["outcome"] == "accepted"
+        assert detail["response_code"] == 202
+
+    def test_governance_attempt_target_is_sanitized_for_missing_app(self, api_server):
+        """Client-controlled app identifiers must be capped before audit persistence."""
+        from auth import create_token
+        from db import get_db
+
+        raw_app_id = "missing-" + ("x" * 260)
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{raw_app_id}/decision",
+            json={
+                "decision": "approve",
+                "decision_reason": "Testing missing-app target capping.",
+                "officer_signoff": {
+                    "acknowledged": True,
+                    "scope": "decision",
+                    "source_context": "ai_advisory",
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 404
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT target, detail FROM audit_log
+            WHERE action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        assert len(row["target"]) <= 160
+        assert row["target"] == raw_app_id[:160]
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "application.decision"
+        assert detail["response_code"] == 404

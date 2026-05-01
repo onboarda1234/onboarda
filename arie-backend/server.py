@@ -3320,14 +3320,14 @@ class PreApprovalDecisionHandler(BaseHandler):
                     f"Pre-approval decision: {decision} | Risk: {app['risk_level']} (Score: {app['risk_score']}) | Notes: {notes}",
                     self.get_client_ip(), _safe_json(_before), _safe_json(_after)))
 
+        self.log_governance_attempt(
+            user, "application.pre_approval_decision", attempt_target, "accepted", 201,
+            "", attempt_summary, db=db, commit=False)
         db.commit()
         db.close()
 
         self.log_audit(user, f"Pre-Approval {decision}", app["ref"],
                        f"Pre-approval decision: {decision} — {notes}")
-        self.log_governance_attempt(
-            user, "application.pre_approval_decision", attempt_target, "accepted", 201,
-            "", attempt_summary)
 
         self.success({
             "status": "decision_recorded",
@@ -7143,20 +7143,23 @@ class ScreeningReviewHandler(BaseHandler):
             user.get("name") or user.get("full_name") or user["sub"],
         )
 
+        def _screening_audit_in_tx(audit_user, action, target, detail, **kwargs):
+            self.log_audit(audit_user, action, target, detail, commit=False, **kwargs)
+
         # EX-09: Recompute risk when screening review indicates escalation
         risk_recomputed = False
         if disposition == "escalated":
             rr = recompute_risk(db, app["id"], "screening_review_escalated",
-                                user=user, log_audit_fn=self.log_audit)
+                                user=user, log_audit_fn=_screening_audit_in_tx)
             risk_recomputed = rr.get("recomputed", False)
 
-        db.commit()
-
         disposition_label = disposition.replace("_", " ")
-        self.log_audit(user, "Screening Review", app["ref"], f"{subject_type}:{subject_name} -> {disposition_label}", db=db)
+        self.log_audit(
+            user, "Screening Review", app["ref"],
+            f"{subject_type}:{subject_name} -> {disposition_label}", db=db, commit=False)
         self.log_governance_attempt(
             user, "screening.review_disposition", app["ref"], "accepted", 200,
-            "", attempt_summary, db=db)
+            "", attempt_summary, db=db, commit=False)
         review = dict(db.execute(
             """
             SELECT application_id, subject_type, subject_name, disposition, notes, reviewer_name, created_at, updated_at
@@ -7164,6 +7167,7 @@ class ScreeningReviewHandler(BaseHandler):
             """,
             (app["id"], subject_type, subject_name),
         ).fetchone())
+        db.commit()
         db.close()
         response = {"review": review}
         if risk_recomputed:
@@ -8447,7 +8451,7 @@ class MemoValidateHandler(BaseHandler):
 _VALID_SIGNOFF_SCOPES = {"decision", "override", "memo"}
 
 
-def _governance_summary(payload, keys):
+def _governance_summary(payload, keys, max_total_chars=1200):
     """Build a compact, non-secret payload summary for governance audit rows."""
     summary = {}
     if not isinstance(payload, dict):
@@ -8462,6 +8466,13 @@ def _governance_summary(payload, keys):
             summary[key] = {"keys": sorted(str(k) for k in value.keys())[:12]}
         elif value is not None:
             summary[key] = value
+    encoded = json.dumps(summary, default=str)
+    if len(encoded) > max_total_chars:
+        summary = {
+            "truncated": True,
+            "keys": sorted(str(k) for k in summary.keys()),
+            "original_summary_bytes": len(encoded),
+        }
     return summary
 
 
@@ -9065,6 +9076,7 @@ class ApplicationDecisionHandler(BaseHandler):
         db = get_db()
         attempt_summary = _governance_summary(
             data,
+            # Dict values, including officer_signoff, are summarized by key names only.
             ("decision", "override_ai", "documents_list", "officer_signoff"),
         )
         attempt_target = app_id
@@ -9223,7 +9235,8 @@ class ApplicationDecisionHandler(BaseHandler):
                                 self.get_client_ip(), _safe_json(_before), _safe_json(_first_after)))
                     self.log_governance_attempt(
                         user, "application.decision", attempt_target, "accepted", 202,
-                        "First approval recorded; awaiting second approver", attempt_summary, db=db)
+                        "First approval recorded; awaiting second approver", attempt_summary,
+                        db=db, commit=False)
                     db.commit()
                     db.close()
                     return self.success({"status": "first_approval_recorded", "message": dual_error}, 202)
@@ -9311,12 +9324,11 @@ class ApplicationDecisionHandler(BaseHandler):
         except Exception as e:
             logger.error("Failed to record decision record for app %s: %s", app["ref"], e)
 
-        db.commit()
-        db.close()
-
         self.log_governance_attempt(
             user, "application.decision", attempt_target, "accepted", 201,
-            "", attempt_summary)
+            "", attempt_summary, db=db, commit=False)
+        db.commit()
+        db.close()
 
         self.success({"status": "decision_recorded", "decision": decision, "application_status": new_status}, 201)
 
