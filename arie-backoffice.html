@@ -1106,6 +1106,11 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
           <div id="detail-entity-info"></div>
         </div>
 
+        <div class="detail-section" id="detail-rmi-section" style="display:none;">
+          <div class="detail-section-title">Request For More Information</div>
+          <div id="detail-rmi-panel"></div>
+        </div>
+
         <!-- Pre-Screening Summary -->
         <div class="card" id="prescreen-summary-card" style="border-left:4px solid #6366f1;background:rgba(99,102,241,0.03);">
           <div class="card-header" style="margin-bottom:12px;">
@@ -2653,6 +2658,43 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
   </div>
 </div>
 
+<!-- ═══════════════ STRUCTURED RMI MODAL ═══════════════ -->
+<div class="modal-overlay" id="modal-rmi-request">
+  <div class="modal" style="width:640px;">
+    <div class="modal-header"><h3>Request Additional Documents</h3><button class="modal-close" onclick="closeModal('modal-rmi-request')">&times;</button></div>
+    <div class="modal-body">
+      <div id="rmi-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;"></div>
+      <div class="form-group">
+        <div class="form-label">Request Reason</div>
+        <textarea class="form-input" rows="3" id="rmi-reason" placeholder="Explain why these documents are required..." style="resize:vertical;"></textarea>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Deadline</div>
+        <input class="form-input" type="date" id="rmi-deadline" />
+      </div>
+      <div class="form-group">
+        <div class="form-label">Requested Documents</div>
+        <div id="rmi-doc-options" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;"></div>
+        <div id="rmi-custom-docs" style="display:flex;flex-direction:column;gap:8px;margin-top:10px;"></div>
+        <button class="btn btn-outline btn-sm" type="button" onclick="addRMICustomDoc()" style="margin-top:10px;">+ Custom Document</button>
+      </div>
+      <div class="officer-signoff-gate">
+        <label>
+          <input type="checkbox" id="rmi-officer-signoff" />
+          <div>
+            <div class="signoff-text">Officer Sign-Off</div>
+            <div class="signoff-sub">I confirm the requested documents are necessary for compliance review and that the client request should be recorded in the audit trail.</div>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-rmi-request')">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmRMIRequest()">Send Request</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════ SCREENING DISPOSITION MODAL ═══════════════ -->
 <div class="modal-overlay" id="modal-screening-disposition">
   <div class="modal" style="width:560px;">
@@ -3292,6 +3334,7 @@ async function loadFromAPI() {
           dims: dims,
           docs: backendDocuments.map(function(d) { return d.doc_type; }),
           _documents: backendDocuments,
+          rmiRequests: a.rmi_requests || [],
           pepCount: (function() {
             var declared = (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
                            (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length;
@@ -3671,6 +3714,7 @@ async function _autoRefreshApplications() {
           dims: dims,
           docs: backendDocuments.map(function(d) { return d.doc_type; }),
           _documents: backendDocuments,
+          rmiRequests: a.rmi_requests || [],
           pepCount: (function() {
             var declared = (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
                            (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length;
@@ -5177,6 +5221,7 @@ async function fetchApplicationDetail(ref) {
     dims: dims,
     _documents: documents,
     docs: documents.map(function(doc) { return doc.doc_type; }),
+    rmiRequests: detail.rmi_requests || [],
     _raw_prescreening: psData,
     prescreeningData: psData,
     latestMemoMeta: detail.latest_memo || null,
@@ -5204,6 +5249,7 @@ function renderAuthoritativeAppDetail(app, options) {
     '<div class="detail-row"><span class="label">Assigned To</span><span class="value">' + escapeHtml(app.assigned) + '</span></div>' +
     '<div class="detail-row"><span class="label">Status</span><span class="value">' + escapeHtml(app.status) + '</span></div>' +
     '<div class="detail-row"><span class="label">Created</span><span class="value">' + escapeHtml(app.date) + '</span></div>';
+  renderRMIPanel(app);
 
   // Format nested estimated_monthly_activity object into readable string
   function formatMonthlyActivity(obj) {
@@ -5519,6 +5565,47 @@ async function openAppDetail(ref, options) {
     showToast('Detail load failed: ' + (err.message || 'Could not load application detail.'));
     return;
   }
+}
+
+function rmiStatusBadge(status) {
+  var normalized = String(status || 'open').toLowerCase();
+  var cls = normalized === 'fulfilled' ? 'approved' : (normalized === 'cancelled' ? 'rejected' : 'pending');
+  return '<span class="badge ' + cls + '">' + escapeHtml(normalized.replace(/_/g, ' ')) + '</span>';
+}
+
+function renderRMIPanel(app) {
+  var section = document.getElementById('detail-rmi-section');
+  var panel = document.getElementById('detail-rmi-panel');
+  if (!section || !panel) return;
+  var requests = app && Array.isArray(app.rmiRequests) ? app.rmiRequests : [];
+  if (!requests.length) {
+    section.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+  section.style.display = 'block';
+  panel.innerHTML = requests.map(function(req) {
+    var items = Array.isArray(req.items) ? req.items : [];
+    var itemRows = items.map(function(item) {
+      var status = String(item.status || 'requested').replace(/_/g, ' ');
+      var docInfo = item.document_id ? '<span style="font-family:monospace;font-size:11px;color:var(--text3);">' + escapeHtml(item.document_id) + '</span>' : '<span style="color:var(--text3);">Awaiting upload</span>';
+      return '<tr>' +
+        '<td style="padding:6px 8px;">' + escapeHtml(item.label || item.doc_type || '') + '</td>' +
+        '<td style="padding:6px 8px;font-size:12px;color:var(--text2);">' + escapeHtml(item.description || '') + '</td>' +
+        '<td style="padding:6px 8px;">' + rmiStatusBadge(status) + '</td>' +
+        '<td style="padding:6px 8px;">' + docInfo + '</td>' +
+      '</tr>';
+    }).join('');
+    return '<div style="border:1px solid var(--border1);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface2);">' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">' +
+        '<strong style="font-size:13px;">' + escapeHtml(req.id || 'RMI') + '</strong>' +
+        rmiStatusBadge(req.status) +
+        '<span style="font-size:12px;color:var(--text3);">Deadline: ' + escapeHtml(req.deadline || '-') + '</span>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">' + escapeHtml(req.reason || '') + '</div>' +
+      '<table class="data-table" style="font-size:12px;"><thead><tr><th>Document</th><th>Notes</th><th>Status</th><th>Upload</th></tr></thead><tbody>' + itemRows + '</tbody></table>' +
+    '</div>';
+  }).join('');
 }
 
 function renderUsers() {
@@ -8650,9 +8737,88 @@ function rejectApplication() {
 
 var pendingDecision = '';
 
+var RMI_DOC_OPTIONS = [
+  { doc_type: 'cert_inc', label: 'Certificate of Incorporation' },
+  { doc_type: 'memarts', label: 'Memorandum and Articles' },
+  { doc_type: 'reg_sh', label: 'Register of Shareholders' },
+  { doc_type: 'reg_dir', label: 'Register of Directors' },
+  { doc_type: 'fin_stmt', label: 'Financial Statements' },
+  { doc_type: 'poa', label: 'Proof of Registered Address' },
+  { doc_type: 'board_res', label: 'Board Resolution' },
+  { doc_type: 'structure_chart', label: 'Ownership Structure Chart' },
+  { doc_type: 'source_wealth', label: 'Source of Wealth Evidence' },
+  { doc_type: 'source_funds', label: 'Source of Funds Evidence' },
+  { doc_type: 'bank_statements', label: 'Bank Statements' },
+  { doc_type: 'aml_policy', label: 'AML/CFT Policy' },
+  { doc_type: 'licence', label: 'Regulatory Licence or Certificate' },
+  { doc_type: 'contracts', label: 'Sample Contracts or Agreements' }
+];
+
 function parseRequestedDocuments(reason, notes) {
   var combined = [notes, reason].filter(Boolean).join('\n');
   return combined.split(/\n|,|;/).map(function(item) { return item.trim(); }).filter(Boolean);
+}
+
+function setRMIError(message) {
+  var el = document.getElementById('rmi-error');
+  if (!el) return;
+  if (!message) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
+  }
+  el.textContent = message;
+  el.style.display = 'block';
+}
+
+function renderRMIDocOptions() {
+  var container = document.getElementById('rmi-doc-options');
+  if (!container) return;
+  container.innerHTML = RMI_DOC_OPTIONS.map(function(opt) {
+    return '<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;line-height:1.35;">' +
+      '<input type="checkbox" class="rmi-doc-option" value="' + escapeHtml(opt.doc_type) + '" data-label="' + escapeHtml(opt.label) + '" />' +
+      '<span>' + escapeHtml(opt.label) + '</span>' +
+    '</label>';
+  }).join('');
+}
+
+function defaultRMIDeadline() {
+  var d = new Date();
+  d.setDate(d.getDate() + 10);
+  return d.toISOString().slice(0, 10);
+}
+
+function addRMICustomDoc(value) {
+  var container = document.getElementById('rmi-custom-docs');
+  if (!container) return;
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;';
+  row.innerHTML = '<input class="form-input rmi-custom-doc" value="' + escapeHtml(value || '') + '" placeholder="Custom document name..." style="flex:1;" />' +
+    '<button class="btn btn-outline btn-sm" type="button">Remove</button>';
+  row.querySelector('button').onclick = function() { row.remove(); };
+  container.appendChild(row);
+}
+
+function slugRMIDocType(label) {
+  return String(label || 'document').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80) || 'document';
+}
+
+function collectRMIItems() {
+  var items = [];
+  document.querySelectorAll('.rmi-doc-option:checked').forEach(function(cb) {
+    items.push({ doc_type: cb.value, label: cb.getAttribute('data-label') || cb.value, description: '' });
+  });
+  document.querySelectorAll('.rmi-custom-doc').forEach(function(input) {
+    var label = input.value.trim();
+    if (label) items.push({ doc_type: slugRMIDocType(label), label: label, description: '' });
+  });
+  var seen = {};
+  return items.filter(function(item) {
+    var key = item.doc_type + '|' + item.label.toLowerCase();
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
 }
 
 async function refreshCurrentAppDetail() {
@@ -8855,14 +9021,64 @@ async function confirmOverride() {
 function requestMoreInfo() {
   if (!currentApp) return;
   if (!assertPermission('request_more_information')) return;
-  pendingDecision = 'Request Docs';
-  document.getElementById('decision-type-display').textContent = 'Request Additional Documents';
-  document.getElementById('decision-reason').value = '';
-  document.getElementById('decision-notes').value = '';
-  setDecisionError('');
-  var dso = document.getElementById('decision-officer-signoff'); if (dso) dso.checked = false;
-  renderDecisionReadiness('Request Docs');
-  document.getElementById('modal-decision-reason').classList.add('open');
+  renderRMIDocOptions();
+  document.getElementById('rmi-reason').value = '';
+  document.getElementById('rmi-deadline').value = defaultRMIDeadline();
+  document.getElementById('rmi-custom-docs').innerHTML = '';
+  document.querySelectorAll('.rmi-doc-option').forEach(function(cb) { cb.checked = false; });
+  var signoff = document.getElementById('rmi-officer-signoff'); if (signoff) signoff.checked = false;
+  setRMIError('');
+  document.getElementById('modal-rmi-request').classList.add('open');
+}
+
+async function confirmRMIRequest() {
+  if (!currentApp) return;
+  if (!assertPermission('request_more_information')) return;
+  var reason = document.getElementById('rmi-reason').value.trim();
+  var deadline = document.getElementById('rmi-deadline').value;
+  var items = collectRMIItems();
+  var signoff = document.getElementById('rmi-officer-signoff');
+  if (!reason) {
+    setRMIError('Request reason is required.');
+    return;
+  }
+  if (!deadline) {
+    setRMIError('Deadline is required.');
+    return;
+  }
+  if (!items.length) {
+    setRMIError('Select at least one requested document.');
+    return;
+  }
+  if (!signoff || !signoff.checked) {
+    setRMIError('Officer sign-off is required.');
+    return;
+  }
+  try {
+    var resp = await boApiCall('POST', '/applications/' + currentApp.id + '/decision', {
+      decision: 'request_documents',
+      decision_reason: reason,
+      rmi_deadline: deadline,
+      rmi_items: items,
+      documents_list: items.map(function(item) { return item.label; }),
+      officer_signoff: { acknowledged: true, scope: 'decision', source_context: 'ai_advisory' }
+    });
+    AUDIT_LOG.unshift({
+      ts: new Date().toISOString().slice(0,16).replace('T',' '),
+      user: currentUser.name,
+      role: ROLE_LABELS[currentUser.role],
+      action: 'Request Docs',
+      target: currentApp.ref,
+      detail: 'Structured RMI ' + (resp.rmi_request_id || '') + ' — ' + reason
+    });
+    closeModal('modal-rmi-request');
+    await refreshCurrentAppDetail();
+    showToast('Additional document request sent to client');
+  } catch (e) {
+    console.warn('RMI request failed:', e);
+    setRMIError(e.message || 'Could not send document request');
+    showToast(e.message || 'Could not send document request', 'error');
+  }
 }
 
 function reassignCase() { document.getElementById('modal-reassign').classList.add('open'); }
@@ -8996,6 +9212,7 @@ function openAddUserModal() { document.getElementById('modal-add-user').classLis
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
   if (id === 'modal-decision-reason') setDecisionError('');
+  if (id === 'modal-rmi-request') setRMIError('');
   if (id === 'modal-screening-disposition') {
     setScreeningDispositionError('');
     pendingScreeningDisposition = null;
