@@ -594,7 +594,45 @@ class TestSupervisorUX:
 
 
 # ═══════════════════════════════════════════════════════════
-# G. AUDIT TRAIL HARDENING
+# G. SCREENING DISPOSITION UX
+# ═══════════════════════════════════════════════════════════
+class TestScreeningDispositionUX:
+    """Test screening disposition modal and payload contract."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r") as f:
+            return f.read()
+
+    def test_screening_disposition_modal_fields_present(self):
+        html = self._read_backoffice()
+        assert 'id="modal-screening-disposition"' in html
+        assert 'id="screening-disposition-code"' in html
+        assert 'id="screening-disposition-rationale"' in html
+        assert "Second reviewer required" in html
+
+    def test_screening_disposition_payload_sends_code_and_rationale(self):
+        html = self._read_backoffice()
+        fn_start = html.index("async function submitScreeningDisposition()")
+        fn_region = html[fn_start:fn_start + 2000]
+        assert "disposition_code: code" in fn_region
+        assert "rationale: rationale" in fn_region
+        assert "notes: rationale" in fn_region
+        assert "rationale.length < 12" in fn_region
+
+    def test_screening_review_no_longer_uses_prompt_notes(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function saveScreeningReview(")
+        fn_end = html.index("async function submitScreeningDisposition()", fn_start)
+        fn_region = html[fn_start:fn_end]
+        assert "window.prompt" not in fn_region
+        assert "openScreeningDispositionModalByRow" in fn_region
+
+
+# ═══════════════════════════════════════════════════════════
+# H. AUDIT TRAIL HARDENING
 # ═══════════════════════════════════════════════════════════
 class TestAuditTrailHardening:
     """Test structured audit entries."""

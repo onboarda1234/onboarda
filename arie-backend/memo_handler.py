@@ -447,6 +447,30 @@ def build_compliance_memo(app, directors, ubos, documents):
         "timestamp": now_ts
     }
 
+    screening_review_lines = []
+    for review in app.get("screening_reviews") or []:
+        if not isinstance(review, dict) or not review.get("disposition"):
+            continue
+        subject = f"{review.get('subject_type', 'subject')}:{review.get('subject_name', 'Unknown')}"
+        disposition_text = str(review.get("disposition") or "").replace("_", " ")
+        code = review.get("disposition_code") or "no code recorded"
+        rationale = review.get("rationale") or review.get("notes") or "no rationale recorded"
+        reviewer = review.get("reviewer_name") or review.get("reviewer_id") or "unknown reviewer"
+        line = f"{subject} — {disposition_text} ({code}) by {reviewer}: {rationale}"
+        if review.get("requires_four_eyes"):
+            second_reviewer = review.get("second_reviewer_name") or review.get("second_reviewer_id")
+            if second_reviewer:
+                line += f" Second review completed by {second_reviewer}"
+                if review.get("second_rationale"):
+                    line += f": {review.get('second_rationale')}"
+            else:
+                line += " Second review required but not yet completed"
+        screening_review_lines.append(line[:1000])
+    screening_review_evidence = (
+        " Officer disposition evidence: " + " ".join(screening_review_lines)
+        if screening_review_lines else ""
+    )
+
     # Generate Big 4-grade 11-section memo structure
     memo = {
         "application_ref": app["ref"],
@@ -610,6 +634,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + f"PEP Screening: {len(all_peps)} self-declared / detected match(es)"
                     + (" — " + ". ".join([p["full_name"] + " identified as PEP. PEP declaration form and enhanced due diligence documentation requested." for p in all_peps]) if all_peps else " — no declared or detected matches.")
                     + " Adverse Media Screening: Comprehensive search conducted across global news and regulatory enforcement databases. No relevant hits identified for any associated individual or the entity. "
+                    + screening_review_evidence
                     + f"Company Registry Verification: {app['company_name']} verified against registry records. "
                     + f"Registration details are {'consistent' if verified_docs else 'pending verification against'} application data."
                 )

@@ -526,8 +526,17 @@ def _get_postgres_schema() -> str:
         subject_name TEXT NOT NULL,
         disposition TEXT NOT NULL CHECK(disposition IN ('cleared','escalated','follow_up_required')),
         notes TEXT,
+        disposition_code TEXT,
+        rationale TEXT,
+        sensitivity_flags TEXT DEFAULT '[]',
+        requires_four_eyes BOOLEAN DEFAULT false,
         reviewer_id TEXT REFERENCES users(id),
         reviewer_name TEXT,
+        second_reviewer_id TEXT REFERENCES users(id),
+        second_reviewer_name TEXT,
+        second_disposition_code TEXT,
+        second_rationale TEXT,
+        second_reviewed_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(application_id, subject_type, subject_name)
@@ -1278,8 +1287,17 @@ def _get_sqlite_schema() -> str:
         subject_name TEXT NOT NULL,
         disposition TEXT NOT NULL CHECK(disposition IN ('cleared','escalated','follow_up_required')),
         notes TEXT,
+        disposition_code TEXT,
+        rationale TEXT,
+        sensitivity_flags TEXT DEFAULT '[]',
+        requires_four_eyes INTEGER DEFAULT 0,
         reviewer_id TEXT REFERENCES users(id),
         reviewer_name TEXT,
+        second_reviewer_id TEXT REFERENCES users(id),
+        second_reviewer_name TEXT,
+        second_disposition_code TEXT,
+        second_rationale TEXT,
+        second_reviewed_at TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')),
         UNIQUE(application_id, subject_type, subject_name)
@@ -3324,6 +3342,39 @@ def _run_migrations(db: DBConnection):
             logger.info("Migration v2.26: reviewer_role column already exists")
     except Exception as e:
         logger.error("Migration v2.26 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.26a: Add structured screening disposition controls.
+    # These columns make screening clear/escalate/follow-up decisions
+    # audit-grade: each disposition has a code/rationale and sensitive
+    # clears can require a second distinct officer sign-off.
+    try:
+        added = []
+        screening_review_cols = [
+            ("disposition_code", "TEXT"),
+            ("rationale", "TEXT"),
+            ("sensitivity_flags", "TEXT DEFAULT '[]'"),
+            ("requires_four_eyes", "BOOLEAN DEFAULT FALSE" if db.is_postgres else "INTEGER DEFAULT 0"),
+            ("second_reviewer_id", "TEXT"),
+            ("second_reviewer_name", "TEXT"),
+            ("second_disposition_code", "TEXT"),
+            ("second_rationale", "TEXT"),
+            ("second_reviewed_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
+        ]
+        for column_name, column_type in screening_review_cols:
+            if not _safe_column_exists(db, "screening_reviews", column_name):
+                db.execute(f"ALTER TABLE screening_reviews ADD COLUMN {column_name} {column_type}")
+                added.append(column_name)
+        if added:
+            db.commit()
+            logger.info("Migration v2.26a: Added screening_reviews columns %s", added)
+        else:
+            logger.info("Migration v2.26a: screening_reviews disposition columns already exist")
+    except Exception as e:
+        logger.error("Migration v2.26a failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

@@ -81,3 +81,41 @@ def test_upsert_screening_review_persists_and_survives_queue_reload(db, temp_db)
     assert row["review_disposition"] == "cleared"
     assert "false positive" in row["review_notes"].lower()
     assert row["reviewed_by"] == "Test Admin"
+
+
+def test_screening_review_rationale_flows_into_memo():
+    from memo_handler import build_compliance_memo
+
+    app = {
+        "id": "app_memo_screening_review",
+        "ref": "ARF-MEMO-SCREENING-REVIEW",
+        "company_name": "Memo Screening Review Ltd",
+        "brn": "BRN-123",
+        "country": "Mauritius",
+        "sector": "Technology",
+        "entity_type": "SME",
+        "risk_level": "MEDIUM",
+        "risk_score": 45,
+        "prescreening_data": json.dumps({
+            "screening_report": {
+                "company_screening": {"sanctions": {"matched": False, "results": [], "api_status": "live"}},
+                "director_screenings": [],
+                "ubo_screenings": [],
+            }
+        }),
+        "screening_reviews": [{
+            "subject_type": "entity",
+            "subject_name": "Memo Screening Review Ltd",
+            "disposition": "cleared",
+            "disposition_code": "provider_no_relevant_match",
+            "rationale": "Officer confirmed no relevant provider match after review.",
+            "reviewer_name": "Test Admin",
+            "requires_four_eyes": False,
+        }],
+    }
+
+    memo, _, _, _ = build_compliance_memo(app, [], [], [])
+    content = memo["sections"]["screening_results"]["content"]
+    assert "Officer disposition evidence" in content
+    assert "provider_no_relevant_match" in content
+    assert "Officer confirmed no relevant provider match" in content

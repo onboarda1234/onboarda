@@ -937,6 +937,8 @@ class TestGovernanceAttemptAudit:
                 "subject_type": "company",
                 "subject_name": "Phase 1B Screening Accept Ltd",
                 "disposition": "cleared",
+                "disposition_code": "provider_no_relevant_match",
+                "rationale": "Testing accepted screening audit with a recorded rationale.",
                 "notes": "Testing accepted screening audit.",
             },
             headers={"Authorization": f"Bearer {token}"},
@@ -960,6 +962,171 @@ class TestGovernanceAttemptAudit:
         assert detail["action"] == "screening.review_disposition"
         assert detail["outcome"] == "accepted"
         assert detail["response_code"] == 200
+
+    def test_screening_review_requires_code_and_rationale(self, api_server):
+        """Screening dispositions must reject missing code/rationale before state changes."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1c_screening_required_fields"
+        app_ref = "ARF-2026-PHASE1C-SCREEN-REQ"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_id,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (app_id, app_ref, "phase1c_client", "Phase 1C Required Fields Ltd", "in_review"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_id,
+                "subject_type": "entity",
+                "subject_name": "Phase 1C Required Fields Ltd",
+                "disposition": "cleared",
+                "notes": "Legacy note only.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+        assert "disposition_code" in resp.json()["error"]
+
+        conn = get_db()
+        review = conn.execute("SELECT id FROM screening_reviews WHERE application_id = ?", (app_id,)).fetchone()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_id,),
+        ).fetchone()
+        conn.close()
+
+        assert review is None
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "screening.review_disposition"
+        assert detail["outcome"] == "rejected"
+        assert detail["response_code"] == 400
+
+    def test_sensitive_screening_clear_requires_second_reviewer(self, api_server):
+        """Director/UBO sensitive clears require two distinct officer sign-offs."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_phase1c_sensitive_screening"
+        app_ref = "ARF-2026-PHASE1C-SENSITIVE"
+        subject_name = "Alice Sensitive"
+        prescreening = {
+            "screening_report": {
+                "screened_at": "2026-04-30T10:00:00Z",
+                "screening_mode": "live",
+                "company_screening": {
+                    "found": True,
+                    "sanctions": {"matched": False, "results": [], "api_status": "live"},
+                },
+                "director_screenings": [{
+                    "person_name": subject_name,
+                    "person_type": "director",
+                    "screening": {
+                        "matched": True,
+                        "results": [{"name": "Alice Sensitive", "is_sanctioned": True, "is_pep": False}],
+                        "api_status": "live",
+                        "screened_at": "2026-04-30T10:00:00Z",
+                    },
+                }],
+                "ubo_screenings": [],
+                "ip_geolocation": {"risk_level": "LOW"},
+                "kyc_applicants": [],
+                "overall_flags": ["Director sanctions match"],
+                "total_hits": 1,
+            }
+        }
+
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM directors WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1c_client", "Phase 1C Sensitive Ltd",
+            "Mauritius", "Technology", "SME", "in_review", json.dumps(prescreening),
+        ))
+        conn.execute(
+            "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
+            (app_id, subject_name, "Mauritius", "No"),
+        )
+        conn.commit()
+        conn.close()
+
+        first_token = create_token("admin001", "admin", "Test Admin", "officer")
+        first_payload = {
+            "application_id": app_ref,
+            "subject_type": "director",
+            "subject_name": subject_name,
+            "disposition": "cleared",
+            "disposition_code": "false_positive",
+            "rationale": "Provider hit reviewed against identity documents and assessed as false positive.",
+        }
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json=first_payload,
+            headers={"Authorization": f"Bearer {first_token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "second_review_required"
+
+        queue = http_requests.get(
+            f"{api_server}/api/screening/queue",
+            headers={"Authorization": f"Bearer {first_token}"},
+            timeout=3,
+        )
+        assert queue.status_code == 200
+        row = next(r for r in queue.json()["rows"] if r["application_ref"] == app_ref and r["subject_name"] == subject_name)
+        assert row["review_four_eyes_status"] == "pending_second_review"
+        assert row["review_resolved"] is False
+
+        retry = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json=first_payload,
+            headers={"Authorization": f"Bearer {first_token}"},
+            timeout=3,
+        )
+        assert retry.status_code == 409
+
+        second_token = create_token("sco_phase1c", "sco", "Second Officer", "officer")
+        second_payload = dict(first_payload)
+        second_payload["rationale"] = "Independent review confirms the provider hit is not the same individual."
+        second = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json=second_payload,
+            headers={"Authorization": f"Bearer {second_token}"},
+            timeout=3,
+        )
+        assert second.status_code == 200
+        assert second.json()["status"] == "second_review_complete"
+
+        queue = http_requests.get(
+            f"{api_server}/api/screening/queue",
+            headers={"Authorization": f"Bearer {first_token}"},
+            timeout=3,
+        )
+        row = next(r for r in queue.json()["rows"] if r["application_ref"] == app_ref and r["subject_name"] == subject_name)
+        assert row["review_four_eyes_status"] == "complete"
+        assert row["review_resolved"] is True
+        assert row["second_reviewed_by"] == "Second Officer"
 
     def test_first_approval_202_attempt_is_audited(self, api_server):
         """Dual-approval first approval must leave a 202 Governance Attempt row."""

@@ -2653,6 +2653,24 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
   </div>
 </div>
 
+<!-- ═══════════════ SCREENING DISPOSITION MODAL ═══════════════ -->
+<div class="modal-overlay" id="modal-screening-disposition">
+  <div class="modal" style="width:560px;">
+    <div class="modal-header"><h3 id="screening-disposition-title">Record Screening Disposition</h3><button class="modal-close" onclick="closeModal('modal-screening-disposition')">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-group"><div class="form-label">Subject</div><div style="padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);font-weight:600;color:var(--text1);" id="screening-disposition-subject">-</div></div>
+      <div id="screening-four-eyes-panel" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;color:var(--text2);"></div>
+      <div id="screening-disposition-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;"></div>
+      <div class="form-group"><div class="form-label">Disposition Code</div><select class="form-select" id="screening-disposition-code"></select></div>
+      <div class="form-group"><div class="form-label">Rationale (Required)</div><textarea class="form-input" rows="5" id="screening-disposition-rationale" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-screening-disposition')">Cancel</button>
+      <button class="btn btn-primary" id="screening-disposition-submit" onclick="submitScreeningDisposition()">Save Disposition</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════ OVERRIDE RECOMMENDATION MODAL ═══════════════ -->
 <div class="modal-overlay" id="modal-override">
   <div class="modal">
@@ -3561,6 +3579,8 @@ function switchUser(role) {
 var APPLICATIONS = [];
 // Demo data is no longer hardcoded. APPLICATIONS is populated from API via loadFromAPI().
 var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
+var SCREENING_REVIEW_ROWS = {};
+var pendingScreeningDisposition = null;
 
 // ═══════════════════════════════════════════════════════════
 // EX-13: Auto-refresh, ETag caching, and staleness indicator
@@ -5492,6 +5512,7 @@ async function openAppDetail(ref, options) {
   options = options || {};
   try {
     var detailApp = await fetchApplicationDetail(ref);
+    await loadScreeningQueue();
     return renderAuthoritativeAppDetail(detailApp, options);
   } catch (err) {
     console.error('Failed to load application detail:', err);
@@ -5717,12 +5738,44 @@ function screeningReviewBadge(row) {
     follow_up_required: 'Follow-Up Required'
   };
   var status = row.review_disposition;
+  var pendingSecond = row.review_four_eyes_status === 'pending_second_review';
+  var completeSecond = row.review_four_eyes_status === 'complete';
   var cls = status === 'cleared' ? 'approved' : status === 'escalated' ? 'high' : 'pending';
+  if (pendingSecond) cls = 'pending';
   var meta = row.reviewed_by ? ' by ' + row.reviewed_by : '';
-  return '<div style="margin-top:4px;"><span class="badge ' + cls + '">' + escapeHtml(labelMap[status] || status) + '</span>' +
+  var code = row.review_disposition_code ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Code: ' + escapeHtml(row.review_disposition_code.replace(/_/g, ' ')) + '</div>' : '';
+  var second = pendingSecond
+    ? '<div style="font-size:11px;color:var(--amber);font-weight:600;margin-top:2px;">Second reviewer required</div>'
+    : completeSecond
+      ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Second review: ' + escapeHtml(row.second_reviewed_by || 'Recorded') + (row.second_reviewed_at ? ' • ' + escapeHtml(String(row.second_reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>'
+      : '';
+  return '<div style="margin-top:4px;"><span class="badge ' + cls + '">' + escapeHtml(pendingSecond ? 'Second Review Required' : (labelMap[status] || status)) + '</span>' +
     (meta ? '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(meta + (row.reviewed_at ? ' • ' + String(row.reviewed_at).substring(0, 19).replace('T', ' ') : '')) + '</div>' : '') +
-    (row.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:2px;">' + escapeHtml(row.review_notes) + '</div>' : '') +
+    code +
+    (row.review_rationale ? '<div style="font-size:11px;color:var(--text2);margin-top:2px;">' + escapeHtml(row.review_rationale) + '</div>' : row.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:2px;">' + escapeHtml(row.review_notes) + '</div>' : '') +
+    second +
     '</div>';
+}
+
+function screeningReviewHistory(row) {
+  if (!row || !row.review_disposition) return '';
+  var html = '<div style="margin-top:12px;padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;line-height:1.5;">';
+  html += '<div style="font-weight:700;color:var(--text1);margin-bottom:6px;">Disposition History</div>';
+  html += '<div><strong>First reviewer:</strong> ' + escapeHtml(row.reviewed_by || 'Not recorded') + (row.reviewed_at ? ' • ' + escapeHtml(String(row.reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>';
+  html += '<div><strong>Decision:</strong> ' + escapeHtml(String(row.review_disposition || '').replace(/_/g, ' ')) + (row.review_disposition_code ? ' / ' + escapeHtml(row.review_disposition_code.replace(/_/g, ' ')) : '') + '</div>';
+  if (row.review_rationale || row.review_notes) html += '<div><strong>Rationale:</strong> ' + escapeHtml(row.review_rationale || row.review_notes) + '</div>';
+  if (row.requires_four_eyes) {
+    if (row.second_reviewed_by) {
+      html += '<div><strong>Second reviewer:</strong> ' + escapeHtml(row.second_reviewed_by) + (row.second_reviewed_at ? ' • ' + escapeHtml(String(row.second_reviewed_at).substring(0, 19).replace('T', ' ')) : '') + '</div>';
+      if (row.second_disposition_code) html += '<div><strong>Second code:</strong> ' + escapeHtml(row.second_disposition_code.replace(/_/g, ' ')) + '</div>';
+      if (row.second_rationale) html += '<div><strong>Second rationale:</strong> ' + escapeHtml(row.second_rationale) + '</div>';
+    } else {
+      html += '<div style="color:var(--amber);font-weight:600;"><strong>Second reviewer:</strong> Required before this clear is final.</div>';
+    }
+  }
+  if (row.sensitivity_flags && row.sensitivity_flags.length) html += '<div><strong>Sensitivity:</strong> ' + escapeHtml(row.sensitivity_flags.join(', ').replace(/_/g, ' ')) + '</div>';
+  html += '</div>';
+  return html;
 }
 
 function screeningModeBadge(mode) {
@@ -5804,6 +5857,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (redApplicants.length) body += '<div style="margin-top:10px;"><strong>KYC review flags:</strong> RED outcome for ' + escapeHtml(redApplicants.join(', ')) + '</div>';
   body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> Distinct adverse-media results are not persisted in the current screening report.</div>';
   body += '</div>';
+  body += screeningReviewHistory(reviewRow);
 
   return screeningReviewCard('Entity Screening — ' + escapeHtml(app.company), badges.join(''), body, screeningFocusMatches(focus, 'entity', app.company));
 }
@@ -5862,6 +5916,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   }
   body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> Distinct adverse-media results are not persisted in the current screening report.</div>';
   body += '</div>';
+  body += screeningReviewHistory(reviewRow);
 
   return screeningReviewCard(escapeHtml(person.name), badges.join(''), body, screeningFocusMatches(focus, person.subject_type, person.name));
 }
@@ -5954,21 +6009,144 @@ function openScreeningReview(ref, subjectType, subjectName) {
   });
 }
 
-async function saveScreeningReview(applicationRef, subjectType, subjectName, disposition) {
-  var notes = window.prompt('Add screening review notes for ' + subjectName + ':', '');
-  if (notes === null) return;
+function openScreeningReviewByRow(rowKey) {
+  var row = SCREENING_REVIEW_ROWS[rowKey];
+  if (!row) { showToast('Screening row is no longer available', 'error'); return; }
+  openScreeningReview(row.application_ref, row.subject_type, row.subject_name);
+}
+
+function screeningDispositionLabel(disposition) {
+  var labels = { cleared: 'Clear', escalated: 'Escalate', follow_up_required: 'Request Follow-Up' };
+  return labels[disposition] || disposition;
+}
+
+function screeningDispositionCodeOptions(disposition) {
+  var options = {
+    cleared: [
+      ['false_positive', 'False positive'],
+      ['identity_mismatch', 'Identity mismatch'],
+      ['provider_no_relevant_match', 'Provider no relevant match'],
+      ['duplicate_or_irrelevant', 'Duplicate or irrelevant hit'],
+      ['low_risk_context_accepted', 'Low-risk context accepted']
+    ],
+    escalated: [
+      ['potential_sanctions_match', 'Potential sanctions match'],
+      ['potential_pep_match', 'Potential PEP match'],
+      ['adverse_media_match', 'Adverse media match'],
+      ['director_ubo_sensitive_hit', 'Director/UBO sensitive hit'],
+      ['high_risk_jurisdiction', 'High-risk jurisdiction'],
+      ['provider_unresolved', 'Provider unresolved']
+    ],
+    follow_up_required: [
+      ['client_clarification_required', 'Client clarification required'],
+      ['missing_identity_data', 'Missing identity data'],
+      ['provider_pending_or_unavailable', 'Provider pending or unavailable'],
+      ['documentation_required', 'Documentation required']
+    ]
+  };
+  return options[disposition] || [];
+}
+
+function setScreeningDispositionError(message) {
+  var el = document.getElementById('screening-disposition-error');
+  if (!el) return;
+  if (!message) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
+  }
+  el.textContent = message;
+  el.style.display = '';
+}
+
+function openScreeningDispositionModalByRow(rowKey, disposition) {
+  var row = SCREENING_REVIEW_ROWS[rowKey];
+  if (!row) { showToast('Screening row is no longer available', 'error'); return; }
+  pendingScreeningDisposition = { rowKey: rowKey, row: row, disposition: disposition };
+  setScreeningDispositionError('');
+
+  var actionLabel = screeningDispositionLabel(disposition);
+  var title = document.getElementById('screening-disposition-title');
+  if (title) title.textContent = actionLabel + ' Screening Subject';
+  var subject = document.getElementById('screening-disposition-subject');
+  if (subject) subject.textContent = row.subject_name + ' (' + String(row.subject_type || '').replace('_', ' ') + ') — ' + row.application_ref;
+  var select = document.getElementById('screening-disposition-code');
+  if (select) {
+    select.innerHTML = '<option value="">Select disposition code</option>' + screeningDispositionCodeOptions(disposition).map(function(opt) {
+      return '<option value="' + escapeHtml(opt[0]) + '">' + escapeHtml(opt[1]) + '</option>';
+    }).join('');
+  }
+  var rationale = document.getElementById('screening-disposition-rationale');
+  if (rationale) rationale.value = '';
+
+  var panel = document.getElementById('screening-four-eyes-panel');
+  if (panel) {
+    var needsSecond = disposition === 'cleared' && (
+      row.requires_four_eyes ||
+      row.review_four_eyes_status === 'pending_second_review' ||
+      row.subject_type === 'director' ||
+      row.subject_type === 'ubo' ||
+      row.watchlist_status === 'match' ||
+      row.pep_declared_status === 'declared' ||
+      row.pep_screening_status === 'match' ||
+      (row.total_hits || 0) > 0
+    );
+    if (needsSecond) {
+      var bits = row.sensitivity_flags && row.sensitivity_flags.length ? row.sensitivity_flags.join(', ').replace(/_/g, ' ') : 'sensitive screening subject';
+      panel.innerHTML = '<strong>Four-eyes control:</strong> clearing this subject requires two distinct officers. ' +
+        (row.review_four_eyes_status === 'pending_second_review' ? 'This submission will be recorded as the second review if you are not the first reviewer.' : 'First submission will remain pending until a second reviewer signs off.') +
+        '<div style="margin-top:4px;">Sensitivity: ' + escapeHtml(bits) + '</div>';
+      panel.style.display = '';
+    } else {
+      panel.style.display = 'none';
+      panel.innerHTML = '';
+    }
+  }
+
+  document.getElementById('modal-screening-disposition').classList.add('open');
+}
+
+function saveScreeningReview(applicationRef, subjectType, subjectName, disposition) {
+  var rowKey = Object.keys(SCREENING_REVIEW_ROWS).find(function(key) {
+    var row = SCREENING_REVIEW_ROWS[key];
+    return row.application_ref === applicationRef && row.subject_type === subjectType && row.subject_name === subjectName;
+  });
+  if (!rowKey) {
+    rowKey = 'manual_' + Date.now();
+    SCREENING_REVIEW_ROWS[rowKey] = { application_ref: applicationRef, subject_type: subjectType, subject_name: subjectName };
+  }
+  openScreeningDispositionModalByRow(rowKey, disposition);
+}
+
+async function submitScreeningDisposition() {
+  if (!pendingScreeningDisposition || !pendingScreeningDisposition.row) return;
+  var row = pendingScreeningDisposition.row;
+  var disposition = pendingScreeningDisposition.disposition;
+  var code = document.getElementById('screening-disposition-code').value;
+  var rationale = document.getElementById('screening-disposition-rationale').value.trim();
+  if (!code) { setScreeningDispositionError('Select a disposition code.'); return; }
+  if (rationale.length < 12) { setScreeningDispositionError('Rationale must be at least 12 characters.'); return; }
+
+  var btn = document.getElementById('screening-disposition-submit');
+  if (btn) btn.disabled = true;
   try {
-    await boApiCall('POST', '/screening/review', {
-      application_id: applicationRef,
-      subject_type: subjectType,
-      subject_name: subjectName,
+    var resp = await boApiCall('POST', '/screening/review', {
+      application_id: row.application_ref || row.application_id,
+      subject_type: row.subject_type,
+      subject_name: row.subject_name,
       disposition: disposition,
-      notes: notes
+      disposition_code: code,
+      rationale: rationale,
+      notes: rationale
     });
-    showToast('Screening review saved');
+    closeModal('modal-screening-disposition');
+    showToast(resp.status === 'second_review_required' ? 'First review recorded; awaiting second reviewer' : 'Screening disposition saved');
     await renderScreening();
   } catch(e) {
-    showToast(e.message || 'Failed to save screening review', 'error');
+    setScreeningDispositionError(e.message || 'Failed to save screening disposition');
+    showToast(e.message || 'Failed to save screening disposition', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -5977,6 +6155,7 @@ async function renderScreening() {
   tbody.innerHTML = '';
 
   await loadScreeningQueue();
+  SCREENING_REVIEW_ROWS = {};
 
   if (!SCREENING_QUEUE.rows.length) {
     var empty = document.createElement('tr');
@@ -5985,16 +6164,20 @@ async function renderScreening() {
       '</td>';
     tbody.appendChild(empty);
   } else {
-    SCREENING_QUEUE.rows.forEach(function(row) {
+    SCREENING_QUEUE.rows.forEach(function(row, idx) {
+      var rowKey = 'screening_row_' + idx;
+      SCREENING_REVIEW_ROWS[rowKey] = row;
       var tr = document.createElement('tr');
       var pepCell = '<div style="display:flex;flex-wrap:wrap;gap:4px;">' +
         screeningBadge(row.pep_declared_status || 'not_applicable') +
         screeningBadge(row.pep_screening_status || 'not_applicable') +
         '</div>';
-      var actions = '<button class="btn btn-outline btn-sm" onclick="openScreeningReview(\'' + escapeHtml(row.application_ref) + '\',\'' + escapeHtml(row.subject_type) + '\',\'' + escapeHtml(row.subject_name).replace(/'/g, "\\'") + '\')">View</button>';
-      if (row.review_required) {
-        actions += ' <button class="btn btn-outline btn-sm" onclick="saveScreeningReview(\'' + escapeHtml(row.application_ref) + '\',\'' + escapeHtml(row.subject_type) + '\',\'' + escapeHtml(row.subject_name).replace(/'/g, "\\'") + '\',\'cleared\')">Clear</button>';
-        actions += ' <button class="btn btn-outline btn-sm" onclick="saveScreeningReview(\'' + escapeHtml(row.application_ref) + '\',\'' + escapeHtml(row.subject_type) + '\',\'' + escapeHtml(row.subject_name).replace(/'/g, "\\'") + '\',\'escalated\')">Escalate</button>';
+      var actions = '<button class="btn btn-outline btn-sm" onclick="openScreeningReviewByRow(\'' + rowKey + '\')">View</button>';
+      if (row.review_required && !row.review_resolved) {
+        var clearLabel = row.review_four_eyes_status === 'pending_second_review' ? 'Second Review' : 'Clear';
+        actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'cleared\')">' + clearLabel + '</button>';
+        actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'escalated\')">Escalate</button>';
+        actions += ' <button class="btn btn-outline btn-sm" onclick="openScreeningDispositionModalByRow(\'' + rowKey + '\',\'follow_up_required\')">Follow-Up</button>';
       }
 
       tr.innerHTML = '<td>' + escapeHtml(row.subject_name) + '</td>' +
@@ -8813,6 +8996,10 @@ function openAddUserModal() { document.getElementById('modal-add-user').classLis
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
   if (id === 'modal-decision-reason') setDecisionError('');
+  if (id === 'modal-screening-disposition') {
+    setScreeningDispositionError('');
+    pendingScreeningDisposition = null;
+  }
 }
 
 async function addUser() {
