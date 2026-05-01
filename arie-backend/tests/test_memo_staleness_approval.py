@@ -15,7 +15,7 @@ import sqlite3
 import sys
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -39,7 +39,7 @@ def _valid_screening():
         "company_registry": {"api_status": "live"},
         "ip_geolocation": {"api_status": "live"},
         "kyc": {"api_status": "live"},
-        "screened_at": datetime.now().isoformat(),
+        "screened_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -50,10 +50,10 @@ def _insert_app(db, risk_level="HIGH", status="compliance_review",
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-stale-{suffix}"
     app_ref = f"ARF-STALE-{suffix}"
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     updated = app_updated_at or now
     inputs_upd = inputs_updated_at or updated
-    sub_at = submitted_at or (datetime.now() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    sub_at = submitted_at or (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
 
     prescreening = json.dumps({"screening_report": _valid_screening()})
     db.execute(
@@ -73,7 +73,7 @@ def _insert_app(db, risk_level="HIGH", status="compliance_review",
 
 def _insert_memo(db, app_id, created_at=None):
     """Insert a valid compliance memo for an application."""
-    now = created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = created_at or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     memo_data = json.dumps({
         "ai_source": "deterministic",
         "metadata": {"ai_source": "deterministic"},
@@ -107,7 +107,7 @@ class TestMemoStalenessInputsUpdatedAt:
         """When inputs_updated_at is after memo creation, approval is blocked."""
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
         input_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -124,7 +124,7 @@ class TestMemoStalenessInputsUpdatedAt:
         """Screening rerun updates inputs_updated_at and blocks approval."""
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
         # Simulate screening rerun updating inputs_updated_at after memo
         rerun_time = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -146,7 +146,7 @@ class TestMemoStalenessInputsUpdatedAt:
         """
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         # Memo was created 1 hour ago
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
         # inputs_updated_at is 2 hours ago (before memo), so memo is fresh
@@ -171,7 +171,7 @@ class TestMemoStalenessInputsUpdatedAt:
         """When memo is regenerated after input change, approval passes."""
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         input_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
         # Memo generated AFTER input change
         memo_time = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -189,7 +189,7 @@ class TestMemoStalenessInputsUpdatedAt:
         back to updated_at to preserve safety."""
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
         row_updated_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -214,7 +214,7 @@ class TestMemoStalenessInputsUpdatedAt:
         old code that doesn't SELECT it), the gate falls back to updated_at."""
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
         row_updated_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -247,7 +247,7 @@ class TestDualApprovalNoFalseStaleness:
         """
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         input_time = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -291,7 +291,7 @@ class TestDualApprovalNoFalseStaleness:
         """Same officer cannot do both first and second approval."""
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         input_time = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -321,7 +321,7 @@ class TestDualApprovalNoFalseStaleness:
         """If substantive data changes after first-approval, second approval is blocked."""
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         old_time = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -361,7 +361,7 @@ class TestDualApprovalNoFalseStaleness:
         """LOW risk apps skip dual approval; first-approval write is irrelevant."""
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         input_time = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -384,7 +384,7 @@ class TestDualApprovalNoFalseStaleness:
         """VERY_HIGH risk follows same dual-approval flow without false staleness."""
         from security_hardening import ApprovalGateValidator
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         input_time = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
         memo_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
 

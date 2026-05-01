@@ -13,7 +13,7 @@ import sys
 import json
 import sqlite3
 import tempfile
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -187,10 +187,10 @@ def _insert_app_and_memo(db, app_id=None,
             "company_registry": {"api_status": "live"},
             "ip_geolocation": {"api_status": "live"},
             "kyc": {"api_status": "live"},
-            "screened_at": datetime.now().isoformat()
+            "screened_at": datetime.now(timezone.utc).isoformat()
         }
     prescreening = json.dumps({"screening_report": screening_report})
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     app_updated = app_updated_at or now
     memo_created = memo_created_at or now
     sub_at = submitted_at or now
@@ -224,7 +224,7 @@ class TestApprovalGateStaleness:
 
     def test_fresh_memo_passes(self, db):
         """When memo is newer than app update, approval passes staleness check."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         # Screening was done after submission, memo was done after app update
         screening = {
             "screening_mode": "live",
@@ -247,7 +247,7 @@ class TestApprovalGateStaleness:
 
     def test_stale_memo_blocked(self, db):
         """When app was updated after memo generation, approval is blocked."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         screening = {
             "screening_mode": "live",
             "sanctions": {"api_status": "live", "matched": False, "source": "sumsub"},
@@ -270,7 +270,7 @@ class TestApprovalGateStaleness:
 
     def test_screening_before_submission_blocked(self, db):
         """If screening timestamp is older than submission, approval is blocked."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         old_screening = {
             "screening_mode": "live",
             "sanctions": {"api_status": "live", "matched": False, "source": "sumsub"},
@@ -293,7 +293,7 @@ class TestApprovalGateStaleness:
 
     def test_blocked_memo_still_blocked(self, db):
         """Memo with blocked=True still blocks approval (existing behavior preserved)."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         app = _insert_app_and_memo(
             db,
             blocked=True,
@@ -354,7 +354,7 @@ class TestApprovalGateExistingChecks:
              risk_level, risk_score, prescreening_data, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (app_id, f"ARF-{app_id}", "Test Corp", "Mauritius", "Technology", "SME",
-              "in_review", "MEDIUM", 50, prescreening, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+              "in_review", "MEDIUM", 50, prescreening, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
         db.commit()
         app = dict(db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone())
         from security_hardening import ApprovalGateValidator
@@ -382,7 +382,7 @@ class TestApprovalGateExistingChecks:
              risk_level, risk_score, prescreening_data, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (app_id, f"ARF-{app_id}", "Test Corp", "Mauritius", "Technology", "SME",
-              "in_review", "MEDIUM", 50, prescreening, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+              "in_review", "MEDIUM", 50, prescreening, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
         db.commit()
         app = dict(db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone())
         from security_hardening import ApprovalGateValidator
@@ -392,7 +392,7 @@ class TestApprovalGateExistingChecks:
 
     def test_requires_memo_approved_review_status(self, db):
         """Approval must fail if memo review_status is not 'approved'."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         app = _insert_app_and_memo(
             db,
             review_status="draft",

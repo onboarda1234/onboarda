@@ -51,7 +51,7 @@ def _insert_app_and_memo(db, *,
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-fresh-{suffix}"
     ref = f"ARF-FRESH-{suffix}"
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     if screening_report is None:
         screening_report = _make_screening_report()
@@ -222,8 +222,8 @@ class TestMissingFreshnessFailsClosed:
         app = _insert_app_and_memo(
             db,
             screening_report=report,
-            submitted_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            memo_created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            submitted_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            memo_created_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         )
         can, err = ApprovalGateValidator.validate_approval(app, db)
         assert not can, "Expected missing screening timestamp to block approval"
@@ -238,8 +238,8 @@ class TestMissingFreshnessFailsClosed:
         app = _insert_app_and_memo(
             db,
             screening_report=report,
-            submitted_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            memo_created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            submitted_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            memo_created_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         )
         can, err = ApprovalGateValidator.validate_approval(app, db)
         assert not can, "Expected empty screening timestamp to block approval"

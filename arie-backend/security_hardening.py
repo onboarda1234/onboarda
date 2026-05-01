@@ -39,6 +39,27 @@ from cryptography.fernet import Fernet, InvalidToken
 logger = logging.getLogger(__name__)
 
 
+def _parse_approval_timestamp(value: Any) -> datetime:
+    """Parse approval-gate timestamps to aware UTC datetimes.
+
+    SQLite CURRENT_TIMESTAMP/datetime('now') and current screening persistence
+    store UTC timestamps without timezone offsets. Treat naive values as UTC so
+    comparisons against datetime.now(timezone.utc) are stable across host
+    timezones.
+    """
+    if isinstance(value, str):
+        parsed = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+    else:
+        parsed = value
+
+    if not isinstance(parsed, datetime):
+        raise TypeError(f"Expected datetime-compatible timestamp, got {type(value).__name__}")
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 # ============================================================================
 # 1. Approval Gate Validators (P0-01, P0-02)
 # ============================================================================
@@ -335,59 +356,13 @@ class ApprovalGateValidator:
                     "Live AI verification required for approval."
                 )
 
-            # 7. Staleness detection: application data modified after memo/screening
-            # If the application inputs were updated after the memo was generated,
-            # the memo may be based on outdated data and should be regenerated.
-            # We use inputs_updated_at (substantive input changes only) rather than
-            # updated_at (which includes operational workflow writes like first-
-            # approval recording) to avoid false stale-memo blocking.
-            app_updated_at = app.get('inputs_updated_at') or app.get('updated_at')
-            memo_created_at = memo_row.get('created_at')
-            if app_updated_at and memo_created_at:
-                try:
-                    # Parse timestamps — handle both ISO and SQLite datetime formats
-                    if isinstance(app_updated_at, str):
-                        app_ts = datetime.fromisoformat(app_updated_at.replace('Z', '+00:00'))
-                    else:
-                        app_ts = app_updated_at
-                    if isinstance(memo_created_at, str):
-                        memo_ts = datetime.fromisoformat(memo_created_at.replace('Z', '+00:00'))
-                    else:
-                        memo_ts = memo_created_at
-                    # Make both naive for comparison if they have mixed tz info
-                    if app_ts.tzinfo and not memo_ts.tzinfo:
-                        app_ts = app_ts.replace(tzinfo=None)
-                    elif memo_ts.tzinfo and not app_ts.tzinfo:
-                        memo_ts = memo_ts.replace(tzinfo=None)
-                    if app_ts > memo_ts:
-                        return (
-                            False,
-                            "Application data was modified after the compliance memo was generated. "
-                            "The memo may be based on outdated information. "
-                            "Please regenerate the compliance memo before approving."
-                        )
-                except (ValueError, TypeError) as ts_err:
-                    logger.warning(f"Could not compare timestamps for staleness check: {ts_err}")
-                    return (False, "Could not verify memo freshness due to timestamp format error. "
-                            "Please regenerate the compliance memo before approving.")
-
-            # 8. Screening freshness: check screening was run after application submission
+            # 7. Screening freshness: check screening was run after application submission
             submitted_at = app.get('submitted_at')
             screening_ts_str = screening_report.get('screened_at') or screening_report.get('timestamp')
             if submitted_at and screening_ts_str:
                 try:
-                    if isinstance(submitted_at, str):
-                        sub_ts = datetime.fromisoformat(submitted_at.replace('Z', '+00:00'))
-                    else:
-                        sub_ts = submitted_at
-                    if isinstance(screening_ts_str, str):
-                        scr_ts = datetime.fromisoformat(screening_ts_str.replace('Z', '+00:00'))
-                    else:
-                        scr_ts = screening_ts_str
-                    if sub_ts.tzinfo and not scr_ts.tzinfo:
-                        sub_ts = sub_ts.replace(tzinfo=None)
-                    elif scr_ts.tzinfo and not sub_ts.tzinfo:
-                        scr_ts = scr_ts.replace(tzinfo=None)
+                    sub_ts = _parse_approval_timestamp(submitted_at)
+                    scr_ts = _parse_approval_timestamp(screening_ts_str)
                     if sub_ts > scr_ts:
                         return (
                             False,
@@ -399,7 +374,7 @@ class ApprovalGateValidator:
                     return (False, "Could not verify screening freshness due to timestamp format error. "
                             "Re-submit the application to trigger fresh screening.")
 
-            # 9. Screening age validation: screening results must not exceed
+                    # 8. Screening age validation: screening results must not exceed
             #    the configurable validity period (default 90 days).
             #    Fail-closed: missing screening timestamp blocks approval.
             validity_days = get_screening_validity_days()
@@ -409,13 +384,8 @@ class ApprovalGateValidator:
             # 9a. Reject future-dated screened_at timestamps (fail closed)
             if screening_ts_str:
                 try:
-                    if isinstance(screening_ts_str, str):
-                        _scr_ts_future = datetime.fromisoformat(screening_ts_str.replace('Z', '+00:00'))
-                    else:
-                        _scr_ts_future = screening_ts_str
+                    _scr_ts_future = _parse_approval_timestamp(screening_ts_str)
                     _now_future = datetime.now(timezone.utc)
-                    if _scr_ts_future.tzinfo is None:
-                        _now_future = _now_future.replace(tzinfo=None)
                     if _scr_ts_future > _now_future + timedelta(seconds=_FUTURE_SKEW_SECONDS):
                         logger.warning(
                             f"Future-dated screened_at rejected for application {app_id}: "
@@ -433,13 +403,8 @@ class ApprovalGateValidator:
             if screening_valid_until_str:
                 # Prefer explicit valid_until if stored
                 try:
-                    if isinstance(screening_valid_until_str, str):
-                        valid_until = datetime.fromisoformat(screening_valid_until_str.replace('Z', '+00:00'))
-                    else:
-                        valid_until = screening_valid_until_str
+                    valid_until = _parse_approval_timestamp(screening_valid_until_str)
                     now = datetime.now(timezone.utc)
-                    if valid_until.tzinfo is None:
-                        now = now.replace(tzinfo=None)
 
                     # EX-10 closeout: reject future-dated valid_until beyond allowed skew + validity window
                     max_valid_until = now + timedelta(days=validity_days, seconds=_FUTURE_SKEW_SECONDS)
@@ -469,14 +434,9 @@ class ApprovalGateValidator:
             elif screening_ts_str:
                 # Fall back to computing expiry from screened_at + validity_days
                 try:
-                    if isinstance(screening_ts_str, str):
-                        scr_ts_check = datetime.fromisoformat(screening_ts_str.replace('Z', '+00:00'))
-                    else:
-                        scr_ts_check = screening_ts_str
+                    scr_ts_check = _parse_approval_timestamp(screening_ts_str)
                     computed_valid_until = scr_ts_check + timedelta(days=validity_days)
                     now = datetime.now(timezone.utc)
-                    if computed_valid_until.tzinfo is None:
-                        now = now.replace(tzinfo=None)
                     if now > computed_valid_until:
                         age_days = (now - computed_valid_until).days
                         return (
@@ -494,18 +454,37 @@ class ApprovalGateValidator:
                 return (False, "Screening timestamp is missing from the screening report. "
                         "A re-screen is required before approval can proceed.")
 
+            # 9. Staleness detection: application data modified after memo/screening
+            # If the application inputs were updated after the memo was generated,
+            # the memo may be based on outdated data and should be regenerated.
+            # We use inputs_updated_at (substantive input changes only) rather than
+            # updated_at (which includes operational workflow writes like first-
+            # approval recording) to avoid false stale-memo blocking.
+            app_updated_at = app.get('inputs_updated_at') or app.get('updated_at')
+            memo_created_at = memo_row.get('created_at')
+            if app_updated_at and memo_created_at:
+                try:
+                    app_ts = _parse_approval_timestamp(app_updated_at)
+                    memo_ts = _parse_approval_timestamp(memo_created_at)
+                    if app_ts > memo_ts:
+                        return (
+                            False,
+                            "Application data was modified after the compliance memo was generated. "
+                            "The memo may be based on outdated information. "
+                            "Please regenerate the compliance memo before approving."
+                        )
+                except (ValueError, TypeError) as ts_err:
+                    logger.warning(f"Could not compare timestamps for staleness check: {ts_err}")
+                    return (False, "Could not verify memo freshness due to timestamp format error. "
+                            "Please regenerate the compliance memo before approving.")
+
             # EX-10 closeout: Audit log on successful freshness validation
             _screening_age_days = None
             _valid_until_log = screening_valid_until_str or None
             try:
                 _now_log = datetime.now(timezone.utc)
                 if screening_ts_str:
-                    if isinstance(screening_ts_str, str):
-                        _scr_log = datetime.fromisoformat(screening_ts_str.replace('Z', '+00:00'))
-                    else:
-                        _scr_log = screening_ts_str
-                    if _scr_log.tzinfo is None:
-                        _now_log = _now_log.replace(tzinfo=None)
+                    _scr_log = _parse_approval_timestamp(screening_ts_str)
                     _screening_age_days = (_now_log - _scr_log).days
             except (ValueError, TypeError) as age_err:
                 logger.debug(f"Could not compute screening age for audit log: {age_err}")
