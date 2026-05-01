@@ -232,6 +232,10 @@ class DBConnection:
         """Commit transaction."""
         self.conn.commit()
 
+    def rollback(self) -> None:
+        """Rollback transaction."""
+        self.conn.rollback()
+
     def close(self) -> None:
         """Close connection and return to pool if PostgreSQL."""
         if self._cursor:

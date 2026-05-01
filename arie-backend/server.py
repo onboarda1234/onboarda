@@ -6771,6 +6771,9 @@ _SCREENING_DISPOSITION_CODES = {
     },
 }
 
+_SCREENING_SUBJECT_TYPES = {"entity", "director", "ubo", "applicant", "client"}
+_SCREENING_SUBJECT_ALIASES = {"company": "entity"}
+
 
 def _truthy_review_flag(value):
     if isinstance(value, bool):
@@ -6835,7 +6838,106 @@ def _screening_review_is_resolved(review):
     return _screening_review_payload_fields(review)["review_resolved"]
 
 
-def _screening_sensitive_flags(app, row, subject_type, disposition):
+def _screening_structured_adverse_media_hit(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_lc = str(key).lower()
+            if key_lc in ("has_adverse_media_hit", "adverse_media_hit") and item is True:
+                return True
+            if key_lc in ("adverse_media_hits", "adverse_media_results") and isinstance(item, list) and item:
+                return True
+            if key_lc in ("categories", "category") and isinstance(item, (list, tuple, str)):
+                text = " ".join(item) if isinstance(item, (list, tuple)) else item
+                if "adverse" in str(text).lower():
+                    return True
+            if _screening_structured_adverse_media_hit(item):
+                return True
+    elif isinstance(value, list):
+        return any(_screening_structured_adverse_media_hit(item) for item in value)
+    return False
+
+
+def _screening_review_subject_context(db, app, subject_type, subject_name):
+    prescreening = safe_json_loads(app.get("prescreening_data"))
+    if not isinstance(prescreening, dict):
+        prescreening = {}
+    report = prescreening.get("screening_report") or {}
+    if not isinstance(report, dict):
+        report = {}
+
+    if subject_type == "entity":
+        company_screening = report.get("company_screening") or {}
+        company_sanctions = company_screening.get("sanctions") or {}
+        company_state = derive_screening_state(company_sanctions)
+        company_subject = derive_subject_state(company_sanctions)
+        facts = _screening_hit_facts(company_sanctions)
+        company_ip = report.get("ip_geolocation") or {}
+        context = []
+        if company_ip.get("risk_level"):
+            context.append("IP risk: " + str(company_ip.get("risk_level")))
+        return {
+            "watchlist_status": _screening_legacy_status(
+                company_state,
+                company_subject["has_provider_sanctions_hit"],
+            ),
+            "pep_declared_status": "not_applicable",
+            "pep_screening_status": "not_applicable",
+            "screening_state": company_state,
+            "total_hits": facts["total_hits"] or (report or {}).get("total_hits", 0),
+            "entity_context": context,
+            "adverse_media_hit": _screening_structured_adverse_media_hit(report),
+        }
+
+    if subject_type in ("director", "ubo"):
+        table = "directors" if subject_type == "director" else "ubos"
+        pii_fields = PII_FIELDS_DIRECTORS if subject_type == "director" else PII_FIELDS_UBOS
+        people = [
+            decrypt_pii_fields(dict(p), pii_fields)
+            for p in db.execute(f"SELECT * FROM {table} WHERE application_id = ?", (app["id"],)).fetchall()
+        ]
+        person = next((p for p in people if (p.get("full_name") or "") == subject_name), {})
+        declared_pep = normalize_is_pep(person.get("is_pep", "No")) == "Yes"
+        combined = (report.get("director_screenings") or []) + (report.get("ubo_screenings") or [])
+        item = next((i for i in combined if (i.get("person_name") or i.get("name")) == subject_name), {})
+        screening = (item or {}).get("screening") or {}
+        facts = _screening_hit_facts(screening)
+        person_state = derive_screening_state(screening)
+        subject = derive_subject_state(screening, declared_pep=declared_pep)
+        has_pep_hit = subject["has_provider_pep_hit"] or bool((item or {}).get("undeclared_pep"))
+        context = []
+        if declared_pep:
+            context.append("Declared PEP")
+        if (item or {}).get("undeclared_pep"):
+            context.append("Undeclared PEP")
+        if item.get("adverse_media"):
+            context.append("Adverse media")
+        return {
+            "watchlist_status": _screening_legacy_status(
+                person_state,
+                subject["has_provider_sanctions_hit"],
+            ),
+            "pep_declared_status": "declared" if declared_pep else "not_declared",
+            "pep_screening_status": _screening_legacy_status(person_state, has_pep_hit),
+            "screening_state": person_state,
+            "total_hits": facts["total_hits"],
+            "entity_context": context,
+            "adverse_media_hit": _screening_structured_adverse_media_hit(item) or _screening_structured_adverse_media_hit(screening),
+        }
+
+    return {
+        "watchlist_status": None,
+        "pep_declared_status": None,
+        "pep_screening_status": None,
+        "screening_state": None,
+        "total_hits": 0,
+        "entity_context": [],
+        "adverse_media_hit": False,
+    }
+
+
+def _screening_sensitive_flags(app, row, subject_type, disposition, context_error=False):
+    # Four-eyes is intentionally scoped to clearing a sensitive hit. Escalate
+    # and follow-up dispositions preserve the concern rather than clearing it.
     if disposition != "cleared":
         return []
 
@@ -6847,6 +6949,11 @@ def _screening_sensitive_flags(app, row, subject_type, disposition):
 
     if subject_type in ("director", "ubo"):
         add("director_or_ubo")
+    elif subject_type not in ("entity", "director", "ubo"):
+        add("legacy_subject_type")
+
+    if context_error:
+        add("sensitivity_context_unavailable")
 
     if row:
         if row.get("watchlist_status") in ("match", "hit", "failed", "possible_match", "review"):
@@ -6863,6 +6970,8 @@ def _screening_sensitive_flags(app, row, subject_type, disposition):
         except (TypeError, ValueError):
             pass
         context_text = " ".join(str(v) for v in (row.get("entity_context") or [])).lower()
+        if row.get("adverse_media_hit"):
+            add("adverse_media")
         if "adverse" in context_text:
             add("adverse_media")
         if "ip risk: high" in context_text or "ip risk: very_high" in context_text:
@@ -7266,9 +7375,10 @@ class ScreeningReviewHandler(BaseHandler):
 
         data = self.get_json()
         app_id = data.get("application_id")
-        subject_type = (data.get("subject_type") or "").strip().lower()
-        if subject_type == "company":
-            subject_type = "entity"
+        raw_subject_type = (data.get("subject_type") or "").strip().lower()
+        subject_type = _SCREENING_SUBJECT_ALIASES.get(raw_subject_type, raw_subject_type)
+        if raw_subject_type and raw_subject_type != subject_type:
+            logger.debug("Normalized screening review subject_type %s -> %s", raw_subject_type, subject_type)
         subject_name = (data.get("subject_name") or "").strip()
         disposition = (data.get("disposition") or "").strip().lower()
         notes = (data.get("notes") or "").strip()
@@ -7297,7 +7407,7 @@ class ScreeningReviewHandler(BaseHandler):
                 attempt_summary)
             return self.error("application_id, subject_type, subject_name, and disposition are required")
 
-        if subject_type not in ("entity", "director", "ubo"):
+        if subject_type not in _SCREENING_SUBJECT_TYPES:
             self.log_governance_attempt(
                 user, "screening.review_disposition", app_id, "rejected", 400,
                 "Unsupported screening subject type", attempt_summary)
@@ -7323,7 +7433,10 @@ class ScreeningReviewHandler(BaseHandler):
             return self.error("Screening review rationale must be at least 12 characters", 400)
 
         db = get_db()
-        app = db.execute("SELECT id, ref, company_name, country FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+        app = db.execute(
+            "SELECT id, ref, company_name, country, prescreening_data FROM applications WHERE id=? OR ref=?",
+            (app_id, app_id),
+        ).fetchone()
         if not app:
             self.log_governance_attempt(
                 user, "screening.review_disposition", app_id, "rejected", 404,
@@ -7341,20 +7454,20 @@ class ScreeningReviewHandler(BaseHandler):
         ).fetchone()
 
         row_context = None
+        context_error = False
         try:
-            queue_payload = _build_screening_queue_payload(db, {"type": "officer", "sub": user.get("sub", "")})
-            for row in queue_payload.get("rows", []):
-                if (
-                    (row.get("application_id") == app["id"] or row.get("application_ref") == app["ref"])
-                    and row.get("subject_type") == subject_type
-                    and row.get("subject_name") == subject_name
-                ):
-                    row_context = row
-                    break
+            row_context = _screening_review_subject_context(db, app, subject_type, subject_name)
         except Exception as e:
+            context_error = True
             logger.warning("Could not derive screening review sensitivity context for %s/%s: %s", app["ref"], subject_name, e)
 
-        sensitivity_flags = _screening_sensitive_flags(app, row_context, subject_type, disposition)
+        sensitivity_flags = _screening_sensitive_flags(
+            app,
+            row_context,
+            subject_type,
+            disposition,
+            context_error=context_error,
+        )
         requires_four_eyes = bool(sensitivity_flags)
         existing_requires_four_eyes = _truthy_review_flag((existing_review or {}).get("requires_four_eyes"))
         existing_second_reviewer = (existing_review or {}).get("second_reviewer_id")
