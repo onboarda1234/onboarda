@@ -8932,11 +8932,11 @@ class ComplianceMemoHandler(BaseHandler):
         memo_json = json.dumps(memo)
         try:
             db.execute(
-                "INSERT INTO compliance_memos (application_id, version, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version, raw_output_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (real_id, next_version, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
+                "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version, raw_output_hash, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
                  validation_result["quality_score"], validation_result["validation_status"],
                  supervisor_result["verdict"], supervisor_result["recommendation"], rule_violations_json,
-                 memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash)
+                 memo.get("metadata", {}).get("memo_version", "v" + str(next_version)), memo_input_hash, next_version)
             )
             db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                        (user.get("sub",""), user.get("name",""), user.get("role",""), "Generate Memo", app["ref"],

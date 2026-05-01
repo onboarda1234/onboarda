@@ -392,7 +392,8 @@ def test_upload_accept_attributes_match_server_allowlist():
 
     assert FileUploadValidator.ALLOWED_EXTENSIONS == {".pdf", ".docx", ".xlsx", ".pptx", ".png", ".jpg", ".jpeg"}
     allowed = set(FileUploadValidator.ALLOWED_EXTENSIONS)
-    for path in (Path("arie-portal.html"), Path("arie-backoffice.html")):
+    repo_root = Path(__file__).resolve().parents[2]
+    for path in (repo_root / "arie-portal.html", repo_root / "arie-backoffice.html"):
         html = path.read_text()
         for accept in __import__("re").findall(r'accept="([^"]+)"', html):
             for token in [part.strip() for part in accept.split(",") if part.strip().startswith(".")]:

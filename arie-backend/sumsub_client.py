@@ -36,7 +36,7 @@ import requests
 from requests.exceptions import RequestException, Timeout
 
 from environment import is_production, get_sumsub_individual_level_name
-from provider_errors import public_provider_error, sanitize_provider_error
+from provider_errors import sanitize_provider_error
 
 
 logger = logging.getLogger("sumsub_client")
@@ -1189,7 +1189,7 @@ class SumsubClient:
             "review_answer": "",
             "source": "sumsub",
             "api_status": "error",
-            "error": public_provider_error(operation),
+            "error": f"{operation} failed: {safe_reason}",
             "note": safe_reason,
             "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         }

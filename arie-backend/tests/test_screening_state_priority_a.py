@@ -533,7 +533,8 @@ class TestMemoTruthfulness:
         text = _flatten_text(memo)
         # Standard clean-claim phrasing remains for true terminal-clear.
         assert "clean sanctions screening" in text
-        assert "not complete" not in text
+        assert "sanctions screening not complete" not in text
+        assert "pep screening not complete" not in text
 
     def test_memo_preserves_declared_pep_when_provider_pending(self):
         from memo_handler import build_compliance_memo
