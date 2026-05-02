@@ -475,6 +475,32 @@ def hash_reset_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _resolve_upload_document_path(stored_path: str):
+    """Resolve a stored document path while enforcing UPLOAD_DIR containment."""
+    if not stored_path:
+        return None
+
+    raw_path = str(stored_path).strip()
+    if not raw_path:
+        return None
+
+    upload_root = Path(UPLOAD_DIR).resolve()
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = upload_root / candidate
+
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return None
+
+    if resolved != upload_root and upload_root not in resolved.parents:
+        logger.warning(f"Rejected unsafe document path outside upload directory: {stored_path}")
+        return None
+
+    return str(resolved)
+
+
 def _revoke_all_client_sessions(db, user_id):
     """
     Best-effort revocation helper: invalidate any JWT that was issued for *user_id*.
@@ -4374,71 +4400,64 @@ class DocumentDownloadHandler(BaseHandler):
         inline_view = self.get_argument("view", "") == "inline"
 
         db = get_db()
-        doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
-        if not doc:
-            db.close()
-            return self.error("Document not found", 404)
+        try:
+            doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+            if not doc:
+                return self.error("Document not found", 404)
 
-        # Check access — officer can view any, client can only view their own
-        app = db.execute("SELECT id, client_id, ref FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
-        if not app:
-            db.close()
-            return self.error("Application not found", 404)
-        if user.get("type") == "client" and app["client_id"] != user["sub"]:
-            db.close()
-            return self.error("Access denied", 403)
-        db.close()
+            # Check access - officer can view any, client can only view their own.
+            app = db.execute("SELECT id, client_id, ref FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if user.get("type") == "client" and app["client_id"] != user["sub"]:
+                return self.error("Access denied", 403)
 
-        mime_type = doc.get("mime_type") or "application/octet-stream"
-        is_previewable = mime_type in INLINE_PREVIEWABLE_TYPES
-        disposition = "inline" if (inline_view and is_previewable) else "attachment"
+            mime_type = doc.get("mime_type") or "application/octet-stream"
+            is_previewable = mime_type in INLINE_PREVIEWABLE_TYPES
+            disposition = "inline" if (inline_view and is_previewable) else "attachment"
 
-        s3_key = doc.get("s3_key") if doc else None
+            s3_key = doc.get("s3_key") if doc else None
 
-        # Prefer S3 presigned URL if document is stored in S3
-        if s3_key and HAS_S3:
-            try:
-                s3 = get_s3_client()
-                success, url_or_error = s3.get_presigned_url_with_ownership(
-                    key=s3_key,
-                    requesting_user_id=user.get("sub", ""),
-                    requesting_user_role=user.get("role") or user.get("type", ""),
-                    db_connection=db,
-                    expiry=900,
-                    response_filename=doc["doc_name"]
-                )
-                if success:
-                    db.close()
-                    action = "View" if inline_view else "Download"
-                    self.log_audit(user, action, app["ref"], f"Document {action.lower()}ed via S3: {doc['doc_name']}")
-                    return self.success({
-                        "download_url": url_or_error,
-                        "source": "s3",
-                        "expires_in": 900,
-                        "disposition": disposition,
-                        "previewable": is_previewable,
-                    })
-                else:
+            # Prefer S3 presigned URL if document is stored in S3.
+            if s3_key and HAS_S3:
+                try:
+                    s3 = get_s3_client()
+                    success, url_or_error = s3.get_presigned_url_with_ownership(
+                        key=s3_key,
+                        requesting_user_id=user.get("sub", ""),
+                        requesting_user_role=user.get("role") or user.get("type", ""),
+                        db_connection=db,
+                        expiry=900,
+                        response_filename=doc["doc_name"]
+                    )
+                    if success:
+                        action = "View" if inline_view else "Download"
+                        self.log_audit(user, action, app["ref"], f"Document {action.lower()}ed via S3: {doc['doc_name']}")
+                        return self.success({
+                            "download_url": url_or_error,
+                            "source": "s3",
+                            "expires_in": 900,
+                            "disposition": disposition,
+                            "previewable": is_previewable,
+                        })
                     logger.warning(f"S3 presigned URL failed for {doc_id}: {url_or_error}. Falling back to local.")
-            except Exception as e:
-                logger.warning(f"S3 download failed for {doc_id}: {e}. Falling back to local.")
+                except Exception as e:
+                    logger.warning(f"S3 download failed for {doc_id}: {e}. Falling back to local.")
 
-        # Fall back to local file
-        db.close()
-        file_path = doc["file_path"]
-        if file_path and not os.path.isabs(file_path):
-            file_path = os.path.join(UPLOAD_DIR, os.path.basename(file_path))
+            # Fall back to local file with strict upload directory containment.
+            file_path = _resolve_upload_document_path(doc.get("file_path"))
+            if not file_path or not os.path.exists(file_path):
+                return self.error("Document file not found on server", 404)
 
-        if not file_path or not os.path.exists(file_path):
-            return self.error("Document file not found on server", 404)
-
-        self.set_header("Content-Type", mime_type)
-        self.set_header("Content-Disposition", f'{disposition}; filename="{doc["doc_name"]}"')
-        with open(file_path, "rb") as f:
-            self.write(f.read())
-        action = "View" if inline_view else "Download"
-        self.log_audit(user, action, app["ref"], f"Document {action.lower()}ed locally: {doc['doc_name']}")
-        self.finish()
+            self.set_header("Content-Type", mime_type)
+            self.set_header("Content-Disposition", f'{disposition}; filename="{doc["doc_name"]}"')
+            with open(file_path, "rb") as f:
+                self.write(f.read())
+            action = "View" if inline_view else "Download"
+            self.log_audit(user, action, app["ref"], f"Document {action.lower()}ed locally: {doc['doc_name']}")
+            self.finish()
+        finally:
+            db.close()
 
 
 # ══════════════════════════════════════════════════════════
