@@ -142,7 +142,7 @@ pip install -r requirements.txt
 python server.py
 ```
 
-The backend runs on port **8080** by default for local development. On Render, `PORT=10000` is set via `render.yaml`. Open `arie-portal.html` and `arie-backoffice.html` directly in a browser (or serve via any static file server) — no build step required.
+The backend runs on port **10000** by default for local development and Render deploys. Open `arie-portal.html` and `arie-backoffice.html` directly in a browser (or serve via any static file server) — no build step required.
 
 ### Docker
 

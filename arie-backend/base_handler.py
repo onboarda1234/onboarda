@@ -178,11 +178,11 @@ class BaseHandler(tornado.web.RequestHandler):
         return True
 
     def set_default_headers(self):
-        # CORS — restricted in staging/production, permissive in dev/demo
-        if IS_DEVELOPMENT or IS_DEMO:
-            self.set_header("Access-Control-Allow-Origin", "*")
-        elif ALLOWED_ORIGIN and ALLOWED_ORIGIN != "http://localhost:8080":
+        # CORS — explicit origin takes precedence in all environments.
+        if ALLOWED_ORIGIN and ALLOWED_ORIGIN != "http://localhost:10000":
             self.set_header("Access-Control-Allow-Origin", ALLOWED_ORIGIN)
+        elif IS_DEVELOPMENT or IS_DEMO:
+            self.set_header("Access-Control-Allow-Origin", "*")
         else:
             # In staging/production with no explicit origin, same-origin only (most secure)
             logger.warning("ALLOWED_ORIGIN not configured for %s — defaulting to same-origin only", ENVIRONMENT)

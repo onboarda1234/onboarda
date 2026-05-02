@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════
-# ARIE Finance — Startup Script
+# Onboarda / RegMind — Startup Script
 # ═══════════════════════════════════════════════════════════
 # Usage:  ./start.sh
 # Config: Set environment variables below or in .env file
@@ -9,7 +9,7 @@
 set -e
 
 # ── Configuration ───────────────────────────────────────
-export PORT="${PORT:-8080}"
+export PORT="${PORT:-10000}"
 export DB_PATH="${DB_PATH:-$(dirname "$0")/arie.db}"
 export DEBUG="${DEBUG:-0}"
 export ENVIRONMENT="${ENVIRONMENT:-development}"
@@ -69,7 +69,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
-echo "║  ARIE Finance — Starting Platform               ║"
+echo "║  Onboarda / RegMind — Starting Platform         ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
@@ -101,14 +101,14 @@ echo "  ✅ All dependencies available"
 
 # ── Start the server ────────────────────────────────────
 echo ""
-echo "→ Starting ARIE Finance API on port $PORT..."
+echo "→ Starting Onboarda / RegMind API on port $PORT..."
 echo "  📋 Client Portal:   http://localhost:$PORT/portal"
 echo "  🏢 Back Office:     http://localhost:$PORT/backoffice"
 echo "  📡 API:             http://localhost:$PORT/api/health"
 echo "  🔍 Screening:       http://localhost:$PORT/api/screening/status"
 echo ""
 echo "  Default admin login:"
-echo "    Email:    asudally@ariefinance.mu"
+echo "    Email:    asudally@onboarda.com"
 echo "    Password: (generated on first run — check server output above)"
 echo ""
 echo "  API Keys:"

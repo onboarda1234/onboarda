@@ -7,7 +7,7 @@ Provides: authentication, application CRUD, document uploads,
 risk scoring, AI verification, audit trail, and user management.
 
 Run:  python server.py
-Env:  PORT=8080 SECRET_KEY=your-secret DB_PATH=./arie.db
+Env:  PORT=10000 SECRET_KEY=your-secret DB_PATH=./arie.db
 """
 
 import os, sys, json, uuid, time, hashlib, re, base64, logging, secrets, smtplib
@@ -1330,7 +1330,7 @@ def validate_environment():
     if ENVIRONMENT == "production":
         if not SECRET_KEY or SECRET_KEY == "arie-dev-secret-change-in-production":
             errors.append("SECRET_KEY must be set to a secure random value in production")
-        if not _CFG_ALLOWED_ORIGIN or _CFG_ALLOWED_ORIGIN == "http://localhost:8080":
+        if not _CFG_ALLOWED_ORIGIN or _CFG_ALLOWED_ORIGIN == "http://localhost:10000":
             warnings.append("ALLOWED_ORIGIN not set — CORS defaults to same-origin only")
         if not DATABASE_URL:
             warnings.append("DATABASE_URL not set — using SQLite (not recommended for production)")
@@ -13216,7 +13216,7 @@ if __name__ == "__main__":
 
     print(f"""
 ╔══════════════════════════════════════════════════╗
-║  ARIE Finance API Server                         ║
+║  Onboarda / RegMind API Server                   ║
 ║  Running on http://0.0.0.0:{PORT}                ║
 ║  Environment: {ENVIRONMENT:<33s}║
 ║                                                  ║

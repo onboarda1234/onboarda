@@ -135,8 +135,8 @@ REDIS_URL = os.getenv("REDIS_URL")
 # Server
 # ══════════════════════════════════════════════════════════════
 
-PORT = int(os.getenv("PORT", "8080"))
-ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "http://localhost:8080")
+PORT = int(os.getenv("PORT", "10000"))
+ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "http://localhost:10000")
 DEBUG = os.getenv("DEBUG", "0") == "1"
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(os.path.dirname(__file__), "uploads", "documents"))
 LOG_FORMAT = os.getenv("LOG_FORMAT", "text")

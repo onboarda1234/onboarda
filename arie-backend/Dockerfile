@@ -1,10 +1,10 @@
 # ══════════════════════════════════════════════════════════
-# ARIE Finance — Production Dockerfile
+# Onboarda / RegMind — Production Dockerfile
 # Sprint 3: Containerized deployment with WeasyPrint support
 # ══════════════════════════════════════════════════════════
 #
 # Build:   docker build -t arie-backend .
-# Run:     docker run -p 8080:8080 --env-file .env arie-backend
+# Run:     docker run -p 10000:10000 --env-file .env arie-backend
 # Compose: docker compose up -d
 #
 FROM python:3.11-slim AS base
@@ -41,14 +41,14 @@ USER arie
 # ── Runtime Configuration ──
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PORT=8080 \
+    PORT=10000 \
     DB_PATH=/app/data/arie_finance.db
 
-EXPOSE 8080
+EXPOSE 10000
 
 # Health check — hit /api/readiness every 30s (deep readiness probe)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import requests; r=requests.get('http://localhost:8080/api/readiness', timeout=3); exit(0 if r.status_code==200 else 1)"
+    CMD python -c "import requests; r=requests.get('http://localhost:10000/api/readiness', timeout=3); exit(0 if r.status_code==200 else 1)"
 
 # ── Entrypoint ──
 CMD ["python", "server.py"]

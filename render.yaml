@@ -127,9 +127,9 @@ services:
       - key: UPLOAD_DIR
         value: /data/uploads
       - key: ALLOWED_ORIGIN
-        value: "*"
+        value: "https://demo.regmind.co"
       - key: CORS_ORIGIN
-        value: "*"
+        value: "https://demo.regmind.co"
       # ── Demo feature flags (all demo features ON) ──
       - key: ENABLE_DEMO_MODE
         value: "true"
@@ -172,7 +172,7 @@ services:
       # Admin password for seeding officer accounts on first init (set in Render dashboard)
       - key: ADMIN_INITIAL_PASSWORD
         sync: false
-      # Demo credentials (set in Render dashboard — read by environment.py, served to frontend)
+      # Demo credentials (set in Render dashboard — backend-only authentication checks)
       - key: DEMO_PORTAL_PASSWORD
         sync: false
       - key: DEMO_BACKOFFICE_PASSWORD
