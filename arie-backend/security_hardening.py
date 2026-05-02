@@ -89,7 +89,7 @@ class ApprovalGateValidator:
             2. Screening must exist in prescreening_data and mode must be 'live'
             3. Compliance memo must exist in compliance_memos table
             4. All documents must not be 'flagged'
-            5. Required screening checks (Sumsub) must not use simulated api_status;
+            5. Required screening checks (Sumsub/CA) must not use simulated api_status;
                enrichment checks (company_registry, ip_geolocation) warn only
             6. Compliance memo ai_source must not be 'mock'
         """
@@ -277,7 +277,7 @@ class ApprovalGateValidator:
                     )
 
             # 5. Check screening report for any simulated or degraded provider statuses
-            #    Required checks (Sumsub AML/KYC/sanctions) block approval if simulated.
+            #    Required checks (Sumsub AML/KYC/sanctions or CA screening) block approval if simulated.
             #    Enrichment checks (company_registry, ip_geolocation) warn but do not block.
             #    company_watchlist with api_status="not_configured" warns but does not block
             #    (no Sumsub company/KYB level provisioned).
@@ -570,10 +570,10 @@ def _collect_screening_provider_evidence(screening_report: Dict) -> list:
     """
     Collects screening provider evidence with required/enrichment classification.
 
-    Required (Sumsub-sourced, compliance-critical):
-      - company_watchlist (Sumsub company sanctions)
-      - director_screening_N (Sumsub person AML/PEP)
-      - ubo_screening_N (Sumsub person AML/PEP)
+    Required (compliance-critical):
+      - company_watchlist (Sumsub company sanctions) or company_screening (CA)
+      - director_screening_N (Sumsub or CA person AML/PEP)
+      - ubo_screening_N (Sumsub or CA person AML/PEP)
       - kyc_applicant_N (Sumsub identity verification)
 
     Enrichment (optional, non-blocking):
@@ -598,8 +598,17 @@ def _collect_screening_provider_evidence(screening_report: Dict) -> list:
         })
 
     company_screening = screening_report.get("company_screening") or {}
-    add("company_registry", company_screening)
-    add("company_watchlist", company_screening.get("sanctions"))
+    company_provider = (
+        company_screening.get("provider")
+        or company_screening.get("source")
+        or screening_report.get("provider")
+        or ""
+    ).lower()
+    if company_provider == "complyadvantage":
+        add("company_screening", company_screening)
+    else:
+        add("company_registry", company_screening)
+        add("company_watchlist", company_screening.get("sanctions"))
 
     for idx, person in enumerate(screening_report.get("director_screenings") or []):
         add(f"director_screening_{idx}", (person or {}).get("screening"))
@@ -618,7 +627,8 @@ def determine_screening_mode(screening_report: Dict) -> str:
     """
     Analyzes a screening report to determine if it used live or simulated sources.
 
-    Only required screening sources (Sumsub AML/KYC/sanctions) affect the mode.
+    Only required screening sources (Sumsub AML/KYC/sanctions or CA screening)
+    affect the mode.
     Enrichment sources (company_registry, ip_geolocation) are excluded — their
     simulated status does not make the overall screening mode 'simulated'.
 
@@ -651,7 +661,7 @@ def determine_screening_mode(screening_report: Dict) -> str:
                 if api_status in ("error", "blocked", "pending"):
                     logger.warning(f"Screening contains non-live provider state: {item}")
                     return 'unknown'
-                if api_status == "live" or source_name in ("sumsub", "opencorporates", "ipapi", "local"):
+                if api_status == "live" or source_name in ("sumsub", "complyadvantage", "opencorporates", "ipapi", "local"):
                     saw_live = True
             return 'live' if saw_live else 'unknown'
 

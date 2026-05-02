@@ -263,7 +263,12 @@ def derive_person_screening_from_match(
         "has_sanctions_hit": rollups["has_sanctions_hit"],
         "has_adverse_media_hit": True if rollups["has_adverse_media_hit"] else None,
         "adverse_media_coverage": "full" if rollups["has_adverse_media_hit"] else "none",
-        "screening": {"provider": "complyadvantage", "profile_identifier": match.profile_identifier},
+        "screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "profile_identifier": match.profile_identifier,
+        },
         "screening_state": "completed_match",
         "requires_review": any((rollups["has_pep_hit"], rollups["has_sanctions_hit"], rollups["has_adverse_media_hit"])),
         "is_rca": rollups["is_rca"],
@@ -276,7 +281,12 @@ def derive_company_screening_from_match(match: MergedMatch) -> dict:
     return {
         "company_screening_coverage": "full",
         "has_company_screening_hit": any((rollups["has_sanctions_hit"], rollups["has_adverse_media_hit"])),
-        "company_screening": {"provider": "complyadvantage", "profile_identifier": match.profile_identifier},
+        "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "profile_identifier": match.profile_identifier,
+        },
     }
 
 
@@ -307,6 +317,8 @@ def _build_report(matches, context, provider_specific, provenance):
     if context.screening_subject_kind == "entity":
         if matches:
             company_screening = derive_company_screening_from_match(matches[0])
+        else:
+            company_screening = _empty_company_screening()
     else:
         person_type = "ubo" if context.screening_subject_kind == "ubo" else "director"
         if matches:
@@ -349,11 +361,27 @@ def _empty_person_screening(context, person_type):
         "has_sanctions_hit": False,
         "has_adverse_media_hit": None,
         "adverse_media_coverage": "none",
-        "screening": {"provider": "complyadvantage"},
+        "screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+        },
         "screening_state": "completed_clear",
         "requires_review": bool(context.declared_pep),
         "is_rca": False,
         "pep_classes": None,
+    }
+
+
+def _empty_company_screening():
+    return {
+        "company_screening_coverage": "full",
+        "has_company_screening_hit": False,
+        "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+        },
     }
 
 

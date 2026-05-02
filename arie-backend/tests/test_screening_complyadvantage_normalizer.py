@@ -152,6 +152,8 @@ def test_normalize_clean_baseline():
     report = _single("clean_baseline.json")
     assert report["total_hits"] == 0
     assert report["any_pep_hits"] is False
+    assert report["director_screenings"][0]["screening"]["source"] == "complyadvantage"
+    assert report["director_screenings"][0]["screening"]["api_status"] == "live"
 
 
 def test_normalize_pure_sanctions_via_fixture():
@@ -272,6 +274,39 @@ def test_normalize_company_via_fixture():
     report = _single("company_canonical.json")
     assert report["company_screening_coverage"] == "full"
     assert report["total_persons_screened"] == 0
+    assert report["company_screening"]["source"] == "complyadvantage"
+    assert report["company_screening"]["api_status"] == "live"
+
+
+def test_normalize_company_clean_baseline_preserves_live_provider_evidence():
+    report = normalize_single_pass(
+        CAWorkflowResponse(
+            workflow_instance_identifier="wf-company-clean",
+            workflow_type="screening",
+            status="COMPLETED",
+            step_details={"case-creation": {"status": "COMPLETED"}},
+        ),
+        [],
+        {},
+        CACustomerInput(company={"name": "Clean Co"}),
+        CACustomerResponse(identifier="cust-company-clean"),
+        ScreeningApplicationContext(
+            application_id="app-company-clean",
+            client_id="client-test",
+            screening_subject_kind="entity",
+            screening_subject_name="Clean Co",
+        ),
+        ResnapshotContext(
+            webhook_type="CASE_CREATED",
+            source_case_identifier="case-company-clean",
+            received_at="2026-01-01T00:00:00Z",
+        ),
+    )
+
+    assert report["company_screening_coverage"] == "full"
+    assert report["has_company_screening_hit"] is False
+    assert report["company_screening"]["source"] == "complyadvantage"
+    assert report["company_screening"]["api_status"] == "live"
 
 
 def test_two_pass_strict_misses_relaxed_catches_canonical():
