@@ -1489,8 +1489,53 @@ from screening import (
     sumsub_generate_access_token, sumsub_get_applicant_status,
     sumsub_add_document, sumsub_verify_webhook,
     _simulate_sumsub_applicant, _simulate_sumsub_token, _simulate_sumsub_status,
-    run_full_screening, ScreeningProviderError,
+    run_full_screening as _legacy_run_full_screening, ScreeningProviderError,
 )
+from screening_routing import run_screening_for_active_provider
+
+
+def run_full_screening(application_data, directors, ubos, client_ip=None, db=None):
+    return run_screening_for_active_provider(
+        application_data,
+        directors,
+        ubos,
+        client_ip=client_ip,
+        db=db,
+        legacy_runner=_legacy_run_full_screening,
+    )
+
+
+def _persist_normalized_screening_report_if_enabled(db, client_id, application_id, report):
+    from screening_config import is_abstraction_enabled
+
+    if not is_abstraction_enabled():
+        return
+
+    from screening_storage import (
+        ensure_normalized_table,
+        persist_normalized_report,
+        compute_report_hash,
+    )
+
+    ensure_normalized_table(db)
+    if isinstance(report, dict) and report.get("normalized_version"):
+        _src_hash = report.get("source_screening_report_hash") or compute_report_hash(report)
+        persist_normalized_report(
+            db,
+            client_id,
+            application_id,
+            report,
+            _src_hash,
+            provider=report.get("provider", "sumsub"),
+            normalized_version=str(report.get("normalized_version") or "1.0"),
+        )
+        return
+
+    from screening_normalizer import normalize_screening_report
+
+    _src_hash = compute_report_hash(report)
+    _norm = normalize_screening_report(report)
+    persist_normalized_report(db, client_id, application_id, _norm, _src_hash)
 
 # Priority A — Canonical screening state model (truthful, fail-closed).
 # See screening_state.py for state semantics. Used by the screening queue
@@ -2881,7 +2926,7 @@ class SubmitApplicationHandler(BaseHandler):
         client_ip = self.get_client_ip()
         try:
             screening_report = run_full_screening(
-                scoring_input, directors, ubos, client_ip=client_ip
+                scoring_input, directors, ubos, client_ip=client_ip, db=db
             )
         except ScreeningProviderError as spe:
             logger.error(
@@ -2974,20 +3019,9 @@ class SubmitApplicationHandler(BaseHandler):
 
             # SCR-010: Dual-write normalized screening report (non-authoritative)
             try:
-                from screening_config import is_abstraction_enabled
-                if is_abstraction_enabled():
-                    from screening_normalizer import normalize_screening_report
-                    from screening_storage import (
-                        ensure_normalized_table, persist_normalized_report,
-                        persist_normalization_failure, compute_report_hash,
-                    )
-                    ensure_normalized_table(db)
-                    _src_hash = compute_report_hash(screening_report)
-                    _norm = normalize_screening_report(screening_report)
-                    persist_normalized_report(
-                        db, app.get("client_id", ""), real_id,
-                        _norm, _src_hash,
-                    )
+                _persist_normalized_screening_report_if_enabled(
+                    db, app.get("client_id", ""), real_id, screening_report
+                )
             except Exception as _norm_exc:
                 logger.warning(
                     "Normalized screening write failed: app_id=%s client_id=%s error_type=%s",
@@ -7857,7 +7891,9 @@ class ScreeningHandler(BaseHandler):
             "entity_type": app["entity_type"],
         }
 
-        report = run_full_screening(app_data, directors, ubos, client_ip=self.get_client_ip())
+        report = run_full_screening(
+            app_data, directors, ubos, client_ip=self.get_client_ip(), db=db
+        )
         screening_mode = determine_screening_mode(report)
         report["screening_mode"] = screening_mode
         store_screening_mode(db, real_id, screening_mode)
@@ -7881,20 +7917,9 @@ class ScreeningHandler(BaseHandler):
 
         # SCR-010: Dual-write normalized screening report (non-authoritative)
         try:
-            from screening_config import is_abstraction_enabled
-            if is_abstraction_enabled():
-                from screening_normalizer import normalize_screening_report
-                from screening_storage import (
-                    ensure_normalized_table, persist_normalized_report,
-                    persist_normalization_failure, compute_report_hash,
-                )
-                ensure_normalized_table(db)
-                _src_hash = compute_report_hash(report)
-                _norm = normalize_screening_report(report)
-                persist_normalized_report(
-                    db, app.get("client_id", ""), real_id,
-                    _norm, _src_hash,
-                )
+            _persist_normalized_screening_report_if_enabled(
+                db, app.get("client_id", ""), real_id, report
+            )
         except Exception as _norm_exc:
             logger.warning(
                 "Normalized screening write failed: app_id=%s client_id=%s error_type=%s",

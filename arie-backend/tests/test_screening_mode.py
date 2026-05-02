@@ -40,6 +40,53 @@ def test_determine_screening_mode_simulated_when_nested_provider_is_simulated(te
     assert determine_screening_mode(report) == "simulated"
 
 
+def test_determine_screening_mode_live_for_complyadvantage_report():
+    from security_hardening import determine_screening_mode
+
+    report = {
+        "provider": "complyadvantage",
+        "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+        },
+        "director_screenings": [
+            {
+                "person_name": "Jane Doe",
+                "screening": {
+                    "provider": "complyadvantage",
+                    "source": "complyadvantage",
+                    "api_status": "live",
+                },
+            }
+        ],
+        "ubo_screenings": [],
+    }
+
+    assert determine_screening_mode(report) == "live"
+
+
+def test_complyadvantage_company_screening_is_required_evidence():
+    from security_hardening import _collect_screening_provider_evidence
+
+    report = {
+        "provider": "complyadvantage",
+        "company_screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+        },
+        "director_screenings": [],
+        "ubo_screenings": [],
+    }
+
+    evidence = _collect_screening_provider_evidence(report)
+    by_name = {item["name"]: item for item in evidence}
+
+    assert by_name["company_screening"]["is_required"] is True
+    assert "company_registry" not in by_name
+
+
 def test_store_screening_mode_updates_application_column(db, temp_db):
     from security_hardening import store_screening_mode
 
