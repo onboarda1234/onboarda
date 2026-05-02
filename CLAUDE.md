@@ -152,6 +152,20 @@ To rollback: `git checkout v4.1-stable`
 - Commits: Descriptive messages with category prefix (fix:, feat:, refactor:, etc.)
 
 ## Important Notes
+## Feature Scope (What Is and Is Not Implemented)
+
+These clarifications prevent marketing claims from diverging from code behaviour:
+
+| Feature | Status | Details |
+|---------|--------|---------|
+| **Sumsub AML/PEP screening** | ✅ ACTIVE | `run_full_screening()` in `screening.py` uses Sumsub end-to-end |
+| **Adverse media parsing** | ✅ ACTIVE | Parses adverse-media signals already included in Sumsub screening results and prescreening data |
+| **Adverse media (external provider)** | ⚠️ NOT IMPLEMENTED | No external adverse-media API call; no `ADVERSE_MEDIA_API_KEY`. Back office correctly notes: "Distinct adverse-media results are not persisted in the current screening report." |
+| **ComplyAdvantage provider** | ⚠️ SCAFFOLDED — OFF by default | Adapter and registry exist (`screening_complyadvantage/`). `ENABLE_SCREENING_ABSTRACTION` is `False` in all environments. `run_full_screening()` is hardcoded to Sumsub and does not invoke provider abstraction. Do not claim ComplyAdvantage as a live provider unless `ENABLE_SCREENING_ABSTRACTION=true` is confirmed working end-to-end. |
+| **Periodic review (state machine)** | ✅ ACTIVE | `periodic_review_engine.py` enforces review states, audit trails, and lifecycle linkage |
+| **Periodic review (automatic scheduler)** | ⚠️ NOT IMPLEMENTED | No APScheduler, `PeriodicCallback`, or `IOLoop` timer. Reviews are scheduled via the manual "Schedule Due Reviews" button in back office. |
+
+
 
 - `server.py` is large (~4000 lines) — all endpoints are in one file
 - `arie-backoffice.html` is ~550KB — contains all JS/CSS inline

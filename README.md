@@ -116,11 +116,13 @@ Applicant submits via Portal
 
 **Monitoring Agents (6–10):**
 
-6. **Periodic Review Preparation** — Scheduled review triggers and data collection
-7. **Adverse Media & PEP Monitoring** — Continuous media and PEP screening
+6. **Periodic Review Preparation** — Officer-triggered review scheduling, state machine, and data collection (automatic scheduler not yet implemented)
+7. **Adverse Media & PEP Monitoring** — PEP screening and adverse-media signal parsing from Sumsub results (external adverse-media API call not yet implemented)
 8. **Behaviour & Risk Drift** — Transaction pattern analysis and risk drift detection
 9. **Regulatory Impact** — Regulatory change assessment for existing clients
 10. **Ongoing Compliance Review** — Continuous compliance posture evaluation
+
+> **Note**: Monitoring agents 6–10 are scaffolded with full state machines, endpoints, and audit trails. Automatic scheduling (agent 6) and real-time external adverse-media calls (agent 7) are not yet implemented. The active screening provider is Sumsub; ComplyAdvantage is a registered alternative provider behind a disabled feature flag (`ENABLE_SCREENING_ABSTRACTION=false` by default).
 
 ---
 
