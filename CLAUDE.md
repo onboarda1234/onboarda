@@ -15,7 +15,7 @@ Onboarda is an AI-powered compliance onboarding platform for regulated financial
 - **Database**: PostgreSQL (SQLite for local dev)
 - **AI**: Anthropic Claude API (risk-based Sonnet/Opus routing for memo generation)
 - **KYC Provider**: Sumsub (identity verification, AML/PEP screening)
-- **Hosting**: Render.com (two services: live + demo)
+- **Hosting**: AWS ECS Fargate af-south-1 (staging + planned production) · Render.com (demo only)
 - **CI/CD**: GitHub Actions (`.github/workflows/ci.yml`)
 - **Frontend**: Single-file HTML (no build step)
 
@@ -131,11 +131,30 @@ All 206 tests should pass. Tests cover API endpoints, authentication, rule engin
 
 ## Deployment
 
-### Render.com
-- **RegMind-demo** (`arie-finance-demo-mwmr.onrender.com`) — Demo environment
-  - Custom domain: `demo.regmind.co`
-- **RegMind-live** (`arie-finance-live-mwmr.onrender.com`) — Production environment
-- Auto-deploys from `main` branch on GitHub (`onboarda1234/onboarda`)
+### Active Environments (Verified May 2026)
+
+| Environment | Platform | Domain | Status |
+|-------------|----------|--------|--------|
+| Staging | AWS ECS Fargate (af-south-1) | staging.regmind.co | ✅ Active — validated |
+| Demo | Render.com (`arie-finance-demo`) | demo.regmind.co | ✅ Active |
+| Production | AWS ECS Fargate (af-south-1) | app.regmind.co | ⏳ Planned — DNS not yet provisioned |
+| Render Live | Render.com (`arie-finance-live`) | arie-finance-live-mwmr.onrender.com | ❌ Suspended |
+
+### AWS ECS (Staging)
+- **Cluster:** `regmind-staging` (af-south-1)
+- **ECR:** `782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend`
+- **Database:** AWS RDS PostgreSQL 15 (`regmind-staging-db`)
+- **Secrets:** AWS Secrets Manager (`regmind/staging`)
+- **Logs:** CloudWatch (`/ecs/regmind-staging`)
+- **Deploy workflow:** `.github/workflows/deploy-staging.yml` — triggers on push to `main`
+
+### Render.com (Demo)
+- **Service:** `arie-finance-demo-mwmr.onrender.com`
+- **Custom domain:** `demo.regmind.co`
+- **Auto-deploys** from `main` branch on GitHub (`onboarda1234/onboarda`)
+
+### render.yaml Note
+The root `render.yaml` defines an `arie-finance-live` service labelled "production" — this is **not the active production environment**. Active production will be AWS ECS at `app.regmind.co` once provisioned. The `arie-finance-live` Render service is currently suspended.
 
 ### Git Tags
 - `v4.0-stable` — Pre-document-visibility-fix rollback point

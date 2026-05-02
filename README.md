@@ -23,7 +23,7 @@ The platform ships as two branded surfaces:
 | PDF Generation | [WeasyPrint](https://weasyprint.org/) |
 | Frontend | Vanilla JS — single-file HTML (no build step) |
 | CI/CD | GitHub Actions |
-| Deployment | [Render.com](https://render.com/) |
+| Deployment | AWS ECS Fargate af-south-1 (staging + production) · [Render.com](https://render.com/) (demo) |
 
 ---
 
@@ -144,7 +144,7 @@ pip install -r requirements.txt
 python server.py
 ```
 
-The backend runs on port **10000** by default for local development and Render deploys. Open `arie-portal.html` and `arie-backoffice.html` directly in a browser (or serve via any static file server) — no build step required.
+The backend runs on port **10000** by default (local development, AWS ECS, and Render). Open `arie-portal.html` and `arie-backoffice.html` directly in a browser (or serve via any static file server) — no build step required.
 
 ### Docker
 
@@ -202,12 +202,19 @@ The GitHub Actions CI pipeline (`.github/workflows/ci.yml`) enforces:
 
 ## Deployment
 
-Deployment is managed via **Render.com** using the `render.yaml` blueprint at the repo root. Two services are defined:
+### Active Environments (Verified May 2026)
 
-| Service | Environment | Auto-deploy | External APIs |
-|---------|------------|-------------|--------------|
-| `arie-finance-live` | Production | On push to `main` (CI-gated) | Real (Sumsub, S3, Claude) |
-| `arie-finance-demo` | Demo | On push to `main` | Simulated / sandbox |
+| Environment | Platform | Domain | Status |
+|-------------|----------|--------|--------|
+| **Staging** | AWS ECS Fargate (af-south-1) | staging.regmind.co | ✅ Active — validated |
+| **Demo** | Render.com | demo.regmind.co | ✅ Active |
+| **Production** | AWS ECS Fargate (af-south-1) | app.regmind.co | ⏳ Planned — DNS not yet provisioned |
+
+Staging and production share the same AWS ECS infrastructure (`regmind-staging` cluster, af-south-1 region). The `deploy-staging.yml` GitHub Actions workflow deploys to staging on every push to `main`. Production (`app.regmind.co`) will use the same pipeline once DNS and ECS service are provisioned.
+
+Demo is deployed separately to Render.com (`arie-finance-demo`) with simulated APIs and seed data. It auto-deploys from `main` via the `render.yaml` blueprint.
+
+> **Note:** The `render.yaml` blueprint also defines an `arie-finance-live` service but this is **not the active production environment**. Production is on AWS ECS. The Render live service is currently suspended.
 
 ### Feature Flags
 

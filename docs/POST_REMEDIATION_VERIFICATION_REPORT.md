@@ -50,25 +50,29 @@ All 10 audit remediation prompts are properly implemented, thoroughly tested, an
 | Production location | Old README claimed Render live | render.yaml confirms Render | ✅ Aligned (updated README) |
 | AWS ECS role | Not mentioned in CLAUDE.md | Used for testing/staging via CI workflow | ✅ Clarified (updated README) |
 
-### Deployment Services Defined
+### Corrected Deployment Topology (Verified May 2026)
 
-```
-render.yaml (ROOT):
-├─ arie-finance-live (Production)
-│  ├─ ENV=production
-│  ├─ ENABLE_DEMO_MODE=false
-│  ├─ ENABLE_REAL_SCREENING=true
-│  ├─ ENABLE_SUMSUB_LIVE=true
-│  └─ All secrets managed in Render dashboard
-│
-└─ arie-finance-demo (Demo)
-   ├─ ENV=demo
-   ├─ ENABLE_DEMO_MODE=true
-   ├─ ENABLE_SIMULATED_SCREENING=true
-   ├─ ENABLE_DEBUG_ENDPOINTS=true
-   ├─ ENABLE_SHORTCUT_LOGIN=true
-   └─ Demo credentials set in Render dashboard
-```
+**Second-pass correction** — initial audit incorrectly stated both services are on Render. Ground-truth DNS probes show:
+
+| Domain | HTTP Status | Platform | Role |
+|--------|-------------|----------|------|
+| `staging.regmind.co` | **200 ✓** | AWS ECS Fargate (af-south-1) | Active staging / near-production |
+| `demo.regmind.co` | **200 ✓** | Render.com (arie-finance-demo) | Demo |
+| `app.regmind.co` | **DNS FAIL** | AWS ECS Fargate (af-south-1) | Planned production — not yet provisioned |
+| `arie-finance-live-mwmr.onrender.com` | **503 Suspended** | Render.com | Suspended — not active production |
+
+**Correction to initial report:** `render.yaml` defining `arie-finance-live` as "production" is **documentation drift**. The real production path is AWS ECS (`deploy-staging.yml` → `staging.regmind.co`). The `app.regmind.co` production environment requires DNS provisioning and a new ECS service before it is live. Render.com is used exclusively for demo.
+
+### Verified Deployment Topology
+
+| Environment | Actual Host | Source of Truth | Branch | Status |
+|-------------|-------------|-----------------|--------|--------|
+| Staging | AWS ECS `regmind-staging`, af-south-1 | deploy-staging.yml | main | ✅ Validated |
+| Demo | Render.com `arie-finance-demo` | render.yaml | main | ✅ Active |
+| Production | AWS ECS (planned) `app.regmind.co` | DEPLOYMENT_RUNBOOK.md | main | ⏳ Not yet provisioned |
+| Render Live | Render.com `arie-finance-live` | render.yaml | main | ❌ Suspended |
+
+
 
 ### Residual Configuration Issue
 
