@@ -1088,6 +1088,33 @@ def build_compliance_memo(app, directors, ubos, documents):
         "financial_crime": financial_crime_evidence,
     }
     memo["metadata"]["quality_caps"] = quality_caps
+    # Source attribution — structured record of data sources used in this memo.
+    # Enables a compliance buyer to trace each section back to its evidence base.
+    memo["metadata"]["source_attribution"] = {
+        "application_id": app.get("id"),
+        "application_ref": app.get("ref"),
+        "generation_pipeline": "rule_engine → memo_handler → validation_engine → supervisor",
+        "screening_sources": {
+            "company_screened": bool(screening_report.get("company_screening")),
+            "persons_screened": len(_person_states),
+            "screening_terminal": screening_terminal,
+            "provider": "sumsub",
+        },
+        "document_sources": {
+            "total": len(documents),
+            "verified": len(verified_docs),
+            "pending": len(pending_docs),
+            "types": sorted(list({d.get("doc_type", "unknown") for d in documents})),
+        },
+        "rule_engine_checks": len(rule_engine_result.get("rules_checked", [])),
+        "rule_engine_violations": rule_engine_result.get("total_violations", 0),
+        "risk_factors_used": {
+            "pep_count": len(all_peps),
+            "jurisdiction": country,
+            "sector": sector,
+            "risk_score": risk_score,
+        },
+    }
 
     # ── RULE 4A enforcement: Post-generation factor classification check ──
     # Verify no ALWAYS_RISK_DECREASING keywords appear in risk_increasing_factors

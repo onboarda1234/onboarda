@@ -2383,6 +2383,8 @@ class ApplicationDetailHandler(BaseHandler):
         result["risk_level_label"] = get_risk_label(result.get("risk_level"))
         result["final_risk_level_label"] = get_risk_label(result.get("final_risk_level") or result.get("risk_level"))
         result["assigned_name"] = resolve_user_display_name(db, result.get("assigned_to"))
+        result["first_approver_name"] = resolve_user_display_name(db, result.get("first_approver_id"))
+        result["decision_by_name"] = resolve_user_display_name(db, result.get("decision_by"))
         result["directors"], result["ubos"], result["intermediaries"] = get_application_parties(db, result["id"])
         result["documents"] = [dict(d) for d in db.execute(
             "SELECT * FROM documents WHERE application_id = ?", (result["id"],)).fetchall()]
@@ -10416,7 +10418,6 @@ class ApplicationDecisionHandler(BaseHandler):
         db.execute("""
             UPDATE applications SET
                 status=?, decided_at=datetime('now'), decision_by=?, decision_notes=?,
-                first_approver_id=NULL, first_approved_at=NULL,
                 updated_at=datetime('now')
             WHERE id=?
         """, (new_status, user["sub"], json.dumps(detail_info), real_id))
@@ -10431,7 +10432,9 @@ class ApplicationDecisionHandler(BaseHandler):
             audit_detail += f" | RMI Request: {rmi_request_id} | Deadline: {rmi_deadline}"
 
         _after = {"status": new_status, "decision": decision, "decision_reason": decision_reason,
-                  "override_ai": override_ai, "rmi_request_id": rmi_request_id}
+                  "override_ai": override_ai, "rmi_request_id": rmi_request_id,
+                  "decision_by": user.get("sub"),
+                  "first_approver_id": app.get("first_approver_id") if app.get("risk_level") in ("HIGH", "VERY_HIGH") else None}
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip(),
                     _safe_json(_before), _safe_json(_after)))

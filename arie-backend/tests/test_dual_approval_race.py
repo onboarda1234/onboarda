@@ -249,8 +249,10 @@ class TestDualApprovalDBPersistence:
         finally:
             db.close()
 
-    def test_fields_cleared_on_final_decision(self, temp_db):
-        """first_approver fields are cleared when a final decision is recorded."""
+    def test_fields_preserved_on_final_decision(self, temp_db):
+        """first_approver fields are PRESERVED (not cleared) when a final decision is recorded.
+        This ensures the full dual-approval audit trail is visible on the applications row
+        even after the final approval completes."""
         db = _get_db()
         try:
             app = _insert_high_risk_app(db)
@@ -260,18 +262,24 @@ class TestDualApprovalDBPersistence:
                 ("officer-x", app["id"])
             )
             db.commit()
-            # Simulate final decision clearing fields
+            # Simulate final decision — server.py no longer nulls first_approver_id
             db.execute(
-                "UPDATE applications SET status = 'approved', first_approver_id = NULL, "
-                "first_approved_at = NULL WHERE id = ?",
+                "UPDATE applications SET status = 'approved', decided_at = datetime('now'), "
+                "decision_by = 'officer-y', updated_at = datetime('now') WHERE id = ?",
                 (app["id"],)
             )
             db.commit()
-            updated = db.execute("SELECT first_approver_id, first_approved_at FROM applications WHERE id = ?",
-                                  (app["id"],)).fetchone()
+            updated = db.execute(
+                "SELECT first_approver_id, first_approved_at, decision_by FROM applications WHERE id = ?",
+                (app["id"],)
+            ).fetchone()
             updated = dict(updated)
-            assert updated["first_approver_id"] is None
-            assert updated["first_approved_at"] is None
+            # first_approver_id must be preserved for audit trail
+            assert updated["first_approver_id"] == "officer-x", (
+                "first_approver_id must be preserved after final approval, not cleared"
+            )
+            assert updated["first_approved_at"] is not None
+            assert updated["decision_by"] == "officer-y"
         finally:
             db.close()
 
