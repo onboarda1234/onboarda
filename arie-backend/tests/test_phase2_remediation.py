@@ -39,7 +39,7 @@ class TestFinding10_NoSimulationOnConfiguredFailure:
     def test_configured_client_code_uses_error_result(self):
         """Verify the source code uses _error_result in failure paths when configured."""
         client_path = os.path.join(os.path.dirname(__file__), "..", "sumsub_client.py")
-        with open(client_path) as f:
+        with open(client_path, encoding="utf-8") as f:
             src = f.read()
 
         # Count how many times the pattern "if self.is_configured:\n                    return self._error_result" appears
@@ -59,7 +59,7 @@ class TestFinding15_FilePathRestriction:
     def test_server_blocks_path_traversal(self):
         """Server code must validate file_path against allowed directory."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
         assert "uploads" in src[src.find("class SumsubDocumentHandler"):src.find("class SumsubDocumentHandler") + 2000], \
             "SumsubDocumentHandler must validate file_path against uploads directory"
@@ -75,7 +75,7 @@ class TestFinding16_WebhookSignatureAlwaysChecked:
     def test_no_short_circuit_in_webhook_handler(self):
         """The old pattern 'if SUMSUB_WEBHOOK_SECRET and not ...' must be gone."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
 
         # Find the webhook handler section

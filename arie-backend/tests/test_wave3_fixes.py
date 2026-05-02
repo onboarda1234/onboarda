@@ -33,7 +33,7 @@ class TestW3_BRNValidation:
 
     def test_frontend_brn_pattern(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             src = f.read()
         assert 'pattern=' in src and 'f-brn' in src, \
             "Frontend BRN field should have pattern validation"
@@ -62,7 +62,7 @@ class TestW3_VerificationMessaging:
 
     def test_no_vague_during_review_for_verification(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             src = f.read()
         # The old message said "Registry verification will be completed by the compliance team during review"
         assert "Registry verification will be completed by the compliance team during review" not in src, \

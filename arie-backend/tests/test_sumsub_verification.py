@@ -704,7 +704,7 @@ class TestSumsubWebhookLinkagePersistence:
         server_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server.py"
         )
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             server_src = f.read()
         start = server_src.find(f"class {class_name}")
         assert start != -1, f"{class_name} not found in server.py"

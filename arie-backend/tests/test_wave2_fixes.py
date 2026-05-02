@@ -82,7 +82,7 @@ class TestW2_2_MinimumDirector:
 
     def test_frontend_has_director_check(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             src = f.read()
         assert "Director Required" in src or "director is required" in src.lower(), \
             "Frontend should validate minimum director count"

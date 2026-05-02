@@ -870,7 +870,7 @@ class TestPortalHTMLDataSource:
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-portal.html"
         )
-        with open(portal_path, "r") as f:
+        with open(portal_path, "r", encoding="utf-8") as f:
             content = f.read()
 
         # The CM dropdown loader must use the ownership-scoped portal endpoint

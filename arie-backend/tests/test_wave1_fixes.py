@@ -185,7 +185,7 @@ class TestW1_2_PricingAlignment:
         """The portal PRICING_FALLBACK must match the backend PRICING_TIERS values."""
         from server import PRICING_TIERS
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             src = f.read()
         # Verify portal no longer has the old mismatched PRICING object
         assert "var PRICING = {" not in src, \
@@ -209,7 +209,7 @@ class TestW1_5_NoHardcodedCompliance:
 
     def _read_portal(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             return f.read()
 
     def test_no_hardcoded_sanctions_clearance(self):
@@ -237,14 +237,14 @@ class TestW1_7_NoDomainStale:
 
     def test_no_arie_finance_in_portal(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             src = f.read()
         assert "arie-finance" not in src, \
             "Stale arie-finance.com domain still present in portal"
 
     def test_onboarda_email_present(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             src = f.read()
         assert "compliance@onboarda.com" in src, \
             "compliance@onboarda.com should be used in portal T&C"
@@ -259,7 +259,7 @@ class TestW1_4_DOBResumePresence:
 
     def _read_portal(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             return f.read()
 
     def test_directors_fallback_includes_dob(self):

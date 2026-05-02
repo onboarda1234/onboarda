@@ -26,7 +26,7 @@ class TestNotificationTypeFrontend:
     )
 
     def _read_backoffice(self):
-        with open(self.BACKOFFICE_PATH, "r") as f:
+        with open(self.BACKOFFICE_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_no_officer_message_notification_type(self):
@@ -62,7 +62,7 @@ class TestAgentStageDropdown:
     )
 
     def _read_backoffice(self):
-        with open(self.BACKOFFICE_PATH, "r") as f:
+        with open(self.BACKOFFICE_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_monitoring_stage_option_exists(self):
@@ -101,7 +101,7 @@ class TestNotificationClientIdValidation:
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "server.py",
         )
-        with open(server_path, "r") as f:
+        with open(server_path, "r", encoding="utf-8") as f:
             src = f.read()
 
         # Find the ClientNotificationHandler class and check for client_id validation
@@ -139,7 +139,7 @@ class TestDecisionRecordsDisplay:
     )
 
     def _read_backoffice(self):
-        with open(self.BACKOFFICE_PATH, "r") as f:
+        with open(self.BACKOFFICE_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_decision_records_container_exists(self):
@@ -309,7 +309,7 @@ class TestStatusModelHardening:
     ]
 
     def _read_backoffice(self):
-        with open(self.BACKOFFICE_PATH, "r") as f:
+        with open(self.BACKOFFICE_PATH, "r", encoding="utf-8") as f:
             return f.read()
 
     def test_branding_status_labels_includes_under_review(self):

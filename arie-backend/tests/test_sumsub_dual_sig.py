@@ -223,7 +223,7 @@ class TestServerCodeStructure:
 
     def _get_webhook_handler_code(self):
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
         wh_start = src.find("class SumsubWebhookHandler")
         assert wh_start != -1, "SumsubWebhookHandler class not found in server.py"

@@ -622,13 +622,13 @@ class TestVerificationContextResolution:
 class TestPortalAuthoritativeSource:
     def test_portal_removes_transient_ai_verify_route(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             src = f.read()
         assert "/documents/ai-verify" not in src
 
     def test_portal_renders_persisted_document_truth(self):
         portal_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(portal_path) as f:
+        with open(portal_path, encoding="utf-8") as f:
             src = f.read()
         assert "renderPersistedVerification" in src
         assert "verification_results" in src

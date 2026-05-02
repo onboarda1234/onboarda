@@ -46,7 +46,7 @@ class TestFinding13_WebhookDisplayWired:
         bo_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-backoffice.html")
         if not os.path.exists(bo_path):
             bo_path = os.path.join(os.path.dirname(__file__), "..", "arie-backoffice.html")
-        with open(bo_path) as f:
+        with open(bo_path, encoding="utf-8") as f:
             html = f.read()
         assert "sumsub_webhook" in html, "Backoffice does not reference sumsub_webhook — Finding 13 NOT fixed"
         assert "review_answer" in html, "Backoffice does not display review_answer"

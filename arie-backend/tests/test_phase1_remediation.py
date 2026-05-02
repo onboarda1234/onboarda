@@ -186,7 +186,7 @@ class TestFinding6_MemoVersion:
         import inspect
         # Read server.py source to verify SQL statement
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path, "r") as f:
+        with open(server_path, "r", encoding="utf-8") as f:
             source = f.read()
 
         # Find the primary INSERT statement
@@ -228,6 +228,6 @@ class TestFinding7_ValidationFixField:
         bo_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-backoffice.html")
         if not os.path.exists(bo_path):
             bo_path = os.path.join(os.path.dirname(__file__), "..", "arie-backoffice.html")
-        with open(bo_path, "r") as f:
+        with open(bo_path, "r", encoding="utf-8") as f:
             html = f.read()
         assert "issue.fix" in html, "Backoffice HTML does not reference issue.fix — Finding 7 NOT fixed"

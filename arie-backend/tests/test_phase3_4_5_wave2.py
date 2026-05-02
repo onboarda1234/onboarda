@@ -19,7 +19,7 @@ class TestFinding9_MockSignaling:
     def test_document_verify_handler_sets_ai_source(self):
         """server.py DocumentVerifyHandler must set ai_source in stored results."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
 
         # Find the document verification section that stores results
@@ -37,7 +37,7 @@ class TestFinding9_MockSignaling:
         bo_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-backoffice.html")
         if not os.path.exists(bo_path):
             bo_path = os.path.join(os.path.dirname(__file__), "..", "arie-backoffice.html")
-        with open(bo_path) as f:
+        with open(bo_path, encoding="utf-8") as f:
             html = f.read()
         assert "ai_source" in html, "Backoffice does not reference ai_source"
         assert "Mock" in html or "mock" in html, "Backoffice has no mock indicator"
@@ -115,7 +115,7 @@ class TestFinding12_WebhookLinking:
     def test_mapping_table_migration_exists(self):
         """db.py must contain sumsub_applicant_mappings table creation."""
         db_path = os.path.join(os.path.dirname(__file__), "..", "db.py")
-        with open(db_path) as f:
+        with open(db_path, encoding="utf-8") as f:
             src = f.read()
         assert "sumsub_applicant_mappings" in src, \
             "sumsub_applicant_mappings table not in db.py"
@@ -125,7 +125,7 @@ class TestFinding12_WebhookLinking:
     def test_webhook_handler_uses_mapping_table(self):
         """SumsubWebhookHandler must query sumsub_applicant_mappings."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
         wh_start = src.find("class SumsubWebhookHandler")
         wh_end = src.find("\nclass ", wh_start + 10)
@@ -136,7 +136,7 @@ class TestFinding12_WebhookLinking:
     def test_applicant_handler_stores_mapping(self):
         """SumsubApplicantHandler must insert into sumsub_applicant_mappings."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
         ah_start = src.find("class SumsubApplicantHandler")
         ah_end = src.find("\nclass ", ah_start + 10)
@@ -147,7 +147,7 @@ class TestFinding12_WebhookLinking:
     def test_mapping_table_has_indexes(self):
         """Mapping table must have indexes for efficient lookup."""
         db_path = os.path.join(os.path.dirname(__file__), "..", "db.py")
-        with open(db_path) as f:
+        with open(db_path, encoding="utf-8") as f:
             src = f.read()
         assert "idx_sam_applicant" in src, "Missing index on applicant_id"
         assert "idx_sam_external" in src, "Missing index on external_user_id"
@@ -167,7 +167,7 @@ class TestFinding12_WebhookLinking:
         if the scan is re-introduced.
         """
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
         wh_start = src.find("class SumsubWebhookHandler")
         wh_end = src.find("\nclass ", wh_start + 10)

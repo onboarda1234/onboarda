@@ -389,7 +389,7 @@ class TestEX02_Demo123Removed:
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-portal.html",
         )
-        with open(portal_path, "r") as f:
+        with open(portal_path, "r", encoding="utf-8") as f:
             content = f.read()
         assert "demo123" not in content, "Hardcoded 'demo123' credential must be removed"
 
@@ -402,6 +402,6 @@ class TestEX03_MockCompanyDataRemoved:
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-portal.html",
         )
-        with open(portal_path, "r") as f:
+        with open(portal_path, "r", encoding="utf-8") as f:
             content = f.read()
         assert "MOCK_COMPANY_DATA" not in content, "MOCK_COMPANY_DATA object must be removed"

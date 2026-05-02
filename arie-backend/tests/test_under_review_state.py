@@ -46,7 +46,7 @@ class TestUnderReviewTransitions:
 
     def test_transition_map_includes_under_review_as_target(self):
         """submitted -> under_review must be a valid transition in server.py."""
-        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py")).read()
+        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__, encoding="utf-8")), "server.py")).read()
         assert '"under_review"' in src or "'under_review'" in src
 
     def test_submitted_to_under_review_transition(self, db):
@@ -116,7 +116,7 @@ class TestUnderReviewBusinessRules:
     def test_under_review_in_immutable_party_states(self):
         """under_review must be in the immutable party states set."""
         import re
-        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py")).read()
+        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__, encoding="utf-8")), "server.py")).read()
         m = re.search(r'immutable_party_states\s*=\s*\(([^)]+)\)', src)
         assert m, "immutable_party_states tuple not found in server.py"
         assert "under_review" in m.group(1)
@@ -124,7 +124,7 @@ class TestUnderReviewBusinessRules:
     def test_under_review_in_non_draft_statuses(self):
         """under_review must be in the non-draft statuses guard."""
         import re
-        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py")).read()
+        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__, encoding="utf-8")), "server.py")).read()
         m = re.search(r'non_draft_statuses\s*=\s*\(([^)]+)\)', src)
         assert m, "non_draft_statuses tuple not found in server.py"
         assert "under_review" in m.group(1)
@@ -132,14 +132,14 @@ class TestUnderReviewBusinessRules:
     def test_under_review_in_review_states(self):
         """under_review must be in the review_states for H-05 risk gate."""
         import re
-        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py")).read()
+        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__, encoding="utf-8")), "server.py")).read()
         m = re.search(r'review_states\s*=\s*\(([^)]+)\)', src)
         assert m, "review_states tuple not found in server.py"
         assert "under_review" in m.group(1)
 
     def test_valid_transitions_includes_under_review_source(self):
         """under_review must appear as a source state in valid_transitions."""
-        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "server.py")).read()
+        src = open(os.path.join(os.path.dirname(os.path.dirname(__file__, encoding="utf-8")), "server.py")).read()
         assert '"under_review":' in src or "'under_review':" in src
 
     def test_resilience_valid_statuses_includes_under_review(self):

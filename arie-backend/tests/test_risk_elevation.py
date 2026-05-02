@@ -621,7 +621,7 @@ class TestPakistanElevation:
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "jurisdiction_config.json",
         )
-        with open(config_path) as f:
+        with open(config_path, encoding="utf-8") as f:
             config = json.load(f)
         grey_countries = config["risk_classifications"]["fatf_grey"]["countries"]
         assert "pakistan" in grey_countries

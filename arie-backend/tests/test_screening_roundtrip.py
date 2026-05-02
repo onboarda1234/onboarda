@@ -28,7 +28,7 @@ from screening_models import validate_normalized_report
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "screening")
 GOLDEN_FILE = os.path.join(FIXTURES_DIR, "golden_reports.json")
 
-with open(GOLDEN_FILE) as f:
+with open(GOLDEN_FILE, encoding="utf-8") as f:
     GOLDEN_FIXTURES = json.load(f)
 
 

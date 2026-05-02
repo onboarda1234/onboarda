@@ -25,7 +25,7 @@ class TestNoServerImportInRuleEngine:
 
     def _get_source(self, module_name):
         path = os.path.join(os.path.dirname(os.path.dirname(__file__)), f"{module_name}.py")
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
 
     def test_rule_engine_does_not_import_from_server(self):
@@ -77,7 +77,7 @@ class TestPartyUtilsImportSafety:
         source_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)), "party_utils.py"
         )
-        with open(source_path) as f:
+        with open(source_path, encoding="utf-8") as f:
             source = f.read()
         assert "prometheus_client" not in source, (
             "party_utils.py should not reference prometheus_client"

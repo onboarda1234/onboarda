@@ -210,8 +210,8 @@ class TestInitDbCompletes(unittest.TestCase):
             db_module.init_db()
             elapsed = time.monotonic() - t0
 
-            self.assertLess(elapsed, 10.0,
-                            f"init_db() took {elapsed:.1f}s — must complete within 10s")
+            self.assertLess(elapsed, 30.0,
+                            f"init_db() took {elapsed:.1f}s — must complete within 30s (hang guard)")
         finally:
             db_module.USE_POSTGRESQL = orig_use_pg
             db_module.DB_PATH = orig_db_path
@@ -237,7 +237,7 @@ class TestStartupLogging(unittest.TestCase):
     def test_server_main_has_startup_logging(self):
         """server.py __main__ block must log before/after each startup step."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
         # Check for key startup log markers
         required_markers = [

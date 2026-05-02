@@ -244,7 +244,7 @@ class TestNoRandomFallbackStaging:
         """
         # PII initialization has been moved to party_utils.py
         party_utils_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "party_utils.py")
-        with open(party_utils_path) as f:
+        with open(party_utils_path, encoding="utf-8") as f:
             source = f.read()
         # The critical guard: staging must be in the same branch as sys.exit(1)
         assert '"staging"' in source or "'staging'" in source
@@ -273,7 +273,7 @@ class TestBootTimeSelfTest:
     def test_selftest_code_exists_in_party_utils(self):
         """Verify party_utils.py contains the self-test pattern."""
         party_utils_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "party_utils.py")
-        with open(party_utils_path) as f:
+        with open(party_utils_path, encoding="utf-8") as f:
             source = f.read()
         assert "pii-selftest-canary-" in source
         assert "_encrypted_canary" in source
@@ -283,7 +283,7 @@ class TestBootTimeSelfTest:
     def test_selftest_exits_on_failure_in_staging(self):
         """Verify the self-test failure path calls sys.exit for staging."""
         party_utils_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "party_utils.py")
-        with open(party_utils_path) as f:
+        with open(party_utils_path, encoding="utf-8") as f:
             source = f.read()
         # After "self-test FAILED" there should be a staging check and sys.exit
         idx_fail = source.find("self-test FAILED")
@@ -363,7 +363,7 @@ class TestDeployWorkflowDeterminism:
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             ".github", "workflows", "deploy-staging.yml"
         )
-        with open(workflow_path) as f:
+        with open(workflow_path, encoding="utf-8") as f:
             content = f.read()
         assert "github.sha" in content, "Workflow must use github.sha for deterministic tagging"
         assert "IMAGE_TAG" in content
@@ -374,7 +374,7 @@ class TestDeployWorkflowDeterminism:
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             ".github", "workflows", "deploy-staging.yml"
         )
-        with open(workflow_path) as f:
+        with open(workflow_path, encoding="utf-8") as f:
             content = f.read()
         # Should register new task definition, not hardcode a revision number
         assert "register-task-definition" in content or "task-definition" in content
@@ -393,7 +393,7 @@ class TestNoHardcodedSecrets:
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             "render.yaml"
         )
-        with open(render_path) as f:
+        with open(render_path, encoding="utf-8") as f:
             content = f.read()
         # Should not contain actual password values
         assert "Arie2026!" not in content, "render.yaml contains hardcoded DEMO_PORTAL_PASSWORD"
@@ -406,7 +406,7 @@ class TestNoHardcodedSecrets:
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             "render.yaml"
         )
-        with open(render_path) as f:
+        with open(render_path, encoding="utf-8") as f:
             content = f.read()
         # All secret keys should use sync: false pattern
         assert "sync: false" in content

@@ -77,6 +77,6 @@ def test_no_scoped_ui_or_memo_surfaces_use_stale_agent_labels():
     for path in scoped_files:
         if not path.exists():
             continue
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8", errors="replace")
         for banned in banned_strings:
             assert banned not in text, f"Found stale string '{banned}' in {path}"

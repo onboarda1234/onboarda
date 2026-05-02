@@ -24,7 +24,7 @@ class TestF01WebhookHeader:
     def test_webhook_handler_reads_primary_header(self):
         """server.py SumsubWebhookHandler must read X-App-Access-Sig as primary header."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
 
         wh_start = src.find("class SumsubWebhookHandler")
@@ -39,7 +39,7 @@ class TestF01WebhookHeader:
     def test_webhook_handler_reads_fallback_header(self):
         """server.py SumsubWebhookHandler must also support X-Payload-Digest as fallback."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
 
         wh_start = src.find("class SumsubWebhookHandler")
@@ -54,7 +54,7 @@ class TestF01WebhookHeader:
     def test_webhook_handler_primary_header_comes_before_verify(self):
         """The primary header must be read before calling sumsub_verify_webhook."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
 
         wh_start = src.find("class SumsubWebhookHandler")
@@ -70,7 +70,7 @@ class TestF01WebhookHeader:
     def test_webhook_handler_fallback_header_comes_before_verify(self):
         """The fallback header must also be read before calling sumsub_verify_webhook."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
 
         wh_start = src.find("class SumsubWebhookHandler")
@@ -163,7 +163,7 @@ class TestF02WebhookSecretStagingRejection:
     def test_staging_rejection_guard_uses_in_operator(self):
         """The code must use 'in (production, staging)' style guard, not ==."""
         screening_path = os.path.join(os.path.dirname(__file__), "..", "screening.py")
-        with open(screening_path) as f:
+        with open(screening_path, encoding="utf-8") as f:
             src = f.read()
 
         # Find the sumsub_verify_webhook function
@@ -189,7 +189,7 @@ class TestF03PortalHonestMessaging:
 
     def _portal_src(self):
         path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
 
     def test_no_secure_link_sent_email_text(self):
@@ -259,7 +259,7 @@ class TestF04PortalApplicationIdMapping:
 
     def _portal_src(self):
         path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-portal.html")
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
 
     def test_portal_sends_application_id_in_kyc_applicant_call(self):
@@ -294,7 +294,7 @@ class TestF04PortalApplicationIdMapping:
     def test_backend_stores_mapping_when_both_ids_present(self):
         """SumsubApplicantHandler must insert into sumsub_applicant_mappings when application_id given."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
 
         handler_start = src.find("class SumsubApplicantHandler")
@@ -311,7 +311,7 @@ class TestF04PortalApplicationIdMapping:
     def test_backend_mapping_insert_is_conditional(self):
         """Mapping insert must only happen when both applicant_id and application_id are present."""
         server_path = os.path.join(os.path.dirname(__file__), "..", "server.py")
-        with open(server_path) as f:
+        with open(server_path, encoding="utf-8") as f:
             src = f.read()
 
         handler_start = src.find("class SumsubApplicantHandler")
