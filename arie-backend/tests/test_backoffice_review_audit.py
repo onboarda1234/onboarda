@@ -391,7 +391,7 @@ class TestApplicationAuditLogEndpoint:
         with open(os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-backoffice.html"
-        ), "r") as f:
+        ), "r", encoding="utf-8") as f:
             html = f.read()
         assert "/audit-log" in html
         assert "loadActivityLog" in html
@@ -448,7 +448,7 @@ class TestApplicationNotesEndpoint:
         with open(os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-backoffice.html"
-        ), "r") as f:
+        ), "r", encoding="utf-8") as f:
             html = f.read()
         assert "/notes" in html
         assert "content" in html
@@ -458,7 +458,7 @@ class TestApplicationNotesEndpoint:
         with open(os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-backoffice.html"
-        ), "r") as f:
+        ), "r", encoding="utf-8") as f:
             html = f.read()
         assert "not yet persisted" not in html
 
@@ -507,7 +507,7 @@ class TestReassignSecurity:
         with open(os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-backoffice.html"
-        ), "r") as f:
+        ), "r", encoding="utf-8") as f:
             html = f.read()
         assert "'error'" in html
         # Verify error handling in confirmReassign
@@ -532,7 +532,7 @@ class TestMemoStaleness:
         with open(os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-backoffice.html"
-        ), "r") as f:
+        ), "r", encoding="utf-8") as f:
             html = f.read()
         assert "memoIsStale" in html
         assert "outdated" in html.lower() or "stale" in html.lower()
@@ -579,7 +579,7 @@ class TestSupervisorUX:
         with open(os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-backoffice.html"
-        ), "r") as f:
+        ), "r", encoding="utf-8") as f:
             html = f.read()
         assert "REQUIRES HUMAN REVIEW" in html
 
@@ -588,7 +588,7 @@ class TestSupervisorUX:
         with open(os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-backoffice.html"
-        ), "r") as f:
+        ), "r", encoding="utf-8") as f:
             html = f.read()
         assert "stLabels" in html
 
@@ -603,7 +603,7 @@ class TestScreeningDispositionUX:
         with open(os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
             "arie-backoffice.html"
-        ), "r") as f:
+        ), "r", encoding="utf-8") as f:
             return f.read()
 
     def test_screening_disposition_modal_fields_present(self):
