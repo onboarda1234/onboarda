@@ -13,7 +13,7 @@ Onboarda is an AI-powered compliance onboarding platform for regulated financial
 ### Tech Stack
 - **Backend**: Python 3 / Tornado web framework
 - **Database**: PostgreSQL (SQLite for local dev)
-- **AI**: Anthropic Claude API (Sonnet for LOW/MEDIUM risk, Opus for HIGH/VERY_HIGH)
+- **AI**: Anthropic Claude API (risk-based Sonnet/Opus routing for memo generation)
 - **KYC Provider**: Sumsub (identity verification, AML/PEP screening)
 - **Hosting**: Render.com (two services: live + demo)
 - **CI/CD**: GitHub Actions (`.github/workflows/ci.yml`)
@@ -25,9 +25,9 @@ Onboarda is an AI-powered compliance onboarding platform for regulated financial
 3. **Validation Engine** (`validation_engine.py`) — Cross-checks memo against rules
 4. **Supervisor** (`supervisor_engine.py`) — Final review, approve/reject/escalate
 
-### Risk-Based Model Routing
-- LOW / MEDIUM risk → Claude Sonnet (faster, cheaper)
-- HIGH / VERY_HIGH risk → Claude Opus (more thorough)
+### Risk-Based Model Routing (Memo Generation)
+- LOW / MEDIUM risk memo generation → Claude Sonnet (faster, cheaper)
+- HIGH / VERY_HIGH risk memo generation → Claude Opus (more thorough)
 
 ## Repository Structure
 

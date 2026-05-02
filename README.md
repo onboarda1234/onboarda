@@ -17,7 +17,7 @@ The platform ships as two branded surfaces:
 |-------|-----------|
 | Backend | Python 3.11 / [Tornado](https://www.tornadoweb.org/) |
 | Database | PostgreSQL (production) · SQLite (local dev) |
-| AI | [Anthropic Claude](https://www.anthropic.com/) (Sonnet for LOW/MEDIUM risk, Opus for HIGH/VERY_HIGH) |
+| AI | [Anthropic Claude](https://www.anthropic.com/) (risk-based Sonnet/Opus routing for memo generation) |
 | KYC Provider | [Sumsub](https://sumsub.com/) (identity verification, AML/PEP screening) |
 | Document Storage | AWS S3 |
 | PDF Generation | [WeasyPrint](https://weasyprint.org/) |
@@ -92,8 +92,8 @@ Applicant submits via Portal
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐
-│  3. AI Memo Generation        │  Claude Sonnet (LOW/MEDIUM)
-│     (10 agents, 11 sections)  │  Claude Opus  (HIGH/VERY_HIGH)
+│  3. AI Memo Generation        │  Risk-based routing for memo generation:
+│     (10 agents, 11 sections)  │  Sonnet (LOW/MEDIUM), Opus (HIGH/VERY_HIGH)
 └───────────┬───────────────────┘
             ▼
 ┌───────────────────────────────┐

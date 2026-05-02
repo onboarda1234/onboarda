@@ -1973,6 +1973,7 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
             response = self.client.messages.create(
                 model=chosen_model,
                 max_tokens=max_tokens,
+                temperature=0,
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
                 timeout=timeout,
@@ -1998,7 +1999,7 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
         self,
         system_prompt: str,
         user_prompt: str,
-        model: str = "claude-sonnet-4-6",
+        model: str = None,
         timeout: int = 30,
         content_blocks: list = None,
     ) -> str:
@@ -2032,16 +2033,18 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
 
         # Build message content — multimodal if content_blocks provided, else plain text
         message_content = content_blocks if content_blocks else user_prompt
+        chosen_model = model or self.ROUTING_MODELS["fast"]
 
         for attempt in range(self.max_retries):
             try:
                 logger.debug(
-                    f"Calling Claude {model} (attempt {attempt + 1}/{self.max_retries})"
+                    f"Calling Claude {chosen_model} (attempt {attempt + 1}/{self.max_retries})"
                 )
 
                 response = self.client.messages.create(
-                    model=model,
+                    model=chosen_model,
                     max_tokens=4096,
+                    temperature=0,
                     system=system_prompt,
                     messages=[{"role": "user", "content": message_content}],
                     timeout=timeout,
@@ -2050,21 +2053,21 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                 # Extract text content and track usage (in-memory + persistent)
                 text_content = response.content[0].text
                 self.usage_tracker.log_usage(
-                    model=model,
+                    model=chosen_model,
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
                 )
                 _record_persistent_usage(
-                    model, response.usage.input_tokens,
+                    chosen_model, response.usage.input_tokens,
                     response.usage.output_tokens, method="_call_claude"
                 )
 
-                logger.debug(f"Claude {model} request succeeded")
+                logger.debug(f"Claude {chosen_model} request succeeded")
                 return text_content
 
             except APITimeoutError as e:
                 logger.warning(
-                    f"Claude {model} request timeout (attempt {attempt + 1}/{self.max_retries}): {e}"
+                    f"Claude {chosen_model} request timeout (attempt {attempt + 1}/{self.max_retries}): {e}"
                 )
                 if attempt == self.max_retries - 1:
                     raise RuntimeError(f"Claude API timeout after {self.max_retries} retries") from e

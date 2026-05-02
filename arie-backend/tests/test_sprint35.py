@@ -331,6 +331,57 @@ class TestModelRouting:
         assert len(reason) > 0
 
 
+class TestDeterministicClaudeParams:
+    def test_generate_pins_temperature_zero(self, monkeypatch):
+        from claude_client import ClaudeClient
+
+        captured = {}
+
+        class _FakeMessages:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+
+                class _Resp:
+                    content = [type("Item", (), {"text": "ok"})()]
+                    usage = type("Usage", (), {"input_tokens": 1, "output_tokens": 1})()
+
+                return _Resp()
+
+        client = ClaudeClient()
+        client.mock_mode = False
+        client.client = type("FakeClient", (), {"messages": _FakeMessages()})()
+
+        out = client.generate("deterministic check")
+        assert out == "ok"
+        assert captured.get("temperature") == 0
+
+    def test_call_claude_pins_temperature_zero(self, monkeypatch):
+        import claude_client
+        from claude_client import ClaudeClient
+
+        captured = {}
+
+        class _FakeMessages:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+
+                class _Resp:
+                    content = [type("Item", (), {"text": "ok"})()]
+                    usage = type("Usage", (), {"input_tokens": 1, "output_tokens": 1})()
+
+                return _Resp()
+
+        monkeypatch.setattr(claude_client, "_check_persistent_budget", lambda: True)
+
+        client = ClaudeClient()
+        client.mock_mode = False
+        client.client = type("FakeClient", (), {"messages": _FakeMessages()})()
+
+        out = client._call_claude("sys", "user")
+        assert out == "ok"
+        assert captured.get("temperature") == 0
+
+
 # ═══════════════════════════════════════════════════════════
 # 5. BaseHandler Extraction — Import Verification
 # ═══════════════════════════════════════════════════════════
