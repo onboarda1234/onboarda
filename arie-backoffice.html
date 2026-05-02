@@ -3036,7 +3036,6 @@ var BO_AUTH_USER = null;
 // ─── Environment Detection ────────────────────────────────────
 var APP_ENV = 'production';
 var FEATURE_FLAGS = {};
-var DEMO_CREDENTIALS = {};
 
 async function loadEnvironment() {
   try {
@@ -3044,7 +3043,6 @@ async function loadEnvironment() {
     const data = await res.json();
     APP_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
-    DEMO_CREDENTIALS = data.demo_credentials || {};
     applyEnvironmentUI();
   } catch (e) {
     console.warn('Could not load environment config:', e);
@@ -10963,25 +10961,7 @@ async function handleLogin(e) {
   errEl.classList.remove('show');
 
   try {
-    var resp;
-    var demoUser = USERS.find(function(u) { return u.email === email; });
-    var isOffline = false;
-
-    try {
-      resp = await boApiCall('POST', '/auth/officer/login', { email: email, password: password });
-    } catch(apiErr) {
-      // Backend not running — demo/offline mode (only allowed in demo environment)
-      var demoBoPw = (DEMO_CREDENTIALS || {}).backoffice_password || '';
-      if (APP_ENV === 'demo' && demoUser && demoBoPw && (password === demoBoPw || password === 'admin123')) {
-        isOffline = true;
-        resp = {
-          token: 'demo_' + btoa(email + ':' + Date.now()),
-          user: { id: demoUser.id, name: demoUser.name, email: demoUser.email, role: demoUser.role }
-        };
-      } else {
-        throw apiErr;
-      }
-    }
+    var resp = await boApiCall('POST', '/auth/officer/login', { email: email, password: password });
 
     setBoAuth(resp.token, resp.user);
     currentUser = USERS.find(function(u) { return u.email === email; }) || currentUser;
@@ -10994,14 +10974,14 @@ async function handleLogin(e) {
     if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){return w[0];}).join('');
     document.body.className = 'role-' + (currentUser.role || 'admin');
 
-    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Login', target:'System', detail: isOffline ? 'Signed in (Demo Mode — backend offline)' : 'Signed in via login page', ip:'client' });
+    AUDIT_LOG.unshift({ ts:new Date().toISOString().slice(0,16).replace('T',' '), user:currentUser.name, role:ROLE_LABELS[currentUser.role], action:'Login', target:'System', detail: 'Signed in via login page', ip:'client' });
 
-    if (!isOffline) { await loadFromAPI(); }
+    await loadFromAPI();
     populateOfficerDropdowns();
     renderDashboardRecent();
     showView('dashboard', document.querySelector('.snav-item'));
     hideLoginScreen();
-    showToast(isOffline ? 'Demo Mode — Welcome, ' + currentUser.name : 'Welcome back, ' + (resp.user.name || currentUser.name));
+    showToast('Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
     errText.textContent = 'Invalid email or password.';
     errEl.classList.add('show');

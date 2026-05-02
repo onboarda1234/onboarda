@@ -4647,14 +4647,12 @@ let currentApplicationId = '';
 // ─── Environment Detection ────────────────────────────────
 var APP_ENV = 'production';
 var FEATURE_FLAGS = {};
-var DEMO_CREDENTIALS = {};
 
 async function loadEnvironment() {
   try {
     const data = await apiCall('GET', '/config/environment');
     APP_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
-    DEMO_CREDENTIALS = data.demo_credentials || {};
     applyEnvironmentUI();
   } catch (e) {
     console.warn('Could not load environment config:', e);
@@ -8743,31 +8741,13 @@ async function submitLogin(e) {
   const password = document.getElementById('l-password').value;
   btn.disabled = true; btn.textContent = '⏳ Signing in…';
   try {
-    let resp;
-    let isOffline = false;
-
-    try {
-      resp = await apiCall('POST', '/auth/client/login', { email, password });
-    } catch(apiErr) {
-      // Backend not running — demo/offline mode (only allowed in demo environment)
-      var demoPw = (DEMO_CREDENTIALS || {}).portal_password || '';
-      if (APP_ENV === 'demo' && demoPw && password === demoPw) {
-        isOffline = true;
-        const demoName = email.split('@')[0].replace(/[._]/g,' ').replace(/\b\w/g, c => c.toUpperCase());
-        resp = {
-          token: 'demo_' + btoa(email + ':' + Date.now()),
-          client: { id: 'demo-' + Date.now(), name: demoName, email: email, company: 'Demo Company Ltd' }
-        };
-      } else {
-        throw apiErr;
-      }
-    }
+    const resp = await apiCall('POST', '/auth/client/login', { email, password });
 
     setAuth(resp.token, resp.client);
     btn.disabled = false; btn.textContent = '🔒 Sign In';
 
     showView('my-apps');
-    showToast('success', isOffline ? 'Demo Mode' : 'Welcome back!', isOffline ? 'Signed in offline — explore the portal demo.' : 'Pick up where you left off.');
+    showToast('success', 'Welcome back!', 'Pick up where you left off.');
   } catch (err) {
     btn.disabled = false; btn.textContent = '🔒 Sign In';
     showToast('error', 'Login Failed', 'Invalid credentials. Please check your email and password.');

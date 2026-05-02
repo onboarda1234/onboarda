@@ -372,6 +372,17 @@ class TestGetEnvironmentInfo:
         info = get_environment_info()
         assert isinstance(info["version"], str)
 
+    def test_demo_credentials_not_exposed(self):
+        from environment import get_environment_info
+        info = get_environment_info()
+        assert "demo_credentials" not in info
+
+    def test_demo_credentials_not_exposed_even_when_demo(self, monkeypatch):
+        import environment as env
+        monkeypatch.setattr(env, "is_demo", lambda: True)
+        info = env.get_environment_info()
+        assert "demo_credentials" not in info
+
 
 class TestGetSumsubBaseUrl:
     """Test get_sumsub_base_url()."""

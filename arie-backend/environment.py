@@ -503,10 +503,4 @@ def get_environment_info() -> dict:
         "upload_latency_flags": flags.get_upload_latency_client_flags(),
         "version": os.environ.get("APP_VERSION", "1.0.0-pilot"),
     }
-    # Demo credentials — only exposed in demo environments, read from env vars
-    if is_demo():
-        info["demo_credentials"] = {
-            "portal_password": os.environ.get("DEMO_PORTAL_PASSWORD", ""),
-            "backoffice_password": os.environ.get("DEMO_BACKOFFICE_PASSWORD", ""),
-        }
     return info
