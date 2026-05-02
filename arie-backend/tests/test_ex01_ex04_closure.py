@@ -68,10 +68,14 @@ def _response_json(handler):
 class TestEX01_AdminResetDBAuth:
     """EX-01: POST /api/admin/reset-db must require admin auth."""
 
+    @pytest.fixture(autouse=True)
+    def _set_confirm_env(self, monkeypatch):
+        monkeypatch.setenv("ADMIN_RESET_DB_CONFIRMATION", "test-wipe-confirm")
+
     def test_unauthenticated_post_denied(self, temp_db):
-        """No token → 401."""
+        """No token -> 401."""
         from server import AdminResetDBHandler
-        body = json.dumps({"confirm": "WIPE_STAGING_2026"}).encode()
+        body = json.dumps({"confirm": "test-wipe-confirm"}).encode()
         handler = _build_handler(AdminResetDBHandler, "POST", "/api/admin/reset-db", body=body)
         handler.post()
         assert handler._status_code == 401
@@ -79,10 +83,10 @@ class TestEX01_AdminResetDBAuth:
         assert "error" in resp
 
     def test_non_admin_post_denied(self, temp_db):
-        """Valid client token (non-admin role) → 403."""
+        """Valid client token (non-admin role) -> 403."""
         from server import AdminResetDBHandler, create_token
         token = create_token("client001", "client", "Test Client", "client")
-        body = json.dumps({"confirm": "WIPE_STAGING_2026"}).encode()
+        body = json.dumps({"confirm": "test-wipe-confirm"}).encode()
         handler = _build_handler(AdminResetDBHandler, "POST", "/api/admin/reset-db",
                                  body=body, token=token)
         handler.post()
@@ -91,7 +95,7 @@ class TestEX01_AdminResetDBAuth:
         assert "error" in resp
 
     def test_admin_wrong_confirmation_denied(self, temp_db):
-        """Admin token + wrong confirmation string → 403."""
+        """Admin token + wrong confirmation string -> 403."""
         from server import AdminResetDBHandler, create_token
         token = create_token("admin001", "admin", "Test Admin", "officer")
         body = json.dumps({"confirm": "WRONG_STRING"}).encode()
@@ -101,10 +105,10 @@ class TestEX01_AdminResetDBAuth:
         assert handler._status_code == 403
 
     def test_admin_correct_confirmation_succeeds(self, temp_db):
-        """Admin token + correct confirmation → 200 (reset succeeds in test env)."""
+        """Admin token + correct confirmation -> 200 (reset succeeds in test env)."""
         from server import AdminResetDBHandler, create_token
         token = create_token("admin001", "admin", "Test Admin", "officer")
-        body = json.dumps({"confirm": "WIPE_STAGING_2026"}).encode()
+        body = json.dumps({"confirm": "test-wipe-confirm"}).encode()
         handler = _build_handler(AdminResetDBHandler, "POST", "/api/admin/reset-db",
                                  body=body, token=token)
         handler.post()
@@ -117,15 +121,53 @@ class TestEX01_AdminResetDBAuth:
         """Auth must be checked BEFORE the confirmation string.
 
         An unauthenticated caller should get 401 even if they know the
-        confirmation string — the confirmation is defense-in-depth, not
+        confirmation string - the confirmation is defense-in-depth, not
         primary access control.
         """
         from server import AdminResetDBHandler
-        body = json.dumps({"confirm": "WIPE_STAGING_2026"}).encode()
+        body = json.dumps({"confirm": "test-wipe-confirm"}).encode()
         handler = _build_handler(AdminResetDBHandler, "POST", "/api/admin/reset-db", body=body)
         handler.post()
         # Must get 401, NOT 403 (which would mean the confirmation check ran first)
         assert handler._status_code == 401
+
+    def test_missing_confirmation_env_fails_closed(self, temp_db, monkeypatch):
+        """Missing ADMIN_RESET_DB_CONFIRMATION should fail closed."""
+        from server import AdminResetDBHandler, create_token
+        monkeypatch.delenv("ADMIN_RESET_DB_CONFIRMATION", raising=False)
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        body = json.dumps({"confirm": "test-wipe-confirm"}).encode()
+        handler = _build_handler(AdminResetDBHandler, "POST", "/api/admin/reset-db", body=body, token=token)
+        handler.post()
+        assert handler._status_code == 503
+
+    def test_production_env_is_blocked(self, temp_db, monkeypatch):
+        """Reset endpoint remains blocked in production."""
+        import config
+        from server import AdminResetDBHandler, create_token
+        monkeypatch.setattr(config, "IS_PRODUCTION", True)
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        body = json.dumps({"confirm": "test-wipe-confirm"}).encode()
+        handler = _build_handler(AdminResetDBHandler, "POST", "/api/admin/reset-db", body=body, token=token)
+        handler.post()
+        assert handler._status_code == 403
+
+
+class TestOfficerResetConfirmationControl:
+    """Officer reset endpoint should be env-gated and fail closed."""
+
+    def test_missing_officer_confirmation_env_fails_closed(self, temp_db, monkeypatch):
+        from server import AdminOfficerPasswordResetHandler, create_token
+        monkeypatch.delenv("ADMIN_OFFICER_RESET_CONFIRMATION", raising=False)
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        body = json.dumps({
+            "confirm": "irrelevant",
+            "email": "officer@example.com",
+            "new_password": "StrongPass123",
+        }).encode()
+        handler = _build_handler(AdminOfficerPasswordResetHandler, "POST", "/api/admin/officer-reset-password", body=body, token=token)
+        handler.post()
+        assert handler._status_code == 503
 
 
 # ══════════════════════════════════════════════════════════════

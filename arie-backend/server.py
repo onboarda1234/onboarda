@@ -1502,8 +1502,15 @@ class AdminResetDBHandler(BaseHandler):
         if IS_PRODUCTION:
             self.error("Cannot reset production database", 403)
             return
+
+        required_confirm = (os.environ.get("ADMIN_RESET_DB_CONFIRMATION") or "").strip()
+        if not required_confirm:
+            logger.error("ADMIN_RESET_DB_CONFIRMATION is not set; refusing reset endpoint request")
+            self.error("Reset control is not configured", 503)
+            return
+
         secret = self.get_json().get("confirm")
-        if secret != "WIPE_STAGING_2026":
+        if secret != required_confirm:
             self.error("Invalid confirmation", 403)
             return
         try:
@@ -1541,6 +1548,7 @@ class AdminResetDBHandler(BaseHandler):
                 self.error(f"Wipe succeeded but re-seed failed: {str(seed_err)}", 500)
                 return
             db.close()
+            self.log_audit(user, "Admin Reset", "Database", "Staging database reset and re-seeded")
             self.success({"status": "reset_complete", "message": "Database wiped and re-seeded"})
         except Exception as e:
             logger.error(f"DB reset failed: {e}", exc_info=True)
@@ -1594,7 +1602,12 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
         email = data.get("email", "").strip().lower()
         new_password = data.get("new_password", "")
 
-        if confirm != "RESET_STAGING_ADMIN":
+        required_confirm = (os.environ.get("ADMIN_OFFICER_RESET_CONFIRMATION") or "").strip()
+        if not required_confirm:
+            logger.error("ADMIN_OFFICER_RESET_CONFIRMATION is not set; refusing officer reset request")
+            return self.error("Reset control is not configured", 503)
+
+        if confirm != required_confirm:
             return self.error("Invalid confirmation token", 403)
         if not email or not new_password:
             return self.error("email and new_password required", 400)
@@ -1602,8 +1615,8 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
             return self.error("Password must be at least 8 characters", 400)
 
         db = get_db()
-        user = db.execute("SELECT id, role, full_name FROM users WHERE LOWER(email) = ?", (email,)).fetchone()
-        if not user:
+        officer_row = db.execute("SELECT id, role, full_name FROM users WHERE LOWER(email) = ?", (email,)).fetchone()
+        if not officer_row:
             db.close()
             return self.error("Officer not found", 404)
 
@@ -1613,8 +1626,9 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
         db.commit()
         db.close()
 
-        logger.warning(f"OFFICER PASSWORD RESET: {email} (role={user['role']}) password was reset via staging endpoint")
-        self.success({"status": "password_reset", "email": email, "role": user["role"]})
+        logger.warning(f"OFFICER PASSWORD RESET: {email} (role={officer_row['role']}) password was reset via staging endpoint")
+        self.log_audit(user, "Admin Reset", "Officer Password", f"Officer password reset for {email}")
+        self.success({"status": "password_reset", "email": email, "role": officer_row["role"]})
 
 
 # ── Health Check ──
