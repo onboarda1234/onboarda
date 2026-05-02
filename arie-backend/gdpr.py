@@ -27,6 +27,30 @@ CATEGORY_TABLE_MAP = {
     "monitoring_alerts": ("monitoring_alerts", "created_at"),
 }
 
+# Explicit identifier allowlists derived from CATEGORY_TABLE_MAP.
+# These are used by _assert_safe_sql_identifier() to guard every f-string SQL
+# construction in this module.  Even though table/column names are always
+# resolved from the hardcoded CATEGORY_TABLE_MAP dict (never from user input),
+# an explicit check here protects against future regressions or accidental
+# changes to the map that introduce an unexpected identifier.
+_ALLOWED_GDPR_TABLES: frozenset = frozenset(v[0] for v in CATEGORY_TABLE_MAP.values())
+_ALLOWED_GDPR_DATE_COLS: frozenset = frozenset(v[1] for v in CATEGORY_TABLE_MAP.values())
+
+
+def _assert_safe_sql_identifier(value: str, allowed: frozenset, context: str) -> None:
+    """Raise ValueError if *value* is not in the pre-approved *allowed* set.
+
+    This is a defence-in-depth check: identifiers must already come from
+    CATEGORY_TABLE_MAP, but this validates the resolved value explicitly so
+    any future code-path change will surface immediately rather than silently
+    executing arbitrary SQL.
+    """
+    if value not in allowed:
+        raise ValueError(
+            f"SQL identifier safety check failed for {context!r}: "
+            f"{value!r} is not in the allowed set {sorted(allowed)!r}"
+        )
+
 
 def get_retention_policies(db) -> List[Dict]:
     """Fetch all active retention policies."""
@@ -53,9 +77,11 @@ def get_expired_data_summary(db) -> List[Dict]:
             continue  # Skip categories without direct table mapping (handled manually)
 
         table, date_col = mapping
+        _assert_safe_sql_identifier(table, _ALLOWED_GDPR_TABLES, "table")
+        _assert_safe_sql_identifier(date_col, _ALLOWED_GDPR_DATE_COLS, "date_col")
         try:
             row = db.execute(
-                f"SELECT COUNT(*) as cnt, MIN({date_col}) as oldest FROM {table} WHERE {date_col} < ?",
+                f"SELECT COUNT(*) as cnt, MIN({date_col}) as oldest FROM {table} WHERE {date_col} < ?",  # noqa: S608
                 (cutoff,)
             ).fetchone()
             count = row["cnt"] if row else 0
@@ -114,6 +140,8 @@ def purge_expired_data(
         return {"error": f"Category '{category}' has no direct table mapping — requires manual purge"}
 
     table, date_col = mapping
+    _assert_safe_sql_identifier(table, _ALLOWED_GDPR_TABLES, "table")
+    _assert_safe_sql_identifier(date_col, _ALLOWED_GDPR_DATE_COLS, "date_col")
 
     # Count and get date range
     stats = db.execute(

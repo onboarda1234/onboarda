@@ -137,6 +137,14 @@ from edd_routing_policy import (
     emit_routing_audit as _emit_edd_routing_audit,
 )
 
+# GDPR retention and purge engine (optional import — continues if unavailable)
+try:
+    from gdpr import run_scheduled_purge as _gdpr_run_scheduled_purge
+    HAS_GDPR_PURGE = True
+except ImportError:
+    HAS_GDPR_PURGE = False
+    _gdpr_run_scheduled_purge = None
+
 
 # ── Priority B.2 / Workstream A: EDD route actuation ─────────────────
 # When the deterministic EDD routing policy returns route="edd", this
@@ -10267,6 +10275,18 @@ class ApplicationDecisionHandler(BaseHandler):
             db.close()
             return self.error("override_reason is required when override_ai is true", 400)
 
+        # ── OVERRIDE GOVERNANCE: Only SCO or Admin may override the AI recommendation ──
+        if override_ai and user.get("role") not in ("sco", "admin"):
+            reason = (
+                "AI override requires Senior Compliance Officer or Admin role. "
+                f"Your role '{user.get('role')}' is not permitted to submit override_ai=true."
+            )
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "rejected", 403,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, 403)
+
         # ── EX-11: Backend enforcement of officer sign-off for AI advisory ──
         signoff_scope = "override" if override_ai else "decision"
         signoff_error = _validate_officer_signoff(data.get("officer_signoff"), signoff_scope)
@@ -10400,6 +10420,8 @@ class ApplicationDecisionHandler(BaseHandler):
             "decision_reason": decision_reason,
             "override_ai": override_ai,
             "override_reason": override_reason if override_ai else None,
+            "override_reviewed_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ") if override_ai else None,
+            "override_by_role": user.get("role") if override_ai else None,
             "required_documents": required_documents if decision == "request_documents" else None,
             "rmi_deadline": rmi_deadline if decision == "request_documents" else None,
         }
@@ -13248,4 +13270,27 @@ if __name__ == "__main__":
 ║  Password: see initial boot output above          ║
 ╚══════════════════════════════════════════════════╝
     """)
+    # ── GDPR Retention Purge — daily scheduled run ──
+    # Runs run_scheduled_purge() once per day (86_400_000 ms).
+    # Only executes in non-testing environments to avoid touching test DBs.
+    # Purge only affects categories with auto_purge=True in data_retention_policies.
+    if HAS_GDPR_PURGE and ENVIRONMENT not in ("testing",):
+        def _gdpr_purge_tick():
+            try:
+                db = get_db()
+                results = _gdpr_run_scheduled_purge(db, purged_by="system-scheduler")
+                purged = sum(r.get("records_deleted", 0) for r in results if isinstance(r, dict))
+                if purged:
+                    logger.info("gdpr-purge: daily run complete — %d record(s) purged across %d categor(ies)",
+                                purged, len(results))
+                else:
+                    logger.debug("gdpr-purge: daily run complete — no records eligible for purge")
+                db.close()
+            except Exception as exc:
+                logger.error("gdpr-purge: daily run failed: %s", exc)
+
+        _gdpr_purge_cb = tornado.ioloop.PeriodicCallback(_gdpr_purge_tick, 86_400_000)
+        _gdpr_purge_cb.start()
+        logger.info("gdpr-purge: daily PeriodicCallback registered (interval=86400s)")
+
     tornado.ioloop.IOLoop.current().start()
