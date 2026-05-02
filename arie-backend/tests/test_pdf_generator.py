@@ -2,6 +2,10 @@
 Sprint 3 — PDF Generator Tests
 Validates server-side PDF generation produces valid PDF output
 with correct structure, escaping, and metadata.
+
+Note: These tests require WeasyPrint native system libraries (libpango, libcairo,
+libglib2.0, etc.). On Windows they will be skipped automatically unless the native
+libs are installed. In CI they run in a dedicated pdf-tests job on Ubuntu.
 """
 import os
 import sys
@@ -13,6 +17,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("ENVIRONMENT", "testing")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only")
+
+# Skip the entire module if WeasyPrint cannot load its native shared libraries.
+# This keeps Windows local development usable; CI runs these in a dedicated job
+# with the required native packages installed.
+try:
+    import weasyprint as _wp
+    _wp.HTML(string="<p>probe</p>").write_pdf()
+    _WEASYPRINT_AVAILABLE = True
+except Exception:
+    _WEASYPRINT_AVAILABLE = False
+
+pytestmark = pytest.mark.skipif(
+    not _WEASYPRINT_AVAILABLE,
+    reason="WeasyPrint native libraries not available (libpango/libcairo); "
+           "PDF tests run in the dedicated CI pdf-tests job on Ubuntu.",
+)
 
 
 # ═══════════════════════════════════════════════════════════
