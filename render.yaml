@@ -1,7 +1,8 @@
 # ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # Render.com — Blueprint spec for Onboarda / RegMind
-# Two services: LIVE (production) and DEMO (demo mode)
-# Both auto-deploy on push to main. CI gates merges.
+# ACTIVE service: arie-finance-demo (DEMO mode only, demo.regmind.co)
+# Production is AWS ECS Fargate af-south-1 (not Render).
 # HTML frontends are copied from repo root into arie-backend/
 # at build time (source of truth is repo root).
 # Place this at the REPO ROOT (not inside arie-backend/)
@@ -9,7 +10,12 @@
 
 services:
   # ─────────────────────────────────────────────────────────────
-  # 1. LIVE — Production Environment
+  # ─────────────────────────────────────────────────────────────
+  # DEPRECATED — this Render service is NOT the production environment.
+  # Production is AWS ECS Fargate (af-south-1). This entry is kept
+  # only as a reference and should NOT be auto-deployed to Render.
+  # Set autoDeploy: false or remove this service when confirmed dormant.
+  # 1. arie-finance-live — DORMANT (production is AWS ECS, not Render)
   # ─────────────────────────────────────────────────────────────
   - type: web
     name: arie-finance-live
@@ -19,7 +25,7 @@ services:
     buildCommand: "cp arie-portal.html arie-backend/arie-portal.html && cp arie-backoffice.html arie-backend/arie-backoffice.html && pip install -r arie-backend/requirements.txt"
     startCommand: cd arie-backend && python3 server.py
     healthCheckPath: /api/health
-    autoDeploy: true           # Auto-deploy on push (CI gates merges to main)
+    autoDeploy: false          # DORMANT: production is AWS ECS, not Render
     disk:
       name: arie-data-live
       mountPath: /data
