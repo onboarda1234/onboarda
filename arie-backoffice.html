@@ -1314,6 +1314,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
           <div class="form-group" style="margin:0;">
             <div class="form-label">File</div>
             <input class="form-input" type="file" id="bo-upload-file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" />
+            <div id="bo-upload-size-help" style="font-size:11px;color:var(--text3);margin-top:6px;">Accepted formats: PDF, DOCX, XLSX, PPTX, PNG, JPG (max 25MB)</div>
           </div>
         </div>
         <div class="form-group" style="margin:10px 0 0;">
@@ -3058,6 +3059,31 @@ var BO_AUTH_USER = null;
 // ─── Environment Detection ────────────────────────────────────
 var APP_ENV = 'production';
 var FEATURE_FLAGS = {};
+var BO_DOC_UPLOAD_LEGACY_MAX_MB = 25;
+var BO_DOC_UPLOAD_CLIENT_CAP_MB = 10;
+
+function isBoDocUploadClientCapEnabled() {
+  return !!FEATURE_FLAGS.FF_SIZE_CAP_CLIENT_REJECT;
+}
+
+function boDocUploadMaxMb() {
+  return isBoDocUploadClientCapEnabled() ? BO_DOC_UPLOAD_CLIENT_CAP_MB : BO_DOC_UPLOAD_LEGACY_MAX_MB;
+}
+
+function boDocUploadMaxBytes() {
+  return boDocUploadMaxMb() * 1024 * 1024;
+}
+
+function boDocUploadMaxLabel() {
+  return boDocUploadMaxMb() + 'MB';
+}
+
+function refreshBoDocUploadLimitCopy() {
+  var el = document.getElementById('bo-upload-size-help');
+  if (el) {
+    el.textContent = 'Accepted formats: PDF, DOCX, XLSX, PPTX, PNG, JPG (max ' + boDocUploadMaxLabel() + ')';
+  }
+}
 
 async function loadEnvironment() {
   try {
@@ -3131,6 +3157,7 @@ function applyEnvironmentUI() {
       }
     }, 500);
   }
+  refreshBoDocUploadLimitCopy();
 }
 
 function getCookieValue(name) {
@@ -12072,6 +12099,7 @@ function toggleBoDocUpload() {
     document.getElementById('bo-upload-doc-type').value = '';
     document.getElementById('bo-upload-file').value = '';
     document.getElementById('bo-upload-notes').value = '';
+    refreshBoDocUploadLimitCopy();
   } else {
     panel.style.display = 'none';
     if (btn) btn.textContent = '📤 Upload Document';
@@ -12090,8 +12118,10 @@ async function submitBoDocUpload() {
   if (!docType) { showToast('Please select a document type'); return; }
   if (!file) { showToast('Please select a file to upload'); return; }
 
-  // Check file size (max 25MB for demo)
-  if (file.size > 25 * 1024 * 1024) { showToast('File too large — maximum 25MB'); return; }
+  if (file.size > boDocUploadMaxBytes()) {
+    showToast('File too large — maximum ' + boDocUploadMaxLabel());
+    return;
+  }
 
   try {
     var formData = new FormData();

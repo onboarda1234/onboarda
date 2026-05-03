@@ -86,7 +86,20 @@ jobs:
           import json, sys
           td = json.load(sys.stdin)
           # Update the first container's image
-          td['containerDefinitions'][0]['image'] = '$NEW_IMAGE'
+          container = td['containerDefinitions'][0]
+          container['image'] = '$NEW_IMAGE'
+          env = container.setdefault('environment', [])
+
+          def upsert_env(name, value):
+              for item in env:
+                  if item.get('name') == name:
+                      item['value'] = value
+                      return
+              env.append({'name': name, 'value': value})
+
+          # Phase 7 staging quick win: reject over-10MB document uploads in the browser
+          # before the request body is sent. Defaults remain off in code; staging opts in.
+          upsert_env('FF_SIZE_CAP_CLIENT_REJECT', 'true')
           # Remove fields that can't be passed to register-task-definition
           for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
                       'compatibilities', 'registeredAt', 'registeredBy']:
