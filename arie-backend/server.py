@@ -164,6 +164,70 @@ except ImportError:
 _EDD_ACTUATION_TERMINAL_STAGES = ("edd_approved", "edd_rejected")
 
 
+def _canonical_risk_level(value):
+    """Return a canonical risk level or None when the source is not rated."""
+    key = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
+    return key if key in _CANONICAL_RISK_LEVELS else None
+
+
+def _canonical_risk_score(value):
+    if value in (None, ""):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if score < 0 or score > 100:
+        return None
+    return score
+
+
+def _application_risk_snapshot(app_row):
+    """Truthful risk snapshot for copying into downstream workflow rows.
+
+    Phase 4 deliberately refuses the historical HIGH/0 fallback. A non-low
+    zero score is treated as stale unless a real score is present.
+    """
+    if not app_row:
+        return None, None
+    try:
+        app = dict(app_row)
+    except Exception:
+        app = app_row
+    level = (
+        _canonical_risk_level(app.get("final_risk_level"))
+        or _canonical_risk_level(app.get("risk_level"))
+    )
+    score = (
+        _canonical_risk_score(app.get("final_risk_score"))
+        if app.get("final_risk_score") not in (None, "")
+        else _canonical_risk_score(app.get("risk_score"))
+    )
+    if not level:
+        return None, None
+    if level != "LOW" and score == 0:
+        score = None
+    return level, score
+
+
+def _edd_truthful_risk_snapshot(case_row, app_row=None):
+    app_level, app_score = _application_risk_snapshot(app_row)
+    if app_level:
+        return app_level, app_score
+
+    try:
+        case = dict(case_row)
+    except Exception:
+        case = case_row or {}
+    level = _canonical_risk_level(case.get("risk_level"))
+    score = _canonical_risk_score(case.get("risk_score"))
+    if not level:
+        return None, None
+    if level != "LOW" and score == 0:
+        return None, None
+    return level, score
+
+
 def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, client_ip=""):
     """Create or upsert an EDD case + flip application status when route=edd.
 
@@ -270,11 +334,12 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
                 "evaluated_at": evaluated_at,
                 "note": "EDD case auto-created by routing policy actuation",
             }])
+            risk_level, risk_score = _application_risk_snapshot(app_dict)
             insert_params = (
                 application_id,
                 app_dict.get("company_name") or "",
-                (app_dict.get("risk_level") or "HIGH"),
-                app_dict.get("risk_score") or 0,
+                risk_level,
+                risk_score,
                 "triggered",
                 (user or {}).get("sub") or None,
                 "policy_routing",
@@ -6534,14 +6599,20 @@ class ApplicationEvidencePackHandler(BaseHandler):
             ).fetchall(),
             json_fields=("key_flags", "extra_json"),
         )
-        edd_cases = self._dict_rows(
-            db.execute(
+        edd_cases = [
+            _materialise_edd_case(db, row)
+            for row in db.execute(
                 "SELECT * FROM edd_cases WHERE application_id = ? ORDER BY triggered_at DESC, id DESC",
                 (app_dict["id"],)
-            ).fetchall(),
-            json_fields=("origin_context", "edd_notes"),
-        )
+            ).fetchall()
+        ]
         rmi_requests = _load_rmi_requests(db, app_dict["id"])
+        application_notes = self._dict_rows(
+            db.execute(
+                "SELECT * FROM application_notes WHERE application_id = ? ORDER BY created_at DESC, id DESC",
+                (app_dict["id"],)
+            ).fetchall()
+        )
 
         audit_limit = _bounded_int(self.get_argument("audit_limit", 1000), 1000, min_value=1, max_value=5000)
         targets = _audit_target_values_for_ref(app_dict["ref"])
@@ -6583,6 +6654,7 @@ class ApplicationEvidencePackHandler(BaseHandler):
                 "intermediaries": intermediaries,
             },
             "documents": documents,
+            "application_notes": application_notes,
             "rmi_requests": rmi_requests,
             "compliance_memos": memos,
             "decision_records": decisions,
@@ -12186,6 +12258,114 @@ def _edd_findings_are_complete(db, case_id):
     )
 
 
+def _edd_policy_block(case_dict):
+    notes = safe_json_loads(case_dict.get("edd_notes", "[]"))
+    policy_note = {}
+    if isinstance(notes, list):
+        for item in notes:
+            if isinstance(item, dict) and (
+                item.get("policy_version") or item.get("source") == "policy_routing"
+            ):
+                policy_note = item
+                break
+    return {
+        "origin_context": case_dict.get("origin_context"),
+        "trigger_source": case_dict.get("trigger_source"),
+        "policy_version": policy_note.get("policy_version"),
+        "triggers": policy_note.get("triggers") or [],
+        "mandatory_escalation_reasons": policy_note.get("mandatory_escalation_reasons") or [],
+        "evaluated_at": policy_note.get("evaluated_at"),
+        "trigger_notes": case_dict.get("trigger_notes"),
+    }
+
+
+def _edd_findings_complete_payload(findings):
+    if not findings:
+        return False
+    recommended = str(findings.get("recommended_outcome") or "").strip()
+    if not recommended:
+        return False
+
+    def _list_has_content(value):
+        if isinstance(value, str):
+            try:
+                value = safe_json_loads(value)
+            except Exception:
+                value = [value]
+        if not isinstance(value, list):
+            value = [value]
+        return any(str(item or "").strip() for item in value)
+
+    summary = str(findings.get("findings_summary") or "").strip()
+    return (
+        len(summary) >= 12
+        or _list_has_content(findings.get("key_concerns"))
+        or _list_has_content(findings.get("mitigating_evidence"))
+    )
+
+
+def _edd_case_status_block(case_dict, findings=None):
+    assigned = str(case_dict.get("assigned_officer") or "").strip()
+    senior = str(case_dict.get("senior_reviewer") or "").strip()
+    findings_complete = _edd_findings_complete_payload(findings)
+    blockers = []
+    if not case_dict.get("sla_due_at"):
+        blockers.append("SLA due date is required before senior review or closure.")
+    if not findings_complete:
+        blockers.append("Structured EDD findings are required before senior review or closure.")
+    if not senior:
+        blockers.append("Senior reviewer must be assigned before senior review or closure.")
+    if assigned and senior and assigned == senior:
+        blockers.append("Senior reviewer must be different from the assigned officer.")
+
+    return {
+        "sla_due_at_set": bool(case_dict.get("sla_due_at")),
+        "findings_present": bool(findings),
+        "findings_complete": findings_complete,
+        "senior_reviewer_assigned": bool(senior),
+        "dual_control_ready": bool(senior) and (not assigned or assigned != senior),
+        "gate_blockers": blockers,
+        "can_enter_review_or_close": not blockers,
+        "is_terminal": case_dict.get("stage") in ("edd_approved", "edd_rejected"),
+    }
+
+
+def _materialise_edd_case(db, case_row, include_findings=True):
+    case_dict = dict(case_row)
+    app_row = db.execute(
+        "SELECT id, ref, risk_level, risk_score, final_risk_level "
+        "FROM applications WHERE id = ?",
+        (case_dict.get("application_id"),),
+    ).fetchone()
+    if app_row:
+        case_dict["application_ref"] = app_row["ref"]
+    risk_level, risk_score = _edd_truthful_risk_snapshot(case_dict, app_row)
+    case_dict["risk_level"] = risk_level
+    case_dict["risk_score"] = risk_score
+    case_dict["edd_notes"] = safe_json_loads(case_dict.get("edd_notes", "[]"))
+    findings = None
+    if include_findings:
+        try:
+            from edd_memo_integration import get_edd_findings
+            findings = get_edd_findings(db, case_dict["id"])
+        except Exception:
+            findings = None
+        case_dict["findings"] = findings
+    case_dict["case_status"] = _edd_case_status_block(case_dict, findings)
+    case_dict["policy"] = _edd_policy_block(case_dict)
+    return case_dict
+
+
+def _edd_application_ref(db, case_dict):
+    app = db.execute(
+        "SELECT ref FROM applications WHERE id = ?",
+        (case_dict.get("application_id"),),
+    ).fetchone()
+    if app and app["ref"]:
+        return app["ref"]
+    return f"EDD-{case_dict.get('id')}"
+
+
 class EDDListHandler(BaseHandler):
     """GET /api/edd/cases — List EDD cases; POST — Create a new EDD case"""
     def get(self):
@@ -12222,11 +12402,7 @@ class EDDListHandler(BaseHandler):
 
         query += " ORDER BY triggered_at DESC"
         cases = db.execute(query, params).fetchall()
-        result = []
-        for c in cases:
-            row = dict(c)
-            row["edd_notes"] = safe_json_loads(row.get("edd_notes", "[]"))
-            result.append(row)
+        result = [_materialise_edd_case(db, c) for c in cases]
         db.close()
         self.success({"cases": result, "total": len(result)})
 
@@ -12259,7 +12435,8 @@ class EDDListHandler(BaseHandler):
             "note": trigger_notes
         }])
 
-        insert_params = (application_id, app["company_name"], app.get("risk_level", "HIGH"), app.get("risk_score", 0),
+        risk_level, risk_score = _application_risk_snapshot(app)
+        insert_params = (application_id, app["company_name"], risk_level, risk_score,
               "triggered", user["sub"], data.get("trigger_source", "officer_decision"), trigger_notes, initial_note)
 
         if USE_POSTGRES:
@@ -12295,8 +12472,7 @@ class EDDDetailHandler(BaseHandler):
             db.close()
             return self.error("EDD case not found", 404)
 
-        result = dict(case)
-        result["edd_notes"] = safe_json_loads(result.get("edd_notes", "[]"))
+        result = _materialise_edd_case(db, case)
         db.close()
         self.success(result)
 
@@ -12313,6 +12489,7 @@ class EDDDetailHandler(BaseHandler):
             db.close()
             return self.error("EDD case not found", 404)
         case_dict = dict(case)
+        app_ref = _edd_application_ref(db, case_dict)
 
         # Prevent updates on closed cases
         if case["stage"] in ("edd_approved", "edd_rejected"):
@@ -12392,6 +12569,25 @@ class EDDDetailHandler(BaseHandler):
             updates.append("sla_due_at=?")
             params.append(parsed_sla_due_at.isoformat())
 
+        effective_assigned = str(data.get("assigned_officer") or case_dict.get("assigned_officer") or "").strip()
+        effective_senior = str(data.get("senior_reviewer") or case_dict.get("senior_reviewer") or "").strip()
+
+        if new_stage in _EDD_REVIEW_OR_TERMINAL_STAGES:
+            if not effective_senior:
+                db.close()
+                return self.error("senior_reviewer is required before senior review or closure", 400)
+            if effective_assigned and effective_senior == effective_assigned:
+                db.close()
+                return self.error("senior_reviewer must be different from the assigned officer", 400)
+
+        if new_stage in ("edd_approved", "edd_rejected"):
+            if user.get("role") not in ("sco", "admin"):
+                db.close()
+                return self.error("EDD closure requires Senior Compliance Officer or Admin role", 403)
+            if effective_assigned and user.get("sub") == effective_assigned:
+                db.close()
+                return self.error("EDD closure requires a different officer from the assigned officer", 403)
+
         # Handle decision for terminal stages
         if new_stage in ("edd_approved", "edd_rejected"):
             decision_reason = data.get("decision_reason", "")
@@ -12435,7 +12631,24 @@ class EDDDetailHandler(BaseHandler):
                 detail += f" | Note: {note_text[:100]}"
             if sla_breach_reason:
                 detail += f" | SLA breach acknowledged: {sla_breach_reason[:100]}"
-            self.log_audit(user, "EDD Update", f"EDD-{case_id}", detail, db=db, commit=False)
+            detail += f" | EDD Case: EDD-{case_id}"
+            self.log_audit(user, "EDD Update", app_ref, detail, db=db, commit=False)
+            if new_stage in ("edd_approved", "edd_rejected"):
+                self.log_audit(
+                    user,
+                    "EDD Closure (dual-control)",
+                    app_ref,
+                    json.dumps({
+                        "edd_case_id": case_id,
+                        "decision": new_stage,
+                        "assigned_officer": effective_assigned or None,
+                        "senior_reviewer": effective_senior,
+                        "closed_by": user.get("sub"),
+                        "decision_reason": data.get("decision_reason", ""),
+                    }, default=str, sort_keys=True),
+                    db=db,
+                    commit=False,
+                )
 
             db.commit()
             db.close()
@@ -12449,6 +12662,91 @@ class EDDDetailHandler(BaseHandler):
             return self.error("Failed to update EDD case", 500)
 
         self.success({"status": "updated", "stage": new_stage or case["stage"]})
+
+
+class EDDFindingsHandler(BaseHandler):
+    """GET/PATCH /api/edd/cases/:id/findings — structured EDD findings."""
+    def get(self, case_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        db = get_db()
+        case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+        if not case:
+            db.close()
+            return self.error("EDD case not found", 404)
+        try:
+            from edd_memo_integration import get_edd_findings
+            findings = get_edd_findings(db, case_id)
+        except Exception:
+            findings = None
+        case_dict = dict(case)
+        status = _edd_case_status_block(case_dict, findings)
+        db.close()
+        self.success({"findings": findings, "case_status": status})
+
+    def patch(self, case_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        data = self.get_json()
+        findings = data.get("findings") if isinstance(data.get("findings"), dict) else data
+
+        db = get_db()
+        case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+        if not case:
+            db.close()
+            return self.error("EDD case not found", 404)
+        case_dict = dict(case)
+        app_ref = _edd_application_ref(db, case_dict)
+
+        def _audit_writer(audit_user, action, _target, detail, db=None, before_state=None, after_state=None):
+            self.log_audit(
+                audit_user,
+                action,
+                app_ref,
+                detail,
+                db=db,
+                before_state=before_state,
+                after_state=after_state,
+                commit=False,
+            )
+
+        try:
+            from edd_memo_integration import (
+                EDDCaseNotFound,
+                FindingsValidationError,
+                MissingAuditWriter,
+                set_edd_findings,
+            )
+            updated = set_edd_findings(
+                db,
+                case_id,
+                findings=findings,
+                user=user,
+                audit_writer=_audit_writer,
+            )
+            db.commit()
+        except EDDCaseNotFound:
+            db.close()
+            return self.error("EDD case not found", 404)
+        except (FindingsValidationError, MissingAuditWriter) as exc:
+            db.close()
+            return self.error(str(exc), 400)
+        except Exception as exc:
+            logger.error("Failed to save EDD findings for %s: %s", case_id, exc, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to save EDD findings", 500)
+
+        status = _edd_case_status_block(case_dict, updated)
+        db.close()
+        self.success({"findings": updated, "case_status": status})
+
+    put = patch
 
 
 class EDDStatsHandler(BaseHandler):
@@ -13537,6 +13835,7 @@ def make_app():
 
         # EDD Pipeline
         (r"/api/edd/stats", EDDStatsHandler),
+        (r"/api/edd/cases/([^/]+)/findings", EDDFindingsHandler),
         (r"/api/edd/cases/([^/]+)", EDDDetailHandler),
         (r"/api/edd/cases", EDDListHandler),
 

@@ -121,15 +121,15 @@ def _seed_app(app_id="phase5_app", ref="ARF-2026-P5-001", status="in_review"):
     return client_id, app_id, ref
 
 
-def _create_edd_case(app_id, *, stage="analysis", sla_due_at=None):
+def _create_edd_case(app_id, *, stage="analysis", sla_due_at=None, senior_reviewer="sco001"):
     from db import get_db
 
     conn = get_db()
     conn.execute(
         """INSERT INTO edd_cases
-           (application_id, client_name, risk_level, risk_score, stage, assigned_officer, sla_due_at, priority, edd_notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (app_id, "Phase 5 Ltd", "HIGH", 80, stage, "admin001", sla_due_at, "high", "[]"),
+           (application_id, client_name, risk_level, risk_score, stage, assigned_officer, senior_reviewer, sla_due_at, priority, edd_notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (app_id, "Phase 5 Ltd", "HIGH", 80, stage, "admin001", senior_reviewer, sla_due_at, "high", "[]"),
     )
     case_id = conn.execute("SELECT id FROM edd_cases WHERE application_id=? ORDER BY id DESC LIMIT 1", (app_id,)).fetchone()["id"]
     conn.commit()
@@ -247,7 +247,7 @@ def test_edd_requires_sla_and_findings_before_senior_review(phase5_api_server):
     _insert_edd_findings(case_id)
     accepted = requests.patch(
         f"{phase5_api_server}/api/edd/cases/{case_id}",
-        json={"stage": "pending_senior_review"},
+        json={"stage": "pending_senior_review", "senior_reviewer": "sco001"},
         headers=_officer_headers(),
         timeout=5,
     )
@@ -291,7 +291,7 @@ def test_edd_findings_require_recommendation_plus_evidence(phase5_api_server):
 
     accepted = requests.patch(
         f"{phase5_api_server}/api/edd/cases/{case_id}",
-        json={"stage": "pending_senior_review"},
+        json={"stage": "pending_senior_review", "senior_reviewer": "sco001"},
         headers=_officer_headers(),
         timeout=5,
     )

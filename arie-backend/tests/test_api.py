@@ -548,6 +548,239 @@ class TestAuthenticatedAccess:
         assert detail["doc_type"] == "cert_inc"
         assert detail["duration_ms"] is not None
 
+    def test_edd_creation_preserves_unknown_risk_and_ui_has_no_high_fallback(self, api_server):
+        """EDD must not fabricate HIGH/0 when parent application risk is unknown."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        app_id = "app_p4_edd_unknown"
+        app_ref = "ARF-P4-EDD-UNKNOWN"
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, risk_level, risk_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, app_ref, "testclient001", "Phase 4 Unknown Risk Ltd",
+             "Mauritius", "Technology", "SME", "edd_required", None, None),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        created = http_requests.post(
+            f"{api_server}/api/edd/cases",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"application_id": app_id, "trigger_source": "phase4_test"},
+            timeout=3,
+        )
+        assert created.status_code == 201, created.text
+
+        listed = http_requests.get(
+            f"{api_server}/api/edd/cases",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert listed.status_code == 200
+        row = next(c for c in listed.json()["cases"] if c["application_id"] == app_id)
+        assert row["risk_level"] is None
+        assert row["risk_score"] is None
+
+        html_path = os.path.join(os.path.dirname(__file__), "..", "..", "arie-backoffice.html")
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        assert "c.risk_level || 'HIGH'" not in html
+        assert "riskBadge(c.risk_level)" in html
+
+    def test_edd_findings_sla_dual_control_and_audit_ref_target(self, api_server):
+        """EDD can advance through legitimate gates and its audit is case-reconstructable."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_p4_edd_gate"
+        app_ref = "ARF-P4-EDD-GATE"
+        conn = get_db()
+        conn.execute("DELETE FROM edd_findings WHERE edd_case_id IN (SELECT id FROM edd_cases WHERE application_id = ?)", (app_id,))
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM audit_log WHERE target IN (?, ?, ?)", (app_ref, f"application:{app_ref}", "EDD-999999"))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, risk_level, risk_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, app_ref, "testclient001", "Phase 4 EDD Gate Ltd",
+             "Mauritius", "Fintech", "SME", "edd_required", "HIGH", 80),
+        )
+        conn.execute(
+            """
+            INSERT INTO edd_cases
+            (application_id, client_name, risk_level, risk_score, stage, assigned_officer, trigger_source, edd_notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, "Phase 4 EDD Gate Ltd", "HIGH", 80, "analysis", "admin001", "phase4_test", "[]"),
+        )
+        case_id = conn.execute(
+            "SELECT id FROM edd_cases WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()["id"]
+        conn.commit()
+        conn.close()
+
+        admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+        future_due = "2026-12-31"
+
+        blocked = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}",
+            headers=admin_headers,
+            json={"stage": "pending_senior_review", "sla_due_at": future_due, "senior_reviewer": "sco001"},
+            timeout=3,
+        )
+        assert blocked.status_code == 400
+        assert "Structured EDD findings" in blocked.text
+
+        findings = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}/findings",
+            headers=admin_headers,
+            json={
+                "findings": {
+                    "recommended_outcome": "approve_with_conditions",
+                    "findings_summary": "EDD findings support senior review.",
+                    "key_concerns": ["Opaque ownership reviewed"],
+                    "mitigating_evidence": ["Source of wealth evidence obtained"],
+                    "rationale": "Residual risk acceptable with conditions.",
+                }
+            },
+            timeout=3,
+        )
+        assert findings.status_code == 200, findings.text
+        assert findings.json()["case_status"]["findings_complete"] is True
+
+        same_officer = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}",
+            headers=admin_headers,
+            json={"stage": "pending_senior_review", "sla_due_at": future_due, "senior_reviewer": "admin001"},
+            timeout=3,
+        )
+        assert same_officer.status_code == 400
+        assert "different from the assigned officer" in same_officer.text
+
+        accepted = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}",
+            headers=admin_headers,
+            json={"stage": "pending_senior_review", "sla_due_at": future_due, "senior_reviewer": "sco001"},
+            timeout=3,
+        )
+        assert accepted.status_code == 200, accepted.text
+
+        co_token = create_token("co001", "co", "Compliance Officer", "officer")
+        co_close = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}",
+            headers={"Authorization": f"Bearer {co_token}"},
+            json={"stage": "edd_approved", "decision_reason": "EDD reviewed and approved."},
+            timeout=3,
+        )
+        assert co_close.status_code == 403
+        assert "Senior Compliance Officer or Admin" in co_close.text
+
+        assigned_close = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}",
+            headers=admin_headers,
+            json={"stage": "edd_approved", "decision_reason": "EDD reviewed and approved."},
+            timeout=3,
+        )
+        assert assigned_close.status_code == 403
+        assert "different officer" in assigned_close.text
+
+        sco_token = create_token("sco001", "sco", "Senior Officer", "officer")
+        closed = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}",
+            headers={"Authorization": f"Bearer {sco_token}"},
+            json={"stage": "edd_approved", "decision_reason": "EDD reviewed and approved by SCO."},
+            timeout=3,
+        )
+        assert closed.status_code == 200, closed.text
+
+        audit = http_requests.get(
+            f"{api_server}/api/audit?ref={app_ref}&limit=50",
+            headers=admin_headers,
+            timeout=3,
+        )
+        assert audit.status_code == 200
+        entries = audit.json()["entries"]
+        assert any(e["action"] == "EDD Update" and e["target"] == app_ref for e in entries)
+        assert any(e["action"] == "EDD Closure (dual-control)" and e["target"] == app_ref for e in entries)
+        assert not any(str(e["target"]).startswith("EDD-") for e in entries)
+
+    def test_evidence_pack_includes_notes_and_edd_findings(self, api_server):
+        """Single-call evidence pack must include officer notes and structured EDD findings."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_p4_pack_complete"
+        app_ref = "ARF-P4-PACK-COMPLETE"
+        conn = get_db()
+        conn.execute("DELETE FROM edd_findings WHERE edd_case_id IN (SELECT id FROM edd_cases WHERE application_id = ?)", (app_id,))
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM application_notes WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, risk_level, risk_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, app_ref, "testclient001", "Phase 4 Evidence Pack Ltd",
+             "Mauritius", "Technology", "SME", "edd_required", "HIGH", 75),
+        )
+        conn.execute(
+            "INSERT INTO application_notes (application_id, user_id, user_name, user_role, content) VALUES (?, ?, ?, ?, ?)",
+            (app_id, "admin001", "Test Admin", "admin", "Officer note for evidence pack."),
+        )
+        conn.execute(
+            """
+            INSERT INTO edd_cases
+            (application_id, client_name, risk_level, risk_score, stage, assigned_officer, senior_reviewer, sla_due_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, "Phase 4 Evidence Pack Ltd", "HIGH", 75, "pending_senior_review", "co001", "sco001", "2026-12-31"),
+        )
+        case_id = conn.execute(
+            "SELECT id FROM edd_cases WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO edd_findings
+            (edd_case_id, findings_summary, key_concerns, mitigating_evidence, recommended_outcome)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (case_id, "EDD evidence pack findings are complete.",
+             json.dumps(["Ownership concern reviewed"]),
+             json.dumps(["Mitigating bank evidence obtained"]),
+             "approve_with_conditions"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}/evidence-pack",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200, resp.text
+        pack = resp.json()
+        assert len(pack["application_notes"]) == 1
+        assert pack["application_notes"][0]["content"] == "Officer note for evidence pack."
+        assert pack["edd_cases"][0]["findings"]["recommended_outcome"] == "approve_with_conditions"
+        assert pack["edd_cases"][0]["case_status"]["findings_complete"] is True
+
     def test_document_review_persists_and_survives_detail_reload(self, api_server):
         """POST /api/documents/:id/review should persist officer review truth on the document record."""
         from auth import create_token
