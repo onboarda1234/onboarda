@@ -369,6 +369,21 @@ class TestDeployWorkflowDeterminism:
         assert "IMAGE_TAG" in content
         assert '--build-arg "GIT_SHA=${{ github.sha }}"' in content
         assert '--build-arg "BUILD_TIME=$BUILD_TIME"' in content
+        assert '--build-arg "IMAGE_TAG=$IMAGE_TAG"' in content
+
+    def test_ci_docker_build_verifies_build_metadata_env(self):
+        """ci.yml must prove build provenance env vars are baked into the image."""
+        workflow_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            ".github", "workflows", "ci.yml"
+        )
+        with open(workflow_path, encoding="utf-8") as f:
+            content = f.read()
+        assert '--build-arg "GIT_SHA=${{ github.sha }}"' in content
+        assert '--build-arg "IMAGE_TAG=ci-${{ github.sha }}"' in content
+        assert "grep -q '^GIT_SHA=${{ github.sha }}$'" in content
+        assert "grep -q '^BUILD_TIME=ci$'" in content
+        assert "grep -q '^IMAGE_TAG=ci-${{ github.sha }}$'" in content
 
     def test_deploy_staging_updates_task_definition(self):
         """deploy-staging.yml must update ECS task definition with specific image."""

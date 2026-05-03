@@ -10008,6 +10008,12 @@ class MemoPDFDownloadHandler(BaseHandler):
         pdf_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
         pdf_generated_at = datetime.now(timezone.utc).isoformat()
         memo_version = memo_row.get("memo_version") or (metadata or {}).get("memo_version") or str(memo_row.get("version") or "")
+        renderer_build = get_build_metadata()
+        memo_build = metadata.get("build") if isinstance(metadata.get("build"), dict) else {}
+        memo_build_sha = memo_build.get("git_sha") or renderer_build["git_sha"]
+        memo_build_sha_short = memo_build.get("git_sha_short") or (
+            memo_build_sha[:7] if memo_build_sha != "unknown" else "unknown"
+        )
 
         # Update pdf_generated_at timestamp
         try:
@@ -10023,7 +10029,9 @@ class MemoPDFDownloadHandler(BaseHandler):
                 "memo_version": memo_version,
                 "pdf_sha256": pdf_sha256,
                 "pdf_bytes": len(pdf_bytes),
-                "build": get_build_metadata(),
+                "build": renderer_build,
+                "renderer_build": renderer_build,
+                "memo_build": memo_build or None,
                 "validation_status": validation_result.get("validation_status"),
                 "quality_score": validation_result.get("quality_score"),
                 "supervisor_status": supervisor_result.get("verdict"),
@@ -10048,8 +10056,10 @@ class MemoPDFDownloadHandler(BaseHandler):
         self.set_header("X-Memo-Id", str(memo_row["id"]))
         self.set_header("X-Memo-Version", str(memo_version))
         self.set_header("X-PDF-SHA256", pdf_sha256)
-        self.set_header("X-Build-Git-Sha", get_build_metadata()["git_sha"])
-        self.set_header("X-Build-Git-Sha-Short", get_build_metadata()["git_sha_short"])
+        self.set_header("X-Build-Git-Sha", renderer_build["git_sha"])
+        self.set_header("X-Build-Git-Sha-Short", renderer_build["git_sha_short"])
+        self.set_header("X-Memo-Build-Git-Sha", memo_build_sha)
+        self.set_header("X-Memo-Build-Git-Sha-Short", memo_build_sha_short)
         self.set_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.write(pdf_bytes)
 

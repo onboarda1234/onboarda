@@ -174,7 +174,7 @@ jobs:
           docker build --platform linux/amd64 \
             --build-arg "GIT_SHA=${{ github.sha }}" \
             --build-arg "BUILD_TIME=ci" \
-            --build-arg "IMAGE_TAG=ci-test" \
+            --build-arg "IMAGE_TAG=ci-${{ github.sha }}" \
             -t arie-backend:ci-test .
           echo "Docker image built successfully"
 
@@ -184,6 +184,10 @@ jobs:
           echo "PASS: Port 10000 exposed"
           docker inspect arie-backend:ci-test --format='{{.Config.User}}' | grep -q arie
           echo "PASS: Non-root user configured"
+          docker inspect arie-backend:ci-test --format='{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^GIT_SHA=${{ github.sha }}$'
+          docker inspect arie-backend:ci-test --format='{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^BUILD_TIME=ci$'
+          docker inspect arie-backend:ci-test --format='{{range .Config.Env}}{{println .}}{{end}}' | grep -q '^IMAGE_TAG=ci-${{ github.sha }}$'
+          echo "PASS: Build provenance env configured"
 
       - name: Container smoke test — startup + health check
         env:

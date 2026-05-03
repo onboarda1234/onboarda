@@ -7,6 +7,7 @@ Provides:
 """
 import json
 import logging
+from copy import deepcopy
 from datetime import datetime
 
 from validation_engine import validate_compliance_memo
@@ -112,10 +113,18 @@ def _prescreening_party_list(prescreening_data, role):
         party = _normalise_memo_party(candidate, role)
         if not party:
             continue
-        key = (
-            str(party.get("person_key") or "").strip().lower(),
-            str(party.get("full_name") or "").strip().lower(),
-        )
+        person_key = str(party.get("person_key") or "").strip().lower()
+        if person_key:
+            key = ("person_key", person_key)
+        else:
+            key = (
+                "identity",
+                str(party.get("full_name") or "").strip().lower(),
+                str(party.get("date_of_birth") or party.get("dob") or "").strip().lower(),
+                str(party.get("nationality") or "").strip().lower(),
+                str(party.get("ownership_pct") or "").strip().lower(),
+                str(party.get("role") or role).strip().lower(),
+            )
         if key in seen:
             continue
         seen.add(key)
@@ -124,8 +133,8 @@ def _prescreening_party_list(prescreening_data, role):
 
 
 def _resolve_memo_parties(directors, ubos, prescreening_data):
-    resolved_directors = [dict(d) for d in (directors or []) if isinstance(d, dict)]
-    resolved_ubos = [dict(u) for u in (ubos or []) if isinstance(u, dict)]
+    resolved_directors = [deepcopy(d) for d in (directors or []) if isinstance(d, dict)]
+    resolved_ubos = [deepcopy(u) for u in (ubos or []) if isinstance(u, dict)]
     source_summary = {
         "directors_source": "party_tables" if resolved_directors else "not_provided",
         "ubos_source": "party_tables" if resolved_ubos else "not_provided",
@@ -174,7 +183,12 @@ def _risk_display_context(app):
         if app.get("final_risk_score") not in (None, "")
         else app.get("risk_score")
     )
-    available = level is not None and score is not None
+    # A non-LOW risk level with a zero score is a known stale/reporting shape
+    # from Phase 0 and must not be rendered as a canonical rating. Other
+    # score/level mismatches can be legitimate floor-rule elevations and are
+    # handled by original_risk_level / validation below.
+    stale_zero_score = level not in (None, "LOW") and score == 0
+    available = level is not None and score is not None and not stale_zero_score
     if available:
         assessment = f"{level} — {score}/100"
         summary = f"The recorded canonical risk rating is {level} with a score of {score}/100."
@@ -222,11 +236,27 @@ def _screening_source_summary(screening_report):
             _collect(entry.get("screening") or {})
 
     providers_list = sorted(providers)
+    status_values = {str(s).strip().lower() for s in statuses if str(s).strip()}
+    provider_values = {str(p).strip().lower() for p in providers if str(p).strip()}
+    has_smoke_provider = any("smoke" in p for p in provider_values)
+    has_simulated = bool(status_values & {"simulated", "mocked", "mock", "stubbed"}) or has_smoke_provider
+    has_live = "live" in status_values
+    if has_simulated and has_live:
+        mode = "mixed"
+    elif has_simulated:
+        mode = "simulated"
+    elif has_live:
+        mode = "live"
+    elif status_values:
+        mode = "unknown"
+    else:
+        raw_mode = str(screening_report.get("screening_mode") or "").strip().lower()
+        mode = raw_mode if raw_mode in {"live", "simulated", "not_configured", "disabled"} else "not_configured"
     return {
-        "providers": sorted(providers),
+        "providers": providers_list,
         "provider": providers_list[0] if providers_list else "not_configured",
         "api_statuses": sorted(statuses),
-        "mode": screening_report.get("screening_mode") or ("configured" if providers else "not_configured"),
+        "mode": mode,
     }
 
 
@@ -1169,13 +1199,13 @@ def build_compliance_memo(app, directors, ubos, documents):
             }
         },
         "metadata": {
-            "risk_rating": risk_display["level"] or "NOT_RATED",
-            "risk_score": risk_display["score"],
+            "risk_rating": risk_display["level"] if risk_display["available"] else "NOT_RATED",
+            "risk_score": risk_display["score"] if risk_display["available"] else None,
             "computed_routing_risk": aggregated_risk,
             "computed_routing_score": risk_score,
             "canonical_risk": risk_display,
-            "display_risk_rating": risk_display["level"] or "NOT_RATED",
-            "display_risk_score": risk_display["score"],
+            "display_risk_rating": risk_display["level"] if risk_display["available"] else "NOT_RATED",
+            "display_risk_score": risk_display["score"] if risk_display["available"] else None,
             "original_risk_level": pre_elevation_risk_level,
             "aggregated_risk": aggregated_risk,
             "weighted_risk_score": round(weighted_risk, 2),
