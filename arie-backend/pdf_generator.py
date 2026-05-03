@@ -25,6 +25,8 @@ from branding import BRAND
 
 logger = logging.getLogger("arie")
 
+_VALID_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
+
 # Lazy-load WeasyPrint (heavy import)
 _weasyprint = None
 
@@ -126,6 +128,7 @@ p {
 .risk-medium { background: #f39c12; }
 .risk-high { background: #e74c3c; }
 .risk-very-high { background: #8e0000; }
+.risk-unrated { background: #6b7280; }
 .decision-badge {
     display: inline-block;
     padding: 4px 16px;
@@ -217,8 +220,12 @@ def _risk_badge(level: str) -> str:
     level_upper = (level or "MEDIUM").upper()
     css_class = {
         "LOW": "risk-low", "MEDIUM": "risk-medium",
-        "HIGH": "risk-high", "VERY_HIGH": "risk-very-high"
-    }.get(level_upper, "risk-medium")
+        "HIGH": "risk-high", "VERY_HIGH": "risk-very-high",
+        "NOT_RATED": "risk-unrated", "UNRATED": "risk-unrated",
+        "NOT YET RATED": "risk-unrated",
+    }.get(level_upper, "risk-unrated")
+    if level_upper in ("NOT_RATED", "UNRATED", "NOT YET RATED"):
+        level_upper = "NOT YET RATED"
     return f'<span class="risk-badge {css_class}">{_esc(level_upper)}</span>'
 
 
@@ -236,6 +243,33 @@ def _decision_badge(decision: str) -> str:
     }
     css_class = css_map.get(decision.upper() if decision else "", "decision-review")
     return f'<span class="decision-badge {css_class}">{_esc(d)}</span>'
+
+
+def _pdf_risk_display(metadata: Dict) -> tuple[str, str]:
+    """Return risk badge and score text, failing closed for legacy memo blobs."""
+    canonical_risk = metadata.get("canonical_risk") if isinstance(metadata.get("canonical_risk"), dict) else None
+    if not canonical_risk or canonical_risk.get("available") is not True:
+        return "NOT_RATED", "Not yet scored"
+
+    level = (
+        metadata.get("display_risk_rating")
+        or canonical_risk.get("level")
+        or metadata.get("risk_rating")
+        or metadata.get("aggregated_risk")
+    )
+    level = str(level or "").strip().upper().replace(" ", "_").replace("-", "_")
+    score = metadata.get("display_risk_score")
+    if score in (None, ""):
+        score = canonical_risk.get("score")
+
+    try:
+        numeric_score = float(score)
+    except (TypeError, ValueError):
+        return "NOT_RATED", "Not yet scored"
+    if level not in _VALID_RISK_LEVELS or numeric_score < 0 or numeric_score > 100:
+        return "NOT_RATED", "Not yet scored"
+    score_text = str(int(numeric_score)) if numeric_score.is_integer() else str(round(numeric_score, 2))
+    return level, f"{score_text}/100"
 
 
 def _render_section_content(content: Any) -> str:
@@ -377,8 +411,7 @@ def generate_memo_pdf(
 
     sections = memo_data.get("sections", {})
     metadata = memo_data.get("metadata", {})
-    risk_level = metadata.get("risk_rating", metadata.get("aggregated_risk", "MEDIUM"))
-    risk_score = metadata.get("risk_score", 0)
+    risk_level, risk_score_display = _pdf_risk_display(metadata)
     decision = metadata.get("approval_recommendation", "REVIEW")
     confidence = metadata.get("confidence_level", 0)
     memo_version = metadata.get("memo_version", "1.0")
@@ -410,7 +443,7 @@ def generate_memo_pdf(
     <td class="label">Sector</td><td>{_esc(sector)}</td></tr>
 <tr><td class="label">Entity Type</td><td>{_esc(entity_type)}</td>
     <td class="label">Risk Rating</td><td>{_risk_badge(risk_level)}</td></tr>
-<tr><td class="label">Risk Score</td><td>{_esc(risk_score)}/100</td>
+<tr><td class="label">Risk Score</td><td>{_esc(risk_score_display)}</td>
     <td class="label">Confidence</td><td>{_esc(round(confidence * 100, 1) if isinstance(confidence, (int, float)) else confidence)}%</td></tr>
 <tr><td class="label">Decision</td><td colspan="3">{_decision_badge(decision)}</td></tr>
 <tr><td class="label">Memo Version</td><td>{_esc(memo_version)}</td>

@@ -7,6 +7,7 @@ No DB calls, no PII, no secrets.
 import os
 import sys
 import socket
+import json
 import tempfile
 import threading
 import time
@@ -21,7 +22,7 @@ import requests as http_requests
 import tornado.ioloop
 import tornado.httpserver
 
-EXPECTED_KEYS = {"git_sha", "git_sha_short", "build_time", "environment", "service"}
+EXPECTED_KEYS = {"git_sha", "git_sha_short", "build_time", "image_tag", "environment", "service"}
 
 
 def _find_free_port():
@@ -119,6 +120,8 @@ class TestVersionEndpoint:
         """When GIT_SHA env var is set the response must echo it back."""
         sha = "abc1234deadbeef5678"
         monkeypatch.setenv("GIT_SHA", sha)
+        monkeypatch.setenv("BUILD_TIME", "2026-05-03T00:00:00Z")
+        monkeypatch.setenv("IMAGE_TAG", sha)
 
         from auth import create_token
         token = create_token("admin001", "admin", "Test Admin", "officer")
@@ -130,6 +133,8 @@ class TestVersionEndpoint:
         body = resp.json()
         assert body["git_sha"] == sha
         assert body["git_sha_short"] == sha[:7]
+        assert body["build_time"] == "2026-05-03T00:00:00Z"
+        assert body["image_tag"] == sha
 
     def test_version_service_name(self, api_server):
         """service field must always be 'regmind-backend'."""
@@ -157,3 +162,63 @@ class TestVersionEndpoint:
         assert resp.status_code == 200
         body = resp.json()
         assert body.keys() >= EXPECTED_KEYS
+
+    def test_memo_pdf_response_includes_build_provenance_headers(self, api_server, monkeypatch):
+        """Memo PDF downloads must expose build SHA evidence headers."""
+        import server as server_module
+        from auth import create_token
+        from db import get_db
+
+        sha = "feedfacecafebeef1234567890abcdef12345678"
+        monkeypatch.setenv("GIT_SHA", sha)
+        monkeypatch.setenv("BUILD_TIME", "2026-05-03T01:02:03Z")
+        monkeypatch.setenv("IMAGE_TAG", sha)
+        monkeypatch.setattr(server_module, "generate_memo_pdf", lambda **kwargs: b"%PDF-fake-build-provenance")
+
+        app_id = "version-pdf-app"
+        memo_data = {
+            "sections": {"executive_summary": {"content": "PDF provenance smoke."}},
+            "metadata": {
+                "memo_version": "v1",
+                "approval_recommendation": "REVIEW",
+                "canonical_risk": {"available": False},
+                "display_risk_rating": "NOT_RATED",
+                "display_risk_score": None,
+                "build": {
+                    "git_sha": sha,
+                    "git_sha_short": sha[:7],
+                    "build_time": "2026-05-03T01:02:03Z",
+                    "image_tag": sha,
+                },
+            },
+        }
+        db = get_db()
+        try:
+            db.execute(
+                "INSERT OR IGNORE INTO applications (id, ref, company_name, country, sector, entity_type, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (app_id, "ARF-VERSION-PDF", "Version PDF Ltd", "Mauritius", "Technology", "SME", "submitted"),
+            )
+            db.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+            db.execute(
+                "INSERT INTO compliance_memos (application_id, version, memo_data, generated_by, memo_version, validation_status, quality_score) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (app_id, 1, json.dumps(memo_data), "admin001", "v1", "pass_with_fixes", 7.0),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications/{app_id}/memo/pdf",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers["X-Build-Git-Sha"] == sha
+        assert resp.headers["X-Build-Git-Sha-Short"] == sha[:7]
+        assert resp.headers["X-Memo-Build-Git-Sha"] == sha
+        assert resp.headers["X-Memo-Build-Git-Sha-Short"] == sha[:7]
+        assert resp.headers["X-Memo-Version"] == "v1"

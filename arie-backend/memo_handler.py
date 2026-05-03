@@ -7,6 +7,7 @@ Provides:
 """
 import json
 import logging
+from copy import deepcopy
 from datetime import datetime
 
 from validation_engine import validate_compliance_memo
@@ -24,6 +25,239 @@ from rule_engine import (
 from environment import ENV, is_demo
 
 logger = logging.getLogger("arie")
+
+
+_VALID_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
+
+
+def _memo_prescreening_data(raw_value):
+    if isinstance(raw_value, dict):
+        return raw_value
+    if isinstance(raw_value, str) and raw_value.strip():
+        try:
+            decoded = json.loads(raw_value)
+            return decoded if isinstance(decoded, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _first_party_value(record, *keys):
+    if not isinstance(record, dict):
+        return ""
+    for key in keys:
+        value = record.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def _party_full_name(record):
+    full_name = _first_party_value(record, "full_name", "name", "person_name", "display_name")
+    if full_name:
+        return str(full_name).strip()
+    first = str(_first_party_value(record, "first_name", "firstName")).strip()
+    last = str(_first_party_value(record, "last_name", "lastName", "surname")).strip()
+    return f"{first} {last}".strip()
+
+
+def _normalise_memo_party(record, role):
+    if not isinstance(record, dict):
+        return None
+    full_name = _party_full_name(record)
+    if not full_name:
+        return None
+    normalised = dict(record)
+    normalised["full_name"] = full_name
+    normalised.setdefault("role", role)
+    if "ownership_pct" not in normalised:
+        pct = _first_party_value(
+            record,
+            "ownership_percentage",
+            "shareholding_pct",
+            "shareholding_percentage",
+            "percentage",
+            "ownership",
+        )
+        if pct not in (None, ""):
+            normalised["ownership_pct"] = pct
+    if "is_pep" not in normalised:
+        pep = _first_party_value(record, "pep", "isPEP", "pep_status", "declared_pep")
+        if pep not in (None, ""):
+            normalised["is_pep"] = pep
+    normalised["source"] = normalised.get("source") or "prescreening_data"
+    return normalised
+
+
+def _prescreening_party_list(prescreening_data, role):
+    candidates = []
+    root_keys = {
+        "director": ("directors", "director_details", "board_members"),
+        "ubo": ("ubos", "beneficial_owners", "ubo_details", "shareholders"),
+    }[role]
+    for key in root_keys:
+        value = prescreening_data.get(key)
+        if isinstance(value, list):
+            candidates.extend(value)
+
+    parties = prescreening_data.get("parties")
+    if isinstance(parties, dict):
+        for key in root_keys:
+            value = parties.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+
+    seen = set()
+    normalised = []
+    for candidate in candidates:
+        party = _normalise_memo_party(candidate, role)
+        if not party:
+            continue
+        person_key = str(party.get("person_key") or "").strip().lower()
+        if person_key:
+            key = ("person_key", person_key)
+        else:
+            key = (
+                "identity",
+                str(party.get("full_name") or "").strip().lower(),
+                str(party.get("date_of_birth") or party.get("dob") or "").strip().lower(),
+                str(party.get("nationality") or "").strip().lower(),
+                str(party.get("ownership_pct") or "").strip().lower(),
+                str(party.get("role") or role).strip().lower(),
+            )
+        if key in seen:
+            continue
+        seen.add(key)
+        normalised.append(party)
+    return normalised
+
+
+def _resolve_memo_parties(directors, ubos, prescreening_data):
+    resolved_directors = [deepcopy(d) for d in (directors or []) if isinstance(d, dict)]
+    resolved_ubos = [deepcopy(u) for u in (ubos or []) if isinstance(u, dict)]
+    source_summary = {
+        "directors_source": "party_tables" if resolved_directors else "not_provided",
+        "ubos_source": "party_tables" if resolved_ubos else "not_provided",
+        "directors_count": len(resolved_directors),
+        "ubos_count": len(resolved_ubos),
+    }
+
+    if not resolved_directors:
+        resolved_directors = _prescreening_party_list(prescreening_data, "director")
+        if resolved_directors:
+            source_summary["directors_source"] = "prescreening_data"
+            source_summary["directors_count"] = len(resolved_directors)
+    if not resolved_ubos:
+        resolved_ubos = _prescreening_party_list(prescreening_data, "ubo")
+        if resolved_ubos:
+            source_summary["ubos_source"] = "prescreening_data"
+            source_summary["ubos_count"] = len(resolved_ubos)
+    return resolved_directors, resolved_ubos, source_summary
+
+
+def _normalise_risk_level(value):
+    if value in (None, ""):
+        return None
+    candidate = str(value).strip().upper().replace(" ", "_").replace("-", "_")
+    return candidate if candidate in _VALID_RISK_LEVELS else None
+
+
+def _normalise_risk_score(value):
+    if value in (None, ""):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if score < 0 or score > 100:
+        return None
+    return int(score) if score.is_integer() else round(score, 2)
+
+
+def _risk_display_context(app):
+    level = _normalise_risk_level(
+        app.get("final_risk_level") or app.get("risk_level") or app.get("risk_band")
+    )
+    score = _normalise_risk_score(
+        app.get("final_risk_score")
+        if app.get("final_risk_score") not in (None, "")
+        else app.get("risk_score")
+    )
+    # A non-LOW risk level with a zero score is a known stale/reporting shape
+    # from Phase 0 and must not be rendered as a canonical rating. Other
+    # score/level mismatches can be legitimate floor-rule elevations and are
+    # handled by original_risk_level / validation below.
+    stale_zero_score = level not in (None, "LOW") and score == 0
+    available = level is not None and score is not None and not stale_zero_score
+    if available:
+        assessment = f"{level} — {score}/100"
+        summary = f"The recorded canonical risk rating is {level} with a score of {score}/100."
+        checklist = f"Canonical risk score reviewed: {score}/100 ({level})"
+    else:
+        assessment = "not yet rated — no canonical risk score is recorded"
+        summary = (
+            "No canonical risk rating or score is recorded on the application; "
+            "the memo must be treated as not yet risk-rated."
+        )
+        checklist = "Canonical risk score not recorded — memo must be treated as not yet rated"
+    return {
+        "available": available,
+        "level": level,
+        "score": score,
+        "assessment": assessment,
+        "summary": summary,
+        "checklist": checklist,
+    }
+
+
+def _screening_source_summary(screening_report):
+    if not isinstance(screening_report, dict) or not screening_report:
+        return {"providers": [], "provider": "not_configured", "api_statuses": [], "mode": "not_configured"}
+    providers = set()
+    statuses = set()
+
+    def _collect(node):
+        if not isinstance(node, dict):
+            return
+        source = node.get("source") or node.get("provider")
+        status = node.get("api_status") or node.get("status")
+        if source:
+            providers.add(str(source))
+        if status:
+            statuses.add(str(status))
+
+    company = screening_report.get("company_screening") or {}
+    if isinstance(company, dict):
+        _collect(company)
+        _collect(company.get("sanctions") or {})
+    for entry in (screening_report.get("director_screenings") or []) + (screening_report.get("ubo_screenings") or []):
+        if isinstance(entry, dict):
+            _collect(entry)
+            _collect(entry.get("screening") or {})
+
+    providers_list = sorted(providers)
+    status_values = {str(s).strip().lower() for s in statuses if str(s).strip()}
+    provider_values = {str(p).strip().lower() for p in providers if str(p).strip()}
+    has_smoke_provider = any("smoke" in p for p in provider_values)
+    has_simulated = bool(status_values & {"simulated", "mocked", "mock", "stubbed"}) or has_smoke_provider
+    has_live = "live" in status_values
+    if has_simulated and has_live:
+        mode = "mixed"
+    elif has_simulated:
+        mode = "simulated"
+    elif has_live:
+        mode = "live"
+    elif status_values:
+        mode = "unknown"
+    else:
+        raw_mode = str(screening_report.get("screening_mode") or "").strip().lower()
+        mode = raw_mode if raw_mode in {"live", "simulated", "not_configured", "disabled"} else "not_configured"
+    return {
+        "providers": providers_list,
+        "provider": providers_list[0] if providers_list else "not_configured",
+        "api_statuses": sorted(statuses),
+        "mode": mode,
+    }
 
 
 def _screening_adverse_media_context(screening_report, prescreening_data):
@@ -122,6 +356,11 @@ def build_compliance_memo(app, directors, ubos, documents):
     Returns:
         tuple: (memo, rule_engine_result, supervisor_result, validation_result)
     """
+    prescreening_data = _memo_prescreening_data(app.get("prescreening_data", "{}"))
+    directors, ubos, party_source_summary = _resolve_memo_parties(
+        directors, ubos, prescreening_data
+    )
+
     # Collect PEP matches — from both declarations and screening results.
     # Priority A.2: accept any truthy form of `is_pep` (Yes/true/1/True)
     # so a declared PEP cannot be flattened to "no PEP" merely because of
@@ -138,13 +377,6 @@ def build_compliance_memo(app, directors, ubos, documents):
     all_peps = pep_directors + pep_ubos
 
     # W2-5: Also check screening results for PEP hits not covered by declarations
-    prescreening_data = {}
-    try:
-        import json as _json
-        raw_ps = app.get("prescreening_data", "{}")
-        prescreening_data = _json.loads(raw_ps) if isinstance(raw_ps, str) else (raw_ps or {})
-    except Exception:
-        pass
     screening_report = prescreening_data.get("screening_report", {})
     if not isinstance(screening_report, dict):
         screening_report = {}
@@ -251,9 +483,13 @@ def build_compliance_memo(app, directors, ubos, documents):
     incorporation_date = app.get("incorporation_date") or "Information not provided"
     business_activity = app.get("business_activity") or "Information not provided"
 
-    # Build risk sub-section ratings based on app risk
-    risk_level = app["risk_level"] or "MEDIUM"
-    risk_score = app["risk_score"] or 50
+    # Build risk sub-section ratings from canonical application risk fields.
+    # Missing risk must not be silently rendered as MEDIUM/50 in a regulated
+    # memo. We retain conservative internal defaults for routing math, but
+    # every officer-visible risk line uses risk_display below.
+    risk_display = _risk_display_context(app)
+    risk_level = risk_display["level"] or "MEDIUM"
+    risk_score = risk_display["score"] if risk_display["score"] is not None else 50
 
     # ── Fix Option C: Derive pre-elevation/original risk level from risk_escalations ──
     # When floor rules or escalation rules elevated the risk level beyond what the
@@ -650,9 +886,13 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "content": (
                     f"This memo presents the compliance assessment of {app['company_name']} (BRN: {app['brn']}), "
                     f"a {entity_type} incorporated in {country}, operating in the {sector} sector. "
-                    f"The composite risk score of {risk_score}/100 (aggregated: {aggregated_risk}) reflects "
-                    f"{'a balanced risk profile' if aggregated_risk == 'MEDIUM' else 'a low-risk profile with no material concerns' if aggregated_risk == 'LOW' else 'an elevated risk profile requiring enhanced scrutiny'}. "
-                    f"Model confidence: {model_confidence}%"
+                    + (
+                        f"The composite risk score of {risk_score}/100 (aggregated: {aggregated_risk}) reflects "
+                        f"{'a balanced risk profile' if aggregated_risk == 'MEDIUM' else 'a low-risk profile with no material concerns' if aggregated_risk == 'LOW' else 'an elevated risk profile requiring enhanced scrutiny'}. "
+                        if risk_display["available"] else
+                        risk_display["summary"] + " Internal factor analysis is used only to route unresolved gaps and is not presented as a final risk rating. "
+                    )
+                    + f"Model confidence: {model_confidence}%"
                     + (f" — reduced due to {'no uploaded documentation and ' if not has_documents else 'outstanding documentation and ' if pending_docs else ''}{'limited historical transaction data' if True else ''}. " if model_confidence < 80 else ". ")
                     + f"The principal risk drivers are "
                     + (f"the presence of {len(all_peps)} Politically Exposed Person(s) ({', '.join([p['full_name'] for p in all_peps])})" if all_peps else "")
@@ -860,8 +1100,12 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "content": (
                     f"Risk scoring model: Onboarda Composite Risk Engine v2.1. "
                     f"Scoring methodology: Weighted multi-factor analysis across 5 risk dimensions, calibrated against Basel Committee and Wolfsberg Group risk factor guidance. "
-                    f"Overall risk score: {risk_score}/100 ({risk_level}). "
-                    f"Model confidence: {max(60, doc_confidence - 5)}% — "
+                    + (
+                        f"Overall risk score: {risk_score}/100 ({risk_level}). "
+                        if risk_display["available"] else
+                        "Overall risk score: Not yet scored — no canonical application risk score is recorded. "
+                    )
+                    + f"Model confidence: {max(60, doc_confidence - 5)}% — "
                     + (f"confidence is reduced from baseline due to {'no uploaded documentation and ' if not has_documents else 'outstanding documentation and ' if pending_docs else ''}limited historical transaction data. " if doc_confidence < 100 else "high confidence based on complete documentation. ")
                     + f"Risk-increasing factors: "
                     + (f"(1) PEP presence ({len(all_peps)} identified) — weight: 0.25, elevating ownership risk due to FATF Recommendation 12 requirements. " if all_peps else "")
@@ -907,7 +1151,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "title": "Compliance Decision",
                 "decision": decision,
                 "content": (
-                    f"On the basis of the composite risk assessment ({risk_level} — {risk_score}/100), "
+                    f"On the basis of the composite risk assessment ({risk_display['assessment']}), "
                     f"{'clean' if (not all_peps and screening_terminal) else 'pending' if not screening_terminal else 'flagged'} screening results, "
                     f"{'unavailable' if not has_documents else 'verified' if not pending_docs else 'partially verified'} documentation ({doc_confidence}% confidence), "
                     f"and {'confirmed' if ubos else 'unverified'} beneficial ownership, "
@@ -955,8 +1199,13 @@ def build_compliance_memo(app, directors, ubos, documents):
             }
         },
         "metadata": {
-            "risk_rating": aggregated_risk,
-            "risk_score": risk_score,
+            "risk_rating": risk_display["level"] if risk_display["available"] else "NOT_RATED",
+            "risk_score": risk_display["score"] if risk_display["available"] else None,
+            "computed_routing_risk": aggregated_risk,
+            "computed_routing_score": risk_score,
+            "canonical_risk": risk_display,
+            "display_risk_rating": risk_display["level"] if risk_display["available"] else "NOT_RATED",
+            "display_risk_score": risk_display["score"] if risk_display["available"] else None,
             "original_risk_level": pre_elevation_risk_level,
             "aggregated_risk": aggregated_risk,
             "weighted_risk_score": round(weighted_risk, 2),
@@ -996,7 +1245,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 f"Source of funds {'reviewed and assessed as consistent' if sof != 'Information not provided' else 'not provided — data gap flagged'}",
                 f"Business model plausibility {'confirmed' if sector != 'Information not provided' else 'assessment limited by data gap'}",
                 (f"Document verification not started — no uploaded documents available ({len(verified_docs)}/{len(documents)}) at {doc_confidence}% confidence" if not has_documents else f"Document verification completed ({len(verified_docs)}/{len(documents)}) at {doc_confidence}% confidence"),
-                f"Composite risk score reviewed: {risk_score}/100 ({risk_level}) at {max(60, doc_confidence - 5)}% model confidence",
+                risk_display["checklist"] + f" at {max(60, doc_confidence - 5)}% model confidence",
                 f"Compliance decision ({decision.replace('_', ' ')}) aligned with risk assessment findings and conditions framework"
             ],
             "rule_engine": rule_engine_result,
@@ -1098,7 +1347,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "company_screened": bool(screening_report.get("company_screening")),
             "persons_screened": len(_person_states),
             "screening_terminal": screening_terminal,
-            "provider": "sumsub",
+            **_screening_source_summary(screening_report),
         },
         "document_sources": {
             "total": len(documents),
@@ -1106,13 +1355,15 @@ def build_compliance_memo(app, directors, ubos, documents):
             "pending": len(pending_docs),
             "types": sorted(list({d.get("doc_type", "unknown") for d in documents})),
         },
+        "party_sources": party_source_summary,
         "rule_engine_checks": len(rule_engine_result.get("rules_checked", [])),
         "rule_engine_violations": rule_engine_result.get("total_violations", 0),
         "risk_factors_used": {
             "pep_count": len(all_peps),
             "jurisdiction": country,
             "sector": sector,
-            "risk_score": risk_score,
+            "risk_score": risk_display["score"],
+            "risk_recorded": risk_display["available"],
         },
     }
 
@@ -1567,20 +1818,42 @@ def build_compliance_memo(app, directors, ubos, documents):
         # Update the compliance_decision section content if it exists,
         # so officer-visible narrative does not contradict the workflow.
         try:
+            _route_triggers = ", ".join((edd_routing or {}).get("triggers", [])[:6])
+            _route_policy = str((edd_routing or {}).get("policy_version", ""))
+            _esc_statement = (
+                "Recommendation: ESCALATE TO EDD (ESCALATE_TO_EDD) — deterministic routing policy "
+                + _route_policy
+                + " requires Enhanced Due Diligence before any approval"
+                + (" (triggers: " + _route_triggers + ")" if _route_triggers else "")
+                + "."
+            )
+            _exec_sec = (memo.get("sections") or {}).get("executive_summary") or {}
+            if isinstance(_exec_sec, dict):
+                _exec_content = _exec_sec.get("content") or ""
+                if "Recommendation:" in _exec_content:
+                    _exec_sec["content"] = _exec_content.split("Recommendation:", 1)[0].rstrip() + " " + _esc_statement
+                else:
+                    _exec_sec["content"] = (_exec_content.rstrip() + " " + _esc_statement).strip()
+                memo["sections"]["executive_summary"] = _exec_sec
+
             _decision_sec = (memo.get("sections") or {}).get("compliance_decision") or {}
             if isinstance(_decision_sec, dict):
                 _decision_sec["decision"] = "ESCALATE_TO_EDD"
                 _decision_sec["decision_label"] = "ESCALATE TO EDD"
-                _existing_content = _decision_sec.get("content") or ""
-                _esc_prefix = (
-                    "Recommendation overridden to ESCALATE_TO_EDD by deterministic routing policy "
-                    + str((edd_routing or {}).get("policy_version", ""))
-                    + " (triggers: " + ", ".join((edd_routing or {}).get("triggers", [])[:6]) + "). "
-                    "Case must be routed to Enhanced Due Diligence before any approval. "
+                _decision_sec["content"] = (
+                    _esc_statement
+                    + " This memo is not an approval recommendation; it is an escalation artefact pending EDD outcome and senior compliance sign-off."
                 )
-                if "ESCALATE_TO_EDD" not in _existing_content:
-                    _decision_sec["content"] = _esc_prefix + _existing_content
                 memo["sections"]["compliance_decision"] = _decision_sec
+
+            memo["metadata"]["conditions"] = [
+                "Enhanced Due Diligence must be completed before any approval decision can be relied upon.",
+                "Senior compliance sign-off is required after EDD findings are recorded.",
+            ]
+            _checklist = list(memo["metadata"].get("review_checklist") or [])
+            if _checklist:
+                _checklist[-1] = "Compliance decision aligned to ESCALATE TO EDD; approval is unavailable until EDD is complete"
+                memo["metadata"]["review_checklist"] = _checklist
         except Exception:
             pass
 

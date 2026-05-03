@@ -9,6 +9,10 @@
 #
 FROM python:3.11-slim AS base
 
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+ARG IMAGE_TAG=${GIT_SHA}
+
 # WeasyPrint system dependencies (Cairo, Pango, GDK-PixBuf)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
@@ -42,7 +46,10 @@ USER arie
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=10000 \
-    DB_PATH=/app/data/arie_finance.db
+    DB_PATH=/app/data/arie_finance.db \
+    GIT_SHA=${GIT_SHA} \
+    BUILD_TIME=${BUILD_TIME} \
+    IMAGE_TAG=${IMAGE_TAG}
 
 EXPOSE 10000
 
