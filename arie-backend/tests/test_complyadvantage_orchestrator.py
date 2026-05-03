@@ -329,6 +329,24 @@ def test_two_pass_relaxed_catches_canonical_match():
     assert "/v2/entity-screening/risks/risk-canonical" in client.called_paths()
 
 
+def test_two_pass_uses_distinct_strict_and_relaxed_workflow_ids():
+    data = _fixture("two_pass_strict_misses_relaxed_catches.json")
+    client = _client_for_two_pass(data)
+
+    _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("relaxed"),
+        application_context=_context(data),
+        monitoring_enabled=False,
+        strict_workflow_id="workflow-strict",
+        relaxed_workflow_id="workflow-relaxed",
+    )
+
+    calls = {call["customer"]["person"]["metadata"]["pass"]: call for call in client.post_calls}
+    assert calls["strict"]["screening"] == {"workflow_id": "workflow-strict"}
+    assert calls["relaxed"]["screening"] == {"workflow_id": "workflow-relaxed"}
+
+
 def test_partial_deep_risk_failure_raises():
     data = _fixture("pep_canonical.json")
     routes = _routes_for_fixture(data)

@@ -15,6 +15,8 @@ class CAConfig:
     realm: str
     username: str
     password: str
+    strict_workflow_id: str
+    relaxed_workflow_id: str
 
     @classmethod
     def from_env(cls):
@@ -27,12 +29,16 @@ class CAConfig:
             raise CAConfigurationError("realm must be 'regmind'")
         username = _required_env("COMPLYADVANTAGE_USERNAME", "account identifier")
         password = _required_env("COMPLYADVANTAGE_PASSWORD", "credential")
+        strict_workflow_id = _required_env("COMPLYADVANTAGE_STRICT_WORKFLOW_ID", "strict workflow ID")
+        relaxed_workflow_id = _required_env("COMPLYADVANTAGE_RELAXED_WORKFLOW_ID", "relaxed workflow ID")
         return cls(
             api_base_url=api_base_url.rstrip("/"),
             auth_url=auth_url.rstrip("/"),
             realm=realm,
             username=username,
             password=password,
+            strict_workflow_id=strict_workflow_id,
+            relaxed_workflow_id=relaxed_workflow_id,
         )
 
 

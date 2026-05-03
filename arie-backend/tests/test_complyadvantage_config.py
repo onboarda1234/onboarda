@@ -10,6 +10,8 @@ ENV = {
     "COMPLYADVANTAGE_REALM": "regmind",
     "COMPLYADVANTAGE_USERNAME": " officer@example.test ",
     "COMPLYADVANTAGE_PASSWORD": " secret ",
+    "COMPLYADVANTAGE_STRICT_WORKFLOW_ID": " workflow-strict ",
+    "COMPLYADVANTAGE_RELAXED_WORKFLOW_ID": " workflow-relaxed ",
 }
 
 
@@ -26,6 +28,8 @@ def test_from_env_loads_and_normalizes(monkeypatch):
     assert config.realm == "regmind"
     assert config.username == "officer@example.test"
     assert config.password == "secret"
+    assert config.strict_workflow_id == "workflow-strict"
+    assert config.relaxed_workflow_id == "workflow-relaxed"
 
 
 @pytest.mark.parametrize("name", ENV.keys())
