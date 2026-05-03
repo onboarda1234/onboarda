@@ -102,6 +102,7 @@ a { color:var(--brand); text-decoration:none; }
 .badge.medium { background:var(--blue-bg); color:var(--blue); }
 .badge.high { background:var(--amber-bg); color:var(--amber); }
 .badge.very-high { background:var(--red-bg); color:var(--red); }
+.badge.unknown { background:rgba(100,116,139,0.14); color:#475569; }
 .badge.pending { background:var(--amber-bg); color:var(--amber); }
 .badge.draft { background:rgba(148,163,184,0.15); color:#64748b; }
 .badge.prescreening-submitted { background:rgba(59,130,246,0.1); color:#3b82f6; }
@@ -910,6 +911,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
           <div class="legend-item"><div class="legend-dot" style="background:var(--blue);"></div> Medium Risk — <span id="dash-risk-med">0</span></div>
           <div class="legend-item"><div class="legend-dot" style="background:var(--amber);"></div> High Risk — <span id="dash-risk-high">0</span></div>
           <div class="legend-item"><div class="legend-dot" style="background:var(--red);"></div> Very High Risk — <span id="dash-risk-vhigh">0</span></div>
+          <div class="legend-item"><div class="legend-dot" style="background:#64748b;"></div> Not Rated — <span id="dash-risk-unknown">0</span></div>
         </div>
       </div>
     </div>
@@ -1010,6 +1012,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <option value="MEDIUM">Medium</option>
       <option value="HIGH">High</option>
       <option value="VERY_HIGH">Very High</option>
+      <option value="UNKNOWN">Not Rated</option>
     </select>
     <select class="form-select" style="width:auto;" id="filter-status" onchange="filterApplications()">
       <option value="">All Statuses</option>
@@ -1865,6 +1868,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
           <option value="MEDIUM">Medium</option>
           <option value="HIGH">High</option>
           <option value="VERY_HIGH">Very High</option>
+          <option value="UNKNOWN">Not Rated</option>
         </select>
       </div>
       <div style="min-width:110px;">
@@ -2243,10 +2247,14 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 <!-- ═══════════════ AUDIT TRAIL VIEW ═══════════════ -->
 <div class="view" id="view-audit">
   <div style="display:flex;gap:10px;margin-bottom:16px;">
-    <input type="date" class="form-input" style="width:auto;" />
-    <input type="date" class="form-input" style="width:auto;" />
+    <input type="date" class="form-input" style="width:auto;" id="audit-from-filter" aria-label="Audit from date" />
+    <input type="date" class="form-input" style="width:auto;" id="audit-to-filter" aria-label="Audit to date" />
+    <input type="text" class="form-input" style="width:190px;" id="audit-ref-filter" placeholder="Application ref" />
     <select class="form-select" style="width:auto;" id="audit-user-filter"><option>All Users</option></select>
-    <select class="form-select" style="width:auto;"><option>All Actions</option><option>Approve</option><option>Reject</option><option>Assign</option><option>Login</option><option>View</option></select>
+    <select class="form-select" style="width:auto;" id="audit-action-filter"><option value="">All Actions</option><option>Approve</option><option>Reject</option><option>Assign</option><option>Login</option><option>View</option><option>Generate Memo</option><option>Download Memo PDF</option><option>Upload</option></select>
+    <button class="btn btn-primary btn-sm" onclick="loadAuditTrail()">Apply</button>
+    <button class="btn btn-outline btn-sm" onclick="clearAuditFilters()">Clear</button>
+    <button class="btn btn-outline btn-sm" onclick="exportAuditTrailCSV()">Export CSV</button>
   </div>
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
@@ -3277,7 +3285,7 @@ function normalizePeriodicReview(raw) {
     id: raw.id,
     ref: raw.application_id || '',
     client: raw.client_name || '',
-    risk: raw.risk_level || 'Low',
+    risk: normalizeRiskLevel(raw.risk_level),
     lastReview: raw.completed_at ? raw.completed_at.split('T')[0].split(' ')[0] : '—',
     nextDue: raw.due_date || '—',
     trigger: reviewTriggerText(raw || {}, status.payload),
@@ -3329,8 +3337,8 @@ async function loadFromAPI() {
           company: a.company_name,
           sector: a.sector || 'Unknown',
           entityType: a.entity_type || '',
-          risk: a.risk_level || 'LOW',
-          score: a.risk_score || 0,
+          risk: normalizeRiskLevel(a.risk_level),
+          score: normalizeRiskScore(a.risk_score),
           lane: a.onboarding_lane || 'Standard Review',
           statusRaw: a.status || '',
           status: formatStatus(a.status),
@@ -3453,15 +3461,8 @@ async function loadFromAPI() {
       }
     } catch(e) { console.warn('Could not load verification checks:', e); }
 
-    // Load audit log
-    try {
-      var auditResp = await boApiCall('GET', '/audit?limit=50');
-      if (auditResp.entries && auditResp.entries.length > 0) {
-        AUDIT_LOG = auditResp.entries.map(function(e) {
-          return { ts: e.timestamp, user: e.user_name, role: e.user_role, action: e.action, target: e.target, detail: e.detail, ip: e.ip_address };
-        });
-      }
-    } catch(e) {}
+    // Load audit log with the same filter path used by the Audit Trail view.
+    try { await loadAuditTrail({ silent: true }); } catch(e) {}
 
     // Load monitoring alerts from backend
     try {
@@ -3712,7 +3713,7 @@ async function _autoRefreshApplications() {
         return {
           id: a.id, ref: a.ref, company: a.company_name,
           sector: a.sector || 'Unknown', entityType: a.entity_type || '',
-          risk: a.risk_level || 'LOW', score: a.risk_score || 0,
+          risk: normalizeRiskLevel(a.risk_level), score: normalizeRiskScore(a.risk_score),
           lane: a.onboarding_lane || 'Standard Review',
           statusRaw: a.status || '', status: formatStatus(a.status),
           assignedId: a.assigned_to || '',
@@ -3916,6 +3917,7 @@ function populateOfficerDropdowns() {
     existingDynamic.forEach(function(o) { o.remove(); });
     USERS.forEach(function(u) {
       var opt = document.createElement('option');
+      opt.value = u.id;
       opt.textContent = u.name;
       opt.setAttribute('data-dynamic', 'true');
       auditFilter.appendChild(opt);
@@ -3994,9 +3996,24 @@ function showView(name, navItem) {
 // ═══════════════════════════════════════════════════════════
 // RENDER FUNCTIONS
 // ═══════════════════════════════════════════════════════════
+function normalizeRiskLevel(level) {
+  var raw = String(level || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  return ['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH'].indexOf(raw) >= 0 ? raw : 'UNKNOWN';
+}
+
+function normalizeRiskScore(score) {
+  return (score === null || score === undefined || score === '') ? null : score;
+}
+
+function formatRiskScore(score) {
+  return normalizeRiskScore(score) === null ? '—' : String(score);
+}
+
 function riskBadge(level) {
-  var map = { LOW:'low', MEDIUM:'medium', HIGH:'high', VERY_HIGH:'very-high' };
-  return '<span class="badge ' + (map[level]||'') + '">' + escapeHtml(String(level).replace('_',' ')) + '</span>';
+  var normalized = normalizeRiskLevel(level);
+  var map = { LOW:'low', MEDIUM:'medium', HIGH:'high', VERY_HIGH:'very-high', UNKNOWN:'unknown' };
+  var label = normalized === 'UNKNOWN' ? 'NOT RATED' : String(normalized).replace('_',' ');
+  return '<span class="badge ' + (map[normalized]||'unknown') + '">' + escapeHtml(label) + '</span>';
 }
 
 function statusBadge(status) {
@@ -4058,22 +4075,23 @@ function updateDashboardStats() {
   updateDashboardMonitoringStats();
 
   // Risk distribution donut
-  var low = 0, med = 0, high = 0, vhigh = 0;
+  var low = 0, med = 0, high = 0, vhigh = 0, unknown = 0;
   APPLICATIONS.forEach(function(a) {
-    var r = (a.risk || '').toUpperCase();
+    var r = normalizeRiskLevel(a.risk);
     if (r === 'LOW') low++;
     else if (r === 'MEDIUM') med++;
     else if (r === 'HIGH') high++;
     else if (r === 'VERY_HIGH' || r === 'VERY HIGH') vhigh++;
+    else unknown++;
   });
   var t = Math.max(total, 1);
-  var pLow = Math.round(low / t * 100), pMed = Math.round(med / t * 100), pHigh = Math.round(high / t * 100), pVHigh = Math.round(vhigh / t * 100);
+  var pLow = Math.round(low / t * 100), pMed = Math.round(med / t * 100), pHigh = Math.round(high / t * 100), pVHigh = Math.round(vhigh / t * 100), pUnknown = Math.round(unknown / t * 100);
   el = document.getElementById('dash-donut');
   if (el) {
     if (total === 0) {
       el.style.background = 'conic-gradient(var(--surface3) 0% 100%)';
     } else {
-      el.style.background = 'conic-gradient(var(--green) 0% ' + pLow + '%, var(--blue) ' + pLow + '% ' + (pLow+pMed) + '%, var(--amber) ' + (pLow+pMed) + '% ' + (pLow+pMed+pHigh) + '%, var(--red) ' + (pLow+pMed+pHigh) + '% 100%)';
+      el.style.background = 'conic-gradient(var(--green) 0% ' + pLow + '%, var(--blue) ' + pLow + '% ' + (pLow+pMed) + '%, var(--amber) ' + (pLow+pMed) + '% ' + (pLow+pMed+pHigh) + '%, var(--red) ' + (pLow+pMed+pHigh) + '% ' + (pLow+pMed+pHigh+pVHigh) + '%, #64748b ' + (pLow+pMed+pHigh+pVHigh) + '% 100%)';
     }
   }
   el = document.getElementById('dash-donut-total'); if (el) el.textContent = total;
@@ -4081,6 +4099,7 @@ function updateDashboardStats() {
   el = document.getElementById('dash-risk-med'); if (el) el.textContent = med + (total > 0 ? ' (' + pMed + '%)' : '');
   el = document.getElementById('dash-risk-high'); if (el) el.textContent = high + (total > 0 ? ' (' + pHigh + '%)' : '');
   el = document.getElementById('dash-risk-vhigh'); if (el) el.textContent = vhigh + (total > 0 ? ' (' + pVHigh + '%)' : '');
+  el = document.getElementById('dash-risk-unknown'); if (el) el.textContent = unknown + (total > 0 ? ' (' + pUnknown + '%)' : '');
 }
 
 function updateDashboardMonitoringStats() {
@@ -4203,7 +4222,7 @@ function buildReportDataFromApplications(filters) {
   if (filters.date_from) apps = apps.filter(function(a) { return a.date >= filters.date_from; });
   if (filters.date_to) apps = apps.filter(function(a) { return a.date <= filters.date_to; });
   if (filters.status) apps = apps.filter(function(a) { return a.status && a.status.toLowerCase().replace(/\s+/g,'_') === filters.status; });
-  if (filters.risk_level) apps = apps.filter(function(a) { return (a.risk || '').toUpperCase().replace(' ','_') === filters.risk_level; });
+  if (filters.risk_level) apps = apps.filter(function(a) { return normalizeRiskLevel(a.risk) === filters.risk_level; });
   if (filters.jurisdiction) apps = apps.filter(function(a) { return a.country === filters.jurisdiction; });
   if (filters.entity_type) apps = apps.filter(function(a) { return a.entityType === filters.entity_type; });
   if (filters.assigned_to) apps = apps.filter(function(a) { return a.assignedId === filters.assigned_to || a.assigned === filters.assigned_to; });
@@ -4214,12 +4233,15 @@ function buildReportDataFromApplications(filters) {
   var pending = apps.filter(function(a) { var s = (a.status||'').toLowerCase().replace(/[\s\u2013-]+/g,'_'); return s === 'pending' || s === 'application_submitted' || s === 'submitted' || s === 'under_review'; }).length;
   var eddReq = apps.filter(function(a) { return (a.status||'').toLowerCase().replace(/\s+/g,'_') === 'edd_required'; }).length;
   var withdrawn = apps.filter(function(a) { return (a.status||'').toLowerCase() === 'withdrawn'; }).length;
-  var scores = apps.map(function(a) { return parseFloat(a.score) || 0; });
+  var scores = apps.map(function(a) { return normalizeRiskScore(a.score); }).filter(function(v) { return v !== null && !isNaN(parseFloat(v)); }).map(function(v) { return parseFloat(v); });
   var avgScore = scores.length ? parseFloat((scores.reduce(function(s,v) { return s+v; },0) / scores.length).toFixed(2)) : 0;
 
   // Risk distribution
-  var riskDist = { LOW: 0, MEDIUM: 0, HIGH: 0, VERY_HIGH: 0 };
-  apps.forEach(function(a) { var r = (a.risk||'').toUpperCase().replace(' ','_'); if (riskDist[r] !== undefined) riskDist[r]++; });
+  var riskDist = { LOW: 0, MEDIUM: 0, HIGH: 0, VERY_HIGH: 0, UNKNOWN: 0 };
+  apps.forEach(function(a) {
+    var r = normalizeRiskLevel(a.risk);
+    riskDist[r] = (riskDist[r] || 0) + 1;
+  });
 
   // Status distribution
   var statusDist = {};
@@ -4358,13 +4380,14 @@ function renderReportOverview(data) {
   var rd = data.risk_distribution || {};
   var riskEl = document.getElementById('rpt-chart-risk');
   if (riskEl) {
-    var riskTotal = (rd.LOW||0) + (rd.MEDIUM||0) + (rd.HIGH||0) + (rd.VERY_HIGH||0);
-    var maxRisk = Math.max(rd.LOW||0, rd.MEDIUM||0, rd.HIGH||0, rd.VERY_HIGH||0, 1);
+    var riskTotal = (rd.LOW||0) + (rd.MEDIUM||0) + (rd.HIGH||0) + (rd.VERY_HIGH||0) + (rd.UNKNOWN||0);
+    var maxRisk = Math.max(rd.LOW||0, rd.MEDIUM||0, rd.HIGH||0, rd.VERY_HIGH||0, rd.UNKNOWN||0, 1);
     var riskItems = [
       { key: 'LOW', label: 'Low', color: 'var(--green)', count: rd.LOW||0 },
       { key: 'MEDIUM', label: 'Medium', color: 'var(--blue)', count: rd.MEDIUM||0 },
       { key: 'HIGH', label: 'High', color: 'var(--amber)', count: rd.HIGH||0 },
-      { key: 'VERY_HIGH', label: 'Very High', color: 'var(--red)', count: rd.VERY_HIGH||0 }
+      { key: 'VERY_HIGH', label: 'Very High', color: 'var(--red)', count: rd.VERY_HIGH||0 },
+      { key: 'UNKNOWN', label: 'Not Rated', color: '#64748b', count: rd.UNKNOWN||0 }
     ];
     var html = '';
     riskItems.forEach(function(ri) {
@@ -4567,7 +4590,7 @@ function renderReportDataTable() {
   if (filters.date_from) apps = apps.filter(function(a) { return a.date >= filters.date_from; });
   if (filters.date_to) apps = apps.filter(function(a) { return a.date <= filters.date_to; });
   if (filters.status) apps = apps.filter(function(a) { return a.status && a.status.toLowerCase().replace(/\s+/g,'_') === filters.status; });
-  if (filters.risk_level) apps = apps.filter(function(a) { return (a.risk || '').toUpperCase().replace(' ','_') === filters.risk_level; });
+  if (filters.risk_level) apps = apps.filter(function(a) { return normalizeRiskLevel(a.risk) === filters.risk_level; });
   if (filters.jurisdiction) apps = apps.filter(function(a) { return a.country === filters.jurisdiction; });
   if (filters.entity_type) apps = apps.filter(function(a) { return a.entityType === filters.entity_type; });
   if (filters.assigned_to) apps = apps.filter(function(a) { return a.assignedId === filters.assigned_to || a.assigned === filters.assigned_to; });
@@ -4710,7 +4733,7 @@ function renderApplications() {
     }
     var tr = document.createElement('tr');
     tr.onclick = function() { openAppDetail(app.ref); };
-    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-weight:700;">' + escapeHtml(String(app.score)) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
+    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScore(app.score)) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
 }
@@ -4932,13 +4955,15 @@ function buildStoredRiskComputation(app) {
   if (!rows.length || !totalWeight) return null;
   var normalizedAverage = weightedAverage / (totalWeight / 100);
   var recomputed = Math.round((((normalizedAverage - 1) / 3) * 100) * 10) / 10;
+  var storedScoreRaw = normalizeRiskScore(app.score);
+  var storedScore = storedScoreRaw === null || isNaN(Number(storedScoreRaw)) ? null : Number(storedScoreRaw);
   return {
     rows: rows,
     totalWeight: totalWeight,
     weightedAverage: normalizedAverage,
     recomputedScore: recomputed,
-    storedScore: Number(app.score || 0),
-    drift: Math.round(Math.abs((Number(app.score || 0) - recomputed)) * 10) / 10
+    storedScore: storedScore,
+    drift: storedScore === null ? null : Math.round(Math.abs((storedScore - recomputed)) * 10) / 10
   };
 }
 
@@ -5036,7 +5061,8 @@ function renderStoredRiskComputationHtml(app) {
     '</tr>';
   }).join('');
 
-  var driftHtml = computation.drift > 0.2
+  var storedScoreDisplay = computation.storedScore === null ? 'Not yet scored' : computation.storedScore.toFixed(1);
+  var driftHtml = computation.drift !== null && computation.drift > 0.2
     ? '<div style="margin-top:10px;padding:10px 12px;border:1px solid rgba(217,119,6,0.25);border-radius:8px;background:rgba(217,119,6,0.06);font-size:11px;color:var(--text2);">Stored application score (' + escapeHtml(computation.storedScore.toFixed(1)) + ') differs from the current config recomputation (' + escapeHtml(computation.recomputedScore.toFixed(1)) + '). This usually means the live risk weights changed after the application was scored. The stored application score remains the authoritative value for this case.</div>'
     : '';
 
@@ -5047,7 +5073,7 @@ function renderStoredRiskComputationHtml(app) {
     '</table>' +
     '<div style="margin-top:10px;font-size:12px;color:var(--text2);">Formula: <code style="font-size:11px;background:var(--surface3);padding:2px 6px;border-radius:4px;">((weighted average - 1) / 3) × 100</code></div>' +
     '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Weighted average from stored dimensions: <strong>' + escapeHtml(computation.weightedAverage.toFixed(3)) + '</strong></div>' +
-    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Authoritative stored application score: <strong>' + escapeHtml(computation.storedScore.toFixed(1)) + '</strong></div>' +
+    '<div style="margin-top:6px;font-size:12px;color:var(--text2);">Authoritative stored application score: <strong>' + escapeHtml(storedScoreDisplay) + '</strong></div>' +
     driftHtml +
   '</div>';
 }
@@ -5203,8 +5229,8 @@ async function fetchApplicationDetail(ref) {
     ref: detail.ref,
     company: detail.company_name || psData.registered_entity_name || '—',
     sector: detail.sector || psData.sector || 'Unknown',
-    risk: detail.risk_level || 'LOW',
-    score: detail.risk_score || 0,
+    risk: normalizeRiskLevel(detail.risk_level),
+    score: normalizeRiskScore(detail.risk_score),
     lane: detail.onboarding_lane || 'Standard Review',
     status: formatStatus(detail.status),
     statusRaw: detail.status || '',
@@ -5441,7 +5467,7 @@ function renderAuthoritativeAppDetail(app, options) {
     riskBarsHtml += '<div class="risk-bar-row"><div class="risk-bar-label">' + dimLabels[key] + '</div><div class="risk-bar-track"><div class="risk-bar-fill ' + cls + '" style="width:' + pct + '%;"></div></div><div class="risk-bar-value">' + value.toFixed(2) + '</div></div>';
   });
   document.getElementById('detail-risk-bars').innerHTML = riskBarsHtml || '<div style="font-size:12px;color:var(--text3);">No persisted risk dimension breakdown is available for this application.</div>';
-  document.getElementById('detail-composite-score').textContent = app.score;
+  document.getElementById('detail-composite-score').textContent = formatRiskScore(app.score);
   document.getElementById('detail-risk-badge').innerHTML = riskBadge(app.risk);
   document.getElementById('detail-score-breakdown').innerHTML = renderStoredRiskComputationHtml(app);
 
@@ -5637,9 +5663,86 @@ function renderUsers() {
   });
 }
 
+function mapAuditEntry(e) {
+  return {
+    ts: e.timestamp || '',
+    user: e.user_name || '',
+    role: e.user_role || '',
+    action: e.action || '',
+    target: e.target || '',
+    detail: e.detail || '',
+    ip: e.ip_address || ''
+  };
+}
+
+function auditFilterValue(id) {
+  var el = document.getElementById(id);
+  return el ? String(el.value || '').trim() : '';
+}
+
+function buildAuditQuery(limit) {
+  var params = new URLSearchParams();
+  params.set('limit', String(limit || 100));
+  var from = auditFilterValue('audit-from-filter');
+  var to = auditFilterValue('audit-to-filter');
+  var ref = auditFilterValue('audit-ref-filter');
+  var user = auditFilterValue('audit-user-filter');
+  var action = auditFilterValue('audit-action-filter');
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  if (ref) params.set('ref', ref);
+  if (user && user !== 'All Users') params.set('user', user);
+  if (action) params.set('action', action);
+  return params.toString();
+}
+
+async function loadAuditTrail(options) {
+  options = options || {};
+  var query = buildAuditQuery(options.limit || 100);
+  var auditResp = await boApiCall('GET', '/audit?' + query);
+  AUDIT_LOG = (auditResp.entries || []).map(mapAuditEntry);
+  renderAudit();
+  if (!options.silent) showToast('Audit trail loaded (' + AUDIT_LOG.length + ' row' + (AUDIT_LOG.length === 1 ? '' : 's') + ')', 'success');
+}
+
+function clearAuditFilters() {
+  ['audit-from-filter', 'audit-to-filter', 'audit-ref-filter'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  var userEl = document.getElementById('audit-user-filter'); if (userEl) userEl.value = 'All Users';
+  var actionEl = document.getElementById('audit-action-filter'); if (actionEl) actionEl.value = '';
+  loadAuditTrail();
+}
+
+async function exportAuditTrailCSV() {
+  try {
+    var query = buildAuditQuery(10000);
+    var url = BO_API_BASE + '/audit/export?format=csv&' + query;
+    var headers = {};
+    if (BO_AUTH_TOKEN) headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
+    var res = await fetch(url, { method: 'GET', headers: headers });
+    if (!res.ok) throw new Error('Audit export failed (' + res.status + ')');
+    var blob = await res.blob();
+    var link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'regmind_audit_export.csv';
+    document.body.appendChild(link);
+    link.click();
+    URL.revokeObjectURL(link.href);
+    link.remove();
+  } catch(e) {
+    showToast(e.message || 'Audit export failed', 'error');
+  }
+}
+
 function renderAudit() {
   var tbody = document.getElementById('audit-body');
   tbody.innerHTML = '';
+  if (AUDIT_LOG.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="padding:18px;text-align:center;color:var(--text3);">No audit rows match the current filters.</td></tr>';
+    return;
+  }
   AUDIT_LOG.forEach(function(e) {
     var tr = document.createElement('tr');
     tr.innerHTML = '<td style="font-size:12px;font-family:monospace;">' + escapeHtml(e.ts) + '</td><td>' + escapeHtml(e.user) + '</td><td style="font-size:12px;">' + escapeHtml(e.role) + '</td><td><span class="badge ' + (e.action==='Approve'?'approved':e.action==='Reject'?'rejected':e.action==='Login'?'in-review':'pending') + '">' + escapeHtml(e.action) + '</span></td><td style="font-family:monospace;font-size:12px;">' + escapeHtml(e.target) + '</td><td style="font-size:12px;color:var(--text2);">' + escapeHtml(e.detail) + '</td><td style="font-size:11px;font-family:monospace;color:var(--text3);">' + escapeHtml(e.ip) + '</td>';
@@ -8187,7 +8290,7 @@ function openPeriodicReview(ref) {
         '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Client Profile</div>' +
         '<div class="detail-row"><span class="label">Sector</span><span class="value">' + app.sector + '</span></div>' +
         '<div class="detail-row"><span class="label">Country</span><span class="value">' + app.country + '</span></div>' +
-        '<div class="detail-row"><span class="label">Risk Score</span><span class="value">' + app.score + '</span></div>' +
+        '<div class="detail-row"><span class="label">Risk Score</span><span class="value">' + escapeHtml(formatRiskScore(app.score)) + '</span></div>' +
         '<div class="detail-row"><span class="label">Directors</span><span class="value">' + app.directors.map(function(d){return d.name;}).join(', ') + '</span></div>' +
         '<div class="detail-row"><span class="label">PEPs</span><span class="value">' + (app.pepCount > 0 ? '<span class="badge high">' + app.pepCount + ' PEP(s)</span>' : 'None') + '</span></div>' +
         '</div>';
@@ -13091,7 +13194,7 @@ function downloadRiskCSV() {
   lines.push('Sector,' + '"' + (app.sector || '').replace(/"/g,'""') + '"');
   lines.push('Submission Date,' + app.date);
   lines.push('Risk Level,' + app.risk);
-  lines.push('Composite Score,' + app.score);
+  lines.push('Composite Score,' + formatRiskScore(app.score));
   lines.push('Onboarding Lane,' + app.lane);
   lines.push('Assigned To,' + app.assigned);
   lines.push('');

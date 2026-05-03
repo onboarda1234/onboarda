@@ -5742,6 +5742,8 @@ _REPORT_DEFAULT_FIELDS = (
     "country", "entity_type", "created_at", "assigned_to",
 )
 
+_CANONICAL_RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
+
 _REPORT_APPLICATION_SELECT_COLUMNS = (
     "a.id AS id",
     "a.ref AS ref",
@@ -5794,6 +5796,9 @@ def _report_scope_from_request(handler, user):
     for key, clause in mapping:
         value = filters.get(key)
         if value:
+            if key == "risk_level" and str(value).strip().upper() == "UNKNOWN":
+                conditions.append("(a.risk_level IS NULL OR a.risk_level='' OR a.risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH'))")
+                continue
             conditions.append(clause)
             params.append(value)
 
@@ -5818,8 +5823,10 @@ def _report_field_list(fields):
 def _report_record(row):
     record = dict(row)
     record["status_label"] = get_status_label(record.get("status"))
-    record["risk_score"] = record.get("risk_score") or 0
-    record["risk_level"] = record.get("risk_level") or ""
+    raw_score = record.get("risk_score")
+    record["risk_score"] = raw_score if raw_score not in (None, "") else None
+    raw_level = str(record.get("risk_level") or "").strip().upper()
+    record["risk_level"] = raw_level if raw_level in _CANONICAL_RISK_LEVELS else "UNKNOWN"
     record["risk_lane"] = record.get("onboarding_lane") or ""
     if record.get("risk_dimensions") and isinstance(record["risk_dimensions"], str):
         try:
@@ -5990,7 +5997,7 @@ class ReportAnalyticsHandler(BaseHandler):
                 pass
 
             # --- risk_distribution ---
-            risk_distribution = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0}
+            risk_distribution = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "VERY_HIGH": 0, "UNKNOWN": 0}
             try:
                 rows = db.execute(f"""
                     SELECT a.risk_level, COUNT(*) as cnt
@@ -5999,9 +6006,10 @@ class ReportAnalyticsHandler(BaseHandler):
                 """, params).fetchall()
                 for row in rows:
                     r = dict(row)
-                    level = r.get("risk_level") or ""
-                    if level in risk_distribution:
-                        risk_distribution[level] = r.get("cnt") or 0
+                    level = str(r.get("risk_level") or "").strip().upper()
+                    if level not in _CANONICAL_RISK_LEVELS:
+                        level = "UNKNOWN"
+                    risk_distribution[level] = risk_distribution.get(level, 0) + (r.get("cnt") or 0)
             except Exception:
                 pass
 
@@ -6320,6 +6328,17 @@ def _bounded_int(value, default, min_value=0, max_value=1000):
     return max(min_value, min(parsed, max_value))
 
 
+def _audit_target_values_for_ref(ref):
+    """Return both audit target conventions used for an application ref."""
+    ref = str(ref or "").strip()
+    if not ref:
+        return []
+    if ref.startswith("application:"):
+        bare_ref = ref.split("application:", 1)[1]
+        return [ref, bare_ref]
+    return [ref, f"application:{ref}"]
+
+
 def _append_audit_filters(handler, query, params):
     """Append safe audit_log filters shared by list/export endpoints."""
     start_date = handler.get_argument("from", None) or handler.get_argument("start_date", None)
@@ -6358,14 +6377,10 @@ def _append_audit_filters(handler, query, params):
         query += " AND action = ?"
         params.append(action_filter)
     if ref_filter:
-        ref = ref_filter
-        if ref.startswith("application:"):
-            bare_ref = ref.split("application:", 1)[1]
+        targets = _audit_target_values_for_ref(ref_filter)
+        if targets:
             query += " AND (target = ? OR target = ?)"
-            params.extend([ref, bare_ref])
-        else:
-            query += " AND (target = ? OR target = ?)"
-            params.extend([ref, f"application:{ref}"])
+            params.extend(targets)
 
     return query, params
 
@@ -6411,13 +6426,173 @@ class ApplicationAuditLogHandler(BaseHandler):
             return self.error("Application not found", 404)
         limit = min(int(self.get_argument("limit", "200")), 500)
         offset = max(0, int(self.get_argument("offset", "0")))
+        targets = _audit_target_values_for_ref(app["ref"])
         rows = db.execute(
-            "SELECT * FROM audit_log WHERE target = ? ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            (app["ref"], limit, offset)
+            "SELECT * FROM audit_log WHERE target IN (?, ?) ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (*targets, limit, offset)
         ).fetchall()
-        total = db.execute("SELECT COUNT(*) as c FROM audit_log WHERE target = ?", (app["ref"],)).fetchone()["c"]
+        total = db.execute(
+            "SELECT COUNT(*) as c FROM audit_log WHERE target IN (?, ?)",
+            tuple(targets)
+        ).fetchone()["c"]
         db.close()
         self.success({"entries": [dict(r) for r in rows], "total": total})
+
+
+class ApplicationEvidencePackHandler(BaseHandler):
+    """GET /api/applications/:id/evidence-pack — consolidated case reconstruction packet."""
+
+    @staticmethod
+    def _parse_json_if_structured(value):
+        if value is None or isinstance(value, (dict, list)):
+            return value
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text or text[0] not in ("{", "["):
+            return None
+        try:
+            return safe_json_loads(text)
+        except Exception:
+            return None
+
+    @classmethod
+    def _dict_rows(cls, rows, json_fields=()):
+        result = []
+        for row in rows:
+            item = dict(row)
+            for field in json_fields:
+                if field in item:
+                    item[field] = parse_json_field(item.get(field), {} if field.endswith("_data") else [])
+            result.append(item)
+        return result
+
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+
+        db = get_db()
+        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        if not app:
+            db.close()
+            return self.error("Application not found", 404)
+        if not self.check_app_ownership(user, app):
+            db.close()
+            return
+
+        app_dict = dict(app)
+        app_dict["status_label"] = get_status_label(app_dict.get("status"))
+        app_dict["risk_level_label"] = get_risk_label(app_dict.get("risk_level"))
+        app_dict["final_risk_level_label"] = get_risk_label(app_dict.get("final_risk_level") or app_dict.get("risk_level"))
+        app_dict["assigned_name"] = resolve_user_display_name(db, app_dict.get("assigned_to"))
+        app_dict["decision_by_name"] = resolve_user_display_name(db, app_dict.get("decision_by"))
+        app_dict["prescreening_data"] = merge_prescreening_sources(
+            parse_json_field(app_dict.get("prescreening_data"), {}),
+            load_saved_session_prescreening(db, app_dict),
+        )
+        if app_dict.get("risk_dimensions"):
+            app_dict["risk_dimensions"] = parse_json_field(app_dict.get("risk_dimensions"), {})
+
+        directors, ubos, intermediaries = get_application_parties(db, app_dict["id"])
+        documents = self._dict_rows(
+            db.execute(
+                "SELECT * FROM documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC",
+                (app_dict["id"],)
+            ).fetchall(),
+            json_fields=("verification_results",),
+        )
+        for doc in documents:
+            doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+
+        memos = self._dict_rows(
+            db.execute(
+                """
+                SELECT id, application_id, version, memo_version, raw_output_hash, memo_data,
+                       review_status, reviewed_by, review_notes, quality_score, validation_status,
+                       validation_issues, validation_run_at, approved_by, approved_at,
+                       supervisor_status, supervisor_summary, supervisor_contradictions,
+                       rule_violations, rule_engine_status, blocked, block_reason,
+                       pdf_generated_at, created_at
+                FROM compliance_memos
+                WHERE application_id = ?
+                ORDER BY version DESC, id DESC
+                """,
+                (app_dict["id"],)
+            ).fetchall(),
+            json_fields=("memo_data", "validation_issues", "supervisor_contradictions", "rule_violations"),
+        )
+        for memo in memos:
+            memo["reviewed_by_name"] = resolve_user_display_name(db, memo.get("reviewed_by"))
+            memo["approved_by_name"] = resolve_user_display_name(db, memo.get("approved_by"))
+            memo["final_status"] = _memo_final_status(memo)
+
+        decisions = self._dict_rows(
+            db.execute(
+                "SELECT * FROM decision_records WHERE application_ref = ? ORDER BY timestamp DESC",
+                (app_dict["ref"],)
+            ).fetchall(),
+            json_fields=("key_flags", "extra_json"),
+        )
+        edd_cases = self._dict_rows(
+            db.execute(
+                "SELECT * FROM edd_cases WHERE application_id = ? ORDER BY triggered_at DESC, id DESC",
+                (app_dict["id"],)
+            ).fetchall(),
+            json_fields=("origin_context", "edd_notes"),
+        )
+        rmi_requests = _load_rmi_requests(db, app_dict["id"])
+
+        audit_limit = _bounded_int(self.get_argument("audit_limit", 1000), 1000, min_value=1, max_value=5000)
+        targets = _audit_target_values_for_ref(app_dict["ref"])
+        audit_rows = db.execute(
+            """
+            SELECT * FROM audit_log
+            WHERE target IN (?, ?)
+            ORDER BY timestamp ASC, id ASC
+            LIMIT ?
+            """,
+            (*targets, audit_limit)
+        ).fetchall()
+        audit_total = db.execute(
+            "SELECT COUNT(*) as c FROM audit_log WHERE target IN (?, ?)",
+            tuple(targets)
+        ).fetchone()["c"]
+        audit_entries = []
+        for row in audit_rows:
+            entry = dict(row)
+            parsed_detail = self._parse_json_if_structured(entry.get("detail"))
+            if parsed_detail is not None:
+                entry["detail_json"] = parsed_detail
+            audit_entries.append(entry)
+
+        db.close()
+        self.success({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "build": get_build_metadata(),
+            "scope": {
+                "application_id": app_dict["id"],
+                "application_ref": app_dict["ref"],
+                "audit_targets": targets,
+                "audit_limit": audit_limit,
+            },
+            "application": app_dict,
+            "parties": {
+                "directors": directors,
+                "ubos": ubos,
+                "intermediaries": intermediaries,
+            },
+            "documents": documents,
+            "rmi_requests": rmi_requests,
+            "compliance_memos": memos,
+            "decision_records": decisions,
+            "edd_cases": edd_cases,
+            "audit_log": {
+                "entries": audit_entries,
+                "total": audit_total,
+                "returned": len(audit_entries),
+            },
+        })
 
 
 class ApplicationNotesHandler(BaseHandler):
@@ -6498,51 +6673,28 @@ class AuditExportHandler(BaseHandler):
         if fmt not in ("json", "csv"):
             return self.error("format must be json or csv", 400)
 
-        start_date = self.get_argument("start_date", None)
-        end_date = self.get_argument("end_date", None)
-        actor_user_id = self.get_argument("actor_user_id", None)
-        action_filter = self.get_argument("action", None)
         include_decisions = self.get_argument("include_decisions", "false").lower() in ("true", "1", "yes")
-
-        if start_date:
-            start_date = self._parse_date(start_date)
-            if start_date is None:
-                return self.error("start_date must be a valid ISO-8601 date", 400)
-        if end_date:
-            end_date = self._parse_date(end_date)
-            if end_date is None:
-                return self.error("end_date must be a valid ISO-8601 date", 400)
+        decision_start_date = _parse_audit_date(
+            self.get_argument("from", None) or self.get_argument("start_date", None)
+        )
+        decision_end_date = _parse_audit_date(
+            self.get_argument("to", None) or self.get_argument("end_date", None)
+        )
+        decision_actor_user_id = (
+            self.get_argument("user_id", None)
+            or self.get_argument("actor_user_id", None)
+            or self.get_argument("user", None)
+        )
+        decision_actor_user_id = str(decision_actor_user_id).strip() if decision_actor_user_id is not None else None
 
         db = get_db()
         try:
             query = "SELECT * FROM audit_log WHERE 1=1"
             params = []
-
-            if start_date:
-                query += " AND timestamp >= ?"
-                params.append(start_date)
-            if end_date:
-                query += " AND timestamp <= ?"
-                params.append(end_date)
-            if actor_user_id:
-                query += " AND user_id = ?"
-                params.append(actor_user_id)
-            if action_filter:
-                query += " AND action = ?"
-                params.append(action_filter)
-            ref_filter = (
-                self.get_argument("ref", None)
-                or self.get_argument("application_ref", None)
-                or self.get_argument("target", None)
-            )
-            if ref_filter:
-                ref = str(ref_filter).strip()
-                if ref.startswith("application:"):
-                    query += " AND (target = ? OR target = ?)"
-                    params.extend([ref, ref.split("application:", 1)[1]])
-                else:
-                    query += " AND (target = ? OR target = ?)"
-                    params.extend([ref, f"application:{ref}"])
+            try:
+                query, params = _append_audit_filters(self, query, params)
+            except ValueError as exc:
+                return self.error(str(exc), 400)
 
             query += " ORDER BY timestamp DESC LIMIT ?"
             params.append(self.MAX_EXPORT_ROWS)
@@ -6559,15 +6711,15 @@ class AuditExportHandler(BaseHandler):
             if include_decisions:
                 d_query = "SELECT * FROM decision_records WHERE 1=1"
                 d_params = []
-                if start_date:
+                if decision_start_date:
                     d_query += " AND timestamp >= ?"
-                    d_params.append(start_date)
-                if end_date:
+                    d_params.append(decision_start_date)
+                if decision_end_date:
                     d_query += " AND timestamp <= ?"
-                    d_params.append(end_date)
-                if actor_user_id:
+                    d_params.append(decision_end_date)
+                if decision_actor_user_id:
                     d_query += " AND actor_user_id = ?"
-                    d_params.append(actor_user_id)
+                    d_params.append(decision_actor_user_id)
                 d_query += " ORDER BY timestamp DESC"
                 d_rows = db.execute(d_query, tuple(d_params)).fetchall()
                 decision_map = {}
@@ -6796,6 +6948,10 @@ class DashboardHandler(BaseHandler):
             stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
             stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["risk_unknown"] = db.execute(
+                "SELECT COUNT(*) as c FROM applications WHERE client_id=? AND (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH'))",
+                (client_id,)
+            ).fetchone()["c"]
 
             # Recent applications
             recent = db.execute("""
@@ -6827,6 +6983,10 @@ class DashboardHandler(BaseHandler):
             stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM'{fx_clause}", fp).fetchone()["c"]
             stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH'{fx_clause}", fp).fetchone()["c"]
             stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH'{fx_clause}", fp).fetchone()["c"]
+            stats["risk_unknown"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH')){fx_clause}",
+                fp
+            ).fetchone()["c"]
 
             # Recent applications
             recent_fx_excl, recent_fx_params = fixture_app_exclude_clause(table_alias="a")
@@ -13271,6 +13431,7 @@ def make_app():
         (r"/api/applications/([^/]+)/memo", ComplianceMemoHandler),
         (r"/api/applications/([^/]+)/decision", ApplicationDecisionHandler),
         (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),
+        (r"/api/applications/([^/]+)/evidence-pack", ApplicationEvidencePackHandler),
         (r"/api/applications/([^/]+)/audit-log", ApplicationAuditLogHandler),
         (r"/api/applications/([^/]+)/notes", ApplicationNotesHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
