@@ -1,8 +1,8 @@
 # RegMind — Investor-Grade Product Audit Report
 
 **Classification:** CONFIDENTIAL — Due Diligence Material  
-**Report Date:** April 2026  
-**Methodology:** Full codebase audit of `onboarda1234/onboarda` repository  
+**Report Date:** May 2026  
+**Methodology:** Main-branch code audit of `onboarda1234/onboarda` + GitHub Actions evidence + AWS staging deployment evidence where available  
 **Auditor Role:** Senior Product Auditor / Enterprise SaaS Analyst / Technical Due Diligence Expert
 
 ---
@@ -19,28 +19,39 @@ The platform operates as two branded surfaces:
 
 ### Classification
 
-**Demo-ready with production-grade subsystems.**
+**Production-pilot-ready for controlled deployment, but not yet enterprise-grade.**
 
-Several core subsystems — risk scoring, memo generation, validation engine, supervisor pipeline, change management, and audit trail — are production-grade in implementation depth. The platform as a whole is demo-ready with clear pathways to full production deployment. The monolithic architecture of `server.py` (10,147 lines) and single-file frontends (711KB backoffice, 510KB portal) are the primary structural constraints preventing enterprise-grade classification.
+Several core subsystems — risk scoring, memo generation, validation engine, supervisor pipeline, change management, and audit trail — remain production-grade in implementation depth. However, the overall platform should now be classified more precisely as **production-pilot-ready for controlled deployment**: the EX-01 to EX-13 remediation sprint has been closed, current `main` CI and staging deployment both succeeded on 2026-05-03, and AWS staging is now the authoritative near-production runtime surface. The platform is still not enterprise-grade because staging remains single-task / non-autoscaled, `server.py` is still monolithic (13,765 lines), and the frontends remain large single-file HTML applications (829KB backoffice, 547KB portal).
 
 ### Overall Assessment
 
-RegMind is a genuine compliance operating system, not a collection of tools. It implements end-to-end workflows from client intake through ongoing monitoring, with deterministic rule enforcement, AI-assisted analysis, multi-layer validation, and immutable audit trails. The depth of the compliance logic — 10 AI agents, 15-point memo validation, 11-check supervisor contradiction detection, materiality-tiered change management — exceeds what is typically found in early-stage compliance platforms.
+RegMind is a genuine compliance operating system, not a collection of tools. It implements end-to-end workflows from client intake through ongoing monitoring, with deterministic rule enforcement, AI-assisted analysis, multi-layer validation, and immutable audit trails. The depth of the compliance logic — 10 AI agents, 15-point memo validation, 11-check supervisor contradiction detection, materiality-tiered change management — remains stronger than what is typically found in early-stage compliance platforms. The latest evidence materially improves the prior audit posture: remediation items EX-01 through EX-13 are closed, the approval / audit / screening governance layers have been hardened, and AWS staging on ECS Fargate now supports a credible controlled-pilot narrative. That said, the current infrastructure and enterprise controls still support **controlled pilot deployment**, not broad enterprise production rollout.
+
+### Evidence Grading Used in This Report
+
+| Label | Meaning |
+|---|---|
+| **Code-confirmed** | Directly evidenced in `main` branch source, tests, or CI configuration |
+| **Runtime-confirmed** | Evidenced by validated AWS staging deployment/workflow/runbook or successful staging deployment on `main` |
+| **Partially implemented** | Present in code but limited by feature flags, missing wiring, or incomplete runtime proof |
+| **Demo-ready** | Suitable for demonstration or internal review, but not enough for controlled regulated deployment by itself |
+| **Production-ready** | Control or subsystem is technically mature and operationally credible within the current pilot posture |
+| **Blocker** | Material gap that prevents full production / enterprise-readiness classification |
 
 ### Key Strengths
 1. **Deterministic AI pipeline** — 4-layer architecture (rules → memo → validation → supervisor) prevents AI hallucination from reaching compliance decisions
 2. **35+ database tables** with comprehensive relational integrity — not a thin prototype
 3. **10 specialized AI agents** with defined authority levels (authoritative vs decision_support)
-4. **2,718+ automated tests** across 111 test files — exceptional for a platform at this stage
-5. **Production security controls** — fail-closed approval gates, PII encryption, token revocation, CSRF, rate limiting
-6. **Complete change management lifecycle** — materiality tiering, profile versioning, atomic implementation
+4. **4,000+ automated tests** — latest `main` validation recorded 4,087 passed / 23 skipped, with CI enforcing a minimum 3,800 collected tests
+5. **Closed remediation sprint (EX-01 to EX-13)** — approval, audit, screening, and client-side hardening controls are now materially stronger
+6. **Validated AWS staging path** — ECS Fargate staging deploys from `main`, with SHA-tagged images, health checks, and post-deploy verification
 
 ### Key Weaknesses
-1. **Monolithic server.py** (10,147 lines, 114 handler classes) — technical debt that will constrain team scaling
+1. **Monolithic server.py** (13,765 lines) — technical debt that will constrain team scaling and raises deployment blast radius
 2. **Single-file HTML frontends** — no component framework, no build pipeline, limits frontend iteration velocity
 3. **SQLite/PostgreSQL dual support** — acceptable for now but will need migration tooling hardening
 4. **External provider dependency** — Sumsub for KYC/AML screening is single-provider with partial abstraction
-5. **No horizontal scaling architecture** — single-process Tornado server, in-memory rate limiting
+5. **Infrastructure is still single-instance pilot posture** — single ECS desired task, no autoscaling, no confirmed HA/DR, and no enterprise identity/compliance certification layer
 
 ---
 
@@ -91,7 +102,7 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 **Step-by-step flow:**
 
 1. **Client Registration** (`POST /api/auth/client/register`) — Email/password with bcrypt hashing, strong password policy (12+ chars, 4 character types)
-2. **Company Lookup** (`POST /api/screening/company`) — OpenCorporates registry verification; prefills application form
+2. **Company Lookup** (`POST /api/screening/company`) — Company lookup path exists, but external registry verification should currently be treated as **partially implemented / degraded**, not as a fully proven production control
 3. **Prescreening Submission** (`POST /api/applications`) — Company details, sector, entity type, ownership structure, expected transaction volumes
 4. **Real-time Sanctions Check** (`POST /api/screening/sanctions`) — Country-level sanctioned jurisdiction detection during form completion
 5. **Risk Scoring** (rule_engine.py `compute_risk_score()`) — 5-dimension composite score (D1-D5) with floor rules and elevation logic
@@ -126,7 +137,7 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 **Step-by-step flow:**
 
 1. **AML/PEP Screening** (`screen_sumsub_aml()`) — Per-person Sumsub AML screening: create applicant → trigger check → poll review → map GREEN/RED/PENDING
-2. **Company Registry Verification** (`lookup_opencorporates()`) — OpenCorporates lookup for company details
+2. **Company Registry Verification** (`lookup_opencorporates()`) — OpenCorporates enrichment path exists, but it is not yet a fully runtime-proven authoritative dependency for controlled deployment
 3. **IP Geolocation** (`geolocate_ip()`) — Client IP risk classification
 4. **Screening Queue** (`GET /api/screening/queue`) — Officers review hits with false positive analysis (Agent 3: FinCrime Screening Interpretation)
 5. **Screening Review** (`POST /api/screening/review`) — Per-subject disposition: cleared / escalated / follow_up_required
@@ -242,14 +253,14 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 ### Screening Queue
 - **Purpose:** Centralized review of AML/PEP/sanctions screening results
 - **Functionality:** Queue listing, per-subject review, disposition tracking (cleared/escalated/follow_up_required), false positive analysis via Agent 3
-- **Completeness:** ✅ Production-ready (live Sumsub integration + OpenCorporates)
+- **Completeness:** ⚠️ **Pilot-ready** — live Sumsub screening is code-confirmed and staging-aligned, but external registry enrichment remains partially implemented / degraded
 - **Dependencies:** screening.py, sumsub_client.py, screening_normalizer.py
 - **Commercial relevance:** High — eliminates manual screening review spreadsheets
 
 ### Ongoing Monitoring
 - **Purpose:** Post-onboarding continuous compliance surveillance
 - **Functionality:** 3 monitoring agents (6, 7, 8), alert management with severity/disposition, periodic review scheduling with risk-level-driven frequency, agent execution tracking
-- **Completeness:** ⚠️ Demo-ready (agents implemented but monitoring trigger automation not fully wired for production scheduling)
+- **Completeness:** ⚠️ **Pilot-ready with limitations** — agents and review state management exist, but automatic scheduler / trigger automation is still not implemented
 - **Dependencies:** supervisor/ module, agent_executors.py, monitoring tables
 - **Commercial relevance:** Critical for ongoing regulatory compliance — transforms RegMind from onboarding tool to lifecycle system
 
@@ -270,14 +281,14 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 ### Reports
 - **Purpose:** Operational and compliance analytics
 - **Functionality:** Overview, operations, compliance, and data table views; CSV export; report generation endpoint
-- **Completeness:** ⚠️ Demo-ready (report structure exists; data aggregation implemented; limited customization)
+- **Completeness:** ⚠️ **Pilot-ready for internal reporting** — report structure and aggregation exist, but customization and enterprise reporting breadth remain limited
 - **Dependencies:** Applications, screening, decisions
 - **Commercial relevance:** Required for board/management reporting and regulatory submissions
 
 ### Regulatory Intelligence
 - **Purpose:** Regulatory document management and AI-assisted analysis
 - **Functionality:** Document upload, AI analysis (status: uploaded → analysed → review_required), source text management, review workflow
-- **Completeness:** ⚠️ Demo-ready (structure complete, AI analysis integration scaffolded)
+- **Completeness:** ⚠️ **Partially implemented / demo-ready** — structure exists, but AI analysis remains scaffolded rather than production-proven
 - **Dependencies:** claude_client.py, document storage
 - **Commercial relevance:** Forward-looking differentiator — positions RegMind as proactive compliance rather than reactive
 
@@ -312,7 +323,7 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 ### Agent Health
 - **Purpose:** Monitoring AI agent execution quality and reliability
 - **Functionality:** Agent execution tracking (agent_executions table), golden test capability, health data generation, export
-- **Completeness:** ⚠️ Demo-ready (UI complete, backend scaffolded, golden test infrastructure present)
+- **Completeness:** ⚠️ **Demo-ready / internal-governance-ready** — useful for internal oversight, but not yet an enterprise operations layer
 - **Dependencies:** AI agents, supervisor/
 - **Commercial relevance:** Enterprise requirement — AI governance demands operational monitoring
 
@@ -347,7 +358,7 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 ### Supervisor Dashboard
 - **Purpose:** Executive oversight of AI pipeline quality
 - **Functionality:** Pipeline execution monitoring, contradiction visualization, audit chain verification, re-screening capability
-- **Completeness:** ⚠️ Demo-ready (UI implemented, backend data available, needs production hardening)
+- **Completeness:** ⚠️ **Pilot-ready for controlled use** — UI and data exist, but broader production hardening is still required
 - **Dependencies:** supervisor/, agent_executions, supervisor_pipeline_results
 - **Commercial relevance:** Governance requirement — provides compliance leadership with pipeline visibility
 
@@ -361,9 +372,9 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 |---|---|
 | **Language** | Python 3.11 |
 | **Framework** | Tornado (async web framework) |
-| **Total Python files** | 176 |
-| **Total lines of code** | 94,140 |
-| **Main server** | server.py — 10,147 lines, 114 handler classes |
+| **Total Python files** | 303 |
+| **Total lines of code** | 142,441 |
+| **Main server** | server.py — 13,765 lines |
 | **Database** | PostgreSQL (production) / SQLite (development) |
 | **AI Integration** | Anthropic Claude API (Sonnet + Opus) |
 | **KYC Provider** | Sumsub |
@@ -404,8 +415,8 @@ RegMind owns **Layer 2 (Operational Compliance)** and **Layer 3 (Decision & Gove
 
 | Component | Size | Technology |
 |---|---|---|
-| Back-office (arie-backoffice.html) | 711KB, 11,547 lines | Vanilla JS SPA, 22 views |
-| Client portal (arie-portal.html) | 510KB, 9,429 lines | Vanilla JS SPA, 19 views |
+| Back-office (arie-backoffice.html) | 829KB, 13,450 lines | Vanilla JS SPA, 22 views |
+| Client portal (arie-portal.html) | 547KB, 9,953 lines | Vanilla JS SPA, 19 views |
 | Landing page (index.html) | 55KB, 637 lines | Static HTML |
 
 No build step, no framework, no component library. All JavaScript is inline. This is simultaneously a strength (zero build complexity, instant deployment) and a weakness (no code splitting, no TypeScript safety, no component reuse).
@@ -427,7 +438,7 @@ The backend is partially modularized:
 - resilience/ directory (10 files) — circuit breaker, retry, queue patterns
 
 **Monolithic concern:**
-- server.py (10,147 lines) — all 114 HTTP handlers, route registration, and significant business logic in one file
+- server.py (13,765 lines) — route registration and significant business logic remain concentrated in one file
 
 ### Coupling vs Separation
 
@@ -441,10 +452,10 @@ The coupling is **acceptable for current scale** but will need refactoring:
 
 | Dimension | Current State | Assessment |
 |---|---|---|
-| Horizontal scaling | Single-process Tornado | ❌ Not ready |
+| Horizontal scaling | Single-process Tornado on a single ECS desired task in staging | ❌ Not ready |
 | Database | PostgreSQL with connection pooling | ✅ Ready |
 | File storage | S3 support (boto3) | ✅ Ready |
-| Rate limiting | In-memory (per-process) | ⚠️ Partial |
+| Rate limiting | In-memory (per-container / per-process) | ⚠️ Partial |
 | Session management | DB-backed tokens | ✅ Ready |
 | Background tasks | Resilience queue (SQLite-backed) | ⚠️ Partial |
 | Caching | None | ❌ Not implemented |
@@ -719,37 +730,100 @@ Gaps:
 
 ## 10. Production Readiness
 
-### Production-Ready Components
+### Current Readiness Verdict
+
+**RegMind is now best described as _production-pilot-ready for controlled deployment_.**
+
+This is a stronger position than the earlier "demo-ready with production-grade subsystems" framing, but it is still materially short of full enterprise-grade readiness. Current `main` evidence shows:
+
+- **Code-confirmed:** EX-01 through EX-13 remediation sprint closed; protected controls and dedicated tests exist on `main`
+- **Code-confirmed:** GitHub Actions CI on `main` succeeded on **2026-05-03**
+- **Runtime-confirmed:** AWS staging deployment on `main` succeeded on **2026-05-03**
+- **Runtime-confirmed:** staging deployment flow includes SHA-pinned ECR images, ECS deployment, readiness checks, and portal/backoffice verification
+- **Not yet confirmed:** HA, autoscaling, multi-region DR, SSO/SAML, compliance certifications, or enterprise multi-tenancy
+
+### Readiness by Environment
+
+| Environment | Current status | Basis |
+|---|---|---|
+| **Internal demo** | ✅ **Ready** | Code-confirmed and still suitable for investor, stakeholder, and internal workflow demonstrations |
+| **AWS staging / UAT** | ✅ **Ready** | Runtime-confirmed via validated staging runbook, deployment workflow, and successful staging deployment on `main` |
+| **Controlled production pilot** | ⚠️ **Ready with conditions** | Appropriate for controlled deployment with a limited design-partner scope and explicit infrastructure caveats |
+| **Broad production rollout** | ❌ **Not ready** | Single-task posture, no autoscaling/HA, unresolved enterprise controls, and structural technical debt remain |
+| **Enterprise-grade deployment** | ❌ **Not ready** | No confirmed SSO/SAML, SOC 2 / ISO 27001, multi-tenancy, or cross-region DR posture |
+
+### Remediation Sprint EX-01 to EX-13 — Current Closure Matrix
+
+| Control | Close-out summary | Status |
+|---|---|---|
+| **EX-01** | Admin reset DB authentication hardening closed | **Code-confirmed** |
+| **EX-02** | Demo credential fallback removed | **Code-confirmed** |
+| **EX-03** | Mock company data removed | **Code-confirmed** |
+| **EX-04** | Webhook idempotency guard closed | **Code-confirmed** |
+| **EX-05** | `before_state` / `after_state` audit logging verified | **Runtime-confirmed** |
+| **EX-06** | High-risk dual-approval workflow verified | **Runtime-confirmed** |
+| **EX-07** | Legacy webhook fallback removed | **Code-confirmed** |
+| **EX-08** | Sumsub applicant ID validation verified | **Runtime-confirmed** |
+| **EX-09** | Risk score recomputation trigger verified | **Runtime-confirmed** |
+| **EX-10** | Screening freshness validation verified | **Runtime-confirmed** |
+| **EX-11** | AI outputs advisory labeling + officer sign-off governance verified | **Runtime-confirmed** |
+| **EX-12** | Client-side defense-in-depth guards verified | **Runtime-confirmed** |
+| **EX-13** | Applications-list N+1 optimization + refresh behavior verified | **Runtime-confirmed** |
+
+> The close-out posture above is consistent with the protected-controls registry on `main`, the associated dedicated test suites, and the current validated staging/deploy evidence. It materially improves the prior audit narrative.
+
+### Components That Are Production-Ready Within the Current Pilot Posture
 
 | Component | Evidence |
 |---|---|
-| Risk scoring engine | 1,221 lines, comprehensive country/sector mappings, floor/elevation rules |
-| Memo generation | 778 lines, 11-section template, 6 pre-generation rules |
-| Validation engine | 560 lines, 15 weighted rules, quality scoring |
-| Supervisor engine | 351 lines, 11 contradiction checks, verdict/confidence |
-| Security hardening | 1,814 lines, 9-point approval gate, PII encryption, token revocation |
-| Change management | 1,802 lines, state machine, materiality tiering, atomic implementation |
-| Authentication | JWT + bcrypt + rate limiting + CSRF + strong password policy |
-| Database schema | 35+ tables with foreign keys, indexes, CASCADE deletes |
-| Test suite | 2,718 tests across 111 files |
-| Document verification | 70.5KB + 58.4KB check matrix with 5-layer architecture |
+| Risk scoring engine | Code-confirmed; recomputation and threshold governance hardened |
+| Memo generation | Code-confirmed; deterministic 11-section memo pipeline |
+| Validation engine | Code-confirmed; 15-point validation layer |
+| Supervisor engine | Code-confirmed; contradiction detection and approval gating |
+| Security hardening | Code-confirmed; approval gates, webhook verification, auth controls, and screening freshness checks |
+| Change management | Code-confirmed and materially improved by EX-05 / EX-09 auditability and recomputation controls |
+| Authentication / RBAC | Code-confirmed; demo fallbacks removed and governance tightened |
+| Audit trail | Code-confirmed and strengthened; before/after state capture and sign-off governance now materially better |
+| Document verification | Code-confirmed; 5-layer verification matrix remains one of the strongest subsystems |
 
-### Demo-Ready Components
+### Components That Remain Pilot-Ready, Partial, or Demo-Ready
 
-| Component | Gap |
+| Component | Current posture | Limitation |
+|---|---|---|
+| Ongoing monitoring | **Pilot-ready with limitations** | No fully automated scheduler; some monitoring workflows still rely on manual initiation |
+| Regulatory intelligence | **Partially implemented / demo-ready** | AI analysis remains scaffolded rather than fully production-proven |
+| Agent health monitoring | **Demo-ready / internal-governance-ready** | Good internal oversight surface, but not yet an enterprise ops control plane |
+| Reports | **Pilot-ready for internal use** | Limited customization and enterprise reporting depth |
+| Public API v1 | **Partial** | Limited external integration breadth and documentation |
+
+### AWS Staging Architecture (Current Known Posture)
+
+| Component | Current known state |
 |---|---|
-| Ongoing monitoring | Agent trigger automation not wired for production scheduling |
-| Regulatory intelligence | AI analysis scaffolded but not production-tested |
-| Agent health monitoring | UI complete, golden test infrastructure present, needs production data |
-| Reports | Structure exists, needs customizable report templates |
-| Supervisor dashboard | UI implemented, needs production hardening |
-| Public API v1 | 4 endpoints, needs expansion for enterprise integration |
+| **Region** | `af-south-1` (Cape Town) |
+| **Runtime** | AWS ECS Fargate |
+| **Cluster / service** | `regmind-staging` / `regmind-backend` |
+| **Task size** | 1 vCPU / 3 GiB RAM |
+| **Desired tasks** | 1 |
+| **Autoscaling** | Not configured |
+| **ALB** | `regmind-staging-alb` |
+| **Target group** | `regmind-staging-tg` |
+| **Document storage** | S3 bucket `regmind-documents-staging` |
+| **Secrets** | AWS Secrets Manager (`regmind/staging`) |
+| **Image tags** | ECR `regmind-backend:$GIT_SHA` plus `:latest` |
 
-### Critical Blockers
+### Remaining Production / Enterprise Blockers
 
-1. **No horizontal scaling** — single Tornado process; must add load balancer + stateless session management
-2. **server.py monolith** — 10,147 lines is a deployment risk (single file failure = total system failure)
-3. **In-memory rate limiting** — doesn't work across multiple processes/containers
+1. **Single ECS desired task** — staging proves operability, but not HA
+2. **No autoscaling configured** — capacity remains manually bounded
+3. **No full HA posture** — no evidence of multi-task or multi-AZ application redundancy at the service layer
+4. **Staging public-IP exposure remains a concern** — current staging posture is not yet a final locked-down enterprise network design
+5. **No confirmed SOC 2 / ISO 27001** — limits enterprise procurement readiness
+6. **No confirmed SSO / SAML** — limits enterprise identity integration
+7. **No full multi-tenancy model** — current posture is not enterprise tenant-isolation grade
+8. **No full DR / cross-region failover** — recovery posture is not yet enterprise-class
+9. **Limited production customer evidence** — controlled pilot is credible; broad market proof is not yet established
+10. **Structural technical debt** — `server.py` monolith and large single-file frontends remain material scaling risks
 
 ### Reliability Risks
 
@@ -779,9 +853,10 @@ Gaps:
 
 - **Docker:** Dockerfile with non-root user, health checks, persistent volumes ✅
 - **Docker Compose:** PostgreSQL 16 + backend with health checks ✅
-- **Render.com:** render.yaml with production config, persistent disk ✅
-- **CI/CD:** GitHub Actions (.github/workflows/ci.yml) ✅
-- **No Kubernetes manifests** — Render.com PaaS deployment only
+- **GitHub Actions CI:** `main` CI succeeded on 2026-05-03 ✅
+- **AWS staging deploy:** ECS Fargate staging deploy from `main` succeeded on 2026-05-03 ✅
+- **Demo surface:** Render remains relevant for demo, not as the authoritative near-production path ✅
+- **No Kubernetes manifests** — ECS is workflow-driven rather than IaC-defined
 - **No infrastructure-as-code** (no Terraform, no CloudFormation)
 
 ---
@@ -789,8 +864,8 @@ Gaps:
 ## 11. Strengths
 
 ### Technical Strengths
-1. **94,140 lines of Python** across 176 files — substantial codebase, not a prototype
-2. **2,718 automated tests** across 111 test files — exceptional test discipline for early-stage
+1. **142,441 lines of Python** across 303 files — substantial codebase, not a prototype
+2. **4,000+ automated tests** — current main-branch validation recorded 4,087 passed / 23 skipped
 3. **10 AI agents** with defined authority levels (authoritative vs decision_support) — sophisticated agent architecture
 4. **5-layer document verification** (gate → rule → hybrid → AI → aggregation) — defense-in-depth
 5. **Pydantic validation on AI outputs** — prevents malformed AI responses from propagating
@@ -834,8 +909,8 @@ Gaps:
 3. **Screening dual-write** — normalized and legacy screening data coexist behind feature flag; migration incomplete
 
 ### Fragile Areas
-1. **server.py at 10,147 lines** — any merge conflict, syntax error, or import failure crashes the entire backend
-2. **Single-file HTML frontends** — 711KB backoffice HTML is near the browser parsing performance limit
+1. **server.py at 13,765 lines** — any merge conflict, syntax error, or import failure crashes the entire backend
+2. **Single-file HTML frontends** — 829KB backoffice HTML is near the browser parsing performance limit
 3. **prescreening_data JSONB** — schemaless storage means no schema migration for historical data
 
 ### Architectural Issues
@@ -865,7 +940,7 @@ Gaps:
 
 4. **Mauritius regulatory specificity** — FATF grey/black list alignment, secrecy jurisdiction scoring, Mauritius DPA 2017 GDPR compliance, FIU Mauritius SAR reporting — this is jurisdiction-specific compliance knowledge embedded in code.
 
-5. **Test coverage** — 2,718 tests across 111 files creates a regression safety net that competitors starting from scratch won't have.
+5. **Test coverage** — 4,000+ automated tests create a meaningful regression safety net that competitors starting from scratch will struggle to match.
 
 ### Where Moat Exists or Can Be Built
 
@@ -878,10 +953,11 @@ Gaps:
 
 | Provider | Dependency | Risk | Mitigation |
 |---|---|---|---|
-| Sumsub | KYC/AML screening | High — single provider | Screening abstraction layer (behind feature flag) |
+| Sumsub | KYC/AML screening | High — single provider | Screening abstraction layer exists but is not yet the live runtime path |
 | Anthropic Claude | AI agent execution | High — sole AI provider | Fail-closed mock blocking in production |
-| OpenCorporates | Company registry lookup | Medium — enrichment only | Graceful degradation |
-| Render.com | Hosting | Low — standard PaaS | Docker-based deployment is portable |
+| OpenCorporates | Company registry lookup | Medium — enrichment only | Graceful degradation / partial implementation |
+| AWS ECS Fargate | Staging / planned production hosting | Medium — current service is single-task and non-autoscaled | Portable Docker/ECR deployment path already exists |
+| Render.com | Demo hosting | Low | Isolated from the near-production AWS staging path |
 | WeasyPrint | PDF generation | Low — OSS library | Replaceable |
 
 ### Uniqueness of Workflow Integration
@@ -894,7 +970,7 @@ The integration of screening → risk scoring → memo generation → validation
 
 ### How Sellable Is the Product Today
 
-**Sellable as a managed pilot/demo.** The platform can demonstrate complete end-to-end compliance workflows to prospects. With a 2-4 week hardening sprint (monitoring automation, horizontal scaling, production security testing), it could support a limited production pilot with a single customer.
+**Sellable as a controlled production pilot.** The platform can now credibly support a limited pilot deployment with explicit infrastructure caveats, while still serving as a strong investor / regulator / prospect demonstration environment. It should not yet be marketed as fully enterprise-grade software.
 
 ### Best ICP (Ideal Customer Profile)
 
@@ -915,7 +991,7 @@ The integration of screening → risk scoring → memo generation → validation
 2. **Multi-tenancy** — Current architecture is single-tenant; enterprises need isolated data per business unit
 3. **SLA guarantees** — No uptime monitoring, alerting, or SLA enforcement infrastructure
 4. **Compliance certifications** — No SOC 2, ISO 27001, or equivalent certification
-5. **Data residency** — No regional deployment capability; single-region hosting on Render.com
+5. **Data residency / regional posture** — staging is now on AWS af-south-1, but there is still no demonstrated multi-region residency or failover model
 6. **API documentation** — Public API v1 has 4 endpoints; enterprise integration requires comprehensive API docs
 7. **Disaster recovery** — No documented backup/restore procedures, no cross-region failover
 
@@ -925,21 +1001,21 @@ The integration of screening → risk scoring → memo generation → validation
 
 ### Product Maturity Classification
 
-**Late demo-stage / Early production-stage**
+**Controlled pilot stage / Early commercial deployment**
 
-The codebase demonstrates depth that exceeds typical demo-stage platforms (94,140 lines, 2,718 tests, 35+ tables) but lacks the operational infrastructure (monitoring, horizontal scaling, DR) required for enterprise production classification.
+The codebase demonstrates depth that exceeds typical demo-stage platforms (142,441 lines of Python, 4,000+ tests, 35+ tables) and now has a more credible validated staging posture on AWS. It still lacks the operational infrastructure and enterprise controls (HA, autoscaling, DR, SSO, certifications, multi-tenancy) required for broad enterprise production classification.
 
 ### Strengths Supporting Valuation
 
 1. **Deep compliance domain encoding** — The verification matrix, risk model, and memo template represent months of regulatory expertise codified in software. This is not easily replicated.
-2. **Test coverage** — 2,718 tests across 111 files provides deployment confidence and reduces future development risk.
+2. **Test coverage** — 4,000+ automated tests provide materially stronger deployment confidence and reduce future development risk.
 3. **Architecture sophistication** — 4-layer AI pipeline with deterministic controls is a genuinely novel approach to compliance automation.
 4. **Complete workflow coverage** — From client registration through ongoing monitoring and change management — this is not a point solution.
 5. **Security posture** — 9-point approval gate, PII encryption, cryptographic audit chain, prompt injection defense — demonstrates production security thinking.
 
 ### Weaknesses Limiting Valuation
 
-1. **Monolithic architecture** — server.py (10,147 lines) creates deployment risk and limits team scaling to ~2-3 concurrent backend developers.
+1. **Monolithic architecture** — server.py (13,765 lines) creates deployment risk and limits team scaling.
 2. **Single-provider dependency** — Sumsub lock-in (screening abstraction layer is incomplete/behind feature flag).
 3. **No production customers** — Platform has not been validated in production regulatory environments.
 4. **No compliance certifications** — SOC 2, ISO 27001 absence limits enterprise sales conversations.
@@ -961,27 +1037,27 @@ The codebase demonstrates depth that exceeds typical demo-stage platforms (94,14
 
 ### "Is RegMind a scalable, enterprise-grade compliance operating system with real market value?"
 
-**RegMind is a genuine compliance operating system with real market value, but it is not yet enterprise-grade.**
+**RegMind is a genuine compliance operating system with real market value, and it is now credible as a controlled production-pilot platform — but it is not yet enterprise-grade.**
 
 **It IS:**
 - A complete compliance operating system (not a tool or platform)
 - Architecturally sophisticated (4-layer deterministic AI pipeline)
 - Deeply encoded with compliance domain knowledge (verification matrix, risk model, memo templates)
-- Well-tested (2,718 tests)
+- Well-tested (4,000+ automated tests)
 - Security-conscious (PII encryption, approval gates, cryptographic audit chain)
 - Workflow-complete (onboarding through ongoing monitoring and change management)
 
 **It is NOT yet:**
-- Horizontally scalable (single-process Tornado)
+- Horizontally scalable (single-process Tornado / single ECS desired task)
 - Enterprise-ready (no SSO, no multi-tenancy, no compliance certifications)
-- Production-proven (no live regulated customers)
-- Architecturally modular (10K-line server.py, single-file frontends)
+- Broad-production-proven (limited customer/runtime evidence beyond controlled staging and pilot posture)
+- Architecturally modular (13,765-line server.py, single-file frontends)
 
-**Assessment:** RegMind is **18-24 months from enterprise-grade** with focused engineering investment. The compliance domain depth, AI pipeline architecture, and test coverage create a strong foundation. The primary risks are structural (monolith, scaling, provider dependency) rather than conceptual (the compliance logic is sound).
+**Assessment:** RegMind has moved beyond a pure demo narrative and should now be positioned as **production-pilot-ready for controlled deployment**. The compliance domain depth, AI pipeline architecture, remediation close-out, and staging evidence create a strong foundation. The remaining risks are structural and operational — monolith, scaling posture, enterprise identity, certification, tenancy, and DR — rather than conceptual.
 
 **For acquisition purposes:** The value is in the compliance IP (verification matrix, risk model, memo pipeline, supervisor framework) and the architectural approach (deterministic AI controls), not in the current deployment infrastructure. An acquirer would likely retain the compliance logic and re-platform the infrastructure.
 
-**For investment purposes:** The platform demonstrates exceptional depth for its stage. The 94,140 lines of backend code, 2,718 tests, and 10 AI agents represent substantial engineering investment. With first-customer validation and architectural hardening, RegMind could command a meaningful valuation in the compliance technology space.
+**For investment purposes:** The platform demonstrates exceptional depth for its stage. The 142,441 lines of Python, 4,000+ automated tests, 10 AI agents, and current AWS staging posture represent substantial engineering investment. With first-customer pilot validation and architectural hardening, RegMind could command a meaningful valuation in the compliance technology space.
 
 ---
 
