@@ -312,6 +312,200 @@ class TestAuthenticatedAccess:
         assert "application:ARF-FILTER" in targets
         assert "System" not in targets
 
+        export = http_requests.get(
+            f"{api_server}/api/audit/export?format=json&ref=ARF-FILTER",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert export.status_code == 200
+        export_targets = {e["target"] for e in export.json()["entries"]}
+        assert export_targets == {"ARF-FILTER", "application:ARF-FILTER"}
+
+    def test_application_audit_log_includes_prefixed_application_targets(self, api_server):
+        """Case audit reconstruction must include bare and application: prefixed targets."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        for target in ("ARF-P3-AUDIT", "application:ARF-P3-AUDIT", "ARF-P3-OTHER"):
+            conn.execute("DELETE FROM audit_log WHERE target = ?", (target,))
+        conn.execute("DELETE FROM applications WHERE id = ?", ("app_p3_audit",))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("app_p3_audit", "ARF-P3-AUDIT", "testclient001", "Audit Reconstruction Ltd",
+             "Mauritius", "Technology", "SME", "in_review"),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            ("admin001", "Test Admin", "admin", "Generate Memo", "ARF-P3-AUDIT", "bare", "127.0.0.1"),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            ("admin001", "Test Admin", "admin", "edd_routing.evaluated", "application:ARF-P3-AUDIT", "prefixed", "127.0.0.1"),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            ("admin001", "Test Admin", "admin", "Login", "ARF-P3-OTHER", "other", "127.0.0.1"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications/ARF-P3-AUDIT/audit-log?limit=20",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        targets = {e["target"] for e in data["entries"]}
+        assert data["total"] == 2
+        assert targets == {"ARF-P3-AUDIT", "application:ARF-P3-AUDIT"}
+
+    def test_dashboard_reports_surface_unknown_risk_bucket(self, api_server):
+        """Unknown risk must be explicit, not coerced into low/zero reporting."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id IN (?, ?)", ("app_p3_unknown", "app_p3_low"))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, risk_level, risk_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("app_p3_unknown", "ARF-P3-UNKNOWN", "testclient001", "Mauritius Alpha Holdings Ltd",
+             "Mauritius", "Technology", "SME", "in_review", None, None),
+        )
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, risk_level, risk_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("app_p3_low", "ARF-P3-LOW", "testclient001", "Mauritius Beta Holdings Ltd",
+             "Mauritius", "Manufacturing", "SME", "in_review", "LOW", 12),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        dashboard = http_requests.get(
+            f"{api_server}/api/dashboard",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert dashboard.status_code == 200
+        dash = dashboard.json()
+        risk_sum = (
+            dash.get("risk_low", 0) + dash.get("risk_medium", 0) +
+            dash.get("risk_high", 0) + dash.get("risk_very_high", 0) +
+            dash.get("risk_unknown", 0)
+        )
+        assert dash["risk_unknown"] >= 1
+        assert risk_sum == dash["total"]
+
+        analytics = http_requests.get(
+            f"{api_server}/api/reports/analytics",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert analytics.status_code == 200
+        body = analytics.json()
+        dist = body["risk_distribution"]
+        assert dist["UNKNOWN"] >= 1
+        assert sum(dist.values()) == body["summary"]["total"]
+
+        report = http_requests.get(
+            f"{api_server}/api/reports/generate?fields=ref,risk_level,risk_score",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert report.status_code == 200
+        row = next(r for r in report.json()["data"] if r["ref"] == "ARF-P3-UNKNOWN")
+        assert row["risk_level"] == "UNKNOWN"
+        assert row["risk_score"] is None
+
+    def test_application_evidence_pack_reconstructs_case(self, api_server):
+        """Evidence pack should consolidate application, memo, decision, EDD, and audit data."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        app_id = "app_p3_pack"
+        app_ref = "ARF-P3-PACK"
+        conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM decision_records WHERE application_ref = ?", (app_ref,))
+        conn.execute("DELETE FROM audit_log WHERE target IN (?, ?, ?)", (app_ref, f"application:{app_ref}", "ARF-P3-PACK-OTHER"))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, risk_level, risk_score, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, app_ref, "testclient001", "Evidence Pack Ltd", "Mauritius", "Fintech",
+             "SME", "edd_required", "HIGH", 72, json.dumps({"registered_entity_name": "Evidence Pack Ltd"})),
+        )
+        conn.execute(
+            """
+            INSERT INTO compliance_memos
+            (application_id, version, memo_version, memo_data, review_status, validation_status, quality_score, raw_output_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, 1, "v1", json.dumps({"metadata": {"memo_version": "v1"}}), "draft", "pass", 8.2, "hash123"),
+        )
+        conn.execute(
+            """
+            INSERT INTO decision_records
+            (id, application_ref, decision_type, risk_level, confidence_score, source, actor_user_id, actor_role, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("dec_p3_pack", app_ref, "escalate_edd", "HIGH", 0.88, "manual", "admin001", "admin", "2026-05-03T10:00:00Z"),
+        )
+        conn.execute(
+            """
+            INSERT INTO edd_cases
+            (application_id, client_name, risk_level, risk_score, stage, trigger_source)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, "Evidence Pack Ltd", "HIGH", 72, "triggered", "officer_decision"),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            ("admin001", "Test Admin", "admin", "Generate Memo", app_ref, json.dumps({"memo_version": "v1"}), "127.0.0.1"),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            ("admin001", "Test Admin", "admin", "edd_routing.actuated", f"application:{app_ref}", "prefixed", "127.0.0.1"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications/{app_ref}/evidence-pack",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        pack = resp.json()
+        assert pack["scope"]["application_ref"] == app_ref
+        assert pack["application"]["company_name"] == "Evidence Pack Ltd"
+        assert pack["compliance_memos"][0]["memo_version"] == "v1"
+        assert pack["decision_records"][0]["decision_type"] == "escalate_edd"
+        assert pack["edd_cases"][0]["stage"] == "triggered"
+        assert pack["audit_log"]["total"] == 2
+        targets = {e["target"] for e in pack["audit_log"]["entries"]}
+        assert targets == {app_ref, f"application:{app_ref}"}
+        assert pack["audit_log"]["entries"][0]["detail_json"]["memo_version"] == "v1"
+
     def test_failed_document_upload_is_audited(self, api_server):
         """Rejected uploads are security events and must appear in case audit."""
         from auth import create_token
