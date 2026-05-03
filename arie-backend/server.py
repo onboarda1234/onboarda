@@ -2310,6 +2310,8 @@ class ApplicationsHandler(BaseHandler):
         status = self.get_argument("status", None)
         risk = self.get_argument("risk", None)
         assigned = self.get_argument("assigned", None)
+        limit = _bounded_int(self.get_argument("limit", 5000), 5000, min_value=1, max_value=5000)
+        offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
 
         query = """
             SELECT a.*, u.full_name AS assigned_name
@@ -2341,8 +2343,10 @@ class ApplicationsHandler(BaseHandler):
             query += " AND a.assigned_to = ?"
             params.append(assigned)
 
-        query += " ORDER BY a.created_at DESC LIMIT 200"
-        rows = db.execute(query, params).fetchall()
+        total = db.execute(f"SELECT COUNT(*) AS c FROM ({query}) filtered", params).fetchone()["c"]
+
+        query += " ORDER BY a.created_at DESC LIMIT ? OFFSET ?"
+        rows = db.execute(query, params + [limit, offset]).fetchall()
         db.close()
 
         apps = [dict(r) for r in rows]
@@ -2392,7 +2396,13 @@ class ApplicationsHandler(BaseHandler):
         db.close()
 
         # EX-13: ETag support — compute hash of response for conditional requests
-        payload = {"applications": apps, "total": len(apps)}
+        payload = {
+            "applications": apps,
+            "total": total,
+            "returned": len(apps),
+            "limit": limit,
+            "offset": offset,
+        }
         payload_json = json.dumps(payload, sort_keys=True, default=str)
         etag = '"' + hashlib.md5(payload_json.encode("utf-8")).hexdigest() + '"'
 

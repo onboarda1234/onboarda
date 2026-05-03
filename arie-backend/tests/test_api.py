@@ -190,6 +190,40 @@ class TestAuthenticatedAccess:
                                  headers={"Authorization": f"Bearer {token}"}, timeout=3)
         assert resp.status_code == 200
 
+    def test_applications_endpoint_returns_true_total_with_pagination(self, api_server):
+        """Application list pagination must not redefine total as returned-row count."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id IN (?, ?)", ("app_page_1", "app_page_2"))
+        conn.execute(
+            "INSERT INTO applications (id, ref, client_id, company_name, country, status, created_at, is_fixture) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("app_page_1", "ARF-PAGE-001", "client_page", "Phase Page One Ltd", "Mauritius", "submitted", "2026-05-03T10:00:00Z", 0),
+        )
+        conn.execute(
+            "INSERT INTO applications (id, ref, client_id, company_name, country, status, created_at, is_fixture) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("app_page_2", "ARF-PAGE-002", "client_page", "Phase Page Two Ltd", "Mauritius", "submitted", "2026-05-03T10:01:00Z", 0),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/applications?limit=1&offset=0",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["limit"] == 1
+        assert body["offset"] == 0
+        assert body["returned"] == 1
+        assert len(body["applications"]) == 1
+        assert body["total"] >= 2
+
     def test_dashboard_returns_200_for_officer_with_fixture_filter(self, api_server):
         """Officer dashboard must not use ambiguous columns in joined recent query."""
         from auth import create_token

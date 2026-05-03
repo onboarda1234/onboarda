@@ -799,18 +799,18 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
   </div>
   <nav class="sidebar-nav" aria-label="Back office navigation">
     <div class="snav-section">Main</div>
-    <div class="snav-item active" onclick="showView('dashboard',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span> Dashboard</div>
-    <div class="snav-item" onclick="showView('kpis',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> KPI Dashboard</div>
-    <div class="snav-item" onclick="showView('applications',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span> Applications</div>
-    <div class="snav-item" onclick="showView('cases',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span> Case Management</div>
+    <div class="snav-item active" data-view="dashboard" onclick="showView('dashboard',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span> Dashboard</div>
+    <div class="snav-item" data-view="kpis" onclick="showView('kpis',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> KPI Dashboard</div>
+    <div class="snav-item" data-view="applications" onclick="showView('applications',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg></span> Applications</div>
+    <div class="snav-item" data-view="cases" onclick="showView('cases',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span> Case Management</div>
     <div class="snav-section">Compliance</div>
-    <div class="snav-item" onclick="showView('screening',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span> Screening Queue</div>
-    <div class="snav-item" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Ongoing Monitoring</div>
-    <div class="snav-item" onclick="showView('lifecycle',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M21 12a9 9 0 0 1-9 9"/><path d="M16 7l5 0 0-5"/><path d="M8 17l-5 0 0 5"/></svg></span> Lifecycle</div>
-    <div class="snav-item" onclick="showView('edd',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span> EDD Pipeline</div>
-    <div class="snav-item" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
-    <div class="snav-item" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
-    <div class="snav-item" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span> Regulatory Intelligence</div>
+    <div class="snav-item" data-view="screening" onclick="showView('screening',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span> Screening Queue</div>
+    <div class="snav-item" data-view="edd" onclick="showView('edd',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span> EDD Pipeline</div>
+    <div class="snav-item" data-view="monitoring" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Ongoing Monitoring</div>
+    <div class="snav-item" data-view="lifecycle" onclick="showView('lifecycle',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M21 12a9 9 0 0 1-9 9"/><path d="M16 7l5 0 0-5"/><path d="M8 17l-5 0 0 5"/></svg></span> Lifecycle</div>
+    <div class="snav-item" data-view="change-mgmt" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
+    <div class="snav-item" data-view="reports" onclick="showView('reports',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Reports</div>
+    <div class="snav-item" data-view="reg-intel" onclick="showView('reg-intel',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1"/><path d="M9 13h1"/><path d="M9 17h1"/></svg></span> Regulatory Intelligence</div>
     <div class="snav-section">Compliance Supervisor</div>
     <div class="snav-item" onclick="showView('supervisor',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span> Supervisor Dashboard</div>
     <div class="snav-item" onclick="showView('supervisor-audit',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span> Audit Chain</div>
@@ -940,7 +940,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
   <div class="card">
     <div class="card-header">
       <div class="card-title">Recent Submissions</div>
-      <button class="btn btn-outline btn-sm" onclick="showView('applications',document.querySelector('.snav-item:nth-child(3)'))">View All →</button>
+      <button class="btn btn-outline btn-sm" onclick="showView('applications')">View All →</button>
     </div>
     <table class="data-table" id="dashboard-recent-table">
       <thead>
@@ -968,7 +968,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <div class="stat-card-change" id="dash-mon-alerts-note">Live monitoring alerts</div>
     </div>
     <div class="stat-card">
-      <button class="btn btn-primary" style="width:100%;margin-top:20px;" onclick="showView('monitoring',document.querySelectorAll('.snav-item')[5])">View Ongoing Monitoring →</button>
+      <button class="btn btn-primary" style="width:100%;margin-top:20px;" onclick="showView('monitoring')">View Ongoing Monitoring →</button>
     </div>
   </div>
 </div>
@@ -1038,6 +1038,12 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <option value="">All Officers</option>
       <option value="Unassigned">Unassigned</option>
     </select>
+    <input type="text" class="form-input" style="width:260px;" id="applications-search" placeholder="Search applications..." oninput="filterApplications()" />
+    <select class="form-select" style="width:auto;" id="applications-page-size" onchange="setApplicationsPageSize(this.value)" aria-label="Applications per page">
+      <option value="10">10 per page</option>
+      <option value="20" selected>20 per page</option>
+      <option value="50">50 per page</option>
+    </select>
     <span id="applications-last-updated" style="margin-left:auto;font-size:11px;color:var(--text3);display:flex;align-items:center;gap:4px;" title="Time since last data refresh">
       <span id="applications-freshness-dot" style="width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;"></span>
       <span id="applications-freshness-text">Updated just now</span>
@@ -1051,13 +1057,21 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <tbody id="applications-body"></tbody>
     </table>
   </div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;gap:10px;flex-wrap:wrap;">
+    <div id="applications-pagination-summary" style="font-size:12px;color:var(--text3);">Showing 0 applications</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button class="btn btn-outline btn-sm" id="applications-prev-page" onclick="changeApplicationsPage(-1)">Previous</button>
+      <span id="applications-page-indicator" style="font-size:12px;color:var(--text2);">Page 1 of 1</span>
+      <button class="btn btn-outline btn-sm" id="applications-next-page" onclick="changeApplicationsPage(1)">Next</button>
+    </div>
+  </div>
 </div>
 
 <!-- ═══════════════ APPLICATION DETAIL VIEW ═══════════════ -->
 <div class="view" id="view-app-detail">
   <!-- Top bar: back button + action buttons (horizontal) -->
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;padding:12px 16px;background:var(--surface2);border:1px solid var(--border1);border-radius:var(--radius-sm);position:sticky;top:64px;z-index:10;">
-    <button class="btn btn-outline btn-sm" onclick="showView('applications',document.querySelector('.snav-item:nth-child(3)'))">← Back</button>
+    <button class="btn btn-outline btn-sm" onclick="showView('applications')">← Back</button>
     <div style="width:1px;height:28px;background:var(--border1);"></div>
 
     <!-- Pre-Approval Actions (shown only for pre_approval_review) -->
@@ -3163,6 +3177,17 @@ async function boApiCall(method, path, body) {
 function setBoAuth(token, user) {
   BO_AUTH_TOKEN = token;
   BO_AUTH_USER = user;
+  if (user) {
+    currentUser = {
+      id: user.id || user.sub || '',
+      sub: user.sub || user.id || '',
+      name: user.name || user.full_name || user.email || 'Signed-in user',
+      email: user.email || '',
+      role: user.role || '',
+      initials: String(user.name || user.full_name || user.email || 'SU').split(/\s+/).filter(Boolean).map(function(w){ return w[0]; }).join('').slice(0, 3).toUpperCase() || 'SU',
+      status: user.status || 'active'
+    };
+  }
   // Auth token kept in memory only; httpOnly session cookie set by server
 }
 
@@ -3307,66 +3332,67 @@ function eddTriggerText(caseRow) {
   return String((caseRow && (caseRow.trigger_notes || caseRow.trigger_source)) || '');
 }
 
+function mapApplicationFromApi(a) {
+  var dims = {};
+  try { dims = typeof a.risk_dimensions === 'string' ? JSON.parse(a.risk_dimensions) : (a.risk_dimensions || {}); } catch(e) {}
+  var backendDocuments = (a.documents || []).map(function(d) {
+    return {
+      id: d.id,
+      doc_type: d.doc_type,
+      doc_name: d.doc_name,
+      file_size: d.file_size,
+      mime_type: d.mime_type,
+      verification_status: d.verification_status,
+      verification_results: d.verification_results,
+      verified_at: d.verified_at,
+      person_id: d.person_id
+    };
+  });
+  return {
+    id: a.id,
+    ref: a.ref,
+    company: a.company_name,
+    sector: a.sector || 'Unknown',
+    entityType: a.entity_type || '',
+    risk: normalizeRiskLevel(a.risk_level),
+    score: normalizeRiskScore(a.risk_score),
+    lane: a.onboarding_lane || 'Standard Review',
+    statusRaw: a.status || '',
+    status: formatStatus(a.status),
+    assignedId: a.assigned_to || '',
+    assigned: a.assigned_name || a.assigned_to || 'Unassigned',
+    date: (a.created_at || '').split('T')[0].split(' ')[0],
+    country: a.country || '',
+    brn: a.brn || '',
+    directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, dob: d.date_of_birth || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
+    ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
+    intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
+    dims: dims,
+    docs: backendDocuments.map(function(d) { return d.doc_type; }),
+    _documents: backendDocuments,
+    rmiRequests: a.rmi_requests || [],
+    pepCount: (function() {
+      var declared = (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
+                     (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length;
+      if (declared > 0) return declared;
+      var sr = (a.prescreening_data || {}).screening_report || {};
+      var screeningPeps = (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
+                          (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
+      return screeningPeps;
+    })(),
+    _raw_prescreening: a.prescreening_data
+  };
+}
+
 // Try to load data from API, fall back to mock data
 async function loadFromAPI() {
   if (!BO_AUTH_TOKEN) return false;
   try {
     // Load applications from API
-    var appResp = await boApiCall('GET', '/applications');
-    if (appResp.applications && appResp.applications.length > 0) {
-      // Map API format to back-office format
-      APPLICATIONS = appResp.applications.map(function(a) {
-        var dims = {};
-        try { dims = typeof a.risk_dimensions === 'string' ? JSON.parse(a.risk_dimensions) : (a.risk_dimensions || {}); } catch(e) {}
-        var backendDocuments = (a.documents || []).map(function(d) {
-          return {
-            id: d.id,
-            doc_type: d.doc_type,
-            doc_name: d.doc_name,
-            file_size: d.file_size,
-            mime_type: d.mime_type,
-            verification_status: d.verification_status,
-            verification_results: d.verification_results,
-            verified_at: d.verified_at,
-            person_id: d.person_id
-          };
-        });
-        return {
-          id: a.id,
-          ref: a.ref,
-          company: a.company_name,
-          sector: a.sector || 'Unknown',
-          entityType: a.entity_type || '',
-          risk: normalizeRiskLevel(a.risk_level),
-          score: normalizeRiskScore(a.risk_score),
-          lane: a.onboarding_lane || 'Standard Review',
-          statusRaw: a.status || '',
-          status: formatStatus(a.status),
-          assignedId: a.assigned_to || '',
-          assigned: a.assigned_name || a.assigned_to || 'Unassigned',
-          date: (a.created_at || '').split('T')[0].split(' ')[0],
-          country: a.country || '',
-          brn: a.brn || '',
-          directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, dob: d.date_of_birth || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
-          ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
-          intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
-          dims: dims,
-          docs: backendDocuments.map(function(d) { return d.doc_type; }),
-          _documents: backendDocuments,
-          rmiRequests: a.rmi_requests || [],
-          pepCount: (function() {
-            var declared = (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
-                           (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length;
-            if (declared > 0) return declared;
-            // Fallback: count screening-detected undeclared PEPs
-            var sr = (a.prescreening_data || {}).screening_report || {};
-            var screeningPeps = (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
-                                (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
-            return screeningPeps;
-          })(),
-          _raw_prescreening: a.prescreening_data
-        };
-      });
+    var appResp = await boApiCall('GET', '/applications?limit=5000');
+    if (Array.isArray(appResp.applications)) {
+      applicationsApiTotal = Number(appResp.total || appResp.applications.length || 0);
+      APPLICATIONS = appResp.applications.map(mapApplicationFromApi);
     }
 
     // EX-13: Mark data as freshly loaded and start auto-refresh
@@ -3386,6 +3412,14 @@ async function loadFromAPI() {
             status: u.status
           };
         });
+        if (BO_AUTH_USER) {
+          var authId = BO_AUTH_USER.id || BO_AUTH_USER.sub || '';
+          var authEmail = BO_AUTH_USER.email || '';
+          var matchedUser = USERS.find(function(u) {
+            return (authId && String(u.id) === String(authId)) || (authEmail && String(u.email).toLowerCase() === String(authEmail).toLowerCase());
+          });
+          if (matchedUser) currentUser = matchedUser;
+        }
       }
     } catch(e) {}
 
@@ -3627,11 +3661,14 @@ function switchUser(role) {
   if (nameEl) nameEl.textContent = currentUser.name;
   if (roleEl) roleEl.textContent = ROLE_LABELS[role] || role;
   if (avatarEl) avatarEl.textContent = currentUser.name.split(' ').map(function(w){return w[0];}).join('');
-  showView('dashboard', document.querySelector('.snav-item'));
+  showView('dashboard');
   showToast('Switched to ' + (ROLE_LABELS[role] || role));
 }
 
 var APPLICATIONS = [];
+var applicationsApiTotal = 0;
+var applicationsCurrentPage = 1;
+var applicationsPageSize = 20;
 // Demo data is no longer hardcoded. APPLICATIONS is populated from API via loadFromAPI().
 var SCREENING_QUEUE = { metrics:null, rows:[], generated_at:null, load_error:null };
 var SCREENING_REVIEW_ROWS = {};
@@ -3681,7 +3718,7 @@ async function _autoRefreshApplications() {
     var opts = { method: 'GET', headers: {} };
     if (BO_AUTH_TOKEN) opts.headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
     if (_applicationsEtag) opts.headers['If-None-Match'] = _applicationsEtag;
-    var res = await fetch(BO_API_BASE + '/applications', opts);
+    var res = await fetch(BO_API_BASE + '/applications?limit=5000', opts);
     // ETag match — data unchanged, just update timestamp
     if (res.status === 304) {
       _applicationsLastRefreshed = Date.now();
@@ -3693,52 +3730,12 @@ async function _autoRefreshApplications() {
     var etag = res.headers.get('ETag') || '';
     if (etag) _applicationsEtag = etag;
     var data = await res.json();
-    if (data.applications && data.applications.length > 0) {
+    if (Array.isArray(data.applications)) {
       // Preserve current filter/selection state
       var listView = document.getElementById('view-applications');
       var isOnList = listView && listView.classList.contains('active');
-      // Re-map same as loadFromAPI
-      APPLICATIONS = data.applications.map(function(a) {
-        var dims = {};
-        try { dims = typeof a.risk_dimensions === 'string' ? JSON.parse(a.risk_dimensions) : (a.risk_dimensions || {}); } catch(e) {}
-        var backendDocuments = (a.documents || []).map(function(d) {
-          return {
-            id: d.id, doc_type: d.doc_type, doc_name: d.doc_name,
-            file_size: d.file_size, mime_type: d.mime_type,
-            verification_status: d.verification_status,
-            verification_results: d.verification_results,
-            verified_at: d.verified_at, person_id: d.person_id
-          };
-        });
-        return {
-          id: a.id, ref: a.ref, company: a.company_name,
-          sector: a.sector || 'Unknown', entityType: a.entity_type || '',
-          risk: normalizeRiskLevel(a.risk_level), score: normalizeRiskScore(a.risk_score),
-          lane: a.onboarding_lane || 'Standard Review',
-          statusRaw: a.status || '', status: formatStatus(a.status),
-          assignedId: a.assigned_to || '',
-          assigned: a.assigned_name || a.assigned_to || 'Unassigned',
-          date: (a.created_at || '').split('T')[0].split(' ')[0],
-          country: a.country || '', brn: a.brn || '',
-          directors: (a.directors || []).map(function(d) { return { id: d.person_key || d.id, name: d.full_name, nat: d.nationality, dob: d.date_of_birth || '', pep: d.is_pep || 'No', pep_declaration: d.pep_declaration || {} }; }),
-          ubos: (a.ubos || []).map(function(u) { return { id: u.id || '', person_key: u.person_key || '', name: u.full_name, nat: u.nationality || '', dob: u.date_of_birth || '', pct: u.ownership_pct || 0, pep: u.is_pep || 'No', pep_declaration: u.pep_declaration || {} }; }),
-          intermediaries: (a.intermediaries || []).map(function(i) { return { id: i.person_key || i.id, name: i.entity_name || i.full_name || '', jurisdiction: i.jurisdiction || '', pct: i.ownership_pct || 0 }; }),
-          dims: dims,
-          docs: backendDocuments.map(function(d) { return d.doc_type; }),
-          _documents: backendDocuments,
-          rmiRequests: a.rmi_requests || [],
-          pepCount: (function() {
-            var declared = (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
-                           (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length;
-            if (declared > 0) return declared;
-            var sr = (a.prescreening_data || {}).screening_report || {};
-            var screeningPeps = (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
-                                (sr.ubo_screenings || []).filter(function(s) { return s.undeclared_pep; }).length;
-            return screeningPeps;
-          })(),
-          _raw_prescreening: a.prescreening_data
-        };
-      });
+      applicationsApiTotal = Number(data.total || data.applications.length || 0);
+      APPLICATIONS = data.applications.map(mapApplicationFromApi);
       // Re-render list if currently visible (preserves filter state)
       if (isOnList) renderApplications();
       // Update dashboard counts
@@ -3955,6 +3952,9 @@ function showView(name, navItem) {
   var view = document.getElementById('view-' + name);
   if (view) view.classList.add('active');
 
+  if (!navItem) {
+    navItem = document.querySelector('.snav-item[data-view="' + name + '"]');
+  }
   if (navItem) {
     document.querySelectorAll('.snav-item').forEach(function(n) { n.classList.remove('active'); });
     navItem.classList.add('active');
@@ -4723,21 +4723,88 @@ function renderApplications() {
   var riskFilter = document.getElementById('filter-risk').value;
   var statusFilter = document.getElementById('filter-status').value;
   var assignedFilter = document.getElementById('filter-assigned').value;
+  var filtered = getFilteredApplications(riskFilter, statusFilter, assignedFilter);
+  var totalPages = Math.max(1, Math.ceil(filtered.length / applicationsPageSize));
+  if (applicationsCurrentPage > totalPages) applicationsCurrentPage = totalPages;
+  if (applicationsCurrentPage < 1) applicationsCurrentPage = 1;
+  var start = (applicationsCurrentPage - 1) * applicationsPageSize;
+  var pageApps = filtered.slice(start, start + applicationsPageSize);
   tbody.innerHTML = '';
-  APPLICATIONS.forEach(function(app) {
-    if (riskFilter && app.risk !== riskFilter) return;
-    if (statusFilter && (app.statusRaw || '') !== statusFilter) return;
-    if (assignedFilter) {
-      var normalizedAssigned = app.assignedId || 'Unassigned';
-      if (normalizedAssigned !== assignedFilter) return;
-    }
+  if (!pageApps.length) {
+    var empty = document.createElement('tr');
+    empty.innerHTML = '<td colspan="9" style="text-align:center;color:var(--text3);padding:24px;">No applications match the current filters.</td>';
+    tbody.appendChild(empty);
+  }
+  pageApps.forEach(function(app) {
     var tr = document.createElement('tr');
     tr.onclick = function() { openAppDetail(app.ref); };
     tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScore(app.score)) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
+  updateApplicationsPagination(filtered.length, totalPages);
 }
-function filterApplications() { renderApplications(); }
+
+function getApplicationsSearchText() {
+  var input = document.getElementById('applications-search');
+  return String(input ? input.value : '').trim().toLowerCase();
+}
+
+function applicationMatchesSearch(app, q) {
+  if (!q) return true;
+  var fields = [app.ref, app.company, app.brn, app.sector, app.country, app.assigned, app.status, app.statusRaw];
+  return fields.some(function(value) { return String(value || '').toLowerCase().indexOf(q) >= 0; });
+}
+
+function getFilteredApplications(riskFilter, statusFilter, assignedFilter) {
+  var q = getApplicationsSearchText();
+  return APPLICATIONS.filter(function(app) {
+    if (riskFilter && app.risk !== riskFilter) return false;
+    if (statusFilter && (app.statusRaw || '') !== statusFilter) return false;
+    if (assignedFilter) {
+      var normalizedAssigned = app.assignedId || 'Unassigned';
+      if (normalizedAssigned !== assignedFilter) return false;
+    }
+    return applicationMatchesSearch(app, q);
+  });
+}
+
+function updateApplicationsPagination(filteredCount, totalPages) {
+  var summary = document.getElementById('applications-pagination-summary');
+  var indicator = document.getElementById('applications-page-indicator');
+  var prev = document.getElementById('applications-prev-page');
+  var next = document.getElementById('applications-next-page');
+  var totalLoaded = APPLICATIONS.length;
+  var totalSource = applicationsApiTotal || totalLoaded;
+  var start = filteredCount ? ((applicationsCurrentPage - 1) * applicationsPageSize + 1) : 0;
+  var end = filteredCount ? Math.min(start + applicationsPageSize - 1, filteredCount) : 0;
+  if (summary) {
+    var text = filteredCount === totalLoaded
+      ? 'Showing ' + start + '-' + end + ' of ' + filteredCount + ' applications'
+      : 'Showing ' + start + '-' + end + ' of ' + filteredCount + ' matching applications';
+    if (totalSource > totalLoaded) text += ' (' + totalLoaded + ' loaded of ' + totalSource + ')';
+    summary.textContent = text;
+  }
+  if (indicator) indicator.textContent = 'Page ' + applicationsCurrentPage + ' of ' + totalPages;
+  if (prev) prev.disabled = applicationsCurrentPage <= 1;
+  if (next) next.disabled = applicationsCurrentPage >= totalPages;
+}
+
+function setApplicationsPageSize(value) {
+  var parsed = parseInt(value, 10);
+  applicationsPageSize = [10, 20, 50].indexOf(parsed) >= 0 ? parsed : 20;
+  applicationsCurrentPage = 1;
+  renderApplications();
+}
+
+function changeApplicationsPage(delta) {
+  applicationsCurrentPage += delta;
+  renderApplications();
+}
+
+function filterApplications() {
+  applicationsCurrentPage = 1;
+  renderApplications();
+}
 
 function formatDetailDate(value) {
   return ((value || '').split('T')[0].split(' ')[0]) || '—';
@@ -7103,17 +7170,30 @@ function loadCMStats() {
 
 var activeCaseTab = 'my-cases';
 
+function currentUserId() {
+  return currentUser ? String(currentUser.id || currentUser.sub || '') : '';
+}
+
+function isPreApprovalCase(app) {
+  return app.status === 'Pre-Approval Review' || app.status === 'pre_approval_review';
+}
+
+function isAssignedToCurrentUser(app) {
+  var userId = currentUserId();
+  return !!userId && String(app.assignedId || '') === userId;
+}
+
 function renderCases() {
   var tbody = document.getElementById('cases-body');
   tbody.innerHTML = '';
   APPLICATIONS.forEach(function(app) {
     // Filter by active tab
-    if (activeCaseTab === 'pre-approval') {
-      if (app.status !== 'Pre-Approval Review' && app.status !== 'pre_approval_review') return;
-    }
+    if (activeCaseTab === 'my-cases' && !isAssignedToCurrentUser(app)) return;
+    if (activeCaseTab === 'unassigned' && app.assignedId) return;
+    if (activeCaseTab === 'pre-approval' && !isPreApprovalCase(app)) return;
     var tr = document.createElement('tr');
     // Highlight pre-approval cases
-    if (app.status === 'Pre-Approval Review' || app.status === 'pre_approval_review') {
+    if (isPreApprovalCase(app)) {
       tr.style.background = 'rgba(217,119,6,0.06)';
     }
     tr.innerHTML = '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadge(app.risk) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td><td><button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + escapeHtml(app.ref) + '\')">Open</button></td>';
@@ -7121,7 +7201,7 @@ function renderCases() {
   });
 
   // Update pre-approval badge count
-  var preApprovalCount = APPLICATIONS.filter(function(a) { return a.status === 'Pre-Approval Review' || a.status === 'pre_approval_review'; }).length;
+  var preApprovalCount = APPLICATIONS.filter(isPreApprovalCase).length;
   var badge = document.getElementById('pre-approval-badge');
   if (badge) {
     badge.textContent = preApprovalCount;
@@ -9577,10 +9657,16 @@ function toggleDarkMode() {
 })();
 
 function handleGlobalSearch(q) {
-  if (!q) return;
-  // Simple search - find matching application
-  var found = APPLICATIONS.find(function(a) { return a.ref.toLowerCase().indexOf(q.toLowerCase()) >= 0 || a.company.toLowerCase().indexOf(q.toLowerCase()) >= 0; });
-  if (found && q.length > 3) openAppDetail(found.ref);
+  var query = String(q || '');
+  var appSearch = document.getElementById('applications-search');
+  if (appSearch && appSearch.value !== query) appSearch.value = query;
+  applicationsCurrentPage = 1;
+  if (query.trim()) {
+    showView('applications');
+  } else {
+    var listView = document.getElementById('view-applications');
+    if (listView && listView.classList.contains('active')) renderApplications();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -11207,7 +11293,7 @@ async function handleLogin(e) {
     await loadFromAPI();
     populateOfficerDropdowns();
     renderDashboardRecent();
-    showView('dashboard', document.querySelector('.snav-item'));
+    showView('dashboard');
     hideLoginScreen();
     showToast('Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
