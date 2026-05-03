@@ -670,6 +670,15 @@ class TestAuthenticatedAccess:
         assert same_officer.status_code == 400
         assert "different from the assigned officer" in same_officer.text
 
+        ineligible_senior = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}",
+            headers=admin_headers,
+            json={"stage": "pending_senior_review", "sla_due_at": future_due, "senior_reviewer": "co001"},
+            timeout=3,
+        )
+        assert ineligible_senior.status_code == 400
+        assert "Senior Compliance Officer or Admin" in ineligible_senior.text
+
         accepted = http_requests.patch(
             f"{api_server}/api/edd/cases/{case_id}",
             headers=admin_headers,
@@ -713,6 +722,7 @@ class TestAuthenticatedAccess:
         )
         assert audit.status_code == 200
         entries = audit.json()["entries"]
+        assert any(e["action"] == "edd.findings.created" and e["target"] == app_ref for e in entries)
         assert any(e["action"] == "EDD Update" and e["target"] == app_ref for e in entries)
         assert any(e["action"] == "EDD Closure (dual-control)" and e["target"] == app_ref for e in entries)
         assert not any(str(e["target"]).startswith("EDD-") for e in entries)

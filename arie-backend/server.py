@@ -12366,6 +12366,23 @@ def _edd_application_ref(db, case_dict):
     return f"EDD-{case_dict.get('id')}"
 
 
+def _edd_senior_reviewer_error(db, reviewer_id):
+    reviewer_id = str(reviewer_id or "").strip()
+    if not reviewer_id:
+        return None
+    reviewer = db.execute(
+        "SELECT role, status FROM users WHERE id = ? LIMIT 1",
+        (reviewer_id,),
+    ).fetchone()
+    if not reviewer:
+        return "senior_reviewer must be a Senior Compliance Officer or Admin"
+    role = str(reviewer["role"] or "").strip().lower()
+    status = str(reviewer["status"] or "active").strip().lower()
+    if role not in ("sco", "admin") or status != "active":
+        return "senior_reviewer must be a Senior Compliance Officer or Admin"
+    return None
+
+
 class EDDListHandler(BaseHandler):
     """GET /api/edd/cases — List EDD cases; POST — Create a new EDD case"""
     def get(self):
@@ -12571,6 +12588,11 @@ class EDDDetailHandler(BaseHandler):
 
         effective_assigned = str(data.get("assigned_officer") or case_dict.get("assigned_officer") or "").strip()
         effective_senior = str(data.get("senior_reviewer") or case_dict.get("senior_reviewer") or "").strip()
+
+        senior_reviewer_error = _edd_senior_reviewer_error(db, effective_senior)
+        if senior_reviewer_error:
+            db.close()
+            return self.error(senior_reviewer_error, 400)
 
         if new_stage in _EDD_REVIEW_OR_TERMINAL_STAGES:
             if not effective_senior:
