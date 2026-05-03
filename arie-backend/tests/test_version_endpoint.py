@@ -21,7 +21,7 @@ import requests as http_requests
 import tornado.ioloop
 import tornado.httpserver
 
-EXPECTED_KEYS = {"git_sha", "git_sha_short", "build_time", "environment", "service"}
+EXPECTED_KEYS = {"git_sha", "git_sha_short", "build_time", "image_tag", "environment", "service"}
 
 
 def _find_free_port():
@@ -119,6 +119,8 @@ class TestVersionEndpoint:
         """When GIT_SHA env var is set the response must echo it back."""
         sha = "abc1234deadbeef5678"
         monkeypatch.setenv("GIT_SHA", sha)
+        monkeypatch.setenv("BUILD_TIME", "2026-05-03T00:00:00Z")
+        monkeypatch.setenv("IMAGE_TAG", sha)
 
         from auth import create_token
         token = create_token("admin001", "admin", "Test Admin", "officer")
@@ -130,6 +132,8 @@ class TestVersionEndpoint:
         body = resp.json()
         assert body["git_sha"] == sha
         assert body["git_sha_short"] == sha[:7]
+        assert body["build_time"] == "2026-05-03T00:00:00Z"
+        assert body["image_tag"] == sha
 
     def test_version_service_name(self, api_server):
         """service field must always be 'regmind-backend'."""

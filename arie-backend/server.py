@@ -5310,6 +5310,20 @@ class EnvironmentInfoHandler(BaseHandler):
         self.success(get_environment_info())
 
 
+def get_build_metadata():
+    git_sha = os.environ.get("GIT_SHA") or "unknown"
+    build_time = os.environ.get("BUILD_TIME") or "unknown"
+    image_tag = os.environ.get("IMAGE_TAG") or git_sha
+    return {
+        "git_sha": git_sha,
+        "git_sha_short": git_sha[:7] if git_sha != "unknown" else "unknown",
+        "build_time": build_time,
+        "image_tag": image_tag,
+        "environment": ENVIRONMENT,
+        "service": "regmind-backend",
+    }
+
+
 class VersionHandler(BaseHandler):
     """GET /api/version — build identification for authenticated sessions.
 
@@ -5321,14 +5335,7 @@ class VersionHandler(BaseHandler):
         user = self.require_auth()
         if not user:
             return
-        self.success({
-            "git_sha": os.environ.get("GIT_SHA", "unknown"),
-            "git_sha_short": os.environ.get("GIT_SHA", "unknown")[:7]
-            if os.environ.get("GIT_SHA") else "unknown",
-            "build_time": os.environ.get("BUILD_TIME", "unknown"),
-            "environment": ENVIRONMENT,
-            "service": "regmind-backend",
-        })
+        self.success(get_build_metadata())
 
 
 class SystemSettingsHandler(BaseHandler):
@@ -8994,6 +9001,7 @@ class ComplianceMemoHandler(BaseHandler):
         memo["metadata"]["memo_input_hash"] = memo_input_hash
         memo["metadata"]["memo_version"] = "v" + str(next_version)
         memo["metadata"]["model_version"] = "v1.1"
+        memo["metadata"]["build"] = get_build_metadata()
 
         # Store memo in compliance_memos table
         rule_violations_json = json.dumps(rule_violations) if rule_violations else None
@@ -10015,6 +10023,7 @@ class MemoPDFDownloadHandler(BaseHandler):
                 "memo_version": memo_version,
                 "pdf_sha256": pdf_sha256,
                 "pdf_bytes": len(pdf_bytes),
+                "build": get_build_metadata(),
                 "validation_status": validation_result.get("validation_status"),
                 "quality_score": validation_result.get("quality_score"),
                 "supervisor_status": supervisor_result.get("verdict"),
@@ -10039,6 +10048,8 @@ class MemoPDFDownloadHandler(BaseHandler):
         self.set_header("X-Memo-Id", str(memo_row["id"]))
         self.set_header("X-Memo-Version", str(memo_version))
         self.set_header("X-PDF-SHA256", pdf_sha256)
+        self.set_header("X-Build-Git-Sha", get_build_metadata()["git_sha"])
+        self.set_header("X-Build-Git-Sha-Short", get_build_metadata()["git_sha_short"])
         self.set_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.write(pdf_bytes)
 

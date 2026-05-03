@@ -219,6 +219,8 @@ def _risk_badge(level: str) -> str:
         "LOW": "risk-low", "MEDIUM": "risk-medium",
         "HIGH": "risk-high", "VERY_HIGH": "risk-very-high"
     }.get(level_upper, "risk-medium")
+    if level_upper in ("NOT_RATED", "UNRATED", "NOT YET RATED"):
+        level_upper = "NOT YET RATED"
     return f'<span class="risk-badge {css_class}">{_esc(level_upper)}</span>'
 
 
@@ -377,8 +379,16 @@ def generate_memo_pdf(
 
     sections = memo_data.get("sections", {})
     metadata = memo_data.get("metadata", {})
-    risk_level = metadata.get("risk_rating", metadata.get("aggregated_risk", "MEDIUM"))
-    risk_score = metadata.get("risk_score", 0)
+    risk_level = metadata.get("display_risk_rating") or metadata.get("risk_rating", metadata.get("aggregated_risk", "MEDIUM"))
+    risk_score = metadata.get("display_risk_score")
+    if risk_score in (None, ""):
+        risk_score = metadata.get("risk_score", 0)
+    canonical_risk = metadata.get("canonical_risk") if isinstance(metadata.get("canonical_risk"), dict) else {}
+    if canonical_risk and not canonical_risk.get("available"):
+        risk_level = "NOT_RATED"
+        risk_score_display = "Not yet scored"
+    else:
+        risk_score_display = f"{risk_score}/100"
     decision = metadata.get("approval_recommendation", "REVIEW")
     confidence = metadata.get("confidence_level", 0)
     memo_version = metadata.get("memo_version", "1.0")
@@ -410,7 +420,7 @@ def generate_memo_pdf(
     <td class="label">Sector</td><td>{_esc(sector)}</td></tr>
 <tr><td class="label">Entity Type</td><td>{_esc(entity_type)}</td>
     <td class="label">Risk Rating</td><td>{_risk_badge(risk_level)}</td></tr>
-<tr><td class="label">Risk Score</td><td>{_esc(risk_score)}/100</td>
+<tr><td class="label">Risk Score</td><td>{_esc(risk_score_display)}</td>
     <td class="label">Confidence</td><td>{_esc(round(confidence * 100, 1) if isinstance(confidence, (int, float)) else confidence)}%</td></tr>
 <tr><td class="label">Decision</td><td colspan="3">{_decision_badge(decision)}</td></tr>
 <tr><td class="label">Memo Version</td><td>{_esc(memo_version)}</td>

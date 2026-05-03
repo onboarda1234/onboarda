@@ -367,6 +367,8 @@ class TestDeployWorkflowDeterminism:
             content = f.read()
         assert "github.sha" in content, "Workflow must use github.sha for deterministic tagging"
         assert "IMAGE_TAG" in content
+        assert '--build-arg "GIT_SHA=${{ github.sha }}"' in content
+        assert '--build-arg "BUILD_TIME=$BUILD_TIME"' in content
 
     def test_deploy_staging_updates_task_definition(self):
         """deploy-staging.yml must update ECS task definition with specific image."""
