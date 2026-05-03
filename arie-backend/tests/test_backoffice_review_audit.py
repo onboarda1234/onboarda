@@ -632,7 +632,55 @@ class TestScreeningDispositionUX:
 
 
 # ═══════════════════════════════════════════════════════════
-# H. AUDIT TRAIL HARDENING
+# H. PRE-PHASE-6 NAVIGATION AND CASE LIST UX
+# ═══════════════════════════════════════════════════════════
+class TestPrePhaseSixBackofficeUX:
+    """Pin focused dashboard/application/case-list behaviours before Phase 6."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_dashboard_view_all_uses_application_nav_state(self):
+        html = self._read_backoffice()
+        assert 'onclick="showView(\'applications\')">View All' in html
+        assert "snav-item:nth-child(3)" not in html
+        assert 'document.querySelector(\'.snav-item[data-view="\' + name + \'"]\')' in html
+
+    def test_edd_pipeline_is_above_ongoing_monitoring(self):
+        html = self._read_backoffice()
+        assert html.index('data-view="edd"') < html.index('data-view="monitoring"')
+
+    def test_applications_page_has_search_and_page_size_controls(self):
+        html = self._read_backoffice()
+        assert 'id="applications-search"' in html
+        assert 'id="applications-page-size"' in html
+        assert 'function setApplicationsPageSize(value)' in html
+        assert 'function changeApplicationsPage(delta)' in html
+        assert 'id="applications-pagination-summary"' in html
+        assert "'/applications?limit=5000'" in html
+
+    def test_global_search_filters_application_list_instead_of_opening_detail(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function handleGlobalSearch(q)")
+        fn_end = html.index("// ═══════════════════════════════════════════════════════════", fn_start)
+        fn_region = html[fn_start:fn_end]
+        assert "applications-search" in fn_region
+        assert "showView('applications')" in fn_region
+        assert "openAppDetail" not in fn_region
+
+    def test_my_cases_filters_by_current_user_assignment(self):
+        html = self._read_backoffice()
+        assert "function isAssignedToCurrentUser(app)" in html
+        assert "activeCaseTab === 'my-cases' && !isAssignedToCurrentUser(app)" in html
+        assert "activeCaseTab === 'unassigned' && app.assignedId" in html
+
+
+# ═══════════════════════════════════════════════════════════
+# I. AUDIT TRAIL HARDENING
 # ═══════════════════════════════════════════════════════════
 class TestAuditTrailHardening:
     """Test structured audit entries."""
