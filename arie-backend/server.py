@@ -1822,6 +1822,63 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
 
 
 # ── Health Check ──
+def _complyadvantage_runtime_status():
+    """Return truthful ComplyAdvantage readiness without activating it.
+
+    Sumsub remains authoritative for IDV/KYC.  ComplyAdvantage only reports
+    live when both the provider selection and abstraction gate are active and
+    the CA credential boundary validates.
+    """
+    from screening_config import get_active_provider_name, is_abstraction_enabled
+
+    requested_provider = get_active_provider_name()
+    abstraction_enabled = is_abstraction_enabled()
+    ca_env_keys = (
+        "COMPLYADVANTAGE_API_BASE_URL",
+        "COMPLYADVANTAGE_AUTH_URL",
+        "COMPLYADVANTAGE_REALM",
+        "COMPLYADVANTAGE_USERNAME",
+        "COMPLYADVANTAGE_PASSWORD",
+    )
+    has_partial_config = any((os.environ.get(key) or "").strip() for key in ca_env_keys)
+    configured = False
+    config_error = ""
+    try:
+        from screening_complyadvantage.config import CAConfig
+        CAConfig.from_env()
+        configured = True
+    except Exception as exc:
+        config_error = str(exc)
+
+    active = requested_provider == "complyadvantage" and abstraction_enabled and configured
+    if active:
+        status = "live"
+    elif configured:
+        status = "ready"
+    elif has_partial_config:
+        status = "misconfigured"
+    else:
+        status = "not_configured"
+
+    blockers = []
+    if requested_provider == "complyadvantage" and not abstraction_enabled:
+        blockers.append("ENABLE_SCREENING_ABSTRACTION is false")
+    if not configured and config_error:
+        blockers.append(config_error)
+
+    return {
+        "configured": configured,
+        "status": status,
+        "active": active,
+        "requested_provider": requested_provider,
+        "abstraction_enabled": abstraction_enabled,
+        "implementation_status": "in_progress",
+        "role": "KYB screening, adverse media, and ongoing monitoring",
+        "description": "ComplyAdvantage KYB, adverse-media, and ongoing-monitoring integration",
+        "blockers": blockers,
+    }
+
+
 class HealthHandler(BaseHandler):
     def get(self):
         """Safe unauthenticated liveness check.
@@ -1863,6 +1920,7 @@ class HealthHandler(BaseHandler):
                 "opencorporates": "configured" if OPENCORPORATES_API_KEY else "simulated",
                 "ip_geolocation": "live",
                 "sumsub_kyc": "configured" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
+                "complyadvantage": _complyadvantage_runtime_status()["status"],
             }
             health["metrics_enabled"] = METRICS_ENABLED
 
@@ -8642,8 +8700,9 @@ class APIStatusHandler(BaseHandler):
             "sumsub": {
                 "configured": bool(SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY),
                 "status": "live" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
-                "description": "KYC identity verification (document + selfie + liveness)"
+                "description": "IDV and KYC screening (document + selfie + liveness)"
             },
+            "complyadvantage": _complyadvantage_runtime_status(),
             "anthropic": {
                 "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
                 "status": "configured" if os.environ.get("ANTHROPIC_API_KEY") else "simulated",

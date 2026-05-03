@@ -70,9 +70,10 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
             )
             self.set_status(401)
             return
-        if signature_status == "production_secret_missing":
+        if signature_status == "deployed_secret_missing":
             logger.error(
-                "ca_webhook_signature signature_mode=production_fail_closed signature_secret_configured=false"
+                "ca_webhook_signature signature_mode=deployed_fail_closed signature_secret_configured=false environment=%s",
+                _environment(),
             )
             emit_metric(
                 "webhook_signature_failure",
@@ -80,7 +81,7 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
                 trace_id=trace_id,
                 component="webhook_handler",
                 outcome="failure",
-                signature_mode="production_fail_closed",
+                signature_mode="deployed_fail_closed",
             )
             emit_metric(
                 "env_mode_drift",
@@ -88,7 +89,7 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
                 trace_id=trace_id,
                 component="webhook_handler",
                 outcome="failure",
-                signature_mode="production_fail_closed",
+                signature_mode="deployed_fail_closed",
             )
             self.set_status(503)
             return
@@ -257,8 +258,8 @@ def _signature_status(body, signature):
     secret = os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET", "")
     if secret:
         return "valid" if _verify_signature(body, signature) else "invalid"
-    if _environment() == "production":
-        return "production_secret_missing"
+    if _environment() in ("staging", "production"):
+        return "deployed_secret_missing"
     return "disabled_non_production"
 
 
@@ -270,7 +271,7 @@ def _metric_signature_mode(signature_status):
     return {
         "valid": "strict",
         "invalid": "strict",
-        "production_secret_missing": "production_fail_closed",
+        "deployed_secret_missing": "deployed_fail_closed",
         "disabled_non_production": "sandbox_fail_open",
     }.get(signature_status, "strict")
 

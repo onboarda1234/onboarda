@@ -221,8 +221,7 @@ def test_missing_signature_returns_401_without_spawn_or_body():
     fake_loop.spawn_callback.assert_not_called()
 
 
-@pytest.mark.parametrize("environment", ["staging", "development"])
-def test_secret_unset_non_production_fails_open_with_warning(environment, caplog):
+def test_secret_unset_development_fails_open_with_warning(caplog):
     fake_loop = MagicMock()
     with caplog.at_level(logging.WARNING, logger="screening_complyadvantage.webhook_handler"):
         with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
@@ -230,7 +229,7 @@ def test_secret_unset_non_production_fails_open_with_warning(environment, caplog
                 _fixture("webhook_case_created.json"),
                 secret=None,
                 include_signature=False,
-                environment=environment,
+                environment="development",
             )
 
     assert handler._status_code == 202
@@ -240,7 +239,8 @@ def test_secret_unset_non_production_fails_open_with_warning(environment, caplog
     assert "signature_verification_disabled=true" in caplog.text
 
 
-def test_secret_unset_production_fails_closed_with_503(caplog):
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_secret_unset_deployed_environments_fail_closed_with_503(environment, caplog):
     fake_loop = MagicMock()
     with caplog.at_level(logging.ERROR, logger="screening_complyadvantage.webhook_handler"):
         with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
@@ -248,13 +248,13 @@ def test_secret_unset_production_fails_closed_with_503(caplog):
                 _fixture("webhook_case_created.json"),
                 secret=None,
                 include_signature=False,
-                environment="production",
+                environment=environment,
             )
 
     assert handler._status_code == 503
     assert b"".join(handler._write_buffer) == b""
     fake_loop.spawn_callback.assert_not_called()
-    assert "signature_mode=production_fail_closed" in caplog.text
+    assert "signature_mode=deployed_fail_closed" in caplog.text
 
 
 def test_malformed_json_returns_400_without_spawn_or_body(caplog):

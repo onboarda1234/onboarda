@@ -34,6 +34,7 @@ def test_complyadvantage_route_uses_registered_provider_with_db(monkeypatch):
         "screening_routing.get_active_provider_name",
         lambda: COMPLYADVANTAGE_PROVIDER_NAME,
     )
+    monkeypatch.setattr("screening_routing.is_abstraction_enabled", lambda: True)
     db = object()
 
     class FakeCAProvider:
@@ -63,6 +64,28 @@ def test_complyadvantage_route_uses_registered_provider_with_db(monkeypatch):
     assert FakeCAProvider.instances[0].calls == [
         ({"application_id": "app-2"}, [], [{"full_name": "Owner"}], "203.0.113.11")
     ]
+
+
+def test_complyadvantage_provider_request_ignored_when_abstraction_disabled(monkeypatch):
+    monkeypatch.setattr("screening_routing.get_active_provider_name", lambda: COMPLYADVANTAGE_PROVIDER_NAME)
+    monkeypatch.setattr("screening_routing.is_abstraction_enabled", lambda: False)
+    sentinel = {"provider": "sumsub", "legacy_shape": True}
+    calls = []
+
+    def legacy_runner(application_data, directors, ubos, client_ip=None):
+        calls.append((application_data, directors, ubos, client_ip))
+        return sentinel
+
+    result = run_screening_for_active_provider(
+        {"application_id": "app-guard"},
+        [],
+        [],
+        client_ip="203.0.113.12",
+        legacy_runner=legacy_runner,
+    )
+
+    assert result is sentinel
+    assert calls == [({"application_id": "app-guard"}, [], [], "203.0.113.12")]
 
 
 def test_unknown_active_provider_fails_closed(monkeypatch):
