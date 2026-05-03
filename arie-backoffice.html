@@ -3111,9 +3111,22 @@ function applyEnvironmentUI() {
   }
 }
 
+function getCookieValue(name) {
+  var parts = document.cookie ? document.cookie.split(';') : [];
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i].trim();
+    if (part.indexOf(name + '=') === 0) return decodeURIComponent(part.substring(name.length + 1));
+  }
+  return '';
+}
+
 async function boApiCall(method, path, body) {
   var opts = { method: method, headers: {} };
   if (BO_AUTH_TOKEN) opts.headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(String(method || '').toUpperCase()) >= 0) {
+    var csrf = getCookieValue('csrf_token');
+    if (csrf) opts.headers['X-CSRF-Token'] = csrf;
+  }
   if (body) {
     if (typeof FormData !== 'undefined' && body instanceof FormData) {
       opts.body = body;
@@ -5867,6 +5880,10 @@ function screeningModeBadge(mode) {
   if (!mode || mode === 'unknown') return '<span class="badge high" title="Screening provenance could not be verified. This will block approval in production.">⚠ Unverified — Blocks Approval</span>';
   if (mode === 'live') return '<span class="badge approved">✓ Live Screening</span>';
   if (mode === 'simulated') return '<span class="badge high" title="Simulated screening data cannot be used for production approval. This is not from a live screening provider.">🧪 Simulated — Not From Live Screening — Blocks Approval</span>';
+  if (mode === 'not_configured') return '<span class="badge high" title="Required screening provider is not configured for this subject.">Screening Not Configured — Blocks Approval</span>';
+  if (mode === 'pending') return '<span class="badge pending" title="Provider screening is not terminal yet.">Screening Pending — Blocks Approval</span>';
+  if (mode === 'unavailable') return '<span class="badge high" title="Provider screening was unavailable or failed.">Screening Unavailable — Blocks Approval</span>';
+  if (mode === 'mixed') return '<span class="badge pending" title="Only part of the screening stack is live; KYB/adverse media coverage is not yet provider-verified.">Mixed Coverage — Review Required</span>';
   return '<span class="badge pending">' + escapeHtml(mode) + '</span>';
 }
 

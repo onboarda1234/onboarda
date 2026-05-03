@@ -102,6 +102,32 @@ class TestHealthAPI:
         resp = http_requests.get(f"{api_server}/api/health", timeout=3)
         assert "application/json" in resp.headers.get("Content-Type", "")
 
+    def test_public_health_does_not_leak_internal_inventory(self, api_server):
+        """Unauthenticated health must not expose DB type or provider config."""
+        resp = http_requests.get(f"{api_server}/api/health", timeout=3)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "database" not in body
+        assert "integrations" not in body
+        assert "metrics_enabled" not in body
+
+    def test_portal_and_backoffice_have_browser_security_headers(self, api_server):
+        """Static HTML entry points must carry the same security posture as APIs."""
+        required = {
+            "Content-Security-Policy",
+            "Strict-Transport-Security",
+            "X-Frame-Options",
+            "Referrer-Policy",
+            "Permissions-Policy",
+            "X-Content-Type-Options",
+        }
+        for path in ("/portal", "/backoffice"):
+            resp = http_requests.get(f"{api_server}{path}", timeout=3)
+            assert resp.status_code == 200
+            missing = [h for h in required if not resp.headers.get(h)]
+            assert missing == []
+            assert "TornadoServer" not in resp.headers.get("Server", "")
+
 
 # ═══════════════════════════════════════════════════════════
 # 2. Auth Rejection — unauthenticated requests must be blocked
@@ -251,6 +277,82 @@ class TestAuthenticatedAccess:
         assert data["latest_memo_data"]["sections"]["executive_summary"]["content"] == "Stored memo"
         assert data["latest_memo_data"]["memo_version"] == "v3"
         assert data["latest_memo_data"]["application_ref"] == "ARF-2026-DETAIL"
+
+    def test_audit_endpoint_filters_by_application_ref_and_prefixed_target(self, api_server):
+        """Global audit reconstruction must support both target conventions."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            ("admin001", "Test Admin", "admin", "Generate Memo", "ARF-FILTER", "bare", "127.0.0.1"),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            ("admin001", "Test Admin", "admin", "edd_routing.evaluated", "application:ARF-FILTER", "prefixed", "127.0.0.1"),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+            ("admin001", "Test Admin", "admin", "Login", "System", "other", "127.0.0.1"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.get(
+            f"{api_server}/api/audit?ref=ARF-FILTER&limit=50",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 200
+        entries = resp.json()["entries"]
+        targets = {e["target"] for e in entries}
+        assert "ARF-FILTER" in targets
+        assert "application:ARF-FILTER" in targets
+        assert "System" not in targets
+
+    def test_failed_document_upload_is_audited(self, api_server):
+        """Rejected uploads are security events and must appear in case audit."""
+        from auth import create_token
+        from db import get_db
+
+        conn = get_db()
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("app_upload_reject", "ARF-UPLOAD-REJECT", "testclient001",
+             "Upload Reject Ltd", "Mauritius", "Technology", "SME", "draft"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("testclient001", "client", "Test Client", "client")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/app_upload_reject/documents?doc_type=cert_inc",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": ("bad.exe", b"MZ fake executable", "application/octet-stream")},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+
+        admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+        audit = http_requests.get(
+            f"{api_server}/api/applications/app_upload_reject/audit-log?limit=20",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=3,
+        )
+        assert audit.status_code == 200
+        entries = audit.json()["entries"]
+        rejection = next(e for e in entries if e["action"].startswith("Upload Rejected"))
+        detail = json.loads(rejection["detail"])
+        assert detail["reason_code"] == "disallowed_extension"
+        assert detail["filename"] == "bad.exe"
+        assert detail["doc_type"] == "cert_inc"
+        assert detail["duration_ms"] is not None
 
     def test_document_review_persists_and_survives_detail_reload(self, api_server):
         """POST /api/documents/:id/review should persist officer review truth on the document record."""
