@@ -289,6 +289,17 @@ class TestBaseHandlerCookieSecurity(unittest.TestCase):
         self.assertIn('samesite="Lax"', csrf_src)
         self.assertIn('samesite="Lax"', session_src)
 
+    def test_deployed_cookie_secure_flag_is_https_or_environment_gated(self):
+        """Deployed/staging cookies must not depend on production env alone."""
+        from base_handler import BaseHandler
+        csrf_src = inspect.getsource(BaseHandler.issue_csrf_token)
+        session_src = inspect.getsource(BaseHandler.issue_session_cookie)
+        helper_src = inspect.getsource(BaseHandler._secure_cookie_required)
+        self.assertIn("self._secure_cookie_required()", csrf_src)
+        self.assertIn("self._secure_cookie_required()", session_src)
+        self.assertIn("X-Forwarded-Proto", helper_src)
+        self.assertIn("_is_deployed_environment", helper_src)
+
     def test_session_cookie_expires_days(self):
         """Session cookie must have explicit expiry."""
         from base_handler import BaseHandler

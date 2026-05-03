@@ -39,12 +39,12 @@
 | **Load balancer** | AWS ALB with HTTPS (ACM certificate), ports 80 + 443 |
 | **DNS** | `staging.regmind.co` → ALB CNAME via GoDaddy |
 | **Logs** | AWS CloudWatch (`/ecs/regmind-staging`) |
-| **Health endpoints** | `GET /api/health` (liveness), `GET /api/readiness` (deep readiness), `GET /api/config/environment` |
+| **Health endpoints** | `GET /api/liveness` (public ALB/ECS liveness), `GET /api/health` (safe public health), `GET /api/readiness` (authenticated deep readiness) |
 | **AI engine** | Claude API via `anthropic` SDK. Fail-closed in staging/production. |
 | **KYC/AML** | Sumsub API (live credentials). Level name requires admin verification. |
 | **PII encryption** | Fernet AES-128-CBC. Key pinned in Secrets Manager. |
 | **Rate limiting** | In-memory (per-container). Resets on restart. |
-| **Token revocation** | In-memory (per-container). Resets on restart. |
+| **Token revocation** | DB-backed revocation list with in-memory cache. Password resets revoke user sessions. |
 | **Frontend** | Two single-file HTML apps. Must be copied into `arie-backend/` before Docker build. |
 
 ---
@@ -78,6 +78,9 @@ All secrets must exist in `regmind/staging` in AWS Secrets Manager:
 - `DATABASE_URL` — PostgreSQL connection string
 - `ANTHROPIC_API_KEY` — valid Anthropic key
 - `SUMSUB_APP_TOKEN` + `SUMSUB_SECRET_KEY` — active Sumsub credentials
+- `ADMIN_CLIENT_RESET_CONFIRMATION` — required for admin client-password reset endpoint
+- `ADMIN_OFFICER_RESET_CONFIRMATION` — required for admin officer-password reset endpoint
+- `METRICS_TOKEN` — optional bearer token for Prometheus scraping when `/metrics` is enabled
 
 **Sumsub note:** `SUMSUB_LEVEL_NAME` (env var, currently `basic-kyc-level`) must match a level configured in the Sumsub dashboard. If KYC applicant creation returns 404, verify this first.
 
@@ -117,17 +120,15 @@ Must use `--platform linux/amd64` (dev machine is ARM, ECS runs amd64).
 ```bash
 GIT_SHA=$(git rev-parse HEAD)
 docker tag regmind-backend:latest 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:$GIT_SHA
-docker tag regmind-backend:latest 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:latest
 
 aws ecr get-login-password --region af-south-1 | docker login --username AWS \
   --password-stdin 782913119880.dkr.ecr.af-south-1.amazonaws.com
 
 docker push 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:$GIT_SHA
-docker push 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:latest
 ```
 If push returns `403 Forbidden`, re-run the login command.
 
-> **Note:** Always push both a SHA-tagged image AND `:latest`. The SHA tag enables deterministic rollback.
+> **Note:** Do not push `:latest`. Staging deployments are SHA-tagged only so ECR can be configured with immutable tags and every running task can be traced to one commit.
 
 ### Step 4: Register new task definition and deploy to ECS
 
@@ -152,15 +153,16 @@ sleep 120
 
 ### Step 6: Verify health
 ```bash
-curl -s https://staging.regmind.co/api/readiness | python3 -m json.tool
+curl -s https://staging.regmind.co/api/liveness | python3 -m json.tool
 ```
-Expected: `"ready": true`, database `"status": "ok"`, encryption `"status": "ok"`
+Expected: `"status": "ok"` with no database or integration inventory.
 
-Also check liveness:
+Authenticated operators can run the deep readiness check with an admin/SCO token:
 ```bash
-curl -s https://staging.regmind.co/api/health | python3 -m json.tool
+curl -s -H "Authorization: Bearer $ADMIN_OR_SCO_JWT" \
+  https://staging.regmind.co/api/readiness | python3 -m json.tool
 ```
-Expected: `"status": "ok"`, `"database": {"status": "connected", "type": "postgresql"}`
+Expected: `"ready": true`, database `"status": "ok"`, encryption `"status": "ok"`.
 
 ---
 
@@ -179,14 +181,53 @@ Expected: 16/17+ checks pass. Covers: health, environment, auth, app creation, s
 
 | # | Check | How | Expected |
 |---|---|---|---|
-| 1 | Health | `curl https://staging.regmind.co/api/health` | `ok`, `connected`, `postgresql` |
-| 2 | Environment | `curl https://staging.regmind.co/api/config/environment` | `staging`, `is_demo: false` |
-| 3 | Portal loads | Browser: staging.regmind.co/portal | Login page, no demo data |
-| 4 | Back office loads | Browser: staging.regmind.co/backoffice | Login screen, no demo data before login |
-| 5 | Dashboard stats | After login, scroll to monitoring section | "—" and "Monitoring not yet active" |
-| 6 | Agent Health | Navigate to Agent Health | "Not Yet Active" placeholder |
-| 7 | Regulatory page | Navigate to Regulatory Intelligence | "No regulatory documents yet" |
-| 8 | KPI AI section | KPI Dashboard → AI Performance | Placeholder, not 87.3%/92.1%/99.8% |
+| 1 | Build provenance | `curl https://staging.regmind.co/api/version` | `git_sha` and `image_tag` match the deployed commit; no `unknown` values |
+| 2 | Public liveness | `curl https://staging.regmind.co/api/liveness` | `ok`; no database/integration inventory |
+| 3 | Public health | `curl https://staging.regmind.co/api/health` | Safe public keys only; no `database`, `integrations`, or `metrics_enabled` |
+| 4 | Portal loads | Browser: staging.regmind.co/portal | Login page, no demo data |
+| 5 | Back office loads | Browser: staging.regmind.co/backoffice | Login screen, no demo data before login |
+| 6 | Dashboard stats | After login, scroll to monitoring section | "—" and "Monitoring not yet active" |
+| 7 | Agent Health | Navigate to Agent Health | "Not Yet Active" placeholder |
+| 8 | Regulatory page | Navigate to Regulatory Intelligence | "No regulatory documents yet" |
+| 9 | KPI AI section | KPI Dashboard → AI Performance | Placeholder, not 87.3%/92.1%/99.8% |
+
+### Phase 1-5 pilot close-out gates
+
+Run these after every Phase hardening deployment before declaring the environment pilot-ready:
+
+1. **Version/SHA:** `/api/version` returns the deployed Git SHA, image tag, and build time.
+2. **CSRF:** cookie-auth unsafe write without `X-CSRF-Token` returns `403`; same write with a valid token reaches business validation/success.
+3. **Audit reconstruction:** `/api/audit?ref=<ARF>`, `/api/audit/export?format=csv&ref=<ARF>`, `/api/applications/<ARF>/audit-log`, and `/api/applications/<ARF>/evidence-pack` reconcile on the same case audit events.
+4. **Evidence pack:** includes application notes, documents, RMI, memos, decision records, EDD cases, EDD findings/status/policy, and build metadata.
+5. **UNKNOWN risk:** dashboard and reports include an explicit `UNKNOWN`/`NOT RATED` bucket; missing risk scores render as null/em dash, never `0` or default `50`.
+6. **EDD lifecycle:** findings and SLA are required before senior review; closure requires SCO/admin and a different actor; `EDD Closure (dual-control)` audit rows target the ARF.
+7. **Screening truthfulness:** `/api/screening/status` lists Sumsub as live, OpenSanctions/OpenCorporates as simulated unless configured, and does not advertise ComplyAdvantage as live while implementation is in progress.
+8. **Diagnostics exposure:** unauthenticated `/metrics` and `/api/readiness` return `401`; `/api/liveness` is public and hardened; random 404 paths return `Server: RegMind` plus hardened headers.
+9. **Admin resets:** client/officer password-reset endpoints require confirmation token, enforce password policy, write audit rows, and revoke existing JWT sessions.
+10. **Operational queues:** `/api/edd/cases` hides fixture/smoke rows by default; only admin/SCO with `include_fixtures=1` or `show_fixtures=true` can include them.
+
+### Phase 5 infrastructure gates
+
+Capture command output in the release evidence pack:
+
+```bash
+aws ecr describe-repositories --repository-names regmind-backend \
+  --region af-south-1 --query 'repositories[0].imageTagMutability'
+
+aws ecr describe-image-scan-findings --repository-name regmind-backend \
+  --image-id imageTag=$GIT_SHA --region af-south-1
+
+aws rds describe-db-instances --db-instance-identifier regmind-staging-db \
+  --region af-south-1 --query 'DBInstances[0].{BackupRetentionPeriod:BackupRetentionPeriod,DeletionProtection:DeletionProtection}'
+
+aws elbv2 describe-load-balancer-attributes --load-balancer-arn "$ALB_ARN" \
+  --region af-south-1 --query 'Attributes[?starts_with(Key, `access_logs.s3.`)]'
+
+aws logs describe-log-groups --log-group-name-prefix /ecs/regmind-staging \
+  --region af-south-1 --query 'logGroups[].{name:logGroupName,retention:retentionInDays}'
+```
+
+Expected Phase 5 baseline: ECR tags immutable; no unaccepted HIGH image findings; RDS backup retention at least 7 days and deletion protection enabled; ALB access logs enabled; CloudWatch log retention set; alarms exist for ALB 5xx, ECS running task count, RDS CPU/storage, failed-login spike, memo/EDD failure, and `Invalid encryption token`.
 
 ### Log review
 ```bash
@@ -223,15 +264,12 @@ aws ecs update-service --cluster regmind-staging --service regmind-backend \
 **Step 3:** Wait and verify:
 ```bash
 sleep 120
-curl -s https://staging.regmind.co/api/health | python3 -m json.tool
+curl -s https://staging.regmind.co/api/liveness | python3 -m json.tool
 ```
 
-### If `:latest` has been overwritten (rollback not possible via ECR)
+### If the SHA image is missing
 
-1. Check out the previous known-good git commit locally
-2. Rebuild the Docker image from that commit
-3. Push as `:latest`
-4. Force redeploy ECS
+Treat this as a release incident. The ECR repository should have immutable SHA tags and no `:latest` dependency. Rebuild from the previous known-good commit, push that SHA tag, register a task definition with that SHA-tagged image, and redeploy.
 
 **Database note:** Task definition rollback does NOT roll back database migrations. If a migration was applied during the failed deploy, the old code may encounter schema mismatches. Assess backward compatibility before rolling back.
 
@@ -243,12 +281,12 @@ curl -s https://staging.regmind.co/api/health | python3 -m json.tool
 |---|---|---|---|
 | **DB connection pool exhaustion** | Medium | All endpoints return 500 | Restart ECS task. Pool is maxconn=5 on db.t3.micro (~20 total). |
 | **Sumsub level-name mismatch** | Confirmed | KYC applicant creation fails (404) | Admin verifies level in Sumsub dashboard, updates ECS env var. |
-| **JWT invalidation on deploy** | Certain | All users must re-login | Expected. Sessions use 24h expiry. |
+| **JWT invalidation on deploy** | Low | Users must re-login if JWT secret changes or sessions are administratively revoked | JWT secret is stable in Secrets Manager; do not rotate without a migration/communications plan. |
 | **Browser cache shows stale UI** | Medium | Old interface visible after deploy | Hard refresh (Cmd+Shift+R) or incognito. |
 | **In-memory rate limiter resets** | Certain | Brute-force protection absent briefly | Acceptable for pilot. Redis is future. |
-| **In-memory token revocation resets** | Certain | Revoked tokens valid until natural 24h expiry | Acceptable for pilot. Redis is future. |
+| **Token revocation cache resets** | Low | DB-backed revoked tokens are reloaded; only cache warmth is lost | Ensure `revoked_tokens` table is intact after DB maintenance. |
 | **Single-container failure** | Low | ~2 min downtime during ECS restart | Production should have min 2 tasks. |
-| **`:latest` tag prevents reliable rollback** | Mitigated | Cannot roll back to previous image | SHA-tagged images now pushed alongside `:latest`. Rollback is reliable. |
+| **Mutable image tags prevent reliable rollback** | Mitigated by Phase 5 | Cannot prove which image ran | ECR tags must be immutable; deploy SHA-tagged images only. |
 
 ---
 
@@ -256,7 +294,7 @@ curl -s https://staging.regmind.co/api/health | python3 -m json.tool
 
 ### Deployment is unhealthy
 ```bash
-curl -s https://staging.regmind.co/api/health
+curl -s https://staging.regmind.co/api/liveness
 aws ecs describe-services --cluster regmind-staging --services regmind-backend \
   --region af-south-1 --query 'services[0].events[0:3].message' --output text
 ```
@@ -310,24 +348,29 @@ PRE-DEPLOY
 [ ] Note current task definition revision: regmind-staging:___
 [ ] Docker Desktop running
 [ ] AWS CLI configured (af-south-1)
+[ ] ECR repository is immutable
+[ ] RDS backup retention >= 7 days and deletion protection enabled
+[ ] ALB access logs enabled
+[ ] CloudWatch log retention and baseline alarms configured
 
 BUILD
 [ ] cp ../arie-portal.html . && cp ../arie-backoffice.html .  (run from `arie-backend/`; local builds only; CI does this automatically)
 [ ] docker build --platform linux/amd64 -t regmind-backend .
-[ ] docker tag → 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:latest
+[ ] docker tag → 782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:$GIT_SHA
 [ ] aws ecr get-login-password (if >12h since last login)
-[ ] docker push
+[ ] docker push SHA tag only
 
 DEPLOY
-[ ] aws ecs update-service --desired-count 0
-[ ] sleep 30
-[ ] aws ecs update-service --desired-count 1 --force-new-deployment
+[ ] Register task definition with SHA-tagged image
+[ ] aws ecs update-service --task-definition <NEW_TASK_DEF_ARN> --force-new-deployment
 [ ] sleep 120
 
 VERIFY
-[ ] /api/readiness → ready: true, encryption: ok, database: ok
-[ ] /api/health → ok, connected, postgresql
-[ ] /api/config/environment → staging, is_demo: false
+[ ] /api/version → deployed SHA and image tag match
+[ ] /api/liveness → ok, hardened headers
+[ ] /api/readiness unauthenticated → 401
+[ ] /metrics unauthenticated → 401
+[ ] random 404 → Server: RegMind, hardened headers
 [ ] python3.11 tests/test_staging_e2e.py → 16/17+ pass
 [ ] Browser: dashboard shows "—" not demo stats
 [ ] Logs: no "mock mode" or "connection pool exhausted"
@@ -346,7 +389,7 @@ ROLLBACK (if needed — reliable with SHA-tagged images)
 
 | Improvement | Benefit | Effort |
 |---|---|---|
-| **Versioned image tags** (`:$GIT_SHA` alongside `:latest`) | Reliable rollback | ✅ Done |
+| **Versioned image tags** (`:$GIT_SHA`, no `:latest`) | Reliable rollback and provenance | ✅ Done |
 | **Blue-green deployment** | Zero-downtime, automatic rollback | 1 day |
 | **Redis-backed rate limiter + token revocation** | Survives restarts, scales | 1 day |
 | **Automated E2E in CI/CD post-deploy step** | Catches deploy regressions automatically | 2 hours |

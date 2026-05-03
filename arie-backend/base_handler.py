@@ -32,6 +32,11 @@ ENVIRONMENT = _CFG_ENVIRONMENT
 rate_limiter = RateLimiter()
 
 
+def _is_deployed_environment() -> bool:
+    """Return True when cookies should require HTTPS transport."""
+    return ENVIRONMENT not in ("development", "dev", "test", "testing", "local", "demo")
+
+
 def _upload_latency_route_context(method, path):
     """Return telemetry context for upload-latency endpoints only."""
     if method != "POST":
@@ -241,7 +246,7 @@ class BaseHandler(tornado.web.RequestHandler):
         self.set_cookie(
             "csrf_token", csrf_token,
             httponly=False,  # Must be readable by JS to send in header
-            secure=(ENVIRONMENT == "production"),
+            secure=self._secure_cookie_required(),
             samesite="Lax",
             path="/",
             expires_days=1,  # Match JWT 24h expiry
@@ -257,11 +262,16 @@ class BaseHandler(tornado.web.RequestHandler):
         self.set_cookie(
             "arie_session", jwt_token,
             httponly=True,
-            secure=(ENVIRONMENT == "production"),
+            secure=self._secure_cookie_required(),
             samesite="Lax",
             path="/",
             expires_days=1,  # Match JWT 24h expiry
         )
+
+    def _secure_cookie_required(self):
+        """Require Secure cookies on HTTPS/deployed requests, not just prod."""
+        forwarded_proto = (self.request.headers.get("X-Forwarded-Proto") or "").lower()
+        return _is_deployed_environment() or self.request.protocol == "https" or forwarded_proto == "https"
 
     def clear_session_cookie(self):
         """Sprint 3.5: Clear session cookie on logout."""

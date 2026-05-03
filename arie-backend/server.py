@@ -1710,21 +1710,52 @@ class AdminResetPasswordHandler(BaseHandler):
             self.error("Not available in production", 403)
             return
         data = self.get_json()
+        confirm = data.get("confirm", "")
         email = data.get("email", "").strip().lower()
         new_password = data.get("new_password", "")
+
+        required_confirm = (os.environ.get("ADMIN_CLIENT_RESET_CONFIRMATION") or "").strip()
+        if not required_confirm:
+            logger.error("ADMIN_CLIENT_RESET_CONFIRMATION is not set; refusing client reset request")
+            self.error("Reset control is not configured", 503)
+            return
+
+        if confirm != required_confirm:
+            self.error("Invalid confirmation token", 403)
+            return
         if not email or not new_password:
             self.error("email and new_password required", 400)
             return
-        import bcrypt
-        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        is_valid, pw_error = PasswordPolicy.validate(new_password)
+        if not is_valid:
+            self.error(f"Password policy violation: {pw_error}", 400)
+            return
+
         db = get_db()
-        db.execute("UPDATE clients SET password_hash=? WHERE LOWER(email)=?", (pw_hash, email))
-        db.commit()
-        check = db.execute("SELECT id FROM clients WHERE LOWER(email)=?", (email,)).fetchone()
-        if not check:
+        client = db.execute("SELECT id, email, company_name FROM clients WHERE LOWER(email)=?", (email,)).fetchone()
+        if not client:
             db.close()
             self.error("Email not found", 404)
             return
+
+        import bcrypt
+        pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+        db.execute("UPDATE clients SET password_hash=? WHERE LOWER(email)=?", (pw_hash, email))
+        self.log_audit(
+            user,
+            "Admin Password Reset",
+            f"client:{email}",
+            json.dumps({
+                "subject_type": "client",
+                "subject_id": client["id"],
+                "subject_email": email,
+                "sessions_revoked": True,
+            }, default=str),
+            db=db,
+            commit=False,
+        )
+        db.commit()
+        _revoke_all_client_sessions(db, client["id"])
         db.close()
         self.success({"status": "password_reset", "email": email})
 
@@ -1755,8 +1786,9 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
             return self.error("Invalid confirmation token", 403)
         if not email or not new_password:
             return self.error("email and new_password required", 400)
-        if len(new_password) < 8:
-            return self.error("Password must be at least 8 characters", 400)
+        is_valid, pw_error = PasswordPolicy.validate(new_password)
+        if not is_valid:
+            return self.error(f"Password policy violation: {pw_error}", 400)
 
         db = get_db()
         officer_row = db.execute("SELECT id, role, full_name FROM users WHERE LOWER(email) = ?", (email,)).fetchone()
@@ -1767,11 +1799,25 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
         import bcrypt
         pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
         db.execute("UPDATE users SET password_hash = ? WHERE LOWER(email) = ?", (pw_hash, email))
+        self.log_audit(
+            user,
+            "Admin Password Reset",
+            f"officer:{email}",
+            json.dumps({
+                "subject_type": "officer",
+                "subject_id": officer_row["id"],
+                "subject_email": email,
+                "subject_role": officer_row["role"],
+                "sessions_revoked": True,
+            }, default=str),
+            db=db,
+            commit=False,
+        )
         db.commit()
+        _revoke_all_client_sessions(db, officer_row["id"])
         db.close()
 
         logger.warning(f"OFFICER PASSWORD RESET: {email} (role={officer_row['role']}) password was reset via staging endpoint")
-        self.log_audit(user, "Admin Reset", "Officer Password", f"Officer password reset for {email}")
         self.success({"status": "password_reset", "email": email, "role": officer_row["role"]})
 
 
@@ -1825,8 +1871,68 @@ class HealthHandler(BaseHandler):
         self.write(json.dumps(health, default=str))
 
 
-class ReadinessHandler(tornado.web.RequestHandler):
-    """GET /api/readiness — Deep readiness probe for load balancers and orchestrators.
+def _readiness_status_payload():
+    """Return deep readiness status without writing to a handler."""
+    checks = {}
+    ready = True
+
+    # 1. PII encryption init status
+    if _pii_encryption_ok and _pii_encryptor is not None:
+        checks["encryption"] = {"status": "ok"}
+    else:
+        checks["encryption"] = {"status": "failed", "detail": "PIIEncryptor not initialised or self-test failed"}
+        ready = False
+
+    # 2. Database connectivity
+    db = None
+    try:
+        db = get_db()
+        db.execute("SELECT 1")
+        checks["database"] = {"status": "ok"}
+    except Exception as e:
+        checks["database"] = {"status": "failed", "detail": str(e)}
+        ready = False
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    # 3. Required config present (environment-specific)
+    missing_config = []
+    if ENVIRONMENT in ("staging", "production", "prod"):
+        if not os.environ.get("PII_ENCRYPTION_KEY"):
+            missing_config.append("PII_ENCRYPTION_KEY")
+        if not SECRET_KEY:
+            missing_config.append("SECRET_KEY/JWT_SECRET")
+    if missing_config:
+        checks["config"] = {"status": "failed", "missing": missing_config}
+        ready = False
+    else:
+        checks["config"] = {"status": "ok"}
+
+    return ready, {
+        "ready": ready,
+        "environment": ENVIRONMENT,
+        "checks": checks,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+class LivenessHandler(BaseHandler):
+    """GET /api/liveness — public, hardened liveness check for ALB/ECS."""
+
+    def get(self):
+        self.success({
+            "status": "ok",
+            "service": "regmind-backend",
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+
+
+class ReadinessHandler(BaseHandler):
+    """GET /api/readiness — authenticated deep readiness probe.
 
     Returns 200 only when ALL critical subsystems are operational:
     - PII encryption initialised and self-test passed
@@ -1835,65 +1941,53 @@ class ReadinessHandler(tornado.web.RequestHandler):
     """
 
     def get(self):
-        checks = {}
-        ready = True
-
-        # 1. PII encryption init status
-        if _pii_encryption_ok and _pii_encryptor is not None:
-            checks["encryption"] = {"status": "ok"}
-        else:
-            checks["encryption"] = {"status": "failed", "detail": "PIIEncryptor not initialised or self-test failed"}
-            ready = False
-
-        # 2. Database connectivity
-        db = None
-        try:
-            db = get_db()
-            db.execute("SELECT 1")
-            checks["database"] = {"status": "ok"}
-        except Exception as e:
-            checks["database"] = {"status": "failed", "detail": str(e)}
-            ready = False
-        finally:
-            if db is not None:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-
-        # 3. Required config present (environment-specific)
-        missing_config = []
-        if ENVIRONMENT in ("staging", "production", "prod"):
-            if not os.environ.get("PII_ENCRYPTION_KEY"):
-                missing_config.append("PII_ENCRYPTION_KEY")
-            if not SECRET_KEY:
-                missing_config.append("SECRET_KEY/JWT_SECRET")
-        if missing_config:
-            checks["config"] = {"status": "failed", "missing": missing_config}
-            ready = False
-        else:
-            checks["config"] = {"status": "ok"}
-
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        ready, payload = _readiness_status_payload()
         status_code = 200 if ready else 503
         self.set_status(status_code)
-        self.set_header("Content-Type", "application/json")
-        self.write(json.dumps({
-            "ready": ready,
-            "environment": ENVIRONMENT,
-            "checks": checks,
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }, default=str))
+        self.write(json.dumps(payload, default=str))
 
 
-class MetricsHandler(tornado.web.RequestHandler):
-    """GET /metrics — Prometheus metrics endpoint"""
+class MetricsHandler(BaseHandler):
+    """GET /metrics — Prometheus metrics endpoint, auth/token gated."""
+
+    def _metrics_token_valid(self):
+        required = (os.environ.get("METRICS_TOKEN") or "").strip()
+        if not required:
+            return False
+        auth = (self.request.headers.get("Authorization") or "").strip()
+        if auth.startswith("Bearer "):
+            supplied = auth.split("Bearer ", 1)[1].strip()
+        else:
+            supplied = auth
+        return bool(supplied) and secrets.compare_digest(supplied, required)
+
     def get(self):
+        if not self._metrics_token_valid():
+            user = self.require_auth(roles=["admin", "sco"])
+            if not user:
+                return
         if not METRICS_ENABLED:
             self.set_status(404)
             self.write("Metrics not enabled")
             return
         self.set_header("Content-Type", CONTENT_TYPE_LATEST)
         self.write(generate_latest())
+
+
+class HardenedNotFoundHandler(BaseHandler):
+    """Default 404 path with the same header posture as normal handlers."""
+
+    def prepare(self):
+        self._upload_latency_started_at = time.monotonic()
+
+    def _not_found(self, *args, **kwargs):
+        self.set_status(404)
+        self.write({"error": "Not found"})
+
+    get = post = put = patch = delete = head = _not_found
 
 
 # ══════════════════════════════════════════════════════════
@@ -12198,6 +12292,14 @@ class SARAutoTriggerHandler(BaseHandler):
 
 _EDD_VALID_PRIORITIES = {"low", "medium", "high", "urgent"}
 _EDD_REVIEW_OR_TERMINAL_STAGES = {"pending_senior_review", "edd_approved", "edd_rejected"}
+_EDD_FIXTURE_COMPANY_NAME_PATTERNS = (
+    "%phase1 memo truth%",
+    "%codex rmi smoke%",
+    "%codex%smoke%",
+    "%qa e2e%",
+    "%staging e2e%",
+    "%e2e test%",
+)
 
 
 def _parse_edd_sla_due_at(value):
@@ -12397,7 +12499,8 @@ class EDDListHandler(BaseHandler):
 
         stage = self.get_argument("stage", None)
         assigned = self.get_argument("assigned_officer", None)
-        show_fx = should_show_fixtures(user, self.get_argument("show_fixtures", None))
+        fixture_opt_in = self.get_argument("show_fixtures", None) or self.get_argument("include_fixtures", None)
+        show_fx = should_show_fixtures(user, fixture_opt_in)
 
         db = get_db()
         if show_fx:
@@ -12409,6 +12512,12 @@ class EDDListHandler(BaseHandler):
             # consistency (the NULL-safe guard is a no-op here).
             query = f"SELECT * FROM edd_cases WHERE {fx_excl}"
             params = list(fx_params)
+            name_checks = " OR ".join(
+                "LOWER(COALESCE(company_name, '')) LIKE ?"
+                for _ in _EDD_FIXTURE_COMPANY_NAME_PATTERNS
+            )
+            query += f" AND application_id NOT IN (SELECT id FROM applications WHERE {name_checks})"
+            params.extend(_EDD_FIXTURE_COMPANY_NAME_PATTERNS)
 
         if stage:
             query += " AND stage = ?"
@@ -13720,6 +13829,7 @@ def make_app():
     routes = [
         # Health & Readiness
         (r"/api/health", HealthHandler),
+        (r"/api/liveness", LivenessHandler),
         (r"/api/readiness", ReadinessHandler),
         (r"/api/admin/reset-db", AdminResetDBHandler),
         (r"/api/admin/reset-password", AdminResetPasswordHandler),
@@ -13919,6 +14029,7 @@ def make_app():
         xsrf_cookies=False,  # CSRF handled by custom check_xsrf_cookie() on BaseHandler (double-submit cookie pattern)
         cookie_secret=SECRET_KEY,
         max_body_size=20 * 1024 * 1024,  # 20MB max request body
+        default_handler_class=HardenedNotFoundHandler,
     )
 
 

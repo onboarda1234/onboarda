@@ -128,6 +128,37 @@ class TestHealthAPI:
             assert missing == []
             assert "TornadoServer" not in resp.headers.get("Server", "")
 
+    def test_public_liveness_is_hardened(self, api_server):
+        """Public liveness replaces deep unauthenticated readiness checks."""
+        resp = http_requests.get(f"{api_server}/api/liveness", timeout=3)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        assert resp.headers.get("Server") == "RegMind"
+        assert resp.headers.get("Content-Security-Policy")
+        assert resp.headers.get("Strict-Transport-Security")
+
+    def test_readiness_requires_auth(self, api_server):
+        """Deep readiness must not expose encryption/database/config status publicly."""
+        resp = http_requests.get(f"{api_server}/api/readiness", timeout=3)
+        assert resp.status_code == 401
+        assert "checks" not in resp.text
+        assert resp.headers.get("Server") == "RegMind"
+
+    def test_metrics_requires_auth(self, api_server):
+        """Prometheus exposition must not be available anonymously."""
+        resp = http_requests.get(f"{api_server}/metrics", timeout=3)
+        assert resp.status_code == 401
+        assert "python_gc_objects_collected_total" not in resp.text
+        assert resp.headers.get("Server") == "RegMind"
+
+    def test_default_404_has_hardened_headers(self, api_server):
+        """Unmatched routes must not fall through to Tornado's default 404."""
+        resp = http_requests.get(f"{api_server}/no-such-phase5-path", timeout=3)
+        assert resp.status_code == 404
+        assert resp.headers.get("Server") == "RegMind"
+        assert resp.headers.get("Content-Security-Policy")
+        assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
 
 # ═══════════════════════════════════════════════════════════
 # 2. Auth Rejection — unauthenticated requests must be blocked
@@ -178,6 +209,118 @@ class TestAuthenticatedAccess:
         resp = http_requests.post(f"{api_server}/api/auth/officer/login",
                                   json={}, timeout=3)
         assert resp.status_code in (400, 401)
+
+    def test_admin_client_password_reset_requires_confirm_policy_audit_and_revokes(self, api_server, monkeypatch):
+        """Client admin reset must be confirmed, audited, policy-checked, and revoke sessions."""
+        import bcrypt
+        from auth import create_token, decode_token
+        from db import get_db
+
+        monkeypatch.setenv("ADMIN_CLIENT_RESET_CONFIRMATION", "phase5-confirm")
+        admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+        client_id = "phase5_client_reset"
+        email = "phase5-client-reset@example.com"
+        old_hash = bcrypt.hashpw("OldStrong123!".encode(), bcrypt.gensalt()).decode()
+
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (f"client:{email}",))
+        conn.execute("DELETE FROM clients WHERE id = ? OR LOWER(email) = ?", (client_id, email))
+        conn.execute(
+            "INSERT INTO clients (id, email, password_hash, company_name) VALUES (?, ?, ?, ?)",
+            (client_id, email, old_hash, "Phase 5 Client Reset Ltd"),
+        )
+        conn.commit()
+        conn.close()
+
+        stale_client_token = create_token(client_id, "client", "Phase 5 Client Reset Ltd", "client")
+        assert decode_token(stale_client_token) is not None
+
+        missing_confirm = http_requests.post(
+            f"{api_server}/api/admin/reset-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"email": email, "new_password": "StrongPass123!"},
+            timeout=3,
+        )
+        assert missing_confirm.status_code == 403
+
+        weak = http_requests.post(
+            f"{api_server}/api/admin/reset-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"email": email, "new_password": "short", "confirm": "phase5-confirm"},
+            timeout=3,
+        )
+        assert weak.status_code == 400
+        assert "Password policy violation" in weak.text
+
+        ok = http_requests.post(
+            f"{api_server}/api/admin/reset-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"email": email, "new_password": "StrongPass123!", "confirm": "phase5-confirm"},
+            timeout=3,
+        )
+        assert ok.status_code == 200, ok.text
+        assert decode_token(stale_client_token) is None
+
+        audit = http_requests.get(
+            f"{api_server}/api/audit?ref=client:{email}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=3,
+        )
+        assert audit.status_code == 200
+        entries = audit.json()["entries"]
+        assert any(e["action"] == "Admin Password Reset" and e["target"] == f"client:{email}" for e in entries)
+
+    def test_admin_officer_password_reset_audits_and_revokes(self, api_server, monkeypatch):
+        """Officer reset must use policy, audit the reset, and revoke old officer tokens."""
+        import bcrypt
+        from auth import create_token, decode_token
+        from db import get_db
+
+        monkeypatch.setenv("ADMIN_OFFICER_RESET_CONFIRMATION", "phase5-officer-confirm")
+        admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+        officer_id = "phase5_sco_reset"
+        officer_email = "phase5-sco-reset@example.com"
+        old_hash = bcrypt.hashpw("OldStrong123!".encode(), bcrypt.gensalt()).decode()
+
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (f"officer:{officer_email}",))
+        conn.execute("DELETE FROM users WHERE id = ? OR LOWER(email) = ?", (officer_id, officer_email))
+        conn.execute(
+            "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (officer_id, officer_email, old_hash, "Phase 5 SCO Reset", "sco", "active"),
+        )
+        conn.commit()
+        conn.close()
+
+        stale_officer_token = create_token(officer_id, "sco", "Phase 5 SCO Reset", "officer")
+        assert decode_token(stale_officer_token) is not None
+
+        weak = http_requests.post(
+            f"{api_server}/api/admin/officer-reset-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"email": officer_email, "new_password": "short", "confirm": "phase5-officer-confirm"},
+            timeout=3,
+        )
+        assert weak.status_code == 400
+        assert "Password policy violation" in weak.text
+
+        ok = http_requests.post(
+            f"{api_server}/api/admin/officer-reset-password",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"email": officer_email, "new_password": "StrongPass123!", "confirm": "phase5-officer-confirm"},
+            timeout=3,
+        )
+        assert ok.status_code == 200, ok.text
+        assert decode_token(stale_officer_token) is None
+
+        conn = get_db()
+        audit = conn.execute(
+            "SELECT action, target FROM audit_log WHERE target = ? ORDER BY timestamp DESC LIMIT 1",
+            (f"officer:{officer_email}",),
+        ).fetchone()
+        conn.close()
+        assert audit is not None
+        assert audit["action"] == "Admin Password Reset"
 
     def test_application_detail_returns_authoritative_payload(self, api_server):
         """GET /api/applications/:ref should return parsed persisted detail data for back office review."""
@@ -594,6 +737,54 @@ class TestAuthenticatedAccess:
             html = f.read()
         assert "c.risk_level || 'HIGH'" not in html
         assert "riskBadge(c.risk_level)" in html
+
+    def test_edd_list_excludes_fixture_rows_by_default_and_supports_include_fixtures(self, api_server):
+        """Operational EDD queue should hide fixture/smoke rows unless explicitly opted in."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_p5_edd_fixture"
+        app_ref = "ARF-P5-EDD-FIXTURE"
+        conn = get_db()
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, is_fixture)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, app_ref, "testclient001", "PHASE1 Memo Truth Smoke Fixture Ltd",
+             "Mauritius", "Technology", "SME", "edd_required", 0),
+        )
+        conn.execute(
+            """
+            INSERT INTO edd_cases
+            (application_id, client_name, risk_level, risk_score, trigger_source, trigger_notes, stage, assigned_officer)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, "PHASE1 Memo Truth Smoke Fixture Ltd", None, None,
+             "phase5_test", "fixture visibility test", "triggered", "admin001"),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        default_resp = http_requests.get(
+            f"{api_server}/api/edd/cases",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert default_resp.status_code == 200
+        assert all(c["application_id"] != app_id for c in default_resp.json()["cases"])
+
+        include_resp = http_requests.get(
+            f"{api_server}/api/edd/cases?include_fixtures=1",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert include_resp.status_code == 200
+        assert any(c["application_id"] == app_id for c in include_resp.json()["cases"])
 
     def test_edd_findings_sla_dual_control_and_audit_ref_target(self, api_server):
         """EDD can advance through legitimate gates and its audit is case-reconstructable."""
