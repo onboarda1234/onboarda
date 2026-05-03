@@ -10,6 +10,7 @@ rate limiting, JSON helpers, audit logging, and safe error responses.
 
 import datetime
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -128,6 +129,7 @@ class BaseHandler(tornado.web.RequestHandler):
                 url = self.request.full_url().replace("http://", "https://", 1)
                 self.redirect(url, permanent=True)
                 return
+        self.check_xsrf_cookie()
 
     def on_finish(self):
         """Emit parse-ready timing logs for upload-latency endpoints only."""
@@ -190,14 +192,14 @@ class BaseHandler(tornado.web.RequestHandler):
         self.set_header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-CSRF-Token,X-Idempotency-Key")
         self.set_header("Access-Control-Max-Age", "3600")
         self.set_header("Content-Type", "application/json")
+        self.set_header("Server", "RegMind")
         # Security headers — always on
         self.set_header("X-Content-Type-Options", "nosniff")
         self.set_header("X-Frame-Options", "DENY")
         self.set_header("X-XSS-Protection", "1; mode=block")
         self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
-        # HSTS — always in production (tells browsers to only use HTTPS)
-        if ENVIRONMENT == "production":
-            self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+        # HSTS — enforce HTTPS-only browser behaviour on deployed surfaces.
+        self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         # Content Security Policy
         #
         # 'unsafe-eval' REMOVED (prior batch) — closes XSS amplification vector.
@@ -240,7 +242,7 @@ class BaseHandler(tornado.web.RequestHandler):
             "csrf_token", csrf_token,
             httponly=False,  # Must be readable by JS to send in header
             secure=(ENVIRONMENT == "production"),
-            samesite="Strict",
+            samesite="Lax",
             path="/",
             expires_days=1,  # Match JWT 24h expiry
         )
@@ -298,6 +300,10 @@ class BaseHandler(tornado.web.RequestHandler):
         # OPTIONS preflight requests don't need CSRF
         if self.request.method == "OPTIONS":
             return
+        # CSRF only applies to browser session-cookie auth. Requests with no
+        # session cookie should reach normal authentication and return 401.
+        if not self.get_cookie("arie_session", None):
+            return
         # For state-changing methods with cookie auth, enforce CSRF
         if self.request.method in ("POST", "PUT", "PATCH", "DELETE"):
             csrf_cookie = self.get_cookie("csrf_token", None)
@@ -343,7 +349,37 @@ class BaseHandler(tornado.web.RequestHandler):
         return user
 
     def get_client_ip(self):
-        return self.request.headers.get("X-Real-IP", self.request.remote_ip)
+        remote_ip = self.request.remote_ip or ""
+        x_real_ip = (self.request.headers.get("X-Real-IP") or "").strip()
+        x_forwarded_for = (self.request.headers.get("X-Forwarded-For") or "").strip()
+
+        def _is_valid_ip(value):
+            try:
+                ipaddress.ip_address(value)
+                return True
+            except ValueError:
+                return False
+
+        def _is_trusted_proxy(value):
+            try:
+                ip = ipaddress.ip_address(value)
+            except ValueError:
+                return False
+            # ALB/ECS hops are private. In tests, loopback is the local proxy.
+            return ip.is_private or ip.is_loopback
+
+        # AWS ALB writes the original client as the leftmost X-Forwarded-For
+        # value. Trust it only when the direct peer is a private/loopback proxy
+        # so direct public callers cannot spoof audit provenance.
+        if x_forwarded_for and _is_trusted_proxy(remote_ip):
+            for part in x_forwarded_for.split(","):
+                candidate = part.strip()
+                if _is_valid_ip(candidate):
+                    return candidate
+
+        if x_real_ip and _is_valid_ip(x_real_ip):
+            return x_real_ip
+        return remote_ip
 
     def success(self, data, status=200):
         self.set_status(status)

@@ -4676,9 +4676,22 @@ function applyEnvironmentUI() {
   }
 }
 
+function getCookieValue(name) {
+  var parts = document.cookie ? document.cookie.split(';') : [];
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i].trim();
+    if (part.indexOf(name + '=') === 0) return decodeURIComponent(part.substring(name.length + 1));
+  }
+  return '';
+}
+
 async function apiCall(method, path, body, isFormData) {
   const opts = { method, headers: {} };
   if (AUTH_TOKEN) opts.headers['Authorization'] = 'Bearer ' + AUTH_TOKEN;
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(String(method || '').toUpperCase()) >= 0) {
+    const csrf = getCookieValue('csrf_token');
+    if (csrf) opts.headers['X-CSRF-Token'] = csrf;
+  }
   if (body && !isFormData) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);

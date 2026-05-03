@@ -1713,7 +1713,12 @@ class AdminOfficerPasswordResetHandler(BaseHandler):
 # ── Health Check ──
 class HealthHandler(BaseHandler):
     def get(self):
-        """Enhanced health check with database connectivity and dependency status."""
+        """Safe unauthenticated liveness check.
+
+        Detailed database and provider configuration is only returned to admins;
+        unauthenticated callers should not be able to fingerprint deployment
+        internals from /api/health.
+        """
         from branding import BRAND
         health = {
             "status": "ok",
@@ -1724,36 +1729,31 @@ class HealthHandler(BaseHandler):
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
-        # Database connectivity check
-        db = None
-        try:
-            db = get_db()
-            db.execute("SELECT 1")
-            health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
-        except Exception as e:
-            logger.error("Health check database error: %s", e)
-            health["database"] = {"status": "error"}
-            health["status"] = "degraded"
-        finally:
-            if db is not None:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-
-        # External API status — only show if authenticated and is admin
-        # Remove integrations section to avoid configuration leakage
         user = self.get_current_user_token()
         if user and user.get("role") == "admin":
+            db = None
+            try:
+                db = get_db()
+                db.execute("SELECT 1")
+                health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
+            except Exception as e:
+                logger.error("Health check database error: %s", e)
+                health["database"] = {"status": "error"}
+                health["status"] = "degraded"
+            finally:
+                if db is not None:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
+
             health["integrations"] = {
                 "opensanctions": "configured" if OPENSANCTIONS_API_KEY else "simulated",
                 "opencorporates": "configured" if OPENCORPORATES_API_KEY else "simulated",
                 "ip_geolocation": "live",
                 "sumsub_kyc": "configured" if (SUMSUB_APP_TOKEN and SUMSUB_SECRET_KEY) else "simulated",
             }
-
-        # Metrics status
-        health["metrics_enabled"] = METRICS_ENABLED
+            health["metrics_enabled"] = METRICS_ENABLED
 
         status_code = 200 if health["status"] == "ok" else 503
         self.set_status(status_code)
@@ -3472,6 +3472,44 @@ class PreApprovalDecisionHandler(BaseHandler):
 class DocumentUploadHandler(BaseHandler):
     """GET/POST /api/applications/:id/documents"""
 
+    def _upload_duration_ms(self):
+        started = getattr(self, "_upload_latency_started_at", None)
+        if started is None:
+            return None
+        return round((time.monotonic() - started) * 1000, 2)
+
+    def _audit_upload_rejected(self, user, target, reason_code, message, *,
+                               filename="", doc_type="", declared_size=None,
+                               rmi_item_id=None, status_code=400, db=None):
+        """Best-effort audit row for rejected uploads."""
+        detail = {
+            "outcome": "rejected",
+            "reason_code": reason_code,
+            "message": str(message or "")[:500],
+            "filename": os.path.basename(str(filename or ""))[:180],
+            "doc_type": str(doc_type or "")[:120],
+            "declared_size": declared_size,
+            "rmi_item_id": str(rmi_item_id or "")[:80],
+            "response_code": status_code,
+            "duration_ms": self._upload_duration_ms(),
+        }
+        try:
+            self.log_audit(
+                user,
+                f"Upload Rejected: {reason_code}",
+                target or "document-upload",
+                json.dumps(detail, sort_keys=True),
+                db=db,
+                commit=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "upload_rejection_audit_failed=true reason_code=%s target=%s error=%s",
+                reason_code,
+                target,
+                exc,
+            )
+
     def get(self, app_id):
         """Return all documents for an application."""
         user = self.require_auth()
@@ -3516,6 +3554,7 @@ class DocumentUploadHandler(BaseHandler):
         db = get_db()
         app = db.execute("SELECT id, ref, client_id, risk_level, status, pre_approval_decision FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
         if not app:
+            self._audit_upload_rejected(user, app_id, "application_not_found", "Application not found", status_code=404, db=db)
             db.close()
             return self.error("Application not found", 404)
 
@@ -3528,15 +3567,28 @@ class DocumentUploadHandler(BaseHandler):
             allow_general=False,
         )
         if doc_type_error:
+            self._audit_upload_rejected(
+                user, app["ref"], "invalid_doc_type", doc_type_error,
+                doc_type=self.get_argument("doc_type", "general"), db=db,
+            )
             db.close()
             return self.error(doc_type_error, 400)
         rmi_item_id = self.get_argument("rmi_item_id", None)
         if rmi_item_id:
             rmi_target, rmi_target_error = _validate_rmi_upload_target(db, app["id"], rmi_item_id)
             if rmi_target_error:
+                self._audit_upload_rejected(
+                    user, app["ref"], "invalid_rmi_slot", rmi_target_error,
+                    doc_type=requested_doc_type, rmi_item_id=rmi_item_id, db=db,
+                )
                 db.close()
                 return self.error(rmi_target_error, 400)
             if rmi_target and rmi_target.get("doc_type") != requested_doc_type:
+                self._audit_upload_rejected(
+                    user, app["ref"], "doc_type_slot_mismatch",
+                    "Uploaded document type does not match the requested document slot",
+                    doc_type=requested_doc_type, rmi_item_id=rmi_item_id, db=db,
+                )
                 db.close()
                 return self.error("Uploaded document type does not match the requested document slot", 400)
 
@@ -3545,6 +3597,11 @@ class DocumentUploadHandler(BaseHandler):
         risk_level = (app.get("risk_level") or "").upper()
         if risk_level in ("HIGH", "VERY_HIGH") and ENVIRONMENT == "production":
             if app.get("pre_approval_decision") != "PRE_APPROVE":
+                self._audit_upload_rejected(
+                    user, app["ref"], "pre_approval_required",
+                    "Pre-approval required before document upload",
+                    doc_type=requested_doc_type, db=db, status_code=403,
+                )
                 db.close()
                 return self.error(
                     "Pre-approval required: HIGH/VERY_HIGH risk applications must be pre-approved "
@@ -3553,6 +3610,10 @@ class DocumentUploadHandler(BaseHandler):
                 )
 
         if "file" not in self.request.files:
+            self._audit_upload_rejected(
+                user, app["ref"], "missing_file", "No file provided",
+                doc_type=requested_doc_type, db=db,
+            )
             db.close()
             return self.error("No file provided")
 
@@ -3565,12 +3626,26 @@ class DocumentUploadHandler(BaseHandler):
         content_type = file_info.get("content_type", "application/octet-stream")
 
         if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
+            self._audit_upload_rejected(
+                user, app["ref"], "file_too_large",
+                f"File exceeds {MAX_UPLOAD_MB}MB limit",
+                filename=filename, doc_type=doc_type, declared_size=len(body), db=db,
+            )
             db.close()
             return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit")
 
         # Validate file upload (mandatory)
-        is_valid, upload_error = FileUploadValidator.validate(filename, content_type, body)
+        is_valid, upload_reason_code, upload_error = FileUploadValidator.validate_with_reason(
+            filename, content_type, body
+        )
         if not is_valid:
+            self._audit_upload_rejected(
+                user,
+                app["ref"],
+                upload_reason_code or "file_rejected",
+                f"File rejected: {upload_error}",
+                filename=filename, doc_type=doc_type, declared_size=len(body), db=db,
+            )
             db.close()
             return self.error(f"File rejected: {upload_error}", 400)
 
@@ -3602,17 +3677,32 @@ class DocumentUploadHandler(BaseHandler):
                 else:
                     logger.error(f"S3 upload failed for {doc_id}: {key_or_error}")
                     if is_production() or is_staging():
+                        self._audit_upload_rejected(
+                            user, app["ref"], "durable_storage_failed",
+                            "Document upload failed: unable to store document durably",
+                            filename=filename, doc_type=doc_type, declared_size=len(body), db=db, status_code=500,
+                        )
                         db.close()
                         return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
                     logger.warning(f"S3 upload failed in demo — using local storage only for {doc_id}")
             except Exception as e:
                 logger.error(f"S3 upload exception for {doc_id}: {e}")
                 if is_production() or is_staging():
+                    self._audit_upload_rejected(
+                        user, app["ref"], "durable_storage_exception",
+                        "Document upload failed: unable to store document durably",
+                        filename=filename, doc_type=doc_type, declared_size=len(body), db=db, status_code=500,
+                    )
                     db.close()
                     return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
                 logger.warning(f"S3 upload exception in demo — using local storage only for {doc_id}")
                 s3_key = None
         elif is_production() or is_staging():
+            self._audit_upload_rejected(
+                user, app["ref"], "durable_storage_unavailable",
+                "Document upload failed: S3 storage is not available",
+                filename=filename, doc_type=doc_type, declared_size=len(body), db=db, status_code=500,
+            )
             db.close()
             return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
 
@@ -3654,7 +3744,15 @@ class DocumentUploadHandler(BaseHandler):
             db, app["id"], doc_id, doc_type, rmi_item_id=rmi_item_id
         )
         if rmi_error:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             db.close()
+            self._audit_upload_rejected(
+                user, app["ref"], "rmi_fulfillment_failed", rmi_error,
+                filename=filename, doc_type=doc_type, declared_size=len(body), rmi_item_id=rmi_item_id,
+            )
             return self.error(rmi_error, 400)
         db.commit()
         db.close()
@@ -6199,6 +6297,79 @@ class ReportAnalyticsHandler(BaseHandler):
 # AUDIT TRAIL ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
+def _parse_audit_date(value):
+    """Parse an ISO-8601 date/datetime string for audit filters."""
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%fZ",
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(value, fmt)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    return None
+
+
+def _bounded_int(value, default, min_value=0, max_value=1000):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(min_value, min(parsed, max_value))
+
+
+def _append_audit_filters(handler, query, params):
+    """Append safe audit_log filters shared by list/export endpoints."""
+    start_date = handler.get_argument("from", None) or handler.get_argument("start_date", None)
+    end_date = handler.get_argument("to", None) or handler.get_argument("end_date", None)
+    actor_user_id = (
+        handler.get_argument("user_id", None)
+        or handler.get_argument("actor_user_id", None)
+        or handler.get_argument("user", None)
+    )
+    action_filter = handler.get_argument("action", None)
+    ref_filter = (
+        handler.get_argument("ref", None)
+        or handler.get_argument("application_ref", None)
+        or handler.get_argument("target", None)
+    )
+    actor_user_id = str(actor_user_id).strip() if actor_user_id is not None else None
+    action_filter = str(action_filter).strip() if action_filter is not None else None
+    ref_filter = str(ref_filter).strip() if ref_filter is not None else None
+
+    if start_date:
+        parsed = _parse_audit_date(start_date)
+        if parsed is None:
+            raise ValueError("from/start_date must be a valid ISO-8601 date")
+        query += " AND timestamp >= ?"
+        params.append(parsed)
+    if end_date:
+        parsed = _parse_audit_date(end_date)
+        if parsed is None:
+            raise ValueError("to/end_date must be a valid ISO-8601 date")
+        query += " AND timestamp <= ?"
+        params.append(parsed)
+    if actor_user_id:
+        query += " AND user_id = ?"
+        params.append(actor_user_id)
+    if action_filter:
+        query += " AND action = ?"
+        params.append(action_filter)
+    if ref_filter:
+        ref = ref_filter
+        if ref.startswith("application:"):
+            bare_ref = ref.split("application:", 1)[1]
+            query += " AND (target = ? OR target = ?)"
+            params.extend([ref, bare_ref])
+        else:
+            query += " AND (target = ? OR target = ?)"
+            params.extend([ref, f"application:{ref}"])
+
+    return query, params
+
+
 class AuditHandler(BaseHandler):
     """GET /api/audit"""
     def get(self):
@@ -6206,12 +6377,25 @@ class AuditHandler(BaseHandler):
         if not user:
             return
         db = get_db()
-        limit = int(self.get_argument("limit", 100))
-        offset = int(self.get_argument("offset", 0))
-        rows = db.execute("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
-        total = db.execute("SELECT COUNT(*) as c FROM audit_log").fetchone()["c"]
+        limit = _bounded_int(self.get_argument("limit", 100), 100, min_value=1, max_value=1000)
+        offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
+        try:
+            query = "SELECT * FROM audit_log WHERE 1=1"
+            params = []
+            query, params = _append_audit_filters(self, query, params)
+            rows = db.execute(
+                query + " ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                tuple(params + [limit, offset])
+            ).fetchall()
+            total = db.execute(
+                "SELECT COUNT(*) as c FROM (" + query + ") filtered",
+                tuple(params)
+            ).fetchone()["c"]
+        except ValueError as exc:
+            db.close()
+            return self.error(str(exc), 400)
         db.close()
-        self.success({"entries": [dict(r) for r in rows], "total": total})
+        self.success({"entries": [dict(r) for r in rows], "total": total, "limit": limit, "offset": offset})
 
 
 class ApplicationAuditLogHandler(BaseHandler):
@@ -6303,15 +6487,7 @@ class AuditExportHandler(BaseHandler):
     @staticmethod
     def _parse_date(value):
         """Parse an ISO-8601 date/datetime string. Returns str or None."""
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
-                    "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%fZ",
-                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-            try:
-                dt = datetime.strptime(value, fmt)
-                return dt.strftime("%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                continue
-        return None
+        return _parse_audit_date(value)
 
     def get(self):
         user = self.require_auth(roles=["admin", "sco"])
@@ -6354,6 +6530,19 @@ class AuditExportHandler(BaseHandler):
             if action_filter:
                 query += " AND action = ?"
                 params.append(action_filter)
+            ref_filter = (
+                self.get_argument("ref", None)
+                or self.get_argument("application_ref", None)
+                or self.get_argument("target", None)
+            )
+            if ref_filter:
+                ref = str(ref_filter).strip()
+                if ref.startswith("application:"):
+                    query += " AND (target = ? OR target = ?)"
+                    params.extend([ref, ref.split("application:", 1)[1]])
+                else:
+                    query += " AND (target = ? OR target = ?)"
+                    params.extend([ref, f"application:{ref}"])
 
             query += " ORDER BY timestamp DESC LIMIT ?"
             params.append(self.MAX_EXPORT_ROWS)
@@ -6999,19 +7188,34 @@ elif os.path.exists(os.path.join(_same_dir, "arie-portal.html")):
 else:
     PORTAL_DIR = _parent_dir  # fallback
 
-class PortalHandler(tornado.web.RequestHandler):
+class PortalHandler(BaseHandler):
     """Serve the client portal HTML"""
     def get(self):
         self.set_header("Content-Type", "text/html")
         with open(os.path.join(PORTAL_DIR, "arie-portal.html"), "r") as f:
             self.write(f.read())
 
-class BackOfficeHandler(tornado.web.RequestHandler):
+class BackOfficeHandler(BaseHandler):
     """Serve the back-office portal HTML"""
     def get(self):
         self.set_header("Content-Type", "text/html")
         with open(os.path.join(PORTAL_DIR, "arie-backoffice.html"), "r") as f:
             self.write(f.read())
+
+
+class SecureStaticFileHandler(tornado.web.StaticFileHandler):
+    """Static asset handler with the same browser security posture as HTML."""
+    def set_default_headers(self):
+        self.set_header("Server", "RegMind")
+        self.set_header("X-Content-Type-Options", "nosniff")
+        self.set_header("X-Frame-Options", "DENY")
+        self.set_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        self.set_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+        self.set_header(
+            "Content-Security-Policy",
+            "default-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+        )
 
 
 def _screening_hit_facts(screening_record):
@@ -7024,6 +7228,34 @@ def _screening_hit_facts(screening_record):
         "pep_hits": pep_hits,
         "other_hits": max(0, len(results) - sanctions_hits - pep_hits),
     }
+
+
+def _screening_queue_row_mode(report_mode, state, status_key, entity_context=None, provider_record=None):
+    """Return truthful row-level screening provenance for queue display."""
+    context_text = " ".join(str(x or "") for x in (entity_context or [])).lower()
+    provider_record = provider_record if isinstance(provider_record, dict) else {}
+    source_text = " ".join(
+        str(provider_record.get(k) or "")
+        for k in ("source", "provider", "api_status")
+    ).lower()
+    combined = f"{context_text} {source_text}"
+
+    if any(token in combined for token in ("codex-smoke", "smoke", "mock", "simulated")):
+        return "simulated"
+    if status_key == "screening_not_configured" or state == _SCR_NOT_CONFIGURED:
+        return "not_configured"
+    if status_key == "screening_unavailable" or state == _SCR_FAILED:
+        return "unavailable"
+    if status_key == "screening_pending" or state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
+        return "pending"
+    # OpenCorporates/OpenSanctions are not the Phase 2 source of truth for live
+    # KYB/adverse/ongoing monitoring. CA owns that scope and is still in
+    # progress; rows from simulated legacy enrichment must not show as live.
+    if "opencorporates" in combined and not OPENCORPORATES_API_KEY:
+        return "simulated" if report_mode != "live" else "mixed"
+    if "opensanctions" in combined and not OPENSANCTIONS_API_KEY:
+        return "simulated" if report_mode != "live" else "mixed"
+    return report_mode or "unknown"
 
 
 _SCREENING_DISPOSITION_CODES = {
@@ -7468,6 +7700,28 @@ def _build_screening_queue_payload(db, user):
                 entity_status_key = "screened_no_match"
                 entity_status_label = "No Provider Match"
 
+            company_provider_record = {
+                "source": " ".join(str(x or "") for x in (
+                    company_screening.get("source"),
+                    company_sanctions.get("source"),
+                )),
+                "provider": " ".join(str(x or "") for x in (
+                    company_screening.get("provider"),
+                    company_sanctions.get("provider"),
+                )),
+                "api_status": " ".join(str(x or "") for x in (
+                    company_screening.get("api_status"),
+                    company_sanctions.get("api_status"),
+                )),
+            }
+            entity_screening_mode = _screening_queue_row_mode(
+                screening_mode,
+                company_sanctions_state,
+                entity_status_key,
+                company_context,
+                company_provider_record,
+            )
+
             rows.append({
                 "application_id": app["id"],
                 "application_ref": app["ref"],
@@ -7481,7 +7735,7 @@ def _build_screening_queue_payload(db, user):
                 "entity_context": company_context,
                 "status_key": entity_status_key,
                 "status_label": entity_status_label,
-                "screening_mode": screening_mode,
+                "screening_mode": entity_screening_mode,
                 "screened_at": screened_at,
                 "screened_by": screened_by,
                 "flag_count": len(overall_flags),
@@ -7593,6 +7847,14 @@ def _build_screening_queue_payload(db, user):
             elif person_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED) and report and item:
                 entity_context.append("Provider result pending")
 
+            person_screening_mode = _screening_queue_row_mode(
+                screening_mode,
+                person_state,
+                status_key,
+                entity_context,
+                screening,
+            )
+
             rows.append({
                 "application_id": app["id"],
                 "application_ref": app["ref"],
@@ -7606,7 +7868,7 @@ def _build_screening_queue_payload(db, user):
                 "entity_context": entity_context,
                 "status_key": status_key,
                 "status_label": status_label,
-                "screening_mode": screening_mode,
+                "screening_mode": person_screening_mode,
                 "screened_at": screening.get("screened_at") or screened_at,
                 "screened_by": screened_by,
                 "flag_count": len(overall_flags),
@@ -13162,7 +13424,7 @@ def make_app():
         # Serve portal HTML files and static assets
         (r"/portal", PortalHandler),
         (r"/backoffice", BackOfficeHandler),
-        (r"/static/(.*)", tornado.web.StaticFileHandler, {"path": STATIC_DIR}),
+        (r"/static/(.*)", SecureStaticFileHandler, {"path": STATIC_DIR}),
     ]
 
     # Integrate supervisor routes

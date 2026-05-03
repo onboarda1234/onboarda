@@ -11,6 +11,7 @@ import socket
 import threading
 import time
 import pytest
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -262,6 +263,58 @@ class TestCSRFProtection:
                                   json={"test": True}, timeout=3)
         # May get 400 (bad input) but NOT 403 (CSRF)
         assert resp.status_code != 403
+
+    def test_cookie_auth_write_requires_csrf_before_business_logic(self, api_server):
+        """Cookie-auth unsafe writes must fail CSRF before handler validation."""
+        from auth import create_token
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        cookies = {"arie_session": token, "csrf_token": "csrf-good"}
+
+        missing = http_requests.post(
+            f"{api_server}/api/applications",
+            cookies={"arie_session": token, "csrf_token": "csrf-good"},
+            json={"test": True},
+            timeout=3,
+        )
+        assert missing.status_code == 403
+        assert "CSRF" in missing.text
+
+        mismatch = http_requests.post(
+            f"{api_server}/api/applications",
+            cookies=cookies,
+            headers={"X-CSRF-Token": "csrf-bad"},
+            json={"test": True},
+            timeout=3,
+        )
+        assert mismatch.status_code == 403
+        assert "CSRF" in mismatch.text
+
+        valid = http_requests.post(
+            f"{api_server}/api/applications",
+            cookies=cookies,
+            headers={"X-CSRF-Token": "csrf-good"},
+            json={"test": True},
+            timeout=3,
+        )
+        assert valid.status_code != 403
+
+    def test_get_client_ip_uses_leftmost_x_forwarded_for_from_private_proxy(self):
+        """Audit IP should record the client, not the ALB/ECS private hop."""
+        from base_handler import BaseHandler
+
+        handler = object.__new__(BaseHandler)
+        handler.request = SimpleNamespace(
+            headers={"X-Forwarded-For": "203.0.113.10, 10.0.1.7"},
+            remote_ip="10.0.1.7",
+        )
+        assert handler.get_client_ip() == "203.0.113.10"
+
+        spoofed = object.__new__(BaseHandler)
+        spoofed.request = SimpleNamespace(
+            headers={"X-Forwarded-For": "1.2.3.4"},
+            remote_ip="8.8.8.8",
+        )
+        assert spoofed.get_client_ip() == "8.8.8.8"
 
 
 # ═══════════════════════════════════════════════════════════

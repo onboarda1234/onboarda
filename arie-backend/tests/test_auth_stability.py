@@ -281,6 +281,14 @@ class TestBaseHandlerCookieSecurity(unittest.TestCase):
         src = inspect.getsource(BaseHandler.issue_csrf_token)
         self.assertIn("httponly=False", src)
 
+    def test_csrf_cookie_samesite_matches_session_cookie(self):
+        """CSRF and session cookies must use the same SameSite policy."""
+        from base_handler import BaseHandler
+        csrf_src = inspect.getsource(BaseHandler.issue_csrf_token)
+        session_src = inspect.getsource(BaseHandler.issue_session_cookie)
+        self.assertIn('samesite="Lax"', csrf_src)
+        self.assertIn('samesite="Lax"', session_src)
+
     def test_session_cookie_expires_days(self):
         """Session cookie must have explicit expiry."""
         from base_handler import BaseHandler
