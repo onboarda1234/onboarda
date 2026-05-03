@@ -460,6 +460,15 @@ class TestFileUploadValidator:
         assert valid is False
         assert "not allowed" in msg.lower()
 
+    def test_disallowed_extension_returns_structured_reason(self):
+        from security_hardening import FileUploadValidator
+        valid, reason, msg = FileUploadValidator.validate_with_reason(
+            "script.exe", "application/pdf", b"%PDF test"
+        )
+        assert valid is False
+        assert reason == "disallowed_extension"
+        assert "not allowed" in msg.lower()
+
     def test_disallowed_mime_type(self):
         from security_hardening import FileUploadValidator
         valid, msg = FileUploadValidator.validate(
@@ -492,6 +501,15 @@ class TestFileUploadValidator:
             "document.pdf", "application/pdf", b"random data no magic"
         )
         assert valid is False
+        assert "magic bytes" in msg.lower()
+
+    def test_magic_bytes_mismatch_returns_structured_reason(self):
+        from security_hardening import FileUploadValidator
+        valid, reason, msg = FileUploadValidator.validate_with_reason(
+            "document.pdf", "application/pdf", b"random data no magic"
+        )
+        assert valid is False
+        assert reason == "magic_byte_mismatch"
         assert "magic bytes" in msg.lower()
 
     def test_jpeg_jpg_variants_accepted(self):

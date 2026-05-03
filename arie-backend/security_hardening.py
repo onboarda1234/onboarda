@@ -1614,12 +1614,30 @@ class FileUploadValidator:
             ...     b"%PDF-1.4 ..."
             ... )
         """
+        is_valid, _reason_code, message = cls.validate_with_reason(filename, content_type, file_data)
+        return (is_valid, message)
+
+    @classmethod
+    def validate_with_reason(
+        cls,
+        filename: str,
+        content_type: str,
+        file_data: bytes,
+    ) -> Tuple[bool, str, str]:
+        """
+        Validates a file upload and returns a stable machine-readable reason.
+
+        Returns:
+            Tuple of (is_valid, reason_code, error_message).  reason_code is
+            "ok" on success and a stable audit taxonomy value on rejection.
+        """
         try:
             # 1. Check extension
             file_ext = Path(filename).suffix.lower()
             if file_ext not in cls.ALLOWED_EXTENSIONS:
                 return (
                     False,
+                    "disallowed_extension",
                     f"File type '{file_ext}' not allowed. Allowed: {', '.join(cls.ALLOWED_EXTENSIONS)}"
                 )
 
@@ -1628,6 +1646,7 @@ class FileUploadValidator:
             if content_type_clean not in cls.ALLOWED_MIME_TYPES:
                 return (
                     False,
+                    "disallowed_mime_type",
                     f"Content-Type '{content_type_clean}' not allowed. "
                     f"Allowed: {', '.join(cls.ALLOWED_MIME_TYPES)}"
                 )
@@ -1638,6 +1657,7 @@ class FileUploadValidator:
                 max_size_mb = cls.MAX_FILE_SIZE / (1024 * 1024)
                 return (
                     False,
+                    "file_too_large",
                     f"File size {file_size} bytes exceeds maximum of {cls.MAX_FILE_SIZE} bytes ({max_size_mb}MB)"
                 )
 
@@ -1646,6 +1666,7 @@ class FileUploadValidator:
             if not magic_match:
                 return (
                     False,
+                    "magic_byte_mismatch",
                     "File content does not match claimed file type (magic bytes mismatch)"
                 )
 
@@ -1653,16 +1674,17 @@ class FileUploadValidator:
             if not cls._magic_matches_content_type(magic_match, content_type_clean):
                 return (
                     False,
+                    "mime_magic_mismatch",
                     f"File content type does not match Content-Type header "
                     f"(magic: {magic_match}, claimed: {content_type_clean})"
                 )
 
             logger.info(f"File upload validated: {filename} ({file_size} bytes)")
-            return (True, "")
+            return (True, "ok", "")
 
         except Exception as e:
             logger.error(f"File validation error: {e}", exc_info=True)
-            return (False, f"File validation error: {str(e)}")
+            return (False, "validation_error", f"File validation error: {str(e)}")
 
     @classmethod
     def _check_magic_bytes(cls, file_data: bytes) -> Optional[str]:

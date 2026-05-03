@@ -242,7 +242,7 @@ class BaseHandler(tornado.web.RequestHandler):
             "csrf_token", csrf_token,
             httponly=False,  # Must be readable by JS to send in header
             secure=(ENVIRONMENT == "production"),
-            samesite="Strict",
+            samesite="Lax",
             path="/",
             expires_days=1,  # Match JWT 24h expiry
         )

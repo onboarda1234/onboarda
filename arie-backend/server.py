@@ -3635,16 +3635,15 @@ class DocumentUploadHandler(BaseHandler):
             return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit")
 
         # Validate file upload (mandatory)
-        is_valid, upload_error = FileUploadValidator.validate(filename, content_type, body)
+        is_valid, upload_reason_code, upload_error = FileUploadValidator.validate_with_reason(
+            filename, content_type, body
+        )
         if not is_valid:
-            reason_code = "file_rejected"
-            err_l = str(upload_error or "").lower()
-            if "magic bytes" in err_l:
-                reason_code = "magic_byte_mismatch"
-            elif "not allowed" in err_l:
-                reason_code = "disallowed_extension"
             self._audit_upload_rejected(
-                user, app["ref"], reason_code, f"File rejected: {upload_error}",
+                user,
+                app["ref"],
+                upload_reason_code or "file_rejected",
+                f"File rejected: {upload_error}",
                 filename=filename, doc_type=doc_type, declared_size=len(body), db=db,
             )
             db.close()
@@ -6336,6 +6335,9 @@ def _append_audit_filters(handler, query, params):
         or handler.get_argument("application_ref", None)
         or handler.get_argument("target", None)
     )
+    actor_user_id = str(actor_user_id).strip() if actor_user_id is not None else None
+    action_filter = str(action_filter).strip() if action_filter is not None else None
+    ref_filter = str(ref_filter).strip() if ref_filter is not None else None
 
     if start_date:
         parsed = _parse_audit_date(start_date)
@@ -6356,7 +6358,7 @@ def _append_audit_filters(handler, query, params):
         query += " AND action = ?"
         params.append(action_filter)
     if ref_filter:
-        ref = str(ref_filter).strip()
+        ref = ref_filter
         if ref.startswith("application:"):
             bare_ref = ref.split("application:", 1)[1]
             query += " AND (target = ? OR target = ?)"
