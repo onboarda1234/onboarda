@@ -360,6 +360,8 @@ class TestDeployWorkflowDeterminism:
         assert ":latest" not in content
         assert "/api/liveness" in content
         assert "/api/readiness" not in content
+        assert "upsert_env('FF_SIZE_CAP_CLIENT_REJECT', 'true')" in content
+        assert "Phase 7 staging quick win" in content
 
     def test_ci_docker_build_verifies_build_metadata_env(self):
         """ci.yml must prove build provenance env vars are baked into the image."""

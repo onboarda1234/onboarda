@@ -705,6 +705,38 @@ class TestPhaseSixComplyAdvantageStatusUI:
 
 
 # ═══════════════════════════════════════════════════════════
+# I2. PHASE 7 UPLOAD LATENCY SIZE CAP UI
+# ═══════════════════════════════════════════════════════════
+class TestPhaseSevenUploadSizeCapUI:
+    """Pin the back-office client-side upload size cap quick win."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_bo_document_upload_limit_is_flag_driven_and_visible(self):
+        html = self._read_backoffice()
+        assert "FF_SIZE_CAP_CLIENT_REJECT" in html
+        assert "BO_DOC_UPLOAD_CLIENT_CAP_MB = 10" in html
+        assert "BO_DOC_UPLOAD_LEGACY_MAX_MB = 25" in html
+        assert 'id="bo-upload-size-help"' in html
+        assert "function refreshBoDocUploadLimitCopy()" in html
+        assert "refreshBoDocUploadLimitCopy();" in html
+
+    def test_bo_document_upload_rejects_using_active_limit_not_literal_25mb(self):
+        html = self._read_backoffice()
+        fn_start = html.index("async function submitBoDocUpload()")
+        fn_end = html.index("// ═══════════════════════════════════════════════════════════", fn_start)
+        fn_region = html[fn_start:fn_end]
+        assert "boDocUploadMaxBytes()" in fn_region
+        assert "boDocUploadMaxLabel()" in fn_region
+        assert "25 * 1024 * 1024" not in fn_region
+
+
+# ═══════════════════════════════════════════════════════════
 # J. AUDIT TRAIL HARDENING
 # ═══════════════════════════════════════════════════════════
 class TestAuditTrailHardening:
