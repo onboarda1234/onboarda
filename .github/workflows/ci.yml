@@ -222,10 +222,15 @@ jobs:
           echo "Health response: $HEALTH"
           echo "$HEALTH" | python3 -c "import sys,json; json.load(sys.stdin); print('PASS: Valid JSON response')"
 
-          # Verify readiness endpoint
-          READINESS=$(curl -sf http://localhost:10000/api/readiness)
-          echo "Readiness response: $READINESS"
-          echo "$READINESS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('ready') is True, f'Readiness not ready: {d}'; print('PASS: Readiness endpoint ok')"
+          # Verify public liveness endpoint
+          LIVENESS=$(curl -sf http://localhost:10000/api/liveness)
+          echo "Liveness response: $LIVENESS"
+          echo "$LIVENESS" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('status') == 'ok', f'Liveness not ok: {d}'; print('PASS: Liveness endpoint ok')"
+
+          # Deep readiness is intentionally authenticated.
+          READINESS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:10000/api/readiness)
+          test "$READINESS_STATUS" = "401"
+          echo "PASS: Readiness endpoint requires authentication"
 
           # Verify security headers present
           HEADERS=$(curl -sI http://localhost:10000/api/health)

@@ -80,7 +80,6 @@ ROGUE_FIXTURE_REFS: tuple = (
     "ARF-2026-100427",  # test [QA-R10-mnyuuv7q]
 )
 
-
 def fixture_app_exclude_clause(table_alias: str = "a") -> Tuple[str, List[str]]:
     """Return ``(sql_fragment, params)`` that excludes fixture applications.
 
@@ -172,7 +171,7 @@ def should_show_fixtures(
     """
     if not user:
         return False
-    if str(query_param_value or "").lower() != "true":
+    if str(query_param_value or "").strip().lower() not in ("true", "1", "yes"):
         return False
     role = user.get("role") or user.get("type") or ""
     return role in ("admin", "sco")

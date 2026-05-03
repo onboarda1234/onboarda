@@ -244,6 +244,11 @@ class TestFixtureFilterModule(unittest.TestCase):
         user = {"role": "sco", "sub": "u2"}
         self.assertTrue(should_show_fixtures(user, "true"))
 
+    def test_should_show_fixtures_accepts_operator_one_value(self):
+        from fixture_filter import should_show_fixtures
+        user = {"role": "admin", "sub": "u1"}
+        self.assertTrue(should_show_fixtures(user, "1"))
+
     def test_should_show_fixtures_co_silently_ignored(self):
         from fixture_filter import should_show_fixtures
         user = {"role": "co", "sub": "u3"}

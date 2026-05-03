@@ -301,18 +301,21 @@ class TestReadinessEndpoint:
     """Test the /api/readiness endpoint."""
 
     def test_readiness_route_registered(self, app):
-        """Verify /api/readiness is in the server routes."""
+        """Verify /api/readiness and public /api/liveness are in the routes."""
         import server
         # Check by inspecting the source pattern in make_app
         import inspect
         source = inspect.getsource(server.make_app)
         assert "/api/readiness" in source, "No /api/readiness route found in make_app()"
+        assert "/api/liveness" in source, "No /api/liveness route found in make_app()"
 
     def test_readiness_handler_exists(self):
         """ReadinessHandler class exists in server module."""
-        from server import ReadinessHandler
+        from server import LivenessHandler, ReadinessHandler
         assert ReadinessHandler is not None
         assert hasattr(ReadinessHandler, "get")
+        assert LivenessHandler is not None
+        assert hasattr(LivenessHandler, "get")
 
     def test_readiness_checks_encryption(self):
         """ReadinessHandler should check _pii_encryption_ok."""
@@ -322,30 +325,14 @@ class TestReadinessEndpoint:
         assert server._pii_encryption_ok is True
 
     def test_readiness_fails_when_encryption_broken(self, monkeypatch):
-        """When _pii_encryption_ok is False, readiness should report failure."""
+        """When _pii_encryption_ok is False, readiness payload should fail."""
         import server
         original = server._pii_encryption_ok
         try:
             server._pii_encryption_ok = False
-            # Simulate calling the handler logic
-            handler = server.ReadinessHandler(
-                server.make_app(),
-                server.tornado.httputil.HTTPServerRequest(
-                    method="GET",
-                    uri="/api/readiness",
-                    connection=type("FakeConn", (), {
-                        "no_keep_alive": False,
-                        "set_close_callback": lambda self, cb: None,
-                        "finish": lambda self: None,
-                        "write_headers": lambda self, *a, **kw: None,
-                        "write": lambda self, data, callback=None: callback() if callback else None,
-                    })()
-                )
-            )
-            handler._transforms = []
-            handler.get()
-            # Should have set 503
-            assert handler._status_code == 503
+            ready, payload = server._readiness_status_payload()
+            assert ready is False
+            assert payload["checks"]["encryption"]["status"] == "failed"
         finally:
             server._pii_encryption_ok = original
 
@@ -358,7 +345,7 @@ class TestDeployWorkflowDeterminism:
     """Verify GitHub workflow uses deterministic image tagging."""
 
     def test_deploy_staging_uses_git_sha_tag(self):
-        """deploy-staging.yml must tag Docker images with git SHA, not just :latest."""
+        """deploy-staging.yml must tag Docker images with git SHA only."""
         workflow_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             ".github", "workflows", "deploy-staging.yml"
@@ -370,6 +357,9 @@ class TestDeployWorkflowDeterminism:
         assert '--build-arg "GIT_SHA=${{ github.sha }}"' in content
         assert '--build-arg "BUILD_TIME=$BUILD_TIME"' in content
         assert '--build-arg "IMAGE_TAG=$IMAGE_TAG"' in content
+        assert ":latest" not in content
+        assert "/api/liveness" in content
+        assert "/api/readiness" not in content
 
     def test_ci_docker_build_verifies_build_metadata_env(self):
         """ci.yml must prove build provenance env vars are baked into the image."""
@@ -384,6 +374,9 @@ class TestDeployWorkflowDeterminism:
         assert "grep -q '^GIT_SHA=${{ github.sha }}$'" in content
         assert "grep -q '^BUILD_TIME=ci$'" in content
         assert "grep -q '^IMAGE_TAG=ci-${{ github.sha }}$'" in content
+        assert "http://localhost:10000/api/liveness" in content
+        assert 'READINESS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:10000/api/readiness)' in content
+        assert 'test "$READINESS_STATUS" = "401"' in content
 
     def test_deploy_staging_updates_task_definition(self):
         """deploy-staging.yml must update ECS task definition with specific image."""

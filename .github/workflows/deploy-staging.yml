@@ -65,12 +65,9 @@ jobs:
             --label "git.ref=${{ github.ref }}" \
             --label "build.time=$BUILD_TIME" \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
           echo "Pushed $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          echo "Pushed $ECR_REGISTRY/$ECR_REPOSITORY:latest"
 
       - name: Register new task definition with SHA-pinned image
         id: register-task-def
@@ -130,19 +127,19 @@ jobs:
 
       - name: Verify deployment health
         run: |
-          echo "Waiting for readiness check..."
+          echo "Waiting for public liveness check..."
           for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging.regmind.co/api/readiness 2>/dev/null)
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://staging.regmind.co/api/liveness 2>/dev/null)
             if [ "$STATUS" = "200" ]; then
-              echo "Readiness check PASSED after ${i}0s"
-              READINESS=$(curl -sf https://staging.regmind.co/api/readiness)
-              echo "Response: $READINESS"
+              echo "Liveness check PASSED after ${i}0s"
+              LIVENESS=$(curl -sf https://staging.regmind.co/api/liveness)
+              echo "Response: $LIVENESS"
               break
             fi
             echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
             sleep 10
             if [ "$i" -eq 30 ]; then
-              echo "FAIL: Readiness check did not pass within 5 minutes"
+              echo "FAIL: Liveness check did not pass within 5 minutes"
               # Show health endpoint for diagnostics
               curl -sf https://staging.regmind.co/api/health 2>/dev/null || true
               exit 1
