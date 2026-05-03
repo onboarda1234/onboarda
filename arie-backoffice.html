@@ -13235,7 +13235,8 @@ async function checkAPIStatus() {
     html += '<div style="font-weight:600;margin-bottom:8px;">API Integration Status</div>';
 
     var apis = [
-      { key: 'sumsub', label: 'Sumsub KYC/AML', icon: '🔍' },
+      { key: 'sumsub', label: 'Sumsub IDV/KYC', icon: '🔍' },
+      { key: 'complyadvantage', label: 'ComplyAdvantage KYB / Media / Monitoring', icon: '🧭' },
       { key: 'opencorporates', label: 'Open Corporates (Registry)', icon: '🏢' },
       { key: 'ip_geolocation', label: 'IP Geolocation', icon: '🌍' },
       { key: 'anthropic', label: 'Claude-backed Verification', icon: '🤖' }
@@ -13243,8 +13244,18 @@ async function checkAPIStatus() {
 
     apis.forEach(function(api) {
       var info = status[api.key] || {};
-      var statusColor = info.status === 'live' || info.status === 'configured' ? 'var(--green)' : 'var(--amber)';
-      var statusLabel = info.status === 'live' ? 'LIVE' : info.status === 'configured' ? 'CONFIGURED' : 'SIMULATED';
+      var state = (info.status || '').toLowerCase();
+      var statusColor = state === 'live' || state === 'configured' || state === 'ready' ? 'var(--green)' : (state === 'misconfigured' ? 'var(--red)' : 'var(--amber)');
+      var statusLabels = {
+        live: 'LIVE',
+        configured: 'CONFIGURED',
+        ready: 'READY',
+        not_configured: 'NOT CONFIGURED',
+        simulated: 'SIMULATED',
+        in_progress: 'IN PROGRESS',
+        misconfigured: 'MISCONFIGURED'
+      };
+      var statusLabel = statusLabels[state] || (state ? state.toUpperCase() : 'UNKNOWN');
       html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">';
       html += '<span>' + api.icon + '</span>';
       html += '<span style="flex:1;">' + api.label + '</span>';

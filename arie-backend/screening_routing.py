@@ -11,7 +11,7 @@ import inspect
 import logging
 from typing import Callable
 
-from screening_config import get_active_provider_name
+from screening_config import get_active_provider_name, is_abstraction_enabled
 from screening_provider import (
     COMPLYADVANTAGE_PROVIDER_NAME,
     SUMSUB_PROVIDER_NAME,
@@ -37,7 +37,7 @@ def run_screening_for_active_provider(
     and existing AML report contract.  ComplyAdvantage and future providers are
     resolved through the provider registry.
     """
-    provider_name = get_active_provider_name()
+    provider_name = _effective_provider_name()
 
     if provider_name == SUMSUB_PROVIDER_NAME:
         runner = legacy_runner or _default_legacy_runner()
@@ -71,6 +71,23 @@ def _build_provider(provider_name: str, *, db=None):
         pass
 
     return factory(**kwargs)
+
+
+def _effective_provider_name() -> str:
+    """Return the provider that is allowed to handle live screening calls.
+
+    ComplyAdvantage cutover requires both the provider selection and the
+    abstraction gate.  This keeps a stray SCREENING_PROVIDER change from moving
+    operational screening off the legacy Sumsub path.
+    """
+    requested = get_active_provider_name()
+    if requested == COMPLYADVANTAGE_PROVIDER_NAME and not is_abstraction_enabled():
+        logger.warning(
+            "screening_provider_override_ignored provider=%s abstraction_enabled=false",
+            requested,
+        )
+        return SUMSUB_PROVIDER_NAME
+    return requested
 
 
 def _fallback_factory(provider_name: str):

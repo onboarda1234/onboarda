@@ -680,7 +680,32 @@ class TestPrePhaseSixBackofficeUX:
 
 
 # ═══════════════════════════════════════════════════════════
-# I. AUDIT TRAIL HARDENING
+# I. PHASE 6 COMPLYADVANTAGE STATUS UI
+# ═══════════════════════════════════════════════════════════
+class TestPhaseSixComplyAdvantageStatusUI:
+    """Pin truthful provider roles and status labels in the back-office UI."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_api_status_panel_lists_complyadvantage_with_correct_responsibility(self):
+        html = self._read_backoffice()
+        assert "{ key: 'complyadvantage', label: 'ComplyAdvantage KYB / Media / Monitoring'" in html
+        assert "{ key: 'sumsub', label: 'Sumsub IDV/KYC'" in html
+
+    def test_api_status_panel_understands_ca_readiness_states(self):
+        html = self._read_backoffice()
+        assert "ready: 'READY'" in html
+        assert "not_configured: 'NOT CONFIGURED'" in html
+        assert "misconfigured: 'MISCONFIGURED'" in html
+
+
+# ═══════════════════════════════════════════════════════════
+# J. AUDIT TRAIL HARDENING
 # ═══════════════════════════════════════════════════════════
 class TestAuditTrailHardening:
     """Test structured audit entries."""
