@@ -8,6 +8,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests._migration_idempotency_helpers import FRESH_INIT_PENDING_DATA_MIGRATIONS
+
 COLS = [
     "id", "client_id", "application_id", "provider", "normalized_version",
     "source_screening_report_hash", "normalized_report_json",
@@ -66,7 +68,9 @@ class TestMigrationBackfillReplay:
             db.execute("ALTER TABLE periodic_reviews DROP COLUMN status")
             db.execute("ALTER TABLE periodic_reviews DROP COLUMN due_date")
             db.commit()
-            assert self._run_pending(db) == 2
+            assert self._run_pending(db) == (
+                2 + FRESH_INIT_PENDING_DATA_MIGRATIONS
+            )
             rows = db.execute(
                 "SELECT column_name, data_type FROM information_schema.columns "
                 "WHERE table_name='periodic_reviews' AND column_name IN ('status','due_date')"
@@ -85,7 +89,9 @@ class TestMigrationBackfillReplay:
             db.execute("DROP TABLE screening_reports_normalized")
             db.execute("DELETE FROM schema_version WHERE version='015'")
             db.commit()
-            assert self._run_pending(db) == 1
+            assert self._run_pending(db) == (
+                1 + FRESH_INIT_PENDING_DATA_MIGRATIONS
+            )
             cols = db.execute(
                 "SELECT column_name FROM information_schema.columns WHERE table_name='screening_reports_normalized' ORDER BY ordinal_position"
             ).fetchall()

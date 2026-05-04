@@ -10,6 +10,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests._migration_idempotency_helpers import FRESH_INIT_PENDING_DATA_MIGRATIONS
+
 COLS_017 = [
     "id", "client_id", "application_id", "provider", "person_key",
     "customer_identifier", "external_subscription_id", "status",
@@ -56,7 +58,9 @@ def _run_017_from_migration(db):
     db.execute("DROP TABLE IF EXISTS screening_monitoring_subscriptions")
     db.execute("DELETE FROM schema_version WHERE version='017'")
     db.commit()
-    assert run_all_migrations_with_connection(db) == 1
+    assert run_all_migrations_with_connection(db) == (
+        1 + FRESH_INIT_PENDING_DATA_MIGRATIONS
+    )
 
 
 def test_migration_017_creates_subscriptions_table_postgres(monkeypatch):
