@@ -2465,6 +2465,122 @@ class TestGovernanceAttemptAudit:
         assert detail["outcome"] == "accepted"
         assert detail["response_code"] == 202
 
+    def test_failed_memo_approval_attempt_is_audited(self, api_server):
+        """Memo approval gate rejections must leave a Governance Attempt row."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_day2_memo_approval_audit"
+        app_ref = "ARF-2026-DAY2-MEMO-AUDIT"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id, app_ref, "phase1b_client", "Day 2 Memo Approval Audit Ltd",
+            "Mauritius", "Technology", "SME", "compliance_review", "LOW", 20,
+            self._live_prescreening(),
+        ))
+        self._insert_approved_memo(conn, app_id)
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/memo/approve",
+            json={},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+        assert "officer_signoff" in resp.text
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "memo.approve"
+        assert detail["outcome"] == "rejected"
+        assert detail["response_code"] == 400
+        assert "officer_signoff" in detail["rejection_reason"]
+
+    def test_failed_edd_update_attempt_is_audited(self, api_server):
+        """EDD stage/update gate rejections must leave a Governance Attempt row."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_day2_edd_attempt_audit"
+        app_ref = "ARF-2026-DAY2-EDD-AUDIT"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, risk_level, risk_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, app_ref, "phase1b_client", "Day 2 EDD Attempt Audit Ltd",
+             "Mauritius", "Fintech", "SME", "edd_required", "HIGH", 80),
+        )
+        conn.execute(
+            """
+            INSERT INTO edd_cases
+            (application_id, client_name, risk_level, risk_score, stage, assigned_officer, trigger_source, edd_notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, "Day 2 EDD Attempt Audit Ltd", "HIGH", 80, "analysis", "admin001", "day2_test", "[]"),
+        )
+        case_id = conn.execute(
+            "SELECT id FROM edd_cases WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()["id"]
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.patch(
+            f"{api_server}/api/edd/cases/{case_id}",
+            json={"stage": "not_a_stage"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+        assert "Invalid stage" in resp.text
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'Governance Attempt'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["action"] == "edd.case_update"
+        assert detail["outcome"] == "rejected"
+        assert detail["response_code"] == 400
+        assert "Invalid stage" in detail["rejection_reason"]
+
     def test_governance_attempt_target_is_sanitized_for_missing_app(self, api_server):
         """Client-controlled app identifiers must be capped before audit persistence."""
         from auth import create_token
