@@ -41,15 +41,19 @@ Design contract
   store the application's primary key in an ``application_id`` FK column.
   It includes a NULL-safe guard for tables where ``application_id`` is
   nullable (e.g. ``monitoring_alerts``).
-* ``should_show_fixtures`` encodes the access policy: ``show_fixtures=true``
-  query param, honoured ONLY for ``admin`` or ``sco`` users; silently
-  ignored for all others.
+* ``fixture_request_opt_in`` normalises the accepted opt-in aliases
+  (``show_fixtures`` and ``include_fixtures``) from request handlers.
+* ``should_show_fixtures`` encodes the access policy: fixture opt-in query
+  params are honoured ONLY for ``admin`` or ``sco`` users; silently ignored
+  for all others.
 
 Public surface
 --------------
 * :data:`FIXTURE_APP_ID_PATTERN`
 * :func:`fixture_app_exclude_clause`
 * :func:`fixture_app_id_exclude_clause`
+* :func:`fixture_audit_target_exclude_clause`
+* :func:`fixture_request_opt_in`
 * :func:`should_show_fixtures`
 """
 
@@ -148,6 +152,61 @@ def fixture_app_id_exclude_clause(
     )
 
 
+def fixture_audit_target_exclude_clause(
+    target_col: str = "target",
+) -> Tuple[str, List[str]]:
+    """Return ``(sql_fragment, params)`` excluding fixture-linked audit rows.
+
+    ``audit_log`` is target-oriented rather than FK-oriented. Application
+    events may target any of:
+
+    * application id (including the reserved ``f1xed%`` namespace)
+    * application ref (``ARF-...``)
+    * prefixed ref (``application:ARF-...``)
+
+    This helper keeps list and export endpoints on the same fixture policy as
+    the rest of the back-office query layer.
+    """
+    fixture_predicate = "(id LIKE ? OR is_fixture)"
+    return (
+        f"({target_col} IS NULL OR ("
+        f"{target_col} NOT LIKE ? AND "
+        f"{target_col} NOT IN (SELECT id FROM applications WHERE is_fixture) AND "
+        f"{target_col} NOT IN (SELECT ref FROM applications WHERE ref IS NOT NULL AND {fixture_predicate}) AND "
+        f"{target_col} NOT IN (SELECT 'application:' || ref FROM applications WHERE ref IS NOT NULL AND {fixture_predicate})"
+        f"))",
+        [
+            FIXTURE_APP_ID_PATTERN,
+            FIXTURE_APP_ID_PATTERN,
+            FIXTURE_APP_ID_PATTERN,
+        ],
+    )
+
+
+_FIXTURE_TRUE_VALUES = ("true", "1", "yes", "on")
+
+
+def _fixture_opt_in_truthy(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in _FIXTURE_TRUE_VALUES
+
+
+def fixture_request_opt_in(handler) -> Optional[str]:
+    """Return a truthy fixture opt-in value from a request handler, if any.
+
+    Both ``show_fixtures`` and ``include_fixtures`` are accepted. If one alias
+    is explicitly false and the other is truthy, opt-in still works; this avoids
+    the common ``show_fixtures=0&include_fixtures=1`` footgun.
+    """
+    for arg_name in ("show_fixtures", "include_fixtures"):
+        try:
+            value = handler.get_argument(arg_name, None)
+        except Exception:
+            value = None
+        if _fixture_opt_in_truthy(value):
+            return value
+    return None
+
+
 def should_show_fixtures(
     user: Optional[dict],
     query_param_value: Optional[str],
@@ -155,7 +214,7 @@ def should_show_fixtures(
     """Return True only when an admin/sco user explicitly opts in.
 
     Policy:
-    * The ``show_fixtures=true`` query parameter must be present.
+    * A fixture opt-in query parameter must be present.
     * The authenticated user must have role ``admin`` or ``sco``.
     * Any other combination silently returns False (fixtures excluded).
     * ``user=None`` is treated as non-admin (returns False).
@@ -163,15 +222,15 @@ def should_show_fixtures(
     Args:
         user:               The decoded JWT payload dict from
                             ``BaseHandler.require_auth()``.
-        query_param_value:  The raw query-string value for
-                            ``show_fixtures`` (None if absent).
+        query_param_value:  The raw fixture opt-in query-string value
+                            (None if absent).
 
     Returns:
         bool — True iff fixtures should be visible in the response.
     """
     if not user:
         return False
-    if str(query_param_value or "").strip().lower() not in ("true", "1", "yes"):
+    if not _fixture_opt_in_truthy(query_param_value):
         return False
     role = user.get("role") or user.get("type") or ""
     return role in ("admin", "sco")

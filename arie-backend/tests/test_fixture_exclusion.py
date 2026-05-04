@@ -234,6 +234,33 @@ class TestFixtureFilterModule(unittest.TestCase):
         self.assertIn("app_ref", sql)
         self.assertIn("IS NULL", sql)
 
+    def test_fixture_audit_target_exclude_clause(self):
+        from fixture_filter import fixture_audit_target_exclude_clause
+        sql, params = fixture_audit_target_exclude_clause("target")
+        self.assertIn("target NOT LIKE", sql)
+        self.assertIn("SELECT id FROM applications", sql)
+        self.assertIn("SELECT ref FROM applications", sql)
+        self.assertIn("'application:' || ref", sql)
+        self.assertEqual(params, ["f1xed%", "f1xed%", "f1xed%"])
+
+    def test_fixture_request_opt_in_accepts_include_alias(self):
+        from fixture_filter import fixture_request_opt_in
+
+        class Handler:
+            def get_argument(self, name, default=None):
+                return {"include_fixtures": "1"}.get(name, default)
+
+        self.assertEqual(fixture_request_opt_in(Handler()), "1")
+
+    def test_fixture_request_opt_in_truthy_alias_wins_over_false_alias(self):
+        from fixture_filter import fixture_request_opt_in
+
+        class Handler:
+            def get_argument(self, name, default=None):
+                return {"show_fixtures": "0", "include_fixtures": "true"}.get(name, default)
+
+        self.assertEqual(fixture_request_opt_in(Handler()), "true")
+
     def test_should_show_fixtures_admin_true(self):
         from fixture_filter import should_show_fixtures
         user = {"role": "admin", "sub": "u1"}

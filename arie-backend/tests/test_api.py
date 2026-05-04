@@ -498,6 +498,181 @@ class TestAuthenticatedAccess:
         export_targets = {e["target"] for e in export.json()["entries"]}
         assert export_targets == {"ARF-FILTER", "application:ARF-FILTER"}
 
+    def test_audit_list_and_export_exclude_fixture_application_targets_by_default(self, api_server):
+        """Global audit list/export must not leak fixture-linked rows by default."""
+        from auth import create_token
+        from db import get_db
+
+        real_id = "app_pr1_audit_real"
+        real_ref = "ARF-PR1-AUDIT-REAL"
+        fixture_id = "app_pr1_audit_fixture"
+        fixture_ref = "ARF-PR1-AUDIT-FIXTURE"
+        action = "PR1 Fixture Audit"
+
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE action = ?", (action,))
+        conn.execute("DELETE FROM applications WHERE id IN (?, ?)", (real_id, fixture_id))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, is_fixture)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (real_id, real_ref, "testclient001", "PR1 Audit Real Ltd",
+             "Mauritius", "Technology", "SME", "in_review", 0),
+        )
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, is_fixture)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (fixture_id, fixture_ref, "testclient001", "PR1 Audit Fixture Ltd",
+             "Mauritius", "Technology", "SME", "in_review", 1),
+        )
+        for target, detail in (
+            (real_ref, "real-ref"),
+            (fixture_ref, "fixture-ref"),
+            (f"application:{fixture_ref}", "fixture-prefixed"),
+            (fixture_id, "fixture-id"),
+        ):
+            conn.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                ("admin001", "Test Admin", "admin", action, target, detail, "127.0.0.1"),
+            )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        default_resp = http_requests.get(
+            f"{api_server}/api/audit?action={action}&limit=50",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert default_resp.status_code == 200
+        default_targets = {e["target"] for e in default_resp.json()["entries"]}
+        assert real_ref in default_targets
+        assert fixture_ref not in default_targets
+        assert f"application:{fixture_ref}" not in default_targets
+        assert fixture_id not in default_targets
+
+        include_resp = http_requests.get(
+            f"{api_server}/api/audit?action={action}&include_fixtures=1&limit=50",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert include_resp.status_code == 200
+        include_targets = {e["target"] for e in include_resp.json()["entries"]}
+        assert {real_ref, fixture_ref, f"application:{fixture_ref}", fixture_id}.issubset(include_targets)
+        assert include_resp.json()["show_fixtures"] is True
+
+        export_resp = http_requests.get(
+            f"{api_server}/api/audit/export?format=json&action={action}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert export_resp.status_code == 200
+        export_targets = {e["target"] for e in export_resp.json()["entries"]}
+        assert real_ref in export_targets
+        assert fixture_ref not in export_targets
+        assert f"application:{fixture_ref}" not in export_targets
+        assert fixture_id not in export_targets
+
+    def test_applications_endpoint_excludes_fixtures_by_default_and_supports_alias_opt_in(self, api_server):
+        """Applications list should hide fixtures by default for officers and clients."""
+        from auth import create_token
+        from db import get_db
+
+        real_id = "app_pr1_apps_real"
+        real_ref = "ARF-PR1-APPS-REAL"
+        fixture_id = "app_pr1_apps_fixture"
+        fixture_ref = "ARF-PR1-APPS-FIXTURE"
+        client_id = "testclient001"
+
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id IN (?, ?)", (real_id, fixture_id))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, is_fixture)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (real_id, real_ref, client_id, "PR1 Apps Real Ltd",
+             "Mauritius", "Technology", "SME", "in_review", 0),
+        )
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, is_fixture)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (fixture_id, fixture_ref, client_id, "PR1 Apps Fixture Ltd",
+             "Mauritius", "Technology", "SME", "in_review", 1),
+        )
+        conn.commit()
+        conn.close()
+
+        admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+        co_token = create_token("co001", "co", "Test CO", "officer")
+        client_token = create_token(client_id, "client", "Test Client", "client")
+
+        default_resp = http_requests.get(
+            f"{api_server}/api/applications?limit=5000",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=3,
+        )
+        assert default_resp.status_code == 200
+        default_refs = {a["ref"] for a in default_resp.json()["applications"]}
+        assert real_ref in default_refs
+        assert fixture_ref not in default_refs
+
+        include_resp = http_requests.get(
+            f"{api_server}/api/applications?limit=5000&include_fixtures=1",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=3,
+        )
+        assert include_resp.status_code == 200
+        include_refs = {a["ref"] for a in include_resp.json()["applications"]}
+        assert {real_ref, fixture_ref}.issubset(include_refs)
+
+        co_include = http_requests.get(
+            f"{api_server}/api/applications?limit=5000&include_fixtures=1",
+            headers={"Authorization": f"Bearer {co_token}"},
+            timeout=3,
+        )
+        assert co_include.status_code == 200
+        co_refs = {a["ref"] for a in co_include.json()["applications"]}
+        assert fixture_ref not in co_refs
+
+        client_default = http_requests.get(
+            f"{api_server}/api/applications?limit=5000",
+            headers={"Authorization": f"Bearer {client_token}"},
+            timeout=3,
+        )
+        assert client_default.status_code == 200
+        client_refs = {a["ref"] for a in client_default.json()["applications"]}
+        assert real_ref in client_refs
+        assert fixture_ref not in client_refs
+
+        client_dashboard = http_requests.get(
+            f"{api_server}/api/dashboard",
+            headers={"Authorization": f"Bearer {client_token}"},
+            timeout=3,
+        )
+        assert client_dashboard.status_code == 200
+        client_recent_refs = {a["ref"] for a in client_dashboard.json()["recent"]}
+        assert fixture_ref not in client_recent_refs
+
+        admin_dashboard = http_requests.get(
+            f"{api_server}/api/dashboard?include_fixtures=1",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=3,
+        )
+        assert admin_dashboard.status_code == 200
+        assert admin_dashboard.json()["show_fixtures"] is True
+        admin_recent_refs = {a["ref"] for a in admin_dashboard.json()["recent"]}
+        assert fixture_ref in admin_recent_refs
+
     def test_application_audit_log_includes_prefixed_application_targets(self, api_server):
         """Case audit reconstruction must include bare and application: prefixed targets."""
         from auth import create_token
@@ -819,6 +994,139 @@ class TestAuthenticatedAccess:
         )
         assert include_resp.status_code == 200
         assert any(c["application_id"] == app_id for c in include_resp.json()["cases"])
+
+    def test_edd_stats_honours_fixture_opt_in_aliases_and_role_gate(self, api_server):
+        """EDD KPI stats should match the fixture policy used by the EDD list."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_pr1_edd_stats_fixture"
+        conn = get_db()
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type, status, is_fixture)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, "ARF-PR1-EDD-STATS-FIX", "testclient001", "PR1 EDD Stats Fixture Ltd",
+             "Mauritius", "Technology", "SME", "edd_required", 1),
+        )
+        conn.execute(
+            """
+            INSERT INTO edd_cases
+            (application_id, client_name, risk_level, risk_score, trigger_source, trigger_notes, stage, assigned_officer)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (app_id, "PR1 EDD Stats Fixture Ltd", None, None,
+             "pr1_test", "fixture stats test", "triggered", "admin001"),
+        )
+        conn.commit()
+        conn.close()
+
+        admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+        co_token = create_token("co001", "co", "Test CO", "officer")
+        default_resp = http_requests.get(
+            f"{api_server}/api/edd/stats",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=3,
+        )
+        assert default_resp.status_code == 200
+        include_resp = http_requests.get(
+            f"{api_server}/api/edd/stats?include_fixtures=1",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=3,
+        )
+        assert include_resp.status_code == 200
+        assert include_resp.json()["show_fixtures"] is True
+        assert include_resp.json()["active"] >= default_resp.json()["active"] + 1
+
+        co_include = http_requests.get(
+            f"{api_server}/api/edd/stats?include_fixtures=1",
+            headers={"Authorization": f"Bearer {co_token}"},
+            timeout=3,
+        )
+        assert co_include.status_code == 200
+        assert co_include.json()["show_fixtures"] is False
+        assert co_include.json()["active"] == default_resp.json()["active"]
+
+    def test_screening_queue_excludes_fixture_apps_by_default_and_supports_admin_opt_in(self, api_server):
+        """Screening queue rows inherit the canonical fixture exclusion policy."""
+        from auth import create_token
+        from db import get_db
+
+        real_id = "app_pr1_screen_real"
+        real_ref = "ARF-PR1-SCREEN-REAL"
+        fixture_id = "app_pr1_screen_fixture"
+        fixture_ref = "ARF-PR1-SCREEN-FIXTURE"
+        report = {
+            "screening_report": {
+                "screened_at": "2026-05-04T08:00:00Z",
+                "screening_mode": "live",
+                "company_screening": {
+                    "found": True,
+                    "sanctions": {"matched": False, "results": [], "api_status": "live", "source": "sumsub"},
+                },
+                "director_screenings": [],
+                "ubo_screenings": [],
+                "ip_geolocation": {"risk_level": "LOW"},
+                "kyc_applicants": [],
+                "overall_flags": [],
+                "total_hits": 0,
+            }
+        }
+
+        conn = get_db()
+        conn.execute("DELETE FROM applications WHERE id IN (?, ?)", (real_id, fixture_id))
+        for app_id, app_ref, name, is_fixture in (
+            (real_id, real_ref, "PR1 Screening Real Ltd", 0),
+            (fixture_id, fixture_ref, "PR1 Screening Fixture Ltd", 1),
+        ):
+            conn.execute(
+                """
+                INSERT INTO applications
+                (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data, is_fixture)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (app_id, app_ref, "testclient001", name, "Mauritius", "Technology",
+                 "SME", "in_review", json.dumps(report), is_fixture),
+            )
+        conn.commit()
+        conn.close()
+
+        admin_token = create_token("admin001", "admin", "Test Admin", "officer")
+        co_token = create_token("co001", "co", "Test CO", "officer")
+        default_resp = http_requests.get(
+            f"{api_server}/api/screening/queue",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=3,
+        )
+        assert default_resp.status_code == 200
+        default_refs = {r["application_ref"] for r in default_resp.json()["rows"]}
+        assert real_ref in default_refs
+        assert fixture_ref not in default_refs
+        assert default_resp.json()["show_fixtures"] is False
+
+        include_resp = http_requests.get(
+            f"{api_server}/api/screening/queue?include_fixtures=1",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            timeout=3,
+        )
+        assert include_resp.status_code == 200
+        include_refs = {r["application_ref"] for r in include_resp.json()["rows"]}
+        assert {real_ref, fixture_ref}.issubset(include_refs)
+        assert include_resp.json()["show_fixtures"] is True
+
+        co_include = http_requests.get(
+            f"{api_server}/api/screening/queue?include_fixtures=1",
+            headers={"Authorization": f"Bearer {co_token}"},
+            timeout=3,
+        )
+        assert co_include.status_code == 200
+        co_refs = {r["application_ref"] for r in co_include.json()["rows"]}
+        assert fixture_ref not in co_refs
+        assert co_include.json()["show_fixtures"] is False
 
     def test_edd_findings_sla_dual_control_and_audit_ref_target(self, api_server):
         """EDD can advance through legitimate gates and its audit is case-reconstructable."""
