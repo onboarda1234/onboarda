@@ -10390,33 +10390,48 @@ class MemoApproveHandler(BaseHandler):
             return
 
         db = get_db()
+        app_row = db.execute(
+            "SELECT id, ref FROM applications WHERE id = ? OR ref = ?",
+            (app_id, app_id),
+        ).fetchone()
+        attempt_target = app_row["ref"] if app_row else app_id
         memo_row = db.execute(
             "SELECT * FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
             (app_id, app_id)
         ).fetchone()
 
-        if not memo_row:
-            db.close()
-            return self.error("No compliance memo found.", 404)
-
-        # ── EX-11: Backend enforcement of officer sign-off for memo approval ──
         body = {}
         try:
             body = json.loads(self.request.body or b"{}")
         except (json.JSONDecodeError, TypeError):
             pass
+        attempt_summary = _governance_summary(
+            body,
+            ("approval_reason", "officer_signoff"),
+        )
+
+        def reject_memo_approval(reason, status_code):
+            self.log_governance_attempt(
+                user, "memo.approve", attempt_target, "rejected", status_code,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, status_code)
+
+        if not memo_row:
+            return reject_memo_approval("No compliance memo found.", 404)
+
+        # ── EX-11: Backend enforcement of officer sign-off for memo approval ──
         signoff_error = _validate_officer_signoff(body.get("officer_signoff"), "memo")
         if signoff_error:
-            db.close()
-            return self.error(signoff_error, 400)
+            return reject_memo_approval(signoff_error, 400)
 
         # ── SERVER-SIDE 5-GATE APPROVAL ENFORCEMENT ──
         # Gate 1: Check if memo is blocked by rule engine
         is_blocked = memo_row.get("blocked") or False
         block_reason = memo_row.get("block_reason") or ""
         if is_blocked:
-            db.close()
-            return self.error(f"Cannot approve blocked memo. Block reason: {block_reason}", 400)
+            return reject_memo_approval(
+                f"Cannot approve blocked memo. Block reason: {block_reason}", 400)
 
         # Gate 2: Check validation status
         val_status = memo_row.get("validation_status") or "pending"
@@ -10428,8 +10443,7 @@ class MemoApproveHandler(BaseHandler):
             # A documented reason is mandatory.
             approver_role = user.get("role", "")
             if approver_role not in ("admin", "sco"):
-                db.close()
-                return self.error(
+                return reject_memo_approval(
                     "Cannot approve memo with validation status 'pass_with_fixes'. "
                     "Only admin or Senior Compliance Officer (SCO) may approve memos with outstanding findings.",
                     403
@@ -10437,15 +10451,13 @@ class MemoApproveHandler(BaseHandler):
             # body parsed at EX-11 sign-off validation gate (before Gate 1)
             approval_reason = (body.get("approval_reason") or "").strip()
             if not approval_reason:
-                db.close()
-                return self.error(
+                return reject_memo_approval(
                     "approval_reason is required when approving a memo with validation status 'pass_with_fixes'. "
                     "Provide a documented reason for approving despite outstanding findings.",
                     400
                 )
         else:
-            db.close()
-            return self.error(
+            return reject_memo_approval(
                 f"Cannot approve memo with validation status '{val_status}'. "
                 "Validation must be PASS before memo approval.",
                 400
@@ -10461,8 +10473,7 @@ class MemoApproveHandler(BaseHandler):
         metadata = memo_data.get("metadata", {})
         # Gate 3a: Reject fallback memos — AI pipeline must have succeeded
         if metadata.get("is_fallback") is True:
-            db.close()
-            return self.error(
+            return reject_memo_approval(
                 "Cannot approve a fallback memo. AI pipeline was unavailable when this memo was generated. "
                 "Re-generate the memo with a working AI pipeline before approval.", 400)
 
@@ -10478,9 +10489,8 @@ class MemoApproveHandler(BaseHandler):
         # paths that surface only the verdict string and against
         # legacy embedded memo-only signals.
         if supervisor_result.get("mandatory_escalation"):
-            db.close()
             reasons = supervisor_result.get("mandatory_escalation_reasons") or []
-            return self.error(
+            return reject_memo_approval(
                 "Cannot approve memo: supervisor mandatory_escalation is set "
                 "(reasons: " + ", ".join(reasons[:6]) + "). "
                 "Case must be routed to EDD / senior review before approval.",
@@ -10500,8 +10510,7 @@ class MemoApproveHandler(BaseHandler):
             ).fetchone()
             current_status = (app_row["status"] if app_row else "") or ""
             if current_status not in ("edd_required", "edd_approved"):
-                db.close()
-                return self.error(
+                return reject_memo_approval(
                     "Cannot approve memo: deterministic EDD routing policy ("
                     + str(edd_routing.get("policy_version", "")) + ") routes this "
                     "case to EDD (triggers: "
@@ -10521,8 +10530,7 @@ class MemoApproveHandler(BaseHandler):
             # A documented reason is mandatory.
             approver_role = user.get("role", "")
             if approver_role not in ("admin", "sco"):
-                db.close()
-                return self.error(
+                return reject_memo_approval(
                     "Cannot approve memo with supervisor verdict 'CONSISTENT_WITH_WARNINGS'. "
                     "Only admin or Senior Compliance Officer (SCO) may approve memos with supervisor warnings.",
                     403
@@ -10534,16 +10542,14 @@ class MemoApproveHandler(BaseHandler):
             if val_status != "pass_with_fixes":
                 approval_reason = (body.get("approval_reason") or "").strip()
             if not approval_reason:
-                db.close()
-                return self.error(
+                return reject_memo_approval(
                     "approval_reason is required when approving a memo with supervisor verdict 'CONSISTENT_WITH_WARNINGS'. "
                     "Provide a documented reason for approving despite supervisor warnings.",
                     400
                 )
             supervisor_warnings_approval = True
         else:
-            db.close()
-            return self.error(
+            return reject_memo_approval(
                 f"Cannot approve memo with supervisor verdict '{supervisor_verdict or 'pending'}'. "
                 "Supervisor verdict must be CONSISTENT before memo approval.",
                 400
@@ -10551,8 +10557,8 @@ class MemoApproveHandler(BaseHandler):
 
         # Gate 4: SCO review enforcement — if requires_sco_review, only SCO or admin can approve
         if requires_sco and user.get("role") not in ["sco", "admin"]:
-            db.close()
-            return self.error("This memo requires Senior Compliance Officer review before approval.", 403)
+            return reject_memo_approval(
+                "This memo requires Senior Compliance Officer review before approval.", 403)
 
         now_ts = datetime.now().isoformat()
         needs_reason = val_status == "pass_with_fixes" or supervisor_warnings_approval
@@ -10594,6 +10600,9 @@ class MemoApproveHandler(BaseHandler):
                                    body.get("officer_signoff", {}),
                                    self.get_client_ip(),
                                    self.request.headers.get("User-Agent", ""))
+            self.log_governance_attempt(
+                user, "memo.approve", attempt_target, "accepted", 200,
+                "", attempt_summary, db=db, commit=False)
 
             db.commit()
         except Exception as e:
@@ -12734,25 +12743,38 @@ class EDDDetailHandler(BaseHandler):
 
         data = self.get_json()
         db = get_db()
+        attempt_summary = _governance_summary(
+            data,
+            (
+                "stage", "priority", "assigned_officer", "senior_reviewer",
+                "sla_due_at", "sla_breach_reason", "decision_reason", "note",
+            ),
+        )
+        attempt_target = f"EDD-{case_id}"
+
+        def reject_edd_update(reason, status_code):
+            self.log_governance_attempt(
+                user, "edd.case_update", attempt_target, "rejected", status_code,
+                reason, attempt_summary, db=db)
+            db.close()
+            return self.error(reason, status_code)
 
         case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
         if not case:
-            db.close()
-            return self.error("EDD case not found", 404)
+            return reject_edd_update("EDD case not found", 404)
         case_dict = dict(case)
         app_ref = _edd_application_ref(db, case_dict)
+        attempt_target = app_ref
 
         # Prevent updates on closed cases
         if case["stage"] in ("edd_approved", "edd_rejected"):
-            db.close()
-            return self.error(f"EDD case is already {case['stage']}. Cannot modify.", 409)
+            return reject_edd_update(f"EDD case is already {case['stage']}. Cannot modify.", 409)
 
         new_stage = data.get("stage")
         valid_stages = ["triggered", "information_gathering", "analysis", "pending_senior_review", "edd_approved", "edd_rejected"]
 
         if new_stage and new_stage not in valid_stages:
-            db.close()
-            return self.error(f"Invalid stage. Must be one of: {', '.join(valid_stages)}", 400)
+            return reject_edd_update(f"Invalid stage. Must be one of: {', '.join(valid_stages)}", 400)
 
         # Stage transition validation
         valid_transitions = {
@@ -12765,36 +12787,35 @@ class EDDDetailHandler(BaseHandler):
         if new_stage and new_stage != case["stage"]:
             allowed = valid_transitions.get(case["stage"], [])
             if new_stage not in allowed:
-                db.close()
-                return self.error(f"Invalid transition: {case['stage']} → {new_stage}. Allowed: {', '.join(allowed)}", 400)
+                return reject_edd_update(
+                    f"Invalid transition: {case['stage']} → {new_stage}. Allowed: {', '.join(allowed)}", 400)
 
         priority = str(data.get("priority") or "").strip().lower()
         if priority and priority not in _EDD_VALID_PRIORITIES:
-            db.close()
-            return self.error(f"Invalid priority. Must be one of: {', '.join(sorted(_EDD_VALID_PRIORITIES))}", 400)
+            return reject_edd_update(
+                f"Invalid priority. Must be one of: {', '.join(sorted(_EDD_VALID_PRIORITIES))}", 400)
 
         sla_due_at = data.get("sla_due_at")
         parsed_sla_due_at = None
         if sla_due_at:
             parsed_sla_due_at, sla_error = _parse_edd_sla_due_at(sla_due_at)
             if sla_error:
-                db.close()
-                return self.error(sla_error, 400)
+                return reject_edd_update(sla_error, 400)
 
         effective_sla_due_at = sla_due_at or case_dict.get("sla_due_at")
         if new_stage in _EDD_REVIEW_OR_TERMINAL_STAGES:
             if not effective_sla_due_at:
-                db.close()
-                return self.error("EDD SLA due date is required before senior review or closure", 400)
+                return reject_edd_update(
+                    "EDD SLA due date is required before senior review or closure", 400)
             if not _edd_findings_are_complete(db, case_id):
-                db.close()
-                return self.error("Structured EDD findings are required before senior review or closure", 400)
+                return reject_edd_update(
+                    "Structured EDD findings are required before senior review or closure", 400)
 
         sla_breach_reason = str(data.get("sla_breach_reason") or "").strip()
         if new_stage in ("edd_approved", "edd_rejected") and _edd_sla_is_breached(effective_sla_due_at):
             if len(sla_breach_reason) < 12:
-                db.close()
-                return self.error("sla_breach_reason is required when closing an overdue EDD case", 400)
+                return reject_edd_update(
+                    "sla_breach_reason is required when closing an overdue EDD case", 400)
 
         # Build update fields
         updates = ["updated_at=datetime('now')"]
@@ -12825,31 +12846,29 @@ class EDDDetailHandler(BaseHandler):
 
         senior_reviewer_error = _edd_senior_reviewer_error(db, effective_senior)
         if senior_reviewer_error:
-            db.close()
-            return self.error(senior_reviewer_error, 400)
+            return reject_edd_update(senior_reviewer_error, 400)
 
         if new_stage in _EDD_REVIEW_OR_TERMINAL_STAGES:
             if not effective_senior:
-                db.close()
-                return self.error("senior_reviewer is required before senior review or closure", 400)
+                return reject_edd_update(
+                    "senior_reviewer is required before senior review or closure", 400)
             if effective_assigned and effective_senior == effective_assigned:
-                db.close()
-                return self.error("senior_reviewer must be different from the assigned officer", 400)
+                return reject_edd_update(
+                    "senior_reviewer must be different from the assigned officer", 400)
 
         if new_stage in ("edd_approved", "edd_rejected"):
             if user.get("role") not in ("sco", "admin"):
-                db.close()
-                return self.error("EDD closure requires Senior Compliance Officer or Admin role", 403)
+                return reject_edd_update(
+                    "EDD closure requires Senior Compliance Officer or Admin role", 403)
             if effective_assigned and user.get("sub") == effective_assigned:
-                db.close()
-                return self.error("EDD closure requires a different officer from the assigned officer", 403)
+                return reject_edd_update(
+                    "EDD closure requires a different officer from the assigned officer", 403)
 
         # Handle decision for terminal stages
         if new_stage in ("edd_approved", "edd_rejected"):
             decision_reason = data.get("decision_reason", "")
             if not decision_reason:
-                db.close()
-                return self.error("decision_reason is required for approval/rejection", 400)
+                return reject_edd_update("decision_reason is required for approval/rejection", 400)
             updates.append("decision=?")
             params.append(new_stage)
             updates.append("decision_reason=?")
@@ -12905,6 +12924,9 @@ class EDDDetailHandler(BaseHandler):
                     db=db,
                     commit=False,
                 )
+            self.log_governance_attempt(
+                user, "edd.case_update", attempt_target, "accepted", 200,
+                "", attempt_summary, db=db, commit=False)
 
             db.commit()
             db.close()
