@@ -27,7 +27,7 @@ dialects without per-dialect file branching (Approach C, out of scope).
 Coverage in this file
 ---------------------
 1. SQLite end-to-end — fresh init_db + run_all_migrations applies all
-   12 file-based migrations cleanly and creates the two 010-owned
+   pending file-based data migrations cleanly and creates the two 010-owned
    tables. (Already covered by ``test_migration_chain_full.py``;
    re-asserted here as the migration-010-specific contract.)
 
@@ -55,7 +55,10 @@ import pytest
 # Make arie-backend importable regardless of pytest's cwd.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests._migration_idempotency_helpers import fresh_migration_db
+from tests._migration_idempotency_helpers import (
+    FRESH_INIT_PENDING_DATA_MIGRATIONS,
+    fresh_migration_db,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +70,7 @@ def test_migration_010_creates_tables_on_sqlite(tmp_path, monkeypatch):
     on a fresh SQLite database after the full chain runs cleanly."""
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         from migrations.runner import run_all_migrations_with_connection
-        expected = 0
+        expected = FRESH_INIT_PENDING_DATA_MIGRATIONS
         applied = run_all_migrations_with_connection(db)
         assert applied == expected, (
             f"Expected {expected} migrations applied; got {applied}"

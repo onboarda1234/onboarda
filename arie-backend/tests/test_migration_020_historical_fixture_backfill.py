@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -174,3 +175,57 @@ def test_init_db_premarked_020_is_repaired_then_runner_applies(
         ).fetchone()
         assert row["is_fixture"] == 1
         assert _audit_count(db) == 1
+
+
+def test_init_db_does_not_delete_real_020_migration_row(
+    tmp_path,
+    monkeypatch,
+):
+    with fresh_migration_db(tmp_path, monkeypatch) as db:
+        _insert_application(
+            db,
+            "day1real0200001",
+            "ARF-2026-900031",
+            "PHASE4 Closeout Runtime 20260503160321 Ltd",
+        )
+        checksum = hashlib.sha256(
+            MIGRATION_PATH.read_text(encoding="utf-8").encode()
+        ).hexdigest()[:16]
+        db.execute("DELETE FROM schema_version WHERE version = ?", (MIGRATION_VERSION,))
+        db.execute(
+            """
+            INSERT INTO schema_version (version, filename, description, checksum)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                MIGRATION_VERSION,
+                MIGRATION_FILE,
+                "historical fixture backfill",
+                checksum,
+            ),
+        )
+        db.commit()
+
+        import db as db_module
+        db_module._mark_known_migrations_as_applied(db)
+        real_row = db.execute(
+            """
+            SELECT description, checksum
+            FROM schema_version
+            WHERE version = ?
+            """,
+            (MIGRATION_VERSION,),
+        ).fetchone()
+        assert real_row is not None
+        assert real_row["description"] == "historical fixture backfill"
+        assert real_row["checksum"] == checksum
+
+        from migrations.runner import run_all_migrations_with_connection
+
+        assert run_all_migrations_with_connection(db) == 0
+        row = db.execute(
+            "SELECT is_fixture FROM applications WHERE id = ?",
+            ("day1real0200001",),
+        ).fetchone()
+        assert row["is_fixture"] == 0
+        assert _audit_count(db) == 0
