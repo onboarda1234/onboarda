@@ -7722,8 +7722,33 @@ _SCREENING_DISPOSITION_CODES = {
     },
 }
 
+_SCREENING_REVIEW_RATIONALE_MIN_CHARS = 12
+_SCREENING_CLEAR_RATIONALE_MIN_CHARS = 40
+_SCREENING_CLEAR_RATIONALE_MIN_WORDS = 8
+
 _SCREENING_SUBJECT_TYPES = {"entity", "director", "ubo", "applicant", "client"}
 _SCREENING_SUBJECT_ALIASES = {"company": "entity"}
+
+
+def _screening_rationale_word_count(value):
+    words = str(value or "").replace("-", " ").replace("/", " ").split()
+    return len([part for part in words if any(ch.isalnum() for ch in part)])
+
+
+def _screening_review_rationale_error(disposition, rationale):
+    if len(rationale) < _SCREENING_REVIEW_RATIONALE_MIN_CHARS:
+        return f"Screening review rationale must be at least {_SCREENING_REVIEW_RATIONALE_MIN_CHARS} characters"
+    if disposition == "cleared":
+        if (
+            len(rationale) < _SCREENING_CLEAR_RATIONALE_MIN_CHARS
+            or _screening_rationale_word_count(rationale) < _SCREENING_CLEAR_RATIONALE_MIN_WORDS
+        ):
+            return (
+                "Cleared screening rationale must be at least "
+                f"{_SCREENING_CLEAR_RATIONALE_MIN_CHARS} characters and "
+                f"{_SCREENING_CLEAR_RATIONALE_MIN_WORDS} words, citing the evidence reviewed"
+            )
+    return None
 
 
 def _truthy_review_flag(value):
@@ -8417,11 +8442,12 @@ class ScreeningReviewHandler(BaseHandler):
                 "Valid disposition_code is required for screening review", attempt_summary)
             return self.error("Valid disposition_code is required for screening review", 400)
 
-        if len(rationale) < 12:
+        rationale_error = _screening_review_rationale_error(disposition, rationale)
+        if rationale_error:
             self.log_governance_attempt(
                 user, "screening.review_disposition", app_id, "rejected", 400,
-                "Screening review rationale must be at least 12 characters", attempt_summary)
-            return self.error("Screening review rationale must be at least 12 characters", 400)
+                rationale_error, attempt_summary)
+            return self.error(rationale_error, 400)
 
         db = get_db()
         app = db.execute(
