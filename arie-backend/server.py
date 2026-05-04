@@ -2361,6 +2361,7 @@ class ApplicationsHandler(BaseHandler):
 
         from fixture_filter import (
             fixture_app_exclude_clause,
+            fixture_request_opt_in,
             should_show_fixtures,
         )
 
@@ -2379,17 +2380,16 @@ class ApplicationsHandler(BaseHandler):
         """
         params = []
 
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+
         # Clients can only see their own
         if user["type"] == "client":
             query += " AND a.client_id = ?"
             params.append(user["sub"])
-        else:
-            # Officer / admin: exclude fixtures by default
-            show_fx = should_show_fixtures(user, self.get_argument("show_fixtures", None))
-            if not show_fx:
-                fx_excl, fx_params = fixture_app_exclude_clause()
-                query += f" AND {fx_excl}"
-                params.extend(fx_params)
+        if not show_fx:
+            fx_excl, fx_params = fixture_app_exclude_clause()
+            query += f" AND {fx_excl}"
+            params.extend(fx_params)
 
         if status:
             query += " AND a.status = ?"
@@ -5991,7 +5991,11 @@ _REPORT_APPLICATION_SELECT_COLUMNS = (
 
 def _report_scope_from_request(handler, user):
     """Canonical application-report scope used by analytics and exports."""
-    from fixture_filter import fixture_app_exclude_clause, should_show_fixtures
+    from fixture_filter import (
+        fixture_app_exclude_clause,
+        fixture_request_opt_in,
+        should_show_fixtures,
+    )
 
     filters = {
         "date_from": handler.get_argument("date_from", None),
@@ -6005,7 +6009,7 @@ def _report_scope_from_request(handler, user):
 
     conditions = []
     params = []
-    show_fixtures = should_show_fixtures(user, handler.get_argument("show_fixtures", None))
+    show_fixtures = should_show_fixtures(user, fixture_request_opt_in(handler))
     if not show_fixtures:
         fx_excl, fx_params = fixture_app_exclude_clause()
         conditions.append(fx_excl)
@@ -6566,7 +6570,7 @@ def _audit_target_values_for_ref(ref):
     return [ref, f"application:{ref}"]
 
 
-def _append_audit_filters(handler, query, params):
+def _append_audit_filters(handler, query, params, *, exclude_fixtures=False):
     """Append safe audit_log filters shared by list/export endpoints."""
     start_date = handler.get_argument("from", None) or handler.get_argument("start_date", None)
     end_date = handler.get_argument("to", None) or handler.get_argument("end_date", None)
@@ -6608,6 +6612,12 @@ def _append_audit_filters(handler, query, params):
         if targets:
             query += " AND (target = ? OR target = ?)"
             params.extend(targets)
+    if exclude_fixtures:
+        from fixture_filter import fixture_audit_target_exclude_clause
+
+        fx_excl, fx_params = fixture_audit_target_exclude_clause("target")
+        query += f" AND {fx_excl}"
+        params.extend(fx_params)
 
     return query, params
 
@@ -6622,9 +6632,12 @@ class AuditHandler(BaseHandler):
         limit = _bounded_int(self.get_argument("limit", 100), 100, min_value=1, max_value=1000)
         offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
         try:
+            from fixture_filter import fixture_request_opt_in, should_show_fixtures
+
+            show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
             query = "SELECT * FROM audit_log WHERE 1=1"
             params = []
-            query, params = _append_audit_filters(self, query, params)
+            query, params = _append_audit_filters(self, query, params, exclude_fixtures=not show_fx)
             rows = db.execute(
                 query + " ORDER BY timestamp DESC LIMIT ? OFFSET ?",
                 tuple(params + [limit, offset])
@@ -6637,7 +6650,7 @@ class AuditHandler(BaseHandler):
             db.close()
             return self.error(str(exc), 400)
         db.close()
-        self.success({"entries": [dict(r) for r in rows], "total": total, "limit": limit, "offset": offset})
+        self.success({"entries": [dict(r) for r in rows], "total": total, "limit": limit, "offset": offset, "show_fixtures": show_fx})
 
 
 class ApplicationAuditLogHandler(BaseHandler):
@@ -6923,10 +6936,13 @@ class AuditExportHandler(BaseHandler):
 
         db = get_db()
         try:
+            from fixture_filter import fixture_request_opt_in, should_show_fixtures
+
+            show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
             query = "SELECT * FROM audit_log WHERE 1=1"
             params = []
             try:
-                query, params = _append_audit_filters(self, query, params)
+                query, params = _append_audit_filters(self, query, params, exclude_fixtures=not show_fx)
             except ValueError as exc:
                 return self.error(str(exc), 400)
 
@@ -6982,7 +6998,7 @@ class AuditExportHandler(BaseHandler):
             if fmt == "csv":
                 return self._write_csv(entries, include_decisions)
 
-            self.success({"entries": entries, "total": len(entries)})
+            self.success({"entries": entries, "total": len(entries), "show_fixtures": show_fx})
         finally:
             db.close()
 
@@ -7157,6 +7173,7 @@ class DashboardHandler(BaseHandler):
 
         from fixture_filter import (
             fixture_app_exclude_clause,
+            fixture_request_opt_in,
             should_show_fixtures,
         )
 
@@ -7165,40 +7182,45 @@ class DashboardHandler(BaseHandler):
 
         if user.get("type") == "client":
             client_id = user["sub"]
-            # Client branch is scoped by client_id. Fixtures are never assigned
-            # a real client_id, so the client_id WHERE clause acts as an implicit
-            # fixture filter — no explicit fixture exclusion needed here.
-            stats["total"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE client_id=?", (client_id,)).fetchone()["c"]
-            stats["early_stage_applications"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["in_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["kyc_documents"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["compliance_review"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["approved"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["rejected"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["edd"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE status='edd_required' AND client_id=?", (client_id,)).fetchone()["c"]
+            client_fx_excl, client_fx_params = fixture_app_exclude_clause(table_alias="")
+            client_fx_clause = f" AND {client_fx_excl}"
+
+            def _client_params(*extra):
+                return tuple(extra) + (client_id, *client_fx_params)
+
+            stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["early_stage_applications"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["edd"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='edd_required' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
 
             # Risk distribution
-            stats["risk_low"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["risk_medium"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["risk_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
-            stats["risk_very_high"] = db.execute("SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND client_id=?", (client_id,)).fetchone()["c"]
+            stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["risk_medium"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='MEDIUM' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["risk_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='HIGH' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            stats["risk_very_high"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='VERY_HIGH' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
             stats["risk_unknown"] = db.execute(
-                "SELECT COUNT(*) as c FROM applications WHERE client_id=? AND (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH'))",
-                (client_id,)
+                f"SELECT COUNT(*) as c FROM applications WHERE client_id=? AND (risk_level IS NULL OR risk_level='' OR risk_level NOT IN ('LOW','MEDIUM','HIGH','VERY_HIGH')){client_fx_clause}",
+                _client_params()
             ).fetchone()["c"]
 
             # Recent applications
+            recent_fx_excl, recent_fx_params = fixture_app_exclude_clause(table_alias="a")
             recent = db.execute("""
                 SELECT a.*, u.full_name as assigned_name FROM applications a
                 LEFT JOIN users u ON a.assigned_to = u.id
-                WHERE a.client_id=?
+                WHERE a.client_id=? AND """ + recent_fx_excl + """
                 ORDER BY a.created_at DESC LIMIT 10
-            """, (client_id,)).fetchall()
+            """, (client_id, *recent_fx_params)).fetchall()
             stats["recent"] = [dict(r) for r in recent]
+            stats["show_fixtures"] = False
         else:
             # Officer / admin branch: exclude fixtures by default.
             # Pass show_fixtures=true (admin/sco only) to include them.
-            show_fx = should_show_fixtures(user, self.get_argument("show_fixtures", None))
+            show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
             fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
             fx_clause = "" if show_fx else f" AND {fx_excl}"
             fp = [] if show_fx else fx_params
@@ -7955,12 +7977,18 @@ def upsert_screening_review(
     )
 
 
-def _build_screening_queue_payload(db, user):
+def _build_screening_queue_payload(db, user, *, show_fixtures=False):
     query = "SELECT * FROM applications WHERE 1=1"
     params = []
     if user["type"] == "client":
         query += " AND client_id = ?"
         params.append(user["sub"])
+    if not show_fixtures:
+        from fixture_filter import fixture_app_exclude_clause
+
+        fx_excl, fx_params = fixture_app_exclude_clause(table_alias="")
+        query += f" AND {fx_excl}"
+        params.extend(fx_params)
     query += " ORDER BY created_at DESC LIMIT 200"
 
     apps = [dict(r) for r in db.execute(query, params).fetchall()]
@@ -8280,6 +8308,7 @@ def _build_screening_queue_payload(db, user):
     return {
         "metrics": metrics,
         "rows": rows,
+        "show_fixtures": show_fixtures,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
@@ -8295,8 +8324,11 @@ class ScreeningQueueHandler(BaseHandler):
         if not user:
             return
 
+        from fixture_filter import fixture_request_opt_in, should_show_fixtures
+
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
         db = get_db()
-        payload = _build_screening_queue_payload(db, user)
+        payload = _build_screening_queue_payload(db, user, show_fixtures=show_fx)
         db.close()
         self.success(payload)
 
@@ -12563,13 +12595,13 @@ class EDDListHandler(BaseHandler):
 
         from fixture_filter import (
             fixture_app_id_exclude_clause,
+            fixture_request_opt_in,
             should_show_fixtures,
         )
 
         stage = self.get_argument("stage", None)
         assigned = self.get_argument("assigned_officer", None)
-        fixture_opt_in = self.get_argument("show_fixtures", None) or self.get_argument("include_fixtures", None)
-        show_fx = should_show_fixtures(user, fixture_opt_in)
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
 
         db = get_db()
         if show_fx:
@@ -12956,10 +12988,19 @@ class EDDStatsHandler(BaseHandler):
         if not user:
             return
 
-        from fixture_filter import fixture_app_id_exclude_clause
+        from fixture_filter import (
+            fixture_app_id_exclude_clause,
+            fixture_request_opt_in,
+            should_show_fixtures,
+        )
 
         db = get_db()
-        fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
+        if show_fx:
+            fx_excl = "1=1"
+            fx_params = []
+        else:
+            fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
         active = db.execute(
             f"SELECT COUNT(*) as c FROM edd_cases WHERE stage NOT IN ('edd_approved','edd_rejected') AND {fx_excl}",
             fx_params,
@@ -12985,7 +13026,8 @@ class EDDStatsHandler(BaseHandler):
         self.success({
             "active": active,
             "pending_senior_review": pending_senior,
-            "completed_this_month": completed_month
+            "completed_this_month": completed_month,
+            "show_fixtures": show_fx,
         })
 
 
@@ -13008,7 +13050,8 @@ class LifecycleQueueHandler(BaseHandler):
                       also accepted: comma-separated list of item types
                       (alert / review / edd) for finer control
       application_id: scope to a single application
-      show_fixtures : 'true' to include fixture rows (admin/sco only;
+      show_fixtures / include_fixtures:
+                      truthy value includes fixture rows (admin/sco only;
                       silently ignored for other roles)
 
     Response: ``{"items": [...], "counts": {...}, "filter": {...}}``.
@@ -13020,7 +13063,7 @@ class LifecycleQueueHandler(BaseHandler):
         if not user:
             return
 
-        from fixture_filter import should_show_fixtures
+        from fixture_filter import fixture_request_opt_in, should_show_fixtures
 
         include = (self.get_argument("include", "active") or "active").lower()
         if include not in ("active", "historical", "all", "legacy_unmapped"):
@@ -13053,7 +13096,7 @@ class LifecycleQueueHandler(BaseHandler):
                 types = tuple(normalised)
 
         application_id = self.get_argument("application_id", None) or None
-        show_fx = should_show_fixtures(user, self.get_argument("show_fixtures", None))
+        show_fx = should_show_fixtures(user, fixture_request_opt_in(self))
 
         import lifecycle_queue as lq
         db = get_db()
