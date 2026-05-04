@@ -587,7 +587,7 @@ class _IsFixtureBase(unittest.TestCase):
     REAL_APP_ID   = "ccddee1122334455"    # real UUID-like, not f1xed
     REAL_APP_REF  = "ARF-2025-200001"
     ROGUE_APP_ID  = "99aabb0011223344"    # UUID-like, NOT f1xed — but is_fixture=1
-    ROGUE_APP_REF = "ARF-2026-100421"     # one of the 8 historical rogue refs
+    ROGUE_APP_REF = "ARF-2026-100421"     # one of the historical rogue refs
     SEEDED_APP_ID = "f1xed00000000099"    # reserved f1xed namespace
     SEEDED_APP_REF = "ARF-2026-900099"
 
@@ -859,7 +859,7 @@ class TestMigrationV229(_IsFixtureBase):
                          "Backfill of f1xed% rows must not touch real rows")
 
     def test_rogue_refs_migration_marks_correct_rows(self):
-        """Migration UPDATE by ref marks only the 8 rogue refs."""
+        """Migration UPDATE by ref marks all documented rogue refs that exist."""
         from fixture_filter import ROGUE_FIXTURE_REFS
         # All rogue refs that exist should be marked
         for ref in ROGUE_FIXTURE_REFS:
@@ -907,8 +907,8 @@ class TestSeederSetsIsFixture(unittest.TestCase):
             "bind with Python True for dialect-safe handling)",
         )
 
-    def test_fixture_filter_rogue_refs_constant_has_all_8(self):
-        """ROGUE_FIXTURE_REFS must contain exactly the 8 known rogue refs."""
+    def test_fixture_filter_rogue_refs_constant_has_all_known_refs(self):
+        """ROGUE_FIXTURE_REFS must contain every known historical fixture ref."""
         from fixture_filter import ROGUE_FIXTURE_REFS
         expected = {
             "ARF-2026-100454",
@@ -919,9 +919,35 @@ class TestSeederSetsIsFixture(unittest.TestCase):
             "ARF-2026-100430",
             "ARF-2026-100428",
             "ARF-2026-100427",
+            "ARF-2026-900031",
+            "ARF-2026-900030",
+            "ARF-2026-900029",
+            "ARF-2026-900028",
+            "ARF-2026-900027",
+            "ARF-2026-900026",
+            "ARF-2026-900025",
+            "ARF-2026-900024",
+            "ARF-2026-900023",
+            "ARF-2026-900022",
+            "ARF-2026-900021",
+            "ARF-2026-900020",
+            "ARF-2026-900019",
+            "ARF-2026-900018",
+            "ARF-2026-900017",
+            "ARF-2026-900016",
+            "ARF-2026-900015",
+            "ARF-2026-900014",
+            "ARF-2026-900013",
+            "ARF-2026-100470",
+            "ARF-2026-100469",
+            "ARF-2026-100468",
+            "ARF-2026-100451",
+            "ARF-2026-100447",
+            "ARF-2026-100446",
+            "ARF-2026-100422",
         }
         self.assertEqual(set(ROGUE_FIXTURE_REFS), expected,
-                         "ROGUE_FIXTURE_REFS must match all 8 known rogue historical refs")
+                         "ROGUE_FIXTURE_REFS must match all known historical fixture refs")
 
 
 if __name__ == "__main__":

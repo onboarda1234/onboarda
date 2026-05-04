@@ -6,7 +6,7 @@ Three tests that lock the Phase A2 fix in place.
 Test 1  (PG — skipped when no PostgreSQL service is available in the
          sandbox, with a TODO referencing Phase A3)
          Bring up a fresh PostgreSQL 15 database, run ``init_db()`` then
-         the file-based migration runner, and assert that all 13
+         the file-based migration runner, and assert that all known
          migrations are applied with zero failures.
 
 Test 2  (always runs — SQLite)
@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Helpers
 # ---------------------------------------------------------------------------
 
-_TOTAL_MIGRATIONS = 19
+_TOTAL_MIGRATIONS = 20
 
 
 def _extract_periodic_reviews_ddl(schema_sql: str) -> str:
