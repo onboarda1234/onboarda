@@ -348,6 +348,72 @@ def test_memo_fingerprint_is_stable_and_changes_on_source_input_change():
     assert first.startswith("memo-input-v1:")
 
 
+def test_memo_fingerprint_changes_when_screening_review_changes():
+    from server import _memo_generation_fingerprint
+
+    base_review = {
+        "subject_type": "company",
+        "subject_name": "Phase 3 Test Ltd",
+        "disposition": "clear",
+        "disposition_code": "false_positive",
+        "rationale": "Name-only match; no shared identifiers.",
+        "updated_at": "2026-05-04T10:00:00Z",
+    }
+    first = _memo_generation_fingerprint(
+        _app(screening_reviews=[base_review]),
+        _directors(),
+        _ubos(),
+        _documents(),
+    )
+    changed = _memo_generation_fingerprint(
+        _app(screening_reviews=[dict(base_review, rationale="Confirmed adverse match.")]),
+        _directors(),
+        _ubos(),
+        _documents(),
+    )
+
+    assert first != changed
+
+
+class _MemoLockDB:
+    def __init__(self, *, is_postgres):
+        self.is_postgres = is_postgres
+        self.statements = []
+
+    def execute(self, sql, params=()):
+        self.statements.append((sql, params))
+        return self
+
+    def fetchone(self):
+        return {"id": "phase3-app", "ref": "ARF-PHASE3"}
+
+
+def test_memo_application_loader_locks_postgres_application_row():
+    from server import _locked_memo_application_row
+
+    db = _MemoLockDB(is_postgres=True)
+
+    row = _locked_memo_application_row(db, "ARF-PHASE3")
+
+    assert row["ref"] == "ARF-PHASE3"
+    assert len(db.statements) == 1
+    assert "FOR UPDATE" in db.statements[0][0]
+    assert db.statements[0][1] == ("ARF-PHASE3", "ARF-PHASE3")
+
+
+def test_memo_application_loader_acquires_sqlite_write_lock_before_read():
+    from server import _locked_memo_application_row
+
+    db = _MemoLockDB(is_postgres=False)
+
+    row = _locked_memo_application_row(db, "phase3-app")
+
+    assert row["id"] == "phase3-app"
+    assert db.statements[0] == ("BEGIN IMMEDIATE", ())
+    assert "FOR UPDATE" not in db.statements[1][0]
+    assert db.statements[1][1] == ("phase3-app", "phase3-app")
+
+
 def test_idempotent_memo_payload_marks_reused_existing_row():
     from server import _memo_payload_if_fingerprint_unchanged
 

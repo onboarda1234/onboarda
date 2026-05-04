@@ -9614,6 +9614,27 @@ def _memo_payload_if_fingerprint_unchanged(latest_row, fingerprint):
     memo["metadata"]["block_reason"] = row.get("block_reason")
     return memo
 
+
+def _locked_memo_application_row(db, app_id):
+    """Fetch the memo source application under a per-application generation lock."""
+    if db.is_postgres:
+        return db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ? FOR UPDATE",
+            (app_id, app_id),
+        ).fetchone()
+
+    # SQLite: acquire a write lock before the source read so concurrent local
+    # requests cannot both calculate the same next memo version.
+    try:
+        db.execute("BEGIN IMMEDIATE")
+    except Exception:
+        pass  # Already in a transaction.
+    return db.execute(
+        "SELECT * FROM applications WHERE id = ? OR ref = ?",
+        (app_id, app_id),
+    ).fetchone()
+
+
 class ComplianceMemoHandler(BaseHandler):
     """POST /api/applications/:id/memo — Generate compliance memo from application data"""
     def post(self, app_id):
@@ -9637,8 +9658,12 @@ class ComplianceMemoHandler(BaseHandler):
             })
             return
 
-        app = db.execute("SELECT * FROM applications WHERE id = ? OR ref = ?", (app_id, app_id)).fetchone()
+        app = _locked_memo_application_row(db, app_id)
         if not app:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             db.close()
             return self.error("Application not found", 404)
 
@@ -9706,7 +9731,18 @@ class ComplianceMemoHandler(BaseHandler):
             return
 
         # Build compliance memo (pure computation — extracted to memo_handler.py)
-        memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(app, directors, ubos, documents)
+        try:
+            memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(
+                app, directors, ubos, documents
+            )
+        except Exception as e:
+            logger.error("Failed to build compliance memo for %s: %s", real_id, e, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to generate compliance memo", 500)
         rule_violations = rule_engine_result.get("violations", [])
         latest_version = int((dict(latest_memo_row).get("version") if latest_memo_row else 0) or 0)
         next_version = latest_version + 1
