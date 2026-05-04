@@ -2336,14 +2336,38 @@ class MeHandler(BaseHandler):
 class LogoutHandler(BaseHandler):
     """POST /api/auth/logout — Revoke token and clear session cookie."""
     def post(self):
-        user = self.get_current_user_token()
-        if user:
-            # Revoke the JWT so it can't be reused even before expiry
-            jti = user.get("jti")
-            exp = user.get("exp")
+        presented_tokens = []
+        auth = self.request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            presented_tokens.append(auth[7:])
+        session_token = self.get_cookie("arie_session", None)
+        if session_token:
+            presented_tokens.append(session_token)
+
+        user = None
+        revoked_count = 0
+        seen_tokens = set()
+        for token in presented_tokens:
+            if not token or token in seen_tokens:
+                continue
+            seen_tokens.add(token)
+            decoded = decode_token(token)
+            if not decoded:
+                continue
+            if user is None:
+                user = decoded
+            jti = decoded.get("jti")
+            exp = decoded.get("exp")
             if jti and exp:
                 token_revocation_list.revoke(jti, exp)
-            self.log_audit(user, "Logout", "System", f"User {user.get('name', '')} logged out")
+                revoked_count += 1
+        if user:
+            self.log_audit(
+                user,
+                "Logout",
+                "System",
+                f"User {user.get('name', '')} logged out; revoked {revoked_count} session token(s)",
+            )
         self.clear_session_cookie()
         self.success({"status": "logged_out"})
 

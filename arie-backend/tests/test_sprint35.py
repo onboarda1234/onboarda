@@ -202,6 +202,48 @@ class TestLogout:
         replay_client.cookies.set("arie_session", token)
         assert replay_client.get(f"{api_server}/api/auth/me", timeout=3).status_code == 401
 
+    def test_logout_revokes_bearer_and_cookie_tokens_when_both_present(self, api_server):
+        """Logout must revoke both presented tokens, not only the auth-precedence winner."""
+        from auth import create_token
+        bearer_token = create_token("admin001", "admin", "Test Admin", "officer")
+        cookie_token = create_token("admin001", "admin", "Test Admin", "officer")
+        assert bearer_token != cookie_token
+
+        headers = {"Authorization": f"Bearer {bearer_token}"}
+        cookies = {"arie_session": cookie_token}
+        assert http_requests.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 200
+        assert http_requests.get(f"{api_server}/api/auth/me", cookies=cookies, timeout=3).status_code == 200
+
+        logout = http_requests.post(
+            f"{api_server}/api/auth/logout",
+            headers=headers,
+            cookies=cookies,
+            timeout=3,
+        )
+        assert logout.status_code == 200
+
+        assert http_requests.get(f"{api_server}/api/auth/me", headers=headers, timeout=3).status_code == 401
+        assert http_requests.get(f"{api_server}/api/auth/me", cookies=cookies, timeout=3).status_code == 401
+
+    def test_logout_with_invalid_bearer_still_revokes_valid_cookie_token(self, api_server):
+        """A stale/invalid Authorization header must not mask a valid cookie session during logout."""
+        from auth import create_token
+        cookie_token = create_token("admin001", "admin", "Test Admin", "officer")
+        cookies = {"arie_session": cookie_token}
+        headers = {"Authorization": "Bearer invalid.stale.token"}
+
+        assert http_requests.get(f"{api_server}/api/auth/me", cookies=cookies, timeout=3).status_code == 200
+        logout = http_requests.post(
+            f"{api_server}/api/auth/logout",
+            headers=headers,
+            cookies=cookies,
+            timeout=3,
+        )
+        assert logout.status_code == 200
+
+        # Re-send the original cookie value to prove server-side revocation happened.
+        assert http_requests.get(f"{api_server}/api/auth/me", cookies=cookies, timeout=3).status_code == 401
+
     def test_browser_signout_calls_server_logout(self):
         """Back office and portal sign-out must call the server logout endpoint."""
         repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
