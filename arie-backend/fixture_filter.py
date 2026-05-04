@@ -15,10 +15,10 @@ All current staging scenarios use IDs in the reserved ``f1xed...``
 **Signal 2 — explicit column** (``is_fixture``):
 ``applications.is_fixture`` is a boolean/integer column (``FALSE``/
 ``0`` by default) set to ``TRUE``/``1`` for any fixture or historical
-test row.  This column was introduced to handle 8 historical test rows
-that pre-date the ``f1xed`` namespace (ARF-2026-100421, 100424, 100427,
-100428, 100430, 100454, 100455, 100456) whose IDs are normal UUID hex
-values and would bypass the ID-pattern check alone.
+test row.  This column was introduced to handle historical test rows
+that pre-date the ``f1xed`` namespace and later smoke/QA rows created
+with normal UUID-like IDs. These rows would bypass the ID-pattern check
+alone.
 
 Both signals are checked; a row is a fixture if *either* condition is
 true.  New seeded rows must set ``is_fixture = 1`` (the seeder does
@@ -69,10 +69,12 @@ from typing import List, Optional, Tuple
 # *reserved namespace*.
 FIXTURE_APP_ID_PATTERN: str = "f1xed%"
 
-# Stable ``ref`` values of the 8 historical test rows that pre-date the
-# ``f1xed`` namespace.  These rows are marked ``is_fixture = 1`` by
-# migration v2.29.  This tuple is kept here for documentation and test
-# coverage; the authoritative marking lives in the DB column.
+# Stable ``ref`` values of historical test rows that pre-date the
+# ``f1xed`` namespace or were created by smoke/QA probes before the Day 1
+# data-hygiene backfill. These rows are marked ``is_fixture = 1`` by
+# inline migration v2.29 and file migration 020. This tuple is kept here for
+# documentation and test coverage; the authoritative marking lives in the DB
+# column.
 ROGUE_FIXTURE_REFS: tuple = (
     "ARF-2026-100454",  # EX06 DualApproval Test Corp
     "ARF-2026-100456",  # EX06 Validation TestCo Ltd
@@ -82,6 +84,32 @@ ROGUE_FIXTURE_REFS: tuple = (
     "ARF-2026-100430",  # Probe Test Co
     "ARF-2026-100428",  # test 2
     "ARF-2026-100427",  # test [QA-R10-mnyuuv7q]
+    "ARF-2026-900031",  # PHASE4 Closeout Runtime 20260503160321 Ltd
+    "ARF-2026-900030",  # PHASE4 Closeout Runtime 20260503160217 Ltd
+    "ARF-2026-900029",  # PHASE2 Postdeploy Validation 20260503T122058Z Ltd
+    "ARF-2026-900028",  # PHASE2 Diagnosis 20260503T094527Z Ltd
+    "ARF-2026-900027",  # PHASE1 Memo Truth Smoke 1777801085 Ltd
+    "ARF-2026-900026",  # PHASE1 Memo Truth Smoke 1777801021 Ltd
+    "ARF-2026-900025",  # PHASE1 Memo Truth Smoke 1777800962 Ltd
+    "ARF-2026-900024",  # PHASE1 Memo Truth Smoke 1777800913 Ltd
+    "ARF-2026-900023",  # PHASE0 Baseline Audit 1777793617 Ltd
+    "ARF-2026-900022",  # D2 Verify Probe Ltd
+    "ARF-2026-900021",  # AUDIT May2 Runtime 1777708928 Ltd
+    "ARF-2026-900020",  # AUDIT May2 Runtime 1777688957 Ltd
+    "ARF-2026-900019",  # AUDIT Runtime Upload 1777663856 Ltd
+    "ARF-2026-900018",  # Codex RMI Smoke 1777639540 Ltd
+    "ARF-2026-900017",  # Codex Phase1C Smoke 1777617157 Ltd
+    "ARF-2026-900016",  # Codex Resume Smoke 1777617050 Ltd
+    "ARF-2026-900015",  # E2E Test Corp 1777617014
+    "ARF-2026-900014",  # QA E2E Test 1 Standard Trading Ltd
+    "ARF-2026-900013",  # test
+    "ARF-2026-100470",  # Priority C QA Validation Ltd
+    "ARF-2026-100469",  # QA Audit Crypto Payments Ltd
+    "ARF-2026-100468",  # QA Audit MU SME Ltd
+    "ARF-2026-100451",  # EntityType Validator 31553 Ltd
+    "ARF-2026-100447",  # Phase2 Validator Delta
+    "ARF-2026-100446",  # Phase2 Validator Ltd
+    "ARF-2026-100422",  # Staging E2E Corp
 )
 
 def fixture_app_exclude_clause(table_alias: str = "a") -> Tuple[str, List[str]]:
@@ -134,7 +162,7 @@ def fixture_app_id_exclude_clause(
 
     * The ``NOT LIKE`` arm catches ``f1xed%`` IDs without a join.
     * The ``NOT IN`` subquery catches rows whose linked application has
-      ``is_fixture = 1`` (the 8 rogue historical test rows).
+      ``is_fixture = 1`` (historical and smoke/QA fixture rows).
     * The ``IS NULL`` guard preserves manually created alerts/reviews
       with no application link.
 

@@ -55,6 +55,7 @@ _CHAIN_FILES = [
     ("017", "migration_017_screening_monitoring_subscriptions.sql"),
     ("018", "migration_018_monitoring_alerts_provider_case_unique.sql"),
     ("019", "migration_019_monitoring_alerts_backfill_provenance.sql"),
+    ("020", "migration_020_historical_fixture_backfill.sql"),
 ]
 
 
