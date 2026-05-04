@@ -3,13 +3,17 @@ Shared helpers for per-migration idempotency tests
 (test_migration_004_idempotency.py, ..._005_..., ..._006_..., ..._007_...)
 and the full-chain validation tests (test_migration_chain_full.py).
 
+Fresh ``init_db`` pre-marks schema migrations as applied, but intentional
+file-runner data migrations (currently migration 020) remain pending because
+their data effects are not represented by schema DDL.
+
 Each per-migration test module asserts the same two contract conditions
 against a fresh SQLite database:
 
   1. ``test_fresh_init_db_then_runner_completes_cleanly`` -- a brand-new
      SQLite database (init_db has just run) followed by the file-based
-     migration runner completes with no FAILED log line, emits
-     ``Applied N migration(s) successfully``, records the migration
+     migration runner completes with no FAILED log line, applies the pending
+     data migration(s), records the migration
      version in ``schema_version``, and -- where applicable -- the
      post-condition column the migration was historically responsible
      for is present (because inline v2.x in db.py adds it).
@@ -50,6 +54,8 @@ import sys
 
 # Make arie-backend importable regardless of pytest's cwd.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+FRESH_INIT_PENDING_DATA_MIGRATIONS = 1
 
 
 @contextlib.contextmanager
@@ -113,8 +119,9 @@ def assert_fresh_init_then_runner_clean(
     post_condition=None,
 ):
     """Run init_db then the file-based runner against a fresh SQLite
-    database. Assert no FAILED log, "up to date" emitted, ``version`` recorded in schema_version, and
-    ``post_condition(db)`` (if provided) returns truthy."""
+    database. Assert no FAILED log, pending data migrations applied,
+    ``version`` recorded in schema_version, and ``post_condition(db)``
+    (if provided) returns truthy."""
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         from migrations.runner import run_all_migrations_with_connection
 
@@ -128,9 +135,16 @@ def assert_fresh_init_then_runner_clean(
         assert not any("failed" in m.lower() for m in messages), (
             f"Migration runner emitted a FAILED log: {messages}"
         )
-        assert applied == 0, f"Expected fresh init_db runner no-op; got {applied}"
-        assert any("up to date" in m.lower() for m in messages), (
-            f"Expected 'Database schema is up to date' log; got: {messages}"
+        assert applied == FRESH_INIT_PENDING_DATA_MIGRATIONS, (
+            "Expected fresh init_db runner to apply "
+            f"{FRESH_INIT_PENDING_DATA_MIGRATIONS} data migration(s); got {applied}"
+        )
+        assert any(
+            f"Applied {FRESH_INIT_PENDING_DATA_MIGRATIONS} migration(s) successfully" in m
+            for m in messages
+        ), (
+            "Expected data-migration applied summary log; got: "
+            f"{messages}"
         )
         # Target version recorded in schema_version.
         rows = db.execute(

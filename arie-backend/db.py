@@ -15,6 +15,12 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+FILE_MIGRATIONS_REQUIRING_RUNNER = frozenset({
+    # Migration 020 is a data backfill. It is not represented by init_db's
+    # schema DDL, so long-lived databases must let the file runner execute it.
+    "020",
+})
+
 # Try to import psycopg2 for PostgreSQL support
 try:
     import psycopg2
@@ -2000,9 +2006,11 @@ def _mark_known_migrations_as_applied(db: DBConnection):
     """On fresh installs, record file migrations already represented by init_db.
 
     ``init_db`` creates the complete current schema, so the file-based
-    migration runner must treat every existing migration file as already
-    applied. Long-lived databases keep their existing rows and only missing
-    versions are inserted here.
+    migration runner must treat every existing schema migration file as already
+    applied. Data migrations listed in ``FILE_MIGRATIONS_REQUIRING_RUNNER`` are
+    not represented by the DDL and must still run through the file runner.
+    Long-lived databases keep their existing rows and only missing versions are
+    inserted here.
     """
     from migrations.runner import MIGRATIONS_DIR, ensure_schema_version_table
 
@@ -2013,6 +2021,17 @@ def _mark_known_migrations_as_applied(db: DBConnection):
         if len(parts) < 2:
             continue
         version = parts[1]
+        if version in FILE_MIGRATIONS_REQUIRING_RUNNER:
+            # Repair prior deploys that incorrectly pre-marked a data migration
+            # as "covered by init_db". A genuinely applied file migration has
+            # its file checksum, so it is left untouched.
+            db.execute(
+                "DELETE FROM schema_version "
+                "WHERE version = ? AND filename = ? "
+                "AND description = ? AND checksum = ?",
+                (version, path.name, "covered by init_db", "init_db"),
+            )
+            continue
         existing = db.execute(
             "SELECT 1 FROM schema_version WHERE version = ?",
             (version,),

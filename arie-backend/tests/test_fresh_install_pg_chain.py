@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ---------------------------------------------------------------------------
 
 _TOTAL_MIGRATIONS = 20
+_FRESH_INIT_PENDING_DATA_MIGRATIONS = 1
 
 
 def _extract_periodic_reviews_ddl(schema_sql: str) -> str:
@@ -153,9 +154,11 @@ def test_fresh_pg_init_and_migration_chain(tmp_path, monkeypatch, caplog):
             assert not any("failed" in m.lower() for m in messages), (
                 f"Migration runner emitted a FAILED log on PG: {messages}"
             )
-            # Fresh init_db pre-populates schema_version, so runner is a no-op.
-            assert applied == 0, (
-                f"Expected 0 migrations applied; got {applied}. "
+            # Fresh init_db pre-populates schema migrations. Data migrations
+            # still run because their effects are not represented by DDL.
+            assert applied == _FRESH_INIT_PENDING_DATA_MIGRATIONS, (
+                "Expected fresh PG runner to apply "
+                f"{_FRESH_INIT_PENDING_DATA_MIGRATIONS} data migration(s); got {applied}. "
                 f"Messages: {messages}"
             )
             # Migration 003 specifically must be in the applied list
@@ -238,9 +241,11 @@ def test_fresh_sqlite_init_and_migration_chain(tmp_path, monkeypatch, caplog):
         assert not any("failed" in m.lower() for m in messages), (
             f"Migration runner emitted a FAILED log on SQLite: {messages}"
         )
-        # Fresh init_db pre-populates schema_version, so runner is a no-op.
-        assert applied == 0, (
-            f"Expected 0 migrations applied on SQLite; got {applied}. "
+        # Fresh init_db pre-populates schema migrations. Data migrations still
+        # run because their effects are not represented by DDL.
+        assert applied == _FRESH_INIT_PENDING_DATA_MIGRATIONS, (
+            "Expected fresh SQLite runner to apply "
+            f"{_FRESH_INIT_PENDING_DATA_MIGRATIONS} data migration(s); got {applied}. "
             f"Messages: {messages}"
         )
         # Migration 003 must be in the applied list

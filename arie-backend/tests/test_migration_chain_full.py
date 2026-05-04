@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests._migration_idempotency_helpers import fresh_migration_db
 
+_FILE_RUNNER_DATA_MIGRATIONS = {"020"}
 
 _CHAIN_FILES = [
     ("001", "migration_001_initial.sql"),
@@ -178,23 +179,30 @@ def _fresh_pg(monkeypatch):
 def test_fresh_db_applies_all_migrations(
     tmp_path, monkeypatch, caplog
 ):
-    """Step 4 case 1: fresh init_db then runner; migrations are pre-marked."""
+    """Step 4 case 1: fresh init_db then runner.
+
+    Schema migrations are pre-marked by init_db; data migrations still run.
+    """
     with fresh_migration_db(tmp_path, monkeypatch) as db:
         applied, messages = _run_and_capture(db, caplog)
         _assert_no_failed_log(messages)
-        assert applied == 0, (
-            f"Expected 0 migrations applied on fresh DB; got {applied}"
+        assert applied == len(_FILE_RUNNER_DATA_MIGRATIONS), (
+            "Expected only file-runner data migrations on fresh DB; "
+            f"got {applied}"
         )
-        assert any("up to date" in m.lower() for m in messages), (
-            f"Missing up-to-date summary log; got: {messages}"
+        assert any(
+            f"Applied {len(_FILE_RUNNER_DATA_MIGRATIONS)} migration(s) successfully" in m
+            for m in messages
+        ), (
+            f"Missing applied-summary log; got: {messages}"
         )
         assert _applied_versions(db) == [v for v, _ in _CHAIN_FILES]
 
 
 def test_init_db_marks_all_known_migrations_as_applied(monkeypatch):
-    """init_db's contract: after running, every migration_*.sql file is
-    pre-marked as applied in schema_version. The file-based runner is a
-    no-op on a fresh DB.
+    """init_db's contract: after running, schema migrations are pre-marked.
+
+    Data migrations are intentionally left pending for the file-based runner.
 
     This is the regression test for the bug where migration 014's
     ADD COLUMN status would collide with init_db's own status column."""
@@ -214,14 +222,17 @@ def test_init_db_marks_all_known_migrations_as_applied(monkeypatch):
             for r in db.execute("SELECT version FROM schema_version").fetchall()
         }
 
-        assert expected_versions <= actual_versions, (
-            "init_db did not mark these migrations as applied: "
-            f"{expected_versions - actual_versions}"
+        expected_missing = _FILE_RUNNER_DATA_MIGRATIONS
+        assert expected_versions - actual_versions == expected_missing, (
+            "init_db marked the wrong migration set as applied. Missing: "
+            f"{expected_versions - actual_versions}; expected missing: "
+            f"{expected_missing}"
         )
 
         applied_count = run_all_migrations_with_connection(db)
-        assert applied_count == 0, (
-            f"Expected 0 migrations to apply on fresh init_db, got {applied_count}"
+        assert applied_count == len(_FILE_RUNNER_DATA_MIGRATIONS), (
+            "Expected only file-runner data migrations on fresh init_db, "
+            f"got {applied_count}"
         )
     finally:
         db.close()

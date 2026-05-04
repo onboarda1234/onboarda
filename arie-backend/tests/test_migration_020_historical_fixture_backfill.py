@@ -134,3 +134,43 @@ def test_migration_020_requires_exact_company_name_match(tmp_path, monkeypatch):
         ).fetchone()
         assert row["is_fixture"] == 0
         assert _audit_count(db) == 0
+
+
+def test_init_db_premarked_020_is_repaired_then_runner_applies(
+    tmp_path,
+    monkeypatch,
+):
+    with fresh_migration_db(tmp_path, monkeypatch) as db:
+        _insert_application(
+            db,
+            "day1repair00001",
+            "ARF-2026-900031",
+            "PHASE4 Closeout Runtime 20260503160321 Ltd",
+        )
+        db.execute("DELETE FROM schema_version WHERE version = ?", (MIGRATION_VERSION,))
+        db.execute(
+            """
+            INSERT INTO schema_version (version, filename, description, checksum)
+            VALUES (?, ?, ?, ?)
+            """,
+            (MIGRATION_VERSION, MIGRATION_FILE, "covered by init_db", "init_db"),
+        )
+        db.commit()
+
+        import db as db_module
+        db_module._mark_known_migrations_as_applied(db)
+        bad_premark = db.execute(
+            "SELECT 1 FROM schema_version WHERE version = ?",
+            (MIGRATION_VERSION,),
+        ).fetchone()
+        assert bad_premark is None
+
+        from migrations.runner import run_all_migrations_with_connection
+
+        assert run_all_migrations_with_connection(db) == 1
+        row = db.execute(
+            "SELECT is_fixture FROM applications WHERE id = ?",
+            ("day1repair00001",),
+        ).fetchone()
+        assert row["is_fixture"] == 1
+        assert _audit_count(db) == 1
