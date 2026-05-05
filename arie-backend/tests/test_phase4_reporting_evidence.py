@@ -244,3 +244,17 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         assert summary["total"] == len(rows)
         assert summary["pending"] == 4
         assert classified_total == summary["total"]
+
+    def test_dashboard_in_progress_count_matches_report_pending_bucket(self):
+        analytics = self.fetch("/api/reports/analytics", headers=self._admin_headers())
+        dashboard = self.fetch("/api/dashboard", headers=self._admin_headers())
+
+        assert analytics.code == 200
+        assert dashboard.code == 200
+        analytics_body = json.loads(analytics.body.decode())
+        dashboard_body = json.loads(dashboard.body.decode())
+        expected_pending = analytics_body["summary"]["pending"]
+        assert dashboard_body["early_stage_applications"] == expected_pending
+        assert dashboard_body["in_progress_applications"] == expected_pending
+        assert dashboard_body["pending_statuses"] == analytics_body["report"]["pending_statuses"]
+        assert dashboard_body["canonical_view"] == "applications_report_v1"

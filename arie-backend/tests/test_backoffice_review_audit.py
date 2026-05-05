@@ -802,6 +802,37 @@ class TestDayThreeApprovalBlockerUX:
 
 
 # ═══════════════════════════════════════════════════════════
+# I3B. DAY 4 DASHBOARD COUNT ALIGNMENT
+# ═══════════════════════════════════════════════════════════
+class TestDayFourDashboardCountAlignment:
+    """Pin Dashboard in-progress counts to the report status contract."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_dashboard_in_progress_label_and_status_contract_are_visible(self):
+        html = self._read_backoffice()
+        assert '<div class="stat-card-label">In Progress</div>' in html
+        assert "var DASHBOARD_PENDING_STATUSES = [" in html
+        assert "'draft'" in html
+        assert "'pricing_review'" in html
+        assert "'kyc_documents'" in html
+        assert "function isDashboardPendingApplication(app)" in html
+
+    def test_dashboard_stats_uses_single_pending_helper(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function updateDashboardStats()")
+        fn_region = html[fn_start:fn_start + 900]
+        assert "APPLICATIONS.filter(isDashboardPendingApplication).length" in fn_region
+        assert "pending review" not in fn_region
+        assert "pricing review" not in fn_region
+
+
+# ═══════════════════════════════════════════════════════════
 # I4. DAY 3 MEMO QUALITY TRUTHFULNESS
 # ═══════════════════════════════════════════════════════════
 class TestDayThreeMemoQualityTruthfulness:
