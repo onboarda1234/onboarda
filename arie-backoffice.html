@@ -12757,6 +12757,26 @@ function getMemoValidationIssues(result) {
   }
 }
 
+function hasMemoQualityScore(result) {
+  return !!result && result.quality_score !== undefined && result.quality_score !== null && result.quality_score !== '';
+}
+
+function memoQualityGaugeClass(status, score) {
+  if (status === 'fail') return 'poor';
+  if (status === 'pass_with_fixes') return 'fair';
+  if (status !== 'pass') return 'pending';
+  return score >= 8 ? 'excellent' : score >= 6 ? 'good' : score >= 4 ? 'fair' : 'poor';
+}
+
+function memoQualityScoreLabel(status, score) {
+  var prefix = score.toFixed(1) + ' / 10 — ';
+  if (status === 'fail') return prefix + 'Validation failed; remediation required';
+  if (status === 'pass_with_fixes') return prefix + 'Needs fixes before approval';
+  if (status !== 'pass') return 'Run validation to see server-calculated memo quality results';
+  var scoreLabel = score >= 8 ? 'Excellent' : score >= 6 ? 'Good' : score >= 4 ? 'Fair — manual review recommended' : 'Poor — significant issues found';
+  return prefix + scoreLabel;
+}
+
 function setMemoStatusBadge(label, variant) {
   var badge = document.getElementById('memo-status-badge');
   if (!badge) return;
@@ -12895,24 +12915,24 @@ function renderValidationPanel(result) {
   var status = String(result.validation_status || 'pending').toLowerCase();
   var score = parseFloat(result.quality_score);
   if (isNaN(score)) score = 0;
+  var hasQualityScore = hasMemoQualityScore(result);
   var gauge = document.getElementById('memo-quality-gauge');
-  if (status === 'pending' && !result.quality_score && !isApproved) {
+  if (status === 'pending' && !hasQualityScore && !isApproved) {
     gauge.textContent = '—';
     gauge.className = 'memo-quality-gauge pending';
     gauge.style.background = '#94a3b8';
   } else {
     gauge.textContent = score.toFixed(1);
-    gauge.className = 'memo-quality-gauge ' + (score >= 8 ? 'excellent' : score >= 6 ? 'good' : score >= 4 ? 'fair' : 'poor');
+    gauge.className = 'memo-quality-gauge ' + memoQualityGaugeClass(status, score);
     gauge.style.background = '';
   }
 
   // Score text
   var scoreText = document.getElementById('memo-quality-score-text');
-  if (status === 'pending' && !result.quality_score && !isApproved) {
+  if (status === 'pending' && !hasQualityScore && !isApproved) {
     scoreText.textContent = 'Run validation to see server-calculated memo quality results';
   } else {
-    var scoreLabel = score >= 8 ? 'Excellent' : score >= 6 ? 'Good' : score >= 4 ? 'Fair — manual review recommended' : 'Poor — significant issues found';
-    scoreText.textContent = score.toFixed(1) + ' / 10 — ' + scoreLabel;
+    scoreText.textContent = memoQualityScoreLabel(status, score);
   }
 
   // Version
