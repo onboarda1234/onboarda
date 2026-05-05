@@ -943,6 +943,25 @@ class TestDayFourReportExportReconciliation:
         assert "resp.data.forEach" not in fn_region
         assert "new Blob([csv]" not in fn_region
 
+    def test_kpi_export_uses_server_csv_endpoint(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function exportKPIReport()")
+        fn_region = html[fn_start:fn_start + 2600]
+        assert "/reports/generate?format=csv&" in fn_region
+        assert "fetch(BO_API_BASE + url, { headers: headers })" in fn_region
+        assert "headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN" in fn_region
+        assert "res.blob()" in fn_region
+        assert "X-Report-Record-Count" in fn_region
+        assert "KPI report exported" in fn_region
+
+    def test_kpi_export_no_longer_builds_csv_in_browser(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function exportKPIReport()")
+        fn_region = html[fn_start:fn_start + 2600]
+        assert "var csv = fields.join(',')" not in fn_region
+        assert "resp.data.forEach" not in fn_region
+        assert "new Blob([csv]" not in fn_region
+
 
 # ═══════════════════════════════════════════════════════════
 # J. AUDIT TRAIL HARDENING
