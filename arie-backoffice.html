@@ -1099,6 +1099,8 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     </div>
   </div>
 
+  <div id="detail-approval-blockers" style="display:none;margin:0 0 16px;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
+
   <!-- Content tabs -->
   <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--border1);flex-wrap:wrap;">
     <button class="btn btn-outline btn-sm" id="tab-overview" onclick="switchDetailTab('overview')" style="border:none;border-bottom:2px solid var(--brand);border-radius:0;font-weight:600;color:var(--brand);padding:8px 20px;">Overview</button>
@@ -1255,6 +1257,8 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
 
             <!-- Category Scores Breakdown -->
             <div class="memo-val-scores" id="memo-val-scores"></div>
+
+            <div id="memo-approval-blockers" style="display:none;margin:12px 0;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
 
             <!-- Action Buttons -->
             <div class="officer-signoff-gate" id="memo-officer-signoff-gate">
@@ -5676,6 +5680,7 @@ function renderAuthoritativeAppDetail(app, options) {
   var standardCard = document.getElementById('standard-actions-topbar');
   if (preApprovalCard) preApprovalCard.style.display = isPreApproval ? 'flex' : 'none';
   if (standardCard) standardCard.style.display = isPreApproval ? 'none' : 'flex';
+  renderApprovalBlockersPanel(app);
 
   switchDetailTab(options.initialTab || 'overview');
   showView('app-detail');
@@ -9026,10 +9031,135 @@ function setDecisionError(message) {
   el.style.display = 'block';
 }
 
-function getApprovalReadiness(app) {
+function memoApprovalReasonRecorded(memoData, memoMeta) {
+  return !!String((memoData && memoData.approval_reason) || (memoMeta && memoMeta.approval_reason) || '').trim();
+}
+
+function memoSupervisorBlock(memoData, memoMeta) {
+  var metadata = (memoData && memoData.metadata) || {};
+  return (memoData && memoData.supervisor) || metadata.supervisor || (memoMeta && memoMeta.supervisor) || {};
+}
+
+function getMemoApprovalBlockers(app, validationResult) {
   var blockers = [];
-  if (!app) return { ready: false, blockers: ['No application is selected.'] };
-  if (!app.latestMemo) blockers.push('Compliance memo has not been generated.');
+  var memoData = window._currentMemoData || (app && app.latestMemo) || null;
+  var memoMeta = (app && app.latestMemoMeta) || {};
+  var result = validationResult || {};
+  if (!memoData || !memoData.sections) {
+    return ['Generate a compliance memo before memo approval.'];
+  }
+
+  var reviewStatus = String(result.review_status || memoData.review_status || memoMeta.review_status || '').toLowerCase();
+  if (reviewStatus === 'approved') return blockers;
+
+  if (app && app.memoIsStale) {
+    blockers.push('Regenerate the memo because application data changed after this memo was generated.');
+  }
+
+  var metadata = memoData.metadata || {};
+  if (metadata.blocked) {
+    blockers.push('Resolve memo block: ' + (metadata.block_reason || 'Rule Engine or supervisor marked the memo as blocked.'));
+  }
+  if (metadata.is_fallback || memoData.ai_source === 'fallback' || memoData.memo_source === 'fallback') {
+    blockers.push('Regenerate the memo from the live memo builder; fallback memos cannot be approved.');
+  }
+
+  var status = String(result.validation_status || memoData.validation_status || memoMeta.validation_status || 'pending').toLowerCase();
+  if (status === 'pending') {
+    blockers.push('Run memo validation before approval.');
+  } else if (status === 'fail') {
+    blockers.push('Fix failed memo validation issues and re-run validation.');
+  } else if (status === 'pass_with_fixes') {
+    blockers.push('PASS WITH FIXES approval requires an approval_reason in the memo-approval request; this UI does not capture or submit that reason yet.');
+  } else if (status && status !== 'pass' && status !== 'pass_with_fixes') {
+    blockers.push('Memo validation status is ' + status.replace(/_/g, ' ') + '; approval requires PASS or documented PASS WITH FIXES.');
+  }
+
+  var supervisor = memoSupervisorBlock(memoData, memoMeta);
+  var supervisorVerdict = String(supervisor.verdict || result.supervisor_status || memoMeta.supervisor_status || '').toUpperCase();
+  if (supervisor.mandatory_escalation) {
+    blockers.push('Complete mandatory escalation or EDD and regenerate the memo before approval.');
+  } else if (supervisorVerdict === 'INCONSISTENT' || supervisor.can_approve === false) {
+    blockers.push('Resolve supervisor inconsistencies before memo approval.');
+  } else if (supervisorVerdict === 'CONSISTENT_WITH_WARNINGS') {
+    blockers.push('Supervisor-warning approval requires an approval_reason in the memo-approval request; this UI does not capture or submit that reason yet.');
+  }
+  if (supervisor.requires_sco_review && currentUser && currentUser.role !== 'admin' && currentUser.role !== 'sco') {
+    blockers.push('Senior Compliance Officer or Admin review is required for this memo.');
+  }
+
+  var routing = metadata.edd_routing || {};
+  var appStatus = String((app && (app.statusRaw || app.status)) || '').toLowerCase();
+  if (routing.route === 'edd' && appStatus !== 'edd_required' && appStatus !== 'edd_approved') {
+    blockers.push('Route this case to EDD before memo approval.');
+  }
+
+  return blockers;
+}
+
+function renderMemoApprovalBlockers(result) {
+  var panel = document.getElementById('memo-approval-blockers');
+  if (!panel) return [];
+  var blockers = getMemoApprovalBlockers(window._currentDetailApp, result || {});
+  if (blockers.length) {
+    panel.style.display = 'block';
+    panel.style.background = '#fef3c7';
+    panel.style.borderColor = '#fde68a';
+    panel.style.color = '#92400e';
+    panel.innerHTML = '<strong>Memo approval blocked:</strong><ul style="margin:8px 0 0 18px;padding:0;">' +
+      blockers.map(function(b) { return '<li>' + escapeHtml(b) + '</li>'; }).join('') +
+      '</ul>';
+  } else {
+    panel.style.display = 'block';
+    panel.style.background = '#dcfce7';
+    panel.style.borderColor = '#bbf7d0';
+    panel.style.color = '#166534';
+    panel.innerHTML = '<strong>Memo approval readiness:</strong> No obvious memo blockers detected. Officer sign-off and backend gates still apply.';
+  }
+  return blockers;
+}
+
+function getApplicationApprovalBlockers(app) {
+  var blockers = [];
+  if (!app) return ['No application is selected.'];
+
+  var status = String(app.statusRaw || app.status || '').toLowerCase();
+  var preReviewStates = {
+    draft: true,
+    prescreening_submitted: true,
+    pricing_review: true,
+    pricing_accepted: true,
+    pre_approval_review: true,
+    pre_approved: true,
+    kyc_documents: true
+  };
+  if (preReviewStates[status]) {
+    blockers.push('Move the application into compliance review before final approval.');
+  }
+
+  if (!app.latestMemo) {
+    blockers.push('Compliance memo has not been generated.');
+  } else {
+    var memoMeta = app.latestMemoMeta || {};
+    var memoData = app.latestMemo || {};
+    var memoReview = String(memoData.review_status || memoMeta.review_status || '').toLowerCase();
+    var memoValidation = String(memoData.validation_status || memoMeta.validation_status || '').toLowerCase();
+    var memoSupervisor = String((memoData.supervisor && memoData.supervisor.verdict) || memoMeta.supervisor_status || '').toUpperCase();
+    if (memoReview !== 'approved') blockers.push('Compliance memo has not been approved.');
+    if (memoValidation === 'pass_with_fixes' && !memoApprovalReasonRecorded(memoData, memoMeta)) {
+      blockers.push('Compliance memo has PASS WITH FIXES without a documented senior approval reason.');
+    } else if (memoValidation && memoValidation !== 'pass' && memoValidation !== 'pass_with_fixes') {
+      blockers.push('Compliance memo validation status is ' + memoValidation.replace(/_/g, ' ') + '.');
+    }
+    if (memoSupervisor === 'CONSISTENT_WITH_WARNINGS' && !memoApprovalReasonRecorded(memoData, memoMeta)) {
+      blockers.push('Compliance memo supervisor warnings need a documented senior approval reason.');
+    } else if (memoSupervisor && memoSupervisor !== 'CONSISTENT' && memoSupervisor !== 'CONSISTENT_WITH_WARNINGS') {
+      blockers.push('Compliance memo supervisor status is ' + memoSupervisor.replace(/_/g, ' ') + '.');
+    }
+    if (memoData.metadata && memoData.metadata.blocked) {
+      blockers.push('Compliance memo is blocked: ' + (memoData.metadata.block_reason || 'blocking memo controls failed.'));
+    }
+  }
   if (app.memoIsStale) blockers.push('Compliance memo is stale after application changes.');
   var screening = getApplicationScreeningSummary(app);
   if (!screening.screening_run_recorded) blockers.push('Screening has not been run.');
@@ -9041,7 +9171,49 @@ function getApprovalReadiness(app) {
   if ((app.risk === 'HIGH' || app.risk === 'VERY_HIGH') && currentUser && currentUser.role === 'co') {
     blockers.push('High-risk approval requires Admin or Senior Compliance Officer.');
   }
+  var documentReadiness = computeDocumentReadinessSummary(app);
+  if (documentReadiness.issueCount > 0) {
+    blockers.push('Resolve or senior-accept flagged/failed document checks before approval.');
+  }
+  if (documentReadiness.pepIncompleteCount > 0) {
+    blockers.push('Complete PEP declaration details before approval.');
+  }
+  return blockers;
+}
+
+function getApprovalReadiness(app) {
+  var blockers = getApplicationApprovalBlockers(app);
   return { ready: blockers.length === 0, blockers: blockers };
+}
+
+function renderApprovalBlockersPanel(app) {
+  var panel = document.getElementById('detail-approval-blockers');
+  var approveBtn = document.getElementById('btn-approve');
+  if (!panel) return;
+  var readiness = getApprovalReadiness(app);
+  if (readiness.ready) {
+    panel.style.display = 'block';
+    panel.style.background = '#dcfce7';
+    panel.style.borderColor = '#bbf7d0';
+    panel.style.color = '#166534';
+    panel.innerHTML = '<strong>Application approval readiness:</strong> No obvious client-side blockers detected. Backend gates still perform final validation.';
+    if (approveBtn) {
+      approveBtn.disabled = false;
+      approveBtn.title = 'Open approval decision modal.';
+    }
+    return;
+  }
+  panel.style.display = 'block';
+  panel.style.background = '#fef3c7';
+  panel.style.borderColor = '#fde68a';
+  panel.style.color = '#92400e';
+  panel.innerHTML = '<strong>Application approval blocked:</strong><ul style="margin:8px 0 0 18px;padding:0;">' +
+    readiness.blockers.map(function(b) { return '<li>' + escapeHtml(b) + '</li>'; }).join('') +
+    '</ul><div style="margin-top:8px;color:var(--text2);">Resolve these items before using the Approve action. More Info, screening review, memo generation, and EDD actions remain available.</div>';
+  if (approveBtn) {
+    approveBtn.disabled = true;
+    approveBtn.title = 'Approval blocked: ' + readiness.blockers.join(' ');
+  }
 }
 
 function renderDecisionReadiness(decision) {
@@ -12815,6 +12987,7 @@ function renderValidationPanel(result) {
   // Enable/disable approve button based on validation status + rule engine + supervisor
   var approveBtn = document.getElementById('btn-approve-memo');
   var memoD = window._currentMemoData;
+  var memoApprovalBlockers = renderMemoApprovalBlockers(result);
   var isBlocked = memoD && memoD.metadata && memoD.metadata.blocked;
   var svInconsistent = memoD && memoD.supervisor && memoD.supervisor.verdict === 'INCONSISTENT';
   var svCannotApprove = memoD && memoD.supervisor && memoD.supervisor.can_approve === false;
@@ -12844,14 +13017,14 @@ function renderValidationPanel(result) {
     approveBtn.innerHTML = '✅ Approve Memo';
     setMemoStatusBadge('Validation Failed', 'rejected');
   } else if (status === 'pass_with_fixes') {
-    approveBtn.disabled = false;
-    approveBtn.title = 'Caution: memo has issues that should be reviewed before approval.';
+    approveBtn.disabled = true;
+    approveBtn.title = memoApprovalBlockers.length ? memoApprovalBlockers.join(' ') : 'PASS WITH FIXES approval is blocked until this UI captures approval_reason.';
     approveBtn.style.background = '#92400e';
     approveBtn.innerHTML = '✅ Approve Memo';
     setMemoStatusBadge('Validated With Fixes', 'pending');
   } else if (status === 'pass') {
-    approveBtn.disabled = false;
-    approveBtn.title = 'Memo passed validation — ready for approval.';
+    approveBtn.disabled = memoApprovalBlockers.length > 0;
+    approveBtn.title = memoApprovalBlockers.length ? memoApprovalBlockers.join(' ') : 'Memo passed validation — ready for approval.';
     approveBtn.style.background = '#166534';
     approveBtn.innerHTML = '✅ Approve Memo';
     setMemoStatusBadge('Validated', 'approved');
