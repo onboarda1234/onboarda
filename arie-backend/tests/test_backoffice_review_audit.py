@@ -802,6 +802,49 @@ class TestDayThreeApprovalBlockerUX:
 
 
 # ═══════════════════════════════════════════════════════════
+# I4. DAY 3 MEMO QUALITY TRUTHFULNESS
+# ═══════════════════════════════════════════════════════════
+class TestDayThreeMemoQualityTruthfulness:
+    """Pin status-aware memo quality labels in the back-office validation panel."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_memo_quality_label_is_status_aware(self):
+        html = self._read_backoffice()
+        assert "function memoQualityScoreLabel(status, score)" in html
+        fn_start = html.index("function memoQualityScoreLabel(status, score)")
+        fn_region = html[fn_start:fn_start + 900]
+        assert "if (status === 'fail') return prefix + 'Validation failed; remediation required';" in fn_region
+        assert "if (status === 'pass_with_fixes') return prefix + 'Needs fixes before approval';" in fn_region
+        assert "if (status !== 'pass') return 'Run validation to see server-calculated memo quality results';" in fn_region
+        assert "var scoreLabel = score >= 8 ? 'Excellent'" in fn_region
+
+    def test_memo_quality_gauge_is_status_aware(self):
+        html = self._read_backoffice()
+        assert "function memoQualityGaugeClass(status, score)" in html
+        fn_start = html.index("function memoQualityGaugeClass(status, score)")
+        fn_region = html[fn_start:fn_start + 500]
+        assert "if (status === 'fail') return 'poor';" in fn_region
+        assert "if (status === 'pass_with_fixes') return 'fair';" in fn_region
+        assert "if (status !== 'pass') return 'pending';" in fn_region
+
+    def test_validation_panel_uses_quality_truthfulness_helpers(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function renderValidationPanel(result)")
+        fn_region = html[fn_start:fn_start + 1700]
+        assert "var hasQualityScore = hasMemoQualityScore(result);" in fn_region
+        assert "memoQualityGaugeClass(status, score)" in fn_region
+        assert "memoQualityScoreLabel(status, score)" in fn_region
+        assert "gauge.className = 'memo-quality-gauge ' + (score >= 8" not in fn_region
+        assert "scoreText.textContent = score.toFixed(1) + ' / 10 — ' + scoreLabel" not in fn_region
+
+
+# ═══════════════════════════════════════════════════════════
 # J. AUDIT TRAIL HARDENING
 # ═══════════════════════════════════════════════════════════
 class TestAuditTrailHardening:
