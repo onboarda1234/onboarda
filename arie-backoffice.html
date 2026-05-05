@@ -9994,11 +9994,9 @@ function renderKPIDashboard() {
     });
   });
 
-  // Backlog: active non-completed applications in the selected period
-  var backlogCount = appsInPeriod.filter(function(a) {
-    var s = statusKey(a);
-    return s !== 'approved' && s !== 'rejected' && s !== 'withdrawn' && s !== 'declined';
-  }).length;
+  // In-progress applications: use the same canonical status set as
+  // Dashboard and Reports so KPI cards do not drift from executive counts.
+  var backlogCount = appsInPeriod.filter(isDashboardPendingApplication).length;
 
   // ── Section 1: Operational Efficiency ──
   // Operational metrics require timing data not yet tracked in the backend.
@@ -10017,9 +10015,9 @@ function renderKPIDashboard() {
         '<div class="kpi-card-value" style="color:var(--text3);">\u2014</div>' +
         '<div class="kpi-card-sub" style="color:var(--text3);">Requires SLA deadline tracking</div>' +
       '</div>' +
-      '<div class="kpi-card amber"><div class="kpi-card-label">Application Backlog</div>' +
+      '<div class="kpi-card amber"><div class="kpi-card-label">In Progress Applications</div>' +
         '<div class="kpi-card-value" style="color:var(--amber);">' + backlogCount + '</div>' +
-        '<div class="kpi-card-sub">' + backlogCount + ' applications in progress in ' + periodLabel.toLowerCase() + '</div>' +
+        '<div class="kpi-card-sub">' + backlogCount + ' applications in the canonical in-progress bucket for ' + periodLabel.toLowerCase() + '</div>' +
       '</div>' +
       '<div class="kpi-card brand"><div class="kpi-card-label">Throughput (Decided)</div>' +
         '<div class="kpi-card-value" style="color:var(--brand);">' + decidedApps + '</div>' +
