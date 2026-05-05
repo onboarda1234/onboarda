@@ -870,7 +870,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <div class="stat-card-change" id="dash-stat-total-change"></div>
     </div>
     <div class="stat-card">
-      <div class="stat-card-label">Pending Review</div>
+      <div class="stat-card-label">In Progress</div>
       <div class="stat-card-value" style="color:var(--amber);" id="dash-stat-early-stage">0</div>
       <div class="stat-card-change" id="dash-stat-early-stage-change"></div>
     </div>
@@ -3665,6 +3665,17 @@ function normalizeStatusKey(status) {
   return String(status || '').toLowerCase().replace(/[\s-]+/g, '_');
 }
 
+var DASHBOARD_PENDING_STATUSES = [
+  'draft', 'pending', 'submitted', 'prescreening_submitted',
+  'pre_approval_review', 'pre_approved', 'pricing_review', 'pricing_accepted',
+  'in_review', 'under_review', 'compliance_review', 'kyc_submitted',
+  'kyc_documents', 'rmi_sent'
+];
+
+function isDashboardPendingApplication(app) {
+  return DASHBOARD_PENDING_STATUSES.indexOf(normalizeStatusKey((app || {}).statusRaw || (app || {}).status)) >= 0;
+}
+
 // ═══════════════════════════════════════════════════════════
 // DATA ARRAYS (populated from API via loadFromAPI())
 // ═══════════════════════════════════════════════════════════
@@ -4087,7 +4098,7 @@ function renderDashboardRecent() {
 
 function updateDashboardStats() {
   var total = APPLICATIONS.length;
-  var earlyStage = APPLICATIONS.filter(function(a) { var s = (a.status||'').toLowerCase(); return s === 'pending review' || s === 'pending' || s === 'in review' || s === 'submitted' || s === 'prescreening submitted' || s === 'pricing review' || s === 'kyc submitted' || s === 'compliance review'; }).length;
+  var earlyStage = APPLICATIONS.filter(isDashboardPendingApplication).length;
   // Approved This Month: only count applications approved with a date in the current calendar month
   var now = new Date();
   var currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');

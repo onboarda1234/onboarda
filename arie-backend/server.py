@@ -7215,7 +7215,12 @@ class DashboardHandler(BaseHandler):
                 return tuple(extra) + (client_id, *client_fx_params)
 
             stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["early_stage_applications"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted') AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            pending_placeholders = ",".join(["?"] * len(_REPORT_PENDING_STATUSES))
+            stats["early_stage_applications"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({pending_placeholders}) AND client_id=?{client_fx_clause}",
+                _client_params(*_REPORT_PENDING_STATUSES),
+            ).fetchone()["c"]
+            stats["in_progress_applications"] = stats["early_stage_applications"]
             stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
             stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
             stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
@@ -7243,6 +7248,8 @@ class DashboardHandler(BaseHandler):
             """, (client_id, *recent_fx_params)).fetchall()
             stats["recent"] = [dict(r) for r in recent]
             stats["show_fixtures"] = False
+            stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
+            stats["canonical_view"] = "applications_report_v1"
         else:
             # Officer / admin branch: exclude fixtures by default.
             # Pass show_fixtures=true (admin/sco only) to include them.
@@ -7252,7 +7259,13 @@ class DashboardHandler(BaseHandler):
             fp = [] if show_fx else fx_params
 
             stats["total"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE 1=1{fx_clause}", fp).fetchone()["c"]
-            stats["early_stage_applications"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('submitted','prescreening_submitted'){fx_clause}", fp).fetchone()["c"]
+            pending_placeholders = ",".join(["?"] * len(_REPORT_PENDING_STATUSES))
+            pending_params = [*_REPORT_PENDING_STATUSES, *fp]
+            stats["early_stage_applications"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({pending_placeholders}){fx_clause}",
+                pending_params,
+            ).fetchone()["c"]
+            stats["in_progress_applications"] = stats["early_stage_applications"]
             stats["in_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='in_review'{fx_clause}", fp).fetchone()["c"]
             stats["kyc_documents"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='kyc_documents'{fx_clause}", fp).fetchone()["c"]
             stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted'){fx_clause}", fp).fetchone()["c"]
@@ -7282,6 +7295,8 @@ class DashboardHandler(BaseHandler):
             """, recent_fp).fetchall()
             stats["recent"] = [dict(r) for r in recent]
             stats["show_fixtures"] = show_fx
+            stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
+            stats["canonical_view"] = "applications_report_v1"
 
         db.close()
         self.success(stats)
