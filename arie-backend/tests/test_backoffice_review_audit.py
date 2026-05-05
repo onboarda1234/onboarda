@@ -845,6 +845,43 @@ class TestDayThreeMemoQualityTruthfulness:
 
 
 # ═══════════════════════════════════════════════════════════
+# I5. DAY 3 RMI SUBMISSION UX HARDENING
+# ═══════════════════════════════════════════════════════════
+class TestDayThreeRMISubmissionHardening:
+    """Pin RMI request UX against duplicate submits and fake success toasts."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_rmi_modal_has_submit_button_state_hook(self):
+        html = self._read_backoffice()
+        assert 'id="rmi-submit-btn"' in html
+        assert "function setRMISubmitting(isSubmitting)" in html
+        fn_start = html.index("function setRMISubmitting(isSubmitting)")
+        fn_region = html[fn_start:fn_start + 450]
+        assert "btn.disabled = !!isSubmitting" in fn_region
+        assert "Sending..." in fn_region
+        assert "Send Request" in fn_region
+
+    def test_rmi_submit_is_debounced_and_requires_server_confirmation(self):
+        html = self._read_backoffice()
+        fn_start = html.index("async function confirmRMIRequest()")
+        fn_region = html[fn_start:fn_start + 2600]
+        assert "if (submitBtn && submitBtn.disabled) return;" in fn_region
+        assert "setRMISubmitting(true);" in fn_region
+        assert "if (!resp || !resp.rmi_request_id)" in fn_region
+        assert "Document request was not confirmed by the server" in fn_region
+        assert "await refreshCurrentAppDetail();" in fn_region
+        assert "showToast('Additional document request sent to client')" in fn_region
+        assert "finally" in fn_region
+        assert "setRMISubmitting(false);" in fn_region
+
+
+# ═══════════════════════════════════════════════════════════
 # J. AUDIT TRAIL HARDENING
 # ═══════════════════════════════════════════════════════════
 class TestAuditTrailHardening:

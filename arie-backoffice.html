@@ -2717,7 +2717,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-rmi-request')">Cancel</button>
-      <button class="btn btn-primary" onclick="confirmRMIRequest()">Send Request</button>
+      <button class="btn btn-primary" id="rmi-submit-btn" onclick="confirmRMIRequest()">Send Request</button>
     </div>
   </div>
 </div>
@@ -9308,6 +9308,13 @@ function setRMIError(message) {
   el.style.display = 'block';
 }
 
+function setRMISubmitting(isSubmitting) {
+  var btn = document.getElementById('rmi-submit-btn');
+  if (!btn) return;
+  btn.disabled = !!isSubmitting;
+  btn.textContent = isSubmitting ? 'Sending...' : 'Send Request';
+}
+
 function renderRMIDocOptions() {
   var container = document.getElementById('rmi-doc-options');
   if (!container) return;
@@ -9572,6 +9579,8 @@ function requestMoreInfo() {
 async function confirmRMIRequest() {
   if (!currentApp) return;
   if (!assertPermission('request_more_information')) return;
+  var submitBtn = document.getElementById('rmi-submit-btn');
+  if (submitBtn && submitBtn.disabled) return;
   var reason = document.getElementById('rmi-reason').value.trim();
   var deadline = document.getElementById('rmi-deadline').value;
   var items = collectRMIItems();
@@ -9592,6 +9601,8 @@ async function confirmRMIRequest() {
     setRMIError('Officer sign-off is required.');
     return;
   }
+  setRMIError('');
+  setRMISubmitting(true);
   try {
     var resp = await boApiCall('POST', '/applications/' + currentApp.id + '/decision', {
       decision: 'request_documents',
@@ -9601,6 +9612,9 @@ async function confirmRMIRequest() {
       documents_list: items.map(function(item) { return item.label; }),
       officer_signoff: { acknowledged: true, scope: 'decision', source_context: 'ai_advisory' }
     });
+    if (!resp || !resp.rmi_request_id) {
+      throw new Error('Document request was not confirmed by the server. Please retry.');
+    }
     AUDIT_LOG.unshift({
       ts: new Date().toISOString().slice(0,16).replace('T',' '),
       user: currentUser.name,
@@ -9616,6 +9630,8 @@ async function confirmRMIRequest() {
     console.warn('RMI request failed:', e);
     setRMIError(e.message || 'Could not send document request');
     showToast(e.message || 'Could not send document request', 'error');
+  } finally {
+    setRMISubmitting(false);
   }
 }
 
