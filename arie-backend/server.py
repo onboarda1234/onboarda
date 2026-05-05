@@ -6175,6 +6175,9 @@ class ReportHandler(BaseHandler):
 
         if output_format == "csv":
             safe_date = generated_at[:10]
+            self.set_header("X-Report-Record-Count", str(len(results)))
+            self.set_header("X-Report-Show-Fixtures", "true" if scope["show_fixtures"] else "false")
+            self.set_header("X-Report-Canonical-View", "applications_report_v1")
             _write_csv_response(self, f"regmind_report_{safe_date}.csv", field_list, results)
             return
 
@@ -6188,6 +6191,8 @@ class ReportHandler(BaseHandler):
                 "generated_at": generated_at,
                 "filters": scope["filters"],
                 "show_fixtures": scope["show_fixtures"],
+                "pending_statuses": scope["pending_statuses"],
+                "canonical_view": "applications_report_v1",
                 "record_count": len(results),
             },
         })

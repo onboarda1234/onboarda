@@ -882,6 +882,38 @@ class TestDayThreeRMISubmissionHardening:
 
 
 # ═══════════════════════════════════════════════════════════
+# I6. DAY 4 REPORT EXPORT RECONCILIATION
+# ═══════════════════════════════════════════════════════════
+class TestDayFourReportExportReconciliation:
+    """Pin Reports export to the backend CSV source of truth."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_reports_export_uses_server_csv_endpoint(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function exportReportsCSV()")
+        fn_region = html[fn_start:fn_start + 2600]
+        assert "/reports/generate?format=csv&" in fn_region
+        assert "fetch(BO_API_BASE + url, { headers: headers })" in fn_region
+        assert "headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN" in fn_region
+        assert "res.blob()" in fn_region
+        assert "X-Report-Record-Count" in fn_region
+
+    def test_reports_export_no_longer_builds_csv_in_browser(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function exportReportsCSV()")
+        fn_region = html[fn_start:fn_start + 2600]
+        assert "var csv = fields.join(',')" not in fn_region
+        assert "resp.data.forEach" not in fn_region
+        assert "new Blob([csv]" not in fn_region
+
+
+# ═══════════════════════════════════════════════════════════
 # J. AUDIT TRAIL HARDENING
 # ═══════════════════════════════════════════════════════════
 class TestAuditTrailHardening:

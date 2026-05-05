@@ -106,9 +106,12 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
 
         assert resp.code == 200
         assert "text/csv" in resp.headers.get("Content-Type", "")
+        assert resp.headers.get("X-Report-Canonical-View") == "applications_report_v1"
+        assert resp.headers.get("X-Report-Show-Fixtures") == "false"
         assert resp.body.startswith("\ufeff".encode("utf-8"))
         reader = csv.reader(io.StringIO(resp.body.decode("utf-8-sig")))
         rows = list(reader)
+        assert resp.headers.get("X-Report-Record-Count") == str(len(rows) - 1)
         assert rows[0] == ["ref", "company_name", "status"]
         assert "prescreening_data" not in rows[0]
         assert any(row[0] == self.report_ref_1 for row in rows[1:])
@@ -123,6 +126,20 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         db.close()
         assert audit is not None
         assert "format=csv" in audit["detail"]
+
+    def test_report_generate_json_exposes_canonical_export_metadata(self):
+        resp = self.fetch(
+            "/api/reports/generate?fields=ref,company_name,status",
+            headers=self._admin_headers(),
+        )
+
+        assert resp.code == 200
+        body = json.loads(resp.body.decode())
+        assert body["total"] == len(body["data"])
+        assert body["report"]["record_count"] == body["total"]
+        assert body["report"]["canonical_view"] == "applications_report_v1"
+        assert body["report"]["show_fixtures"] is False
+        assert "rmi_sent" in body["report"]["pending_statuses"]
 
     def test_report_generate_rejects_unsupported_format(self):
         resp = self.fetch(
