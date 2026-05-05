@@ -25,6 +25,9 @@ def test_report_field_allowlist_blocks_raw_json_fields():
 def test_canonical_pending_status_contract_includes_new_workflow_states():
     from server import _REPORT_PENDING_STATUSES
 
+    assert "draft" in _REPORT_PENDING_STATUSES
+    assert "pricing_review" in _REPORT_PENDING_STATUSES
+    assert "in_review" in _REPORT_PENDING_STATUSES
     assert "compliance_review" in _REPORT_PENDING_STATUSES
     assert "kyc_documents" in _REPORT_PENDING_STATUSES
     assert "rmi_sent" in _REPORT_PENDING_STATUSES
@@ -168,3 +171,59 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         assert body["report"]["canonical_view"] == "applications_report_v1"
         assert body["report"]["filters"] == {"jurisdiction": "Mauritius"}
         assert "rmi_sent" in body["report"]["pending_statuses"]
+
+    def test_analytics_summary_reconciles_visible_lifecycle_statuses(self):
+        from db import get_db
+
+        country = f"Reconcile-{uuid.uuid4().hex[:8]}"
+        rows = [
+            ("draft", "draft"),
+            ("pricing", "pricing_review"),
+            ("review", "in_review"),
+            ("rmi", "rmi_sent"),
+            ("edd", "edd_required"),
+            ("approved", "approved"),
+            ("rejected", "rejected"),
+            ("withdrawn", "withdrawn"),
+        ]
+        db = get_db()
+        for suffix, status in rows:
+            db.execute(
+                """
+                INSERT INTO applications
+                (id, ref, company_name, status, risk_level, risk_score, country, entity_type, is_fixture)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"phase4-report-reconcile-{suffix}-{uuid.uuid4().hex[:8]}",
+                    f"P4-RPT-RECON-{suffix}-{uuid.uuid4().hex[:8]}",
+                    f"Phase Four Reconcile {suffix.title()} Ltd",
+                    status,
+                    "LOW",
+                    20,
+                    country,
+                    "SME",
+                    0,
+                ),
+            )
+        db.commit()
+        db.close()
+
+        resp = self.fetch(
+            f"/api/reports/analytics?jurisdiction={country}",
+            headers=self._admin_headers(),
+        )
+
+        assert resp.code == 200
+        body = json.loads(resp.body.decode())
+        summary = body["summary"]
+        classified_total = (
+            summary["pending"]
+            + summary["edd_required"]
+            + summary["approved"]
+            + summary["rejected"]
+            + summary["withdrawn"]
+        )
+        assert summary["total"] == len(rows)
+        assert summary["pending"] == 4
+        assert classified_total == summary["total"]

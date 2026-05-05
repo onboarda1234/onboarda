@@ -5977,8 +5977,10 @@ class VerificationChecksHandler(BaseHandler):
 # ══════════════════════════════════════════════════════════
 
 _REPORT_PENDING_STATUSES = (
-    "pending", "submitted", "under_review", "compliance_review",
-    "kyc_submitted", "kyc_documents", "rmi_sent",
+    "draft", "pending", "submitted", "prescreening_submitted",
+    "pre_approval_review", "pre_approved", "pricing_review", "pricing_accepted",
+    "in_review", "under_review", "compliance_review", "kyc_submitted",
+    "kyc_documents", "rmi_sent",
 )
 
 _REPORT_ALLOWED_FIELDS = {
