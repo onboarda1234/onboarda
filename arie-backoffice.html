@@ -2727,7 +2727,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
       <div id="screening-four-eyes-panel" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;color:var(--text2);"></div>
       <div id="screening-disposition-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;font-size:12px;font-weight:600;line-height:1.5;"></div>
       <div class="form-group"><div class="form-label">Disposition Code</div><select class="form-select" id="screening-disposition-code"></select></div>
-      <div class="form-group"><div class="form-label">Rationale (Required)</div><textarea class="form-input" rows="5" id="screening-disposition-rationale" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;"></textarea></div>
+      <div class="form-group"><div class="form-label">Rationale (Required)</div><textarea class="form-input" rows="5" id="screening-disposition-rationale" placeholder="Record the evidence reviewed and why this disposition is appropriate..." style="resize:vertical;"></textarea><div id="screening-disposition-rationale-help" style="font-size:11px;color:var(--text3);margin-top:6px;">Rationale must be at least 12 characters.</div></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-screening-disposition')">Cancel</button>
@@ -6346,6 +6346,35 @@ function screeningDispositionCodeOptions(disposition) {
   return options[disposition] || [];
 }
 
+var SCREENING_RATIONALE_MIN_CHARS = 12;
+var SCREENING_CLEAR_RATIONALE_MIN_CHARS = 40;
+var SCREENING_CLEAR_RATIONALE_MIN_WORDS = 8;
+
+function screeningRationaleWordCount(value) {
+  var matches = String(value || '').replace(/[-/]/g, ' ').match(/[A-Za-z0-9]+/g);
+  return matches ? matches.length : 0;
+}
+
+function screeningDispositionRationaleHelp(disposition) {
+  if (disposition === 'cleared') {
+    return 'Cleared subjects require at least ' + SCREENING_CLEAR_RATIONALE_MIN_CHARS + ' characters and ' + SCREENING_CLEAR_RATIONALE_MIN_WORDS + ' words citing the evidence reviewed.';
+  }
+  return 'Rationale must be at least ' + SCREENING_RATIONALE_MIN_CHARS + ' characters.';
+}
+
+function screeningDispositionRationaleError(disposition, rationale) {
+  if (rationale.length < SCREENING_RATIONALE_MIN_CHARS) {
+    return 'Rationale must be at least ' + SCREENING_RATIONALE_MIN_CHARS + ' characters.';
+  }
+  if (disposition === 'cleared' && (
+    rationale.length < SCREENING_CLEAR_RATIONALE_MIN_CHARS ||
+    screeningRationaleWordCount(rationale) < SCREENING_CLEAR_RATIONALE_MIN_WORDS
+  )) {
+    return 'Cleared screening rationale must be at least ' + SCREENING_CLEAR_RATIONALE_MIN_CHARS + ' characters and ' + SCREENING_CLEAR_RATIONALE_MIN_WORDS + ' words, citing the evidence reviewed.';
+  }
+  return '';
+}
+
 function setScreeningDispositionError(message) {
   var el = document.getElementById('screening-disposition-error');
   if (!el) return;
@@ -6377,6 +6406,8 @@ function openScreeningDispositionModalByRow(rowKey, disposition) {
   }
   var rationale = document.getElementById('screening-disposition-rationale');
   if (rationale) rationale.value = '';
+  var rationaleHelp = document.getElementById('screening-disposition-rationale-help');
+  if (rationaleHelp) rationaleHelp.textContent = screeningDispositionRationaleHelp(disposition);
 
   var panel = document.getElementById('screening-four-eyes-panel');
   if (panel) {
@@ -6424,7 +6455,8 @@ async function submitScreeningDisposition() {
   var code = document.getElementById('screening-disposition-code').value;
   var rationale = document.getElementById('screening-disposition-rationale').value.trim();
   if (!code) { setScreeningDispositionError('Select a disposition code.'); return; }
-  if (rationale.length < 12) { setScreeningDispositionError('Rationale must be at least 12 characters.'); return; }
+  var rationaleError = screeningDispositionRationaleError(disposition, rationale);
+  if (rationaleError) { setScreeningDispositionError(rationaleError); return; }
 
   var btn = document.getElementById('screening-disposition-submit');
   if (btn) btn.disabled = true;

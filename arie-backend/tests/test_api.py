@@ -2109,6 +2109,23 @@ class TestGovernanceAttemptAudit:
         assert short_rationale.status_code == 400
         assert "rationale" in short_rationale.json()["error"]
 
+        thin_clear_rationale = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_id,
+                "subject_type": "entity",
+                "subject_name": "Phase 1C Required Fields Ltd",
+                "disposition": "cleared",
+                "disposition_code": "provider_no_relevant_match",
+                "rationale": "False positive",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert thin_clear_rationale.status_code == 400
+        assert "40 characters" in thin_clear_rationale.json()["error"]
+        assert "8 words" in thin_clear_rationale.json()["error"]
+
         conn = get_db()
         review = conn.execute("SELECT id FROM screening_reviews WHERE application_id = ?", (app_id,)).fetchone()
         row = conn.execute(

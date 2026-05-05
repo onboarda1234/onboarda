@@ -620,7 +620,15 @@ class TestScreeningDispositionUX:
         assert "disposition_code: code" in fn_region
         assert "rationale: rationale" in fn_region
         assert "notes: rationale" in fn_region
-        assert "rationale.length < 12" in fn_region
+        assert "screeningDispositionRationaleError(disposition, rationale)" in fn_region
+
+    def test_screening_disposition_clear_rationale_floor_is_visible_and_enforced(self):
+        html = self._read_backoffice()
+        assert 'id="screening-disposition-rationale-help"' in html
+        assert "SCREENING_CLEAR_RATIONALE_MIN_CHARS = 40" in html
+        assert "SCREENING_CLEAR_RATIONALE_MIN_WORDS = 8" in html
+        assert "screeningRationaleWordCount(rationale)" in html
+        assert "Cleared screening rationale must be at least" in html
 
     def test_screening_review_no_longer_uses_prompt_notes(self):
         html = self._read_backoffice()
