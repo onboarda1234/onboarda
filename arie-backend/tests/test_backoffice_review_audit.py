@@ -745,6 +745,63 @@ class TestPhaseSevenUploadSizeCapUI:
 
 
 # ═══════════════════════════════════════════════════════════
+# I3. DAY 3 APPROVAL BLOCKER UX
+# ═══════════════════════════════════════════════════════════
+class TestDayThreeApprovalBlockerUX:
+    """Pin visible approval blocker panels in the back-office detail workflow."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_application_detail_has_visible_approval_blocker_panel(self):
+        html = self._read_backoffice()
+        assert 'id="detail-approval-blockers"' in html
+        assert "function getApplicationApprovalBlockers(app)" in html
+        assert "function renderApprovalBlockersPanel(app)" in html
+        assert "renderApprovalBlockersPanel(app);" in html
+
+    def test_application_approval_uses_single_blocker_source(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function getApprovalReadiness(app)")
+        fn_region = html[fn_start:fn_start + 500]
+        assert "getApplicationApprovalBlockers(app)" in fn_region
+        assert "ready: blockers.length === 0" in fn_region
+
+    def test_application_approve_button_is_disabled_when_blockers_exist(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function renderApprovalBlockersPanel(app)")
+        fn_region = html[fn_start:fn_start + 1800]
+        assert "approveBtn.disabled = true" in fn_region
+        assert "Approval blocked:" in fn_region
+        assert "Compliance memo has not been approved" in html
+        assert "Screening has not been run" in html
+
+    def test_memo_validation_panel_has_visible_approval_blockers(self):
+        html = self._read_backoffice()
+        assert 'id="memo-approval-blockers"' in html
+        assert "function getMemoApprovalBlockers(app, validationResult)" in html
+        assert "function renderMemoApprovalBlockers(result)" in html
+        fn_start = html.index("function renderValidationPanel(result)")
+        fn_region = html[fn_start:fn_start + 7600]
+        assert "renderMemoApprovalBlockers(result)" in fn_region
+        assert "memoApprovalBlockers" in fn_region
+
+    def test_pass_with_fixes_remains_blocked_until_ui_captures_reason(self):
+        html = self._read_backoffice()
+        assert "PASS WITH FIXES approval requires an approval_reason" in html
+        assert "this UI does not capture or submit that reason yet" in html
+        fn_start = html.index("PASS WITH FIXES approval is blocked until this UI captures approval_reason")
+        fn_start = html.rfind("} else if (status === 'pass_with_fixes')", 0, fn_start)
+        fn_region = html[fn_start:fn_start + 450]
+        assert "approveBtn.disabled = true" in fn_region
+        assert "memoApprovalBlockers.length" in fn_region
+
+
+# ═══════════════════════════════════════════════════════════
 # J. AUDIT TRAIL HARDENING
 # ═══════════════════════════════════════════════════════════
 class TestAuditTrailHardening:
