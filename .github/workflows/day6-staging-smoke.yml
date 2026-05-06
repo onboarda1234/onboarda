@@ -1,0 +1,133 @@
+name: Day 6 Staging Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "Staging API base URL"
+        required: true
+        default: "https://staging.regmind.co/api"
+      expected_sha:
+        description: "Expected deployed git SHA prefix. Defaults to the workflow SHA when blank."
+        required: false
+        default: ""
+      expected_total:
+        description: "Expected analytics total"
+        required: true
+        default: "22"
+      expected_pending:
+        description: "Expected analytics pending count"
+        required: true
+        default: "21"
+      expected_edd:
+        description: "Expected analytics EDD-routed count"
+        required: true
+        default: "1"
+      show_fixtures:
+        description: "Pass show_fixtures=true to supported smoke endpoints"
+        required: true
+        type: boolean
+        default: false
+      skip_applications:
+        description: "Skip /applications-derived KPI checks"
+        required: true
+        type: boolean
+        default: false
+
+concurrency:
+  group: day6-staging-smoke
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: af-south-1
+
+      - name: Mint short-lived staging smoke token
+        env:
+          SECRET_ID: regmind/staging
+          AWS_REGION: af-south-1
+        run: |
+          set -euo pipefail
+          SECRET_JSON="$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_ID" \
+            --region "$AWS_REGION" \
+            --query SecretString \
+            --output text)"
+          SMOKE_TOKEN="$(
+            SECRET_JSON="$SECRET_JSON" python3 - <<'PY'
+          import base64
+          import hashlib
+          import hmac
+          import json
+          import os
+          import time
+          import uuid
+
+          def b64url(data):
+              return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+          secret = json.loads(os.environ["SECRET_JSON"])["JWT_SECRET"].encode("utf-8")
+          now = int(time.time())
+          header = {"alg": "HS256", "typ": "JWT"}
+          payload = {
+              "sub": "github-actions:day6-staging-smoke",
+              "role": "admin",
+              "name": "GitHub Day 6 Staging Smoke",
+              "type": "officer",
+              "jti": uuid.uuid4().hex,
+              "iss": "arie-finance",
+              "iat": now,
+              "nbf": now,
+              "exp": now + 1800,
+          }
+          signing_input = f"{b64url(json.dumps(header, separators=(',', ':')).encode())}.{b64url(json.dumps(payload, separators=(',', ':')).encode())}"
+          signature = hmac.new(secret, signing_input.encode("ascii"), hashlib.sha256).digest()
+          print(f"{signing_input}.{b64url(signature)}")
+          PY
+          )"
+          echo "::add-mask::$SMOKE_TOKEN"
+          echo "BACKOFFICE_TOKEN=$SMOKE_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Run Day 5 closing smoke against staging
+        env:
+          INPUT_EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA="$INPUT_EXPECTED_SHA"
+          if [ -z "$EXPECTED_SHA" ]; then
+            EXPECTED_SHA="${GITHUB_SHA:0:7}"
+          fi
+
+          args=(
+            --api-base "${{ inputs.api_base }}"
+            --token-env BACKOFFICE_TOKEN
+            --expected-sha "$EXPECTED_SHA"
+            --expected-total "${{ inputs.expected_total }}"
+            --expected-pending "${{ inputs.expected_pending }}"
+            --expected-edd "${{ inputs.expected_edd }}"
+          )
+          if [ "${{ inputs.show_fixtures }}" = "true" ]; then
+            args+=(--show-fixtures)
+          fi
+          if [ "${{ inputs.skip_applications }}" = "true" ]; then
+            args+=(--skip-applications)
+          fi
+
+          python3 arie-backend/scripts/qa/day5_closing_smoke.py "${args[@]}"
