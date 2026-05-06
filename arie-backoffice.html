@@ -10153,36 +10153,42 @@ function officerRow(name, role, active, completed, avgTime, approvalRate, worklo
 }
 
 function exportKPIReport() {
-  boApiCall('GET', '/reports/generate?fields=ref,company_name,status,risk_level,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count').then(function(resp) {
-    if (!resp.data || resp.data.length === 0) {
+  var baseFields = 'fields=ref,company_name,status,risk_level,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count';
+  var url = '/reports/generate?format=csv&' + baseFields;
+  var headers = {};
+  if (BO_AUTH_TOKEN) headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
+  fetch(BO_API_BASE + url, { headers: headers }).then(async function(res) {
+    if (res.status === 401 && BO_AUTH_TOKEN) {
+      showToast('Your session has expired. Please sign in again.', 'warning');
+      BO_AUTH_TOKEN = '';
+      showLoginScreen();
+      throw new Error('Session expired');
+    }
+    if (!res.ok) {
+      var msg = 'Export failed';
+      try {
+        var err = await res.json();
+        msg = err.error || msg;
+      } catch(e) {}
+      throw new Error(msg);
+    }
+    var recordCount = res.headers.get('X-Report-Record-Count') || '';
+    if (recordCount === '0') {
       showToast('No data to export', 'warning');
       return;
     }
-    // Build CSV
-    var fields = resp.fields;
-    var csv = fields.join(',') + '\\n';
-    resp.data.forEach(function(row) {
-      var line = fields.map(function(f) {
-        var val = row[f] !== undefined && row[f] !== null ? String(row[f]) : '';
-        // Escape commas and quotes in CSV
-        if (val.includes(',') || val.includes('"') || val.includes('\\n')) {
-          val = '"' + val.replace(/"/g, '""') + '"';
-        }
-        return val;
-      });
-      csv += line.join(',') + '\\n';
-    });
-    // Download
-    var blob = new Blob([csv], { type: 'text/csv' });
-    var url = URL.createObjectURL(blob);
+    var blob = await res.blob();
+    var blobUrl = URL.createObjectURL(blob);
     var a = document.createElement('a');
-    a.href = url;
-    a.download = 'onboarda_report_' + new Date().toISOString().split('T')[0] + '.csv';
+    var disposition = res.headers.get('Content-Disposition') || '';
+    var filenameMatch = disposition.match(/filename="?([^"]+)"?/);
+    a.href = blobUrl;
+    a.download = filenameMatch ? filenameMatch[1] : 'regmind_kpi_report_' + new Date().toISOString().split('T')[0] + '.csv';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    showToast('📥 Report exported: ' + resp.data.length + ' records', 'success');
+    URL.revokeObjectURL(blobUrl);
+    showToast('📥 KPI report exported: ' + (recordCount || 'filtered') + ' records', 'success');
   }).catch(function(err) {
     showToast('Export failed: ' + (err.message || err), 'error');
   });
