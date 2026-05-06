@@ -4259,6 +4259,10 @@ def _run_migrations(db: DBConnection):
 
     # Migration v2.32: Application-specific generated Enhanced / EDD requirements.
     #
+    # Note: v2.32 is the db.py inline migration sequence. The matching file
+    # migration is migration_022_application_enhanced_requirements.sql in the
+    # schema_version runner sequence.
+    #
     # Step 2 persists rule snapshots per application without creating RMI
     # requests, portal prompts, memo output, or approval blockers.
     try:
