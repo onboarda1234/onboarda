@@ -855,6 +855,16 @@ class TestDayFourKPIEDDRoutingTruthfulness:
         assert "risk === 'HIGH'" not in edd_region
         assert "risk === 'VERY_HIGH'" not in edd_region
 
+    def test_kpi_status_key_prefers_raw_backend_status(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function renderKPIDashboard()")
+        status_start = html.index("function statusKey(app)", fn_start)
+        status_region = html[status_start:status_start + 420]
+        assert "app.statusRaw || app.status" in status_region
+        assert "replace(/[\\s-]+/g, '_')" in status_region
+        assert "enhanced_due_diligence_required" in status_region
+        assert "return 'edd_required'" in status_region
+
     def test_kpi_edd_card_label_matches_routing_semantics(self):
         html = self._read_backoffice()
         fn_start = html.index("function renderKPIDashboard()")
