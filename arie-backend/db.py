@@ -518,6 +518,52 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_enhanced_req_active ON enhanced_requirement_rules(active);
     CREATE INDEX IF NOT EXISTS idx_enhanced_req_audience ON enhanced_requirement_rules(audience);
 
+    -- Application-specific generated Enhanced / EDD requirements
+    CREATE TABLE IF NOT EXISTS application_enhanced_requirements (
+        id SERIAL PRIMARY KEY,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        source_rule_id INTEGER REFERENCES enhanced_requirement_rules(id),
+        trigger_key TEXT NOT NULL,
+        trigger_label TEXT NOT NULL,
+        trigger_category TEXT NOT NULL DEFAULT 'risk',
+        requirement_key TEXT NOT NULL,
+        requirement_label TEXT NOT NULL,
+        requirement_description TEXT,
+        audience TEXT NOT NULL DEFAULT 'client' CHECK(audience IN ('client','backoffice','both')),
+        requirement_type TEXT NOT NULL DEFAULT 'document' CHECK(requirement_type IN ('document','declaration','review_task','explanation','internal_control')),
+        subject_scope TEXT NOT NULL DEFAULT 'application' CHECK(subject_scope IN ('company','ubo','director','controller','application','screening_subject')),
+        blocking_approval INTEGER NOT NULL DEFAULT 1 CHECK(blocking_approval IN (0,1)),
+        waivable INTEGER NOT NULL DEFAULT 1 CHECK(waivable IN (0,1)),
+        waiver_roles TEXT DEFAULT '[]',
+        mandatory INTEGER NOT NULL DEFAULT 1 CHECK(mandatory IN (0,1)),
+        status TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','requested','uploaded','under_review','accepted','rejected','waived','cancelled')),
+        generation_source TEXT NOT NULL DEFAULT 'manual_api',
+        trigger_reason TEXT,
+        trigger_context TEXT DEFAULT '{}',
+        linked_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        linked_rmi_item_id TEXT,
+        requested_at TIMESTAMP,
+        requested_by TEXT REFERENCES users(id),
+        uploaded_at TIMESTAMP,
+        reviewed_at TIMESTAMP,
+        reviewed_by TEXT REFERENCES users(id),
+        review_notes TEXT,
+        waived_at TIMESTAMP,
+        waived_by TEXT REFERENCES users(id),
+        waiver_reason TEXT,
+        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_by TEXT REFERENCES users(id),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT REFERENCES users(id),
+        UNIQUE(application_id, trigger_key, requirement_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_app ON application_enhanced_requirements(application_id);
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_rule ON application_enhanced_requirements(source_rule_id);
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_trigger ON application_enhanced_requirements(trigger_key);
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_status ON application_enhanced_requirements(status);
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_active ON application_enhanced_requirements(active);
+
     -- AI Agents Configuration
     CREATE TABLE IF NOT EXISTS ai_agents (
         id SERIAL PRIMARY KEY,
@@ -1349,6 +1395,52 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_enhanced_req_active ON enhanced_requirement_rules(active);
     CREATE INDEX IF NOT EXISTS idx_enhanced_req_audience ON enhanced_requirement_rules(audience);
 
+    -- Application-specific generated Enhanced / EDD requirements
+    CREATE TABLE IF NOT EXISTS application_enhanced_requirements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        source_rule_id INTEGER REFERENCES enhanced_requirement_rules(id),
+        trigger_key TEXT NOT NULL,
+        trigger_label TEXT NOT NULL,
+        trigger_category TEXT NOT NULL DEFAULT 'risk',
+        requirement_key TEXT NOT NULL,
+        requirement_label TEXT NOT NULL,
+        requirement_description TEXT,
+        audience TEXT NOT NULL DEFAULT 'client' CHECK(audience IN ('client','backoffice','both')),
+        requirement_type TEXT NOT NULL DEFAULT 'document' CHECK(requirement_type IN ('document','declaration','review_task','explanation','internal_control')),
+        subject_scope TEXT NOT NULL DEFAULT 'application' CHECK(subject_scope IN ('company','ubo','director','controller','application','screening_subject')),
+        blocking_approval INTEGER NOT NULL DEFAULT 1 CHECK(blocking_approval IN (0,1)),
+        waivable INTEGER NOT NULL DEFAULT 1 CHECK(waivable IN (0,1)),
+        waiver_roles TEXT DEFAULT '[]',
+        mandatory INTEGER NOT NULL DEFAULT 1 CHECK(mandatory IN (0,1)),
+        status TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','requested','uploaded','under_review','accepted','rejected','waived','cancelled')),
+        generation_source TEXT NOT NULL DEFAULT 'manual_api',
+        trigger_reason TEXT,
+        trigger_context TEXT DEFAULT '{}',
+        linked_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+        linked_rmi_item_id TEXT,
+        requested_at TEXT,
+        requested_by TEXT REFERENCES users(id),
+        uploaded_at TEXT,
+        reviewed_at TEXT,
+        reviewed_by TEXT REFERENCES users(id),
+        review_notes TEXT,
+        waived_at TEXT,
+        waived_by TEXT REFERENCES users(id),
+        waiver_reason TEXT,
+        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+        created_at TEXT DEFAULT (datetime('now')),
+        created_by TEXT REFERENCES users(id),
+        updated_at TEXT DEFAULT (datetime('now')),
+        updated_by TEXT REFERENCES users(id),
+        UNIQUE(application_id, trigger_key, requirement_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_app ON application_enhanced_requirements(application_id);
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_rule ON application_enhanced_requirements(source_rule_id);
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_trigger ON application_enhanced_requirements(trigger_key);
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_status ON application_enhanced_requirements(status);
+    CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_active ON application_enhanced_requirements(active);
+
     -- AI Agents Configuration
     CREATE TABLE IF NOT EXISTS ai_agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2038,6 +2130,12 @@ def init_db():
         db.commit()
         logger.info("startup: completed _ensure_default_enhanced_requirement_rules")
 
+        # Ensure generated application-specific Enhanced / EDD requirements table exists.
+        logger.info("startup: entering _ensure_application_enhanced_requirements_table")
+        _ensure_application_enhanced_requirements_table(db)
+        db.commit()
+        logger.info("startup: completed _ensure_application_enhanced_requirements_table")
+
         # ── H-2: Ensure demo application stubs exist (run in init_db for reliability) ──
         # Use both config.IS_DEMO and environment.is_demo() for robustness
         _is_demo = _CFG_IS_DEMO
@@ -2262,6 +2360,104 @@ def _ensure_enhanced_requirement_rules_table(db: DBConnection):
         CREATE INDEX IF NOT EXISTS idx_enhanced_req_trigger ON enhanced_requirement_rules(trigger_key);
         CREATE INDEX IF NOT EXISTS idx_enhanced_req_active ON enhanced_requirement_rules(active);
         CREATE INDEX IF NOT EXISTS idx_enhanced_req_audience ON enhanced_requirement_rules(audience);
+        """)
+
+
+def _ensure_application_enhanced_requirements_table(db: DBConnection):
+    """Create generated application Enhanced / EDD requirements table."""
+    if db.is_postgres:
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS application_enhanced_requirements (
+            id SERIAL PRIMARY KEY,
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            source_rule_id INTEGER REFERENCES enhanced_requirement_rules(id),
+            trigger_key TEXT NOT NULL,
+            trigger_label TEXT NOT NULL,
+            trigger_category TEXT NOT NULL DEFAULT 'risk',
+            requirement_key TEXT NOT NULL,
+            requirement_label TEXT NOT NULL,
+            requirement_description TEXT,
+            audience TEXT NOT NULL DEFAULT 'client' CHECK(audience IN ('client','backoffice','both')),
+            requirement_type TEXT NOT NULL DEFAULT 'document' CHECK(requirement_type IN ('document','declaration','review_task','explanation','internal_control')),
+            subject_scope TEXT NOT NULL DEFAULT 'application' CHECK(subject_scope IN ('company','ubo','director','controller','application','screening_subject')),
+            blocking_approval INTEGER NOT NULL DEFAULT 1 CHECK(blocking_approval IN (0,1)),
+            waivable INTEGER NOT NULL DEFAULT 1 CHECK(waivable IN (0,1)),
+            waiver_roles TEXT DEFAULT '[]',
+            mandatory INTEGER NOT NULL DEFAULT 1 CHECK(mandatory IN (0,1)),
+            status TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','requested','uploaded','under_review','accepted','rejected','waived','cancelled')),
+            generation_source TEXT NOT NULL DEFAULT 'manual_api',
+            trigger_reason TEXT,
+            trigger_context TEXT DEFAULT '{}',
+            linked_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+            linked_rmi_item_id TEXT,
+            requested_at TIMESTAMP,
+            requested_by TEXT REFERENCES users(id),
+            uploaded_at TIMESTAMP,
+            reviewed_at TIMESTAMP,
+            reviewed_by TEXT REFERENCES users(id),
+            review_notes TEXT,
+            waived_at TIMESTAMP,
+            waived_by TEXT REFERENCES users(id),
+            waiver_reason TEXT,
+            active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT REFERENCES users(id),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT REFERENCES users(id),
+            UNIQUE(application_id, trigger_key, requirement_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_app ON application_enhanced_requirements(application_id);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_rule ON application_enhanced_requirements(source_rule_id);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_trigger ON application_enhanced_requirements(trigger_key);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_status ON application_enhanced_requirements(status);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_active ON application_enhanced_requirements(active);
+        """)
+    else:
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS application_enhanced_requirements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+            source_rule_id INTEGER REFERENCES enhanced_requirement_rules(id),
+            trigger_key TEXT NOT NULL,
+            trigger_label TEXT NOT NULL,
+            trigger_category TEXT NOT NULL DEFAULT 'risk',
+            requirement_key TEXT NOT NULL,
+            requirement_label TEXT NOT NULL,
+            requirement_description TEXT,
+            audience TEXT NOT NULL DEFAULT 'client' CHECK(audience IN ('client','backoffice','both')),
+            requirement_type TEXT NOT NULL DEFAULT 'document' CHECK(requirement_type IN ('document','declaration','review_task','explanation','internal_control')),
+            subject_scope TEXT NOT NULL DEFAULT 'application' CHECK(subject_scope IN ('company','ubo','director','controller','application','screening_subject')),
+            blocking_approval INTEGER NOT NULL DEFAULT 1 CHECK(blocking_approval IN (0,1)),
+            waivable INTEGER NOT NULL DEFAULT 1 CHECK(waivable IN (0,1)),
+            waiver_roles TEXT DEFAULT '[]',
+            mandatory INTEGER NOT NULL DEFAULT 1 CHECK(mandatory IN (0,1)),
+            status TEXT NOT NULL DEFAULT 'generated' CHECK(status IN ('generated','requested','uploaded','under_review','accepted','rejected','waived','cancelled')),
+            generation_source TEXT NOT NULL DEFAULT 'manual_api',
+            trigger_reason TEXT,
+            trigger_context TEXT DEFAULT '{}',
+            linked_document_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+            linked_rmi_item_id TEXT,
+            requested_at TEXT,
+            requested_by TEXT REFERENCES users(id),
+            uploaded_at TEXT,
+            reviewed_at TEXT,
+            reviewed_by TEXT REFERENCES users(id),
+            review_notes TEXT,
+            waived_at TEXT,
+            waived_by TEXT REFERENCES users(id),
+            waiver_reason TEXT,
+            active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+            created_at TEXT DEFAULT (datetime('now')),
+            created_by TEXT REFERENCES users(id),
+            updated_at TEXT DEFAULT (datetime('now')),
+            updated_by TEXT REFERENCES users(id),
+            UNIQUE(application_id, trigger_key, requirement_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_app ON application_enhanced_requirements(application_id);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_rule ON application_enhanced_requirements(source_rule_id);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_trigger ON application_enhanced_requirements(trigger_key);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_status ON application_enhanced_requirements(status);
+        CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_active ON application_enhanced_requirements(active);
         """)
 
 
@@ -4056,6 +4252,24 @@ def _run_migrations(db: DBConnection):
             logger.info("Migration v2.31: Ensured compliance_memos memo-integrity columns")
     except Exception as e:
         logger.error("Migration v2.31 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.32: Application-specific generated Enhanced / EDD requirements.
+    #
+    # Step 2 persists rule snapshots per application without creating RMI
+    # requests, portal prompts, memo output, or approval blockers.
+    try:
+        if not _safe_table_exists(db, "application_enhanced_requirements"):
+            _ensure_application_enhanced_requirements_table(db)
+            db.commit()
+            logger.info("Migration v2.32: Created application_enhanced_requirements table")
+        else:
+            logger.info("Migration v2.32: application_enhanced_requirements table already exists")
+    except Exception as e:
+        logger.error("Migration v2.32 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

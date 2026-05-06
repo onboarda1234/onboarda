@@ -7,8 +7,11 @@ future phases.
 """
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 ALLOWED_AUDIENCES = ("client", "backoffice", "both")
@@ -28,6 +31,36 @@ ALLOWED_SUBJECT_SCOPES = (
     "screening_subject",
 )
 ALLOWED_WAIVER_ROLES = ("admin", "sco")
+
+EXPECTED_DEFAULT_TRIGGER_KEYS = (
+    "high_or_very_high_risk",
+    "pep",
+    "crypto_vasp",
+    "opaque_ownership",
+    "high_risk_jurisdiction",
+    "high_volume",
+    "screening_concern",
+)
+
+APPLICATION_REQUIREMENT_STATUSES = (
+    "generated",
+    "requested",
+    "uploaded",
+    "under_review",
+    "accepted",
+    "rejected",
+    "waived",
+    "cancelled",
+)
+
+EDD_TRIGGER_TO_REQUIREMENT_TRIGGER = {
+    "high_or_very_high_risk": "high_or_very_high_risk",
+    "declared_pep_present": "pep",
+    "crypto_or_virtual_asset_sector": "crypto_vasp",
+    "elevated_jurisdiction": "high_risk_jurisdiction",
+    "opaque_or_incomplete_ownership": "opaque_ownership",
+    "material_screening_concern": "screening_concern",
+}
 
 
 DEFAULT_ENHANCED_REQUIREMENT_RULES = [
@@ -558,6 +591,18 @@ def serialize_rule(row):
     return item
 
 
+def serialize_application_requirement(row):
+    """Return an API-safe dict for a generated application requirement row."""
+    if row is None:
+        return None
+    item = _row_dict(row)
+    for key in ("blocking_approval", "waivable", "mandatory", "active"):
+        item[key] = _bool(item.get(key))
+    item["waiver_roles"] = _loads_json(item.get("waiver_roles"), [])
+    item["trigger_context"] = _loads_json(item.get("trigger_context"), {})
+    return item
+
+
 def validate_rule_payload(data, existing=None):
     """Validate and normalize a create/update payload.
 
@@ -730,3 +775,637 @@ def seed_default_enhanced_requirement_rules(db, actor="system"):
             (actor, actor, "system", "enhanced_requirement_rules.seeded", "Enhanced Requirement Rules", detail, ""),
         )
     return inserted
+
+
+def _row_dict(row):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return dict(row)
+    try:
+        return dict(row)
+    except Exception:
+        pass
+    keys = row.keys() if hasattr(row, "keys") else []
+    return {key: row[key] for key in keys}
+
+
+def _db_is_postgres(db):
+    return bool(getattr(db, "is_postgres", False))
+
+
+def _table_exists(db, table_name):
+    try:
+        if _db_is_postgres(db):
+            row = db.execute(
+                "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=?",
+                (table_name,),
+            ).fetchone()
+            return row is not None
+        row = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _column_exists(db, table_name, column_name):
+    try:
+        if _db_is_postgres(db):
+            row = db.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=? AND column_name=?",
+                (table_name, column_name),
+            ).fetchone()
+            return row is not None
+        rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+        for row in rows:
+            data = _row_dict(row)
+            if data and data.get("name") == column_name:
+                return True
+            try:
+                if row[1] == column_name:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        return False
+    return False
+
+
+def _audit_user(actor):
+    if isinstance(actor, dict):
+        return {
+            "sub": actor.get("sub") or actor.get("id") or "system",
+            "name": actor.get("name") or actor.get("full_name") or actor.get("sub") or "system",
+            "role": actor.get("role") or "system",
+        }
+    text = str(actor or "system")
+    return {"sub": text, "name": text, "role": "system"}
+
+
+def _insert_audit(db, action, target, detail, actor=None, before_state=None, after_state=None):
+    user = _audit_user(actor)
+    detail_text = json.dumps(detail or {}, default=str, sort_keys=True)
+    has_state_columns = (
+        _column_exists(db, "audit_log", "before_state")
+        and _column_exists(db, "audit_log", "after_state")
+    )
+    if has_state_columns:
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                user["sub"],
+                user["name"],
+                user["role"],
+                action,
+                target,
+                detail_text,
+                "",
+                json.dumps(before_state, default=str, sort_keys=True) if before_state is not None else None,
+                json.dumps(after_state, default=str, sort_keys=True) if after_state is not None else None,
+            ),
+        )
+    else:
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (user["sub"], user["name"], user["role"], action, target, detail_text, ""),
+        )
+
+
+def diagnose_enhanced_requirement_config(db):
+    """Validate that Step 2 generation can safely consume settings config."""
+    diagnostics = {
+        "ok": False,
+        "config_ok": False,
+        "table_exists": False,
+        "expected_trigger_groups": {},
+        "missing_trigger_groups": [],
+        "inactive_trigger_groups": [],
+        "warnings": [],
+        "errors": [],
+    }
+
+    if not _table_exists(db, "enhanced_requirement_rules"):
+        diagnostics["errors"].append("enhanced_requirement_rules table is missing")
+        diagnostics["missing_trigger_groups"] = list(EXPECTED_DEFAULT_TRIGGER_KEYS)
+        return diagnostics
+
+    diagnostics["table_exists"] = True
+    for trigger_key in EXPECTED_DEFAULT_TRIGGER_KEYS:
+        row = db.execute(
+            """
+            SELECT
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS active_count
+            FROM enhanced_requirement_rules
+            WHERE trigger_key = ?
+            """,
+            (trigger_key,),
+        ).fetchone()
+        row_dict = _row_dict(row) or {}
+        total_count = int(row_dict.get("total_count") or 0)
+        active_count = int(row_dict.get("active_count") or 0)
+        diagnostics["expected_trigger_groups"][trigger_key] = {
+            "total_count": total_count,
+            "active_count": active_count,
+            "ok": active_count > 0,
+        }
+        if total_count == 0:
+            diagnostics["missing_trigger_groups"].append(trigger_key)
+        elif active_count == 0:
+            diagnostics["inactive_trigger_groups"].append(trigger_key)
+
+    if diagnostics["missing_trigger_groups"]:
+        diagnostics["errors"].append(
+            "Missing enhanced requirement trigger group(s): "
+            + ", ".join(diagnostics["missing_trigger_groups"])
+        )
+    if diagnostics["inactive_trigger_groups"]:
+        diagnostics["errors"].append(
+            "No active enhanced requirement rules for trigger group(s): "
+            + ", ".join(diagnostics["inactive_trigger_groups"])
+        )
+
+    diagnostics["ok"] = not diagnostics["errors"]
+    diagnostics["config_ok"] = diagnostics["ok"]
+    return diagnostics
+
+
+def _load_application(db, application_id):
+    row = db.execute(
+        "SELECT * FROM applications WHERE id = ? OR ref = ?",
+        (application_id, application_id),
+    ).fetchone()
+    return _row_dict(row)
+
+
+def _load_application_requirement(db, requirement_id):
+    row = db.execute(
+        "SELECT * FROM application_enhanced_requirements WHERE id = ?",
+        (requirement_id,),
+    ).fetchone()
+    return serialize_application_requirement(row)
+
+
+def _application_target(app):
+    app = app or {}
+    return "application:" + str(app.get("ref") or app.get("id") or "unknown")
+
+
+def _is_yes(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in ("yes", "true", "1", "y")
+
+
+def _declared_pep_present(db, application_id):
+    try:
+        rows = db.execute(
+            """
+            SELECT is_pep FROM directors WHERE application_id=?
+            UNION ALL
+            SELECT is_pep FROM ubos WHERE application_id=?
+            """,
+            (application_id, application_id),
+        ).fetchall()
+    except Exception:
+        return False
+    return any(_is_yes(_row_dict(row).get("is_pep")) for row in rows)
+
+
+def _prescreening_dict(app):
+    return _loads_json((app or {}).get("prescreening_data"), {}) or {}
+
+
+def _screening_summary_from_app(app):
+    prescreening = _prescreening_dict(app)
+    report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
+    if not isinstance(report, dict):
+        report = _loads_json(report, {})
+    existing = prescreening.get("screening_terminality_summary") if isinstance(prescreening, dict) else {}
+    if isinstance(existing, dict) and existing:
+        return existing
+    try:
+        total_hits = int(report.get("total_hits") or 0)
+    except Exception:
+        total_hits = 0
+    return {
+        "terminal": bool(report),
+        "has_terminal_match": total_hits > 0,
+        "has_non_terminal": False,
+    }
+
+
+def _ownership_transparency_status(app):
+    raw = (
+        (app or {}).get("ownership_transparency_status")
+        or (app or {}).get("ownership_structure")
+        or ""
+    )
+    text = str(raw).strip().lower()
+    if text in ("opaque", "incomplete", "unknown", "high"):
+        return text
+    opaque_tokens = (
+        "complex",
+        "shell",
+        "opaque",
+        "nominee",
+        "bearer",
+        "multi-layered",
+        "layered",
+        "trust",
+        "3+",
+        "undisclosed",
+    )
+    if any(token in text for token in opaque_tokens):
+        return "opaque"
+    if text in ("simple", "transparent", "clear", "1-2"):
+        return "clear"
+    return text
+
+
+def _jurisdiction_risk_tier(app):
+    existing = (app or {}).get("jurisdiction_risk_tier")
+    if existing:
+        return str(existing).strip().lower()
+    try:
+        from rule_engine import classify_country
+
+        score = classify_country((app or {}).get("country"))
+    except Exception:
+        return ""
+    if score >= 4:
+        return "very_high"
+    if score >= 3:
+        return "high"
+    if score <= 1:
+        return "low"
+    return "standard"
+
+
+def _sector_risk_tier(app):
+    existing = (app or {}).get("sector_risk_tier")
+    if existing:
+        return str(existing).strip().lower()
+    try:
+        from rule_engine import score_sector
+
+        score = score_sector((app or {}).get("sector"))
+    except Exception:
+        return ""
+    if score >= 4:
+        return "high"
+    if score == 3:
+        return "elevated"
+    if score <= 1:
+        return "low"
+    return "standard"
+
+
+def _declared_high_volume(app):
+    prescreening = _prescreening_dict(app)
+    values = []
+    if isinstance(prescreening, dict):
+        values.extend([
+            prescreening.get("monthly_volume"),
+            prescreening.get("expected_volume"),
+        ])
+        transaction = _loads_json(prescreening.get("transaction"), {})
+        if isinstance(transaction, dict):
+            expected = _loads_json(transaction.get("expected_monthly_volume"), {})
+            if isinstance(expected, dict):
+                values.append(expected.get("band_legacy"))
+    text = " ".join(str(v or "") for v in values).lower()
+    compact = re.sub(r"[^0-9a-z<>]+", "", text)
+    if not text.strip():
+        return False
+    if "under" in text or "below" in text or "<50000" in compact:
+        return False
+    return (
+        "over" in text
+        or "above" in text
+        or "500,000" in text
+        or "5,000,000" in text
+        or "500000" in compact
+        or "5000000" in compact
+        or ">500000" in compact
+        or ">5m" in compact
+    )
+
+
+def _routing_for_application(db, app):
+    app = dict(app or {})
+    risk_dict = {
+        "score": app.get("risk_score"),
+        "level": app.get("final_risk_level") or app.get("risk_level") or "",
+        "final_risk_level": app.get("final_risk_level") or app.get("risk_level") or "",
+        "base_risk_level": app.get("base_risk_level") or app.get("risk_level") or "",
+        "sector_label": app.get("sector") or "",
+        "sector_risk_tier": _sector_risk_tier(app),
+        "jurisdiction_risk_tier": _jurisdiction_risk_tier(app),
+        "ownership_transparency_status": _ownership_transparency_status(app),
+        "declared_pep_present": _declared_pep_present(db, app.get("id")),
+    }
+    screening_summary = _screening_summary_from_app(app)
+    try:
+        from routing_actuator import build_routing_facts
+        from edd_routing_policy import evaluate_edd_routing
+
+        facts = build_routing_facts(
+            app_row=app,
+            risk_dict=risk_dict,
+            screening_summary=screening_summary,
+        )
+        routing = evaluate_edd_routing(facts)
+    except Exception as exc:
+        logger.warning("Enhanced requirement routing detection failed: %s", exc)
+        routing = {
+            "policy_version": "edd_routing_policy_v1",
+            "route": "standard",
+            "triggers": [],
+            "inputs": risk_dict,
+            "evaluated_at": _now_iso(),
+            "errors": [str(exc)],
+        }
+    return routing
+
+
+def _resolve_requirement_triggers(app, routing):
+    mapped = {}
+    warnings = []
+    routing = routing or {}
+    for source_trigger in list(routing.get("triggers") or []):
+        target = EDD_TRIGGER_TO_REQUIREMENT_TRIGGER.get(source_trigger)
+        if target:
+            mapped.setdefault(target, []).append(source_trigger)
+            continue
+        if source_trigger == "supervisor_mandatory_escalation":
+            screening = (routing.get("inputs") or {}).get("screening_terminality_summary") or {}
+            if isinstance(screening, dict) and screening.get("has_terminal_match"):
+                mapped.setdefault("screening_concern", []).append(source_trigger)
+            else:
+                warnings.append("Unmapped EDD routing trigger: supervisor_mandatory_escalation")
+            continue
+        if source_trigger == "high_risk_sector":
+            if "crypto_vasp" not in mapped:
+                warnings.append("Unmapped EDD routing trigger: high_risk_sector")
+            continue
+        if source_trigger.startswith("edd_flag:"):
+            warnings.append("Unmapped EDD routing trigger: " + source_trigger)
+            continue
+        warnings.append("Unmapped EDD routing trigger: " + str(source_trigger))
+
+    if _declared_high_volume(app):
+        mapped.setdefault("high_volume", []).append("declared_high_volume")
+
+    ordered = [key for key in EXPECTED_DEFAULT_TRIGGER_KEYS if key in mapped]
+    for key in sorted(k for k in mapped if k not in ordered):
+        ordered.append(key)
+    return ordered, mapped, warnings
+
+
+def _load_active_rules(db, trigger_keys):
+    if not trigger_keys:
+        return []
+    placeholders = ",".join("?" for _ in trigger_keys)
+    rows = db.execute(
+        f"""
+        SELECT * FROM enhanced_requirement_rules
+        WHERE active = 1 AND trigger_key IN ({placeholders})
+        ORDER BY trigger_category, trigger_label, sort_order, id
+        """,
+        tuple(trigger_keys),
+    ).fetchall()
+    return [serialize_rule(row) for row in rows]
+
+
+def generate_application_enhanced_requirements(
+    db,
+    application_id,
+    app_row=None,
+    routing=None,
+    actor=None,
+    generation_source="manual_api",
+):
+    """Generate missing application-specific enhanced requirements.
+
+    The engine is intentionally create-only in Step 2: it snapshots active
+    settings rules into application rows and preserves all existing generated
+    records, including reviewed, waived, uploaded, accepted, or rejected work.
+    The caller owns the transaction.
+    """
+    app = _row_dict(app_row) if app_row is not None else _load_application(db, application_id)
+    result = {
+        "application_id": application_id,
+        "ran": False,
+        "config_ok": False,
+        "triggers": [],
+        "generated_count": 0,
+        "existing_count": 0,
+        "skipped_count": 0,
+        "requirements": [],
+        "warnings": [],
+        "errors": [],
+    }
+    if not app:
+        result["errors"].append("application_not_found")
+        return result
+
+    result["application_id"] = app.get("id") or application_id
+    target = _application_target(app)
+    audit_base = {
+        "application_id": app.get("id"),
+        "application_ref": app.get("ref"),
+        "actor": _audit_user(actor).get("sub"),
+        "generation_source": generation_source,
+        "timestamp": _now_iso(),
+    }
+
+    _insert_audit(
+        db,
+        "application_enhanced_requirements.generation_attempted",
+        target,
+        dict(audit_base),
+        actor=actor,
+    )
+
+    diagnostics = diagnose_enhanced_requirement_config(db)
+    result["config_ok"] = bool(diagnostics.get("config_ok"))
+    if not result["config_ok"]:
+        result["errors"].extend(diagnostics.get("errors") or [])
+        result["warnings"].extend(diagnostics.get("warnings") or [])
+        _insert_audit(
+            db,
+            "application_enhanced_requirements.config_invalid",
+            target,
+            {
+                **audit_base,
+                "config_ok": False,
+                "errors": result["errors"],
+                "warnings": result["warnings"],
+            },
+            actor=actor,
+        )
+        _insert_audit(
+            db,
+            "application_enhanced_requirements.generation_completed",
+            target,
+            {
+                **audit_base,
+                "config_ok": False,
+                "generated_requirement_keys": [],
+                "existing_requirement_keys": [],
+                "errors": result["errors"],
+                "warnings": result["warnings"],
+            },
+            actor=actor,
+        )
+        return result
+
+    routing_decision = routing or _routing_for_application(db, app)
+    triggers, trigger_sources, trigger_warnings = _resolve_requirement_triggers(app, routing_decision)
+    result["triggers"] = triggers
+    result["warnings"].extend(trigger_warnings)
+    result["ran"] = True
+
+    if not triggers:
+        _insert_audit(
+            db,
+            "application_enhanced_requirements.generation_completed",
+            target,
+            {
+                **audit_base,
+                "config_ok": True,
+                "triggers": [],
+                "generated_requirement_keys": [],
+                "existing_requirement_keys": [],
+                "warnings": result["warnings"],
+            },
+            actor=actor,
+        )
+        return result
+
+    rules = _load_active_rules(db, triggers)
+    if not rules:
+        result["warnings"].append("No active enhanced requirement rules matched detected trigger(s)")
+
+    generated_keys = []
+    existing_keys = []
+    for rule in rules:
+        existing = db.execute(
+            """
+            SELECT * FROM application_enhanced_requirements
+            WHERE application_id=? AND trigger_key=? AND requirement_key=?
+            """,
+            (app["id"], rule["trigger_key"], rule["requirement_key"]),
+        ).fetchone()
+        if existing:
+            result["existing_count"] += 1
+            existing_item = serialize_application_requirement(existing)
+            result["requirements"].append(existing_item)
+            existing_keys.append(rule["requirement_key"])
+            continue
+
+        trigger_context = {
+            "routing": routing_decision,
+            "mapped_from_triggers": trigger_sources.get(rule["trigger_key"], []),
+            "generation_source": generation_source,
+        }
+        params = (
+            app["id"],
+            rule.get("id"),
+            rule["trigger_key"],
+            rule["trigger_label"],
+            rule["trigger_category"],
+            rule["requirement_key"],
+            rule["requirement_label"],
+            rule.get("requirement_description", ""),
+            rule["audience"],
+            rule["requirement_type"],
+            rule["subject_scope"],
+            1 if rule.get("blocking_approval") else 0,
+            1 if rule.get("waivable") else 0,
+            json.dumps(rule.get("waiver_roles") or []),
+            1 if rule.get("mandatory") else 0,
+            "generated",
+            generation_source,
+            "; ".join(trigger_sources.get(rule["trigger_key"], [])),
+            json.dumps(trigger_context, default=str, sort_keys=True),
+            1,
+            _audit_user(actor).get("sub"),
+            _audit_user(actor).get("sub"),
+        )
+        if _db_is_postgres(db):
+            inserted = db.execute(
+                """
+                INSERT INTO application_enhanced_requirements
+                (application_id, source_rule_id, trigger_key, trigger_label,
+                 trigger_category, requirement_key, requirement_label,
+                 requirement_description, audience, requirement_type,
+                 subject_scope, blocking_approval, waivable, waiver_roles,
+                 mandatory, status, generation_source, trigger_reason,
+                 trigger_context, active, created_by, updated_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                RETURNING id
+                """,
+                params,
+            ).fetchone()
+            req_id = inserted["id"]
+        else:
+            db.execute(
+                """
+                INSERT INTO application_enhanced_requirements
+                (application_id, source_rule_id, trigger_key, trigger_label,
+                 trigger_category, requirement_key, requirement_label,
+                 requirement_description, audience, requirement_type,
+                 subject_scope, blocking_approval, waivable, waiver_roles,
+                 mandatory, status, generation_source, trigger_reason,
+                 trigger_context, active, created_by, updated_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                params,
+            )
+            req_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+        created = _load_application_requirement(db, req_id)
+        result["generated_count"] += 1
+        result["requirements"].append(created)
+        generated_keys.append(rule["requirement_key"])
+        _insert_audit(
+            db,
+            "application_enhanced_requirement.generated",
+            target,
+            {
+                **audit_base,
+                "requirement_id": created.get("id") if created else req_id,
+                "trigger_key": rule["trigger_key"],
+                "requirement_key": rule["requirement_key"],
+            },
+            actor=actor,
+            after_state=created,
+        )
+
+    _insert_audit(
+        db,
+        "application_enhanced_requirements.generation_completed",
+        target,
+        {
+            **audit_base,
+            "config_ok": True,
+            "triggers": triggers,
+            "generated_requirement_keys": generated_keys,
+            "existing_requirement_keys": existing_keys,
+            "generated_count": result["generated_count"],
+            "existing_count": result["existing_count"],
+            "warnings": result["warnings"],
+            "errors": result["errors"],
+        },
+        actor=actor,
+    )
+    return result

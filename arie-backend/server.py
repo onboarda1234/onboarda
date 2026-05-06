@@ -141,6 +141,9 @@ from enhanced_requirements import (
     ALLOWED_REQUIREMENT_TYPES,
     ALLOWED_SUBJECT_SCOPES,
     ALLOWED_WAIVER_ROLES,
+    diagnose_enhanced_requirement_config,
+    generate_application_enhanced_requirements,
+    serialize_application_requirement,
     serialize_rule as serialize_enhanced_requirement_rule,
     validate_rule_payload as validate_enhanced_requirement_rule_payload,
 )
@@ -6058,6 +6061,100 @@ class EnhancedRequirementRuleStateHandler(BaseHandler):
         db.commit()
         db.close()
         self.success({"rule": after, "status": action + "d"})
+
+
+class EnhancedRequirementDiagnosticsHandler(BaseHandler):
+    """GET /api/settings/enhanced-requirements/diagnostics."""
+
+    def get(self):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+        db = get_db()
+        try:
+            diagnostics = diagnose_enhanced_requirement_config(db)
+        finally:
+            db.close()
+        self.success({"diagnostics": diagnostics})
+
+
+class ApplicationEnhancedRequirementsHandler(BaseHandler):
+    """GET /api/applications/:id/enhanced-requirements."""
+
+    def get(self, app_id):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_READ_ROLES)
+        if not user:
+            return
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            rows = db.execute(
+                """
+                SELECT * FROM application_enhanced_requirements
+                WHERE application_id = ?
+                ORDER BY trigger_category, trigger_label, requirement_label, id
+                """,
+                (app["id"],),
+            ).fetchall()
+            requirements = [serialize_application_requirement(row) for row in rows]
+            self.success({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "requirements": requirements,
+                "total": len(requirements),
+            })
+        finally:
+            db.close()
+
+
+class ApplicationEnhancedRequirementsGenerateHandler(BaseHandler):
+    """POST /api/applications/:id/enhanced-requirements/generate."""
+
+    def post(self, app_id):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+        data = self.get_json() or {}
+        generation_source = str(data.get("generation_source") or "manual_api").strip()
+        if not re.match(r"^[a-z0-9_:-]{1,80}$", generation_source):
+            return self.error("generation_source must be a stable lowercase key", 400)
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            result = generate_application_enhanced_requirements(
+                db,
+                app["id"],
+                app_row=app,
+                actor=user,
+                generation_source=generation_source,
+            )
+            db.commit()
+            self.success(result)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "application enhanced requirements generation failed: app_id=%s error=%s",
+                app_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to generate enhanced requirements", 500)
+        finally:
+            db.close()
 
 
 ROLE_PERMISSION_MATRIX = [
@@ -14446,6 +14543,8 @@ def make_app():
         (r"/api/applications/([^/]+)/notes", ApplicationNotesHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),
+        (r"/api/applications/([^/]+)/enhanced-requirements/generate", ApplicationEnhancedRequirementsGenerateHandler),
+        (r"/api/applications/([^/]+)/enhanced-requirements", ApplicationEnhancedRequirementsHandler),
         (r"/api/applications/([^/]+)/documents/([^/]+)", DocumentDeleteHandler),
         (r"/api/applications/([^/]+)/documents", DocumentUploadHandler),
         (r"/api/applications/([^/]+)", ApplicationDetailHandler),
@@ -14476,6 +14575,7 @@ def make_app():
         (r"/api/config/verification-checks", VerificationChecksHandler),
         (r"/api/config/environment", EnvironmentInfoHandler),
         (r"/api/settings/enhanced-requirements", EnhancedRequirementRulesHandler),
+        (r"/api/settings/enhanced-requirements/diagnostics", EnhancedRequirementDiagnosticsHandler),
         (r"/api/settings/enhanced-requirements/([^/]+)/(disable|enable)", EnhancedRequirementRuleStateHandler),
         (r"/api/settings/enhanced-requirements/([^/]+)", EnhancedRequirementRuleDetailHandler),
         (r"/api/version", VersionHandler),
