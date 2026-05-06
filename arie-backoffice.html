@@ -3674,7 +3674,7 @@ function normalizeStatusKey(status) {
   return String(status || '').toLowerCase().replace(/[\s-]+/g, '_');
 }
 
-var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], canonicalView: '' };
+var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], eddRoutedStatuses: [], canonicalView: '' };
 
 function normalizeStatusList(statuses) {
   if (!Array.isArray(statuses)) return [];
@@ -3688,7 +3688,9 @@ function normalizeStatusList(statuses) {
 
 function setDashboardStatusContract(source) {
   var pending = normalizeStatusList(source && source.pending_statuses);
+  var eddRouted = normalizeStatusList(source && source.edd_routed_statuses);
   if (pending.length) DASHBOARD_STATUS_CONTRACT.pendingStatuses = pending;
+  if (eddRouted.length) DASHBOARD_STATUS_CONTRACT.eddRoutedStatuses = eddRouted;
   if (source && source.canonical_view) DASHBOARD_STATUS_CONTRACT.canonicalView = source.canonical_view;
 }
 
@@ -3700,8 +3702,20 @@ function hasDashboardStatusContract() {
   return getDashboardPendingStatuses().length > 0;
 }
 
+function getDashboardEddRoutedStatuses() {
+  return DASHBOARD_STATUS_CONTRACT.eddRoutedStatuses;
+}
+
+function hasDashboardEddRoutedStatusContract() {
+  return getDashboardEddRoutedStatuses().length > 0;
+}
+
 function isDashboardPendingApplication(app) {
   return getDashboardPendingStatuses().indexOf(normalizeStatusKey((app || {}).statusRaw || (app || {}).status)) >= 0;
+}
+
+function isDashboardEddRoutedApplication(app) {
+  return getDashboardEddRoutedStatuses().indexOf(normalizeStatusKey((app || {}).statusRaw || (app || {}).status)) >= 0;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -10002,14 +10016,15 @@ function renderKPIDashboard() {
   var totalApps = appsInPeriod.length;
   var approvedApps = appsInPeriod.filter(function(a) { return statusKey(a) === 'approved'; }).length;
   var rejectedApps = appsInPeriod.filter(function(a) { var s = statusKey(a); return s === 'rejected' || s === 'declined'; }).length;
-  var eddApps = appsInPeriod.filter(function(a) {
-    var s = statusKey(a);
-    return s === 'edd_required' || s === 'edd_approved';
-  }).length;
+  var hasEddRoutedStatusContract = hasDashboardEddRoutedStatusContract();
+  var eddApps = hasEddRoutedStatusContract ? appsInPeriod.filter(isDashboardEddRoutedApplication).length : null;
   var decidedApps = approvedApps + rejectedApps;
   var approvalRate = decidedApps > 0 ? ((approvedApps / decidedApps) * 100).toFixed(1) : '—';
   var rejectionRate = decidedApps > 0 ? ((rejectedApps / decidedApps) * 100).toFixed(1) : '—';
-  var eddRoutingRate = totalApps > 0 ? ((eddApps / totalApps) * 100).toFixed(1) : '—';
+  var eddRoutingRate = (eddApps !== null && totalApps > 0) ? ((eddApps / totalApps) * 100).toFixed(1) : '—';
+  var eddRoutingSub = eddApps !== null
+    ? eddApps + ' applications routed to EDD of ' + totalApps + ' total'
+    : 'EDD routing status contract unavailable; reload dashboard data';
 
   // Count sanctions/adverse media hits from screening data on applications in period
   var sanctionsHits = 0;
@@ -10081,7 +10096,7 @@ function renderKPIDashboard() {
       '</div>' +
       '<div class="kpi-card amber"><div class="kpi-card-label">EDD Routing Rate</div>' +
         '<div class="kpi-card-value" style="color:var(--amber);">' + (eddRoutingRate !== '—' ? eddRoutingRate + '%' : '\u2014') + '</div>' +
-        '<div class="kpi-card-sub">' + eddApps + ' applications routed to EDD of ' + totalApps + ' total</div>' +
+        '<div class="kpi-card-sub">' + eddRoutingSub + '</div>' +
       '</div>' +
       '<div class="kpi-card purple"><div class="kpi-card-label">PEP Hit Rate</div>' +
         (function() {
@@ -10114,9 +10129,8 @@ function renderKPIDashboard() {
   // ── Section 4: Team Productivity ──
   // Escalation Rate: compute real value from filtered applications
   var escalationCount = appsInPeriod.filter(function(a) {
-    var s = statusKey(a);
     var risk = String(a.risk || '').toUpperCase();
-    return s === 'edd_required' || risk === 'HIGH' || risk === 'VERY_HIGH';
+    return isDashboardEddRoutedApplication(a) || risk === 'HIGH' || risk === 'VERY_HIGH';
   }).length;
   var escalationRate = totalApps > 0 ? ((escalationCount / totalApps) * 100).toFixed(1) : '0.0';
 

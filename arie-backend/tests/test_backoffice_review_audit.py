@@ -817,10 +817,12 @@ class TestDayFourDashboardCountAlignment:
     def test_dashboard_in_progress_label_and_status_contract_are_visible(self):
         html = self._read_backoffice()
         assert '<div class="stat-card-label">In Progress</div>' in html
-        assert "var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], canonicalView: '' };" in html
+        assert "var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], eddRoutedStatuses: [], canonicalView: '' };" in html
         assert "function setDashboardStatusContract(source)" in html
         assert "function getDashboardPendingStatuses()" in html
         assert "function hasDashboardStatusContract()" in html
+        assert "function getDashboardEddRoutedStatuses()" in html
+        assert "function isDashboardEddRoutedApplication(app)" in html
         assert "setDashboardStatusContract(dashboardResp);" in html
         assert "function isDashboardPendingApplication(app)" in html
 
@@ -846,6 +848,7 @@ class TestDayFourDashboardCountAlignment:
         assert "'pricing_review'" not in status_region
         assert "'kyc_documents'" not in status_region
         assert "pendingStatuses: []" in status_region
+        assert "eddRoutedStatuses: []" in status_region
 
     def test_empty_dashboard_status_contract_renders_unavailable_not_zero(self):
         html = self._read_backoffice()
@@ -887,12 +890,24 @@ class TestDayFourKPIEDDRoutingTruthfulness:
     def test_kpi_edd_rate_uses_edd_statuses_not_risk_proxy(self):
         html = self._read_backoffice()
         fn_start = html.index("function renderKPIDashboard()")
-        edd_start = html.index("var eddApps = appsInPeriod.filter", fn_start)
+        edd_start = html.index("var eddApps = hasEddRoutedStatusContract", fn_start)
         edd_region = html[edd_start:edd_start + 360]
-        assert "var s = statusKey(a);" in edd_region
-        assert "s === 'edd_required' || s === 'edd_approved'" in edd_region
+        assert "hasEddRoutedStatusContract" in edd_region
+        assert "appsInPeriod.filter(isDashboardEddRoutedApplication).length" in edd_region
+        assert "s === 'edd_required' || s === 'edd_approved'" not in edd_region
         assert "risk === 'HIGH'" not in edd_region
         assert "risk === 'VERY_HIGH'" not in edd_region
+
+    def test_edd_routing_statuses_are_loaded_from_backend_contract(self):
+        html = self._read_backoffice()
+        contract_start = html.index("function setDashboardStatusContract(source)")
+        contract_region = html[contract_start:contract_start + 1200]
+        assert "source && source.edd_routed_statuses" in contract_region
+        assert "DASHBOARD_STATUS_CONTRACT.eddRoutedStatuses = eddRouted" in contract_region
+        assert "function getDashboardEddRoutedStatuses()" in contract_region
+        assert "function hasDashboardEddRoutedStatusContract()" in contract_region
+        assert "function isDashboardEddRoutedApplication(app)" in contract_region
+        assert "getDashboardEddRoutedStatuses().indexOf" in contract_region
 
     def test_kpi_status_key_prefers_raw_backend_status(self):
         html = self._read_backoffice()
@@ -908,9 +923,9 @@ class TestDayFourKPIEDDRoutingTruthfulness:
         html = self._read_backoffice()
         fn_start = html.index("function renderKPIDashboard()")
         card_start = html.index("EDD Routing Rate", fn_start)
-        card_region = html[card_start:card_start + 700]
+        card_region = html[card_start:card_start + 900]
         assert "eddRoutingRate" in card_region
-        assert "applications routed to EDD" in card_region
+        assert "eddRoutingSub" in card_region
         assert "High/Very High risk" not in card_region
         assert "EDD Conversion Rate" not in card_region
 

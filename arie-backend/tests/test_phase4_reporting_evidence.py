@@ -23,7 +23,7 @@ def test_report_field_allowlist_blocks_raw_json_fields():
 
 
 def test_canonical_pending_status_contract_includes_new_workflow_states():
-    from server import _REPORT_PENDING_STATUSES
+    from server import _REPORT_EDD_ROUTED_STATUSES, _REPORT_PENDING_STATUSES
 
     assert "draft" in _REPORT_PENDING_STATUSES
     assert "pricing_review" in _REPORT_PENDING_STATUSES
@@ -31,6 +31,8 @@ def test_canonical_pending_status_contract_includes_new_workflow_states():
     assert "compliance_review" in _REPORT_PENDING_STATUSES
     assert "kyc_documents" in _REPORT_PENDING_STATUSES
     assert "rmi_sent" in _REPORT_PENDING_STATUSES
+    assert _REPORT_EDD_ROUTED_STATUSES == ("edd_required",)
+    assert "edd_approved" not in _REPORT_EDD_ROUTED_STATUSES
 
 
 def test_pdf_download_handler_records_pdf_hash_metadata():
@@ -140,6 +142,7 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         assert body["report"]["canonical_view"] == "applications_report_v1"
         assert body["report"]["show_fixtures"] is False
         assert "rmi_sent" in body["report"]["pending_statuses"]
+        assert body["report"]["edd_routed_statuses"] == ["edd_required"]
 
     def test_report_generate_rejects_unsupported_format(self):
         resp = self.fetch(
@@ -188,6 +191,7 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         assert body["report"]["canonical_view"] == "applications_report_v1"
         assert body["report"]["filters"] == {"jurisdiction": "Mauritius"}
         assert "rmi_sent" in body["report"]["pending_statuses"]
+        assert body["report"]["edd_routed_statuses"] == ["edd_required"]
 
     def test_analytics_summary_reconciles_visible_lifecycle_statuses(self):
         from db import get_db
@@ -257,4 +261,5 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         assert dashboard_body["early_stage_applications"] == expected_pending
         assert dashboard_body["in_progress_applications"] == expected_pending
         assert dashboard_body["pending_statuses"] == analytics_body["report"]["pending_statuses"]
+        assert dashboard_body["edd_routed_statuses"] == analytics_body["report"]["edd_routed_statuses"]
         assert dashboard_body["canonical_view"] == "applications_report_v1"

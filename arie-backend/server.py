@@ -5983,6 +5983,10 @@ _REPORT_PENDING_STATUSES = (
     "kyc_documents", "rmi_sent",
 )
 
+_REPORT_EDD_ROUTED_STATUSES = (
+    "edd_required",
+)
+
 _REPORT_ALLOWED_FIELDS = {
     "id", "ref", "company_name", "status", "status_label", "risk_level",
     "risk_score", "risk_lane", "country", "sector", "entity_type",
@@ -6065,6 +6069,7 @@ def _report_scope_from_request(handler, user):
         "filters": {k: v for k, v in filters.items() if v},
         "show_fixtures": show_fixtures,
         "pending_statuses": list(_REPORT_PENDING_STATUSES),
+        "edd_routed_statuses": list(_REPORT_EDD_ROUTED_STATUSES),
     }
 
 
@@ -6192,6 +6197,7 @@ class ReportHandler(BaseHandler):
                 "filters": scope["filters"],
                 "show_fixtures": scope["show_fixtures"],
                 "pending_statuses": scope["pending_statuses"],
+                "edd_routed_statuses": scope["edd_routed_statuses"],
                 "canonical_view": "applications_report_v1",
                 "record_count": len(results),
             },
@@ -6234,11 +6240,11 @@ class ReportAnalyticsHandler(BaseHandler):
                         SUM(CASE WHEN a.status='approved' THEN 1 ELSE 0 END) as approved,
                         SUM(CASE WHEN a.status='rejected' THEN 1 ELSE 0 END) as rejected,
                         SUM(CASE WHEN a.status IN ({",".join(["?"] * len(_REPORT_PENDING_STATUSES))}) THEN 1 ELSE 0 END) as pending,
-                        SUM(CASE WHEN a.status='edd_required' THEN 1 ELSE 0 END) as edd_required,
+                        SUM(CASE WHEN a.status IN ({",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))}) THEN 1 ELSE 0 END) as edd_required,
                         SUM(CASE WHEN a.status='withdrawn' THEN 1 ELSE 0 END) as withdrawn,
                         AVG(CASE WHEN a.risk_score IS NOT NULL THEN a.risk_score ELSE NULL END) as avg_risk_score
                     FROM applications a WHERE {where}
-                """, [*_REPORT_PENDING_STATUSES, *params]).fetchone()
+                """, [*_REPORT_PENDING_STATUSES, *_REPORT_EDD_ROUTED_STATUSES, *params]).fetchone()
                 if row:
                     r = dict(row)
                     total = r.get("total") or 0
@@ -6556,6 +6562,7 @@ class ReportAnalyticsHandler(BaseHandler):
                     "filters": scope["filters"],
                     "show_fixtures": scope["show_fixtures"],
                     "pending_statuses": scope["pending_statuses"],
+                    "edd_routed_statuses": scope["edd_routed_statuses"],
                     "canonical_view": "applications_report_v1",
                 },
             })
@@ -7231,7 +7238,11 @@ class DashboardHandler(BaseHandler):
             stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted') AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
             stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
             stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
-            stats["edd"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='edd_required' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
+            edd_placeholders = ",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))
+            stats["edd"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({edd_placeholders}) AND client_id=?{client_fx_clause}",
+                _client_params(*_REPORT_EDD_ROUTED_STATUSES),
+            ).fetchone()["c"]
 
             # Risk distribution
             stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW' AND client_id=?{client_fx_clause}", _client_params()).fetchone()["c"]
@@ -7254,6 +7265,7 @@ class DashboardHandler(BaseHandler):
             stats["recent"] = [dict(r) for r in recent]
             stats["show_fixtures"] = False
             stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
+            stats["edd_routed_statuses"] = list(_REPORT_EDD_ROUTED_STATUSES)
             stats["canonical_view"] = "applications_report_v1"
         else:
             # Officer / admin branch: exclude fixtures by default.
@@ -7276,7 +7288,12 @@ class DashboardHandler(BaseHandler):
             stats["compliance_review"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status IN ('compliance_review','kyc_submitted'){fx_clause}", fp).fetchone()["c"]
             stats["approved"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='approved'{fx_clause}", fp).fetchone()["c"]
             stats["rejected"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='rejected'{fx_clause}", fp).fetchone()["c"]
-            stats["edd"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE status='edd_required'{fx_clause}", fp).fetchone()["c"]
+            edd_placeholders = ",".join(["?"] * len(_REPORT_EDD_ROUTED_STATUSES))
+            edd_params = [*_REPORT_EDD_ROUTED_STATUSES, *fp]
+            stats["edd"] = db.execute(
+                f"SELECT COUNT(*) as c FROM applications WHERE status IN ({edd_placeholders}){fx_clause}",
+                edd_params,
+            ).fetchone()["c"]
 
             # Risk distribution
             stats["risk_low"] = db.execute(f"SELECT COUNT(*) as c FROM applications WHERE risk_level='LOW'{fx_clause}", fp).fetchone()["c"]
@@ -7301,6 +7318,7 @@ class DashboardHandler(BaseHandler):
             stats["recent"] = [dict(r) for r in recent]
             stats["show_fixtures"] = show_fx
             stats["pending_statuses"] = list(_REPORT_PENDING_STATUSES)
+            stats["edd_routed_statuses"] = list(_REPORT_EDD_ROUTED_STATUSES)
             stats["canonical_view"] = "applications_report_v1"
 
         db.close()
