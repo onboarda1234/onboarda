@@ -945,6 +945,38 @@ class TestDayFourReportExportReconciliation:
 
 
 # ═══════════════════════════════════════════════════════════
+# I7. DAY 4 KPI BACKLOG ALIGNMENT
+# ═══════════════════════════════════════════════════════════
+class TestDayFourKPIBacklogAlignment:
+    """Pin KPI backlog to the canonical in-progress status contract."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_kpi_backlog_uses_dashboard_pending_helper(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function renderKPIDashboard()")
+        fn_region = html[fn_start:fn_start + 5200]
+        assert "var backlogCount = appsInPeriod.filter(isDashboardPendingApplication).length;" in fn_region
+        assert "In Progress Applications" in fn_region
+        assert "canonical in-progress bucket" in fn_region
+
+    def test_kpi_backlog_no_longer_uses_terminal_status_inverse(self):
+        html = self._read_backoffice()
+        start = html.index("// In-progress applications: use the same canonical status set")
+        end = html.index("// ── Section 1: Operational Efficiency ──", start)
+        backlog_region = html[start:end]
+        assert "s !== 'approved'" not in backlog_region
+        assert "s !== 'rejected'" not in backlog_region
+        assert "s !== 'withdrawn'" not in backlog_region
+        assert "isDashboardPendingApplication" in backlog_region
+
+
+# ═══════════════════════════════════════════════════════════
 # J. AUDIT TRAIL HARDENING
 # ═══════════════════════════════════════════════════════════
 class TestAuditTrailHardening:
