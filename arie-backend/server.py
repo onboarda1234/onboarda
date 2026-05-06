@@ -5999,6 +5999,14 @@ _REPORT_DEFAULT_FIELDS = (
     "country", "entity_type", "created_at", "assigned_to",
 )
 
+_REPORT_EXPORT_FIELDS = (
+    "ref", "company_name", "status", "risk_level", "risk_score",
+    "sector", "country", "entity_type", "created_at", "assigned_to",
+    "director_count", "ubo_count", "document_count",
+)
+
+_REPORT_EXPORT_FILENAME_PREFIX = "regmind_applications_report"
+
 _CANONICAL_RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
 
 _REPORT_APPLICATION_SELECT_COLUMNS = (
@@ -6180,10 +6188,13 @@ class ReportHandler(BaseHandler):
 
         if output_format == "csv":
             safe_date = generated_at[:10]
+            filename = f"{_REPORT_EXPORT_FILENAME_PREFIX}_{safe_date}.csv"
             self.set_header("X-Report-Record-Count", str(len(results)))
             self.set_header("X-Report-Show-Fixtures", "true" if scope["show_fixtures"] else "false")
             self.set_header("X-Report-Canonical-View", "applications_report_v1")
-            _write_csv_response(self, f"regmind_report_{safe_date}.csv", field_list, results)
+            self.set_header("X-Report-Field-List", ",".join(field_list))
+            self.set_header("X-Report-Filename", filename)
+            _write_csv_response(self, filename, field_list, results)
             return
 
         self.success({
@@ -6200,6 +6211,9 @@ class ReportHandler(BaseHandler):
                 "edd_routed_statuses": scope["edd_routed_statuses"],
                 "canonical_view": "applications_report_v1",
                 "record_count": len(results),
+                "field_list": field_list,
+                "ignored_fields": ignored_fields,
+                "filename_prefix": _REPORT_EXPORT_FILENAME_PREFIX,
             },
         })
 

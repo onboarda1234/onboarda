@@ -4746,11 +4746,18 @@ function sortReportTable(field) {
   renderReportDataTable();
 }
 
+var REPORT_EXPORT_FIELD_LIST = 'fields=ref,company_name,status,risk_level,risk_score,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count';
+
+function reportCsvFilename(res) {
+  var disposition = res.headers.get('Content-Disposition') || '';
+  var filenameMatch = disposition.match(/filename="?([^"]+)"?/);
+  return filenameMatch ? filenameMatch[1] : 'regmind_applications_report_' + new Date().toISOString().split('T')[0] + '.csv';
+}
+
 function exportReportsCSV() {
   var filters = getReportFilters();
   var filterParams = Object.keys(filters).filter(function(k) { return filters[k]; }).map(function(k) { return k + '=' + encodeURIComponent(filters[k]); }).join('&');
-  var baseFields = 'fields=ref,company_name,status,risk_level,risk_score,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count';
-  var url = '/reports/generate?format=csv&' + baseFields + (filterParams ? '&' + filterParams : '');
+  var url = '/reports/generate?format=csv&' + REPORT_EXPORT_FIELD_LIST + (filterParams ? '&' + filterParams : '');
   var headers = {};
   if (BO_AUTH_TOKEN) headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
   fetch(BO_API_BASE + url, { headers: headers }).then(async function(res) {
@@ -4776,10 +4783,8 @@ function exportReportsCSV() {
     var blob = await res.blob();
     var blobUrl = URL.createObjectURL(blob);
     var a = document.createElement('a');
-    var disposition = res.headers.get('Content-Disposition') || '';
-    var filenameMatch = disposition.match(/filename="?([^"]+)"?/);
     a.href = blobUrl;
-    a.download = filenameMatch ? filenameMatch[1] : 'regmind_report_' + new Date().toISOString().split('T')[0] + '.csv';
+    a.download = reportCsvFilename(res);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -10203,8 +10208,7 @@ function officerRow(name, role, active, completed, avgTime, approvalRate, worklo
 }
 
 function exportKPIReport() {
-  var baseFields = 'fields=ref,company_name,status,risk_level,sector,country,entity_type,created_at,assigned_to,director_count,ubo_count,document_count';
-  var url = '/reports/generate?format=csv&' + baseFields;
+  var url = '/reports/generate?format=csv&' + REPORT_EXPORT_FIELD_LIST;
   var headers = {};
   if (BO_AUTH_TOKEN) headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN;
   fetch(BO_API_BASE + url, { headers: headers }).then(async function(res) {
@@ -10230,10 +10234,8 @@ function exportKPIReport() {
     var blob = await res.blob();
     var blobUrl = URL.createObjectURL(blob);
     var a = document.createElement('a');
-    var disposition = res.headers.get('Content-Disposition') || '';
-    var filenameMatch = disposition.match(/filename="?([^"]+)"?/);
     a.href = blobUrl;
-    a.download = filenameMatch ? filenameMatch[1] : 'regmind_kpi_report_' + new Date().toISOString().split('T')[0] + '.csv';
+    a.download = reportCsvFilename(res);
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
