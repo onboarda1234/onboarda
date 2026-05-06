@@ -100,6 +100,80 @@ def _runtime_js(html, scenario):
     ])
 
 
+def _export_runtime_js(html, scenario):
+    report_start = html.index("var REPORT_EXPORT_FIELD_LIST")
+    report_end = html.index("function updateOnboardingLanes", report_start)
+    kpi_start = html.index("function exportKPIReport()")
+    kpi_end = html.index("\n// ═══════════════════════════════════════════════════════════\n// RISK SCORING", kpi_start)
+    return "\n".join([
+        textwrap.dedent(
+            """
+            const fetchCalls = [];
+            const clickedDownloads = [];
+            const appendedDownloads = [];
+            const removedDownloads = [];
+            const objectUrls = [];
+            const revokedUrls = [];
+            const toasts = [];
+            let blobCalls = 0;
+            let loginShown = false;
+
+            const document = {
+              body: {
+                appendChild(el) { appendedDownloads.push(el.download || ''); },
+                removeChild(el) { removedDownloads.push(el.download || ''); }
+              },
+              createElement(tag) {
+                return {
+                  tagName: tag,
+                  href: '',
+                  download: '',
+                  click() { clickedDownloads.push({ href: this.href, download: this.download }); }
+                };
+              }
+            };
+            const URL = {
+              createObjectURL(blob) {
+                objectUrls.push(blob);
+                return 'blob://download-' + objectUrls.length;
+              },
+              revokeObjectURL(url) { revokedUrls.push(url); }
+            };
+
+            var BO_API_BASE = '/api';
+            var BO_AUTH_TOKEN = 'runtime-token';
+            function showToast(message, type) { toasts.push({ message, type }); }
+            function showLoginScreen() { loginShown = true; }
+            function getReportFilters() { return { jurisdiction: 'Mauritius', risk_level: '' }; }
+
+            function makeCsvResponse(recordCount) {
+              return {
+                status: 200,
+                ok: true,
+                headers: {
+                  get(name) {
+                    const headers = {
+                      'X-Report-Record-Count': recordCount,
+                      'Content-Disposition': 'attachment; filename=\"regmind_applications_report_2026-05-06.csv\"'
+                    };
+                    return headers[name] || '';
+                  }
+                },
+                async blob() {
+                  blobCalls += 1;
+                  return 'csv-blob-' + blobCalls;
+                },
+                async json() { return {}; }
+              };
+            }
+            """
+        ),
+        html[report_start:report_end],
+        html[kpi_start:kpi_end],
+        scenario,
+    ])
+
+
 def _run_node(script):
     assert shutil.which("node"), "Node.js is required for back-office KPI runtime tests"
     result = subprocess.run(
@@ -222,3 +296,90 @@ class TestBackofficeKPIRuntime:
             "pricing": True,
             "draft": False,
         }
+
+    def test_report_and_kpi_exports_download_server_csv_blobs(self):
+        html = _read_backoffice()
+        scenario = textwrap.dedent(
+            """
+            globalThis.fetch = async function(url, opts) {
+              fetchCalls.push({ url, headers: opts.headers || {} });
+              return makeCsvResponse('22');
+            };
+
+            exportReportsCSV();
+            exportKPIReport();
+
+            setTimeout(function() {
+              console.log(JSON.stringify({
+                fetchCalls,
+                clickedDownloads,
+                appendedDownloads,
+                removedDownloads,
+                objectUrls,
+                revokedUrls,
+                toasts,
+                blobCalls,
+                loginShown
+              }));
+            }, 0);
+            """
+        )
+
+        result = _run_node(_export_runtime_js(html, scenario))
+
+        assert result["blobCalls"] == 2
+        assert result["loginShown"] is False
+        assert len(result["fetchCalls"]) == 2
+        report_call, kpi_call = result["fetchCalls"]
+        assert report_call["url"].startswith("/api/reports/generate?format=csv&fields=")
+        assert "risk_level,risk_score,sector" in report_call["url"]
+        assert "jurisdiction=Mauritius" in report_call["url"]
+        assert kpi_call["url"].startswith("/api/reports/generate?format=csv&fields=")
+        assert "risk_level,risk_score,sector" in kpi_call["url"]
+        assert "jurisdiction=Mauritius" not in kpi_call["url"]
+        assert report_call["headers"]["Authorization"] == "Bearer runtime-token"
+        assert kpi_call["headers"]["Authorization"] == "Bearer runtime-token"
+        assert result["clickedDownloads"] == [
+            {"href": "blob://download-1", "download": "regmind_applications_report_2026-05-06.csv"},
+            {"href": "blob://download-2", "download": "regmind_applications_report_2026-05-06.csv"},
+        ]
+        assert result["appendedDownloads"] == [
+            "regmind_applications_report_2026-05-06.csv",
+            "regmind_applications_report_2026-05-06.csv",
+        ]
+        assert result["removedDownloads"] == result["appendedDownloads"]
+        assert result["revokedUrls"] == ["blob://download-1", "blob://download-2"]
+        assert result["toasts"] == [
+            {"message": "📥 Report exported: 22 records", "type": "success"},
+            {"message": "📥 KPI report exported: 22 records", "type": "success"},
+        ]
+
+    def test_kpi_export_zero_record_response_does_not_download_blob(self):
+        html = _read_backoffice()
+        scenario = textwrap.dedent(
+            """
+            globalThis.fetch = async function(url, opts) {
+              fetchCalls.push({ url, headers: opts.headers || {} });
+              return makeCsvResponse('0');
+            };
+
+            exportKPIReport();
+
+            setTimeout(function() {
+              console.log(JSON.stringify({
+                fetchCalls,
+                clickedDownloads,
+                toasts,
+                blobCalls
+              }));
+            }, 0);
+            """
+        )
+
+        result = _run_node(_export_runtime_js(html, scenario))
+
+        assert result["blobCalls"] == 0
+        assert result["clickedDownloads"] == []
+        assert len(result["fetchCalls"]) == 1
+        assert result["fetchCalls"][0]["url"].startswith("/api/reports/generate?format=csv&fields=")
+        assert result["toasts"] == [{"message": "No data to export", "type": "warning"}]
