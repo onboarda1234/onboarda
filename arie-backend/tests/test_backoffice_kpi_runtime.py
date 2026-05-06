@@ -34,6 +34,8 @@ PENDING_STATUSES = [
     "rmi_sent",
 ]
 
+EDD_ROUTED_STATUSES = ["edd_required"]
+
 
 def _read_backoffice():
     with open(BACKOFFICE_PATH, "r", encoding="utf-8") as f:
@@ -137,7 +139,7 @@ class TestBackofficeKPIRuntime:
         html = _read_backoffice()
         scenario = "\n".join([
             _staging_like_apps_js(),
-            "setDashboardStatusContract({ pending_statuses: __PENDING__, canonical_view: 'applications_report_v1' });",
+            "setDashboardStatusContract({ pending_statuses: __PENDING__, edd_routed_statuses: __EDD__, canonical_view: 'applications_report_v1' });",
             textwrap.dedent(
                 """
                 renderKPIDashboard();
@@ -151,7 +153,7 @@ class TestBackofficeKPIRuntime:
                 }));
                 """
             ),
-        ]).replace("__PENDING__", json.dumps(PENDING_STATUSES))
+        ]).replace("__PENDING__", json.dumps(PENDING_STATUSES)).replace("__EDD__", json.dumps(EDD_ROUTED_STATUSES))
 
         result = _run_node(_runtime_js(html, scenario))
 
@@ -170,6 +172,7 @@ class TestBackofficeKPIRuntime:
         html = _read_backoffice()
         scenario = "\n".join([
             _staging_like_apps_js(),
+            "setDashboardStatusContract({ edd_routed_statuses: __EDD__ });",
             textwrap.dedent(
                 """
                 renderKPIDashboard();
@@ -182,7 +185,7 @@ class TestBackofficeKPIRuntime:
                 }));
                 """
             ),
-        ])
+        ]).replace("__EDD__", json.dumps(EDD_ROUTED_STATUSES))
 
         result = _run_node(_runtime_js(html, scenario))
 
