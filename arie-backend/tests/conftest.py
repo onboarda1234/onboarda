@@ -18,12 +18,29 @@ os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only"
 
 _db_initialized = False
 
+
+def _sync_test_db_path(path):
+    """Keep already-imported config/db/server modules pointed at the test DB.
+
+    Several tests import runtime modules during collection, before ``temp_db``
+    has a chance to set ``DB_PATH``. Those modules cache DB_PATH at import time,
+    so updating only ``os.environ`` is not enough for same-process test runs.
+    """
+    os.environ["DB_PATH"] = path
+    for module_name in ("config", "db", "server"):
+        module = sys.modules.get(module_name)
+        if module is not None and hasattr(module, "DB_PATH"):
+            setattr(module, "DB_PATH", path)
+        if module_name == "server" and module is not None and hasattr(module, "_CFG_DB_PATH"):
+            setattr(module, "_CFG_DB_PATH", path)
+
+
 @pytest.fixture
 def temp_db():
     """Create a temporary database for testing."""
     global _db_initialized
     path = os.path.join(tempfile.gettempdir(), f"onboarda_test_{os.getpid()}.db")
-    os.environ["DB_PATH"] = path
+    _sync_test_db_path(path)
 
     if not _db_initialized:
         # Remove stale DB from previous run
