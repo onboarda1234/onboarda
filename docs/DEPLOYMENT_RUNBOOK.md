@@ -238,6 +238,33 @@ aws logs filter-log-events --log-group-name /ecs/regmind-staging \
 ```
 Check for: `connection pool exhausted`, `falling back to mock mode`, `Sumsub create applicant failed: 404`.
 
+### Day 6 deployment evidence ledger
+
+Attach this ledger to every Day 6 staging deployment note before the deployment is marked closed:
+
+| Evidence item | Source | Required value |
+|---|---|---|
+| Deployed commit | `curl https://staging.regmind.co/api/version` | `git_sha` equals the reviewed `main` commit; `image_tag` contains the same SHA |
+| Build provenance | GitHub Actions `deploy-staging.yml` run | Run URL, run number, and actor recorded |
+| ECS service | `aws ecs describe-services --cluster regmind-staging --services regmind-backend --region af-south-1` | `deployments[0].rolloutState` is `COMPLETED`; task definition revision recorded |
+| Runtime logs | CloudWatch log group `/ecs/regmind-staging` | No new `ERROR`, `connection pool exhausted`, or `falling back to mock mode` entries after deploy |
+| Reporting smoke | `arie-backend/scripts/qa/day5_closing_smoke.py` | `ok: true`, `canonical_view: applications_report_v1`, and expected total/pending/EDD counts |
+| Rollback handle | Previous ECS task definition | Previous `regmind-staging:<REVISION>` recorded before deployment |
+
+Recommended smoke command:
+
+```bash
+BACKOFFICE_TOKEN="$STAGING_BACKOFFICE_TOKEN" \
+python3 arie-backend/scripts/qa/day5_closing_smoke.py \
+  --api-base https://staging.regmind.co/api \
+  --expected-sha "$GIT_SHA" \
+  --expected-total 22 \
+  --expected-pending 21 \
+  --expected-edd 1
+```
+
+Use `--token-env BACKOFFICE_TOKEN` if the token is stored under a different environment variable name. Do not paste bearer tokens into release notes, GitHub comments, or shell history.
+
 ---
 
 ## 6. Rollback Procedure
