@@ -833,6 +833,40 @@ class TestDayFourDashboardCountAlignment:
 
 
 # ═══════════════════════════════════════════════════════════
+# I3C. DAY 4 KPI EDD ROUTING TRUTHFULNESS
+# ═══════════════════════════════════════════════════════════
+class TestDayFourKPIEDDRoutingTruthfulness:
+    """Pin KPI EDD rate to actual EDD routing statuses, not risk proxies."""
+
+    def _read_backoffice(self):
+        with open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "arie-backoffice.html"
+        ), "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_kpi_edd_rate_uses_edd_statuses_not_risk_proxy(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function renderKPIDashboard()")
+        edd_start = html.index("var eddApps = appsInPeriod.filter", fn_start)
+        edd_region = html[edd_start:edd_start + 360]
+        assert "var s = statusKey(a);" in edd_region
+        assert "s === 'edd_required' || s === 'edd_approved'" in edd_region
+        assert "risk === 'HIGH'" not in edd_region
+        assert "risk === 'VERY_HIGH'" not in edd_region
+
+    def test_kpi_edd_card_label_matches_routing_semantics(self):
+        html = self._read_backoffice()
+        fn_start = html.index("function renderKPIDashboard()")
+        card_start = html.index("EDD Routing Rate", fn_start)
+        card_region = html[card_start:card_start + 700]
+        assert "eddRoutingRate" in card_region
+        assert "applications routed to EDD" in card_region
+        assert "High/Very High risk" not in card_region
+        assert "EDD Conversion Rate" not in card_region
+
+
+# ═══════════════════════════════════════════════════════════
 # I4. DAY 3 MEMO QUALITY TRUTHFULNESS
 # ═══════════════════════════════════════════════════════════
 class TestDayThreeMemoQualityTruthfulness:

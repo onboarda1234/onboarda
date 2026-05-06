@@ -9972,13 +9972,13 @@ function renderKPIDashboard() {
   var approvedApps = appsInPeriod.filter(function(a) { return statusKey(a) === 'approved'; }).length;
   var rejectedApps = appsInPeriod.filter(function(a) { var s = statusKey(a); return s === 'rejected' || s === 'declined'; }).length;
   var eddApps = appsInPeriod.filter(function(a) {
-    var risk = String(a.risk || '').toUpperCase();
-    return risk === 'HIGH' || risk === 'VERY_HIGH';
+    var s = statusKey(a);
+    return s === 'edd_required' || s === 'edd_approved';
   }).length;
   var decidedApps = approvedApps + rejectedApps;
   var approvalRate = decidedApps > 0 ? ((approvedApps / decidedApps) * 100).toFixed(1) : '—';
   var rejectionRate = decidedApps > 0 ? ((rejectedApps / decidedApps) * 100).toFixed(1) : '—';
-  var eddConversionRate = totalApps > 0 ? ((eddApps / totalApps) * 100).toFixed(1) : '—';
+  var eddRoutingRate = totalApps > 0 ? ((eddApps / totalApps) * 100).toFixed(1) : '—';
 
   // Count sanctions/adverse media hits from screening data on applications in period
   var sanctionsHits = 0;
@@ -10043,9 +10043,9 @@ function renderKPIDashboard() {
         '<div class="kpi-card-value" style="color:var(--red);">' + (rejectionRate !== '—' ? rejectionRate + '%' : '\u2014') + '</div>' +
         '<div class="kpi-card-sub">' + rejectedApps + ' rejected of ' + decidedApps + ' decided</div>' +
       '</div>' +
-      '<div class="kpi-card amber"><div class="kpi-card-label">EDD Conversion Rate</div>' +
-        '<div class="kpi-card-value" style="color:var(--amber);">' + (eddConversionRate !== '—' ? eddConversionRate + '%' : '\u2014') + '</div>' +
-        '<div class="kpi-card-sub">' + eddApps + ' High/Very High risk of ' + totalApps + ' total</div>' +
+      '<div class="kpi-card amber"><div class="kpi-card-label">EDD Routing Rate</div>' +
+        '<div class="kpi-card-value" style="color:var(--amber);">' + (eddRoutingRate !== '—' ? eddRoutingRate + '%' : '\u2014') + '</div>' +
+        '<div class="kpi-card-sub">' + eddApps + ' applications routed to EDD of ' + totalApps + ' total</div>' +
       '</div>' +
       '<div class="kpi-card purple"><div class="kpi-card-label">PEP Hit Rate</div>' +
         (function() {
