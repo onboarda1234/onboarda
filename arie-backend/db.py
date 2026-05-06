@@ -486,6 +486,38 @@ def _get_postgres_schema() -> str:
         updated_by TEXT REFERENCES users(id)
     );
 
+    -- Enhanced / EDD requirement settings
+    CREATE TABLE IF NOT EXISTS enhanced_requirement_rules (
+        id SERIAL PRIMARY KEY,
+        trigger_key TEXT NOT NULL,
+        trigger_label TEXT NOT NULL,
+        trigger_category TEXT NOT NULL DEFAULT 'risk',
+        requirement_key TEXT NOT NULL,
+        requirement_label TEXT NOT NULL,
+        requirement_description TEXT,
+        audience TEXT NOT NULL DEFAULT 'client' CHECK(audience IN ('client','backoffice','both')),
+        requirement_type TEXT NOT NULL DEFAULT 'document' CHECK(requirement_type IN ('document','declaration','review_task','explanation','internal_control')),
+        subject_scope TEXT NOT NULL DEFAULT 'application' CHECK(subject_scope IN ('company','ubo','director','controller','application','screening_subject')),
+        blocking_approval INTEGER NOT NULL DEFAULT 1 CHECK(blocking_approval IN (0,1)),
+        waivable INTEGER NOT NULL DEFAULT 1 CHECK(waivable IN (0,1)),
+        waiver_roles JSONB DEFAULT '[]',
+        mandatory INTEGER NOT NULL DEFAULT 1 CHECK(mandatory IN (0,1)),
+        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+        sort_order INTEGER NOT NULL DEFAULT 100,
+        applies_when JSONB DEFAULT '{}',
+        client_safe_label TEXT,
+        client_safe_description TEXT,
+        internal_notes TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_by TEXT REFERENCES users(id),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_by TEXT REFERENCES users(id),
+        UNIQUE(trigger_key, requirement_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_enhanced_req_trigger ON enhanced_requirement_rules(trigger_key);
+    CREATE INDEX IF NOT EXISTS idx_enhanced_req_active ON enhanced_requirement_rules(active);
+    CREATE INDEX IF NOT EXISTS idx_enhanced_req_audience ON enhanced_requirement_rules(audience);
+
     -- AI Agents Configuration
     CREATE TABLE IF NOT EXISTS ai_agents (
         id SERIAL PRIMARY KEY,
@@ -1285,6 +1317,38 @@ def _get_sqlite_schema() -> str:
         updated_by TEXT REFERENCES users(id)
     );
 
+    -- Enhanced / EDD requirement settings
+    CREATE TABLE IF NOT EXISTS enhanced_requirement_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trigger_key TEXT NOT NULL,
+        trigger_label TEXT NOT NULL,
+        trigger_category TEXT NOT NULL DEFAULT 'risk',
+        requirement_key TEXT NOT NULL,
+        requirement_label TEXT NOT NULL,
+        requirement_description TEXT,
+        audience TEXT NOT NULL DEFAULT 'client' CHECK(audience IN ('client','backoffice','both')),
+        requirement_type TEXT NOT NULL DEFAULT 'document' CHECK(requirement_type IN ('document','declaration','review_task','explanation','internal_control')),
+        subject_scope TEXT NOT NULL DEFAULT 'application' CHECK(subject_scope IN ('company','ubo','director','controller','application','screening_subject')),
+        blocking_approval INTEGER NOT NULL DEFAULT 1 CHECK(blocking_approval IN (0,1)),
+        waivable INTEGER NOT NULL DEFAULT 1 CHECK(waivable IN (0,1)),
+        waiver_roles TEXT DEFAULT '[]',
+        mandatory INTEGER NOT NULL DEFAULT 1 CHECK(mandatory IN (0,1)),
+        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+        sort_order INTEGER NOT NULL DEFAULT 100,
+        applies_when TEXT DEFAULT '{}',
+        client_safe_label TEXT,
+        client_safe_description TEXT,
+        internal_notes TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        created_by TEXT REFERENCES users(id),
+        updated_at TEXT DEFAULT (datetime('now')),
+        updated_by TEXT REFERENCES users(id),
+        UNIQUE(trigger_key, requirement_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_enhanced_req_trigger ON enhanced_requirement_rules(trigger_key);
+    CREATE INDEX IF NOT EXISTS idx_enhanced_req_active ON enhanced_requirement_rules(active);
+    CREATE INDEX IF NOT EXISTS idx_enhanced_req_audience ON enhanced_requirement_rules(audience);
+
     -- AI Agents Configuration
     CREATE TABLE IF NOT EXISTS ai_agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1968,6 +2032,12 @@ def init_db():
         db.commit()
         logger.info("startup: completed _ensure_default_system_settings")
 
+        # Ensure configurable Enhanced / EDD requirement rules exist.
+        logger.info("startup: entering _ensure_default_enhanced_requirement_rules")
+        _ensure_default_enhanced_requirement_rules(db)
+        db.commit()
+        logger.info("startup: completed _ensure_default_enhanced_requirement_rules")
+
         # ── H-2: Ensure demo application stubs exist (run in init_db for reliability) ──
         # Use both config.IS_DEMO and environment.is_demo() for robustness
         _is_demo = _CFG_IS_DEMO
@@ -2123,6 +2193,86 @@ def _ensure_default_system_settings(db: DBConnection):
         ))
     except Exception as e:
         logger.debug("Default system settings seed skipped: %s", e)
+
+
+def _ensure_enhanced_requirement_rules_table(db: DBConnection):
+    """Create the enhanced requirement rules table for existing databases."""
+    if db.is_postgres:
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS enhanced_requirement_rules (
+            id SERIAL PRIMARY KEY,
+            trigger_key TEXT NOT NULL,
+            trigger_label TEXT NOT NULL,
+            trigger_category TEXT NOT NULL DEFAULT 'risk',
+            requirement_key TEXT NOT NULL,
+            requirement_label TEXT NOT NULL,
+            requirement_description TEXT,
+            audience TEXT NOT NULL DEFAULT 'client' CHECK(audience IN ('client','backoffice','both')),
+            requirement_type TEXT NOT NULL DEFAULT 'document' CHECK(requirement_type IN ('document','declaration','review_task','explanation','internal_control')),
+            subject_scope TEXT NOT NULL DEFAULT 'application' CHECK(subject_scope IN ('company','ubo','director','controller','application','screening_subject')),
+            blocking_approval INTEGER NOT NULL DEFAULT 1 CHECK(blocking_approval IN (0,1)),
+            waivable INTEGER NOT NULL DEFAULT 1 CHECK(waivable IN (0,1)),
+            waiver_roles JSONB DEFAULT '[]',
+            mandatory INTEGER NOT NULL DEFAULT 1 CHECK(mandatory IN (0,1)),
+            active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+            sort_order INTEGER NOT NULL DEFAULT 100,
+            applies_when JSONB DEFAULT '{}',
+            client_safe_label TEXT,
+            client_safe_description TEXT,
+            internal_notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT REFERENCES users(id),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_by TEXT REFERENCES users(id),
+            UNIQUE(trigger_key, requirement_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_enhanced_req_trigger ON enhanced_requirement_rules(trigger_key);
+        CREATE INDEX IF NOT EXISTS idx_enhanced_req_active ON enhanced_requirement_rules(active);
+        CREATE INDEX IF NOT EXISTS idx_enhanced_req_audience ON enhanced_requirement_rules(audience);
+        """)
+    else:
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS enhanced_requirement_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trigger_key TEXT NOT NULL,
+            trigger_label TEXT NOT NULL,
+            trigger_category TEXT NOT NULL DEFAULT 'risk',
+            requirement_key TEXT NOT NULL,
+            requirement_label TEXT NOT NULL,
+            requirement_description TEXT,
+            audience TEXT NOT NULL DEFAULT 'client' CHECK(audience IN ('client','backoffice','both')),
+            requirement_type TEXT NOT NULL DEFAULT 'document' CHECK(requirement_type IN ('document','declaration','review_task','explanation','internal_control')),
+            subject_scope TEXT NOT NULL DEFAULT 'application' CHECK(subject_scope IN ('company','ubo','director','controller','application','screening_subject')),
+            blocking_approval INTEGER NOT NULL DEFAULT 1 CHECK(blocking_approval IN (0,1)),
+            waivable INTEGER NOT NULL DEFAULT 1 CHECK(waivable IN (0,1)),
+            waiver_roles TEXT DEFAULT '[]',
+            mandatory INTEGER NOT NULL DEFAULT 1 CHECK(mandatory IN (0,1)),
+            active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+            sort_order INTEGER NOT NULL DEFAULT 100,
+            applies_when TEXT DEFAULT '{}',
+            client_safe_label TEXT,
+            client_safe_description TEXT,
+            internal_notes TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            created_by TEXT REFERENCES users(id),
+            updated_at TEXT DEFAULT (datetime('now')),
+            updated_by TEXT REFERENCES users(id),
+            UNIQUE(trigger_key, requirement_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_enhanced_req_trigger ON enhanced_requirement_rules(trigger_key);
+        CREATE INDEX IF NOT EXISTS idx_enhanced_req_active ON enhanced_requirement_rules(active);
+        CREATE INDEX IF NOT EXISTS idx_enhanced_req_audience ON enhanced_requirement_rules(audience);
+        """)
+
+
+def _ensure_default_enhanced_requirement_rules(db: DBConnection):
+    """Seed default Enhanced / EDD requirement rules idempotently."""
+    try:
+        _ensure_enhanced_requirement_rules_table(db)
+        from enhanced_requirements import seed_default_enhanced_requirement_rules
+        seed_default_enhanced_requirement_rules(db)
+    except Exception as e:
+        logger.warning("Default enhanced requirement rules seed skipped: %s", e)
 
 
 def _safe_column_exists(db: DBConnection, table: str, column: str) -> bool:
@@ -2357,6 +2507,16 @@ def _run_migrations(db: DBConnection):
             );
             """)
         logger.info("Migration v2.5: system_settings table ready")
+
+    # Migration v2.21: Enhanced / EDD requirement rules settings table
+    if not _safe_table_exists(db, "enhanced_requirement_rules"):
+        logger.info("Migration v2.21: Creating enhanced_requirement_rules table")
+        _ensure_enhanced_requirement_rules_table(db)
+        logger.info("Migration v2.21: enhanced_requirement_rules table ready")
+    try:
+        _ensure_default_enhanced_requirement_rules(db)
+    except Exception as e:
+        logger.warning("Migration v2.21: enhanced requirement seed skipped: %s", e)
 
     # Migration v2.6: Add regulatory_documents table for regulatory intelligence workflow
     if not _safe_table_exists(db, "regulatory_documents"):

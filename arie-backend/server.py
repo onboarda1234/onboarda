@@ -136,6 +136,14 @@ from edd_routing_policy import (
     evaluate_edd_routing as _evaluate_edd_routing,
     emit_routing_audit as _emit_edd_routing_audit,
 )
+from enhanced_requirements import (
+    ALLOWED_AUDIENCES,
+    ALLOWED_REQUIREMENT_TYPES,
+    ALLOWED_SUBJECT_SCOPES,
+    ALLOWED_WAIVER_ROLES,
+    serialize_rule as serialize_enhanced_requirement_rule,
+    validate_rule_payload as validate_enhanced_requirement_rule_payload,
+)
 
 # GDPR retention and purge engine (optional import — continues if unavailable)
 try:
@@ -5756,6 +5764,302 @@ class SystemSettingsHandler(BaseHandler):
         self.success({"status": "saved"})
 
 
+ENHANCED_REQUIREMENT_READ_ROLES = ["admin", "sco", "co"]
+ENHANCED_REQUIREMENT_WRITE_ROLES = ["admin", "sco"]
+
+
+def _enhanced_rule_audit_payload(rule, actor):
+    rule = rule or {}
+    return {
+        "rule_id": rule.get("id"),
+        "trigger_key": rule.get("trigger_key"),
+        "requirement_key": rule.get("requirement_key"),
+        "actor": actor.get("sub") if actor else None,
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _load_enhanced_requirement_rule(db, rule_id):
+    row = db.execute(
+        "SELECT * FROM enhanced_requirement_rules WHERE id = ?",
+        (rule_id,),
+    ).fetchone()
+    return serialize_enhanced_requirement_rule(row) if row else None
+
+
+def _enhanced_requirement_meta():
+    return {
+        "audiences": list(ALLOWED_AUDIENCES),
+        "requirement_types": list(ALLOWED_REQUIREMENT_TYPES),
+        "subject_scopes": list(ALLOWED_SUBJECT_SCOPES),
+        "waiver_roles": list(ALLOWED_WAIVER_ROLES),
+        "read_roles": ENHANCED_REQUIREMENT_READ_ROLES,
+        "write_roles": ENHANCED_REQUIREMENT_WRITE_ROLES,
+    }
+
+
+class EnhancedRequirementRulesHandler(BaseHandler):
+    """GET/POST /api/settings/enhanced-requirements."""
+
+    def get(self):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_READ_ROLES)
+        if not user:
+            return
+
+        trigger_key = (self.get_argument("trigger_key", "") or "").strip()
+        audience = (self.get_argument("audience", "") or "").strip()
+        active = (self.get_argument("active", "") or "").strip().lower()
+
+        query = "SELECT * FROM enhanced_requirement_rules WHERE 1=1"
+        params = []
+        if trigger_key:
+            query += " AND trigger_key = ?"
+            params.append(trigger_key)
+        if audience:
+            query += " AND audience = ?"
+            params.append(audience)
+        if active in ("true", "1", "false", "0"):
+            query += " AND active = ?"
+            params.append(1 if active in ("true", "1") else 0)
+        query += " ORDER BY trigger_category, trigger_label, sort_order, id"
+
+        db = get_db()
+        rows = db.execute(query, tuple(params)).fetchall()
+        db.close()
+
+        rules = [serialize_enhanced_requirement_rule(r) for r in rows]
+        grouped = {}
+        for rule in rules:
+            grouped.setdefault(rule["trigger_key"], {
+                "trigger_key": rule["trigger_key"],
+                "trigger_label": rule["trigger_label"],
+                "trigger_category": rule["trigger_category"],
+                "rules": [],
+            })["rules"].append(rule)
+        self.success({"rules": rules, "grouped": grouped, "total": len(rules), "meta": _enhanced_requirement_meta()})
+
+    def post(self):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+
+        data = self.get_json()
+        normalized, error = validate_enhanced_requirement_rule_payload(data)
+        if error:
+            return self.error(error, 400)
+
+        db = get_db()
+        existing = db.execute(
+            "SELECT id FROM enhanced_requirement_rules WHERE trigger_key=? AND requirement_key=?",
+            (normalized["trigger_key"], normalized["requirement_key"]),
+        ).fetchone()
+        if existing:
+            db.close()
+            return self.error("Rule already exists for trigger_key and requirement_key", 409)
+
+        insert_params = (
+            normalized["trigger_key"],
+            normalized["trigger_label"],
+            normalized["trigger_category"],
+            normalized["requirement_key"],
+            normalized["requirement_label"],
+            normalized["requirement_description"],
+            normalized["audience"],
+            normalized["requirement_type"],
+            normalized["subject_scope"],
+            1 if normalized["blocking_approval"] else 0,
+            1 if normalized["waivable"] else 0,
+            json.dumps(normalized["waiver_roles"]),
+            1 if normalized["mandatory"] else 0,
+            1 if normalized["active"] else 0,
+            normalized["sort_order"],
+            json.dumps(normalized["applies_when"]),
+            normalized["client_safe_label"],
+            normalized["client_safe_description"],
+            normalized["internal_notes"],
+            user["sub"],
+            user["sub"],
+        )
+        if db.is_postgres:
+            row = db.execute("""
+                INSERT INTO enhanced_requirement_rules
+                (trigger_key, trigger_label, trigger_category, requirement_key,
+                 requirement_label, requirement_description, audience,
+                 requirement_type, subject_scope, blocking_approval, waivable,
+                 waiver_roles, mandatory, active, sort_order, applies_when,
+                 client_safe_label, client_safe_description, internal_notes,
+                 created_by, updated_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                RETURNING id
+            """, insert_params).fetchone()
+            rule_id = row["id"]
+        else:
+            db.execute("""
+                INSERT INTO enhanced_requirement_rules
+                (trigger_key, trigger_label, trigger_category, requirement_key,
+                 requirement_label, requirement_description, audience,
+                 requirement_type, subject_scope, blocking_approval, waivable,
+                 waiver_roles, mandatory, active, sort_order, applies_when,
+                 client_safe_label, client_safe_description, internal_notes,
+                 created_by, updated_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, insert_params)
+            rule_id = db.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+
+        created = _load_enhanced_requirement_rule(db, rule_id)
+        self.log_audit(
+            user,
+            "enhanced_requirement_rule.created",
+            "Enhanced Requirement Rules",
+            json.dumps(_enhanced_rule_audit_payload(created, user), sort_keys=True),
+            db=db,
+            after_state=created,
+            commit=False,
+        )
+        db.commit()
+        db.close()
+        self.success({"rule": created, "status": "created"}, 201)
+
+
+class EnhancedRequirementRuleDetailHandler(BaseHandler):
+    """GET/PATCH /api/settings/enhanced-requirements/:id."""
+
+    def get(self, rule_id):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_READ_ROLES)
+        if not user:
+            return
+        db = get_db()
+        rule = _load_enhanced_requirement_rule(db, rule_id)
+        db.close()
+        if not rule:
+            return self.error("Rule not found", 404)
+        self.success({"rule": rule, "meta": _enhanced_requirement_meta()})
+
+    def patch(self, rule_id):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+
+        db = get_db()
+        before = _load_enhanced_requirement_rule(db, rule_id)
+        if not before:
+            db.close()
+            return self.error("Rule not found", 404)
+
+        normalized, error = validate_enhanced_requirement_rule_payload(self.get_json(), existing=before)
+        if error:
+            db.close()
+            return self.error(error, 400)
+
+        duplicate = db.execute(
+            "SELECT id FROM enhanced_requirement_rules WHERE trigger_key=? AND requirement_key=? AND id <> ?",
+            (normalized["trigger_key"], normalized["requirement_key"], rule_id),
+        ).fetchone()
+        if duplicate:
+            db.close()
+            return self.error("Rule already exists for trigger_key and requirement_key", 409)
+
+        db.execute("""
+            UPDATE enhanced_requirement_rules SET
+                trigger_key=?,
+                trigger_label=?,
+                trigger_category=?,
+                requirement_key=?,
+                requirement_label=?,
+                requirement_description=?,
+                audience=?,
+                requirement_type=?,
+                subject_scope=?,
+                blocking_approval=?,
+                waivable=?,
+                waiver_roles=?,
+                mandatory=?,
+                active=?,
+                sort_order=?,
+                applies_when=?,
+                client_safe_label=?,
+                client_safe_description=?,
+                internal_notes=?,
+                updated_by=?,
+                updated_at=datetime('now')
+            WHERE id=?
+        """, (
+            normalized["trigger_key"],
+            normalized["trigger_label"],
+            normalized["trigger_category"],
+            normalized["requirement_key"],
+            normalized["requirement_label"],
+            normalized["requirement_description"],
+            normalized["audience"],
+            normalized["requirement_type"],
+            normalized["subject_scope"],
+            1 if normalized["blocking_approval"] else 0,
+            1 if normalized["waivable"] else 0,
+            json.dumps(normalized["waiver_roles"]),
+            1 if normalized["mandatory"] else 0,
+            1 if normalized["active"] else 0,
+            normalized["sort_order"],
+            json.dumps(normalized["applies_when"]),
+            normalized["client_safe_label"],
+            normalized["client_safe_description"],
+            normalized["internal_notes"],
+            user["sub"],
+            rule_id,
+        ))
+        after = _load_enhanced_requirement_rule(db, rule_id)
+        self.log_audit(
+            user,
+            "enhanced_requirement_rule.updated",
+            "Enhanced Requirement Rules",
+            json.dumps(_enhanced_rule_audit_payload(after, user), sort_keys=True),
+            db=db,
+            before_state=before,
+            after_state=after,
+            commit=False,
+        )
+        db.commit()
+        db.close()
+        self.success({"rule": after, "status": "updated"})
+
+
+class EnhancedRequirementRuleStateHandler(BaseHandler):
+    """POST /api/settings/enhanced-requirements/:id/(disable|enable)."""
+
+    def post(self, rule_id, action):
+        user = self.require_auth(roles=ENHANCED_REQUIREMENT_WRITE_ROLES)
+        if not user:
+            return
+        action = (action or "").strip().lower()
+        if action not in ("disable", "enable"):
+            return self.error("Invalid rule state action", 404)
+
+        db = get_db()
+        before = _load_enhanced_requirement_rule(db, rule_id)
+        if not before:
+            db.close()
+            return self.error("Rule not found", 404)
+        active = 1 if action == "enable" else 0
+        db.execute(
+            "UPDATE enhanced_requirement_rules SET active=?, updated_by=?, updated_at=datetime('now') WHERE id=?",
+            (active, user["sub"], rule_id),
+        )
+        after = _load_enhanced_requirement_rule(db, rule_id)
+        audit_action = f"enhanced_requirement_rule.{action}d"
+        self.log_audit(
+            user,
+            audit_action,
+            "Enhanced Requirement Rules",
+            json.dumps(_enhanced_rule_audit_payload(after, user), sort_keys=True),
+            db=db,
+            before_state=before,
+            after_state=after,
+            commit=False,
+        )
+        db.commit()
+        db.close()
+        self.success({"rule": after, "status": action + "d"})
+
+
 ROLE_PERMISSION_MATRIX = [
     {"id": "view_dashboard", "label": "View dashboard", "roles": ["admin", "sco", "co", "analyst"]},
     {"id": "view_all_applications", "label": "View all applications", "roles": ["admin", "sco", "co", "analyst"]},
@@ -5775,6 +6079,8 @@ ROLE_PERMISSION_MATRIX = [
     {"id": "manage_roles_permissions", "label": "Manage roles & permissions", "roles": ["admin"]},
     {"id": "view_audit_trail", "label": "View audit trail", "roles": ["admin", "sco"]},
     {"id": "system_settings", "label": "System settings", "roles": ["admin"]},
+    {"id": "manage_enhanced_requirements", "label": "Manage Enhanced / EDD requirements", "roles": ["admin", "sco"]},
+    {"id": "view_enhanced_requirements", "label": "View Enhanced / EDD requirements", "roles": ["admin", "sco", "co"]},
 ]
 
 
@@ -14169,6 +14475,9 @@ def make_app():
         (r"/api/config/ai-agents/([^/]+)", AIAgentDetailHandler),
         (r"/api/config/verification-checks", VerificationChecksHandler),
         (r"/api/config/environment", EnvironmentInfoHandler),
+        (r"/api/settings/enhanced-requirements", EnhancedRequirementRulesHandler),
+        (r"/api/settings/enhanced-requirements/([^/]+)/(disable|enable)", EnhancedRequirementRuleStateHandler),
+        (r"/api/settings/enhanced-requirements/([^/]+)", EnhancedRequirementRuleDetailHandler),
         (r"/api/version", VersionHandler),
 
         # Screening (Real API Integrations)

@@ -664,6 +664,9 @@ body.role-admin .role-admin-only-block, body.role-admin .snav-section.role-admin
 .role-sco-only { display:none !important; }
 body.role-admin .role-sco-only, body.role-sco .role-sco-only { display:initial !important; }
 body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only { display:flex !important; }
+.role-enhanced-settings { display:none !important; }
+body.role-admin .role-enhanced-settings, body.role-sco .role-enhanced-settings, body.role-co .role-enhanced-settings { display:initial !important; }
+body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role-enhanced-settings, body.role-co .snav-item.role-enhanced-settings { display:flex !important; }
 
 /* ── AI Chat Sidebar ── */
 .ai-chat-sidebar { position:fixed; top:0; right:-400px; width:400px; height:100vh; background:var(--surface); box-shadow:-4px 0 24px rgba(0,0,0,0.12); z-index:1000; transition:right 0.3s ease; display:flex; flex-direction:column; border-left:1px solid var(--border1); }
@@ -821,6 +824,7 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     <div class="snav-item role-admin-only" onclick="showView('ai-checks',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg></span> AI Verification Checks</div>
     <div class="snav-item role-admin-only" onclick="showView('ai-agents',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M20 9h3"/><path d="M20 14h3"/><path d="M1 9h3"/><path d="M1 14h3"/></svg></span> AI Agents</div>
     <div class="snav-item role-admin-only" onclick="showView('agent-health',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Agent Health</div>
+    <div class="snav-item role-enhanced-settings" data-view="enhanced-requirements" onclick="showView('enhanced-requirements',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"/><path d="M21 12a9 9 0 1 1-6.22-8.56"/><path d="M21 3v6h-6"/></svg></span> Enhanced Requirements</div>
     <div class="snav-item" onclick="showView('resources',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span> Resources</div>
     <div class="snav-item role-admin-only" onclick="showView('settings',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span> Settings</div>
     <div class="snav-item role-sco-only" onclick="showView('audit',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></span> Audit Trail</div>
@@ -2261,6 +2265,74 @@ body.role-admin .snav-item.role-sco-only, body.role-sco .snav-item.role-sco-only
     <div class="form-group"><div class="form-label">EDD Threshold Score (reference only, not auto-enforced)</div><input class="form-input" type="number" id="setting-edd-threshold" value="55" /></div>
     <button class="btn btn-primary" onclick="saveSystemSettings()">Save Settings</button>
   </div>
+</div>
+
+<!-- ═══════════════ ENHANCED REQUIREMENTS SETTINGS VIEW ═══════════════ -->
+<div class="view" id="view-enhanced-requirements">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;">
+    <div>
+      <h3 style="font-size:16px;font-weight:700;">Enhanced / EDD Requirements</h3>
+      <p style="font-size:13px;color:var(--text3);margin-top:2px;">Rules are grouped by trigger and stored as back-office configuration.</p>
+    </div>
+    <button class="btn btn-primary role-er-write" id="er-add-btn" onclick="showEnhancedRequirementForm()">Add Rule</button>
+  </div>
+
+  <div class="card" style="margin-bottom:16px;">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <input class="form-input" id="er-search" style="width:260px;" placeholder="Search rules..." oninput="renderEnhancedRequirementRules()" />
+      <select class="form-select" id="er-trigger-filter" style="width:auto;" onchange="renderEnhancedRequirementRules()">
+        <option value="">All triggers</option>
+      </select>
+      <select class="form-select" id="er-audience-filter" style="width:auto;" onchange="renderEnhancedRequirementRules()">
+        <option value="">All audiences</option>
+        <option value="client">Client-facing</option>
+        <option value="backoffice">Back-office</option>
+        <option value="both">Both</option>
+      </select>
+      <select class="form-select" id="er-active-filter" style="width:auto;" onchange="renderEnhancedRequirementRules()">
+        <option value="">All statuses</option>
+        <option value="active">Active</option>
+        <option value="disabled">Disabled</option>
+      </select>
+      <button class="btn btn-outline btn-sm" onclick="loadEnhancedRequirementRules()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="card" id="er-form-card" style="display:none;margin-bottom:16px;">
+    <div class="card-header" style="margin-bottom:14px;">
+      <div class="card-title" id="er-form-title">Add Enhanced Requirement Rule</div>
+      <button class="btn btn-outline btn-sm" onclick="hideEnhancedRequirementForm()">Cancel</button>
+    </div>
+    <input type="hidden" id="er-rule-id" />
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;">
+      <div class="form-group"><div class="form-label">Trigger Key</div><input class="form-input" id="er-trigger-key" /></div>
+      <div class="form-group"><div class="form-label">Trigger Label</div><input class="form-input" id="er-trigger-label" /></div>
+      <div class="form-group"><div class="form-label">Trigger Category</div><input class="form-input" id="er-trigger-category" /></div>
+      <div class="form-group"><div class="form-label">Requirement Key</div><input class="form-input" id="er-requirement-key" /></div>
+      <div class="form-group" style="grid-column:1 / -1;"><div class="form-label">Requirement Label</div><input class="form-input" id="er-requirement-label" /></div>
+      <div class="form-group" style="grid-column:1 / -1;"><div class="form-label">Requirement Description</div><textarea class="form-input" style="resize:vertical;" id="er-requirement-description" rows="2"></textarea></div>
+      <div class="form-group"><div class="form-label">Audience</div><select class="form-select" id="er-audience"><option value="client">Client</option><option value="backoffice">Back-office</option><option value="both">Both</option></select></div>
+      <div class="form-group"><div class="form-label">Requirement Type</div><select class="form-select" id="er-requirement-type"><option value="document">Document</option><option value="declaration">Declaration</option><option value="review_task">Review task</option><option value="explanation">Explanation</option><option value="internal_control">Internal control</option></select></div>
+      <div class="form-group"><div class="form-label">Subject Scope</div><select class="form-select" id="er-subject-scope"><option value="company">Company</option><option value="ubo">UBO</option><option value="director">Director</option><option value="controller">Controller</option><option value="application">Application</option><option value="screening_subject">Screening subject</option></select></div>
+      <div class="form-group"><div class="form-label">Sort Order</div><input class="form-input" type="number" id="er-sort-order" value="100" /></div>
+      <div class="form-group" style="grid-column:1 / -1;">
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-size:12px;"><input type="checkbox" id="er-blocking-approval" checked /> Blocks approval</label>
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-size:12px;"><input type="checkbox" id="er-waivable" checked /> Waivable</label>
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-size:12px;"><input type="checkbox" id="er-mandatory" checked /> Mandatory</label>
+        <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;"><input type="checkbox" id="er-active" checked /> Active</label>
+      </div>
+      <div class="form-group"><div class="form-label">Waiver Roles</div><input class="form-input" id="er-waiver-roles" placeholder="admin,sco" /></div>
+      <div class="form-group"><div class="form-label">Client-safe Label</div><input class="form-input" id="er-client-safe-label" /></div>
+      <div class="form-group" style="grid-column:1 / -1;"><div class="form-label">Client-safe Description</div><textarea class="form-input" style="resize:vertical;" id="er-client-safe-description" rows="2"></textarea></div>
+      <div class="form-group" style="grid-column:1 / -1;"><div class="form-label">Internal Notes</div><textarea class="form-input" style="resize:vertical;" id="er-internal-notes" rows="2"></textarea></div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+      <button class="btn btn-outline" onclick="hideEnhancedRequirementForm()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEnhancedRequirementRule()">Save Rule</button>
+    </div>
+  </div>
+
+  <div id="enhanced-requirements-container"></div>
 </div>
 
 <!-- ═══════════════ AUDIT TRAIL VIEW ═══════════════ -->
@@ -4024,12 +4096,16 @@ function showView(name, navItem) {
   // Enforce frontend role restrictions on admin-only views
   var adminOnlyViews = ['users', 'roles', 'risk-model', 'ai-checks', 'ai-agents', 'agent-health', 'settings'];
   var scoOnlyViews = ['audit'];
+  var enhancedSettingsViews = ['enhanced-requirements'];
   var role = currentUser ? currentUser.role : '';
   if (adminOnlyViews.indexOf(name) >= 0 && role !== 'admin') {
     showToast('Access restricted to administrators', 'error'); return;
   }
   if (scoOnlyViews.indexOf(name) >= 0 && role !== 'admin' && role !== 'sco') {
     showToast('Access restricted to senior compliance officers', 'error'); return;
+  }
+  if (enhancedSettingsViews.indexOf(name) >= 0 && ['admin','sco','co'].indexOf(role) < 0) {
+    showToast('Access restricted to compliance officers', 'error'); return;
   }
 
   document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
@@ -4044,7 +4120,7 @@ function showView(name, navItem) {
     navItem.classList.add('active');
   }
 
-  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', lifecycle:'Lifecycle Queue', edd:'EDD Pipeline', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
+  var titles = { dashboard:'Dashboard', kpis:'KPI Dashboard', applications:'Applications', cases:'Case Management', screening:'Screening Queue', monitoring:'Ongoing Monitoring', lifecycle:'Lifecycle Queue', edd:'EDD Pipeline', 'change-mgmt':'Change Management', reports:'Reports & Analytics', 'reg-intel':'Regulatory Intelligence', users:'User Management', roles:'Roles & Permissions', resources:'Compliance Resources', settings:'Settings', 'enhanced-requirements':'Enhanced Requirements', audit:'Audit Trail', 'app-detail':'Application Review', 'risk-model':'Risk Scoring Model', 'ai-checks':'AI Verification Checks', 'ai-agents':'AI Agent Pipeline', 'agent-health':'Agent Health Dashboard', 'supervisor':'AI Supervisor Dashboard', 'supervisor-audit':'Supervisor Audit Chain' };
   document.getElementById('topbar-title').textContent = titles[name] || name;
 
   // Close mobile menu on navigation
@@ -4071,6 +4147,7 @@ function showView(name, navItem) {
   if (name === 'supervisor-audit') refreshSupervisorAudit();
   if (name === 'agent-health') renderAgentHealth();
   if (name === 'reports') renderReportsPage();
+  if (name === 'enhanced-requirements') loadEnhancedRequirementRules();
   if (name === 'settings') {
     try { checkAPIStatus(); } catch(e) {}
     try { loadSystemSettings(); } catch(e) {}
@@ -12316,6 +12393,239 @@ async function saveSystemSettings() {
   } catch (e) {
     console.warn('Could not save system settings:', e);
     showToast('Unable to save system settings');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// ENHANCED / EDD REQUIREMENT SETTINGS
+// ═══════════════════════════════════════════════════════════
+var ENHANCED_REQUIREMENT_RULES = [];
+var ENHANCED_REQUIREMENT_META = {};
+
+function canManageEnhancedRequirements() {
+  return !!(currentUser && ['admin','sco'].indexOf(currentUser.role) >= 0);
+}
+
+function setEnhancedRequirementWriteControls() {
+  var canWrite = canManageEnhancedRequirements();
+  document.querySelectorAll('.role-er-write').forEach(function(el) {
+    el.style.display = canWrite ? '' : 'none';
+  });
+}
+
+function populateEnhancedRequirementTriggerFilter() {
+  var sel = document.getElementById('er-trigger-filter');
+  if (!sel) return;
+  var current = sel.value || '';
+  var seen = {};
+  ENHANCED_REQUIREMENT_RULES.forEach(function(rule) {
+    seen[rule.trigger_key] = rule.trigger_label || rule.trigger_key;
+  });
+  var keys = Object.keys(seen).sort(function(a, b) { return seen[a].localeCompare(seen[b]); });
+  sel.innerHTML = '<option value="">All triggers</option>' + keys.map(function(key) {
+    return '<option value="' + escapeHtml(key) + '">' + escapeHtml(seen[key]) + '</option>';
+  }).join('');
+  sel.value = seen[current] ? current : '';
+}
+
+async function loadEnhancedRequirementRules() {
+  setEnhancedRequirementWriteControls();
+  var container = document.getElementById('enhanced-requirements-container');
+  if (container) container.innerHTML = '<div class="card" style="font-size:13px;color:var(--text3);">Loading rules...</div>';
+  try {
+    var resp = await boApiCall('GET', '/settings/enhanced-requirements');
+    ENHANCED_REQUIREMENT_RULES = resp.rules || [];
+    ENHANCED_REQUIREMENT_META = resp.meta || {};
+    populateEnhancedRequirementTriggerFilter();
+    renderEnhancedRequirementRules();
+  } catch (e) {
+    if (container) container.innerHTML = '<div class="card" style="font-size:13px;color:var(--red);">Unable to load enhanced requirement rules.</div>';
+  }
+}
+
+function enhancedRequirementBadge(text, tone) {
+  var color = tone === 'red' ? 'var(--red)' : tone === 'green' ? 'var(--green)' : tone === 'amber' ? 'var(--amber)' : 'var(--text3)';
+  return '<span style="display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;border:1px solid var(--border1);font-size:11px;font-weight:700;color:' + color + ';background:var(--surface2);white-space:nowrap;">' + escapeHtml(text) + '</span>';
+}
+
+function renderEnhancedRequirementRules() {
+  setEnhancedRequirementWriteControls();
+  var container = document.getElementById('enhanced-requirements-container');
+  if (!container) return;
+  var search = (document.getElementById('er-search') || {}).value || '';
+  search = search.trim().toLowerCase();
+  var trigger = (document.getElementById('er-trigger-filter') || {}).value || '';
+  var audience = (document.getElementById('er-audience-filter') || {}).value || '';
+  var activeFilter = (document.getElementById('er-active-filter') || {}).value || '';
+  var canWrite = canManageEnhancedRequirements();
+
+  var rules = ENHANCED_REQUIREMENT_RULES.filter(function(rule) {
+    var text = [
+      rule.trigger_key, rule.trigger_label, rule.trigger_category,
+      rule.requirement_key, rule.requirement_label, rule.requirement_description,
+      rule.audience, rule.requirement_type, rule.subject_scope
+    ].join(' ').toLowerCase();
+    if (search && text.indexOf(search) < 0) return false;
+    if (trigger && rule.trigger_key !== trigger) return false;
+    if (audience && rule.audience !== audience) return false;
+    if (activeFilter === 'active' && !rule.active) return false;
+    if (activeFilter === 'disabled' && rule.active) return false;
+    return true;
+  });
+
+  if (!rules.length) {
+    container.innerHTML = '<div class="card" style="font-size:13px;color:var(--text3);">No matching rules.</div>';
+    return;
+  }
+
+  var groups = {};
+  rules.forEach(function(rule) {
+    if (!groups[rule.trigger_key]) {
+      groups[rule.trigger_key] = {
+        label: rule.trigger_label || rule.trigger_key,
+        category: rule.trigger_category || '',
+        rules: []
+      };
+    }
+    groups[rule.trigger_key].rules.push(rule);
+  });
+
+  var html = Object.keys(groups).sort(function(a, b) {
+    return groups[a].label.localeCompare(groups[b].label);
+  }).map(function(key) {
+    var group = groups[key];
+    group.rules.sort(function(a, b) { return (a.sort_order || 0) - (b.sort_order || 0) || String(a.requirement_label || '').localeCompare(String(b.requirement_label || '')); });
+    var rows = group.rules.map(function(rule) {
+      var status = rule.active ? enhancedRequirementBadge('Active', 'green') : enhancedRequirementBadge('Disabled', 'red');
+      var audienceTone = rule.audience === 'client' ? 'green' : (rule.audience === 'backoffice' ? 'amber' : 'blue');
+      var controls = '';
+      if (canWrite) {
+        controls =
+          '<button class="btn btn-outline btn-sm" onclick="showEnhancedRequirementForm(' + rule.id + ')">Edit</button> ' +
+          (rule.active
+            ? '<button class="btn btn-outline btn-sm" onclick="toggleEnhancedRequirementRule(' + rule.id + ', false)">Disable</button>'
+            : '<button class="btn btn-outline btn-sm" onclick="toggleEnhancedRequirementRule(' + rule.id + ', true)">Enable</button>');
+      }
+      return '<tr style="' + (!rule.active ? 'opacity:0.62;' : '') + '">' +
+        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(rule.requirement_label || '') + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(rule.requirement_key || '') + '</div></td>' +
+        '<td>' + enhancedRequirementBadge(rule.audience || '', audienceTone) + '</td>' +
+        '<td>' + escapeHtml((rule.requirement_type || '').replace(/_/g, ' ')) + '</td>' +
+        '<td>' + escapeHtml((rule.subject_scope || '').replace(/_/g, ' ')) + '</td>' +
+        '<td>' + (rule.blocking_approval ? enhancedRequirementBadge('Blocking', 'amber') : enhancedRequirementBadge('Non-blocking', '')) + '</td>' +
+        '<td>' + (rule.waivable ? enhancedRequirementBadge('Waivable', '') : enhancedRequirementBadge('Not waivable', 'red')) + '</td>' +
+        '<td>' + status + '</td>' +
+        '<td style="text-align:right;white-space:nowrap;">' + controls + '</td>' +
+      '</tr>';
+    }).join('');
+    return '<div class="card" style="margin-bottom:14px;">' +
+      '<div class="card-header" style="margin-bottom:12px;">' +
+        '<div><div class="card-title">' + escapeHtml(group.label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(key) + ' · ' + escapeHtml(group.category) + '</div></div>' +
+        '<div>' + enhancedRequirementBadge(group.rules.length + ' rule' + (group.rules.length === 1 ? '' : 's'), '') + '</div>' +
+      '</div>' +
+      '<div style="overflow:auto;"><table class="data-table"><thead><tr><th>Requirement</th><th>Audience</th><th>Type</th><th>Scope</th><th>Approval</th><th>Waiver</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '</div>';
+  }).join('');
+  container.innerHTML = html;
+}
+
+function getEnhancedRequirementRule(id) {
+  id = String(id || '');
+  return ENHANCED_REQUIREMENT_RULES.find(function(rule) { return String(rule.id) === id; }) || null;
+}
+
+function showEnhancedRequirementForm(ruleId) {
+  if (!canManageEnhancedRequirements()) {
+    showToast('Only admins and senior compliance officers can modify enhanced requirements', 'error');
+    return;
+  }
+  var rule = ruleId ? getEnhancedRequirementRule(ruleId) : null;
+  var card = document.getElementById('er-form-card');
+  if (!card) return;
+  document.getElementById('er-form-title').textContent = rule ? 'Edit Enhanced Requirement Rule' : 'Add Enhanced Requirement Rule';
+  document.getElementById('er-rule-id').value = rule ? rule.id : '';
+  document.getElementById('er-trigger-key').value = rule ? rule.trigger_key : '';
+  document.getElementById('er-trigger-label').value = rule ? rule.trigger_label : '';
+  document.getElementById('er-trigger-category').value = rule ? rule.trigger_category : 'risk';
+  document.getElementById('er-requirement-key').value = rule ? rule.requirement_key : '';
+  document.getElementById('er-requirement-label').value = rule ? rule.requirement_label : '';
+  document.getElementById('er-requirement-description').value = rule ? (rule.requirement_description || '') : '';
+  document.getElementById('er-audience').value = rule ? rule.audience : 'client';
+  document.getElementById('er-requirement-type').value = rule ? rule.requirement_type : 'document';
+  document.getElementById('er-subject-scope').value = rule ? rule.subject_scope : 'application';
+  document.getElementById('er-sort-order').value = rule ? (rule.sort_order || 100) : 100;
+  document.getElementById('er-blocking-approval').checked = rule ? !!rule.blocking_approval : true;
+  document.getElementById('er-waivable').checked = rule ? !!rule.waivable : true;
+  document.getElementById('er-mandatory').checked = rule ? !!rule.mandatory : true;
+  document.getElementById('er-active').checked = rule ? !!rule.active : true;
+  document.getElementById('er-waiver-roles').value = rule && Array.isArray(rule.waiver_roles) ? rule.waiver_roles.join(',') : 'admin,sco';
+  document.getElementById('er-client-safe-label').value = rule ? (rule.client_safe_label || '') : '';
+  document.getElementById('er-client-safe-description').value = rule ? (rule.client_safe_description || '') : '';
+  document.getElementById('er-internal-notes').value = rule ? (rule.internal_notes || '') : '';
+  card.style.display = '';
+  card.scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+function hideEnhancedRequirementForm() {
+  var card = document.getElementById('er-form-card');
+  if (card) card.style.display = 'none';
+}
+
+function enhancedRequirementPayloadFromForm() {
+  return {
+    trigger_key: document.getElementById('er-trigger-key').value.trim(),
+    trigger_label: document.getElementById('er-trigger-label').value.trim(),
+    trigger_category: document.getElementById('er-trigger-category').value.trim(),
+    requirement_key: document.getElementById('er-requirement-key').value.trim(),
+    requirement_label: document.getElementById('er-requirement-label').value.trim(),
+    requirement_description: document.getElementById('er-requirement-description').value.trim(),
+    audience: document.getElementById('er-audience').value,
+    requirement_type: document.getElementById('er-requirement-type').value,
+    subject_scope: document.getElementById('er-subject-scope').value,
+    blocking_approval: document.getElementById('er-blocking-approval').checked,
+    waivable: document.getElementById('er-waivable').checked,
+    waiver_roles: document.getElementById('er-waiver-roles').value.split(',').map(function(r) { return r.trim(); }).filter(Boolean),
+    mandatory: document.getElementById('er-mandatory').checked,
+    active: document.getElementById('er-active').checked,
+    sort_order: parseInt(document.getElementById('er-sort-order').value, 10) || 100,
+    client_safe_label: document.getElementById('er-client-safe-label').value.trim(),
+    client_safe_description: document.getElementById('er-client-safe-description').value.trim(),
+    internal_notes: document.getElementById('er-internal-notes').value.trim()
+  };
+}
+
+async function saveEnhancedRequirementRule() {
+  if (!canManageEnhancedRequirements()) {
+    showToast('Only admins and senior compliance officers can modify enhanced requirements', 'error');
+    return;
+  }
+  var id = document.getElementById('er-rule-id').value;
+  var payload = enhancedRequirementPayloadFromForm();
+  try {
+    if (id) {
+      await boApiCall('PATCH', '/settings/enhanced-requirements/' + encodeURIComponent(id), payload);
+      showToast('Enhanced requirement rule updated');
+    } else {
+      await boApiCall('POST', '/settings/enhanced-requirements', payload);
+      showToast('Enhanced requirement rule created');
+    }
+    hideEnhancedRequirementForm();
+    await loadEnhancedRequirementRules();
+  } catch (e) {
+    showToast(e.message || 'Unable to save enhanced requirement rule', 'error');
+  }
+}
+
+async function toggleEnhancedRequirementRule(id, enable) {
+  if (!canManageEnhancedRequirements()) {
+    showToast('Only admins and senior compliance officers can modify enhanced requirements', 'error');
+    return;
+  }
+  try {
+    await boApiCall('POST', '/settings/enhanced-requirements/' + encodeURIComponent(id) + '/' + (enable ? 'enable' : 'disable'));
+    showToast(enable ? 'Rule enabled' : 'Rule disabled');
+    await loadEnhancedRequirementRules();
+  } catch (e) {
+    showToast(e.message || 'Unable to update rule status', 'error');
   }
 }
 
