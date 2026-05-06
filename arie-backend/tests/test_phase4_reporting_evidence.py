@@ -35,6 +35,17 @@ def test_canonical_pending_status_contract_includes_new_workflow_states():
     assert "edd_approved" not in _REPORT_EDD_ROUTED_STATUSES
 
 
+def test_canonical_export_field_contract_includes_risk_score():
+    from server import _REPORT_EXPORT_FIELDS, _REPORT_EXPORT_FILENAME_PREFIX
+
+    assert _REPORT_EXPORT_FIELDS == (
+        "ref", "company_name", "status", "risk_level", "risk_score",
+        "sector", "country", "entity_type", "created_at", "assigned_to",
+        "director_count", "ubo_count", "document_count",
+    )
+    assert _REPORT_EXPORT_FILENAME_PREFIX == "regmind_applications_report"
+
+
 def test_pdf_download_handler_records_pdf_hash_metadata():
     import inspect
     from server import MemoPDFDownloadHandler
@@ -110,10 +121,13 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         assert "text/csv" in resp.headers.get("Content-Type", "")
         assert resp.headers.get("X-Report-Canonical-View") == "applications_report_v1"
         assert resp.headers.get("X-Report-Show-Fixtures") == "false"
+        assert resp.headers.get("X-Report-Filename", "").startswith("regmind_applications_report_")
+        assert "regmind_applications_report_" in resp.headers.get("Content-Disposition", "")
         assert resp.body.startswith("\ufeff".encode("utf-8"))
         reader = csv.reader(io.StringIO(resp.body.decode("utf-8-sig")))
         rows = list(reader)
         assert resp.headers.get("X-Report-Record-Count") == str(len(rows) - 1)
+        assert resp.headers.get("X-Report-Field-List") == "ref,company_name,status"
         assert rows[0] == ["ref", "company_name", "status"]
         assert "prescreening_data" not in rows[0]
         assert any(row[0] == self.report_ref_1 for row in rows[1:])
@@ -143,6 +157,9 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         assert body["report"]["show_fixtures"] is False
         assert "rmi_sent" in body["report"]["pending_statuses"]
         assert body["report"]["edd_routed_statuses"] == ["edd_required"]
+        assert body["report"]["field_list"] == body["fields"]
+        assert body["report"]["ignored_fields"] == []
+        assert body["report"]["filename_prefix"] == "regmind_applications_report"
 
     def test_report_generate_rejects_unsupported_format(self):
         resp = self.fetch(

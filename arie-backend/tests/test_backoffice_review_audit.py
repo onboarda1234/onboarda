@@ -1027,11 +1027,16 @@ class TestDayFourReportExportReconciliation:
         html = self._read_backoffice()
         fn_start = html.index("function exportReportsCSV()")
         fn_region = html[fn_start:fn_start + 2600]
+        assert "REPORT_EXPORT_FIELD_LIST" in html
+        assert "risk_score" in html[html.index("var REPORT_EXPORT_FIELD_LIST"):html.index("function exportReportsCSV()")]
+        assert "function reportCsvFilename(res)" in html
         assert "/reports/generate?format=csv&" in fn_region
+        assert "REPORT_EXPORT_FIELD_LIST" in fn_region
         assert "fetch(BO_API_BASE + url, { headers: headers })" in fn_region
         assert "headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN" in fn_region
         assert "res.blob()" in fn_region
         assert "X-Report-Record-Count" in fn_region
+        assert "reportCsvFilename(res)" in fn_region
 
     def test_reports_export_no_longer_builds_csv_in_browser(self):
         html = self._read_backoffice()
@@ -1046,10 +1051,13 @@ class TestDayFourReportExportReconciliation:
         fn_start = html.index("function exportKPIReport()")
         fn_region = html[fn_start:fn_start + 2600]
         assert "/reports/generate?format=csv&" in fn_region
+        assert "REPORT_EXPORT_FIELD_LIST" in fn_region
+        assert "risk_score" in html[html.index("var REPORT_EXPORT_FIELD_LIST"):html.index("function exportReportsCSV()")]
         assert "fetch(BO_API_BASE + url, { headers: headers })" in fn_region
         assert "headers['Authorization'] = 'Bearer ' + BO_AUTH_TOKEN" in fn_region
         assert "res.blob()" in fn_region
         assert "X-Report-Record-Count" in fn_region
+        assert "reportCsvFilename(res)" in fn_region
         assert "KPI report exported" in fn_region
 
     def test_kpi_export_no_longer_builds_csv_in_browser(self):
