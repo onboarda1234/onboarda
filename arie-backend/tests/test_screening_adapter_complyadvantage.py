@@ -5,6 +5,11 @@ from screening_provider import ScreeningProvider
 from screening_complyadvantage.adapter import ComplyAdvantageScreeningAdapter
 
 
+class FakeConfig:
+    strict_workflow_id = "workflow-strict"
+    relaxed_workflow_id = "workflow-relaxed"
+
+
 def _report():
     return {
         "provider": "complyadvantage",
@@ -68,6 +73,8 @@ def test_is_configured_true_and_false(monkeypatch):
         "COMPLYADVANTAGE_REALM": "regmind",
         "COMPLYADVANTAGE_USERNAME": "user",
         "COMPLYADVANTAGE_PASSWORD": "pass",
+        "COMPLYADVANTAGE_STRICT_WORKFLOW_ID": "workflow-strict",
+        "COMPLYADVANTAGE_RELAXED_WORKFLOW_ID": "workflow-relaxed",
     }.items():
         monkeypatch.setenv(name, value)
     assert ComplyAdvantageScreeningAdapter().is_configured() is True
@@ -88,7 +95,7 @@ def test_constructor_does_not_read_env_or_touch_http_or_db(monkeypatch):
 def test_screen_person_delegates_and_returns_plain_contract_dict():
     orchestrator = FakeOrchestrator()
     db = object()
-    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, db=db)
+    adapter = ComplyAdvantageScreeningAdapter(config=FakeConfig(), orchestrator=orchestrator, db=db)
 
     result = adapter.screen_person("Jane Doe", birth_date="1980-01-31", nationality="MU")
 
@@ -97,6 +104,8 @@ def test_screen_person_delegates_and_returns_plain_contract_dict():
     assert validate_normalized_report(result) == []
     call = orchestrator.calls[0]
     assert call["db"] is db
+    assert call["strict_workflow_id"] == "workflow-strict"
+    assert call["relaxed_workflow_id"] == "workflow-relaxed"
     assert call["application_context"].screening_subject_name == "Jane Doe"
     assert call["strict_customer"]["person"]["nationality"] == "MU"
     assert "nationality" not in call["relaxed_customer"]["person"]
@@ -104,7 +113,7 @@ def test_screen_person_delegates_and_returns_plain_contract_dict():
 
 def test_screen_company_delegates_to_entity_context():
     orchestrator = FakeOrchestrator()
-    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator)
+    adapter = ComplyAdvantageScreeningAdapter(config=FakeConfig(), orchestrator=orchestrator)
 
     adapter.screen_company("Acme Ltd", jurisdiction="MU")
 
@@ -116,7 +125,7 @@ def test_screen_company_delegates_to_entity_context():
 def test_run_full_screening_propagates_db_for_each_subject():
     orchestrator = FakeOrchestrator()
     db = object()
-    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, db=db)
+    adapter = ComplyAdvantageScreeningAdapter(config=FakeConfig(), orchestrator=orchestrator, db=db)
 
     result = adapter.run_full_screening(
         {"application_id": "app-1", "client_id": "client-1", "company_name": "Acme Ltd"},

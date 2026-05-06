@@ -1,7 +1,6 @@
 """ScreeningProvider adapter for ComplyAdvantage."""
 
 from hashlib import sha256
-import os
 
 from screening_models import create_normalized_screening_report
 from screening_provider import COMPLYADVANTAGE_PROVIDER_NAME, ScreeningProvider
@@ -106,6 +105,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
         )
 
     def _screen_subject(self, *, strict_customer, relaxed_customer, context, external_identifier=None):
+        config = self._get_config()
         active_provider = get_active_provider_name()
         emit_metric(
             "ca_adapter_invocation",
@@ -121,6 +121,8 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
             monitoring_enabled=True,
             db=self._db,
             external_identifier=external_identifier,
+            strict_workflow_id=config.strict_workflow_id,
+            relaxed_workflow_id=config.relaxed_workflow_id,
         )
 
     def _get_orchestrator(self):
@@ -133,9 +135,13 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
 
     def _get_client(self):
         if self._client is None:
-            config = self._config or CAConfig.from_env()
-            self._client = ComplyAdvantageClient(config)
+            self._client = ComplyAdvantageClient(self._get_config())
         return self._client
+
+    def _get_config(self):
+        if self._config is None:
+            self._config = CAConfig.from_env()
+        return self._config
 
 
 def _combine_reports(reports):

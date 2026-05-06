@@ -106,6 +106,15 @@ def test_monitoring_block_defaults_true_and_can_be_disabled():
     assert monitoring_enabled_from_payload(disabled_payload) is False
 
 
+def test_create_and_screen_includes_workflow_id_when_supplied():
+    payload = build_create_and_screen_payload(
+        {"company": {"name": "Acme"}},
+        workflow_id="workflow-strict",
+    )
+
+    assert payload["screening"] == {"workflow_id": "workflow-strict"}
+
+
 def test_create_and_screen_external_identifier_override_stays_customer_level():
     payload = build_create_and_screen_payload(
         {"person": {"first_name": "Jane", "last_name": "Doe"}},
