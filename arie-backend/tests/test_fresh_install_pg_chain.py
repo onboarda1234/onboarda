@@ -28,6 +28,7 @@ import logging
 import os
 import re
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -37,8 +38,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Helpers
 # ---------------------------------------------------------------------------
 
-_TOTAL_MIGRATIONS = 20
 _FRESH_INIT_PENDING_DATA_MIGRATIONS = 1
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations" / "scripts"
+
+
+def _expected_migration_versions() -> list[str]:
+    return [
+        path.stem.split("_", 2)[1]
+        for path in sorted(_MIGRATIONS_DIR.glob("migration_*.sql"))
+    ]
 
 
 def _extract_periodic_reviews_ddl(schema_sql: str) -> str:
@@ -170,7 +178,7 @@ def test_fresh_pg_init_and_migration_chain(tmp_path, monkeypatch, caplog):
                 f"Migration 003 not in applied list: {applied_versions}"
             )
             # All known versions present
-            expected_versions = [str(i).zfill(3) for i in range(1, _TOTAL_MIGRATIONS + 1)]
+            expected_versions = _expected_migration_versions()
             assert applied_versions == expected_versions, (
                 f"Applied versions mismatch: got {applied_versions}"
             )
@@ -257,7 +265,7 @@ def test_fresh_sqlite_init_and_migration_chain(tmp_path, monkeypatch, caplog):
             f"Migration 003 not in applied list on SQLite: {applied_versions}"
         )
         # All known versions present
-        expected_versions = [str(i).zfill(3) for i in range(1, _TOTAL_MIGRATIONS + 1)]
+        expected_versions = _expected_migration_versions()
         assert applied_versions == expected_versions, (
             f"Applied versions mismatch on SQLite: got {applied_versions}"
         )

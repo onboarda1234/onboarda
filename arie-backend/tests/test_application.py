@@ -69,7 +69,9 @@ class TestApplicationWorkflow:
         """, ("admin001", "Test Admin", "admin", "Test Action", "test_target", "Test detail"))
         db.commit()
 
-        logs = db.execute("SELECT * FROM audit_log WHERE action='Test Action'").fetchall()
+        logs = db.execute(
+            "SELECT * FROM audit_log WHERE action='Test Action' AND target='test_target'"
+        ).fetchall()
         assert len(logs) == 1
         assert logs[0]["user_name"] == "Test Admin"
 

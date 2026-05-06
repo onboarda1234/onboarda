@@ -26,6 +26,7 @@ import importlib
 import logging
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -35,29 +36,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tests._migration_idempotency_helpers import fresh_migration_db
 
 _FILE_RUNNER_DATA_MIGRATIONS = {"020"}
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations" / "scripts"
 
-_CHAIN_FILES = [
-    ("001", "migration_001_initial.sql"),
-    ("002", "migration_002_supervisor_tables.sql"),
-    ("003", "migration_003_monitoring_indexes.sql"),
-    ("004", "migration_004_documents_s3_key.sql"),
-    ("005", "migration_005_applications_truth_schema.sql"),
-    ("006", "migration_006_person_dob.sql"),
-    ("007", "migration_007_screening_reports_normalized.sql"),
-    ("008", "migration_008_lifecycle_linkage.sql"),
-    ("009", "migration_009_periodic_review_operating_model.sql"),
-    ("010", "migration_010_edd_memo_integration.sql"),
-    ("011", "migration_011_edd_memo_attachment_uniqueness.sql"),
-    ("012", "migration_012_legacy_unmapped_audit_classification.sql"),
-    ("013", "migration_013_periodic_review_memos.sql"),
-    ("014", "migration_014_periodic_reviews_status_due_date.sql"),
-    ("015", "migration_015_screening_reports_normalized.sql"),
-    ("016", "migration_016_screening_reports_normalized_uniqueness.sql"),
-    ("017", "migration_017_screening_monitoring_subscriptions.sql"),
-    ("018", "migration_018_monitoring_alerts_provider_case_unique.sql"),
-    ("019", "migration_019_monitoring_alerts_backfill_provenance.sql"),
-    ("020", "migration_020_historical_fixture_backfill.sql"),
-]
+
+def _migration_files():
+    return [
+        (path.stem.split("_", 2)[1], path.name)
+        for path in sorted(_MIGRATIONS_DIR.glob("migration_*.sql"))
+    ]
+
+
+_CHAIN_FILES = _migration_files()
 
 
 def _remove_modern_backfills(db, keep_count):
