@@ -171,6 +171,76 @@ def test_list_endpoint_returns_seeded_rules_and_read_roles(enhanced_req_api_serv
     assert co_resp.status_code == 200
 
 
+def test_co_can_read_but_cannot_modify_enhanced_requirements(enhanced_req_api_server):
+    read_resp = requests.get(
+        f"{enhanced_req_api_server}/api/settings/enhanced-requirements",
+        headers=_headers("co"),
+        timeout=5,
+    )
+    assert read_resp.status_code == 200, read_resp.text
+    rule_id = read_resp.json()["rules"][0]["id"]
+
+    create_resp = requests.post(
+        f"{enhanced_req_api_server}/api/settings/enhanced-requirements",
+        json=_new_rule_payload(),
+        headers=_headers("co"),
+        timeout=5,
+    )
+    assert create_resp.status_code == 403
+
+    update_resp = requests.patch(
+        f"{enhanced_req_api_server}/api/settings/enhanced-requirements/{rule_id}",
+        json={"requirement_label": "CO must not update policy"},
+        headers=_headers("co"),
+        timeout=5,
+    )
+    assert update_resp.status_code == 403
+
+    disable_resp = requests.post(
+        f"{enhanced_req_api_server}/api/settings/enhanced-requirements/{rule_id}/disable",
+        headers=_headers("co"),
+        timeout=5,
+    )
+    assert disable_resp.status_code == 403
+
+    enable_resp = requests.post(
+        f"{enhanced_req_api_server}/api/settings/enhanced-requirements/{rule_id}/enable",
+        headers=_headers("co"),
+        timeout=5,
+    )
+    assert enable_resp.status_code == 403
+
+
+def test_rule_serialization_accepts_text_or_native_json_fields():
+    from enhanced_requirements import serialize_rule
+
+    base = {
+        "id": 1,
+        "trigger_key": "pep",
+        "trigger_label": "PEP",
+        "trigger_category": "screening",
+        "requirement_key": "pep_sow_evidence",
+        "requirement_label": "Source of Wealth evidence",
+        "requirement_description": "",
+        "audience": "client",
+        "requirement_type": "document",
+        "subject_scope": "screening_subject",
+        "blocking_approval": 1,
+        "waivable": 1,
+        "mandatory": 1,
+        "active": 1,
+        "sort_order": 10,
+    }
+
+    text_backed = dict(base, waiver_roles='["admin", "sco"]', applies_when='{"risk_level":"high"}')
+    native_backed = dict(base, waiver_roles=["admin", "sco"], applies_when={"risk_level": "high"})
+
+    assert serialize_rule(text_backed)["waiver_roles"] == ["admin", "sco"]
+    assert serialize_rule(text_backed)["applies_when"] == {"risk_level": "high"}
+    assert serialize_rule(native_backed)["waiver_roles"] == ["admin", "sco"]
+    assert serialize_rule(native_backed)["applies_when"] == {"risk_level": "high"}
+
+
 def test_admin_can_create_update_disable_enable_and_audit(enhanced_req_api_server):
     payload = _new_rule_payload()
     create_resp = requests.post(
