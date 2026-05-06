@@ -3426,6 +3426,15 @@ async function loadFromAPI() {
       APPLICATIONS = appResp.applications.map(mapApplicationFromApi);
     }
 
+    // Load the backend-owned dashboard status contract. The UI uses this for
+    // local dashboard/KPI filtering so lifecycle bucket definitions do not drift.
+    try {
+      var dashboardResp = await boApiCall('GET', '/dashboard');
+      setDashboardStatusContract(dashboardResp);
+    } catch(e) {
+      console.warn('Could not load dashboard status contract:', e);
+    }
+
     // EX-13: Mark data as freshly loaded and start auto-refresh
     _applicationsLastRefreshed = Date.now();
     _updateFreshnessIndicator();
@@ -3665,15 +3674,34 @@ function normalizeStatusKey(status) {
   return String(status || '').toLowerCase().replace(/[\s-]+/g, '_');
 }
 
-var DASHBOARD_PENDING_STATUSES = [
-  'draft', 'pending', 'submitted', 'prescreening_submitted',
-  'pre_approval_review', 'pre_approved', 'pricing_review', 'pricing_accepted',
-  'in_review', 'under_review', 'compliance_review', 'kyc_submitted',
-  'kyc_documents', 'rmi_sent'
-];
+var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], canonicalView: '' };
+
+function normalizeStatusList(statuses) {
+  if (!Array.isArray(statuses)) return [];
+  var seen = {};
+  return statuses.map(normalizeStatusKey).filter(function(status) {
+    if (!status || seen[status]) return false;
+    seen[status] = true;
+    return true;
+  });
+}
+
+function setDashboardStatusContract(source) {
+  var pending = normalizeStatusList(source && source.pending_statuses);
+  if (pending.length) DASHBOARD_STATUS_CONTRACT.pendingStatuses = pending;
+  if (source && source.canonical_view) DASHBOARD_STATUS_CONTRACT.canonicalView = source.canonical_view;
+}
+
+function getDashboardPendingStatuses() {
+  return DASHBOARD_STATUS_CONTRACT.pendingStatuses;
+}
+
+function hasDashboardStatusContract() {
+  return getDashboardPendingStatuses().length > 0;
+}
 
 function isDashboardPendingApplication(app) {
-  return DASHBOARD_PENDING_STATUSES.indexOf(normalizeStatusKey((app || {}).statusRaw || (app || {}).status)) >= 0;
+  return getDashboardPendingStatuses().indexOf(normalizeStatusKey((app || {}).statusRaw || (app || {}).status)) >= 0;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4098,7 +4126,7 @@ function renderDashboardRecent() {
 
 function updateDashboardStats() {
   var total = APPLICATIONS.length;
-  var earlyStage = APPLICATIONS.filter(isDashboardPendingApplication).length;
+  var earlyStage = hasDashboardStatusContract() ? APPLICATIONS.filter(isDashboardPendingApplication).length : null;
   // Approved This Month: only count applications approved with a date in the current calendar month
   var now = new Date();
   var currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
@@ -4110,7 +4138,7 @@ function updateDashboardStats() {
 
   var el;
   el = document.getElementById('dash-stat-total'); if (el) el.textContent = total;
-  el = document.getElementById('dash-stat-early-stage'); if (el) el.textContent = earlyStage;
+  el = document.getElementById('dash-stat-early-stage'); if (el) el.textContent = earlyStage === null ? '—' : earlyStage;
   el = document.getElementById('dash-stat-approved'); if (el) el.textContent = approved;
   el = document.getElementById('dash-stat-rejected'); if (el) el.textContent = rejected;
   el = document.getElementById('dash-stat-edd'); if (el) el.textContent = edd;
@@ -9999,7 +10027,12 @@ function renderKPIDashboard() {
 
   // In-progress applications: use the same canonical status set as
   // Dashboard and Reports so KPI cards do not drift from executive counts.
-  var backlogCount = appsInPeriod.filter(isDashboardPendingApplication).length;
+  var hasPendingStatusContract = hasDashboardStatusContract();
+  var backlogCount = hasPendingStatusContract ? appsInPeriod.filter(isDashboardPendingApplication).length : null;
+  var backlogValue = hasPendingStatusContract ? String(backlogCount) : '—';
+  var backlogSub = hasPendingStatusContract
+    ? backlogCount + ' applications in the canonical in-progress bucket for ' + periodLabel.toLowerCase()
+    : 'In-progress status contract unavailable; reload dashboard data';
 
   // ── Section 1: Operational Efficiency ──
   // Operational metrics require timing data not yet tracked in the backend.
@@ -10019,8 +10052,8 @@ function renderKPIDashboard() {
         '<div class="kpi-card-sub" style="color:var(--text3);">Requires SLA deadline tracking</div>' +
       '</div>' +
       '<div class="kpi-card amber"><div class="kpi-card-label">In Progress Applications</div>' +
-        '<div class="kpi-card-value" style="color:var(--amber);">' + backlogCount + '</div>' +
-        '<div class="kpi-card-sub">' + backlogCount + ' applications in the canonical in-progress bucket for ' + periodLabel.toLowerCase() + '</div>' +
+        '<div class="kpi-card-value" style="color:var(--amber);">' + backlogValue + '</div>' +
+        '<div class="kpi-card-sub">' + backlogSub + '</div>' +
       '</div>' +
       '<div class="kpi-card brand"><div class="kpi-card-label">Throughput (Decided)</div>' +
         '<div class="kpi-card-value" style="color:var(--brand);">' + decidedApps + '</div>' +
