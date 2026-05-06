@@ -817,11 +817,50 @@ class TestDayFourDashboardCountAlignment:
     def test_dashboard_in_progress_label_and_status_contract_are_visible(self):
         html = self._read_backoffice()
         assert '<div class="stat-card-label">In Progress</div>' in html
-        assert "var DASHBOARD_PENDING_STATUSES = [" in html
-        assert "'draft'" in html
-        assert "'pricing_review'" in html
-        assert "'kyc_documents'" in html
+        assert "var DASHBOARD_STATUS_CONTRACT = { pendingStatuses: [], canonicalView: '' };" in html
+        assert "function setDashboardStatusContract(source)" in html
+        assert "function getDashboardPendingStatuses()" in html
+        assert "function hasDashboardStatusContract()" in html
+        assert "setDashboardStatusContract(dashboardResp);" in html
         assert "function isDashboardPendingApplication(app)" in html
+
+    def test_dashboard_pending_statuses_are_loaded_from_backend_contract(self):
+        html = self._read_backoffice()
+        load_start = html.index("async function loadFromAPI()")
+        load_region = html[load_start:load_start + 1800]
+        assert "var dashboardResp = await boApiCall('GET', '/dashboard');" in load_region
+        assert "setDashboardStatusContract(dashboardResp);" in load_region
+        assert "Could not load dashboard status contract" in load_region
+
+        helper_start = html.index("function isDashboardPendingApplication(app)")
+        helper_region = html[helper_start:helper_start + 260]
+        assert "getDashboardPendingStatuses().indexOf" in helper_region
+        assert "normalizeStatusKey((app || {}).statusRaw || (app || {}).status)" in helper_region
+
+    def test_dashboard_pending_statuses_no_longer_duplicate_backend_tuple(self):
+        html = self._read_backoffice()
+        status_start = html.index("function normalizeStatusKey(status)")
+        status_end = html.index("// ═══════════════════════════════════════════════════════════\n// DATA ARRAYS", status_start)
+        status_region = html[status_start:status_end]
+        assert "DASHBOARD_PENDING_STATUSES" not in status_region
+        assert "'pricing_review'" not in status_region
+        assert "'kyc_documents'" not in status_region
+        assert "pendingStatuses: []" in status_region
+
+    def test_empty_dashboard_status_contract_renders_unavailable_not_zero(self):
+        html = self._read_backoffice()
+
+        stats_start = html.index("function updateDashboardStats()")
+        stats_region = html[stats_start:stats_start + 1200]
+        assert "hasDashboardStatusContract() ? APPLICATIONS.filter(isDashboardPendingApplication).length : null" in stats_region
+        assert "earlyStage === null ? '—' : earlyStage" in stats_region
+
+        kpi_start = html.index("function renderKPIDashboard()")
+        kpi_region = html[kpi_start:kpi_start + 5200]
+        assert "var hasPendingStatusContract = hasDashboardStatusContract();" in kpi_region
+        assert "var backlogCount = hasPendingStatusContract ? appsInPeriod.filter(isDashboardPendingApplication).length : null;" in kpi_region
+        assert "var backlogValue = hasPendingStatusContract ? String(backlogCount) : '—';" in kpi_region
+        assert "In-progress status contract unavailable; reload dashboard data" in kpi_region
 
     def test_dashboard_stats_uses_single_pending_helper(self):
         html = self._read_backoffice()
@@ -1024,7 +1063,7 @@ class TestDayFourKPIBacklogAlignment:
         html = self._read_backoffice()
         fn_start = html.index("function renderKPIDashboard()")
         fn_region = html[fn_start:fn_start + 5200]
-        assert "var backlogCount = appsInPeriod.filter(isDashboardPendingApplication).length;" in fn_region
+        assert "var backlogCount = hasPendingStatusContract ? appsInPeriod.filter(isDashboardPendingApplication).length : null;" in fn_region
         assert "In Progress Applications" in fn_region
         assert "canonical in-progress bucket" in fn_region
 
