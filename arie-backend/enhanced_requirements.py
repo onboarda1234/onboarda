@@ -1136,6 +1136,47 @@ def _routing_for_application(db, app):
     return routing
 
 
+def _routing_for_generation(db, app, routing=None):
+    """Return routing context for requirement generation.
+
+    Automatic callers often have a freshly evaluated routing decision with
+    in-memory risk facts that have not been persisted yet.  The application
+    row can still contain durable facts such as declared PEPs or high-volume
+    declarations.  Merge both views so generation remains conservative but
+    does not lose either source.
+    """
+    if not routing:
+        return _routing_for_application(db, app)
+
+    merged = dict(routing or {})
+    merged_triggers = []
+    for trigger in list(merged.get("triggers") or []):
+        if trigger not in merged_triggers:
+            merged_triggers.append(trigger)
+
+    try:
+        app_routing = _routing_for_application(db, app)
+    except Exception as exc:
+        app_routing = {
+            "route": "standard",
+            "triggers": [],
+            "errors": [str(exc)],
+        }
+
+    app_triggers = []
+    for trigger in list((app_routing or {}).get("triggers") or []):
+        app_triggers.append(trigger)
+        if trigger not in merged_triggers:
+            merged_triggers.append(trigger)
+
+    merged["triggers"] = merged_triggers
+    if (app_routing or {}).get("route") == "edd":
+        merged["route"] = "edd"
+    if app_triggers:
+        merged["application_detected_triggers"] = app_triggers
+    return merged
+
+
 def _resolve_requirement_triggers(app, routing):
     mapped = {}
     warnings = []
@@ -1168,6 +1209,36 @@ def _resolve_requirement_triggers(app, routing):
     for key in sorted(k for k in mapped if k not in ordered):
         ordered.append(key)
     return ordered, mapped, warnings
+
+
+def detect_application_enhanced_requirement_triggers(
+    db,
+    application_id=None,
+    app_row=None,
+    routing=None,
+):
+    """Resolve enhanced requirement trigger keys without writing records."""
+    app = _row_dict(app_row) if app_row is not None else _load_application(db, application_id)
+    result = {
+        "application_id": application_id,
+        "triggers": [],
+        "trigger_sources": {},
+        "routing": None,
+        "warnings": [],
+        "errors": [],
+    }
+    if not app:
+        result["errors"].append("application_not_found")
+        return result
+
+    result["application_id"] = app.get("id") or application_id
+    routing_decision = _routing_for_generation(db, app, routing)
+    triggers, trigger_sources, warnings = _resolve_requirement_triggers(app, routing_decision)
+    result["triggers"] = triggers
+    result["trigger_sources"] = trigger_sources
+    result["routing"] = routing_decision
+    result["warnings"] = warnings
+    return result
 
 
 def _load_active_rules(db, trigger_keys):
@@ -1268,7 +1339,7 @@ def generate_application_enhanced_requirements(
         )
         return result
 
-    routing_decision = routing or _routing_for_application(db, app)
+    routing_decision = _routing_for_generation(db, app, routing)
     triggers, trigger_sources, trigger_warnings = _resolve_requirement_triggers(app, routing_decision)
     result["triggers"] = triggers
     result["warnings"].extend(trigger_warnings)
