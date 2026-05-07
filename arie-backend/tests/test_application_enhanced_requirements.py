@@ -864,3 +864,74 @@ def test_lifecycle_reopen_waived_requires_admin_or_sco(enhanced_app_api_server):
     reopened = admin_reopen.json()["requirement"]
     assert reopened["status"] == "under_review"
     assert reopened["waiver_reason"] is None
+
+
+def test_lifecycle_reopen_accepted_requires_senior_reason_and_audits(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    _generate(conn, app_id)
+    admin_req = _first_requirement_id(conn, app_id, offset=0)
+    sco_req = _first_requirement_id(conn, app_id, offset=1)
+    conn.execute(
+        "UPDATE application_enhanced_requirements SET status='accepted' WHERE id IN (?,?)",
+        (admin_req, sco_req),
+    )
+    conn.commit()
+    conn.close()
+
+    co_reopen = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{admin_req}",
+        headers=_headers("co"),
+        json={"status": "under_review", "review_notes": "CO correction attempt"},
+        timeout=5,
+    )
+    assert co_reopen.status_code == 403
+
+    missing_reason = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{admin_req}",
+        headers=_headers("admin"),
+        json={"status": "under_review", "review_notes": ""},
+        timeout=5,
+    )
+    assert missing_reason.status_code == 400
+
+    admin_reopen = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{admin_req}",
+        headers=_headers("admin"),
+        json={"status": "under_review", "review_notes": "Accepted in error; rechecking evidence"},
+        timeout=5,
+    )
+    assert admin_reopen.status_code == 200, admin_reopen.text
+    assert admin_reopen.json()["requirement"]["status"] == "under_review"
+    assert admin_reopen.json()["requirement"]["review_notes"] == "Accepted in error; rechecking evidence"
+
+    sco_reopen = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{sco_req}",
+        headers=_headers("sco"),
+        json={"status": "under_review", "reopen_reason": "SCO reopened after second review"},
+        timeout=5,
+    )
+    assert sco_reopen.status_code == 200, sco_reopen.text
+    assert sco_reopen.json()["requirement"]["status"] == "under_review"
+
+    conn = get_db()
+    audit = conn.execute(
+        """
+        SELECT before_state, after_state
+        FROM audit_log
+        WHERE action='application_enhanced_requirement.status_changed'
+          AND before_state LIKE '%"status": "accepted"%'
+          AND after_state LIKE '%"status": "under_review"%'
+        ORDER BY id DESC LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+    assert audit is not None
+    before = json.loads(audit["before_state"])
+    after = json.loads(audit["after_state"])
+    assert before["status"] == "accepted"
+    assert after["status"] == "under_review"

@@ -63,7 +63,7 @@ APPLICATION_REQUIREMENT_STATUS_TRANSITIONS = {
     "under_review": ("accepted", "rejected", "waived"),
     "rejected": ("under_review", "accepted"),
     "waived": ("under_review",),
-    "accepted": (),
+    "accepted": ("under_review",),
     "cancelled": (),
 }
 
@@ -1280,6 +1280,8 @@ def _validate_requirement_transition(current_status, new_status, actor_role):
         return "Only admin or SCO can waive enhanced requirements"
     if current == "waived" and target == "under_review" and actor_role not in APPLICATION_REQUIREMENT_WAIVER_ROLES:
         return "Only admin or SCO can reopen waived enhanced requirements"
+    if current == "accepted" and target == "under_review" and actor_role not in APPLICATION_REQUIREMENT_WAIVER_ROLES:
+        return "Only admin or SCO can reopen accepted enhanced requirements"
     return None
 
 
@@ -1348,6 +1350,10 @@ def update_application_enhanced_requirement(
             if new_status in ("under_review", "accepted", "rejected"):
                 updates["reviewed_by"] = _audit_user(actor).get("sub")
                 updates["reviewed_at"] = _now_iso()
+            if before.get("status") == "accepted" and new_status == "under_review":
+                reopen_reason = _clean_text(data.get("reopen_reason") or data.get("review_notes"))
+                if not reopen_reason:
+                    return None, "review_notes or reopen_reason is required when reopening an accepted enhanced requirement", 400
             if before.get("status") == "waived" and new_status == "under_review":
                 updates["waived_at"] = None
                 updates["waived_by"] = None
