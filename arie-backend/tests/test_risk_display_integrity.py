@@ -227,3 +227,32 @@ class TestRepairScriptRiskZeroContract:
         assert "statuses_affected" in src
         assert "proposed_changes" in src
         assert "unrecomputable" in src
+
+    def test_repair_script_supports_safe_targeted_apply_options(self):
+        src = _repair_script_source()
+
+        assert "--exclude-ambiguous" in src
+        assert "--application-ref" in src
+        assert "--only-ref" in src
+        assert "excluded_ambiguous" in src
+        assert "--apply requires --exclude-ambiguous or --application-ref/--only-ref" in src
+
+    def test_repair_script_classifies_ambiguous_edd_low_recompute(self):
+        from scripts.repair_missing_risk_scores import (
+            _is_ambiguous_edd_low_recompute,
+            _normalize_application_refs,
+        )
+
+        assert _normalize_application_refs(["ARF-1, ARF-2", "ARF-1"]) == ["ARF-1", "ARF-2"]
+        assert _is_ambiguous_edd_low_recompute(
+            {"status": "edd_required"},
+            {"level": "LOW", "score": 26.0},
+        )
+        assert not _is_ambiguous_edd_low_recompute(
+            {"status": "edd_required"},
+            {"level": "HIGH", "score": 61.0},
+        )
+        assert not _is_ambiguous_edd_low_recompute(
+            {"status": "pricing_review"},
+            {"level": "LOW", "score": 0.0},
+        )

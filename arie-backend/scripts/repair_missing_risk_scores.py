@@ -3,6 +3,8 @@
 One-off repair for non-draft applications with missing or suspect risk fields.
 
 Default mode is dry-run. Pass --apply to persist deterministic recomputation.
+For safe apply, use --exclude-ambiguous for broad repair or target explicit
+records with --application-ref / --only-ref.
 
 Note: risk_score=0 can be a legitimate deterministic LOW score when every
 weighted dimension scores at the minimum. This script still treats stored zero
@@ -92,8 +94,27 @@ def _risk_update_columns(db):
     return {column: _column_exists(db, "applications", column) for column in optional}
 
 
-def _list_suspect_applications(db):
+def _normalize_application_refs(application_refs=None):
+    refs = []
+    for value in application_refs or []:
+        if not value:
+            continue
+        for ref in str(value).split(","):
+            normalized = ref.strip()
+            if normalized:
+                refs.append(normalized)
+    return sorted(set(refs))
+
+
+def _list_suspect_applications(db, application_refs=None):
     placeholders = ",".join("?" for _ in SUSPECT_STATUSES)
+    params = list(SUSPECT_STATUSES)
+    ref_filter = ""
+    refs = _normalize_application_refs(application_refs)
+    if refs:
+        ref_placeholders = ",".join("?" for _ in refs)
+        ref_filter = f" AND ref IN ({ref_placeholders})"
+        params.extend(refs)
     return db.execute(
         f"""
         SELECT *
@@ -104,9 +125,10 @@ def _list_suspect_applications(db):
             OR risk_score IS NULL
             OR risk_score = 0
           )
+          {ref_filter}
         ORDER BY updated_at DESC, created_at DESC
         """,
-        SUSPECT_STATUSES,
+        tuple(params),
     ).fetchall()
 
 
@@ -158,13 +180,26 @@ def persist_recomputed_risk(db, app_row, risk, columns):
     )
 
 
-def repair_missing_risk_scores(apply: bool = False):
+def _is_ambiguous_edd_low_recompute(app, risk):
+    return (
+        (app.get("status") or "").lower() == "edd_required"
+        and (risk.get("level") or "").upper() == "LOW"
+    )
+
+
+def repair_missing_risk_scores(
+    apply: bool = False,
+    application_refs=None,
+    exclude_ambiguous: bool = False,
+):
     db = get_db()
     repaired = 0
     failed = 0
     by_status = {}
     proposed_changes = []
     unrecomputable = []
+    excluded_ambiguous = []
+    refs = _normalize_application_refs(application_refs)
     try:
         if not _table_exists(db, "applications"):
             LOGGER.error("applications table not found; check database configuration before running repair")
@@ -174,20 +209,23 @@ def repair_missing_risk_scores(apply: bool = False):
                 "failed": 0,
                 "applied": apply,
                 "statuses_affected": {},
+                "application_refs": refs,
+                "exclude_ambiguous": exclude_ambiguous,
                 "proposed_changes": [],
+                "excluded_ambiguous": [],
                 "unrecomputable": [],
                 "error": "applications table not found",
             }
 
         columns = _risk_update_columns(db)
-        rows = _list_suspect_applications(db)
+        rows = _list_suspect_applications(db, refs)
         for row in rows:
             app = dict(row)
             status = app.get("status") or "unknown"
             by_status[status] = by_status.get(status, 0) + 1
             try:
                 risk = recompute_application_risk(db, app)
-                proposed_changes.append({
+                change = {
                     "ref": app.get("ref"),
                     "company_name": app.get("company_name"),
                     "status": status,
@@ -199,7 +237,25 @@ def repair_missing_risk_scores(apply: bool = False):
                         "risk_level": risk.get("level"),
                         "risk_score": risk.get("score"),
                     },
-                })
+                }
+                if exclude_ambiguous and _is_ambiguous_edd_low_recompute(app, risk):
+                    change["reason"] = (
+                        "edd_required record recomputed to LOW; review EDD trigger "
+                        "metadata before applying repair"
+                    )
+                    excluded_ambiguous.append(change)
+                    LOGGER.warning(
+                        "EXCLUDED-AMBIGUOUS %s %s: %s/%s -> %s/%s",
+                        app.get("ref"),
+                        app.get("company_name"),
+                        app.get("risk_level"),
+                        app.get("risk_score"),
+                        risk.get("level"),
+                        risk.get("score"),
+                    )
+                    continue
+
+                proposed_changes.append(change)
                 LOGGER.info(
                     "%s %s %s: %s/%s -> %s/%s",
                     "REPAIR" if apply else "DRY-RUN",
@@ -241,7 +297,10 @@ def repair_missing_risk_scores(apply: bool = False):
             "failed": failed,
             "applied": apply,
             "statuses_affected": by_status,
+            "application_refs": refs,
+            "exclude_ambiguous": exclude_ambiguous,
             "proposed_changes": proposed_changes,
+            "excluded_ambiguous": excluded_ambiguous,
             "unrecomputable": unrecomputable,
         }
     finally:
@@ -251,10 +310,29 @@ def repair_missing_risk_scores(apply: bool = False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Persist recomputed risk fields")
+    parser.add_argument(
+        "--exclude-ambiguous",
+        action="store_true",
+        help="Skip edd_required records that recompute to LOW; report them under excluded_ambiguous.",
+    )
+    parser.add_argument(
+        "--application-ref",
+        "--only-ref",
+        action="append",
+        dest="application_refs",
+        default=[],
+        help="Repair only the given application ref. Can be repeated or comma-separated.",
+    )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
+    if args.apply and not args.exclude_ambiguous and not _normalize_application_refs(args.application_refs):
+        parser.error("--apply requires --exclude-ambiguous or --application-ref/--only-ref for safe targeted repair")
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
-    result = repair_missing_risk_scores(apply=args.apply)
+    result = repair_missing_risk_scores(
+        apply=args.apply,
+        application_refs=args.application_refs,
+        exclude_ambiguous=args.exclude_ambiguous,
+    )
     print(json.dumps(result, sort_keys=True))
 
 
