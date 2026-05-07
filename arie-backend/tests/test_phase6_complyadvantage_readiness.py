@@ -12,6 +12,7 @@ _CA_ENV = {
     "COMPLYADVANTAGE_REALM": "regmind",
     "COMPLYADVANTAGE_USERNAME": "ca-user",
     "COMPLYADVANTAGE_PASSWORD": "ca-password",
+    "COMPLYADVANTAGE_SCREENING_CONFIG_ID": "cfg-123",
 }
 
 
