@@ -142,11 +142,13 @@ from enhanced_requirements import (
     ALLOWED_SUBJECT_SCOPES,
     ALLOWED_WAIVER_ROLES,
     diagnose_enhanced_requirement_config,
+    fulfill_application_enhanced_requirement_document,
     generate_application_enhanced_requirements,
     list_portal_application_enhanced_requirements,
     request_application_enhanced_requirement_from_client,
     serialize_application_requirement,
     serialize_rule as serialize_enhanced_requirement_rule,
+    submit_application_enhanced_requirement_response,
     update_application_enhanced_requirement,
     validate_rule_payload as validate_enhanced_requirement_rule_payload,
 )
@@ -14491,6 +14493,276 @@ class PortalApplicationEnhancedRequirementsHandler(BaseHandler):
             db.close()
 
 
+class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
+    """POST /api/portal/applications/:id/enhanced-requirements/:req_id/upload.
+
+    Client fulfilment only. This endpoint creates a normal document row using
+    the existing upload validation/storage pattern, then links it to a requested
+    client-facing enhanced requirement. It does not create RMI rows,
+    notifications, emails, approval blockers, memo content, EDD case changes,
+    screening changes, or risk-threshold changes.
+    """
+    def _cleanup_upload_artifacts(self, file_path=None, s3_key=None):
+        """Best-effort cleanup for upload artifacts when DB/link/commit fails."""
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                logger.warning("Enhanced requirement local upload cleanup failed: %s", exc)
+        if s3_key and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, message = s3.delete_document(s3_key)
+                if not success:
+                    logger.warning("Enhanced requirement S3 upload cleanup failed for %s: %s", s3_key, message)
+            except Exception as exc:
+                logger.warning("Enhanced requirement S3 upload cleanup exception for %s: %s", s3_key, exc)
+
+    def post(self, app_id, requirement_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can submit requested information", 403)
+        if not self.check_rate_limit("enhanced_requirement_upload", max_attempts=20, window_seconds=60):
+            return
+
+        db = get_db()
+        file_path = None
+        s3_key = None
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if not self.check_app_ownership(user, app):
+                return
+
+            safe_reqs = list_portal_application_enhanced_requirements(db, app["id"])
+            safe_req = next(
+                (item for item in safe_reqs if str(item.get("id")) == str(requirement_id)),
+                None,
+            )
+            if not safe_req:
+                return self.error("Requested information item not found", 404)
+            if safe_req.get("requirement_type") != "document":
+                return self.error("This requested information item does not accept document uploads", 400)
+            if safe_req.get("status") not in ("required", "additional_information_needed"):
+                return self.error("This requested information item is not awaiting a document", 400)
+
+            if "file" not in self.request.files:
+                return self.error("No file provided", 400)
+            file_info = self.request.files["file"][0]
+            filename = os.path.basename(file_info["filename"] or "")
+            body = file_info["body"]
+            content_type = file_info.get("content_type", "application/octet-stream")
+
+            if len(body) > MAX_UPLOAD_MB * 1024 * 1024:
+                return self.error(f"File exceeds {MAX_UPLOAD_MB}MB limit", 400)
+
+            is_valid, _reason_code, upload_error = FileUploadValidator.validate_with_reason(
+                filename,
+                content_type,
+                body,
+            )
+            if not is_valid:
+                return self.error(f"File rejected: {upload_error}", 400)
+
+            document_id = uuid.uuid4().hex[:16]
+            ext = os.path.splitext(filename)[1].lower()
+            safe_name = f"{app['id']}_{document_id}{ext}"
+            file_path = os.path.join(UPLOAD_DIR, safe_name)
+            with open(file_path, "wb") as f:
+                f.write(body)
+
+            if HAS_S3:
+                try:
+                    s3 = get_s3_client()
+                    success, key_or_error = s3.upload_document(
+                        file_data=body,
+                        client_id=app["id"],
+                        doc_type="enhanced_requirement",
+                        filename=safe_name,
+                        content_type=content_type,
+                        metadata={
+                            "original_name": filename,
+                            "enhanced_requirement_id": str(requirement_id),
+                        },
+                    )
+                    if success:
+                        s3_key = key_or_error
+                    else:
+                        logger.error("Enhanced requirement S3 upload failed for %s: %s", document_id, key_or_error)
+                        if is_production() or is_staging():
+                            self._cleanup_upload_artifacts(file_path=file_path)
+                            return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+                except Exception as exc:
+                    logger.error("Enhanced requirement S3 upload exception for %s: %s", document_id, exc)
+                    if is_production() or is_staging():
+                        self._cleanup_upload_artifacts(file_path=file_path)
+                        return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
+            elif is_production() or is_staging():
+                self._cleanup_upload_artifacts(file_path=file_path)
+                return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
+
+            verification_metadata = {
+                "source": "enhanced_requirement_upload",
+                "enhanced_requirement_id": str(requirement_id),
+                "client_submitted": True,
+            }
+            db.execute(
+                """
+                INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path, s3_key,
+                 file_size, mime_type, verification_status, verification_results, review_status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    document_id,
+                    app["id"],
+                    "enhanced_requirement",
+                    filename,
+                    file_path,
+                    s3_key,
+                    len(body),
+                    content_type,
+                    "pending",
+                    json.dumps(verification_metadata, sort_keys=True),
+                    "pending",
+                ),
+            )
+            result, error, status_code = fulfill_application_enhanced_requirement_document(
+                db,
+                app["id"],
+                requirement_id,
+                document_id,
+                actor=user,
+            )
+            if error:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                self._cleanup_upload_artifacts(file_path=file_path, s3_key=s3_key)
+                return self.error(error, status_code)
+
+            safe_after = next(
+                (
+                    item for item in list_portal_application_enhanced_requirements(db, app["id"])
+                    if str(item.get("id")) == str(requirement_id)
+                ),
+                None,
+            )
+            db.commit()
+            self.success({
+                "status": "submitted",
+                "requirement": safe_after,
+                "document": {
+                    "id": document_id,
+                    "doc_name": filename,
+                    "doc_type": "enhanced_requirement",
+                    "file_size": len(body),
+                },
+            }, 201)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            self._cleanup_upload_artifacts(file_path=file_path, s3_key=s3_key)
+            logger.error(
+                "portal enhanced requirement upload failed: app_id=%s requirement_id=%s error=%s",
+                app_id,
+                requirement_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to submit requested document", 500)
+        finally:
+            db.close()
+
+
+class PortalApplicationEnhancedRequirementResponseHandler(BaseHandler):
+    """POST /api/portal/applications/:id/enhanced-requirements/:req_id/response."""
+    def post(self, app_id, requirement_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can submit requested information", 403)
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if not self.check_app_ownership(user, app):
+                return
+
+            safe_reqs = list_portal_application_enhanced_requirements(db, app["id"])
+            safe_req = next(
+                (item for item in safe_reqs if str(item.get("id")) == str(requirement_id)),
+                None,
+            )
+            if not safe_req:
+                return self.error("Requested information item not found", 404)
+            if safe_req.get("requirement_type") not in ("explanation", "declaration"):
+                return self.error("This requested information item does not accept text responses", 400)
+            if safe_req.get("status") not in ("required", "additional_information_needed"):
+                return self.error("This requested information item is not awaiting a response", 400)
+
+            data = self.get_json() or {}
+            response_text = data.get("response_text") or data.get("response") or ""
+            result, error, status_code = submit_application_enhanced_requirement_response(
+                db,
+                app["id"],
+                requirement_id,
+                response_text,
+                actor=user,
+            )
+            if error:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                return self.error(error, status_code)
+
+            safe_after = next(
+                (
+                    item for item in list_portal_application_enhanced_requirements(db, app["id"])
+                    if str(item.get("id")) == str(requirement_id)
+                ),
+                None,
+            )
+            db.commit()
+            self.success({
+                "status": "submitted",
+                "requirement": safe_after,
+            })
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "portal enhanced requirement response failed: app_id=%s requirement_id=%s error=%s",
+                app_id,
+                requirement_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to submit requested response", 500)
+        finally:
+            db.close()
+
+
 class PortalChangeRequestHandler(BaseHandler):
     """POST /api/portal/change-requests — Client creates a change request from portal"""
     def get(self):
@@ -14807,6 +15079,10 @@ def make_app():
         (r"/api/applications/([^/]+)/profile-versions/([^/]+)", ApplicationProfileVersionDetailHandler),
         (r"/api/applications/([^/]+)/profile-versions", EntityProfileVersionsHandler),
         (r"/api/profile-versions/([^/]+)", EntityProfileVersionDetailHandler),
+        (r"/api/portal/applications/([^/]+)/enhanced-requirements/([^/]+)/upload",
+         PortalApplicationEnhancedRequirementUploadHandler),
+        (r"/api/portal/applications/([^/]+)/enhanced-requirements/([^/]+)/response",
+         PortalApplicationEnhancedRequirementResponseHandler),
         (r"/api/portal/applications/([^/]+)/enhanced-requirements",
          PortalApplicationEnhancedRequirementsHandler),
         (r"/api/portal/applications", PortalApplicationsHandler),

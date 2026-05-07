@@ -394,7 +394,7 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "Waiver reason" in html
     assert "Save update" in html
     assert "Request from client" in html
-    assert "Portal and RMI exposure are deferred to a later step." in html
+    assert "Requirement marked requested. RMI exposure remains deferred." in html
     assert "['client','both'].indexOf(audience) >= 0" in html
     assert "['generated','under_review','rejected'].indexOf(status) >= 0" in html
     assert "Only admins and senior compliance officers can waive enhanced requirements" in html
@@ -416,6 +416,10 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "Additional Information Required" in portal_html
     assert "renderPortalEnhancedRequirements" in portal_html
     assert "loadPortalEnhancedRequirements" in portal_html
+    assert "uploadPortalEnhancedRequirement" in portal_html
+    assert "submitPortalEnhancedRequirementResponse" in portal_html
+    assert "Upload supporting document" in portal_html
+    assert "Provide response" in portal_html
 
     portal_section = portal_html.split('id="additional-info-required-card"', 1)[1]
     portal_section = portal_section.split("<!-- Section A: Corporate Documents -->", 1)[0]
@@ -427,12 +431,16 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
         "screening concern",
         "sanctions concern",
         "PEP concern",
+        "suspicious",
+        "rejected by compliance",
     ):
         assert forbidden.lower() not in portal_section.lower()
 
     portal_logic = portal_html.split("function portalEnhancedRequirementTone", 1)[1]
     portal_logic = portal_logic.split("function rmiItemTone", 1)[0]
     assert "/portal/applications/" in portal_logic
+    assert "/enhanced-requirements/' + encodeURIComponent(requirementId) + '/upload" in portal_logic
+    assert "/enhanced-requirements/' + encodeURIComponent(requirementId) + '/response" in portal_logic
     assert "apiCall('GET', '/applications/" not in portal_logic
     assert "apiCall('POST', '/applications/" not in portal_logic
     assert "apiCall('PATCH', '/applications/" not in portal_logic
@@ -442,6 +450,8 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "/memo" not in portal_logic
     assert "/edd/" not in portal_logic.lower()
     assert "/screening" not in portal_logic
+    assert "/notify" not in portal_logic
+    assert "/documents" not in portal_logic
     assert "Required" in portal_logic
     assert "Submitted" in portal_logic
     assert "Under review" in portal_logic

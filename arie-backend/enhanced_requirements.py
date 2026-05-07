@@ -65,6 +65,11 @@ APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES = (
     "under_review",
     "rejected",
 )
+APPLICATION_REQUIREMENT_CLIENT_FULFILLMENT_AUDIENCES = ("client", "both")
+APPLICATION_REQUIREMENT_CLIENT_FULFILLMENT_STATUSES = ("requested", "rejected")
+APPLICATION_REQUIREMENT_CLIENT_DOCUMENT_TYPES = ("document",)
+APPLICATION_REQUIREMENT_CLIENT_TEXT_TYPES = ("explanation", "declaration")
+APPLICATION_REQUIREMENT_CLIENT_RESPONSE_MAX_LENGTH = 10000
 APPLICATION_REQUIREMENT_STATUS_TRANSITIONS = {
     "generated": ("under_review", "accepted", "rejected", "waived"),
     "requested": ("under_review", "accepted", "rejected", "waived"),
@@ -868,9 +873,24 @@ def _audit_user(actor):
     return {"sub": text, "name": text, "role": "system"}
 
 
+def _redact_audit_state(state):
+    """Keep client free-text out of audit before/after snapshots."""
+    if state is None:
+        return None
+    if isinstance(state, dict):
+        redacted = dict(state)
+        if "client_response_text" in redacted:
+            redacted["client_response_text_present"] = bool(redacted.get("client_response_text"))
+            redacted.pop("client_response_text", None)
+        return redacted
+    return state
+
+
 def _insert_audit(db, action, target, detail, actor=None, before_state=None, after_state=None):
     user = _audit_user(actor)
     detail_text = json.dumps(detail or {}, default=str, sort_keys=True)
+    before_state = _redact_audit_state(before_state)
+    after_state = _redact_audit_state(after_state)
     has_state_columns = (
         _column_exists(db, "audit_log", "before_state")
         and _column_exists(db, "audit_log", "after_state")
@@ -1477,6 +1497,221 @@ def list_portal_application_enhanced_requirements(db, application_id):
         if safe:
             requirements.append(safe)
     return requirements
+
+
+def _validate_client_fulfillment_target(db, application_id, requirement_id, *, allowed_types):
+    app = _load_application(db, application_id)
+    if not app:
+        return None, None, None, "Application not found", 404
+
+    before = _load_application_requirement_for_app(db, app["id"], requirement_id)
+    if not before:
+        return app, None, None, "Enhanced requirement not found for application", 404
+
+    if not before.get("active"):
+        return app, before, None, "Inactive enhanced requirements cannot be fulfilled", 400
+
+    audience = str(before.get("audience") or "").strip().lower()
+    if audience not in APPLICATION_REQUIREMENT_CLIENT_FULFILLMENT_AUDIENCES:
+        return app, before, None, "Back-office-only enhanced requirements cannot be fulfilled from the portal", 400
+
+    current_status = str(before.get("status") or "generated").strip().lower()
+    if current_status not in APPLICATION_REQUIREMENT_CLIENT_FULFILLMENT_STATUSES:
+        return app, before, None, f"Enhanced requirement status cannot be fulfilled from the portal: {current_status}", 400
+
+    requirement_type = str(before.get("requirement_type") or "").strip().lower()
+    if requirement_type not in tuple(allowed_types or ()):
+        return app, before, None, "Enhanced requirement type does not match this fulfilment endpoint", 400
+
+    client_request, safe_error = _client_safe_requirement_fields(db, before)
+    if safe_error:
+        return app, before, None, safe_error, 400
+
+    return app, before, client_request, None, 200
+
+
+def _client_fulfillment_actor(actor):
+    user = _audit_user(actor)
+    if user.get("role") != "client":
+        return None, "Only clients can fulfil requested information", 403
+    return user, None, 200
+
+
+def fulfill_application_enhanced_requirement_document(
+    db,
+    application_id,
+    requirement_id,
+    document_id,
+    actor=None,
+):
+    """Link an existing uploaded document to a requested portal requirement.
+
+    The caller owns file validation/storage and document row creation. This
+    helper only updates the application-specific enhanced requirement and
+    writes audit rows. It does not create RMI rows, notifications, emails,
+    approval blockers, memo content, EDD case changes, or screening changes.
+    """
+    client_user, actor_error, actor_status = _client_fulfillment_actor(actor)
+    if actor_error:
+        return None, actor_error, actor_status
+
+    app, before, _client_request, error, status_code = _validate_client_fulfillment_target(
+        db,
+        application_id,
+        requirement_id,
+        allowed_types=APPLICATION_REQUIREMENT_CLIENT_DOCUMENT_TYPES,
+    )
+    if error:
+        return None, error, status_code
+
+    doc = db.execute(
+        """
+        SELECT id
+        FROM documents
+        WHERE id = ?
+          AND application_id = ?
+          AND doc_type = 'enhanced_requirement'
+        """,
+        (document_id, app["id"]),
+    ).fetchone()
+    if not doc:
+        return None, "Uploaded document must be an enhanced requirement document for the same application", 400
+
+    now = _now_iso()
+    client_id = client_user.get("sub")
+    db.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='uploaded',
+            linked_document_id=?,
+            uploaded_at=?,
+            reviewed_at=NULL,
+            reviewed_by=NULL,
+            updated_at=?
+        WHERE id=? AND application_id=?
+        """,
+        (document_id, now, now, before["id"], app["id"]),
+    )
+    after = _load_application_requirement_for_app(db, app["id"], before["id"])
+    target = _application_target(app)
+    changes = {
+        "status": {"before": before.get("status"), "after": "uploaded"},
+        "linked_document_id": {"before": before.get("linked_document_id"), "after": document_id},
+        "uploaded_at": {"before": before.get("uploaded_at"), "after": now},
+    }
+    payload = _audit_requirement_update_payload(app, before, after, actor, changes)
+    payload.update({
+        "document_id": document_id,
+        "response_present": False,
+        "client_id": client_id,
+    })
+    for action in (
+        "application_enhanced_requirement.updated",
+        "application_enhanced_requirement.status_changed",
+        "application_enhanced_requirement.document_linked",
+        "application_enhanced_requirement.client_uploaded",
+    ):
+        _insert_audit(
+            db,
+            action,
+            target,
+            payload,
+            actor=actor,
+            before_state=before,
+            after_state=after,
+        )
+
+    return {
+        "application_id": app["id"],
+        "application_ref": app.get("ref"),
+        "requirement": after,
+        "document_id": document_id,
+        "fulfilled": True,
+    }, None, 200
+
+
+def submit_application_enhanced_requirement_response(
+    db,
+    application_id,
+    requirement_id,
+    response_text,
+    actor=None,
+):
+    """Store a client text response for a requested declaration/explanation."""
+    client_user, actor_error, actor_status = _client_fulfillment_actor(actor)
+    if actor_error:
+        return None, actor_error, actor_status
+
+    response_text = _clean_text(response_text)
+    if not response_text:
+        return None, "response_text is required", 400
+    if len(response_text) > APPLICATION_REQUIREMENT_CLIENT_RESPONSE_MAX_LENGTH:
+        return None, f"response_text must be {APPLICATION_REQUIREMENT_CLIENT_RESPONSE_MAX_LENGTH} characters or fewer", 400
+
+    app, before, _client_request, error, status_code = _validate_client_fulfillment_target(
+        db,
+        application_id,
+        requirement_id,
+        allowed_types=APPLICATION_REQUIREMENT_CLIENT_TEXT_TYPES,
+    )
+    if error:
+        return None, error, status_code
+
+    now = _now_iso()
+    client_id = client_user.get("sub")
+    db.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='uploaded',
+            client_response_text=?,
+            client_response_at=?,
+            client_response_by=?,
+            uploaded_at=?,
+            reviewed_at=NULL,
+            reviewed_by=NULL,
+            updated_at=?
+        WHERE id=? AND application_id=?
+        """,
+        (response_text, now, client_id, now, now, before["id"], app["id"]),
+    )
+    after = _load_application_requirement_for_app(db, app["id"], before["id"])
+    target = _application_target(app)
+    changes = {
+        "status": {"before": before.get("status"), "after": "uploaded"},
+        "client_response_text": {
+            "before_present": bool(before.get("client_response_text")),
+            "after_present": True,
+        },
+        "client_response_at": {"before": before.get("client_response_at"), "after": now},
+        "uploaded_at": {"before": before.get("uploaded_at"), "after": now},
+    }
+    payload = _audit_requirement_update_payload(app, before, after, actor, changes)
+    payload.update({
+        "document_id": after.get("linked_document_id"),
+        "response_present": True,
+        "client_id": client_id,
+    })
+    for action in (
+        "application_enhanced_requirement.updated",
+        "application_enhanced_requirement.status_changed",
+        "application_enhanced_requirement.client_response_submitted",
+    ):
+        _insert_audit(
+            db,
+            action,
+            target,
+            payload,
+            actor=actor,
+            before_state=before,
+            after_state=after,
+        )
+
+    return {
+        "application_id": app["id"],
+        "application_ref": app.get("ref"),
+        "requirement": after,
+        "fulfilled": True,
+    }, None, 200
 
 
 def request_application_enhanced_requirement_from_client(

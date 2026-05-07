@@ -267,6 +267,7 @@ def test_application_enhanced_requirements_table_constraints(enhanced_app_db):
         "SELECT * FROM application_enhanced_requirements WHERE application_id=? LIMIT 1",
         (app_id,),
     ).fetchone()
+    assert {"client_response_text", "client_response_at", "client_response_by"}.issubset(set(row.keys()))
     with pytest.raises(Exception):
         db.execute(
             """
@@ -1347,3 +1348,366 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
     assert rmi_count == 0
     assert notification_count == 0
     assert memo_count == 0
+
+
+def test_portal_document_upload_fulfils_requested_enhanced_requirement(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+    import server as server_module
+
+    original_has_s3 = server_module.HAS_S3
+    server_module.HAS_S3 = False
+    try:
+        client_id = "client001"
+        conn = get_db()
+        conn.execute(
+            "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
+            (client_id, "client001@example.com", "hash", "Client One"),
+        )
+        app_id = _insert_application(conn, risk_level="HIGH")
+        conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, app_id))
+        conn.execute(
+            "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+            (app_id, "Declared Person", "Yes"),
+        )
+        conn.commit()
+        _generate(conn, app_id)
+        req_id = _requirement_id_by_key(conn, app_id, "company_bank_reference")
+        conn.execute(
+            """
+            UPDATE application_enhanced_requirements
+            SET status='requested', requested_at=datetime('now'), requested_by='co001'
+            WHERE id=?
+            """,
+            (req_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        resp = requests.post(
+            f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{req_id}/upload",
+            headers=_client_headers(client_id),
+            files={"file": ("evidence.pdf", b"%PDF-1.4\n% enhanced evidence\n", "application/pdf")},
+            timeout=5,
+        )
+    finally:
+        server_module.HAS_S3 = original_has_s3
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["status"] == "submitted"
+    assert body["requirement"]["status"] == "submitted"
+    assert body["requirement"]["id"] == req_id
+    assert body["document"]["doc_type"] == "enhanced_requirement"
+    forbidden_fields = {"trigger_key", "trigger_reason", "trigger_context", "review_notes", "waiver_reason", "requested_by", "audit"}
+    assert not forbidden_fields.intersection(body["requirement"])
+
+    conn = get_db()
+    req = conn.execute("SELECT * FROM application_enhanced_requirements WHERE id=?", (req_id,)).fetchone()
+    doc = conn.execute("SELECT * FROM documents WHERE id=?", (req["linked_document_id"],)).fetchone()
+    app = conn.execute("SELECT status, decision_notes FROM applications WHERE id=?", (app_id,)).fetchone()
+    rmi_count = conn.execute("SELECT COUNT(*) AS c FROM rmi_requests WHERE application_id=?", (app_id,)).fetchone()["c"]
+    rmi_item_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM rmi_request_items WHERE request_id IN (SELECT id FROM rmi_requests WHERE application_id=?)",
+        (app_id,),
+    ).fetchone()["c"]
+    notification_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM client_notifications WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    memo_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM compliance_memos WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    audit = conn.execute(
+        """
+        SELECT detail, before_state, after_state
+        FROM audit_log
+        WHERE action='application_enhanced_requirement.client_uploaded'
+        ORDER BY id DESC LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+
+    assert req["status"] == "uploaded"
+    assert req["uploaded_at"]
+    assert doc["doc_type"] == "enhanced_requirement"
+    assert doc["verification_status"] == "pending"
+    assert doc["review_status"] == "pending"
+    metadata = json.loads(doc["verification_results"])
+    assert metadata["enhanced_requirement_id"] == str(req_id)
+    assert app["status"] == "submitted"
+    assert app["decision_notes"] in (None, "")
+    assert rmi_count == 0
+    assert rmi_item_count == 0
+    assert notification_count == 0
+    assert memo_count == 0
+    assert audit is not None
+    detail = json.loads(audit["detail"])
+    before = json.loads(audit["before_state"])
+    after = json.loads(audit["after_state"])
+    assert detail["old_status"] == "requested"
+    assert detail["new_status"] == "uploaded"
+    assert detail["document_id"] == req["linked_document_id"]
+    assert detail["client_id"] == client_id
+    assert before["status"] == "requested"
+    assert after["status"] == "uploaded"
+
+
+def test_portal_text_response_fulfils_and_resubmits_requested_enhanced_requirement(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    client_id = "client001"
+    conn = get_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
+        (client_id, "client001@example.com", "hash", "Client One"),
+    )
+    app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, app_id))
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Declared Person", "Yes"),
+    )
+    conn.commit()
+    _generate(conn, app_id)
+    req_id = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    conn.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='requested', requested_at=datetime('now'), requested_by='co001'
+        WHERE id=?
+        """,
+        (req_id,),
+    )
+    conn.commit()
+    conn.close()
+
+    first = requests.post(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{req_id}/response",
+        headers=_client_headers(client_id),
+        json={"response_text": "We provide payment workflow software for SME merchants."},
+        timeout=5,
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["requirement"]["status"] == "submitted"
+
+    conn = get_db()
+    req = conn.execute("SELECT * FROM application_enhanced_requirements WHERE id=?", (req_id,)).fetchone()
+    assert req["status"] == "uploaded"
+    assert req["client_response_text"] == "We provide payment workflow software for SME merchants."
+    assert req["client_response_at"]
+    assert req["client_response_by"] == client_id
+    assert req["uploaded_at"]
+    conn.execute("UPDATE application_enhanced_requirements SET status='rejected' WHERE id=?", (req_id,))
+    conn.commit()
+    conn.close()
+
+    second = requests.post(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{req_id}/response",
+        headers=_client_headers(client_id),
+        json={"response_text": "Updated response with the requested operating details."},
+        timeout=5,
+    )
+    assert second.status_code == 200, second.text
+
+    conn = get_db()
+    req_after = conn.execute("SELECT * FROM application_enhanced_requirements WHERE id=?", (req_id,)).fetchone()
+    rmi_count = conn.execute("SELECT COUNT(*) AS c FROM rmi_requests WHERE application_id=?", (app_id,)).fetchone()["c"]
+    notification_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM client_notifications WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    memo_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM compliance_memos WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    audit = conn.execute(
+        """
+        SELECT before_state, after_state
+        FROM audit_log
+        WHERE action='application_enhanced_requirement.client_response_submitted'
+        ORDER BY id DESC LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+
+    assert req_after["status"] == "uploaded"
+    assert req_after["client_response_text"] == "Updated response with the requested operating details."
+    assert rmi_count == 0
+    assert notification_count == 0
+    assert memo_count == 0
+    before = json.loads(audit["before_state"])
+    after = json.loads(audit["after_state"])
+    assert before["status"] == "rejected"
+    assert after["status"] == "uploaded"
+    assert "client_response_text" not in before
+    assert "client_response_text" not in after
+    assert before["client_response_text_present"] is True
+    assert after["client_response_text_present"] is True
+
+
+def test_portal_fulfilment_rejects_unauthorized_ineligible_and_wrong_type(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    client_id = "client001"
+    other_client_id = "client002"
+    conn = get_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
+        (client_id, "client001@example.com", "hash", "Client One"),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
+        (other_client_id, "client002@example.com", "hash", "Client Two"),
+    )
+    app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, app_id))
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Declared Person", "Yes"),
+    )
+    conn.commit()
+    _generate(conn, app_id)
+    generated_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
+    document_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
+    explanation_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    accepted_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
+    waived_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
+    cancelled_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
+    conn.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status = CASE id
+            WHEN ? THEN 'requested'
+            WHEN ? THEN 'requested'
+            WHEN ? THEN 'accepted'
+            WHEN ? THEN 'waived'
+            WHEN ? THEN 'cancelled'
+            ELSE status
+        END,
+        requested_at = CASE WHEN id IN (?,?) THEN datetime('now') ELSE requested_at END,
+        requested_by = CASE WHEN id IN (?,?) THEN 'co001' ELSE requested_by END
+        WHERE application_id=?
+        """,
+        (
+            document_req,
+            explanation_req,
+            accepted_req,
+            waived_req,
+            cancelled_req,
+            document_req,
+            explanation_req,
+            document_req,
+            explanation_req,
+            app_id,
+        ),
+    )
+    pep_app_id = _insert_application(conn, risk_level="LOW")
+    conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, pep_app_id))
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (pep_app_id, "PEP Director", "Yes"),
+    )
+    conn.commit()
+    _generate(conn, pep_app_id)
+    backoffice_req = _requirement_id_by_key(conn, pep_app_id, "mandatory_senior_review")
+    conn.execute(
+        "UPDATE application_enhanced_requirements SET status='requested', requested_at=datetime('now'), requested_by='co001' WHERE id=?",
+        (backoffice_req,),
+    )
+    conn.commit()
+    conn.close()
+
+    pdf_file = {"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")}
+    generated_resp = requests.post(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{generated_req}/upload",
+        headers=_client_headers(client_id),
+        files=pdf_file,
+        timeout=5,
+    )
+    assert generated_resp.status_code == 404
+
+    wrong_client = requests.post(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{document_req}/upload",
+        headers=_client_headers(other_client_id),
+        files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+        timeout=5,
+    )
+    assert wrong_client.status_code == 403
+
+    officer_resp = requests.post(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{document_req}/upload",
+        headers=_headers("admin"),
+        files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+        timeout=5,
+    )
+    assert officer_resp.status_code == 403
+
+    upload_to_text = requests.post(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{explanation_req}/upload",
+        headers=_client_headers(client_id),
+        files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+        timeout=5,
+    )
+    assert upload_to_text.status_code == 400
+
+    response_to_doc = requests.post(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{document_req}/response",
+        headers=_client_headers(client_id),
+        json={"response_text": "Text for a document slot"},
+        timeout=5,
+    )
+    assert response_to_doc.status_code == 400
+
+    too_long = requests.post(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{explanation_req}/response",
+        headers=_client_headers(client_id),
+        json={"response_text": "x" * 10001},
+        timeout=5,
+    )
+    assert too_long.status_code == 400
+
+    unsafe_file = requests.post(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{document_req}/upload",
+        headers=_client_headers(client_id),
+        files={"file": ("malware.exe", b"MZ...", "application/octet-stream")},
+        timeout=5,
+    )
+    assert unsafe_file.status_code == 400
+
+    for req_id in (accepted_req, waived_req, cancelled_req):
+        resp = requests.post(
+            f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{req_id}/upload",
+            headers=_client_headers(client_id),
+            files={"file": ("evidence.pdf", b"%PDF-1.4\n% evidence\n", "application/pdf")},
+            timeout=5,
+        )
+        assert resp.status_code == 404
+
+    backoffice_only = requests.post(
+        f"{base_url}/api/portal/applications/{pep_app_id}/enhanced-requirements/{backoffice_req}/response",
+        headers=_client_headers(client_id),
+        json={"response_text": "Attempt to fulfil internal item"},
+        timeout=5,
+    )
+    assert backoffice_only.status_code == 404
+
+    conn = get_db()
+    doc_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM documents WHERE application_id=? AND doc_type='enhanced_requirement'",
+        (app_id,),
+    ).fetchone()["c"]
+    rmi_count = conn.execute("SELECT COUNT(*) AS c FROM rmi_requests WHERE application_id=?", (app_id,)).fetchone()["c"]
+    notification_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM client_notifications WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    conn.close()
+    assert doc_count == 0
+    assert rmi_count == 0
+    assert notification_count == 0

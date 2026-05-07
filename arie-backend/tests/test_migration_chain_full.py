@@ -25,6 +25,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -47,6 +48,16 @@ def _migration_files():
 
 
 _CHAIN_FILES = _migration_files()
+
+
+def _drop_column_if_present(db, table, column):
+    if not any(dict(row).get("name") == column for row in db.execute(f"PRAGMA table_info({table})").fetchall()):
+        return
+    try:
+        db.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+    except sqlite3.OperationalError as exc:
+        if "no such column" not in str(exc).lower():
+            raise
 
 
 def _remove_modern_backfills(db, keep_count):
@@ -75,6 +86,9 @@ def _remove_modern_backfills(db, keep_count):
                 db.execute(f"ALTER TABLE monitoring_alerts DROP COLUMN {column}")
             except Exception:
                 pass
+    if "023" not in kept_versions:
+        for column in ("client_response_text", "client_response_at", "client_response_by"):
+            _drop_column_if_present(db, "application_enhanced_requirements", column)
     db.commit()
 
 
