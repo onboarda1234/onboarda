@@ -873,9 +873,24 @@ def _audit_user(actor):
     return {"sub": text, "name": text, "role": "system"}
 
 
+def _redact_audit_state(state):
+    """Keep client free-text out of audit before/after snapshots."""
+    if state is None:
+        return None
+    if isinstance(state, dict):
+        redacted = dict(state)
+        if "client_response_text" in redacted:
+            redacted["client_response_text_present"] = bool(redacted.get("client_response_text"))
+            redacted.pop("client_response_text", None)
+        return redacted
+    return state
+
+
 def _insert_audit(db, action, target, detail, actor=None, before_state=None, after_state=None):
     user = _audit_user(actor)
     detail_text = json.dumps(detail or {}, default=str, sort_keys=True)
+    before_state = _redact_audit_state(before_state)
+    after_state = _redact_audit_state(after_state)
     has_state_columns = (
         _column_exists(db, "audit_log", "before_state")
         and _column_exists(db, "audit_log", "after_state")

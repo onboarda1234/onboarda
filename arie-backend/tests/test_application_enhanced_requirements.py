@@ -1539,6 +1539,10 @@ def test_portal_text_response_fulfils_and_resubmits_requested_enhanced_requireme
     after = json.loads(audit["after_state"])
     assert before["status"] == "rejected"
     assert after["status"] == "uploaded"
+    assert "client_response_text" not in before
+    assert "client_response_text" not in after
+    assert before["client_response_text_present"] is True
+    assert after["client_response_text_present"] is True
 
 
 def test_portal_fulfilment_rejects_unauthorized_ineligible_and_wrong_type(enhanced_app_api_server):

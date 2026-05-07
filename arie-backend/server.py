@@ -14502,6 +14502,22 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
     notifications, emails, approval blockers, memo content, EDD case changes,
     screening changes, or risk-threshold changes.
     """
+    def _cleanup_upload_artifacts(self, file_path=None, s3_key=None):
+        """Best-effort cleanup for upload artifacts when DB/link/commit fails."""
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                logger.warning("Enhanced requirement local upload cleanup failed: %s", exc)
+        if s3_key and HAS_S3:
+            try:
+                s3 = get_s3_client()
+                success, message = s3.delete_document(s3_key)
+                if not success:
+                    logger.warning("Enhanced requirement S3 upload cleanup failed for %s: %s", s3_key, message)
+            except Exception as exc:
+                logger.warning("Enhanced requirement S3 upload cleanup exception for %s: %s", s3_key, exc)
+
     def post(self, app_id, requirement_id):
         user = self.require_auth()
         if not user:
@@ -14513,6 +14529,7 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
 
         db = get_db()
         file_path = None
+        s3_key = None
         try:
             app = db.execute(
                 "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
@@ -14561,7 +14578,6 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
             with open(file_path, "wb") as f:
                 f.write(body)
 
-            s3_key = None
             if HAS_S3:
                 try:
                     s3 = get_s3_client()
@@ -14581,27 +14597,15 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     else:
                         logger.error("Enhanced requirement S3 upload failed for %s: %s", document_id, key_or_error)
                         if is_production() or is_staging():
-                            if file_path and os.path.exists(file_path):
-                                try:
-                                    os.remove(file_path)
-                                except OSError:
-                                    pass
+                            self._cleanup_upload_artifacts(file_path=file_path)
                             return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
                 except Exception as exc:
                     logger.error("Enhanced requirement S3 upload exception for %s: %s", document_id, exc)
                     if is_production() or is_staging():
-                        if file_path and os.path.exists(file_path):
-                            try:
-                                os.remove(file_path)
-                            except OSError:
-                                pass
+                        self._cleanup_upload_artifacts(file_path=file_path)
                         return self.error("Document upload failed: unable to store document durably. Please retry.", 500)
             elif is_production() or is_staging():
-                if file_path and os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                    except OSError:
-                        pass
+                self._cleanup_upload_artifacts(file_path=file_path)
                 return self.error("Document upload failed: S3 storage is not available. Contact administrator.", 500)
 
             verification_metadata = {
@@ -14642,11 +14646,7 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     db.rollback()
                 except Exception:
                     pass
-                if file_path and os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                    except OSError:
-                        pass
+                self._cleanup_upload_artifacts(file_path=file_path, s3_key=s3_key)
                 return self.error(error, status_code)
 
             safe_after = next(
@@ -14672,11 +14672,7 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 db.rollback()
             except Exception:
                 pass
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except OSError:
-                    pass
+            self._cleanup_upload_artifacts(file_path=file_path, s3_key=s3_key)
             logger.error(
                 "portal enhanced requirement upload failed: app_id=%s requirement_id=%s error=%s",
                 app_id,
