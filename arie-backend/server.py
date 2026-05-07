@@ -143,6 +143,7 @@ from enhanced_requirements import (
     ALLOWED_WAIVER_ROLES,
     diagnose_enhanced_requirement_config,
     generate_application_enhanced_requirements,
+    request_application_enhanced_requirement_from_client,
     serialize_application_requirement,
     serialize_rule as serialize_enhanced_requirement_rule,
     update_application_enhanced_requirement,
@@ -6153,6 +6154,47 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                 exc_info=True,
             )
             self.error("Failed to update enhanced requirement", 500)
+        finally:
+            db.close()
+
+
+class ApplicationEnhancedRequirementRequestHandler(BaseHandler):
+    """POST /api/applications/:id/enhanced-requirements/:requirement_id/request."""
+
+    def post(self, app_id, requirement_id):
+        user = self.require_auth(roles=APPLICATION_ENHANCED_REQUIREMENT_UPDATE_ROLES)
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            result, error, status_code = request_application_enhanced_requirement_from_client(
+                db,
+                app_id,
+                requirement_id,
+                actor=user,
+            )
+            if error:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                return self.error(error, status_code)
+            db.commit()
+            self.success(result)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "application enhanced requirement request failed: app_id=%s requirement_id=%s error=%s",
+                app_id,
+                requirement_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to request enhanced requirement from client", 500)
         finally:
             db.close()
 
@@ -14589,6 +14631,7 @@ def make_app():
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/generate", ApplicationEnhancedRequirementsGenerateHandler),
+        (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)/request", ApplicationEnhancedRequirementRequestHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)", ApplicationEnhancedRequirementDetailHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements", ApplicationEnhancedRequirementsHandler),
         (r"/api/applications/([^/]+)/documents/([^/]+)", DocumentDeleteHandler),

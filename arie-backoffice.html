@@ -5937,6 +5937,10 @@ function canWaiveApplicationEnhancedRequirements() {
   return !!(currentUser && ['admin','sco'].indexOf(currentUser.role) >= 0);
 }
 
+function canRequestApplicationEnhancedRequirementsFromClient() {
+  return !!(currentUser && ['admin','sco','co'].indexOf(currentUser.role) >= 0);
+}
+
 function setEnhancedRequirementDetailMessage(message, tone) {
   var el = document.getElementById('detail-enhanced-requirements-message');
   if (!el) return;
@@ -5972,6 +5976,14 @@ function enhancedRequirementBoolBadge(value, yesLabel, noLabel) {
 function enhancedRequirementOutstanding(req) {
   var status = String(req.status || 'generated').toLowerCase();
   return ['accepted','waived','cancelled'].indexOf(status) < 0;
+}
+
+function enhancedRequirementRequestEligible(req) {
+  if (!req || req.active === false) return false;
+  var audience = String(req.audience || '').toLowerCase();
+  var status = String(req.status || 'generated').toLowerCase();
+  return ['client','both'].indexOf(audience) >= 0 &&
+    ['generated','under_review','rejected'].indexOf(status) >= 0;
 }
 
 function enhancedRequirementTriggerReason(req) {
@@ -6039,6 +6051,10 @@ function renderApplicationEnhancedRequirementActions(req) {
       '<button class="btn btn-outline btn-sm" onclick="waiveApplicationEnhancedRequirement(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Waive</button>' +
     '</div>';
   }
+  var requestHtml = '';
+  if (canRequestApplicationEnhancedRequirementsFromClient() && enhancedRequirementRequestEligible(req)) {
+    requestHtml = '<button class="btn btn-outline btn-sm" onclick="requestApplicationEnhancedRequirementFromClient(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Request from client</button>';
+  }
 
   return '<div style="min-width:260px;">' +
     '<select id="er-status-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-bottom:6px;">' +
@@ -6053,7 +6069,10 @@ function renderApplicationEnhancedRequirementActions(req) {
     '<textarea id="er-notes-' + escapeHtml(controlId) + '" placeholder="Internal review notes" rows="2" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;resize:vertical;">' + escapeHtml(req.review_notes || '') + '</textarea>' +
     '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;">' +
       '<div style="font-size:10px;color:var(--text3);">' + escapeHtml(linkedLabel) + '</div>' +
-      '<button class="btn btn-primary btn-sm" onclick="saveApplicationEnhancedRequirement(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Save update</button>' +
+      '<div style="display:flex;gap:6px;align-items:center;">' +
+        requestHtml +
+        '<button class="btn btn-primary btn-sm" onclick="saveApplicationEnhancedRequirement(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Save update</button>' +
+      '</div>' +
     '</div>' +
     waiverHtml +
   '</div>';
@@ -6136,7 +6155,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult) {
         '<td>' + enhancedRequirementBoolBadge(req.waivable, 'Yes', 'No') + '</td>' +
         '<td>' + enhancedRequirementBoolBadge(req.mandatory, 'Yes', 'No') + '</td>' +
         '<td><div style="font-size:12px;color:var(--text2);">' + escapeHtml(req.generation_source || '—') + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;max-width:260px;white-space:normal;">' + escapeHtml(reason) + '</div></td>' +
-        '<td><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Created: ' + escapeHtml(enhancedRequirementDate(req.created_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Updated: ' + escapeHtml(enhancedRequirementDate(req.updated_at)) + '</div></td>' +
+        '<td><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Created: ' + escapeHtml(enhancedRequirementDate(req.created_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Updated: ' + escapeHtml(enhancedRequirementDate(req.updated_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Requested: ' + escapeHtml(enhancedRequirementDate(req.requested_at)) + (req.requested_by ? ' by ' + escapeHtml(req.requested_by) : '') + '</div>' + (req.linked_rmi_item_id ? '<div style="font-size:11px;color:var(--text3);white-space:nowrap;">Linked RMI item: ' + escapeHtml(req.linked_rmi_item_id) + '</div>' : '') + '</td>' +
         '<td>' + renderApplicationEnhancedRequirementActions(req) + '</td>' +
       '</tr>';
     }).join('');
@@ -6267,6 +6286,35 @@ async function waiveApplicationEnhancedRequirement(requirementId) {
   } catch (err) {
     setEnhancedRequirementDetailMessage('Unable to waive enhanced requirement: ' + (err.message || 'Unknown error'), 'red');
     showToast('Unable to waive enhanced requirement', 'error');
+  }
+}
+
+async function requestApplicationEnhancedRequirementFromClient(requirementId) {
+  if (!currentApp || !currentApp.id) {
+    showToast('No application selected', 'error');
+    return;
+  }
+  if (!canRequestApplicationEnhancedRequirementsFromClient()) {
+    showToast('You do not have permission to request enhanced requirements from clients', 'error');
+    return;
+  }
+  var req = APPLICATION_ENHANCED_REQUIREMENTS.find(function(item) {
+    return String(item.id) === String(requirementId);
+  });
+  if (!enhancedRequirementRequestEligible(req)) {
+    showToast('This enhanced requirement cannot be requested from the client', 'error');
+    return;
+  }
+  try {
+    var result = await boApiCall('POST', '/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/' + encodeURIComponent(requirementId) + '/request', {});
+    showToast('Enhanced requirement marked as requested from client');
+    await loadApplicationEnhancedRequirements(currentApp);
+    if (result && result.rmi_integration === 'deferred') {
+      setEnhancedRequirementDetailMessage('Requirement marked requested. Portal and RMI exposure are deferred to a later step.', '');
+    }
+  } catch (err) {
+    setEnhancedRequirementDetailMessage('Unable to request enhanced requirement: ' + (err.message || 'Unknown error'), 'red');
+    showToast('Unable to request enhanced requirement', 'error');
   }
 }
 
