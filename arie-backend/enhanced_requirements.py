@@ -59,6 +59,12 @@ APPLICATION_REQUIREMENT_REQUEST_ROLES = ("admin", "sco", "co")
 APPLICATION_REQUIREMENT_NOTES_MAX_LENGTH = 4000
 APPLICATION_REQUIREMENT_REQUESTABLE_AUDIENCES = ("client", "both")
 APPLICATION_REQUIREMENT_REQUESTABLE_STATUSES = ("generated", "under_review", "rejected")
+APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES = (
+    "requested",
+    "uploaded",
+    "under_review",
+    "rejected",
+)
 APPLICATION_REQUIREMENT_STATUS_TRANSITIONS = {
     "generated": ("under_review", "accepted", "rejected", "waived"),
     "requested": ("under_review", "accepted", "rejected", "waived"),
@@ -1376,6 +1382,101 @@ def _client_safe_requirement_fields(db, requirement):
         "requirement_type": requirement.get("requirement_type"),
         "subject_scope": requirement.get("subject_scope"),
     }, None
+
+
+_PORTAL_STATUS_LABELS = {
+    "requested": ("required", "Required"),
+    "uploaded": ("submitted", "Submitted"),
+    "under_review": ("under_review", "Under review"),
+    "rejected": ("additional_information_needed", "Additional information needed"),
+}
+
+_PORTAL_REQUIREMENT_TYPES = {
+    "document": "document",
+    "declaration": "declaration",
+    "explanation": "explanation",
+    "review_task": "information",
+    "internal_control": "information",
+}
+
+_PORTAL_SUBJECT_SCOPES = {
+    "company": "company",
+    "ubo": "beneficial_owner",
+    "director": "director",
+    "controller": "controller",
+    "application": "application",
+    "screening_subject": "person",
+}
+
+
+def serialize_portal_application_requirement(db, row):
+    """Return a client-safe portal representation of one requested requirement."""
+    requirement = serialize_application_requirement(row)
+    if not requirement:
+        return None
+
+    client_request, safe_error = _client_safe_requirement_fields(db, requirement)
+    if safe_error:
+        logger.warning(
+            "portal_enhanced_requirement_unsafe_skip=true requirement_id=%s reason=%s",
+            requirement.get("id"),
+            safe_error,
+        )
+        return None
+
+    backend_status = str(requirement.get("status") or "").strip().lower()
+    status_key, status_label = _PORTAL_STATUS_LABELS.get(
+        backend_status,
+        ("required", "Required"),
+    )
+    requirement_type = _PORTAL_REQUIREMENT_TYPES.get(
+        str(requirement.get("requirement_type") or "").strip().lower(),
+        "information",
+    )
+    subject_scope = _PORTAL_SUBJECT_SCOPES.get(
+        str(requirement.get("subject_scope") or "").strip().lower()
+    )
+
+    result = {
+        "id": requirement.get("id"),
+        "label": client_request.get("label"),
+        "description": client_request.get("description") or "",
+        "requirement_type": requirement_type,
+        "status": status_key,
+        "status_label": status_label,
+        "requested_at": requirement.get("requested_at"),
+        "uploaded_at": requirement.get("uploaded_at"),
+        "reviewed_at": requirement.get("reviewed_at"),
+    }
+    if subject_scope:
+        result["subject_scope"] = subject_scope
+    if requirement.get("linked_document_id"):
+        result["linked_document_id"] = requirement.get("linked_document_id")
+    return result
+
+
+def list_portal_application_enhanced_requirements(db, application_id):
+    """List only client-visible requested enhanced requirements for the portal."""
+    placeholders = ",".join(["?"] * len(APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES))
+    rows = db.execute(
+        f"""
+        SELECT *
+        FROM application_enhanced_requirements
+        WHERE application_id = ?
+          AND active = 1
+          AND audience IN ('client', 'both')
+          AND status IN ({placeholders})
+        ORDER BY requested_at DESC, updated_at DESC, requirement_label, id
+        """,
+        (application_id, *APPLICATION_REQUIREMENT_PORTAL_VISIBLE_STATUSES),
+    ).fetchall()
+
+    requirements = []
+    for row in rows:
+        safe = serialize_portal_application_requirement(db, row)
+        if safe:
+            requirements.append(safe)
+    return requirements
 
 
 def request_application_enhanced_requirement_from_client(

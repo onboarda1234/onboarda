@@ -143,6 +143,7 @@ from enhanced_requirements import (
     ALLOWED_WAIVER_ROLES,
     diagnose_enhanced_requirement_config,
     generate_application_enhanced_requirements,
+    list_portal_application_enhanced_requirements,
     request_application_enhanced_requirement_from_client,
     serialize_application_requirement,
     serialize_rule as serialize_enhanced_requirement_rule,
@@ -14454,6 +14455,42 @@ class PortalApplicationsHandler(BaseHandler):
             db.close()
 
 
+class PortalApplicationEnhancedRequirementsHandler(BaseHandler):
+    """GET /api/portal/applications/:id/enhanced-requirements.
+
+    Client-safe presentation only.  This endpoint does not create RMI rows,
+    notifications, emails, document slots, approval blockers, or memo content.
+    """
+    def get(self, app_id):
+        user = self.require_auth()
+        if not user:
+            return
+        if user.get("type") != "client":
+            return self.error("Only clients can view requested information", 403)
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT id, ref, client_id FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            app = dict(app)
+            if not self.check_app_ownership(user, app):
+                return
+
+            requirements = list_portal_application_enhanced_requirements(db, app["id"])
+            self.success({
+                "application_id": app["id"],
+                "application_ref": app["ref"],
+                "requirements": requirements,
+                "total": len(requirements),
+            })
+        finally:
+            db.close()
+
+
 class PortalChangeRequestHandler(BaseHandler):
     """POST /api/portal/change-requests — Client creates a change request from portal"""
     def get(self):
@@ -14770,6 +14807,8 @@ def make_app():
         (r"/api/applications/([^/]+)/profile-versions/([^/]+)", ApplicationProfileVersionDetailHandler),
         (r"/api/applications/([^/]+)/profile-versions", EntityProfileVersionsHandler),
         (r"/api/profile-versions/([^/]+)", EntityProfileVersionDetailHandler),
+        (r"/api/portal/applications/([^/]+)/enhanced-requirements",
+         PortalApplicationEnhancedRequirementsHandler),
         (r"/api/portal/applications", PortalApplicationsHandler),
         (r"/api/portal/change-requests", PortalChangeRequestHandler),
 
