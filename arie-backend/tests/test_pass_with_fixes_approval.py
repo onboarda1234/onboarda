@@ -22,6 +22,44 @@ VALID_SUPERVISOR = json.dumps({
     "supervisor": {"verdict": "CONSISTENT", "can_approve": True},
 })
 
+
+def _insert_resolved_enhanced_requirement(db, app_id):
+    """Keep these memo-policy tests focused now that Step 7 enforces EDD requirements."""
+    suffix = uuid.uuid4().hex[:8]
+    db.execute(
+        """
+        INSERT INTO application_enhanced_requirements (
+            application_id, trigger_key, trigger_label, trigger_category,
+            requirement_key, requirement_label, requirement_description,
+            audience, requirement_type, subject_scope, blocking_approval,
+            waivable, waiver_roles, mandatory, status, generation_source,
+            trigger_reason, trigger_context, active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id,
+            "high_or_very_high_risk",
+            "HIGH / VERY_HIGH risk",
+            "risk",
+            f"pwf_resolved_{suffix}",
+            "Resolved enhanced review requirement",
+            "Resolved enhanced review fixture for memo approval tests.",
+            "client",
+            "document",
+            "application",
+            1,
+            1,
+            json.dumps(["admin", "sco"]),
+            1,
+            "accepted",
+            "test",
+            "High risk memo approval fixture",
+            "{}",
+            1,
+        ),
+    )
+
+
 def _insert_app(db, *, app_id=None, ref=None):
     """Insert a minimal application and return its id."""
     suffix = uuid.uuid4().hex[:8]
@@ -53,6 +91,7 @@ def _insert_app(db, *, app_id=None, ref=None):
             }),
         ),
     )
+    _insert_resolved_enhanced_requirement(db, app_id)
     db.commit()
     return app_id
 

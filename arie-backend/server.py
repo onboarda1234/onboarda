@@ -141,6 +141,7 @@ from enhanced_requirements import (
     ALLOWED_REQUIREMENT_TYPES,
     ALLOWED_SUBJECT_SCOPES,
     ALLOWED_WAIVER_ROLES,
+    audit_enhanced_requirements_approval_block,
     build_enhanced_review_memo_summary,
     diagnose_enhanced_requirement_config,
     fulfill_application_enhanced_requirement_document,
@@ -151,6 +152,7 @@ from enhanced_requirements import (
     serialize_rule as serialize_enhanced_requirement_rule,
     submit_application_enhanced_requirement_response,
     update_application_enhanced_requirement,
+    validate_enhanced_requirements_for_approval,
     validate_rule_payload as validate_enhanced_requirement_rule_payload,
 )
 
@@ -3007,6 +3009,10 @@ class ApplicationDetailHandler(BaseHandler):
                 app_dict["prescreening_data"] = prescreening
                 can_approve, gate_error = ApprovalGateValidator.validate_approval(app_dict, db)
                 if not can_approve:
+                    _audit_enhanced_requirement_approval_block_if_applicable(
+                        db, app_dict, user, gate_error
+                    )
+                    db.commit()
                     db.close()
                     return self.error(f"Approval gate failed: {gate_error}", 400)
 
@@ -10696,6 +10702,32 @@ DOCUMENT_TYPE_ALLOWLIST = {
 }
 
 
+def _is_enhanced_requirement_gate_error(message):
+    return "enhanced review requirement" in str(message or "").lower()
+
+
+def _audit_enhanced_requirement_approval_block_if_applicable(db, app, user, gate_error):
+    """Audit approval attempts blocked by Step 7 enhanced requirement control."""
+    if not _is_enhanced_requirement_gate_error(gate_error):
+        return
+    try:
+        validation = validate_enhanced_requirements_for_approval(
+            db,
+            app.get("id") if isinstance(app, dict) else app["id"],
+            app_row=app,
+        )
+        if validation.get("passed"):
+            return
+        audit_enhanced_requirements_approval_block(db, app, validation, actor=user)
+    except Exception as exc:  # pragma: no cover - audit must not replace user-facing block
+        logger.error(
+            "Failed to audit enhanced requirements approval block for %s: %s",
+            (app or {}).get("ref") if isinstance(app, dict) else "unknown",
+            exc,
+            exc_info=True,
+        )
+
+
 def _normalize_document_type(value):
     """Return a canonical, bounded document type suitable for DB matching."""
     raw = str(value or "general").strip()
@@ -11746,6 +11778,9 @@ class ApplicationDecisionHandler(BaseHandler):
             can_approve, gate_error = ApprovalGateValidator.validate_approval(app, db)
             if not can_approve:
                 reason = f"Approval blocked: {gate_error}"
+                _audit_enhanced_requirement_approval_block_if_applicable(
+                    db, app, user, gate_error
+                )
                 self.log_governance_attempt(
                     user, "application.decision", attempt_target, "rejected", 400,
                     reason, attempt_summary, db=db)

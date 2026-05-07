@@ -1,9 +1,9 @@
 """Enhanced / EDD requirement settings.
 
 This module defines the configurable rule vocabulary used by the
-back-office settings layer.  It deliberately does not generate RMI requests,
-portal prompts, approval blockers, or memo content; those workflow effects are
-future phases.
+back-office settings layer.  It deliberately does not generate RMI requests or
+client notifications.  Approval and memo integrations are deterministic
+read-only consumers of the application-specific requirement records.
 """
 
 import json
@@ -77,6 +77,8 @@ APPLICATION_REQUIREMENT_MEMO_UNRESOLVED_STATUSES = (
     "under_review",
     "rejected",
 )
+APPLICATION_REQUIREMENT_APPROVAL_UNRESOLVED_STATUSES = APPLICATION_REQUIREMENT_MEMO_UNRESOLVED_STATUSES
+APPLICATION_REQUIREMENT_APPROVAL_RESOLVED_STATUSES = ("accepted", "waived")
 APPLICATION_REQUIREMENT_STATUS_TRANSITIONS = {
     "generated": ("under_review", "accepted", "rejected", "waived"),
     "requested": ("under_review", "accepted", "rejected", "waived"),
@@ -1244,6 +1246,239 @@ def build_enhanced_review_memo_summary(db, application_id):
             f"{len(blocking_outstanding)} blocking enhanced review requirement(s) remain unresolved"
         )
     return summary
+
+
+def _application_requires_enhanced_requirements(app):
+    app = app or {}
+    risk_level = str(app.get("risk_level") or "").strip().upper()
+    status = str(app.get("status") or "").strip().lower()
+    lane = str(app.get("onboarding_lane") or app.get("review_route") or "").strip().lower()
+    return (
+        risk_level in ("HIGH", "VERY_HIGH")
+        or status in ("edd_required", "edd_approved")
+        or lane == "edd"
+    )
+
+
+def _waiver_role_for_user(db, user_id):
+    user_id = _clean_text(user_id)
+    if not user_id or not _table_exists(db, "users"):
+        return None
+    try:
+        row = db.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+    except Exception:
+        return None
+    data = _row_dict(row)
+    return str(data.get("role") or "").strip().lower() or None
+
+
+def _approval_requirement_item(item, action_needed="Resolve requirement"):
+    return {
+        "id": item.get("id"),
+        "requirement_key": item.get("requirement_key"),
+        "requirement_label": item.get("requirement_label"),
+        "trigger_key": item.get("trigger_key"),
+        "trigger_label": item.get("trigger_label"),
+        "audience": item.get("audience"),
+        "requirement_type": item.get("requirement_type"),
+        "status": item.get("status"),
+        "mandatory": bool(item.get("mandatory")),
+        "blocking_approval": bool(item.get("blocking_approval")),
+        "waived_at": item.get("waived_at"),
+        "waived_by": item.get("waived_by"),
+        "waiver_reason_present": bool(_clean_text(item.get("waiver_reason"))),
+        "action_needed": action_needed,
+    }
+
+
+def _valid_approval_waiver(db, item):
+    reason = _clean_text(item.get("waiver_reason"))
+    waived_by = _clean_text(item.get("waived_by"))
+    waived_at = _clean_text(item.get("waived_at"))
+    if not reason or not waived_by or not waived_at:
+        return False, "waiver requires waiver_reason, waived_by, and waived_at"
+    role = _waiver_role_for_user(db, waived_by)
+    if role and role not in APPLICATION_REQUIREMENT_WAIVER_ROLES:
+        return False, "waived_by is not an admin or SCO"
+    return True, ""
+
+
+def validate_enhanced_requirements_for_approval(db, application_id, app_row=None):
+    """Validate application-specific enhanced requirements for approval.
+
+    This is a read-only approval-control helper. It does not generate missing
+    requirements, change lifecycle status, create RMI/client notifications, or
+    alter memo output.  Approval passes only when active mandatory/blocking
+    enhanced requirements are accepted or validly waived.
+    """
+    result = {
+        "passed": True,
+        "has_requirements": False,
+        "unresolved_count": 0,
+        "blocking_unresolved_count": 0,
+        "mandatory_unresolved_count": 0,
+        "invalid_waiver_count": 0,
+        "unresolved_requirements": [],
+        "invalid_waivers": [],
+        "warnings": [],
+        "errors": [],
+        "missing_generated_requirements": False,
+    }
+    app = _row_dict(app_row) if app_row is not None else _load_application(db, application_id)
+    if not app:
+        result["passed"] = False
+        result["errors"].append("application_not_found")
+        return result
+
+    application_id = app.get("id") or application_id
+    requires_enhanced = _application_requires_enhanced_requirements(app)
+
+    if not _table_exists(db, "application_enhanced_requirements"):
+        if requires_enhanced:
+            result["passed"] = False
+            result["missing_generated_requirements"] = True
+            result["errors"].append(
+                "enhanced review requirements table is missing; re-run migrations before approval"
+            )
+        else:
+            result["warnings"].append("application_enhanced_requirements table is missing")
+        return result
+
+    rows = db.execute(
+        """
+        SELECT *
+        FROM application_enhanced_requirements
+        WHERE application_id = ?
+          AND active = 1
+        ORDER BY trigger_category, trigger_label, requirement_label, id
+        """,
+        (application_id,),
+    ).fetchall()
+    items = [serialize_application_requirement(row) for row in rows]
+    items = [item for item in items if item]
+    result["has_requirements"] = bool(items)
+
+    if not items:
+        if requires_enhanced:
+            result["passed"] = False
+            result["missing_generated_requirements"] = True
+            result["errors"].append(
+                "enhanced review requirements are missing or not generated for this HIGH/EDD application"
+            )
+        return result
+
+    for item in items:
+        status = str(item.get("status") or "generated").strip().lower()
+        is_blocking = bool(item.get("mandatory")) or bool(item.get("blocking_approval"))
+        if status == "cancelled":
+            continue
+        if status == "accepted":
+            continue
+        if status == "waived":
+            waiver_ok, waiver_error = _valid_approval_waiver(db, item)
+            if waiver_ok:
+                continue
+            invalid = _approval_requirement_item(item, waiver_error)
+            result["invalid_waivers"].append(invalid)
+            result["invalid_waiver_count"] += 1
+            if is_blocking:
+                result["unresolved_requirements"].append(invalid)
+            continue
+        if is_blocking:
+            result["unresolved_requirements"].append(
+                _approval_requirement_item(
+                    item,
+                    "Accept the requirement or record a valid senior waiver before approval",
+                )
+            )
+
+    # De-duplicate invalid waivers that were also included as unresolved rows.
+    seen = set()
+    unresolved = []
+    for item in result["unresolved_requirements"]:
+        key = item.get("id") or (item.get("trigger_key"), item.get("requirement_key"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unresolved.append(item)
+    result["unresolved_requirements"] = unresolved
+    result["unresolved_count"] = len(unresolved)
+    result["mandatory_unresolved_count"] = len([item for item in unresolved if item.get("mandatory")])
+    result["blocking_unresolved_count"] = len([item for item in unresolved if item.get("blocking_approval")])
+    result["passed"] = not result["errors"] and result["unresolved_count"] == 0
+    return result
+
+
+def format_enhanced_requirements_approval_error(validation):
+    validation = validation or {}
+    if validation.get("missing_generated_requirements"):
+        return (
+            "Enhanced review requirements are missing or not generated. "
+            "Re-run enhanced requirement generation before approval."
+        )
+    unresolved = validation.get("unresolved_requirements") or []
+    invalid_waivers = validation.get("invalid_waivers") or []
+    if not unresolved and invalid_waivers:
+        unresolved = invalid_waivers
+    sample_parts = []
+    for item in unresolved[:5]:
+        label = item.get("requirement_label") or item.get("requirement_key") or "Enhanced requirement"
+        status = item.get("status") or "unknown"
+        flags = []
+        if item.get("mandatory"):
+            flags.append("mandatory")
+        if item.get("blocking_approval"):
+            flags.append("blocking")
+        flag_text = f"; {', '.join(flags)}" if flags else ""
+        sample_parts.append(f"{label} ({status}{flag_text})")
+    detail = "; ".join(sample_parts)
+    if len(unresolved) > 5:
+        detail += f"; +{len(unresolved) - 5} more"
+    counts = (
+        f"mandatory unresolved={validation.get('mandatory_unresolved_count', 0)}, "
+        f"blocking unresolved={validation.get('blocking_unresolved_count', 0)}, "
+        f"invalid waivers={validation.get('invalid_waiver_count', 0)}"
+    )
+    if detail:
+        return (
+            "Enhanced Review requirements remain unresolved. "
+            f"{counts}. Items: {detail}. "
+            "Accept mandatory/blocking requirements or record a valid senior waiver before approval."
+        )
+    return (
+        "Enhanced Review requirements remain unresolved. "
+        f"{counts}. Accept mandatory/blocking requirements or record a valid senior waiver before approval."
+    )
+
+
+def audit_enhanced_requirements_approval_block(db, app, validation, actor=None):
+    """Write a focused audit row for an approval attempt blocked by enhanced requirements."""
+    app = _row_dict(app) or {}
+    validation = validation or {}
+    detail = {
+        "event": "approval.blocked.enhanced_requirements",
+        "application_id": app.get("id"),
+        "application_ref": app.get("ref"),
+        "unresolved_count": validation.get("unresolved_count", 0),
+        "mandatory_unresolved_count": validation.get("mandatory_unresolved_count", 0),
+        "blocking_unresolved_count": validation.get("blocking_unresolved_count", 0),
+        "invalid_waiver_count": validation.get("invalid_waiver_count", 0),
+        "missing_generated_requirements": bool(validation.get("missing_generated_requirements")),
+        "unresolved_requirements": validation.get("unresolved_requirements", [])[:20],
+        "invalid_waivers": validation.get("invalid_waivers", [])[:20],
+        "warnings": validation.get("warnings", []),
+        "errors": validation.get("errors", []),
+        "actor": _audit_user(actor),
+        "timestamp": _now_iso(),
+    }
+    _insert_audit(
+        db,
+        "approval.blocked.enhanced_requirements",
+        _application_target(app),
+        detail,
+        actor=actor,
+    )
+    return detail
 
 
 def _is_yes(value):
