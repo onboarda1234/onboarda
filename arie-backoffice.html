@@ -5921,12 +5921,20 @@ function renderRMIPanel(app) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// APPLICATION ENHANCED REVIEW REQUIREMENTS — read-only display
+// APPLICATION ENHANCED REVIEW REQUIREMENTS — back-office display/actions
 // ═══════════════════════════════════════════════════════════
 var APPLICATION_ENHANCED_REQUIREMENTS = [];
 
 function canViewApplicationEnhancedRequirements() {
   return !!(currentUser && ['admin','sco','co'].indexOf(currentUser.role) >= 0);
+}
+
+function canUpdateApplicationEnhancedRequirements() {
+  return !!(currentUser && ['admin','sco','co'].indexOf(currentUser.role) >= 0);
+}
+
+function canWaiveApplicationEnhancedRequirements() {
+  return !!(currentUser && ['admin','sco'].indexOf(currentUser.role) >= 0);
 }
 
 function setEnhancedRequirementDetailMessage(message, tone) {
@@ -5981,6 +5989,74 @@ function enhancedRequirementTriggerReason(req) {
 function enhancedRequirementDate(value) {
   if (!value) return '—';
   return String(value).replace('T', ' ').slice(0, 19);
+}
+
+function enhancedRequirementControlId(requirementId) {
+  return String(requirementId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function enhancedRequirementDocumentLabel(doc) {
+  if (!doc) return 'Unknown document';
+  return (doc.doc_name || doc.doc_type || doc.id || 'Document') +
+    (doc.doc_type ? ' · ' + doc.doc_type : '');
+}
+
+function enhancedRequirementLinkedDocumentLabel(req) {
+  var docId = req.linked_document_id || '';
+  if (!docId) return 'No document linked';
+  var docs = (currentApp && currentApp._documents) || [];
+  var doc = docs.find(function(item) { return String(item.id) === String(docId); });
+  return doc ? enhancedRequirementDocumentLabel(doc) : ('Linked document: ' + docId);
+}
+
+function enhancedRequirementDocumentOptions(req) {
+  var selected = String((req && req.linked_document_id) || '');
+  var docs = (currentApp && currentApp._documents) || [];
+  var options = '<option value="">No document link change</option>';
+  docs.forEach(function(doc) {
+    var value = String(doc.id || '');
+    if (!value) return;
+    options += '<option value="' + escapeHtml(value) + '"' + (value === selected ? ' selected' : '') + '>' +
+      escapeHtml(enhancedRequirementDocumentLabel(doc)) +
+    '</option>';
+  });
+  return options;
+}
+
+function renderApplicationEnhancedRequirementActions(req) {
+  var linkedLabel = enhancedRequirementLinkedDocumentLabel(req);
+  if (!canUpdateApplicationEnhancedRequirements()) {
+    return '<div style="font-size:11px;color:var(--text3);">Read-only</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(linkedLabel) + '</div>' +
+      (req.review_notes ? '<div style="font-size:11px;color:var(--text2);margin-top:6px;white-space:normal;max-width:260px;">' + escapeHtml(req.review_notes) + '</div>' : '');
+  }
+
+  var controlId = enhancedRequirementControlId(req.id);
+  var waiverHtml = '';
+  if (canWaiveApplicationEnhancedRequirements() && req.waivable) {
+    waiverHtml = '<div style="display:flex;gap:6px;margin-top:6px;align-items:flex-start;">' +
+      '<input id="er-waiver-' + escapeHtml(controlId) + '" placeholder="Waiver reason" style="min-width:160px;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;" />' +
+      '<button class="btn btn-outline btn-sm" onclick="waiveApplicationEnhancedRequirement(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Waive</button>' +
+    '</div>';
+  }
+
+  return '<div style="min-width:260px;">' +
+    '<select id="er-status-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-bottom:6px;">' +
+      '<option value="">No status change</option>' +
+      '<option value="under_review">Mark under review</option>' +
+      '<option value="accepted">Accept</option>' +
+      '<option value="rejected">Reject</option>' +
+    '</select>' +
+    '<select id="er-doc-' + escapeHtml(controlId) + '" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;margin-bottom:6px;">' +
+      enhancedRequirementDocumentOptions(req) +
+    '</select>' +
+    '<textarea id="er-notes-' + escapeHtml(controlId) + '" placeholder="Internal review notes" rows="2" style="width:100%;font-size:11px;padding:7px;border:1px solid var(--border1);border-radius:6px;resize:vertical;">' + escapeHtml(req.review_notes || '') + '</textarea>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px;">' +
+      '<div style="font-size:10px;color:var(--text3);">' + escapeHtml(linkedLabel) + '</div>' +
+      '<button class="btn btn-primary btn-sm" onclick="saveApplicationEnhancedRequirement(\'' + escapeHtml(String(req.id)) + '\')" style="font-size:11px;">Save update</button>' +
+    '</div>' +
+    waiverHtml +
+  '</div>';
 }
 
 function renderApplicationEnhancedRequirements(requirements, generationResult) {
@@ -6061,6 +6137,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult) {
         '<td>' + enhancedRequirementBoolBadge(req.mandatory, 'Yes', 'No') + '</td>' +
         '<td><div style="font-size:12px;color:var(--text2);">' + escapeHtml(req.generation_source || '—') + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;max-width:260px;white-space:normal;">' + escapeHtml(reason) + '</div></td>' +
         '<td><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Created: ' + escapeHtml(enhancedRequirementDate(req.created_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Updated: ' + escapeHtml(enhancedRequirementDate(req.updated_at)) + '</div></td>' +
+        '<td>' + renderApplicationEnhancedRequirementActions(req) + '</td>' +
       '</tr>';
     }).join('');
     return '<div style="border:1px solid var(--border1);border-radius:10px;background:var(--surface);margin-top:12px;overflow:hidden;">' +
@@ -6068,7 +6145,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult) {
         '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(group.label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(key) + (group.category ? ' · ' + escapeHtml(group.category) : '') + '</div></div>' +
         enhancedRequirementDetailBadge(group.items.length + ' requirement' + (group.items.length === 1 ? '' : 's'), 'purple') +
       '</div>' +
-      '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Audience</th><th>Type</th><th>Scope</th><th>Status</th><th>Blocking</th><th>Waivable</th><th>Mandatory</th><th>Source / Reason</th><th>Timeline</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Audience</th><th>Type</th><th>Scope</th><th>Status</th><th>Blocking</th><th>Waivable</th><th>Mandatory</th><th>Source / Reason</th><th>Timeline</th><th>Back-office actions</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
     '</div>';
   }).join('');
 
@@ -6125,6 +6202,71 @@ async function refreshApplicationEnhancedRequirements() {
     showToast('Unable to refresh enhanced requirements', 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Refresh enhanced requirements'; }
+  }
+}
+
+async function saveApplicationEnhancedRequirement(requirementId) {
+  if (!currentApp || !currentApp.id) {
+    showToast('No application selected', 'error');
+    return;
+  }
+  if (!canUpdateApplicationEnhancedRequirements()) {
+    showToast('You do not have permission to update enhanced requirements', 'error');
+    return;
+  }
+  var controlId = enhancedRequirementControlId(requirementId);
+  var statusEl = document.getElementById('er-status-' + controlId);
+  var notesEl = document.getElementById('er-notes-' + controlId);
+  var docEl = document.getElementById('er-doc-' + controlId);
+  var payload = {
+    review_notes: notesEl ? notesEl.value : ''
+  };
+  if (statusEl && statusEl.value) payload.status = statusEl.value;
+  if (docEl && docEl.value) payload.linked_document_id = docEl.value;
+
+  try {
+    await boApiCall('PATCH', '/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/' + encodeURIComponent(requirementId), payload);
+    showToast('Enhanced requirement updated');
+    await loadApplicationEnhancedRequirements(currentApp);
+  } catch (err) {
+    setEnhancedRequirementDetailMessage('Unable to update enhanced requirement: ' + (err.message || 'Unknown error'), 'red');
+    showToast('Unable to update enhanced requirement', 'error');
+  }
+}
+
+async function waiveApplicationEnhancedRequirement(requirementId) {
+  if (!currentApp || !currentApp.id) {
+    showToast('No application selected', 'error');
+    return;
+  }
+  if (!canWaiveApplicationEnhancedRequirements()) {
+    showToast('Only admins and senior compliance officers can waive enhanced requirements', 'error');
+    return;
+  }
+  var controlId = enhancedRequirementControlId(requirementId);
+  var waiverEl = document.getElementById('er-waiver-' + controlId);
+  var notesEl = document.getElementById('er-notes-' + controlId);
+  var docEl = document.getElementById('er-doc-' + controlId);
+  var reason = waiverEl ? waiverEl.value.trim() : '';
+  if (!reason) {
+    showToast('Waiver reason is required', 'error');
+    if (waiverEl) waiverEl.focus();
+    return;
+  }
+  var payload = {
+    status: 'waived',
+    waiver_reason: reason,
+    review_notes: notesEl ? notesEl.value : ''
+  };
+  if (docEl && docEl.value) payload.linked_document_id = docEl.value;
+
+  try {
+    await boApiCall('PATCH', '/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/' + encodeURIComponent(requirementId), payload);
+    showToast('Enhanced requirement waived');
+    await loadApplicationEnhancedRequirements(currentApp);
+  } catch (err) {
+    setEnhancedRequirementDetailMessage('Unable to waive enhanced requirement: ' + (err.message || 'Unknown error'), 'red');
+    showToast('Unable to waive enhanced requirement', 'error');
   }
 }
 

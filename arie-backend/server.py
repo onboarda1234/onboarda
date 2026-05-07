@@ -145,6 +145,7 @@ from enhanced_requirements import (
     generate_application_enhanced_requirements,
     serialize_application_requirement,
     serialize_rule as serialize_enhanced_requirement_rule,
+    update_application_enhanced_requirement,
     validate_rule_payload as validate_enhanced_requirement_rule_payload,
 )
 
@@ -5769,6 +5770,7 @@ class SystemSettingsHandler(BaseHandler):
 
 ENHANCED_REQUIREMENT_READ_ROLES = ["admin", "sco", "co"]
 ENHANCED_REQUIREMENT_WRITE_ROLES = ["admin", "sco"]
+APPLICATION_ENHANCED_REQUIREMENT_UPDATE_ROLES = ["admin", "sco", "co"]
 
 
 def _enhanced_rule_audit_payload(rule, actor):
@@ -6108,6 +6110,49 @@ class ApplicationEnhancedRequirementsHandler(BaseHandler):
                 "requirements": requirements,
                 "total": len(requirements),
             })
+        finally:
+            db.close()
+
+
+class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
+    """PATCH /api/applications/:id/enhanced-requirements/:requirement_id."""
+
+    def patch(self, app_id, requirement_id):
+        user = self.require_auth(roles=APPLICATION_ENHANCED_REQUIREMENT_UPDATE_ROLES)
+        if not user:
+            return
+
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            result, error, status_code = update_application_enhanced_requirement(
+                db,
+                app_id,
+                requirement_id,
+                data,
+                actor=user,
+            )
+            if error:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                return self.error(error, status_code)
+            db.commit()
+            self.success(result)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "application enhanced requirement update failed: app_id=%s requirement_id=%s error=%s",
+                app_id,
+                requirement_id,
+                str(exc)[:300],
+                exc_info=True,
+            )
+            self.error("Failed to update enhanced requirement", 500)
         finally:
             db.close()
 
@@ -14544,6 +14589,7 @@ def make_app():
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements/generate", ApplicationEnhancedRequirementsGenerateHandler),
+        (r"/api/applications/([^/]+)/enhanced-requirements/([^/]+)", ApplicationEnhancedRequirementDetailHandler),
         (r"/api/applications/([^/]+)/enhanced-requirements", ApplicationEnhancedRequirementsHandler),
         (r"/api/applications/([^/]+)/documents/([^/]+)", DocumentDeleteHandler),
         (r"/api/applications/([^/]+)/documents", DocumentUploadHandler),

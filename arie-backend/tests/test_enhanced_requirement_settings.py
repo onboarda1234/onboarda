@@ -373,15 +373,26 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "loadApplicationEnhancedRequirements" in html
     assert "renderApplicationEnhancedRequirements" in html
     assert "refreshApplicationEnhancedRequirements" in html
+    assert "saveApplicationEnhancedRequirement" in html
+    assert "waiveApplicationEnhancedRequirement" in html
     assert "canViewApplicationEnhancedRequirements" in html
+    assert "canUpdateApplicationEnhancedRequirements" in html
+    assert "canWaiveApplicationEnhancedRequirements" in html
     assert "canManageEnhancedRequirements()" in html
     assert "/applications/' + appKey + '/enhanced-requirements" in html
     assert "/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/generate" in html
+    assert "/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/' + encodeURIComponent(requirementId)" in html
+    assert "boApiCall('PATCH'" in html
     assert "generation_source: 'manual_backoffice_refresh'" in html
+    assert "Back-office actions" in html
+    assert "Internal review notes" in html
+    assert "Waiver reason" in html
+    assert "Save update" in html
+    assert "Only admins and senior compliance officers can waive enhanced requirements" in html
     assert "No enhanced requirements generated for this application." in html
     assert "Enhanced requirement configuration is incomplete. Requirements may not be fully generated." in html
 
-    block = html.split("// APPLICATION ENHANCED REVIEW REQUIREMENTS — read-only display", 1)[1]
+    block = html.split("// APPLICATION ENHANCED REVIEW REQUIREMENTS — back-office display/actions", 1)[1]
     block = block.split("function renderUsers()", 1)[0]
     assert "/enhanced-requirements" in block
     assert "/rmi" not in block.lower()
