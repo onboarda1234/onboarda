@@ -487,7 +487,7 @@ def _generate_items_for_context(db, review: Dict[str, Any],
         try:
             doc_rows = db.execute(
                 "SELECT doc_type, doc_name, uploaded_at "
-                "FROM documents WHERE application_id = ?",
+                "FROM documents WHERE application_id = ? AND COALESCE(is_current, TRUE) = TRUE",
                 (application_id,),
             ).fetchall()
         except Exception:
