@@ -84,6 +84,24 @@ class TestS3BucketResolution:
         assert bucket is not None
         assert len(bucket) > 0
 
+    def test_presigned_urls_use_regional_s3_endpoint(self, monkeypatch, temp_db):
+        """Presigned URLs must use the bucket region endpoint, not global s3.amazonaws.com."""
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+        monkeypatch.setenv("AWS_REGION", "af-south-1")
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        monkeypatch.delenv("S3_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_S3_ENDPOINT_URL", raising=False)
+
+        from s3_client import S3Client
+        client = S3Client(bucket_name="regmind-documents-staging")
+
+        success, url = client.get_presigned_url("clients/client_123/reg_sh/test.pdf")
+
+        assert success is True
+        assert url.startswith("https://regmind-documents-staging.s3.af-south-1.amazonaws.com/")
+        assert ".s3.amazonaws.com/" not in url
+
 
 # ===========================================================================
 # 2. Tag Value URL Encoding
