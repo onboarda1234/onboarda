@@ -6021,6 +6021,17 @@ function enhancedRequirementLinkedDocumentLabel(req) {
   return doc ? enhancedRequirementDocumentLabel(doc) : ('Linked document: ' + docId);
 }
 
+function enhancedRequirementClientSubmissionSummary(req) {
+  var parts = [];
+  if (req.uploaded_at) parts.push('Uploaded: ' + enhancedRequirementDate(req.uploaded_at));
+  if (req.linked_document_id) parts.push('Linked document: ' + req.linked_document_id);
+  if (req.client_response_at) parts.push('Client response: ' + enhancedRequirementDate(req.client_response_at));
+  if (!parts.length) return '';
+  return parts.map(function(part) {
+    return '<div style="font-size:11px;color:var(--text3);white-space:nowrap;">' + escapeHtml(part) + '</div>';
+  }).join('');
+}
+
 function enhancedRequirementDocumentOptions(req) {
   var selected = String((req && req.linked_document_id) || '');
   var docs = (currentApp && currentApp._documents) || [];
@@ -6155,7 +6166,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult) {
         '<td>' + enhancedRequirementBoolBadge(req.waivable, 'Yes', 'No') + '</td>' +
         '<td>' + enhancedRequirementBoolBadge(req.mandatory, 'Yes', 'No') + '</td>' +
         '<td><div style="font-size:12px;color:var(--text2);">' + escapeHtml(req.generation_source || '—') + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;max-width:260px;white-space:normal;">' + escapeHtml(reason) + '</div></td>' +
-        '<td><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Created: ' + escapeHtml(enhancedRequirementDate(req.created_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Updated: ' + escapeHtml(enhancedRequirementDate(req.updated_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Requested: ' + escapeHtml(enhancedRequirementDate(req.requested_at)) + (req.requested_by ? ' by ' + escapeHtml(req.requested_by) : '') + '</div>' + (req.linked_rmi_item_id ? '<div style="font-size:11px;color:var(--text3);white-space:nowrap;">Linked RMI item: ' + escapeHtml(req.linked_rmi_item_id) + '</div>' : '') + '</td>' +
+        '<td><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Created: ' + escapeHtml(enhancedRequirementDate(req.created_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Updated: ' + escapeHtml(enhancedRequirementDate(req.updated_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Requested: ' + escapeHtml(enhancedRequirementDate(req.requested_at)) + (req.requested_by ? ' by ' + escapeHtml(req.requested_by) : '') + '</div>' + enhancedRequirementClientSubmissionSummary(req) + (req.linked_rmi_item_id ? '<div style="font-size:11px;color:var(--text3);white-space:nowrap;">Linked RMI item: ' + escapeHtml(req.linked_rmi_item_id) + '</div>' : '') + '</td>' +
         '<td>' + renderApplicationEnhancedRequirementActions(req) + '</td>' +
       '</tr>';
     }).join('');
@@ -6310,7 +6321,7 @@ async function requestApplicationEnhancedRequirementFromClient(requirementId) {
     showToast('Enhanced requirement marked as requested from client');
     await loadApplicationEnhancedRequirements(currentApp);
     if (result && result.rmi_integration === 'deferred') {
-      setEnhancedRequirementDetailMessage('Requirement marked requested. Portal and RMI exposure are deferred to a later step.', '');
+      setEnhancedRequirementDetailMessage('Requirement marked requested. RMI exposure remains deferred.', '');
     }
   } catch (err) {
     setEnhancedRequirementDetailMessage('Unable to request enhanced requirement: ' + (err.message || 'Unknown error'), 'red');

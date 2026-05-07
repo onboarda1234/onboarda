@@ -75,6 +75,12 @@ def _remove_modern_backfills(db, keep_count):
                 db.execute(f"ALTER TABLE monitoring_alerts DROP COLUMN {column}")
             except Exception:
                 pass
+    if "023" not in kept_versions:
+        for column in ("client_response_text", "client_response_at", "client_response_by"):
+            try:
+                db.execute(f"ALTER TABLE application_enhanced_requirements DROP COLUMN {column}")
+            except Exception:
+                pass
     db.commit()
 
 

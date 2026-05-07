@@ -8210,12 +8210,45 @@ function portalEnhancedRequirementActionText(req) {
     return 'No further action is needed right now.';
   }
   if (type === 'document') {
-    return 'Upload supporting files in the document sections below.';
+    return 'Upload a supporting document for this item.';
   }
   if (type === 'declaration' || type === 'explanation') {
-    return 'Provide the requested details in the relevant form or supporting document section.';
+    return 'Provide a response for this item.';
   }
   return 'Provide the requested information in the relevant section.';
+}
+
+function portalEnhancedRequirementNeedsAction(req) {
+  var status = String(req && req.status || '').toLowerCase();
+  return status === 'required' || status === 'additional_information_needed';
+}
+
+function portalEnhancedRequirementControlId(requirementId, suffix) {
+  return 'portal-er-' + String(requirementId || '').replace(/[^a-zA-Z0-9_-]/g, '_') + '-' + suffix;
+}
+
+function portalEnhancedRequirementControlHtml(req) {
+  if (!portalEnhancedRequirementNeedsAction(req)) return '';
+  var reqId = String(req && req.id || '');
+  var type = String(req && req.requirement_type || '').toLowerCase();
+  var safeReqId = escapeHtml(reqId);
+  if (type === 'document') {
+    var inputId = portalEnhancedRequirementControlId(reqId, 'file');
+    return '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+      '<input id="' + escapeHtml(inputId) + '" type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="font-size:12px;max-width:280px;" />' +
+      '<button class="btn btn-primary btn-sm" onclick="uploadPortalEnhancedRequirement(\'' + safeReqId + '\', document.getElementById(\'' + escapeHtml(inputId) + '\'))">Upload supporting document</button>' +
+    '</div>';
+  }
+  if (type === 'declaration' || type === 'explanation') {
+    var textId = portalEnhancedRequirementControlId(reqId, 'response');
+    return '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">' +
+      '<textarea id="' + escapeHtml(textId) + '" rows="3" maxlength="10000" placeholder="Provide response" style="width:100%;font-size:12px;padding:10px;border:1px solid var(--border);border-radius:8px;resize:vertical;background:var(--bg2);color:var(--text);"></textarea>' +
+      '<div style="display:flex;justify-content:flex-end;margin-top:8px;">' +
+        '<button class="btn btn-primary btn-sm" onclick="submitPortalEnhancedRequirementResponse(\'' + safeReqId + '\')">Provide response</button>' +
+      '</div>' +
+    '</div>';
+  }
+  return '';
 }
 
 function renderPortalEnhancedRequirements(requirements) {
@@ -8243,11 +8276,67 @@ function renderPortalEnhancedRequirements(requirements) {
           (req.description ? '<div style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5;">' + escapeHtml(req.description) + '</div>' : '') +
           (meta.length ? '<div style="font-size:11px;color:var(--text3);margin-top:7px;">' + escapeHtml(meta.join(' | ')) + '</div>' : '') +
           '<div style="font-size:11px;color:var(--text2);margin-top:8px;">' + escapeHtml(portalEnhancedRequirementActionText(req)) + '</div>' +
+          portalEnhancedRequirementControlHtml(req) +
         '</div>' +
         '<span class="review-status ' + tone.cls + '">' + escapeHtml(req.status_label || tone.text) + '</span>' +
       '</div>' +
     '</div>';
   }).join('');
+}
+
+async function uploadPortalEnhancedRequirement(requirementId, input) {
+  if (!AUTH_TOKEN || !currentApplicationId) {
+    showToast('error', 'Authentication Required', 'Please sign in before uploading documents.');
+    return;
+  }
+  if (!input || !input.files || !input.files[0]) {
+    showToast('error', 'Upload Required', 'Please choose a file to upload.');
+    return;
+  }
+  var fd = new FormData();
+  fd.append('file', input.files[0]);
+  try {
+    await apiCall(
+      'POST',
+      '/portal/applications/' + encodeURIComponent(currentApplicationId) +
+        '/enhanced-requirements/' + encodeURIComponent(requirementId) + '/upload',
+      fd,
+      true
+    );
+    showToast('success', 'Document Uploaded', 'Your document has been submitted.');
+    input.value = '';
+    await loadPortalEnhancedRequirements();
+  } catch (err) {
+    showToast('error', 'Upload Failed', err.message || 'Could not upload this document.');
+  }
+}
+
+async function submitPortalEnhancedRequirementResponse(requirementId) {
+  if (!AUTH_TOKEN || !currentApplicationId) {
+    showToast('error', 'Authentication Required', 'Please sign in before submitting responses.');
+    return;
+  }
+  var textId = portalEnhancedRequirementControlId(requirementId, 'response');
+  var el = document.getElementById(textId);
+  var text = el ? el.value.trim() : '';
+  if (!text) {
+    showToast('error', 'Response Required', 'Please provide a response before submitting.');
+    if (el) el.focus();
+    return;
+  }
+  try {
+    await apiCall(
+      'POST',
+      '/portal/applications/' + encodeURIComponent(currentApplicationId) +
+        '/enhanced-requirements/' + encodeURIComponent(requirementId) + '/response',
+      { response_text: text }
+    );
+    showToast('success', 'Response Submitted', 'Your response has been submitted.');
+    if (el) el.value = '';
+    await loadPortalEnhancedRequirements();
+  } catch (err) {
+    showToast('error', 'Submit Failed', err.message || 'Could not submit this response.');
+  }
 }
 
 async function loadPortalEnhancedRequirements() {

@@ -545,6 +545,9 @@ def _get_postgres_schema() -> str:
         requested_at TIMESTAMP,
         requested_by TEXT REFERENCES users(id),
         uploaded_at TIMESTAMP,
+        client_response_text TEXT,
+        client_response_at TIMESTAMP,
+        client_response_by TEXT REFERENCES clients(id),
         reviewed_at TIMESTAMP,
         reviewed_by TEXT REFERENCES users(id),
         review_notes TEXT,
@@ -1422,6 +1425,9 @@ def _get_sqlite_schema() -> str:
         requested_at TEXT,
         requested_by TEXT REFERENCES users(id),
         uploaded_at TEXT,
+        client_response_text TEXT,
+        client_response_at TEXT,
+        client_response_by TEXT REFERENCES clients(id),
         reviewed_at TEXT,
         reviewed_by TEXT REFERENCES users(id),
         review_notes TEXT,
@@ -2393,6 +2399,9 @@ def _ensure_application_enhanced_requirements_table(db: DBConnection):
             requested_at TIMESTAMP,
             requested_by TEXT REFERENCES users(id),
             uploaded_at TIMESTAMP,
+            client_response_text TEXT,
+            client_response_at TIMESTAMP,
+            client_response_by TEXT REFERENCES clients(id),
             reviewed_at TIMESTAMP,
             reviewed_by TEXT REFERENCES users(id),
             review_notes TEXT,
@@ -2440,6 +2449,9 @@ def _ensure_application_enhanced_requirements_table(db: DBConnection):
             requested_at TEXT,
             requested_by TEXT REFERENCES users(id),
             uploaded_at TEXT,
+            client_response_text TEXT,
+            client_response_at TEXT,
+            client_response_by TEXT REFERENCES clients(id),
             reviewed_at TEXT,
             reviewed_by TEXT REFERENCES users(id),
             review_notes TEXT,
@@ -2459,6 +2471,23 @@ def _ensure_application_enhanced_requirements_table(db: DBConnection):
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_status ON application_enhanced_requirements(status);
         CREATE INDEX IF NOT EXISTS idx_app_enhanced_req_active ON application_enhanced_requirements(active);
         """)
+    _ensure_application_enhanced_requirement_fulfilment_columns(db)
+
+
+def _ensure_application_enhanced_requirement_fulfilment_columns(db: DBConnection):
+    """Add Step 5C client fulfilment fields without changing existing rows."""
+    if not _safe_table_exists(db, "application_enhanced_requirements"):
+        return
+    column_types = {
+        "client_response_text": "TEXT",
+        "client_response_at": "TIMESTAMP" if db.is_postgres else "TEXT",
+        "client_response_by": "TEXT REFERENCES clients(id)",
+    }
+    for column, definition in column_types.items():
+        if not _safe_column_exists(db, "application_enhanced_requirements", column):
+            db.execute(
+                f"ALTER TABLE application_enhanced_requirements ADD COLUMN {column} {definition}"
+            )
 
 
 def _ensure_default_enhanced_requirement_rules(db: DBConnection):
@@ -4274,6 +4303,26 @@ def _run_migrations(db: DBConnection):
             logger.info("Migration v2.32: application_enhanced_requirements table already exists")
     except Exception as e:
         logger.error("Migration v2.32 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.33: Client fulfilment fields for requested Enhanced / EDD
+    # requirements. The matching file migration is
+    # migration_023_application_enhanced_requirement_fulfilment.sql.
+    #
+    # This is additive only: it stores client text responses and timestamps for
+    # Step 5C fulfilment without changing approval gates, memo output, RMI, EDD
+    # case state, screening, risk thresholds, or standard KYC upload behaviour.
+    try:
+        _ensure_application_enhanced_requirement_fulfilment_columns(db)
+        db.commit()
+        logger.info(
+            "Migration v2.33: Ensured application_enhanced_requirements client fulfilment columns"
+        )
+    except Exception as e:
+        logger.error("Migration v2.33 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:
