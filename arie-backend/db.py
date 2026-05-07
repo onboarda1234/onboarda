@@ -972,8 +972,6 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_directors_application_id ON directors(application_id);
     CREATE INDEX IF NOT EXISTS idx_ubos_application_id ON ubos(application_id);
     CREATE INDEX IF NOT EXISTS idx_documents_application_id ON documents(application_id);
-    CREATE INDEX IF NOT EXISTS idx_documents_current_slot ON documents(application_id, slot_key, is_current);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_one_current_slot ON documents(application_id, slot_key) WHERE is_current IS TRUE;
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_category ON compliance_resources(category);
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
@@ -1869,8 +1867,6 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_directors_application_id ON directors(application_id);
     CREATE INDEX IF NOT EXISTS idx_ubos_application_id ON ubos(application_id);
     CREATE INDEX IF NOT EXISTS idx_documents_application_id ON documents(application_id);
-    CREATE INDEX IF NOT EXISTS idx_documents_current_slot ON documents(application_id, slot_key, is_current);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_one_current_slot ON documents(application_id, slot_key) WHERE is_current = 1;
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_category ON compliance_resources(category);
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
