@@ -53,6 +53,20 @@ APPLICATION_REQUIREMENT_STATUSES = (
     "cancelled",
 )
 
+APPLICATION_REQUIREMENT_REVIEW_ROLES = ("admin", "sco", "co")
+APPLICATION_REQUIREMENT_WAIVER_ROLES = ("admin", "sco")
+APPLICATION_REQUIREMENT_NOTES_MAX_LENGTH = 4000
+APPLICATION_REQUIREMENT_STATUS_TRANSITIONS = {
+    "generated": ("under_review", "accepted", "rejected", "waived"),
+    "requested": ("under_review", "accepted", "rejected", "waived"),
+    "uploaded": ("under_review", "accepted", "rejected", "waived"),
+    "under_review": ("accepted", "rejected", "waived"),
+    "rejected": ("under_review", "accepted"),
+    "waived": ("under_review",),
+    "accepted": ("under_review",),
+    "cancelled": (),
+}
+
 EDD_TRIGGER_TO_REQUIREMENT_TRIGGER = {
     "high_or_very_high_risk": "high_or_very_high_risk",
     "declared_pep_present": "pep",
@@ -951,6 +965,17 @@ def _load_application_requirement(db, requirement_id):
     return serialize_application_requirement(row)
 
 
+def _load_application_requirement_for_app(db, application_id, requirement_id):
+    row = db.execute(
+        """
+        SELECT * FROM application_enhanced_requirements
+        WHERE id = ? AND application_id = ?
+        """,
+        (requirement_id, application_id),
+    ).fetchone()
+    return serialize_application_requirement(row)
+
+
 def _application_target(app):
     app = app or {}
     return "application:" + str(app.get("ref") or app.get("id") or "unknown")
@@ -1239,6 +1264,223 @@ def detect_application_enhanced_requirement_triggers(
     result["routing"] = routing_decision
     result["warnings"] = warnings
     return result
+
+
+def _validate_requirement_transition(current_status, new_status, actor_role):
+    current = str(current_status or "generated").strip().lower()
+    target = str(new_status or "").strip().lower()
+    if target not in APPLICATION_REQUIREMENT_STATUSES:
+        return f"Invalid enhanced requirement status: {target}"
+    if target == current:
+        return None
+    allowed = APPLICATION_REQUIREMENT_STATUS_TRANSITIONS.get(current, ())
+    if target not in allowed:
+        return f"Invalid enhanced requirement status transition: {current} -> {target}"
+    if target == "waived" and actor_role not in APPLICATION_REQUIREMENT_WAIVER_ROLES:
+        return "Only admin or SCO can waive enhanced requirements"
+    if current == "waived" and target == "under_review" and actor_role not in APPLICATION_REQUIREMENT_WAIVER_ROLES:
+        return "Only admin or SCO can reopen waived enhanced requirements"
+    if current == "accepted" and target == "under_review" and actor_role not in APPLICATION_REQUIREMENT_WAIVER_ROLES:
+        return "Only admin or SCO can reopen accepted enhanced requirements"
+    return None
+
+
+def _audit_requirement_update_payload(app, before, after, actor, changes):
+    before = before or {}
+    after = after or {}
+    user = _audit_user(actor)
+    return {
+        "application_id": app.get("id") if app else before.get("application_id"),
+        "application_ref": app.get("ref") if app else None,
+        "requirement_id": after.get("id") or before.get("id"),
+        "requirement_key": after.get("requirement_key") or before.get("requirement_key"),
+        "trigger_key": after.get("trigger_key") or before.get("trigger_key"),
+        "old_status": before.get("status"),
+        "new_status": after.get("status"),
+        "linked_document_id": after.get("linked_document_id"),
+        "actor": user.get("sub"),
+        "timestamp": _now_iso(),
+        "changes": changes,
+    }
+
+
+def update_application_enhanced_requirement(
+    db,
+    application_id,
+    requirement_id,
+    data,
+    actor=None,
+):
+    """Apply controlled back-office lifecycle updates to one requirement.
+
+    This helper intentionally updates only the application-specific enhanced
+    requirement row.  It does not create RMI requests, portal notifications,
+    document slots, memo content, or approval blockers.
+    """
+    data = data or {}
+    actor_role = (_audit_user(actor).get("role") or "").lower()
+    if actor_role not in APPLICATION_REQUIREMENT_REVIEW_ROLES:
+        return None, "Insufficient permissions", 403
+
+    app = _load_application(db, application_id)
+    if not app:
+        return None, "Application not found", 404
+
+    before = _load_application_requirement_for_app(db, app["id"], requirement_id)
+    if not before:
+        return None, "Enhanced requirement not found for application", 404
+
+    updates = {}
+    changes = {}
+    status_change = False
+    notes_changed = False
+    document_linked = False
+    waived = False
+
+    if "status" in data and data.get("status") not in (None, ""):
+        new_status = str(data.get("status") or "").strip().lower()
+        error = _validate_requirement_transition(before.get("status"), new_status, actor_role)
+        if error:
+            status_code = 403 if "Only admin or SCO" in error else 400
+            return None, error, status_code
+        if new_status != before.get("status"):
+            updates["status"] = new_status
+            changes["status"] = {"before": before.get("status"), "after": new_status}
+            status_change = True
+            if new_status in ("under_review", "accepted", "rejected"):
+                updates["reviewed_by"] = _audit_user(actor).get("sub")
+                updates["reviewed_at"] = _now_iso()
+            if before.get("status") == "accepted" and new_status == "under_review":
+                reopen_reason = _clean_text(data.get("reopen_reason") or data.get("review_notes"))
+                if not reopen_reason:
+                    return None, "review_notes or reopen_reason is required when reopening an accepted enhanced requirement", 400
+            if before.get("status") == "waived" and new_status == "under_review":
+                updates["waived_at"] = None
+                updates["waived_by"] = None
+                updates["waiver_reason"] = None
+            if new_status == "waived":
+                if not before.get("waivable"):
+                    return None, "Enhanced requirement is not waivable", 400
+                reason = _clean_text(data.get("waiver_reason"))
+                if not reason:
+                    return None, "waiver_reason is required when waiving an enhanced requirement", 400
+                updates["waived_at"] = _now_iso()
+                updates["waived_by"] = _audit_user(actor).get("sub")
+                updates["waiver_reason"] = reason
+                waived = True
+                changes["waiver_reason"] = {"before": before.get("waiver_reason"), "after": reason}
+        elif new_status == "waived":
+            reason = _clean_text(data.get("waiver_reason"))
+            if not reason:
+                return None, "waiver_reason is required when waiving an enhanced requirement", 400
+
+    if "review_notes" in data:
+        notes = _clean_text(data.get("review_notes"))
+        if len(notes) > APPLICATION_REQUIREMENT_NOTES_MAX_LENGTH:
+            return None, f"review_notes must be {APPLICATION_REQUIREMENT_NOTES_MAX_LENGTH} characters or fewer", 400
+        if notes != (before.get("review_notes") or ""):
+            updates["review_notes"] = notes
+            changes["review_notes"] = {"before": before.get("review_notes") or "", "after": notes}
+            notes_changed = True
+
+    if "linked_document_id" in data and data.get("linked_document_id") not in (None, ""):
+        linked_document_id = _clean_text(data.get("linked_document_id"))
+        doc = db.execute(
+            "SELECT id FROM documents WHERE id = ? AND application_id = ?",
+            (linked_document_id, app["id"]),
+        ).fetchone()
+        if not doc:
+            return None, "linked_document_id must belong to the same application", 400
+        if linked_document_id != before.get("linked_document_id"):
+            updates["linked_document_id"] = linked_document_id
+            changes["linked_document_id"] = {
+                "before": before.get("linked_document_id"),
+                "after": linked_document_id,
+            }
+            document_linked = True
+
+    if not updates:
+        return {
+            "application_id": app["id"],
+            "application_ref": app.get("ref"),
+            "requirement": before,
+            "updated": False,
+            "changes": {},
+        }, None, 200
+
+    updates["updated_by"] = _audit_user(actor).get("sub")
+    updates["updated_at"] = _now_iso()
+    set_clause = ", ".join(f"{column}=?" for column in updates)
+    params = list(updates.values()) + [before["id"], app["id"]]
+    db.execute(
+        f"""
+        UPDATE application_enhanced_requirements
+        SET {set_clause}
+        WHERE id = ? AND application_id = ?
+        """,
+        tuple(params),
+    )
+    after = _load_application_requirement_for_app(db, app["id"], before["id"])
+    target = _application_target(app)
+
+    payload = _audit_requirement_update_payload(app, before, after, actor, changes)
+    _insert_audit(
+        db,
+        "application_enhanced_requirement.updated",
+        target,
+        payload,
+        actor=actor,
+        before_state=before,
+        after_state=after,
+    )
+    if status_change:
+        _insert_audit(
+            db,
+            "application_enhanced_requirement.status_changed",
+            target,
+            payload,
+            actor=actor,
+            before_state=before,
+            after_state=after,
+        )
+    if document_linked:
+        _insert_audit(
+            db,
+            "application_enhanced_requirement.document_linked",
+            target,
+            payload,
+            actor=actor,
+            before_state=before,
+            after_state=after,
+        )
+    if waived:
+        _insert_audit(
+            db,
+            "application_enhanced_requirement.waived",
+            target,
+            payload,
+            actor=actor,
+            before_state=before,
+            after_state=after,
+        )
+    if notes_changed:
+        _insert_audit(
+            db,
+            "application_enhanced_requirement.notes_updated",
+            target,
+            payload,
+            actor=actor,
+            before_state=before,
+            after_state=after,
+        )
+
+    return {
+        "application_id": app["id"],
+        "application_ref": app.get("ref"),
+        "requirement": after,
+        "updated": True,
+        "changes": changes,
+    }, None, 200
 
 
 def _load_active_rules(db, trigger_keys):

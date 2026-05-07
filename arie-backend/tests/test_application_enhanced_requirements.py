@@ -167,6 +167,42 @@ def _generate(db, app_id, source="test"):
     return result
 
 
+def _first_requirement_id(db, app_id, *, offset=0):
+    row = db.execute(
+        """
+        SELECT id FROM application_enhanced_requirements
+        WHERE application_id=?
+        ORDER BY id
+        LIMIT 1 OFFSET ?
+        """,
+        (app_id, offset),
+    ).fetchone()
+    assert row is not None
+    return row["id"]
+
+
+def _insert_document(db, app_id, doc_id=None, *, review_status="pending"):
+    doc_id = doc_id or ("doc_" + uuid.uuid4().hex[:10])
+    db.execute(
+        """
+        INSERT INTO documents
+        (id, application_id, doc_type, doc_name, file_path, verification_status, review_status)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (
+            doc_id,
+            app_id,
+            "bank_statement",
+            "Bank statement.pdf",
+            "/tmp/bank-statement.pdf",
+            "pending",
+            review_status,
+        ),
+    )
+    db.commit()
+    return doc_id
+
+
 def _count_rules(db, trigger_key):
     return db.execute(
         "SELECT COUNT(*) AS c FROM enhanced_requirement_rules WHERE trigger_key=? AND active=1",
@@ -593,3 +629,309 @@ def test_api_permissions_for_diagnostics_read_and_generate(enhanced_app_api_serv
         timeout=5,
     )
     assert client_read.status_code == 403
+
+
+def test_lifecycle_api_permissions_and_status_updates(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    _generate(conn, app_id)
+    req_admin = _first_requirement_id(conn, app_id, offset=0)
+    req_sco = _first_requirement_id(conn, app_id, offset=1)
+    req_co = _first_requirement_id(conn, app_id, offset=2)
+    req_denied = _first_requirement_id(conn, app_id, offset=3)
+    conn.close()
+
+    admin_update = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_admin}",
+        headers=_headers("admin"),
+        json={"status": "under_review", "review_notes": "Admin opened review"},
+        timeout=5,
+    )
+    assert admin_update.status_code == 200, admin_update.text
+    assert admin_update.json()["requirement"]["status"] == "under_review"
+    assert admin_update.json()["requirement"]["review_notes"] == "Admin opened review"
+
+    sco_update = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_sco}",
+        headers=_headers("sco"),
+        json={"status": "accepted", "review_notes": "SCO accepted"},
+        timeout=5,
+    )
+    assert sco_update.status_code == 200, sco_update.text
+    assert sco_update.json()["requirement"]["status"] == "accepted"
+
+    co_update = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_co}",
+        headers=_headers("co"),
+        json={"status": "rejected", "review_notes": "CO rejected for follow-up"},
+        timeout=5,
+    )
+    assert co_update.status_code == 200, co_update.text
+    assert co_update.json()["requirement"]["status"] == "rejected"
+
+    analyst_update = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_denied}",
+        headers=_headers("analyst"),
+        json={"status": "under_review"},
+        timeout=5,
+    )
+    assert analyst_update.status_code == 403
+
+    client_update = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_denied}",
+        headers=_headers("client", token_type="client"),
+        json={"status": "under_review"},
+        timeout=5,
+    )
+    assert client_update.status_code == 403
+
+
+def test_lifecycle_waiver_requires_senior_reason_and_audits(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    _generate(conn, app_id)
+    req_id = _first_requirement_id(conn, app_id)
+    non_waivable_req = _first_requirement_id(conn, app_id, offset=1)
+    conn.execute(
+        "UPDATE application_enhanced_requirements SET waivable=0 WHERE id=?",
+        (non_waivable_req,),
+    )
+    conn.commit()
+    conn.close()
+
+    co_waive = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}",
+        headers=_headers("co"),
+        json={"status": "waived", "waiver_reason": "CO should not waive"},
+        timeout=5,
+    )
+    assert co_waive.status_code == 403
+
+    missing_reason = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}",
+        headers=_headers("admin"),
+        json={"status": "waived", "waiver_reason": ""},
+        timeout=5,
+    )
+    assert missing_reason.status_code == 400
+
+    non_waivable = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{non_waivable_req}",
+        headers=_headers("admin"),
+        json={"status": "waived", "waiver_reason": "Should not waive non-waivable control"},
+        timeout=5,
+    )
+    assert non_waivable.status_code == 400
+
+    admin_waive = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}",
+        headers=_headers("admin"),
+        json={"status": "waived", "waiver_reason": "Equivalent document already reviewed"},
+        timeout=5,
+    )
+    assert admin_waive.status_code == 200, admin_waive.text
+    waived = admin_waive.json()["requirement"]
+    assert waived["status"] == "waived"
+    assert waived["waiver_reason"] == "Equivalent document already reviewed"
+    assert waived["waived_by"] == "admin001"
+    assert waived["waived_at"]
+
+    conn = get_db()
+    actions = {
+        row["action"]: row
+        for row in conn.execute(
+            """
+            SELECT action, before_state, after_state
+            FROM audit_log
+            WHERE target=(SELECT 'application:' || ref FROM applications WHERE id=?)
+              AND action LIKE 'application_enhanced_requirement.%'
+            """,
+            (app_id,),
+        ).fetchall()
+    }
+    conn.close()
+    assert "application_enhanced_requirement.updated" in actions
+    assert "application_enhanced_requirement.status_changed" in actions
+    assert "application_enhanced_requirement.waived" in actions
+    before = json.loads(actions["application_enhanced_requirement.waived"]["before_state"])
+    after = json.loads(actions["application_enhanced_requirement.waived"]["after_state"])
+    assert before["status"] == "generated"
+    assert after["status"] == "waived"
+    assert after["waiver_reason"] == "Equivalent document already reviewed"
+
+
+def test_lifecycle_document_link_validation_and_invalid_status(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    other_app_id = _insert_application(conn, risk_level="LOW")
+    _generate(conn, app_id)
+    req_id = _first_requirement_id(conn, app_id)
+    valid_doc = _insert_document(conn, app_id, "doc_valid_link")
+    other_doc = _insert_document(conn, other_app_id, "doc_wrong_app")
+    conn.close()
+
+    bad_status = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}",
+        headers=_headers("admin"),
+        json={"status": "requested"},
+        timeout=5,
+    )
+    assert bad_status.status_code == 400
+
+    wrong_doc = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}",
+        headers=_headers("admin"),
+        json={"linked_document_id": other_doc},
+        timeout=5,
+    )
+    assert wrong_doc.status_code == 400
+
+    valid_link = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}",
+        headers=_headers("admin"),
+        json={"linked_document_id": valid_doc, "review_notes": "Linked existing upload"},
+        timeout=5,
+    )
+    assert valid_link.status_code == 200, valid_link.text
+    assert valid_link.json()["requirement"]["linked_document_id"] == valid_doc
+
+    conn = get_db()
+    doc = conn.execute(
+        "SELECT review_status, verification_status FROM documents WHERE id=?",
+        (valid_doc,),
+    ).fetchone()
+    audit = conn.execute(
+        """
+        SELECT before_state, after_state
+        FROM audit_log
+        WHERE action='application_enhanced_requirement.document_linked'
+        ORDER BY id DESC LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+    assert doc["review_status"] == "pending"
+    assert doc["verification_status"] == "pending"
+    assert json.loads(audit["before_state"])["linked_document_id"] is None
+    assert json.loads(audit["after_state"])["linked_document_id"] == valid_doc
+
+
+def test_lifecycle_reopen_waived_requires_admin_or_sco(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    _generate(conn, app_id)
+    req_id = _first_requirement_id(conn, app_id)
+    conn.close()
+
+    waived = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}",
+        headers=_headers("sco"),
+        json={"status": "waived", "waiver_reason": "SCO waiver"},
+        timeout=5,
+    )
+    assert waived.status_code == 200, waived.text
+
+    co_reopen = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}",
+        headers=_headers("co"),
+        json={"status": "under_review"},
+        timeout=5,
+    )
+    assert co_reopen.status_code == 403
+
+    admin_reopen = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}",
+        headers=_headers("admin"),
+        json={"status": "under_review", "review_notes": "Reopened for review"},
+        timeout=5,
+    )
+    assert admin_reopen.status_code == 200, admin_reopen.text
+    reopened = admin_reopen.json()["requirement"]
+    assert reopened["status"] == "under_review"
+    assert reopened["waiver_reason"] is None
+
+
+def test_lifecycle_reopen_accepted_requires_senior_reason_and_audits(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    _generate(conn, app_id)
+    admin_req = _first_requirement_id(conn, app_id, offset=0)
+    sco_req = _first_requirement_id(conn, app_id, offset=1)
+    conn.execute(
+        "UPDATE application_enhanced_requirements SET status='accepted' WHERE id IN (?,?)",
+        (admin_req, sco_req),
+    )
+    conn.commit()
+    conn.close()
+
+    co_reopen = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{admin_req}",
+        headers=_headers("co"),
+        json={"status": "under_review", "review_notes": "CO correction attempt"},
+        timeout=5,
+    )
+    assert co_reopen.status_code == 403
+
+    missing_reason = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{admin_req}",
+        headers=_headers("admin"),
+        json={"status": "under_review", "review_notes": ""},
+        timeout=5,
+    )
+    assert missing_reason.status_code == 400
+
+    admin_reopen = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{admin_req}",
+        headers=_headers("admin"),
+        json={"status": "under_review", "review_notes": "Accepted in error; rechecking evidence"},
+        timeout=5,
+    )
+    assert admin_reopen.status_code == 200, admin_reopen.text
+    assert admin_reopen.json()["requirement"]["status"] == "under_review"
+    assert admin_reopen.json()["requirement"]["review_notes"] == "Accepted in error; rechecking evidence"
+
+    sco_reopen = requests.patch(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{sco_req}",
+        headers=_headers("sco"),
+        json={"status": "under_review", "reopen_reason": "SCO reopened after second review"},
+        timeout=5,
+    )
+    assert sco_reopen.status_code == 200, sco_reopen.text
+    assert sco_reopen.json()["requirement"]["status"] == "under_review"
+
+    conn = get_db()
+    audit = conn.execute(
+        """
+        SELECT before_state, after_state
+        FROM audit_log
+        WHERE action='application_enhanced_requirement.status_changed'
+          AND before_state LIKE '%"status": "accepted"%'
+          AND after_state LIKE '%"status": "under_review"%'
+        ORDER BY id DESC LIMIT 1
+        """
+    ).fetchone()
+    conn.close()
+    assert audit is not None
+    before = json.loads(audit["before_state"])
+    after = json.loads(audit["after_state"])
+    assert before["status"] == "accepted"
+    assert after["status"] == "under_review"
