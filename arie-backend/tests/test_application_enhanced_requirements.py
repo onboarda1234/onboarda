@@ -1356,39 +1356,43 @@ def test_portal_document_upload_fulfils_requested_enhanced_requirement(enhanced_
     from db import get_db
     import server as server_module
 
+    original_has_s3 = server_module.HAS_S3
     server_module.HAS_S3 = False
-    client_id = "client001"
-    conn = get_db()
-    conn.execute(
-        "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
-        (client_id, "client001@example.com", "hash", "Client One"),
-    )
-    app_id = _insert_application(conn, risk_level="HIGH")
-    conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, app_id))
-    conn.execute(
-        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
-        (app_id, "Declared Person", "Yes"),
-    )
-    conn.commit()
-    _generate(conn, app_id)
-    req_id = _requirement_id_by_key(conn, app_id, "company_bank_reference")
-    conn.execute(
-        """
-        UPDATE application_enhanced_requirements
-        SET status='requested', requested_at=datetime('now'), requested_by='co001'
-        WHERE id=?
-        """,
-        (req_id,),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        client_id = "client001"
+        conn = get_db()
+        conn.execute(
+            "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
+            (client_id, "client001@example.com", "hash", "Client One"),
+        )
+        app_id = _insert_application(conn, risk_level="HIGH")
+        conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, app_id))
+        conn.execute(
+            "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+            (app_id, "Declared Person", "Yes"),
+        )
+        conn.commit()
+        _generate(conn, app_id)
+        req_id = _requirement_id_by_key(conn, app_id, "company_bank_reference")
+        conn.execute(
+            """
+            UPDATE application_enhanced_requirements
+            SET status='requested', requested_at=datetime('now'), requested_by='co001'
+            WHERE id=?
+            """,
+            (req_id,),
+        )
+        conn.commit()
+        conn.close()
 
-    resp = requests.post(
-        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{req_id}/upload",
-        headers=_client_headers(client_id),
-        files={"file": ("evidence.pdf", b"%PDF-1.4\n% enhanced evidence\n", "application/pdf")},
-        timeout=5,
-    )
+        resp = requests.post(
+            f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements/{req_id}/upload",
+            headers=_client_headers(client_id),
+            files={"file": ("evidence.pdf", b"%PDF-1.4\n% enhanced evidence\n", "application/pdf")},
+            timeout=5,
+        )
+    finally:
+        server_module.HAS_S3 = original_has_s3
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["status"] == "submitted"

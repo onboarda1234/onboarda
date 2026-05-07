@@ -1565,11 +1565,17 @@ def fulfill_application_enhanced_requirement_document(
         return None, error, status_code
 
     doc = db.execute(
-        "SELECT id FROM documents WHERE id = ? AND application_id = ?",
+        """
+        SELECT id
+        FROM documents
+        WHERE id = ?
+          AND application_id = ?
+          AND doc_type = 'enhanced_requirement'
+        """,
         (document_id, app["id"]),
     ).fetchone()
     if not doc:
-        return None, "Uploaded document must belong to the same application", 400
+        return None, "Uploaded document must be an enhanced requirement document for the same application", 400
 
     now = _now_iso()
     client_id = client_user.get("sub")
@@ -1579,6 +1585,8 @@ def fulfill_application_enhanced_requirement_document(
         SET status='uploaded',
             linked_document_id=?,
             uploaded_at=?,
+            reviewed_at=NULL,
+            reviewed_by=NULL,
             updated_at=?
         WHERE id=? AND application_id=?
         """,
@@ -1659,6 +1667,8 @@ def submit_application_enhanced_requirement_response(
             client_response_at=?,
             client_response_by=?,
             uploaded_at=?,
+            reviewed_at=NULL,
+            reviewed_by=NULL,
             updated_at=?
         WHERE id=? AND application_id=?
         """,

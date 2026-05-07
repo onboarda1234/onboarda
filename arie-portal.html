@@ -4783,6 +4783,7 @@ let appRef = '';
 let uploadedDocs = new Set();
 let currentRMIRequests = [];
 let currentEnhancedRequirements = [];
+let portalEnhancedRequirementBusy = {};
 var TOTAL_REQUIRED_DOCS = 11;
 var APP_TABLE_COLSPAN = 7;
 var PRESCREENING_FIELD_BINDINGS = {
@@ -8197,6 +8198,9 @@ function updateClientStatusTracker(status) {
 
 function portalEnhancedRequirementTone(status) {
   var s = String(status || 'required').toLowerCase();
+  if (s === 'uploaded') s = 'submitted';
+  if (s === 'requested') s = 'required';
+  if (s === 'rejected') s = 'additional_information_needed';
   if (s === 'submitted') return { cls: 'uploaded', text: 'Submitted' };
   if (s === 'under_review') return { cls: 'warning', text: 'Under review' };
   if (s === 'additional_information_needed') return { cls: 'missing', text: 'Additional information needed' };
@@ -8206,6 +8210,9 @@ function portalEnhancedRequirementTone(status) {
 function portalEnhancedRequirementActionText(req) {
   var type = String(req && req.requirement_type || '').toLowerCase();
   var status = String(req && req.status || '').toLowerCase();
+  if (status === 'uploaded') status = 'submitted';
+  if (status === 'requested') status = 'required';
+  if (status === 'rejected') status = 'additional_information_needed';
   if (status === 'submitted' || status === 'under_review') {
     return 'No further action is needed right now.';
   }
@@ -8220,7 +8227,7 @@ function portalEnhancedRequirementActionText(req) {
 
 function portalEnhancedRequirementNeedsAction(req) {
   var status = String(req && req.status || '').toLowerCase();
-  return status === 'required' || status === 'additional_information_needed';
+  return status === 'required' || status === 'requested' || status === 'additional_information_needed' || status === 'rejected';
 }
 
 function portalEnhancedRequirementControlId(requirementId, suffix) {
@@ -8236,7 +8243,7 @@ function portalEnhancedRequirementControlHtml(req) {
     var inputId = portalEnhancedRequirementControlId(reqId, 'file');
     return '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
       '<input id="' + escapeHtml(inputId) + '" type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" style="font-size:12px;max-width:280px;" />' +
-      '<button class="btn btn-primary btn-sm" onclick="uploadPortalEnhancedRequirement(\'' + safeReqId + '\', document.getElementById(\'' + escapeHtml(inputId) + '\'))">Upload supporting document</button>' +
+      '<button class="btn btn-primary btn-sm" onclick="uploadPortalEnhancedRequirement(\'' + safeReqId + '\', document.getElementById(\'' + escapeHtml(inputId) + '\'), this)">Upload supporting document</button>' +
     '</div>';
   }
   if (type === 'declaration' || type === 'explanation') {
@@ -8244,7 +8251,7 @@ function portalEnhancedRequirementControlHtml(req) {
     return '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">' +
       '<textarea id="' + escapeHtml(textId) + '" rows="3" maxlength="10000" placeholder="Provide response" style="width:100%;font-size:12px;padding:10px;border:1px solid var(--border);border-radius:8px;resize:vertical;background:var(--bg2);color:var(--text);"></textarea>' +
       '<div style="display:flex;justify-content:flex-end;margin-top:8px;">' +
-        '<button class="btn btn-primary btn-sm" onclick="submitPortalEnhancedRequirementResponse(\'' + safeReqId + '\')">Provide response</button>' +
+        '<button class="btn btn-primary btn-sm" onclick="submitPortalEnhancedRequirementResponse(\'' + safeReqId + '\', this)">Provide response</button>' +
       '</div>' +
     '</div>';
   }
@@ -8284,7 +8291,7 @@ function renderPortalEnhancedRequirements(requirements) {
   }).join('');
 }
 
-async function uploadPortalEnhancedRequirement(requirementId, input) {
+async function uploadPortalEnhancedRequirement(requirementId, input, button) {
   if (!AUTH_TOKEN || !currentApplicationId) {
     showToast('error', 'Authentication Required', 'Please sign in before uploading documents.');
     return;
@@ -8292,6 +8299,14 @@ async function uploadPortalEnhancedRequirement(requirementId, input) {
   if (!input || !input.files || !input.files[0]) {
     showToast('error', 'Upload Required', 'Please choose a file to upload.');
     return;
+  }
+  var busyKey = 'upload:' + requirementId;
+  if (portalEnhancedRequirementBusy[busyKey]) return;
+  portalEnhancedRequirementBusy[busyKey] = true;
+  if (button) {
+    button.disabled = true;
+    button.dataset.originalText = button.textContent || '';
+    button.textContent = 'Uploading...';
   }
   var fd = new FormData();
   fd.append('file', input.files[0]);
@@ -8308,10 +8323,16 @@ async function uploadPortalEnhancedRequirement(requirementId, input) {
     await loadPortalEnhancedRequirements();
   } catch (err) {
     showToast('error', 'Upload Failed', err.message || 'Could not upload this document.');
+  } finally {
+    delete portalEnhancedRequirementBusy[busyKey];
+    if (button) {
+      button.disabled = false;
+      button.textContent = button.dataset.originalText || 'Upload supporting document';
+    }
   }
 }
 
-async function submitPortalEnhancedRequirementResponse(requirementId) {
+async function submitPortalEnhancedRequirementResponse(requirementId, button) {
   if (!AUTH_TOKEN || !currentApplicationId) {
     showToast('error', 'Authentication Required', 'Please sign in before submitting responses.');
     return;
@@ -8323,6 +8344,14 @@ async function submitPortalEnhancedRequirementResponse(requirementId) {
     showToast('error', 'Response Required', 'Please provide a response before submitting.');
     if (el) el.focus();
     return;
+  }
+  var busyKey = 'response:' + requirementId;
+  if (portalEnhancedRequirementBusy[busyKey]) return;
+  portalEnhancedRequirementBusy[busyKey] = true;
+  if (button) {
+    button.disabled = true;
+    button.dataset.originalText = button.textContent || '';
+    button.textContent = 'Submitting...';
   }
   try {
     await apiCall(
@@ -8336,6 +8365,12 @@ async function submitPortalEnhancedRequirementResponse(requirementId) {
     await loadPortalEnhancedRequirements();
   } catch (err) {
     showToast('error', 'Submit Failed', err.message || 'Could not submit this response.');
+  } finally {
+    delete portalEnhancedRequirementBusy[busyKey];
+    if (button) {
+      button.disabled = false;
+      button.textContent = button.dataset.originalText || 'Provide response';
+    }
   }
 }
 

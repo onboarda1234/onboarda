@@ -6026,6 +6026,7 @@ function enhancedRequirementClientSubmissionSummary(req) {
   if (req.uploaded_at) parts.push('Uploaded: ' + enhancedRequirementDate(req.uploaded_at));
   if (req.linked_document_id) parts.push('Linked document: ' + req.linked_document_id);
   if (req.client_response_at) parts.push('Client response: ' + enhancedRequirementDate(req.client_response_at));
+  if (req.client_response_by) parts.push('Response by: ' + req.client_response_by);
   if (!parts.length) return '';
   return parts.map(function(part) {
     return '<div style="font-size:11px;color:var(--text3);white-space:nowrap;">' + escapeHtml(part) + '</div>';

@@ -7,7 +7,7 @@ ALTER TABLE application_enhanced_requirements
     ADD COLUMN client_response_text TEXT;
 
 ALTER TABLE application_enhanced_requirements
-    ADD COLUMN client_response_at TEXT;
+    ADD COLUMN client_response_at TIMESTAMP;
 
 ALTER TABLE application_enhanced_requirements
     ADD COLUMN client_response_by TEXT REFERENCES clients(id);
