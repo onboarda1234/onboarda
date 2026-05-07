@@ -181,6 +181,21 @@ def _count_app_reqs(db, app_id, trigger_key):
     ).fetchone()["c"]
 
 
+def _apply_auto_generation(db, app_id, *, source="prescreening_submit", risk_dict=None):
+    import routing_actuator as ra
+
+    app_row = db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone()
+    result = ra.apply_routing_decision(
+        db=db,
+        app_row=app_row,
+        risk_dict=risk_dict,
+        user={"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        source=source,
+    )
+    db.commit()
+    return result
+
+
 def test_application_enhanced_requirements_table_constraints(enhanced_app_db):
     db = enhanced_app_db
     assert db.execute(
@@ -368,6 +383,154 @@ def test_generation_audit_events_include_created_state(enhanced_app_db):
     detail = json.loads(generated_rows[0]["detail"])
     assert detail["application_id"] == app_id
     assert detail["requirement_key"]
+
+
+def test_auto_generation_runs_after_high_risk_routing(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(db, risk_level="HIGH")
+
+    result = _apply_auto_generation(db, app_id)
+
+    assert result["route"] == "edd"
+    generation = result["enhanced_requirements_generation"]
+    assert generation["config_ok"] is True
+    assert generation["generated_count"] == _count_rules(db, "high_or_very_high_risk")
+    assert _count_app_reqs(db, app_id, "high_or_very_high_risk") == _count_rules(
+        db, "high_or_very_high_risk"
+    )
+    row = db.execute(
+        """
+        SELECT DISTINCT generation_source
+        FROM application_enhanced_requirements
+        WHERE application_id=? AND trigger_key='high_or_very_high_risk'
+        """,
+        (app_id,),
+    ).fetchone()
+    assert row["generation_source"] == "prescreening_submit"
+
+
+def test_auto_generation_skips_low_standard_route(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(db, risk_level="LOW")
+
+    result = _apply_auto_generation(db, app_id)
+
+    assert result["route"] == "standard"
+    assert result["enhanced_requirements_generation"] is None
+    total = db.execute(
+        "SELECT COUNT(*) AS c FROM application_enhanced_requirements WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    assert total == 0
+
+
+def test_auto_generation_maps_pep_and_crypto_triggers(enhanced_app_db):
+    db = enhanced_app_db
+    pep_app_id = _insert_application(db, risk_level="MEDIUM")
+    pep_result = _apply_auto_generation(
+        db,
+        pep_app_id,
+        risk_dict={"level": "MEDIUM", "final_risk_level": "MEDIUM", "declared_pep_present": True},
+    )
+    assert pep_result["route"] == "edd"
+    assert "pep" in pep_result["enhanced_requirements_generation"]["triggers"]
+    assert _count_app_reqs(db, pep_app_id, "pep") == _count_rules(db, "pep")
+
+    crypto_app_id = _insert_application(
+        db,
+        risk_level="MEDIUM",
+        sector="Crypto / Digital Assets Exchange",
+    )
+    crypto_result = _apply_auto_generation(db, crypto_app_id)
+    assert crypto_result["route"] == "edd"
+    assert "crypto_vasp" in crypto_result["enhanced_requirements_generation"]["triggers"]
+    assert _count_app_reqs(db, crypto_app_id, "crypto_vasp") == _count_rules(db, "crypto_vasp")
+
+
+def test_auto_generation_is_idempotent_and_preserves_reviewed(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(db, risk_level="HIGH")
+
+    first = _apply_auto_generation(db, app_id, source="risk_recompute")
+    assert first["enhanced_requirements_generation"]["generated_count"] > 0
+
+    db.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='waived', waiver_reason='approved exception', updated_by='sco001'
+        WHERE application_id=? AND requirement_key='company_sof_evidence'
+        """,
+        (app_id,),
+    )
+    db.commit()
+
+    second = _apply_auto_generation(db, app_id, source="risk_recompute")
+    generation = second["enhanced_requirements_generation"]
+    assert generation["generated_count"] == 0
+    assert generation["existing_count"] == first["enhanced_requirements_generation"]["generated_count"]
+    row = db.execute(
+        """
+        SELECT status, waiver_reason, updated_by
+        FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key='company_sof_evidence'
+        """,
+        (app_id,),
+    ).fetchone()
+    assert row["status"] == "waived"
+    assert row["waiver_reason"] == "approved exception"
+    assert row["updated_by"] == "sco001"
+
+
+def test_auto_generation_config_invalid_is_visible_and_fail_soft(enhanced_app_db):
+    db = enhanced_app_db
+    db.execute("UPDATE enhanced_requirement_rules SET active=0 WHERE trigger_key='pep'")
+    db.commit()
+    app_id = _insert_application(db, risk_level="HIGH")
+
+    result = _apply_auto_generation(db, app_id)
+
+    assert result["ran"] is True
+    generation = result["enhanced_requirements_generation"]
+    assert generation["config_ok"] is False
+    assert generation["generated_count"] == 0
+    assert any("pep" in error for error in generation["errors"])
+    audit = db.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM audit_log
+        WHERE action='application_enhanced_requirements.config_invalid'
+        """
+    ).fetchone()
+    assert audit["c"] == 1
+
+
+def test_auto_generation_respects_disabled_rules(enhanced_app_db):
+    db = enhanced_app_db
+    db.execute(
+        """
+        UPDATE enhanced_requirement_rules
+        SET active=0
+        WHERE trigger_key='high_or_very_high_risk'
+          AND requirement_key='company_bank_reference'
+        """
+    )
+    db.commit()
+    app_id = _insert_application(db, risk_level="HIGH")
+
+    result = _apply_auto_generation(db, app_id)
+
+    keys = {
+        row["requirement_key"]
+        for row in db.execute(
+            "SELECT requirement_key FROM application_enhanced_requirements WHERE application_id=?",
+            (app_id,),
+        ).fetchall()
+    }
+    assert result["enhanced_requirements_generation"]["config_ok"] is True
+    assert "company_bank_reference" not in keys
+    assert result["enhanced_requirements_generation"]["generated_count"] == _count_rules(
+        db, "high_or_very_high_risk"
+    )
 
 
 def test_api_permissions_for_diagnostics_read_and_generate(enhanced_app_api_server):

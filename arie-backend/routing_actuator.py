@@ -46,6 +46,10 @@ that any of those upstream paths can call. It:
 5. Writes the ``edd_routing.evaluated`` audit row (via
    ``server._emit_edd_routing_audit``) so that drift can be analysed
    even when actuation is a no-op (route=standard).
+6. Generates backend-only application enhanced requirement records
+   when the evaluated route or durable application facts expose
+   enhanced-review triggers.  This is idempotent and does not create
+   RMI requests, portal prompts, memo output, or approval blockers.
 
 The function is fail-soft for the upstream caller -- it never
 re-raises and always returns a structured ``dict`` so the caller can
@@ -222,6 +226,8 @@ def apply_routing_decision(
         "triggers": [],
         "lane_persisted": None,
         "actuation": None,
+        "enhanced_requirements_generation": None,
+        "enhanced_requirement_triggers": [],
         "errors": [],
     }
 
@@ -339,6 +345,56 @@ def apply_routing_decision(
                 exc_info=True,
             )
             result["errors"].append(f"actuate:{e}")
+
+    # ---- Step 3: backend-only enhanced requirement generation ----------
+    # Keep this after existing routing/actuation so EDD case semantics and
+    # status changes remain owned by the established path. The generation
+    # engine is fail-soft and create-only/idempotent.
+    try:
+        from enhanced_requirements import (  # type: ignore
+            detect_application_enhanced_requirement_triggers,
+            generate_application_enhanced_requirements,
+        )
+
+        trigger_result = detect_application_enhanced_requirement_triggers(
+            db,
+            application_id=application_id,
+            app_row=app_row,
+            routing=routing,
+        )
+        detected_triggers = list(trigger_result.get("triggers") or [])
+        result["enhanced_requirement_triggers"] = detected_triggers
+
+        final_level = _norm_str(facts.get("final_risk_level")).upper()
+        app_lane = _norm_str(app_dict.get("onboarding_lane")).upper()
+        app_status = _norm_str(app_dict.get("status")).lower()
+        should_generate = (
+            routing.get("route") == ROUTE_EDD
+            or final_level in {"HIGH", "VERY_HIGH"}
+            or app_lane == "EDD"
+            or app_status == "edd_required"
+            or bool(detected_triggers)
+        )
+
+        if should_generate:
+            result["enhanced_requirements_generation"] = (
+                generate_application_enhanced_requirements(
+                    db,
+                    application_id,
+                    app_row=app_row,
+                    routing=trigger_result.get("routing") or routing,
+                    actor=user,
+                    generation_source=source,
+                )
+            )
+    except Exception as e:
+        logger.warning(
+            "Enhanced requirement generation failed for app %s source=%s: %s",
+            application_ref,
+            source,
+            e,
+        )
+        result["errors"].append(f"enhanced_requirements:{e}")
 
     result["ran"] = True
     return result
