@@ -250,7 +250,34 @@ class ApprovalGateValidator:
                     "Re-generate the memo and retry."
                 )
 
-            # 4. Check all documents are not flagged (from DB, not app dict)
+            # 4. Enhanced / EDD requirements approval control.
+            # Source of truth is application_enhanced_requirements.  The gate
+            # does not generate rows, change memo output, or create client/RMI
+            # side effects; it only blocks unresolved mandatory/blocking rows.
+            try:
+                from enhanced_requirements import (
+                    format_enhanced_requirements_approval_error,
+                    validate_enhanced_requirements_for_approval,
+                )
+                enhanced_validation = validate_enhanced_requirements_for_approval(
+                    db,
+                    app_id,
+                    app_row=app,
+                )
+                if not enhanced_validation.get("passed"):
+                    return (
+                        False,
+                        format_enhanced_requirements_approval_error(enhanced_validation),
+                    )
+            except Exception as _er:
+                logger.error("Failed to evaluate enhanced requirements approval gate: %s", _er, exc_info=True)
+                return (
+                    False,
+                    "Could not verify Enhanced Review requirements. "
+                    "Resolve configuration/data issues and retry approval."
+                )
+
+            # 5. Check all documents are not flagged (from DB, not app dict)
             # Senior-officer override (EX-06): a flagged document passes the
             # gate when review_status='accepted' AND reviewer_role is admin/sco
             # AND review_comment is non-empty (documented reason).
@@ -276,7 +303,7 @@ class ApprovalGateValidator:
                         f"Flagged documents must be resolved before approval: {doc_types}"
                     )
 
-            # 5. Check screening report for any simulated or degraded provider statuses
+            # 6. Check screening report for any simulated or degraded provider statuses
             #    Required checks (Sumsub AML/KYC/sanctions or CA screening) block approval if simulated.
             #    Enrichment checks (company_registry, ip_geolocation) warn but do not block.
             #    company_watchlist with api_status="not_configured" warns but does not block
@@ -338,7 +365,7 @@ class ApprovalGateValidator:
                             "Live screening results are required for approval."
                         )
 
-            # 6. Check AI source provenance from memo data
+            # 7. Check AI source provenance from memo data
             memo_data_str = memo_row.get('memo_data', '{}') if memo_row else '{}'
             if isinstance(memo_data_str, str):
                 import json as _json2
@@ -356,7 +383,7 @@ class ApprovalGateValidator:
                     "Live AI verification required for approval."
                 )
 
-            # 7. Screening freshness: check screening was run after application submission
+            # 8. Screening freshness: check screening was run after application submission
             submitted_at = app.get('submitted_at')
             screening_ts_str = screening_report.get('screened_at') or screening_report.get('timestamp')
             if submitted_at and screening_ts_str:
@@ -374,7 +401,7 @@ class ApprovalGateValidator:
                     return (False, "Could not verify screening freshness due to timestamp format error. "
                             "Re-submit the application to trigger fresh screening.")
 
-                    # 8. Screening age validation: screening results must not exceed
+                    # 9. Screening age validation: screening results must not exceed
             #    the configurable validity period (default 90 days).
             #    Fail-closed: missing screening timestamp blocks approval.
             validity_days = get_screening_validity_days()
@@ -454,7 +481,7 @@ class ApprovalGateValidator:
                 return (False, "Screening timestamp is missing from the screening report. "
                         "A re-screen is required before approval can proceed.")
 
-            # 9. Staleness detection: application data modified after memo/screening
+            # 10. Staleness detection: application data modified after memo/screening
             # If the application inputs were updated after the memo was generated,
             # the memo may be based on outdated data and should be regenerated.
             # We use inputs_updated_at (substantive input changes only) rather than

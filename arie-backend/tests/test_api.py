@@ -10,6 +10,7 @@ import tempfile
 import socket
 import threading
 import time
+import uuid
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1696,6 +1697,41 @@ class TestGovernanceAttemptAudit:
             "CONSISTENT",
         ))
 
+    def _insert_enhanced_requirement(self, conn, app_id, *, status="accepted", mandatory=1, blocking_approval=1):
+        suffix = uuid.uuid4().hex[:8]
+        conn.execute(
+            """
+            INSERT INTO application_enhanced_requirements (
+                application_id, trigger_key, trigger_label, trigger_category,
+                requirement_key, requirement_label, requirement_description,
+                audience, requirement_type, subject_scope, blocking_approval,
+                waivable, waiver_roles, mandatory, status, generation_source,
+                trigger_reason, trigger_context, active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                "high_or_very_high_risk",
+                "HIGH / VERY_HIGH risk",
+                "risk",
+                f"api_approval_gate_{suffix}",
+                "Enhanced approval gate evidence",
+                "Evidence required for enhanced review approval.",
+                "client",
+                "document",
+                "application",
+                blocking_approval,
+                1,
+                json.dumps(["admin", "sco"]),
+                mandatory,
+                status,
+                "test",
+                "Approval gate API test trigger",
+                "{}",
+                1,
+            ),
+        )
+
     def test_governance_attempt_audit_failure_is_best_effort(self, monkeypatch, caplog):
         """Audit insert failures must log the marker and not raise to the handler."""
         import logging
@@ -1836,6 +1872,78 @@ class TestGovernanceAttemptAudit:
         assert detail["outcome"] == "rejected"
         assert detail["response_code"] == 400
         assert "compliance memo" in detail["rejection_reason"].lower()
+
+    def test_enhanced_requirement_approval_block_is_audited(self, api_server):
+        """Enhanced requirement approval blockers must emit their focused audit event."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_step7_enhanced_block"
+        app_ref = "ARF-2026-STEP7-BLOCK"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target IN (?, ?)", (app_ref, f"application:{app_ref}"))
+        conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM application_enhanced_requirements WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            app_ref,
+            "phase1b_client",
+            "Step 7 Enhanced Block Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "in_review",
+            "MEDIUM",
+            45,
+            self._live_prescreening(),
+        ))
+        self._insert_approved_memo(conn, app_id)
+        self._insert_enhanced_requirement(conn, app_id, status="generated", mandatory=1, blocking_approval=1)
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/decision",
+            json={
+                "decision": "approve",
+                "decision_reason": "Testing enhanced requirement approval block audit.",
+                "officer_signoff": {
+                    "acknowledged": True,
+                    "scope": "decision",
+                    "source_context": "ai_advisory",
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 400
+        assert "Enhanced Review requirements remain unresolved" in resp.json().get("error", "")
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT detail FROM audit_log
+            WHERE target = ? AND action = 'approval.blocked.enhanced_requirements'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (f"application:{app_ref}",),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        detail = json.loads(row["detail"])
+        assert detail["event"] == "approval.blocked.enhanced_requirements"
+        assert detail["application_id"] == app_id
+        assert detail["unresolved_count"] == 1
+        assert detail["mandatory_unresolved_count"] == 1
+        assert detail["blocking_unresolved_count"] == 1
 
     def test_failed_screening_review_attempt_is_audited(self, api_server):
         """Screening disposition rejections must leave an audit row."""
@@ -2445,6 +2553,7 @@ class TestGovernanceAttemptAudit:
             self._live_prescreening(),
         ))
         self._insert_approved_memo(conn, app_id)
+        self._insert_enhanced_requirement(conn, app_id, status="accepted")
         conn.commit()
         conn.close()
 

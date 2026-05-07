@@ -3,7 +3,15 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 
-def _insert_application_and_memo(db, *, validation_status="pass", supervisor_status="CONSISTENT", review_status="approved"):
+def _insert_application_and_memo(
+    db,
+    *,
+    validation_status="pass",
+    supervisor_status="CONSISTENT",
+    review_status="approved",
+    risk_level="MEDIUM",
+    status="compliance_review",
+):
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-approval-gate-{suffix}"
     app_ref = f"ARF-APPROVAL-GATE-{suffix}"
@@ -24,9 +32,9 @@ def _insert_application_and_memo(db, *, validation_status="pass", supervisor_sta
             "Mauritius",
             "Technology",
             "SME",
-            "compliance_review",
-            "MEDIUM",
-            45,
+            status,
+            risk_level,
+            80 if risk_level in ("HIGH", "VERY_HIGH") else 45,
             json.dumps(
                 {
                     "screening_report": {
@@ -65,6 +73,60 @@ def _insert_application_and_memo(db, *, validation_status="pass", supervisor_sta
     return dict(app)
 
 
+def _insert_enhanced_requirement(
+    db,
+    app_id,
+    *,
+    status="generated",
+    mandatory=True,
+    blocking=True,
+    waivable=True,
+    waived_by=None,
+    waived_at=None,
+    waiver_reason=None,
+    requirement_key=None,
+):
+    suffix = uuid.uuid4().hex[:8]
+    key = requirement_key or f"approval_gate_requirement_{suffix}"
+    db.execute(
+        """
+        INSERT INTO application_enhanced_requirements (
+            application_id, trigger_key, trigger_label, trigger_category,
+            requirement_key, requirement_label, requirement_description,
+            audience, requirement_type, subject_scope, blocking_approval,
+            waivable, waiver_roles, mandatory, status, generation_source,
+            trigger_reason, trigger_context, active, waived_by, waived_at,
+            waiver_reason
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id,
+            "high_or_very_high_risk",
+            "HIGH / VERY_HIGH risk",
+            "risk",
+            key,
+            "Enhanced approval gate evidence",
+            "Evidence required for enhanced review approval gate tests.",
+            "client",
+            "document",
+            "application",
+            1 if blocking else 0,
+            1 if waivable else 0,
+            json.dumps(["admin", "sco"]),
+            1 if mandatory else 0,
+            status,
+            "test",
+            "Approval gate test trigger",
+            "{}",
+            1,
+            waived_by,
+            waived_at,
+            waiver_reason,
+        ),
+    )
+    db.commit()
+
+
 def test_validate_approval_requires_explicit_validation_pass(db):
     from security_hardening import ApprovalGateValidator
 
@@ -94,3 +156,113 @@ def test_validate_approval_allows_explicit_positive_states(db):
 
     assert can_approve is True
     assert message == ""
+
+
+def test_mandatory_enhanced_requirements_block_until_accepted(db):
+    from security_hardening import ApprovalGateValidator
+
+    for status in ("generated", "requested", "uploaded", "under_review", "rejected"):
+        app = _insert_application_and_memo(db)
+        _insert_enhanced_requirement(db, app["id"], status=status, mandatory=True, blocking=False)
+
+        can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+        assert can_approve is False
+        assert "Enhanced Review requirements remain unresolved" in message
+        assert status in message
+
+
+def test_blocking_enhanced_requirements_block_until_accepted(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db)
+    _insert_enhanced_requirement(db, app["id"], status="uploaded", mandatory=False, blocking=True)
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "blocking unresolved=1" in message
+
+
+def test_accepted_or_validly_waived_enhanced_requirements_allow_approval(db):
+    from security_hardening import ApprovalGateValidator
+
+    accepted_app = _insert_application_and_memo(db)
+    _insert_enhanced_requirement(db, accepted_app["id"], status="accepted")
+
+    can_approve, message = ApprovalGateValidator.validate_approval(accepted_app, db)
+    assert can_approve is True, message
+
+    waived_app = _insert_application_and_memo(db)
+    _insert_enhanced_requirement(
+        db,
+        waived_app["id"],
+        status="waived",
+        waived_by="sco001",
+        waived_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        waiver_reason="Senior waiver documented for approval gate test.",
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(waived_app, db)
+    assert can_approve is True, message
+
+
+def test_optional_nonblocking_enhanced_requirement_does_not_block(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db)
+    _insert_enhanced_requirement(db, app["id"], status="generated", mandatory=False, blocking=False)
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is True, message
+
+
+def test_cancelled_enhanced_requirement_does_not_block(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db, risk_level="HIGH", status="edd_required")
+    _insert_enhanced_requirement(db, app["id"], status="cancelled", mandatory=True, blocking=True)
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is True, message
+
+
+def test_invalid_enhanced_requirement_waiver_blocks(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db)
+    db.execute(
+        """
+        INSERT OR IGNORE INTO users (id, email, password_hash, full_name, role, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("co001", "co001@example.com", "x", "Compliance Officer", "co", "active"),
+    )
+    db.execute("UPDATE users SET role='co' WHERE id='co001'")
+    db.commit()
+    _insert_enhanced_requirement(
+        db,
+        app["id"],
+        status="waived",
+        waived_by="co001",
+        waived_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        waiver_reason="CO waiver should not satisfy approval control.",
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "invalid waivers=1" in message
+
+
+def test_high_risk_missing_enhanced_requirements_blocks(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db, risk_level="HIGH", status="edd_required")
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "Enhanced review requirements are missing or not generated" in message
