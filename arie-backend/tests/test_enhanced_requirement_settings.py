@@ -360,3 +360,36 @@ def test_backoffice_enhanced_requirements_view_is_wired():
     assert "showEnhancedRequirementForm" in html
     assert "role-enhanced-settings" in html
     assert "/settings/enhanced-requirements" in html
+
+
+def test_backoffice_application_enhanced_requirements_visibility_is_wired():
+    repo_root = Path(__file__).resolve().parents[2]
+    html = (repo_root / "arie-backoffice.html").read_text(encoding="utf-8")
+    portal_html = (repo_root / "arie-portal.html").read_text(encoding="utf-8")
+
+    assert "Enhanced Review Requirements" in html
+    assert 'id="detail-enhanced-requirements-section"' in html
+    assert 'id="detail-enhanced-requirements-container"' in html
+    assert "loadApplicationEnhancedRequirements" in html
+    assert "renderApplicationEnhancedRequirements" in html
+    assert "refreshApplicationEnhancedRequirements" in html
+    assert "canViewApplicationEnhancedRequirements" in html
+    assert "canManageEnhancedRequirements()" in html
+    assert "/applications/' + appKey + '/enhanced-requirements" in html
+    assert "/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/generate" in html
+    assert "generation_source: 'manual_backoffice_refresh'" in html
+    assert "No enhanced requirements generated for this application." in html
+    assert "Enhanced requirement configuration is incomplete. Requirements may not be fully generated." in html
+
+    block = html.split("// APPLICATION ENHANCED REVIEW REQUIREMENTS — read-only display", 1)[1]
+    block = block.split("function renderUsers()", 1)[0]
+    assert "/enhanced-requirements" in block
+    assert "/rmi" not in block.lower()
+    assert "/notify" not in block
+    assert "/decision" not in block
+    assert "/memo" not in block
+    assert "/edd/" not in block.lower()
+    assert "/documents" not in block
+    assert "/supervisor" not in block
+
+    assert "/enhanced-requirements" not in portal_html

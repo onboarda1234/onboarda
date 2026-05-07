@@ -1288,6 +1288,20 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
   <!-- Tab: KYC Documents & Verifications (hidden by default) -->
   <div id="detail-tab-kyc-docs" style="display:none;">
+    <div class="card" id="detail-enhanced-requirements-section" style="border-left:4px solid #7c3aed;background:rgba(124,58,237,0.025);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div class="card-title">Enhanced Review Requirements</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px;">Generated requirement snapshot for this application</div>
+        </div>
+        <button class="btn btn-outline btn-sm" id="detail-enhanced-requirements-refresh" onclick="refreshApplicationEnhancedRequirements()" style="font-size:11px;display:none;">Refresh enhanced requirements</button>
+      </div>
+      <div id="detail-enhanced-requirements-message" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
+      <div id="detail-enhanced-requirements-container">
+        <div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading enhanced requirements…</div>
+      </div>
+    </div>
+
     <div class="card" style="border-left:4px solid var(--brand);background:rgba(43,47,143,0.02);">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
         <div>
@@ -5829,6 +5843,9 @@ function renderAuthoritativeAppDetail(app, options) {
   }).join('') : '<div style="padding:32px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);text-align:center;"><div style="font-size:24px;margin-bottom:8px;">📂</div><div style="font-size:13px;color:var(--text2);font-weight:500;">No documents uploaded yet</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">Documents uploaded by the client will appear here with their verification results.</div></div>';
   document.getElementById('detail-documents').innerHTML = docsHtml;
   document.getElementById('detail-docs-with-verification').innerHTML = docsHtml;
+  loadApplicationEnhancedRequirements(app).catch(function(e) {
+    console.warn('Enhanced requirements display failed:', e);
+  });
 
   // Activity log: load from real audit trail API
   document.getElementById('detail-activity').innerHTML = '<div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading audit trail…</div>';
@@ -5901,6 +5918,214 @@ function renderRMIPanel(app) {
       '<table class="data-table" style="font-size:12px;"><thead><tr><th>Document</th><th>Notes</th><th>Status</th><th>Upload</th></tr></thead><tbody>' + itemRows + '</tbody></table>' +
     '</div>';
   }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════
+// APPLICATION ENHANCED REVIEW REQUIREMENTS — read-only display
+// ═══════════════════════════════════════════════════════════
+var APPLICATION_ENHANCED_REQUIREMENTS = [];
+
+function canViewApplicationEnhancedRequirements() {
+  return !!(currentUser && ['admin','sco','co'].indexOf(currentUser.role) >= 0);
+}
+
+function setEnhancedRequirementDetailMessage(message, tone) {
+  var el = document.getElementById('detail-enhanced-requirements-message');
+  if (!el) return;
+  if (!message) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  var color = tone === 'red' ? 'var(--red)' : tone === 'amber' ? 'var(--amber)' : 'var(--text2)';
+  el.style.display = '';
+  el.style.color = color;
+  el.innerHTML = escapeHtml(message);
+}
+
+function enhancedRequirementDetailBadge(text, tone) {
+  var color = tone === 'red' ? 'var(--red)' : tone === 'green' ? 'var(--green)' : tone === 'amber' ? 'var(--amber)' : tone === 'purple' ? '#7c3aed' : 'var(--text3)';
+  return '<span style="display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;border:1px solid var(--border1);font-size:11px;font-weight:700;color:' + color + ';background:var(--surface2);white-space:nowrap;">' + escapeHtml(text) + '</span>';
+}
+
+function enhancedRequirementStatusBadge(status) {
+  var normalized = String(status || 'generated').toLowerCase();
+  var tone = ['accepted','waived','cancelled'].indexOf(normalized) >= 0 ? 'green'
+    : normalized === 'rejected' ? 'red'
+    : ['uploaded','under_review','requested'].indexOf(normalized) >= 0 ? 'amber'
+    : 'purple';
+  return enhancedRequirementDetailBadge(normalized.replace(/_/g, ' '), tone);
+}
+
+function enhancedRequirementBoolBadge(value, yesLabel, noLabel) {
+  return value ? enhancedRequirementDetailBadge(yesLabel || 'Yes', 'amber') : enhancedRequirementDetailBadge(noLabel || 'No', '');
+}
+
+function enhancedRequirementOutstanding(req) {
+  var status = String(req.status || 'generated').toLowerCase();
+  return ['accepted','waived','cancelled'].indexOf(status) < 0;
+}
+
+function enhancedRequirementTriggerReason(req) {
+  if (req.trigger_reason) return req.trigger_reason;
+  var ctx = req.trigger_context || {};
+  if (Array.isArray(ctx.mapped_from_triggers) && ctx.mapped_from_triggers.length) {
+    return 'Mapped from: ' + ctx.mapped_from_triggers.join(', ');
+  }
+  if (ctx.routing && Array.isArray(ctx.routing.triggers) && ctx.routing.triggers.length) {
+    return 'Routing triggers: ' + ctx.routing.triggers.join(', ');
+  }
+  return '—';
+}
+
+function enhancedRequirementDate(value) {
+  if (!value) return '—';
+  return String(value).replace('T', ' ').slice(0, 19);
+}
+
+function renderApplicationEnhancedRequirements(requirements, generationResult) {
+  var section = document.getElementById('detail-enhanced-requirements-section');
+  var container = document.getElementById('detail-enhanced-requirements-container');
+  var refreshBtn = document.getElementById('detail-enhanced-requirements-refresh');
+  if (!section || !container) return;
+  if (!canViewApplicationEnhancedRequirements()) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  if (refreshBtn) refreshBtn.style.display = canManageEnhancedRequirements() ? '' : 'none';
+
+  requirements = Array.isArray(requirements) ? requirements : [];
+  APPLICATION_ENHANCED_REQUIREMENTS = requirements;
+
+  if (generationResult) {
+    if (generationResult.config_ok === false) {
+      setEnhancedRequirementDetailMessage('Enhanced requirement configuration is incomplete. Requirements may not be fully generated.', 'amber');
+    } else {
+      setEnhancedRequirementDetailMessage(
+        'Refresh complete: ' + (generationResult.generated_count || 0) + ' generated, ' + (generationResult.existing_count || 0) + ' existing.',
+        ''
+      );
+    }
+  }
+
+  if (!requirements.length) {
+    container.innerHTML = '<div style="padding:24px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);text-align:center;"><div style="font-size:13px;color:var(--text2);font-weight:600;">No enhanced requirements generated for this application.</div></div>';
+    return;
+  }
+
+  var clientFacing = requirements.filter(function(req) { return ['client','both'].indexOf(String(req.audience || '').toLowerCase()) >= 0; }).length;
+  var internalFacing = requirements.filter(function(req) { return ['backoffice','both'].indexOf(String(req.audience || '').toLowerCase()) >= 0; }).length;
+  var blocking = requirements.filter(function(req) { return !!req.blocking_approval; }).length;
+  var outstanding = requirements.filter(enhancedRequirementOutstanding).length;
+  var summary = [
+    ['Total', requirements.length],
+    ['Client-facing', clientFacing],
+    ['Back-office/internal', internalFacing],
+    ['Blocking', blocking],
+    ['Outstanding', outstanding]
+  ].map(function(item) {
+    return '<div style="padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">' +
+      '<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);letter-spacing:0.4px;">' + escapeHtml(item[0]) + '</div>' +
+      '<div style="font-size:18px;font-weight:800;color:var(--text1);margin-top:2px;">' + escapeHtml(String(item[1])) + '</div>' +
+    '</div>';
+  }).join('');
+
+  var groups = {};
+  requirements.forEach(function(req) {
+    var key = req.trigger_key || 'unknown';
+    if (!groups[key]) {
+      groups[key] = {
+        label: req.trigger_label || key,
+        category: req.trigger_category || '',
+        items: []
+      };
+    }
+    groups[key].items.push(req);
+  });
+
+  var groupHtml = Object.keys(groups).sort(function(a, b) {
+    return groups[a].label.localeCompare(groups[b].label);
+  }).map(function(key) {
+    var group = groups[key];
+    var rows = group.items.map(function(req) {
+      var reason = enhancedRequirementTriggerReason(req);
+      return '<tr>' +
+        '<td><div style="font-weight:700;font-size:13px;">' + escapeHtml(req.requirement_label || req.requirement_key || '') + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(req.requirement_key || '') + '</div></td>' +
+        '<td>' + enhancedRequirementDetailBadge(req.audience || '—', req.audience === 'client' ? 'green' : (req.audience === 'both' ? 'purple' : '')) + '</td>' +
+        '<td>' + escapeHtml(String(req.requirement_type || '—').replace(/_/g, ' ')) + '</td>' +
+        '<td>' + escapeHtml(String(req.subject_scope || '—').replace(/_/g, ' ')) + '</td>' +
+        '<td>' + enhancedRequirementStatusBadge(req.status) + '</td>' +
+        '<td>' + enhancedRequirementBoolBadge(req.blocking_approval, 'Yes', 'No') + '</td>' +
+        '<td>' + enhancedRequirementBoolBadge(req.waivable, 'Yes', 'No') + '</td>' +
+        '<td>' + enhancedRequirementBoolBadge(req.mandatory, 'Yes', 'No') + '</td>' +
+        '<td><div style="font-size:12px;color:var(--text2);">' + escapeHtml(req.generation_source || '—') + '</div><div style="font-size:11px;color:var(--text3);margin-top:3px;max-width:260px;white-space:normal;">' + escapeHtml(reason) + '</div></td>' +
+        '<td><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Created: ' + escapeHtml(enhancedRequirementDate(req.created_at)) + '</div><div style="font-size:11px;color:var(--text3);white-space:nowrap;">Updated: ' + escapeHtml(enhancedRequirementDate(req.updated_at)) + '</div></td>' +
+      '</tr>';
+    }).join('');
+    return '<div style="border:1px solid var(--border1);border-radius:10px;background:var(--surface);margin-top:12px;overflow:hidden;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border1);background:var(--surface2);">' +
+        '<div><div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml(group.label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(key) + (group.category ? ' · ' + escapeHtml(group.category) : '') + '</div></div>' +
+        enhancedRequirementDetailBadge(group.items.length + ' requirement' + (group.items.length === 1 ? '' : 's'), 'purple') +
+      '</div>' +
+      '<div style="overflow:auto;"><table class="data-table" style="font-size:12px;"><thead><tr><th>Requirement</th><th>Audience</th><th>Type</th><th>Scope</th><th>Status</th><th>Blocking</th><th>Waivable</th><th>Mandatory</th><th>Source / Reason</th><th>Timeline</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '</div>';
+  }).join('');
+
+  container.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;">' + summary + '</div>' + groupHtml;
+}
+
+async function loadApplicationEnhancedRequirements(app, generationResult) {
+  var section = document.getElementById('detail-enhanced-requirements-section');
+  var container = document.getElementById('detail-enhanced-requirements-container');
+  var refreshBtn = document.getElementById('detail-enhanced-requirements-refresh');
+  if (!section || !container) return;
+  if (!canViewApplicationEnhancedRequirements()) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  if (refreshBtn) refreshBtn.style.display = canManageEnhancedRequirements() ? '' : 'none';
+  setEnhancedRequirementDetailMessage('', '');
+  container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading enhanced requirements…</div>';
+  try {
+    var appKey = encodeURIComponent((app && (app.id || app.ref)) || '');
+    var resp = await boApiCall('GET', '/applications/' + appKey + '/enhanced-requirements');
+    renderApplicationEnhancedRequirements(resp.requirements || [], generationResult);
+  } catch (err) {
+    console.warn('Unable to load application enhanced requirements:', err);
+    setEnhancedRequirementDetailMessage('Unable to load enhanced requirements. Existing application review data remains available.', 'amber');
+    container.innerHTML = '<div style="padding:20px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text3);">Enhanced requirements could not be loaded.</div>';
+  }
+}
+
+async function refreshApplicationEnhancedRequirements() {
+  if (!currentApp || !currentApp.id) {
+    showToast('No application selected', 'error');
+    return;
+  }
+  if (!canManageEnhancedRequirements()) {
+    showToast('Only admins and senior compliance officers can refresh enhanced requirements', 'error');
+    return;
+  }
+  var btn = document.getElementById('detail-enhanced-requirements-refresh');
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    var result = await boApiCall('POST', '/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/generate', {
+      generation_source: 'manual_backoffice_refresh'
+    });
+    await loadApplicationEnhancedRequirements(currentApp, result);
+    if (result.config_ok === false) {
+      showToast('Enhanced requirement configuration is incomplete', 'error');
+    } else {
+      showToast('Enhanced requirements refreshed');
+    }
+  } catch (err) {
+    setEnhancedRequirementDetailMessage('Unable to refresh enhanced requirements: ' + (err.message || 'Unknown error'), 'red');
+    showToast('Unable to refresh enhanced requirements', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Refresh enhanced requirements'; }
+  }
 }
 
 function renderUsers() {
