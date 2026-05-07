@@ -713,6 +713,10 @@ def test_kyc_submit_clears_active_draft(api_server, tmp_path):
     _ensure_client(conn, "draftuser_kyc", "draftkyc@test.com")
     _ensure_application(conn, "draft_app_kyc", "ARF-KYC-CLEAR", "draftuser_kyc",
                         status="kyc_documents")
+    conn.execute(
+        "UPDATE applications SET risk_level=?, risk_score=? WHERE id=?",
+        ("MEDIUM", 45, "draft_app_kyc"),
+    )
 
     # Need at least one document on the application for KYC submit to succeed
     doc_path = tmp_path / "coi.pdf"
@@ -1339,4 +1343,3 @@ def test_portal_discard_active_draft_calls_load_my_applications():
     assert "loadClientApplications()" not in discard_fn, (
         "discardActiveDraft() must not call the undefined loadClientApplications()"
     )
-

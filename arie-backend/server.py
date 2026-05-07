@@ -227,6 +227,123 @@ def _application_risk_snapshot(app_row):
     return level, score
 
 
+_RISK_REQUIRED_APPLICATION_STATUSES = (
+    "submitted", "prescreening_submitted", "pricing_review", "pricing_accepted",
+    "pre_approval_review", "pre_approved", "kyc_documents", "kyc_submitted",
+    "compliance_review", "in_review", "under_review", "edd_required",
+    "approved", "rejected", "rmi_sent", "withdrawn",
+)
+_RISK_UNAVAILABLE_WARNING = "Risk unavailable — recalculation required"
+_EDD_ZERO_SCORE_WARNING = "EDD required while canonical risk score is unavailable or zero"
+
+
+def _unique_list(values):
+    seen = set()
+    result = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _json_list_value(value):
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _decision_notes_dict(app):
+    raw = app.get("decision_notes") if app else None
+    if isinstance(raw, dict):
+        return raw
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _edd_trigger_flags_from_app(app):
+    flags = []
+    notes = _decision_notes_dict(app)
+    flags.extend(_json_list_value(notes.get("edd_trigger_flags")))
+    if notes.get("decision") == "escalate_edd":
+        flags.append("officer_escalate_edd")
+    flags.extend("risk_escalation:" + str(item) for item in _json_list_value(app.get("risk_escalations")))
+    if app.get("elevation_reason_text"):
+        flags.append(str(app.get("elevation_reason_text")))
+    return _unique_list(flags)
+
+
+def _decorate_application_risk_integrity(app):
+    """Attach truthful risk-integrity metadata for API consumers.
+
+    This does not overwrite canonical risk fields. It prevents clients from
+    treating missing/stale risk as LOW/0 while preserving valid LOW risk cases.
+    """
+    if not app:
+        return app
+    level = (
+        _canonical_risk_level(app.get("final_risk_level"))
+        or _canonical_risk_level(app.get("risk_level"))
+    )
+    score = _canonical_risk_score(app.get("risk_score"))
+    status = app.get("status") or ""
+    flags = _edd_trigger_flags_from_app(app)
+    warnings = []
+
+    has_authoritative_risk = bool(level and score is not None)
+    if level and level != "LOW" and score == 0:
+        has_authoritative_risk = False
+
+    if status in _RISK_REQUIRED_APPLICATION_STATUSES and not has_authoritative_risk:
+        warnings.append(_RISK_UNAVAILABLE_WARNING)
+
+    if status == "edd_required":
+        if score == 0:
+            warnings.append(_EDD_ZERO_SCORE_WARNING)
+            has_authoritative_risk = False
+        if not flags:
+            warnings.append("EDD trigger reason unavailable")
+
+    app["has_authoritative_risk"] = has_authoritative_risk
+    app["risk_integrity_warnings"] = _unique_list(warnings)
+    app["edd_trigger_flags"] = flags
+    return app
+
+
+def _application_risk_integrity_error(app, action_label="continue"):
+    """Return a fail-closed risk integrity message for non-draft application actions."""
+    if not app:
+        return "Cannot " + action_label + ": application risk record is unavailable."
+    app_dict = dict(app)
+    status = str(app_dict.get("status") or "").lower()
+    if status == "draft":
+        return None
+    _decorate_application_risk_integrity(app_dict)
+    if app_dict.get("has_authoritative_risk") is True:
+        return None
+    warnings = app_dict.get("risk_integrity_warnings") or [_RISK_UNAVAILABLE_WARNING]
+    return (
+        "Cannot " + action_label + ": " + _RISK_UNAVAILABLE_WARNING
+        + ". Recompute risk before continuing. "
+        + "Integrity warning(s): " + "; ".join(warnings)
+    )
+
+
 def _edd_truthful_risk_snapshot(case_row, app_row=None):
     app_level, app_score = _application_risk_snapshot(app_row)
     if app_level:
@@ -2492,6 +2609,7 @@ class ApplicationsHandler(BaseHandler):
             # Bug #4: Parse risk_dimensions from JSON string for API consumers
             if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
                 app["risk_dimensions"] = safe_json_loads(app["risk_dimensions"])
+            _decorate_application_risk_integrity(app)
         db.close()
 
         # EX-13: ETag support — compute hash of response for conditional requests
@@ -2719,6 +2837,7 @@ class ApplicationDetailHandler(BaseHandler):
         # Bug #4: Parse risk_dimensions from JSON string for API consumers
         if result.get("risk_dimensions") and isinstance(result["risk_dimensions"], str):
             result["risk_dimensions"] = safe_json_loads(result["risk_dimensions"])
+        _decorate_application_risk_integrity(result)
         latest_memo = db.execute("""
             SELECT id, version, memo_data, review_status, validation_status, blocked, block_reason,
                    quality_score, memo_version, approved_by, approved_at, created_at
@@ -3433,7 +3552,11 @@ class PricingAcceptHandler(BaseHandler):
             return self.error("Application is not in pricing review stage", 400)
 
         real_id = app["id"]
-        risk_level = app["risk_level"] or "MEDIUM"
+        risk_error = _application_risk_integrity_error(app, "accept pricing")
+        if risk_error:
+            db.close()
+            return self.error(risk_error, 400)
+        risk_level, _risk_score = _application_risk_snapshot(app)
 
         # Update status: accepted pricing
         db.execute("UPDATE applications SET status='pricing_accepted', updated_at=datetime('now') WHERE id=?", (real_id,))
@@ -3496,13 +3619,16 @@ class KYCSubmitHandler(BaseHandler):
             return self.error("Please upload at least one document before submitting", 400)
 
         # Always recompute risk at KYC submission — data may have changed since pre-screening
-        risk_score = app["risk_score"] or 0
-        risk_level = app["risk_level"] or "MEDIUM"
         rr = recompute_risk(db, real_id, "kyc_submission", user=user,
                             log_audit_fn=self.log_audit)
-        if rr.get("recomputed"):
-            risk_score = rr["new_score"]
-            risk_level = rr["new_level"]
+        refreshed_app = db.execute("SELECT * FROM applications WHERE id=?", (real_id,)).fetchone()
+        risk_app_for_submission = dict(refreshed_app or app)
+        risk_app_for_submission["status"] = "kyc_submitted"
+        risk_error = _application_risk_integrity_error(risk_app_for_submission, "submit KYC documents")
+        if risk_error:
+            db.close()
+            return self.error(risk_error, 400)
+        risk_level, risk_score = _application_risk_snapshot(refreshed_app or app)
 
         # W2-4: Set status to kyc_submitted (previously dead state, now active)
         db.execute("""
@@ -3619,6 +3745,15 @@ class PreApprovalDecisionHandler(BaseHandler):
                 "Pre-approval decision notes are required", attempt_summary, db=db)
             db.close()
             return self.error("Pre-approval decision notes are required", 400)
+
+        if decision in ("PRE_APPROVE", "REJECT"):
+            risk_error = _application_risk_integrity_error(app, "record pre-approval decision")
+            if risk_error:
+                self.log_governance_attempt(
+                    user, "application.pre_approval_decision", attempt_target, "rejected", 400,
+                    risk_error, attempt_summary, db=db)
+                db.close()
+                return self.error(risk_error, 400)
 
         # Idempotency: check if a decision was already recorded
         if app.get("pre_approval_decision"):
@@ -10245,6 +10380,14 @@ class ComplianceMemoHandler(BaseHandler):
             return self.error("Application not found", 404)
 
         real_id = app["id"]
+        risk_error = _application_risk_integrity_error(app, "generate compliance memo")
+        if risk_error:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error(risk_error, 400)
 
         # Fetch related data — C-02: decrypt PII fields on read
         directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
@@ -11040,7 +11183,7 @@ class MemoApproveHandler(BaseHandler):
 
         db = get_db()
         app_row = db.execute(
-            "SELECT id, ref FROM applications WHERE id = ? OR ref = ?",
+            "SELECT * FROM applications WHERE id = ? OR ref = ?",
             (app_id, app_id),
         ).fetchone()
         attempt_target = app_row["ref"] if app_row else app_id
@@ -11068,6 +11211,12 @@ class MemoApproveHandler(BaseHandler):
 
         if not memo_row:
             return reject_memo_approval("No compliance memo found.", 404)
+        if not app_row:
+            return reject_memo_approval("Application not found.", 404)
+
+        risk_error = _application_risk_integrity_error(app_row, "approve compliance memo")
+        if risk_error:
+            return reject_memo_approval(risk_error, 400)
 
         # ── EX-11: Backend enforcement of officer sign-off for memo approval ──
         signoff_error = _validate_officer_signoff(body.get("officer_signoff"), "memo")
@@ -11714,6 +11863,15 @@ class ApplicationDecisionHandler(BaseHandler):
             db.close()
             return self.error(signoff_error, 400)
 
+        if decision in ("approve", "reject"):
+            risk_error = _application_risk_integrity_error(app, "submit final decision")
+            if risk_error:
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    risk_error, attempt_summary, db=db)
+                db.close()
+                return self.error(risk_error, 400)
+
         # ── SECURITY: Enforce approval preconditions (mandatory) ──
         if decision == "approve":
             # ── H-1 FIX: Enforce ROLE_PERMISSION_MATRIX — CO cannot approve HIGH/VERY_HIGH ──
@@ -11832,6 +11990,15 @@ class ApplicationDecisionHandler(BaseHandler):
             "request_documents": "rmi_sent"
         }[decision]
 
+        edd_trigger_flags = []
+        risk_integrity_warnings = []
+        if decision == "escalate_edd":
+            edd_trigger_flags = ["officer_escalate_edd"]
+            risk_level_snapshot, risk_score_snapshot = _application_risk_snapshot(app)
+            if risk_level_snapshot is None or risk_score_snapshot is None or risk_score_snapshot == 0:
+                risk_integrity_warnings.append(_RISK_UNAVAILABLE_WARNING)
+                risk_integrity_warnings.append(_EDD_ZERO_SCORE_WARNING)
+
         detail_info = {
             "decision": decision,
             "decision_reason": decision_reason,
@@ -11841,6 +12008,8 @@ class ApplicationDecisionHandler(BaseHandler):
             "override_by_role": user.get("role") if override_ai else None,
             "required_documents": required_documents if decision == "request_documents" else None,
             "rmi_deadline": rmi_deadline if decision == "request_documents" else None,
+            "edd_trigger_flags": edd_trigger_flags if decision == "escalate_edd" else None,
+            "risk_integrity_warnings": _unique_list(risk_integrity_warnings) if decision == "escalate_edd" else None,
         }
 
         if decision == "request_documents":
@@ -11872,6 +12041,8 @@ class ApplicationDecisionHandler(BaseHandler):
 
         _after = {"status": new_status, "decision": decision, "decision_reason": decision_reason,
                   "override_ai": override_ai, "rmi_request_id": rmi_request_id,
+                  "edd_trigger_flags": edd_trigger_flags if decision == "escalate_edd" else None,
+                  "risk_integrity_warnings": _unique_list(risk_integrity_warnings) if decision == "escalate_edd" else None,
                   "decision_by": user.get("sub"),
                   "first_approver_id": app.get("first_approver_id") if app.get("risk_level") in ("HIGH", "VERY_HIGH") else None}
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -13194,6 +13365,13 @@ def _edd_case_status_block(case_dict, findings=None):
     senior = str(case_dict.get("senior_reviewer") or "").strip()
     findings_complete = _edd_findings_complete_payload(findings)
     blockers = []
+    if case_dict.get("has_authoritative_risk") is False:
+        risk_warnings = case_dict.get("risk_integrity_warnings") or [_RISK_UNAVAILABLE_WARNING]
+        blockers.append(
+            _RISK_UNAVAILABLE_WARNING
+            + ". Recompute risk before senior review or closure. "
+            + "Integrity warning(s): " + "; ".join(risk_warnings)
+        )
     if not case_dict.get("sla_due_at"):
         blockers.append("SLA due date is required before senior review or closure.")
     if not findings_complete:
@@ -13218,12 +13396,19 @@ def _edd_case_status_block(case_dict, findings=None):
 def _materialise_edd_case(db, case_row, include_findings=True):
     case_dict = dict(case_row)
     app_row = db.execute(
-        "SELECT id, ref, risk_level, risk_score, final_risk_level "
+        "SELECT id, ref, status, risk_level, risk_score, final_risk_level, decision_notes, risk_escalations, elevation_reason_text "
         "FROM applications WHERE id = ?",
         (case_dict.get("application_id"),),
     ).fetchone()
     if app_row:
         case_dict["application_ref"] = app_row["ref"]
+        decorated_app = _decorate_application_risk_integrity(dict(app_row))
+        case_dict["has_authoritative_risk"] = decorated_app.get("has_authoritative_risk")
+        case_dict["risk_integrity_warnings"] = decorated_app.get("risk_integrity_warnings", [])
+        case_dict["edd_trigger_flags"] = decorated_app.get("edd_trigger_flags", [])
+    else:
+        case_dict["has_authoritative_risk"] = False
+        case_dict["risk_integrity_warnings"] = ["Linked application unavailable"]
     risk_level, risk_score = _edd_truthful_risk_snapshot(case_dict, app_row)
     case_dict["risk_level"] = risk_level
     case_dict["risk_score"] = risk_score
@@ -13453,6 +13638,13 @@ class EDDDetailHandler(BaseHandler):
 
         effective_sla_due_at = sla_due_at or case_dict.get("sla_due_at")
         if new_stage in _EDD_REVIEW_OR_TERMINAL_STAGES:
+            app_for_risk = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (case_dict.get("application_id"),),
+            ).fetchone()
+            risk_error = _application_risk_integrity_error(app_for_risk, "advance EDD case")
+            if risk_error:
+                return reject_edd_update(risk_error, 400)
             if not effective_sla_due_at:
                 return reject_edd_update(
                     "EDD SLA due date is required before senior review or closure", 400)

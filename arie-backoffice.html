@@ -3469,6 +3469,7 @@ function eddTriggerText(caseRow) {
 function mapApplicationFromApi(a) {
   var dims = {};
   try { dims = typeof a.risk_dimensions === 'string' ? JSON.parse(a.risk_dimensions) : (a.risk_dimensions || {}); } catch(e) {}
+  var riskState = buildRiskDisplayState(a);
   var backendDocuments = (a.documents || []).map(function(d) {
     return {
       id: d.id,
@@ -3488,8 +3489,14 @@ function mapApplicationFromApi(a) {
     company: a.company_name,
     sector: a.sector || 'Unknown',
     entityType: a.entity_type || '',
-    risk: normalizeRiskLevel(a.risk_level),
-    score: normalizeRiskScore(a.risk_score),
+    risk: riskState.level,
+    rawRiskLevel: normalizeRiskLevel(a.final_risk_level || a.risk_level),
+    score: riskState.score,
+    rawRiskScore: normalizeRiskScore(a.risk_score),
+    hasAuthoritativeRisk: riskState.hasRisk,
+    riskIntegrityWarnings: riskState.warnings,
+    eddTriggerFlags: riskState.eddTriggerFlags,
+    finalRiskLevel: a.final_risk_level || '',
     lane: a.onboarding_lane || 'Standard Review',
     statusRaw: a.status || '',
     status: formatStatus(a.status),
@@ -4188,17 +4195,88 @@ function showView(name, navItem) {
 // ═══════════════════════════════════════════════════════════
 // RENDER FUNCTIONS
 // ═══════════════════════════════════════════════════════════
+var RISK_UNAVAILABLE_TEXT = 'Risk unavailable — recalculation required';
+var RISK_REQUIRED_STATUSES = [
+  'submitted', 'prescreening_submitted', 'pricing_review', 'pricing_accepted',
+  'pre_approval_review', 'pre_approved', 'kyc_documents', 'kyc_submitted',
+  'compliance_review', 'in_review', 'under_review', 'edd_required',
+  'approved', 'rejected', 'rmi_sent', 'withdrawn'
+];
+
 function normalizeRiskLevel(level) {
   var raw = String(level || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
   return ['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH'].indexOf(raw) >= 0 ? raw : 'UNKNOWN';
 }
 
 function normalizeRiskScore(score) {
-  return (score === null || score === undefined || score === '') ? null : score;
+  if (score === null || score === undefined || score === '') return null;
+  var value = Number(score);
+  return Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
 }
 
 function formatRiskScore(score) {
   return normalizeRiskScore(score) === null ? '—' : String(score);
+}
+
+function parseMaybeJsonArray(value) {
+  if (Array.isArray(value)) return value.slice();
+  if (!value) return [];
+  if (typeof value === 'string') {
+    try {
+      var parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(e) {
+      return [];
+    }
+  }
+  return [];
+}
+
+function riskRequiredForStatus(status) {
+  return RISK_REQUIRED_STATUSES.indexOf(normalizeStatusKey(status)) >= 0;
+}
+
+function buildRiskDisplayState(source) {
+  source = source || {};
+  var status = source.statusRaw || source.status || '';
+  var level = normalizeRiskLevel(source.final_risk_level || source.finalRiskLevel || source.risk_level || source.rawRiskLevel || source.risk);
+  var rawScore = source.risk_score !== undefined ? source.risk_score : source.score;
+  var score = normalizeRiskScore(rawScore);
+  var warnings = parseMaybeJsonArray(source.risk_integrity_warnings || source.riskIntegrityWarnings);
+  var flags = parseMaybeJsonArray(source.edd_trigger_flags || source.eddTriggerFlags);
+  var hasRisk = level !== 'UNKNOWN' && score !== null;
+
+  if (source.has_authoritative_risk === false || source.hasAuthoritativeRisk === false) {
+    hasRisk = false;
+    if (warnings.indexOf(RISK_UNAVAILABLE_TEXT) === -1) warnings.push(RISK_UNAVAILABLE_TEXT);
+  }
+  if (level !== 'UNKNOWN' && level !== 'LOW' && score === 0) {
+    hasRisk = false;
+    if (warnings.indexOf(RISK_UNAVAILABLE_TEXT) === -1) warnings.push(RISK_UNAVAILABLE_TEXT);
+  }
+  if (normalizeStatusKey(status) === 'edd_required' && score === 0) {
+    hasRisk = false;
+    var eddWarning = flags.length ? ('EDD required — ' + flags.join(', ')) : 'EDD required — trigger reason unavailable';
+    if (warnings.indexOf(eddWarning) === -1) warnings.push(eddWarning);
+  }
+  if (riskRequiredForStatus(status) && !hasRisk && warnings.indexOf(RISK_UNAVAILABLE_TEXT) === -1) {
+    warnings.push(RISK_UNAVAILABLE_TEXT);
+  }
+
+  return {
+    status: normalizeStatusKey(status),
+    level: hasRisk ? level : 'UNKNOWN',
+    rawLevel: level,
+    score: hasRisk ? score : null,
+    rawScore: score,
+    hasRisk: hasRisk,
+    warnings: warnings,
+    eddTriggerFlags: flags
+  };
+}
+
+function hasAuthoritativeRisk(source) {
+  return buildRiskDisplayState(source).hasRisk;
 }
 
 function riskBadge(level) {
@@ -4206,6 +4284,27 @@ function riskBadge(level) {
   var map = { LOW:'low', MEDIUM:'medium', HIGH:'high', VERY_HIGH:'very-high', UNKNOWN:'unknown' };
   var label = normalized === 'UNKNOWN' ? 'NOT RATED' : String(normalized).replace('_',' ');
   return '<span class="badge ' + (map[normalized]||'unknown') + '">' + escapeHtml(label) + '</span>';
+}
+
+function riskBadgeForRecord(record) {
+  var state = buildRiskDisplayState(record);
+  if (!state.hasRisk) {
+    var title = escapeHtml((state.warnings || []).join('; ') || RISK_UNAVAILABLE_TEXT);
+    return '<span class="badge unknown" title="' + title + '">' + escapeHtml(RISK_UNAVAILABLE_TEXT) + '</span>';
+  }
+  return riskBadge(state.level);
+}
+
+function formatRiskScoreForRecord(record) {
+  var state = buildRiskDisplayState(record);
+  return state.hasRisk ? state.score.toFixed(1) : '—';
+}
+
+function renderRiskIntegrityWarning(record) {
+  var state = buildRiskDisplayState(record);
+  if (state.hasRisk) return '';
+  var warning = (state.warnings || [RISK_UNAVAILABLE_TEXT]).join('; ');
+  return '<div style="margin:10px 0;padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;color:#991b1b;font-size:12px;font-weight:600;">' + escapeHtml(warning) + '</div>';
 }
 
 function statusBadge(status) {
@@ -4237,7 +4336,7 @@ function renderDashboardRecent() {
   APPLICATIONS.slice(0, 6).forEach(function(app) {
     var tr = document.createElement('tr');
     tr.onclick = function() { openAppDetail(app.ref); };
-    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
+    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
   updateOnboardingLanes();
@@ -4816,8 +4915,8 @@ function renderReportDataTable() {
           '<td style="font-weight:600;color:var(--brand);">' + escapeHtml(a.ref) + '</td>' +
           '<td>' + escapeHtml(a.company || '') + '</td>' +
           '<td>' + statusBadge(a.status) + '</td>' +
-          '<td>' + riskBadge(a.risk) + '</td>' +
-          '<td style="text-align:center;font-weight:600;">' + (a.score || '—') + '</td>' +
+          '<td>' + riskBadgeForRecord(a) + '</td>' +
+          '<td style="text-align:center;font-weight:600;">' + escapeHtml(formatRiskScoreForRecord(a)) + '</td>' +
           '<td>' + escapeHtml(a.country || '—') + '</td>' +
           '<td>' + escapeHtml(a.assigned || 'Unassigned') + '</td>' +
           '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(a.date || '—') + '</td>' +
@@ -4942,7 +5041,7 @@ function renderApplications() {
   pageApps.forEach(function(app) {
     var tr = document.createElement('tr');
     tr.onclick = function() { openAppDetail(app.ref); };
-    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScore(app.score)) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
+    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadgeForRecord(app) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(app)) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
   updateApplicationsPagination(filtered.length, totalPages);
@@ -5494,14 +5593,21 @@ async function fetchApplicationDetail(ref) {
       pct: i.ownership_pct || 0
     };
   });
+  var riskState = buildRiskDisplayState(detail);
 
   return {
     id: detail.id,
     ref: detail.ref,
     company: detail.company_name || psData.registered_entity_name || '—',
     sector: detail.sector || psData.sector || 'Unknown',
-    risk: normalizeRiskLevel(detail.risk_level),
-    score: normalizeRiskScore(detail.risk_score),
+    risk: riskState.level,
+    rawRiskLevel: normalizeRiskLevel(detail.final_risk_level || detail.risk_level),
+    score: riskState.score,
+    rawRiskScore: normalizeRiskScore(detail.risk_score),
+    hasAuthoritativeRisk: riskState.hasRisk,
+    riskIntegrityWarnings: riskState.warnings,
+    eddTriggerFlags: riskState.eddTriggerFlags,
+    finalRiskLevel: detail.final_risk_level || '',
     lane: detail.onboarding_lane || 'Standard Review',
     status: formatStatus(detail.status),
     statusRaw: detail.status || '',
@@ -5550,7 +5656,7 @@ function renderAuthoritativeAppDetail(app, options) {
   currentScreeningReviewFocus = options.screeningFocus || null;
 
   document.getElementById('detail-company-name').textContent = app.company;
-  document.getElementById('detail-badges').innerHTML = riskBadge(app.risk) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>' + renderIncompleteSubmissionBadge(documentReadiness);
+  document.getElementById('detail-badges').innerHTML = riskBadgeForRecord(app) + ' ' + statusBadge(app.status) + ' <span class="badge pending">' + escapeHtml(app.lane) + '</span>' + renderIncompleteSubmissionBadge(documentReadiness);
 
   document.getElementById('detail-entity-info').innerHTML =
     '<div class="detail-row"><span class="label">Reference</span><span class="value" style="font-family:monospace;">' + escapeHtml(app.ref) + '</span></div>' +
@@ -5738,8 +5844,12 @@ function renderAuthoritativeAppDetail(app, options) {
     riskBarsHtml += '<div class="risk-bar-row"><div class="risk-bar-label">' + dimLabels[key] + '</div><div class="risk-bar-track"><div class="risk-bar-fill ' + cls + '" style="width:' + pct + '%;"></div></div><div class="risk-bar-value">' + value.toFixed(2) + '</div></div>';
   });
   document.getElementById('detail-risk-bars').innerHTML = riskBarsHtml || '<div style="font-size:12px;color:var(--text3);">No persisted risk dimension breakdown is available for this application.</div>';
-  document.getElementById('detail-composite-score').textContent = formatRiskScore(app.score);
-  document.getElementById('detail-risk-badge').innerHTML = riskBadge(app.risk);
+  document.getElementById('detail-composite-score').textContent = formatRiskScoreForRecord(app);
+  document.getElementById('detail-risk-badge').innerHTML = riskBadgeForRecord(app);
+  var detailRiskBars = document.getElementById('detail-risk-bars');
+  if (detailRiskBars && !hasAuthoritativeRisk(app)) {
+    detailRiskBars.innerHTML = renderRiskIntegrityWarning(app) + detailRiskBars.innerHTML;
+  }
   document.getElementById('detail-score-breakdown').innerHTML = renderStoredRiskComputationHtml(app);
 
   var screeningSummary = getApplicationScreeningSummary(app);
@@ -7124,10 +7234,23 @@ async function renderScreening() {
 var EDD_CASES = [];
 var currentEDDCase = null;
 
+function mapEDDCaseFromApi(caseRow) {
+  var riskState = buildRiskDisplayState(caseRow || {});
+  return Object.assign({}, caseRow, {
+    risk_level: riskState.level,
+    rawRiskLevel: normalizeRiskLevel((caseRow || {}).risk_level),
+    risk_score: riskState.score,
+    rawRiskScore: normalizeRiskScore((caseRow || {}).risk_score),
+    hasAuthoritativeRisk: riskState.hasRisk,
+    riskIntegrityWarnings: riskState.warnings,
+    eddTriggerFlags: riskState.eddTriggerFlags
+  });
+}
+
 async function loadEDDCases() {
   try {
     var resp = await boApiCall('GET', '/edd/cases');
-    if (resp.cases) EDD_CASES = resp.cases;
+    if (resp.cases) EDD_CASES = resp.cases.map(mapEDDCaseFromApi);
   } catch(e) { console.warn('Could not load EDD cases:', e); }
 }
 
@@ -7179,8 +7302,8 @@ function renderEDD() {
     tr.style.cursor = 'pointer';
     tr.onclick = function() { openEDDDetail(c.id); };
     tr.innerHTML = '<td style="font-weight:600;">' + escapeHtml(c.client_name) + '</td>' +
-      '<td>' + riskBadge(c.risk_level) + '</td>' +
-      '<td style="font-weight:700;">' + escapeHtml(formatRiskScore(c.risk_score)) + '</td>' +
+      '<td>' + riskBadgeForRecord(c) + '</td>' +
+      '<td style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(c)) + '</td>' +
       '<td>' + eddStageBadge(c.stage) + '</td>' +
       '<td style="font-size:12px;">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === c.assigned_officer; }); return u ? u.name : (c.assigned_officer || 'Unassigned'); })()) + '</td>' +
       '<td style="font-weight:600;' + (days > 10 ? 'color:var(--red);' : '') + '">' + days + 'd</td>' +
@@ -7237,8 +7360,8 @@ function openEDDDetail(caseId) {
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">EDD Case Summary</div>' +
     '<div class="detail-row"><span class="label">Client</span><span class="value" style="font-weight:600;">' + escapeHtml(c.client_name) + '</span></div>' +
     '<div class="detail-row"><span class="label">Application</span><span class="value" style="font-family:monospace;">' + escapeHtml(c.application_id) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Risk Level</span><span class="value">' + riskBadge(c.risk_level) + '</span></div>' +
-    '<div class="detail-row"><span class="label">Risk Score</span><span class="value" style="font-weight:700;">' + escapeHtml(formatRiskScore(c.risk_score)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Risk Level</span><span class="value">' + riskBadgeForRecord(c) + '</span></div>' +
+    '<div class="detail-row"><span class="label">Risk Score</span><span class="value" style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(c)) + '</span></div>' +
     '<div class="detail-row"><span class="label">Current Stage</span><span class="value">' + eddStageBadge(c.stage) + '</span></div>' +
     '<div class="detail-row"><span class="label">Assigned Officer</span><span class="value">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === c.assigned_officer; }); return u ? u.name : (c.assigned_officer || 'Unassigned'); })()) + '</span></div>' +
     '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + escapeHtml(eddTriggerText(c)) + '</span></div>' +
@@ -7247,6 +7370,7 @@ function openEDDDetail(caseId) {
     '<div class="detail-row"><span class="label">SLA Due</span><span class="value">' + escapeHtml(slaDate || '—') + '</span></div>' +
     '<div class="detail-row"><span class="label">Senior Reviewer</span><span class="value">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === seniorReviewer; }); return u ? u.name : (seniorReviewer || '—'); })()) + '</span></div>' +
     '</div>';
+  html += renderRiskIntegrityWarning(c);
 
   if (policy.policy_version || (policy.triggers || []).length) {
     html += '<div class="detail-section" style="margin-top:16px;">' +
@@ -7846,7 +7970,7 @@ function renderCases() {
     if (isPreApprovalCase(app)) {
       tr.style.background = 'rgba(217,119,6,0.06)';
     }
-    tr.innerHTML = '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadge(app.risk) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td><td><button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + escapeHtml(app.ref) + '\')">Open</button></td>';
+    tr.innerHTML = '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadgeForRecord(app) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td><td><button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + escapeHtml(app.ref) + '\')">Open</button></td>';
     tbody.appendChild(tr);
   });
 
@@ -9128,7 +9252,7 @@ function openPeriodicReview(ref) {
         '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Client Profile</div>' +
         '<div class="detail-row"><span class="label">Sector</span><span class="value">' + app.sector + '</span></div>' +
         '<div class="detail-row"><span class="label">Country</span><span class="value">' + app.country + '</span></div>' +
-        '<div class="detail-row"><span class="label">Risk Score</span><span class="value">' + escapeHtml(formatRiskScore(app.score)) + '</span></div>' +
+        '<div class="detail-row"><span class="label">Risk Score</span><span class="value">' + escapeHtml(formatRiskScoreForRecord(app)) + '</span></div>' +
         '<div class="detail-row"><span class="label">Directors</span><span class="value">' + app.directors.map(function(d){return d.name;}).join(', ') + '</span></div>' +
         '<div class="detail-row"><span class="label">PEPs</span><span class="value">' + (app.pepCount > 0 ? '<span class="badge high">' + app.pepCount + ' PEP(s)</span>' : 'None') + '</span></div>' +
         '</div>';
@@ -9710,6 +9834,9 @@ function getApplicationApprovalBlockers(app) {
   if (!app) return ['No application is selected.'];
 
   var status = String(app.statusRaw || app.status || '').toLowerCase();
+  if (riskRequiredForStatus(status) && !hasAuthoritativeRisk(app)) {
+    blockers.push(RISK_UNAVAILABLE_TEXT + '. Recompute risk before approval.');
+  }
   var preReviewStates = {
     draft: true,
     prescreening_submitted: true,
@@ -13373,11 +13500,21 @@ function renderMemoSections(data) {
   }
 
   // Risk badge at top
-  var rl = (data.metadata||{}).risk_rating || 'MEDIUM';
-  var rs = (data.metadata||{}).risk_score || 'N/A';
+  var memoMeta = data.metadata || {};
+  var memoRiskState = buildRiskDisplayState({
+    risk_level: memoMeta.risk_rating,
+    risk_score: memoMeta.risk_score,
+    has_authoritative_risk: memoMeta.has_authoritative_risk,
+    risk_integrity_warnings: memoMeta.risk_integrity_warnings,
+    status: (window._currentDetailApp || {}).statusRaw || ''
+  });
   var dec = (data.metadata||{}).approval_recommendation || 'REVIEW';
   html += '<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">';
-  html += '<span style="font-size:11px;color:var(--text3);">Risk Rating:</span><span class="memo-risk-badge ' + rl.toLowerCase() + '">' + rl.replace('_',' ') + ' (' + rs + '/100)</span>';
+  if (memoRiskState.hasRisk) {
+    html += '<span style="font-size:11px;color:var(--text3);">Risk Rating:</span><span class="memo-risk-badge ' + memoRiskState.level.toLowerCase() + '">' + memoRiskState.level.replace('_',' ') + ' (' + memoRiskState.score.toFixed(1) + '/100)</span>';
+  } else {
+    html += '<span style="font-size:11px;color:var(--text3);">Risk Rating:</span><span class="memo-risk-badge medium" style="background:#fee2e2;color:#991b1b;">' + escapeHtml(RISK_UNAVAILABLE_TEXT) + '</span>';
+  }
   html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Decision:</span><span class="memo-risk-badge ' + (dec.indexOf('APPROVE')===0&&dec!=='APPROVE_WITH_CONDITIONS'?'low':dec==='APPROVE_WITH_CONDITIONS'?'medium':dec==='REVIEW'?'high':'very_high') + '">' + dec.replace(/_/g,' ') + '</span>';
   var conf = (data.metadata||{}).confidence_level;
   if (conf) { html += '<span style="font-size:11px;color:var(--text3);margin-left:12px;">Confidence:</span><span style="font-size:11px;font-weight:600;color:' + (conf>=0.8?'var(--green)':conf>=0.6?'var(--amber)':'var(--red)') + ';">' + Math.round(conf*100) + '%</span>'; }
@@ -14590,7 +14727,7 @@ function downloadRiskCSV() {
   lines.push('Sector,' + '"' + (app.sector || '').replace(/"/g,'""') + '"');
   lines.push('Submission Date,' + app.date);
   lines.push('Risk Level,' + app.risk);
-  lines.push('Composite Score,' + formatRiskScore(app.score));
+  lines.push('Composite Score,' + formatRiskScoreForRecord(app));
   lines.push('Onboarding Lane,' + app.lane);
   lines.push('Assigned To,' + app.assigned);
   lines.push('');
