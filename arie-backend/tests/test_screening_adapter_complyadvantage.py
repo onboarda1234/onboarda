@@ -5,6 +5,10 @@ from screening_provider import ScreeningProvider
 from screening_complyadvantage.adapter import ComplyAdvantageScreeningAdapter
 
 
+class FakeConfig:
+    screening_configuration_identifier = "cfg-123"
+
+
 def _report():
     return {
         "provider": "complyadvantage",
@@ -68,6 +72,7 @@ def test_is_configured_true_and_false(monkeypatch):
         "COMPLYADVANTAGE_REALM": "regmind",
         "COMPLYADVANTAGE_USERNAME": "user",
         "COMPLYADVANTAGE_PASSWORD": "pass",
+        "COMPLYADVANTAGE_SCREENING_CONFIG_ID": "cfg-123",
     }.items():
         monkeypatch.setenv(name, value)
     assert ComplyAdvantageScreeningAdapter().is_configured() is True
@@ -88,7 +93,7 @@ def test_constructor_does_not_read_env_or_touch_http_or_db(monkeypatch):
 def test_screen_person_delegates_and_returns_plain_contract_dict():
     orchestrator = FakeOrchestrator()
     db = object()
-    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, db=db)
+    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, config=FakeConfig(), db=db)
 
     result = adapter.screen_person("Jane Doe", birth_date="1980-01-31", nationality="MU")
 
@@ -100,23 +105,26 @@ def test_screen_person_delegates_and_returns_plain_contract_dict():
     assert call["application_context"].screening_subject_name == "Jane Doe"
     assert call["strict_customer"]["person"]["nationality"] == "MU"
     assert "nationality" not in call["relaxed_customer"]["person"]
+    assert call["screening_configuration_identifier"] == "cfg-123"
 
 
 def test_screen_company_delegates_to_entity_context():
     orchestrator = FakeOrchestrator()
-    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator)
+    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, config=FakeConfig())
 
     adapter.screen_company("Acme Ltd", jurisdiction="MU")
 
     call = orchestrator.calls[0]
     assert call["application_context"].screening_subject_kind == "entity"
     assert call["strict_customer"]["company"]["jurisdiction"] == "MU"
+    assert call["strict_customer"]["company"]["legal_name"] == "Acme Ltd"
+    assert call["screening_configuration_identifier"] == "cfg-123"
 
 
 def test_run_full_screening_propagates_db_for_each_subject():
     orchestrator = FakeOrchestrator()
     db = object()
-    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, db=db)
+    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, config=FakeConfig(), db=db)
 
     result = adapter.run_full_screening(
         {"application_id": "app-1", "client_id": "client-1", "company_name": "Acme Ltd"},
@@ -126,5 +134,6 @@ def test_run_full_screening_propagates_db_for_each_subject():
 
     assert len(orchestrator.calls) == 2
     assert all(call["db"] is db for call in orchestrator.calls)
+    assert all(call["screening_configuration_identifier"] == "cfg-123" for call in orchestrator.calls)
     assert result["provider"] == "complyadvantage"
     assert "subscription_seeded" not in result

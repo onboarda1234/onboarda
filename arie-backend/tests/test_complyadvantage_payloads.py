@@ -91,14 +91,15 @@ def test_build_customer_company_strict_vs_relaxed():
     assert "customer_reference" not in strict
     assert strict["registration_number"] == "C123"
     assert strict["addresses"][0]["location_type"] == "registered_address"
-    assert relaxed == {"name": "Acme Ltd"}
+    assert strict["legal_name"] == "Acme Ltd"
+    assert relaxed == {"legal_name": "Acme Ltd"}
     assert relaxed_customer["reference"] == "app-1"
 
 
 def test_monitoring_block_defaults_true_and_can_be_disabled():
-    default_payload = build_create_and_screen_payload({"company": {"name": "Acme"}})
+    default_payload = build_create_and_screen_payload({"company": {"legal_name": "Acme"}})
     disabled_payload = build_create_and_screen_payload(
-        {"company": {"name": "Acme"}},
+        {"company": {"legal_name": "Acme"}},
         monitoring_enabled=False,
     )
 
@@ -115,3 +116,20 @@ def test_create_and_screen_external_identifier_override_stays_customer_level():
     assert payload["customer"]["external_identifier"] == "app-1"
     assert payload["customer"]["reference"] == "app-1"
     assert "external_identifier" not in payload["customer"]["person"]
+
+
+def test_create_and_screen_includes_screening_configuration_identifier_when_supplied():
+    payload = build_create_and_screen_payload(
+        {"company": {"legal_name": "Acme"}},
+        screening_configuration_identifier="cfg-123",
+    )
+
+    assert payload["configuration"]["screening_configuration_identifier"] == "cfg-123"
+    assert "screening" not in payload
+
+
+def test_build_customer_company_uses_legal_name_key_not_name():
+    company = build_customer_company({"legal_name": "Acme Legal", "application_id": "app-1"}, strict=False)
+
+    assert company["company"]["legal_name"] == "Acme Legal"
+    assert "name" not in company["company"]

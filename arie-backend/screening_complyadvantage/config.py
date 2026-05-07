@@ -15,6 +15,7 @@ class CAConfig:
     realm: str
     username: str
     password: str
+    screening_configuration_identifier: str
 
     @classmethod
     def from_env(cls):
@@ -27,12 +28,17 @@ class CAConfig:
             raise CAConfigurationError("realm must be 'regmind'")
         username = _required_env("COMPLYADVANTAGE_USERNAME", "account identifier")
         password = _required_env("COMPLYADVANTAGE_PASSWORD", "credential")
+        screening_configuration_identifier = _required_env(
+            "COMPLYADVANTAGE_SCREENING_CONFIG_ID",
+            "screening configuration identifier",
+        )
         return cls(
             api_base_url=api_base_url.rstrip("/"),
             auth_url=auth_url.rstrip("/"),
             realm=realm,
             username=username,
             password=password,
+            screening_configuration_identifier=screening_configuration_identifier,
         )
 
 
