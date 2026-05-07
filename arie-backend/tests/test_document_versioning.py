@@ -166,6 +166,53 @@ def _document_rows(app_id):
     return rows
 
 
+def test_existing_schema_without_slot_key_can_start_and_repair(tmp_path):
+    import sqlite3
+
+    db_path = str(tmp_path / "legacy_documents.db")
+    raw = sqlite3.connect(db_path)
+    raw.execute(
+        """
+        CREATE TABLE documents (
+            id TEXT PRIMARY KEY,
+            application_id TEXT,
+            person_id TEXT,
+            doc_type TEXT,
+            doc_name TEXT,
+            file_path TEXT,
+            s3_key TEXT,
+            file_size INTEGER,
+            mime_type TEXT,
+            verification_status TEXT DEFAULT 'pending',
+            verification_results TEXT,
+            verified_at TEXT,
+            review_status TEXT DEFAULT 'pending',
+            review_comment TEXT,
+            reviewed_by TEXT,
+            reviewed_at TEXT,
+            uploaded_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    raw.commit()
+    raw.close()
+
+    _sync_db_path(db_path)
+    from db import get_db, init_db
+
+    init_db()
+    conn = get_db()
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    indexes = {row["name"] for row in conn.execute("PRAGMA index_list(documents)").fetchall()}
+    conn.close()
+
+    assert "slot_key" in columns
+    assert "is_current" in columns
+    assert "version" in columns
+    assert "idx_documents_current_slot" in indexes
+    assert "idx_documents_one_current_slot" in indexes
+
+
 def test_replacement_supersedes_previous_document_and_active_apis_hide_history(document_versioning_server):
     app_id = "docver_app_api"
     client_id = "docver_client_api"
