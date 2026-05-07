@@ -3262,6 +3262,19 @@
         <p class="text-sm mt-2" style="color:var(--text3);">Upload all required documents. AI will verify authenticity and validity automatically.</p>
       </div>
 
+      <!-- Additional requested information -->
+      <div class="card" id="additional-info-required-card" style="display:none;border-left:4px solid var(--amber);">
+        <div class="card-header">
+          <div class="card-icon" style="background:var(--amber-dim);color:var(--amber);">i</div>
+          <div>
+            <div class="card-title">Additional Information Required</div>
+            <div class="card-sub">To complete your review, please provide the additional information below.</div>
+          </div>
+        </div>
+        <div id="additional-info-required-container" style="display:flex;flex-direction:column;gap:10px;padding:0 16px 16px;">
+        </div>
+      </div>
+
       <!-- Section A: Corporate Documents -->
       <div class="card">
         <div class="card-header">
@@ -4769,6 +4782,7 @@ function clearAuth() {
 let appRef = '';
 let uploadedDocs = new Set();
 let currentRMIRequests = [];
+let currentEnhancedRequirements = [];
 var TOTAL_REQUIRED_DOCS = 11;
 var APP_TABLE_COLSPAN = 7;
 var PRESCREENING_FIELD_BINDINGS = {
@@ -4903,6 +4917,8 @@ function resetPortalPricingState() {
 function resetPortalApplicationState() {
   currentApplicationId = '';
   appRef = '';
+  currentEnhancedRequirements = [];
+  renderPortalEnhancedRequirements([]);
   if (autoSaveTimer) {
     clearInterval(autoSaveTimer);
     autoSaveTimer = null;
@@ -5184,6 +5200,9 @@ function showView(name) {
   // Load applications if viewing my-apps
   if (name === 'my-apps' || name === 'view-my-apps') {
     loadMyApplications();
+  }
+  if (name === 'onboarding' && AUTH_TOKEN && currentApplicationId) {
+    loadPortalEnhancedRequirements();
   }
 }
 
@@ -8176,6 +8195,80 @@ function updateClientStatusTracker(status) {
   }
 }
 
+function portalEnhancedRequirementTone(status) {
+  var s = String(status || 'required').toLowerCase();
+  if (s === 'submitted') return { cls: 'uploaded', text: 'Submitted' };
+  if (s === 'under_review') return { cls: 'warning', text: 'Under review' };
+  if (s === 'additional_information_needed') return { cls: 'missing', text: 'Additional information needed' };
+  return { cls: 'missing', text: 'Required' };
+}
+
+function portalEnhancedRequirementActionText(req) {
+  var type = String(req && req.requirement_type || '').toLowerCase();
+  var status = String(req && req.status || '').toLowerCase();
+  if (status === 'submitted' || status === 'under_review') {
+    return 'No further action is needed right now.';
+  }
+  if (type === 'document') {
+    return 'Upload supporting files in the document sections below.';
+  }
+  if (type === 'declaration' || type === 'explanation') {
+    return 'Provide the requested details in the relevant form or supporting document section.';
+  }
+  return 'Provide the requested information in the relevant section.';
+}
+
+function renderPortalEnhancedRequirements(requirements) {
+  currentEnhancedRequirements = Array.isArray(requirements) ? requirements : [];
+  var card = document.getElementById('additional-info-required-card');
+  var container = document.getElementById('additional-info-required-container');
+  if (!card || !container) return;
+  if (!currentEnhancedRequirements.length) {
+    card.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  card.style.display = '';
+  container.innerHTML = currentEnhancedRequirements.map(function(req) {
+    var tone = portalEnhancedRequirementTone(req.status);
+    var requestedAt = req.requested_at ? new Date(req.requested_at).toLocaleDateString() : '';
+    var meta = [];
+    if (req.requirement_type) meta.push(String(req.requirement_type).replace(/_/g, ' '));
+    if (req.subject_scope) meta.push(String(req.subject_scope).replace(/_/g, ' '));
+    if (requestedAt) meta.push('Requested ' + requestedAt);
+    return '<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface);">' +
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">' +
+        '<div style="min-width:0;flex:1;">' +
+          '<div style="font-size:14px;font-weight:800;color:var(--text);">' + escapeHtml(req.label || 'Additional information') + '</div>' +
+          (req.description ? '<div style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.5;">' + escapeHtml(req.description) + '</div>' : '') +
+          (meta.length ? '<div style="font-size:11px;color:var(--text3);margin-top:7px;">' + escapeHtml(meta.join(' | ')) + '</div>' : '') +
+          '<div style="font-size:11px;color:var(--text2);margin-top:8px;">' + escapeHtml(portalEnhancedRequirementActionText(req)) + '</div>' +
+        '</div>' +
+        '<span class="review-status ' + tone.cls + '">' + escapeHtml(req.status_label || tone.text) + '</span>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function loadPortalEnhancedRequirements() {
+  if (!AUTH_TOKEN || !currentApplicationId) {
+    renderPortalEnhancedRequirements([]);
+    return;
+  }
+  try {
+    var resp = await apiCall('GET', '/portal/applications/' + encodeURIComponent(currentApplicationId) + '/enhanced-requirements');
+    renderPortalEnhancedRequirements(resp.requirements || []);
+  } catch (err) {
+    console.warn('Could not load additional information requests:', err);
+    var card = document.getElementById('additional-info-required-card');
+    var container = document.getElementById('additional-info-required-container');
+    if (card && container) {
+      card.style.display = '';
+      container.innerHTML = '<div style="padding:12px;border:1px dashed var(--border2);border-radius:8px;color:var(--text3);font-size:12px;text-align:center;">Unable to load additional information right now.</div>';
+    }
+  }
+}
+
 function rmiItemTone(status) {
   var s = String(status || 'requested').toLowerCase();
   if (s === 'accepted') return { cls: 'uploaded', text: 'Accepted' };
@@ -9670,6 +9763,7 @@ async function resumeApplication(ref, stage) {
       }
       syncPersistedApplicationDocuments(app);
       renderRMIRequests(app.rmi_requests || []);
+      loadPortalEnhancedRequirements();
       buildReviewScreen();
     }
   } catch (err) {

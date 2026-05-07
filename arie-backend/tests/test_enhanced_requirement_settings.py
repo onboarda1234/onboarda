@@ -412,4 +412,37 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "/documents" not in block
     assert "/supervisor" not in block
 
-    assert "/enhanced-requirements" not in portal_html
+    assert "/portal/applications/' + encodeURIComponent(currentApplicationId) + '/enhanced-requirements" in portal_html
+    assert "Additional Information Required" in portal_html
+    assert "renderPortalEnhancedRequirements" in portal_html
+    assert "loadPortalEnhancedRequirements" in portal_html
+
+    portal_section = portal_html.split('id="additional-info-required-card"', 1)[1]
+    portal_section = portal_section.split("<!-- Section A: Corporate Documents -->", 1)[0]
+    assert "To complete your review, please provide the additional information below." in portal_section
+    for forbidden in (
+        "EDD",
+        "Enhanced Due Diligence",
+        "high risk",
+        "screening concern",
+        "sanctions concern",
+        "PEP concern",
+    ):
+        assert forbidden.lower() not in portal_section.lower()
+
+    portal_logic = portal_html.split("function portalEnhancedRequirementTone", 1)[1]
+    portal_logic = portal_logic.split("function rmiItemTone", 1)[0]
+    assert "/portal/applications/" in portal_logic
+    assert "apiCall('GET', '/applications/" not in portal_logic
+    assert "apiCall('POST', '/applications/" not in portal_logic
+    assert "apiCall('PATCH', '/applications/" not in portal_logic
+    assert "/rmi" not in portal_logic.lower()
+    assert "/notify" not in portal_logic
+    assert "/decision" not in portal_logic
+    assert "/memo" not in portal_logic
+    assert "/edd/" not in portal_logic.lower()
+    assert "/screening" not in portal_logic
+    assert "Required" in portal_logic
+    assert "Submitted" in portal_logic
+    assert "Under review" in portal_logic
+    assert "Additional information needed" in portal_logic

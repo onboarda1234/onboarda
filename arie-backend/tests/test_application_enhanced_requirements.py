@@ -115,6 +115,13 @@ def _headers(role="admin", token_type="officer"):
     return {"Authorization": f"Bearer {token}"}
 
 
+def _client_headers(client_id="client001"):
+    from auth import create_token
+
+    token = create_token(client_id, "client", f"Client {client_id}", "client")
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _insert_application(
     db,
     *,
@@ -1167,3 +1174,176 @@ def test_request_from_client_rejects_ineligible_requirements(enhanced_app_api_se
     )
     assert backoffice_resp.status_code == 400
     assert "Back-office-only" in backoffice_resp.text
+
+
+def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    client_id = "client001"
+    other_client_id = "client002"
+    conn = get_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
+        (client_id, "client001@example.com", "hash", "Client One"),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO clients (id, email, password_hash, company_name) VALUES (?,?,?,?)",
+        (other_client_id, "client002@example.com", "hash", "Client Two"),
+    )
+    app_id = _insert_application(conn, risk_level="HIGH")
+    conn.execute("UPDATE applications SET client_id=? WHERE id=?", (client_id, app_id))
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Declared Person", "Yes"),
+    )
+    conn.commit()
+    _generate(conn, app_id)
+
+    requested_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
+    uploaded_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
+    under_review_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
+    rejected_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
+    accepted_req = _requirement_id_by_key(conn, app_id, "pep_sow_evidence")
+    waived_req = _requirement_id_by_key(conn, app_id, "pep_linked_sof_evidence")
+    cancelled_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
+    backoffice_req = _requirement_id_by_key(conn, app_id, "mandatory_senior_review")
+    conn.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status = CASE id
+            WHEN ? THEN 'requested'
+            WHEN ? THEN 'uploaded'
+            WHEN ? THEN 'under_review'
+            WHEN ? THEN 'rejected'
+            WHEN ? THEN 'accepted'
+            WHEN ? THEN 'waived'
+            WHEN ? THEN 'cancelled'
+            WHEN ? THEN 'requested'
+            ELSE status
+        END,
+        requested_at = CASE WHEN id IN (?,?,?,?,?) THEN datetime('now') ELSE requested_at END,
+        requested_by = CASE WHEN id IN (?,?,?,?,?) THEN 'co001' ELSE requested_by END
+        WHERE application_id=?
+        """,
+        (
+            requested_req,
+            uploaded_req,
+            under_review_req,
+            rejected_req,
+            accepted_req,
+            waived_req,
+            cancelled_req,
+            backoffice_req,
+            requested_req,
+            uploaded_req,
+            under_review_req,
+            rejected_req,
+            backoffice_req,
+            requested_req,
+            uploaded_req,
+            under_review_req,
+            rejected_req,
+            backoffice_req,
+            app_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = requests.get(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements",
+        headers=_client_headers(client_id),
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["application_id"] == app_id
+    requirements = body["requirements"]
+    returned_ids = {item["id"] for item in requirements}
+    assert returned_ids == {requested_req, uploaded_req, under_review_req, rejected_req}
+    assert {item["status"] for item in requirements} == {
+        "required",
+        "submitted",
+        "under_review",
+        "additional_information_needed",
+    }
+    assert body["total"] == 4
+
+    forbidden_fields = {
+        "trigger_key",
+        "trigger_label",
+        "trigger_category",
+        "trigger_reason",
+        "trigger_context",
+        "internal_notes",
+        "review_notes",
+        "waiver_reason",
+        "waived_by",
+        "requested_by",
+        "audit",
+    }
+    forbidden_text = (
+        "screening concern",
+        "sanctions concern",
+        "high risk",
+        "very high",
+        "approval blocker",
+        "officer notes",
+    )
+    for item in requirements:
+        assert not forbidden_fields.intersection(item)
+        assert item["label"]
+        assert item["status_label"] in {
+            "Required",
+            "Submitted",
+            "Under review",
+            "Additional information needed",
+        }
+        rendered = json.dumps(item).lower()
+        for term in forbidden_text:
+            assert term not in rendered
+
+    other_resp = requests.get(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements",
+        headers=_client_headers(other_client_id),
+        timeout=5,
+    )
+    assert other_resp.status_code == 403
+
+    officer_resp = requests.get(
+        f"{base_url}/api/portal/applications/{app_id}/enhanced-requirements",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert officer_resp.status_code == 403
+
+    backoffice_resp = requests.get(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements",
+        headers=_client_headers(client_id),
+        timeout=5,
+    )
+    assert backoffice_resp.status_code == 403
+
+    conn = get_db()
+    app = conn.execute("SELECT status, decision_notes FROM applications WHERE id=?", (app_id,)).fetchone()
+    rmi_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM rmi_requests WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    notification_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM client_notifications WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    memo_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM compliance_memos WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    conn.close()
+
+    assert app["status"] == "submitted"
+    assert app["decision_notes"] in (None, "")
+    assert rmi_count == 0
+    assert notification_count == 0
+    assert memo_count == 0
