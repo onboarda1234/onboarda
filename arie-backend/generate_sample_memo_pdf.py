@@ -35,7 +35,10 @@ def main():
 
     dirs = [dict(r) for r in db.execute("SELECT * FROM directors WHERE application_id = ?", (app_id,)).fetchall()]
     ubos = [dict(r) for r in db.execute("SELECT * FROM ubos WHERE application_id = ?", (app_id,)).fetchall()]
-    docs = [dict(r) for r in db.execute("SELECT * FROM documents WHERE application_id = ?", (app_id,)).fetchall()]
+    docs = [dict(r) for r in db.execute(
+        "SELECT * FROM documents WHERE application_id = ? AND COALESCE(is_current, TRUE) = TRUE",
+        (app_id,),
+    ).fetchall()]
 
     # Enrich
     ps = json.loads(app.get("prescreening_data", "{}"))

@@ -1220,43 +1220,80 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
             ))
 
 
-def resolve_application_person(db, application_id, person_ref):
+PERSON_TYPE_ALIASES = {
+    "director": "director",
+    "directors": "director",
+    "dir": "director",
+    "ubo": "ubo",
+    "ubos": "ubo",
+    "beneficial_owner": "ubo",
+    "beneficial-owner": "ubo",
+    "intermediary": "intermediary",
+    "intermediaries": "intermediary",
+    "inter": "intermediary",
+    "int": "intermediary",
+}
+
+
+def normalize_person_type(value):
+    if value is None:
+        return None
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(value).strip().lower()).strip("_")
+    return PERSON_TYPE_ALIASES.get(normalized)
+
+
+def _resolve_application_person_by_type(db, application_id, person_ref, person_type):
     if not application_id or not person_ref:
         return None
+    person_type = normalize_person_type(person_type)
+    if person_type == "director":
+        director = db.execute("""
+            SELECT id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration, date_of_birth
+            FROM directors WHERE application_id = ? AND (id = ? OR person_key = ?)
+            LIMIT 1
+        """, (application_id, person_ref, person_ref)).fetchone()
+        if director:
+            result = hydrate_party_record(director, PII_FIELDS_DIRECTORS)
+            result["person_type"] = "director"
+            result["entity_type"] = "Person"
+            return result
+    elif person_type == "ubo":
+        ubo = db.execute("""
+            SELECT id, person_key, first_name, last_name, full_name, nationality, ownership_pct, is_pep, pep_declaration, date_of_birth
+            FROM ubos WHERE application_id = ? AND (id = ? OR person_key = ?)
+            LIMIT 1
+        """, (application_id, person_ref, person_ref)).fetchone()
+        if ubo:
+            result = hydrate_party_record(ubo, PII_FIELDS_UBOS)
+            result["person_type"] = "ubo"
+            result["entity_type"] = "Person"
+            return result
+    elif person_type == "intermediary":
+        intermediary = db.execute("""
+            SELECT id, person_key, entity_name, jurisdiction, ownership_pct
+            FROM intermediaries WHERE application_id = ? AND (id = ? OR person_key = ?)
+            LIMIT 1
+        """, (application_id, person_ref, person_ref)).fetchone()
+        if intermediary:
+            result = dict(intermediary)
+            result["full_name"] = result.get("entity_name", "")
+            result["person_type"] = "intermediary"
+            result["entity_type"] = "Company"
+            return result
+    return None
 
-    director = db.execute("""
-        SELECT id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration, date_of_birth
-        FROM directors WHERE application_id = ? AND (id = ? OR person_key = ?)
-        LIMIT 1
-    """, (application_id, person_ref, person_ref)).fetchone()
-    if director:
-        result = hydrate_party_record(director, PII_FIELDS_DIRECTORS)
-        result["person_type"] = "director"
-        result["entity_type"] = "Person"
-        return result
 
-    ubo = db.execute("""
-        SELECT id, person_key, first_name, last_name, full_name, nationality, ownership_pct, is_pep, pep_declaration, date_of_birth
-        FROM ubos WHERE application_id = ? AND (id = ? OR person_key = ?)
-        LIMIT 1
-    """, (application_id, person_ref, person_ref)).fetchone()
-    if ubo:
-        result = hydrate_party_record(ubo, PII_FIELDS_UBOS)
-        result["person_type"] = "ubo"
-        result["entity_type"] = "Person"
-        return result
+def resolve_application_person(db, application_id, person_ref, person_type=None):
+    if not application_id or not person_ref:
+        return None
+    requested_type = normalize_person_type(person_type)
+    if requested_type:
+        return _resolve_application_person_by_type(db, application_id, person_ref, requested_type)
 
-    intermediary = db.execute("""
-        SELECT id, person_key, entity_name, jurisdiction, ownership_pct
-        FROM intermediaries WHERE application_id = ? AND (id = ? OR person_key = ?)
-        LIMIT 1
-    """, (application_id, person_ref, person_ref)).fetchone()
-    if intermediary:
-        result = dict(intermediary)
-        result["full_name"] = result.get("entity_name", "")
-        result["person_type"] = "intermediary"
-        result["entity_type"] = "Company"
-        return result
+    for candidate_type in ("director", "ubo", "intermediary"):
+        result = _resolve_application_person_by_type(db, application_id, person_ref, candidate_type)
+        if result:
+            return result
 
     return None
 
@@ -1497,7 +1534,12 @@ def get_db():
 
 def init_db():
     """Initialize database schema and seed initial data."""
-    from db import seed_initial_data, sync_ai_checks_from_seed, normalize_legacy_doc_types
+    from db import (
+        seed_initial_data,
+        sync_ai_checks_from_seed,
+        normalize_legacy_doc_types,
+        repair_document_current_versions,
+    )
     logger.info("startup: entering db_init_db (schema + pool)")
     db_init_db()
     logger.info("startup: db_init_db completed")
@@ -1511,6 +1553,10 @@ def init_db():
         logger.info("startup: entering normalize_legacy_doc_types")
         normalize_legacy_doc_types(db)
         logger.info("startup: completed normalize_legacy_doc_types")
+        logger.info("startup: entering repair_document_current_versions")
+        repair_document_current_versions(db)
+        db.commit()
+        logger.info("startup: completed repair_document_current_versions")
         # Upsert canonical ai_checks on every startup so stale rows on
         # existing databases (staging/prod) are always brought up to date.
         logger.info("startup: entering sync_ai_checks_from_seed")
@@ -2465,8 +2511,10 @@ class ApplicationsHandler(BaseHandler):
             doc_rows = db.execute(
                 "SELECT id, doc_type, doc_name, file_size, verification_status, "
                 "verification_results, verified_at, person_id, review_status, "
-                "review_comment, reviewed_by, reviewed_at, application_id "
-                f"FROM documents WHERE application_id IN ({doc_placeholders})",
+                "review_comment, reviewed_by, reviewed_at, application_id, "
+                "slot_key, is_current, version, superseded_at, superseded_by_document_id "
+                f"FROM documents WHERE application_id IN ({doc_placeholders}) "
+                f"AND {ACTIVE_DOCUMENT_SQL}",
                 app_ids,
             ).fetchall()
             for d in doc_rows:
@@ -2707,11 +2755,23 @@ class ApplicationDetailHandler(BaseHandler):
         result["first_approver_name"] = resolve_user_display_name(db, result.get("first_approver_id"))
         result["decision_by_name"] = resolve_user_display_name(db, result.get("decision_by"))
         result["directors"], result["ubos"], result["intermediaries"] = get_application_parties(db, result["id"])
+        include_history = self.get_argument("include_history", "false").lower() == "true"
         result["documents"] = [dict(d) for d in db.execute(
-            "SELECT * FROM documents WHERE application_id = ?", (result["id"],)).fetchall()]
+            f"SELECT * FROM documents WHERE application_id = ? AND {ACTIVE_DOCUMENT_SQL} "
+            "ORDER BY uploaded_at DESC, id DESC",
+            (result["id"],)
+        ).fetchall()]
         for doc in result["documents"]:
             doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+        if include_history:
+            result["document_history"] = [dict(d) for d in db.execute(
+                "SELECT * FROM documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC",
+                (result["id"],)
+            ).fetchall()]
+            for doc in result["document_history"]:
+                doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
+                doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
         result["rmi_requests"] = _load_rmi_requests(db, result["id"])
         stored_prescreening = parse_json_field(result.get("prescreening_data"), {})
         saved_session_prescreening = load_saved_session_prescreening(db, result)
@@ -3490,7 +3550,10 @@ class KYCSubmitHandler(BaseHandler):
         real_id = app["id"]
 
         # Check that at least one document has been uploaded
-        doc_count = db.execute("SELECT COUNT(*) as c FROM documents WHERE application_id=?", (real_id,)).fetchone()["c"]
+        doc_count = db.execute(
+            f"SELECT COUNT(*) as c FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
+            (real_id,),
+        ).fetchone()["c"]
         if doc_count == 0:
             db.close()
             return self.error("Please upload at least one document before submitting", 400)
@@ -3779,7 +3842,7 @@ class DocumentUploadHandler(BaseHandler):
             )
 
     def get(self, app_id):
-        """Return all documents for an application."""
+        """Return current documents for an application by default."""
         user = self.require_auth()
         if not user:
             return
@@ -3794,8 +3857,14 @@ class DocumentUploadHandler(BaseHandler):
             db.close()
             return
 
+        include_history = self.get_argument("include_history", "false").lower() == "true"
+        where_active = "" if include_history else f" AND {ACTIVE_DOCUMENT_SQL}"
         docs = [dict(d) for d in db.execute(
-            "SELECT id, application_id, person_id, doc_type, doc_name, file_size, mime_type, verification_status, verification_results, verified_at, review_status, review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?",
+            "SELECT id, application_id, person_id, doc_type, doc_name, file_size, mime_type, "
+            "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
+            "verification_status, verification_results, verified_at, review_status, "
+            f"review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?{where_active} "
+            "ORDER BY uploaded_at DESC, id DESC",
             (app["id"],)).fetchall()]
 
         # Parse verification_results JSON strings
@@ -3842,6 +3911,7 @@ class DocumentUploadHandler(BaseHandler):
             db.close()
             return self.error(doc_type_error, 400)
         rmi_item_id = self.get_argument("rmi_item_id", None)
+        rmi_target = None
         if rmi_item_id:
             rmi_target, rmi_target_error = _validate_rmi_upload_target(db, app["id"], rmi_item_id)
             if rmi_target_error:
@@ -3987,59 +4057,125 @@ class DocumentUploadHandler(BaseHandler):
             )
 
         person_id = self.get_argument("person_id", None)
+        requested_person_type = normalize_person_type(self.get_argument("person_type", None))
 
         # Validate person_id refers to an existing person if provided
         person_resolved = None
+        person_type = requested_person_type
         if person_id:
-            person_resolved = resolve_application_person(db, app["id"], person_id)
+            person_resolved = resolve_application_person(db, app["id"], person_id, requested_person_type)
             if not person_resolved:
                 logger.warning(
                     f"[doc-upload] person_id={person_id!r} not found in application={app['id']} "
-                    f"doc_type={doc_type} file={filename} — storing document with unresolved person_id"
+                    f"person_type={requested_person_type!r} doc_type={doc_type} file={filename} "
+                    f"— storing document with unresolved person_id"
                 )
+            else:
+                person_type = person_resolved.get("person_type") or requested_person_type
 
         logger.info(
             f"[doc-upload] app={app['id']} doc_id={doc_id} doc_type={doc_type} "
-            f"person_id={person_id!r} person_resolved={'yes' if person_resolved else 'no'} "
+            f"person_id={person_id!r} person_type={person_type!r} person_resolved={'yes' if person_resolved else 'no'} "
             f"file={filename} size={len(body)} s3={'yes' if s3_key else 'no'}"
         )
 
-        db.execute("""
-            INSERT INTO documents (id, application_id, person_id, doc_type, doc_name, file_path, s3_key, file_size, mime_type)
-            VALUES (?,?,?,?,?,?,?,?,?)
-        """, (doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key, len(body), content_type))
-        rmi_fulfilled_item_id, rmi_error = _mark_rmi_item_uploaded(
-            db, app["id"], doc_id, doc_type, rmi_item_id=rmi_item_id
-        )
-        if rmi_error:
+        try:
+            slot_key = _document_slot_key(
+                doc_type,
+                person_id,
+                person_type=person_type,
+                rmi_item_id=rmi_item_id,
+            )
+            replacement = _prepare_document_slot_replacement(
+                db,
+                application_id=app["id"],
+                new_document_id=doc_id,
+                doc_type=doc_type,
+                person_id=person_id,
+                person_type=person_type,
+                slot_key=slot_key,
+                actor_user=user,
+                replaced_reason="upload_replacement",
+                extra_document_ids=[rmi_target.get("document_id")] if rmi_target and rmi_target.get("document_id") else None,
+            )
+            previous_documents = replacement["previous_documents"]
+            db.execute("""
+                INSERT INTO documents
+                (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
+                 file_size, mime_type, slot_key, is_current, version)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key,
+                len(body), content_type, replacement["slot_key"], True, replacement["version"],
+            ))
+            _finalize_document_slot_replacement(db, app["id"], previous_documents, doc_id)
+
+            rmi_fulfilled_item_id, rmi_error = _mark_rmi_item_uploaded(
+                db, app["id"], doc_id, doc_type, rmi_item_id=rmi_item_id
+            )
+            if rmi_error:
+                raise ValueError(rmi_error)
+
+            audit_detail = f"Document uploaded: {filename} ({doc_type})"
+            if person_id:
+                audit_detail += f" person_id={person_id}"
+            if rmi_fulfilled_item_id:
+                audit_detail += f" rmi_item_id={rmi_fulfilled_item_id}"
+            self.log_audit(user, "Upload", app["ref"], audit_detail, db=db, commit=False)
+            if previous_documents:
+                self.log_audit(
+                    user,
+                    "document.replaced",
+                    app["ref"],
+                    json.dumps({
+                        "event": "document.replaced",
+                        "application_id": app["id"],
+                        "application_ref": app["ref"],
+                        "doc_type": doc_type,
+                        "person_id": person_id,
+                        "person_type": person_type,
+                        "slot_key": replacement["slot_key"],
+                        "old_document_id": previous_documents[0]["id"],
+                        "old_document_ids": [row["id"] for row in previous_documents],
+                        "new_document_id": doc_id,
+                        "actor": user.get("sub", ""),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state={"documents": previous_documents},
+                    after_state={"document_id": doc_id, "version": replacement["version"], "is_current": True},
+                )
+            db.commit()
+        except Exception as db_err:
             try:
                 db.rollback()
             except Exception:
                 pass
             db.close()
+            reason = str(db_err)
             self._audit_upload_rejected(
-                user, app["ref"], "rmi_fulfillment_failed", rmi_error,
+                user, app["ref"], "document_persistence_failed", reason,
                 filename=filename, doc_type=doc_type, declared_size=len(body), rmi_item_id=rmi_item_id,
             )
-            return self.error(rmi_error, 400)
-        db.commit()
+            status_code = 400 if isinstance(db_err, ValueError) else 500
+            return self.error(reason, status_code)
         db.close()
 
-        audit_detail = f"Document uploaded: {filename} ({doc_type})"
-        if person_id:
-            audit_detail += f" person_id={person_id}"
-        if rmi_fulfilled_item_id:
-            audit_detail += f" rmi_item_id={rmi_fulfilled_item_id}"
         response = {
             "id": doc_id,
             "doc_name": filename,
             "doc_type": doc_type,
             "file_size": len(body),
             "s3_key": s3_key,
+            "person_type": person_type,
+            "slot_key": replacement["slot_key"],
+            "is_current": True,
+            "version": replacement["version"],
+            "replaced_document_ids": [row["id"] for row in previous_documents],
         }
         if rmi_fulfilled_item_id:
             response["rmi_item_id"] = rmi_fulfilled_item_id
-        self.log_audit(user, "Upload", app["ref"], audit_detail)
         self.success(response, 201)
 
 
@@ -4246,7 +4382,7 @@ class DocumentVerifyHandler(BaseHandler):
         if app:
             try:
                 other_docs = db.execute(
-                    "SELECT file_path FROM documents WHERE application_id=? AND id!=?",
+                    f"SELECT file_path FROM documents WHERE application_id=? AND id!=? AND {ACTIVE_DOCUMENT_SQL}",
                     (app["id"], doc_id)
                 ).fetchall()
                 for od in other_docs:
@@ -6650,7 +6786,7 @@ class ReportHandler(BaseHandler):
             SELECT {application_columns}, u.full_name AS assigned_name,
                    (SELECT COUNT(*) FROM directors WHERE application_id=a.id) as director_count,
                    (SELECT COUNT(*) FROM ubos WHERE application_id=a.id) as ubo_count,
-                   (SELECT COUNT(*) FROM documents WHERE application_id=a.id) as document_count
+                   (SELECT COUNT(*) FROM documents WHERE application_id=a.id AND {ACTIVE_DOCUMENT_SQL}) as document_count
             FROM applications a
             LEFT JOIN users u ON a.assigned_to = u.id
             WHERE {scope["where"]}
@@ -7283,13 +7419,26 @@ class ApplicationEvidencePackHandler(BaseHandler):
         directors, ubos, intermediaries = get_application_parties(db, app_dict["id"])
         documents = self._dict_rows(
             db.execute(
-                "SELECT * FROM documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC",
+                f"SELECT * FROM documents WHERE application_id = ? AND {ACTIVE_DOCUMENT_SQL} ORDER BY uploaded_at DESC, id DESC",
                 (app_dict["id"],)
             ).fetchall(),
             json_fields=("verification_results",),
         )
         for doc in documents:
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+
+        include_history = self.get_argument("include_history", "false").lower() == "true"
+        document_history = []
+        if include_history:
+            document_history = self._dict_rows(
+                db.execute(
+                    "SELECT * FROM documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC",
+                    (app_dict["id"],)
+                ).fetchall(),
+                json_fields=("verification_results",),
+            )
+            for doc in document_history:
+                doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
 
         memos = self._dict_rows(
             db.execute(
@@ -7375,6 +7524,7 @@ class ApplicationEvidencePackHandler(BaseHandler):
                 "intermediaries": intermediaries,
             },
             "documents": documents,
+            "document_history": document_history if include_history else [],
             "application_notes": application_notes,
             "rmi_requests": rmi_requests,
             "compliance_memos": memos,
@@ -10249,7 +10399,10 @@ class ComplianceMemoHandler(BaseHandler):
         # Fetch related data — C-02: decrypt PII fields on read
         directors = [decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS) for d in db.execute("SELECT * FROM directors WHERE application_id=?", (real_id,)).fetchall()]
         ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (real_id,)).fetchall()]
-        documents = [dict(d) for d in db.execute("SELECT * FROM documents WHERE application_id=?", (real_id,)).fetchall()]
+        documents = [dict(d) for d in db.execute(
+            f"SELECT * FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
+            (real_id,),
+        ).fetchall()]
         screening_reviews = [dict(r) for r in db.execute(
             "SELECT * FROM screening_reviews WHERE application_id=? ORDER BY updated_at DESC",
             (real_id,),
@@ -10641,25 +10794,61 @@ def _governance_summary(payload, keys, max_total_chars=1200):
 
 DOCUMENT_TYPE_NORMALIZE = {
     "doc-coi": "cert_inc",
+    "certificate-incorporation": "cert_inc",
+    "certificate incorporation": "cert_inc",
     "certificate_of_incorporation": "cert_inc",
+    "certificate of incorporation": "cert_inc",
+    "incorporation_certificate": "cert_inc",
+    "incorporation certificate": "cert_inc",
     "proof_of_address": "poa",
+    "proof of address": "poa",
+    "address_proof": "poa",
     "financial_statements": "fin_stmt",
+    "financial statements": "fin_stmt",
     "source_of_wealth": "source_wealth",
+    "source of wealth": "source_wealth",
     "source_of_funds": "source_funds",
+    "source of funds": "source_funds",
     "doc-memarts": "memarts",
+    "memorandum_of_association": "memarts",
+    "memorandum of association": "memarts",
+    "memorandum_and_articles": "memarts",
+    "memorandum and articles": "memarts",
+    "memorandum_articles": "memarts",
+    "articles_of_association": "memarts",
+    "articles of association": "memarts",
     "doc-shareholders": "reg_sh",
+    "register_of_shareholders": "reg_sh",
+    "register of shareholders": "reg_sh",
+    "shareholder_register": "reg_sh",
+    "shareholder register": "reg_sh",
     "doc-directors-reg": "reg_dir",
+    "register_of_directors": "reg_dir",
+    "register of directors": "reg_dir",
+    "director_register": "reg_dir",
+    "director register": "reg_dir",
     "doc-financials": "fin_stmt",
     "doc-proof-address": "poa",
     "doc-board-res": "board_res",
+    "board_resolution": "board_res",
+    "board resolution": "board_res",
     "doc-structure-chart": "structure_chart",
+    "structure chart": "structure_chart",
+    "ownership_structure_chart": "structure_chart",
     "doc-bank-ref": "bankref",
+    "bank_reference": "bankref",
+    "bank reference": "bankref",
     "doc-license-cert": "licence",
+    "license": "licence",
+    "licence_certificate": "licence",
+    "license_certificate": "licence",
     "doc-contracts": "contracts",
     "doc-source-wealth-proof": "source_wealth",
     "doc-source-funds-proof": "source_funds",
     "doc-bank-statements": "bank_statements",
+    "bank statements": "bank_statements",
     "doc-aml-policy": "aml_policy",
+    "aml policy": "aml_policy",
     "general": "supporting_document",
 }
 
@@ -10699,7 +10888,15 @@ DOCUMENT_TYPE_ALLOWLIST = {
 def _normalize_document_type(value):
     """Return a canonical, bounded document type suitable for DB matching."""
     raw = str(value or "general").strip()
-    normalized = DOCUMENT_TYPE_NORMALIZE.get(raw, raw)
+    raw_lower = raw.lower()
+    candidate = re.sub(r"[^a-zA-Z0-9_-]+", "_", raw_lower).strip("_")
+    normalized = DOCUMENT_TYPE_NORMALIZE.get(
+        raw,
+        DOCUMENT_TYPE_NORMALIZE.get(
+            raw_lower,
+            DOCUMENT_TYPE_NORMALIZE.get(candidate, candidate),
+        ),
+    )
     normalized = re.sub(r"[^a-zA-Z0-9_-]+", "_", normalized).strip("_").lower()
     return (normalized or "general")[:80]
 
@@ -10725,6 +10922,167 @@ def _validate_document_type(value, *, allow_general=False):
             "'supporting_document' for custom RMI evidence."
         )
     return normalized, None
+
+
+ACTIVE_DOCUMENT_SQL = "COALESCE(is_current, TRUE) = TRUE"
+
+
+def _document_slot_key(doc_type, person_id=None, *, person_type=None, rmi_item_id=None, enhanced_requirement_id=None):
+    """Stable logical key for a single current document upload slot."""
+    if rmi_item_id:
+        return f"rmi:{str(rmi_item_id).strip()}"
+    if enhanced_requirement_id:
+        return f"enhanced_requirement:{str(enhanced_requirement_id).strip()}"
+    normalized = _normalize_document_type(doc_type)
+    person = str(person_id or "").strip()
+    if person:
+        typed_person = normalize_person_type(person_type) or "unknown"
+        return f"person:{typed_person}:{person}:{normalized}"
+    return f"entity:{normalized}"
+
+
+def _document_legacy_person_slot_key(doc_type, person_id):
+    person = str(person_id or "").strip()
+    if not person:
+        return None
+    return f"person:{person}:{_normalize_document_type(doc_type)}"
+
+
+def _truthy_db_bool(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() not in ("0", "false", "f", "no", "n", "")
+
+
+def _lock_document_slot_transaction(db, application_id, slot_key):
+    """Serialize replacements within a logical document slot for this transaction."""
+    lock_key = f"{application_id}:{slot_key}"
+    if db.is_postgres:
+        db.execute("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)", (lock_key,))
+        return
+    try:
+        db.execute("BEGIN IMMEDIATE")
+    except Exception:
+        pass
+
+
+def _load_document_slot_rows(db, application_id, doc_type, person_id, slot_key, extra_document_ids=None):
+    """Load all rows that belong to a logical document slot.
+
+    The fallback doc_type/person predicate keeps legacy rows in scope until
+    their slot_key has been backfilled.
+    """
+    legacy_slot_key = _document_legacy_person_slot_key(doc_type, person_id)
+    rows = db.execute(
+        """
+        SELECT id, doc_name, doc_type, person_id, slot_key, is_current, version,
+               uploaded_at, verification_status
+          FROM documents
+         WHERE application_id = ?
+           AND (
+                slot_key = ?
+                OR (? IS NOT NULL AND slot_key = ?)
+                OR ((slot_key IS NULL OR slot_key = '')
+                    AND doc_type = ?
+                    AND COALESCE(person_id, '') = ?)
+           )
+        """,
+        (application_id, slot_key, legacy_slot_key, legacy_slot_key, doc_type, str(person_id or "")),
+    ).fetchall()
+    by_id = {row["id"]: dict(row) for row in rows}
+    extra_ids = [doc_id for doc_id in (extra_document_ids or []) if doc_id and doc_id not in by_id]
+    if extra_ids:
+        placeholders = ",".join("?" for _ in extra_ids)
+        extra_rows = db.execute(
+            f"""
+            SELECT id, doc_name, doc_type, person_id, slot_key, is_current, version,
+                   uploaded_at, verification_status
+              FROM documents
+             WHERE application_id = ? AND id IN ({placeholders})
+            """,
+            tuple([application_id] + extra_ids),
+        ).fetchall()
+        for row in extra_rows:
+            by_id[row["id"]] = dict(row)
+    return list(by_id.values())
+
+
+def _prepare_document_slot_replacement(
+    db,
+    *,
+    application_id,
+    new_document_id,
+    doc_type,
+    person_id=None,
+    person_type=None,
+    slot_key=None,
+    actor_user=None,
+    replaced_reason="document_replaced",
+    extra_document_ids=None,
+):
+    """Mark prior current rows in this logical slot as superseded.
+
+    The caller must insert ``new_document_id`` and then call
+    ``_finalize_document_slot_replacement`` before committing.
+    """
+    slot_key = slot_key or _document_slot_key(doc_type, person_id, person_type=person_type)
+    _lock_document_slot_transaction(db, application_id, slot_key)
+    slot_rows = _load_document_slot_rows(
+        db,
+        application_id,
+        doc_type,
+        person_id,
+        slot_key,
+        extra_document_ids=extra_document_ids,
+    )
+    max_version = 0
+    previous_current = []
+    for row in slot_rows:
+        try:
+            max_version = max(max_version, int(row.get("version") or 1))
+        except (TypeError, ValueError):
+            max_version = max(max_version, 1)
+        if row.get("id") != new_document_id and _truthy_db_bool(row.get("is_current"), default=True):
+            previous_current.append(row)
+
+    actor_id = (actor_user or {}).get("sub") or "system"
+    for row in previous_current:
+        db.execute(
+            """
+            UPDATE documents
+               SET is_current = ?,
+                   superseded_at = datetime('now'),
+                   superseded_by_document_id = NULL,
+                   replaced_reason = ?,
+                   replaced_by_user_id = ?
+             WHERE id = ? AND application_id = ?
+            """,
+            (False, replaced_reason, actor_id, row["id"], application_id),
+        )
+
+    return {
+        "slot_key": slot_key,
+        "version": max_version + 1,
+        "previous_documents": previous_current,
+    }
+
+
+def _finalize_document_slot_replacement(db, application_id, previous_documents, new_document_id):
+    if not previous_documents:
+        return
+    for row in previous_documents:
+        db.execute(
+            """
+            UPDATE documents
+               SET superseded_by_document_id = ?
+             WHERE id = ? AND application_id = ?
+            """,
+            (new_document_id, row["id"], application_id),
+        )
 
 
 def _normalize_rmi_text(value, max_len=1000):
@@ -14653,12 +15011,29 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 "enhanced_requirement_id": str(requirement_id),
                 "client_submitted": True,
             }
+            slot_key = _document_slot_key(
+                "enhanced_requirement",
+                enhanced_requirement_id=requirement_id,
+            )
+            replacement = _prepare_document_slot_replacement(
+                db,
+                application_id=app["id"],
+                new_document_id=document_id,
+                doc_type="enhanced_requirement",
+                person_id=None,
+                slot_key=slot_key,
+                actor_user=user,
+                replaced_reason="enhanced_requirement_replacement",
+                extra_document_ids=[safe_req.get("linked_document_id")] if safe_req.get("linked_document_id") else None,
+            )
+            previous_documents = replacement["previous_documents"]
             db.execute(
                 """
                 INSERT INTO documents
                 (id, application_id, doc_type, doc_name, file_path, s3_key,
-                 file_size, mime_type, verification_status, verification_results, review_status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                 file_size, mime_type, slot_key, is_current, version,
+                 verification_status, verification_results, review_status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     document_id,
@@ -14669,11 +15044,15 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     s3_key,
                     len(body),
                     content_type,
+                    replacement["slot_key"],
+                    True,
+                    replacement["version"],
                     "pending",
                     json.dumps(verification_metadata, sort_keys=True),
                     "pending",
                 ),
             )
+            _finalize_document_slot_replacement(db, app["id"], previous_documents, document_id)
             result, error, status_code = fulfill_application_enhanced_requirement_document(
                 db,
                 app["id"],
@@ -14696,6 +15075,29 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                 ),
                 None,
             )
+            if previous_documents:
+                self.log_audit(
+                    user,
+                    "document.replaced",
+                    app["ref"],
+                    json.dumps({
+                        "event": "document.replaced",
+                        "application_id": app["id"],
+                        "application_ref": app["ref"],
+                        "doc_type": "enhanced_requirement",
+                        "person_id": None,
+                        "slot_key": replacement["slot_key"],
+                        "old_document_id": previous_documents[0]["id"],
+                        "old_document_ids": [row["id"] for row in previous_documents],
+                        "new_document_id": document_id,
+                        "actor": user.get("sub", ""),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }, sort_keys=True),
+                    db=db,
+                    commit=False,
+                    before_state={"documents": previous_documents},
+                    after_state={"document_id": document_id, "version": replacement["version"], "is_current": True},
+                )
             db.commit()
             self.success({
                 "status": "submitted",
@@ -14705,6 +15107,9 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     "doc_name": filename,
                     "doc_type": "enhanced_requirement",
                     "file_size": len(body),
+                    "slot_key": replacement["slot_key"],
+                    "is_current": True,
+                    "version": replacement["version"],
                 },
             }, 201)
         except Exception as exc:

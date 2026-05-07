@@ -151,11 +151,27 @@ def test_upload_201_response_document_row_and_audit_shape(
 
     assert resp.status_code == 201
     body = resp.json()
-    assert set(body.keys()) == {"id", "doc_name", "doc_type", "file_size", "s3_key"}
+    assert set(body.keys()) == {
+        "id",
+        "doc_name",
+        "doc_type",
+        "file_size",
+        "s3_key",
+        "person_type",
+        "slot_key",
+        "is_current",
+        "version",
+        "replaced_document_ids",
+    }
     assert body["doc_name"] == "passport.pdf"
     assert body["doc_type"] == "passport"
     assert body["file_size"] == len(PDF_BYTES)
     assert body["s3_key"] is None
+    assert body["person_type"] is None
+    assert body["slot_key"] == "entity:passport"
+    assert body["is_current"] is True
+    assert body["version"] == 1
+    assert body["replaced_document_ids"] == []
 
     from db import get_db
 

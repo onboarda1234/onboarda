@@ -256,7 +256,8 @@ class ApprovalGateValidator:
             # AND review_comment is non-empty (documented reason).
             flagged_docs = db.execute(
                 "SELECT id, doc_type, verification_status, review_status, review_comment, reviewer_role FROM documents "
-                "WHERE application_id = ? AND verification_status = 'flagged'",
+                "WHERE application_id = ? AND verification_status = 'flagged' "
+                "AND COALESCE(is_current, TRUE) = TRUE",
                 (app_id,)
             ).fetchall()
             if flagged_docs:
