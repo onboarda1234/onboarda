@@ -375,19 +375,28 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "refreshApplicationEnhancedRequirements" in html
     assert "saveApplicationEnhancedRequirement" in html
     assert "waiveApplicationEnhancedRequirement" in html
+    assert "requestApplicationEnhancedRequirementFromClient" in html
     assert "canViewApplicationEnhancedRequirements" in html
     assert "canUpdateApplicationEnhancedRequirements" in html
     assert "canWaiveApplicationEnhancedRequirements" in html
+    assert "canRequestApplicationEnhancedRequirementsFromClient" in html
+    assert "enhancedRequirementRequestEligible" in html
     assert "canManageEnhancedRequirements()" in html
     assert "/applications/' + appKey + '/enhanced-requirements" in html
     assert "/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/generate" in html
     assert "/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/' + encodeURIComponent(requirementId)" in html
+    assert "/applications/' + encodeURIComponent(currentApp.id) + '/enhanced-requirements/' + encodeURIComponent(requirementId) + '/request" in html
     assert "boApiCall('PATCH'" in html
+    assert "boApiCall('POST'" in html
     assert "generation_source: 'manual_backoffice_refresh'" in html
     assert "Back-office actions" in html
     assert "Internal review notes" in html
     assert "Waiver reason" in html
     assert "Save update" in html
+    assert "Request from client" in html
+    assert "Portal and RMI exposure are deferred to a later step." in html
+    assert "['client','both'].indexOf(audience) >= 0" in html
+    assert "['generated','under_review','rejected'].indexOf(status) >= 0" in html
     assert "Only admins and senior compliance officers can waive enhanced requirements" in html
     assert "No enhanced requirements generated for this application." in html
     assert "Enhanced requirement configuration is incomplete. Requirements may not be fully generated." in html

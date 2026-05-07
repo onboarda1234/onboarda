@@ -181,6 +181,20 @@ def _first_requirement_id(db, app_id, *, offset=0):
     return row["id"]
 
 
+def _requirement_id_by_key(db, app_id, requirement_key):
+    row = db.execute(
+        """
+        SELECT id FROM application_enhanced_requirements
+        WHERE application_id=? AND requirement_key=?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (app_id, requirement_key),
+    ).fetchone()
+    assert row is not None
+    return row["id"]
+
+
 def _insert_document(db, app_id, doc_id=None, *, review_status="pending"):
     doc_id = doc_id or ("doc_" + uuid.uuid4().hex[:10])
     db.execute(
@@ -935,3 +949,221 @@ def test_lifecycle_reopen_accepted_requires_senior_reason_and_audits(enhanced_ap
     after = json.loads(audit["after_state"])
     assert before["status"] == "accepted"
     assert after["status"] == "under_review"
+
+
+def test_request_from_client_permissions_status_and_audit(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    _generate(conn, app_id)
+    admin_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
+    sco_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
+    co_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
+    denied_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
+    linked_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    doc_id = _insert_document(conn, app_id, "doc_request_preserved", review_status="pending")
+    conn.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status = CASE id
+            WHEN ? THEN 'under_review'
+            WHEN ? THEN 'rejected'
+            ELSE status
+        END
+        WHERE id IN (?,?)
+        """,
+        (sco_req, co_req, sco_req, co_req),
+    )
+    conn.execute(
+        "UPDATE application_enhanced_requirements SET linked_document_id=? WHERE id=?",
+        (doc_id, linked_req),
+    )
+    conn.commit()
+    conn.close()
+
+    admin_resp = requests.post(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{admin_req}/request",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert admin_resp.status_code == 200, admin_resp.text
+    admin_body = admin_resp.json()
+    assert admin_body["requirement"]["status"] == "requested"
+    assert admin_body["requirement"]["requested_by"] == "admin001"
+    assert admin_body["requirement"]["requested_at"]
+    assert admin_body["requirement"]["linked_rmi_item_id"] in (None, "")
+    assert admin_body["client_request"]["label"]
+    assert "trigger_context" not in admin_body["client_request"]
+    assert admin_body["rmi_integration"] == "deferred"
+
+    sco_resp = requests.post(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{sco_req}/request",
+        headers=_headers("sco"),
+        timeout=5,
+    )
+    assert sco_resp.status_code == 200, sco_resp.text
+    assert sco_resp.json()["requirement"]["requested_by"] == "sco001"
+
+    co_resp = requests.post(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{co_req}/request",
+        headers=_headers("co"),
+        timeout=5,
+    )
+    assert co_resp.status_code == 200, co_resp.text
+    assert co_resp.json()["requirement"]["requested_by"] == "co001"
+
+    analyst_resp = requests.post(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{denied_req}/request",
+        headers=_headers("analyst"),
+        timeout=5,
+    )
+    assert analyst_resp.status_code == 403
+
+    client_resp = requests.post(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{denied_req}/request",
+        headers=_headers("client", token_type="client"),
+        timeout=5,
+    )
+    assert client_resp.status_code == 403
+
+    linked_resp = requests.post(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{linked_req}/request",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert linked_resp.status_code == 200, linked_resp.text
+    assert linked_resp.json()["requirement"]["linked_document_id"] == doc_id
+
+    repeat_resp = requests.post(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{admin_req}/request",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert repeat_resp.status_code == 409
+
+    conn = get_db()
+    app = conn.execute("SELECT status, decision_notes FROM applications WHERE id=?", (app_id,)).fetchone()
+    doc = conn.execute(
+        "SELECT review_status, verification_status FROM documents WHERE id=?",
+        (doc_id,),
+    ).fetchone()
+    rmi_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM rmi_requests WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    notification_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM client_notifications WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"]
+    audit = conn.execute(
+        """
+        SELECT detail, before_state, after_state
+        FROM audit_log
+        WHERE action='application_enhanced_requirement.requested_from_client'
+          AND target=(SELECT 'application:' || ref FROM applications WHERE id=?)
+        ORDER BY id DESC LIMIT 1
+        """,
+        (app_id,),
+    ).fetchone()
+    conn.close()
+
+    assert app["status"] == "submitted"
+    assert app["decision_notes"] in (None, "")
+    assert doc["review_status"] == "pending"
+    assert doc["verification_status"] == "pending"
+    assert rmi_count == 0
+    assert notification_count == 0
+    assert audit is not None
+    detail = json.loads(audit["detail"])
+    before = json.loads(audit["before_state"])
+    after = json.loads(audit["after_state"])
+    assert detail["old_status"] in ("generated", "under_review", "rejected")
+    assert detail["new_status"] == "requested"
+    assert detail["requested_by"] == "admin001"
+    assert detail["linked_rmi_item_id"] in (None, "")
+    assert before["status"] in ("generated", "under_review", "rejected")
+    assert after["status"] == "requested"
+
+
+def test_request_from_client_rejects_ineligible_requirements(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    app_id = _insert_application(conn, risk_level="HIGH")
+    _generate(conn, app_id)
+    accepted_req = _requirement_id_by_key(conn, app_id, "company_bank_reference")
+    waived_req = _requirement_id_by_key(conn, app_id, "company_bank_statements_6m")
+    cancelled_req = _requirement_id_by_key(conn, app_id, "company_sof_evidence")
+    uploaded_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
+    unsafe_req = _requirement_id_by_key(conn, app_id, "enhanced_business_activity_explanation")
+    conn.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status = CASE id
+            WHEN ? THEN 'accepted'
+            WHEN ? THEN 'waived'
+            WHEN ? THEN 'cancelled'
+            WHEN ? THEN 'uploaded'
+            ELSE status
+        END
+        WHERE id IN (?,?,?,?)
+        """,
+        (
+            accepted_req,
+            waived_req,
+            cancelled_req,
+            uploaded_req,
+            accepted_req,
+            waived_req,
+            cancelled_req,
+            uploaded_req,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET source_rule_id=NULL,
+            requirement_label='Internal risk level screening concern'
+        WHERE id=?
+        """,
+        (unsafe_req,),
+    )
+
+    pep_app_id = _insert_application(conn, risk_level="LOW")
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (pep_app_id, "PEP Director", "Yes"),
+    )
+    conn.commit()
+    _generate(conn, pep_app_id)
+    backoffice_req = _requirement_id_by_key(conn, pep_app_id, "mandatory_senior_review")
+    conn.close()
+
+    for req_id in (accepted_req, waived_req, cancelled_req, uploaded_req):
+        resp = requests.post(
+            f"{base_url}/api/applications/{app_id}/enhanced-requirements/{req_id}/request",
+            headers=_headers("admin"),
+            timeout=5,
+        )
+        assert resp.status_code == 400, resp.text
+
+    unsafe_resp = requests.post(
+        f"{base_url}/api/applications/{app_id}/enhanced-requirements/{unsafe_req}/request",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert unsafe_resp.status_code == 400
+    assert "internal language" in unsafe_resp.text
+
+    backoffice_resp = requests.post(
+        f"{base_url}/api/applications/{pep_app_id}/enhanced-requirements/{backoffice_req}/request",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert backoffice_resp.status_code == 400
+    assert "Back-office-only" in backoffice_resp.text

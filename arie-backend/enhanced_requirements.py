@@ -55,7 +55,10 @@ APPLICATION_REQUIREMENT_STATUSES = (
 
 APPLICATION_REQUIREMENT_REVIEW_ROLES = ("admin", "sco", "co")
 APPLICATION_REQUIREMENT_WAIVER_ROLES = ("admin", "sco")
+APPLICATION_REQUIREMENT_REQUEST_ROLES = ("admin", "sco", "co")
 APPLICATION_REQUIREMENT_NOTES_MAX_LENGTH = 4000
+APPLICATION_REQUIREMENT_REQUESTABLE_AUDIENCES = ("client", "both")
+APPLICATION_REQUIREMENT_REQUESTABLE_STATUSES = ("generated", "under_review", "rejected")
 APPLICATION_REQUIREMENT_STATUS_TRANSITIONS = {
     "generated": ("under_review", "accepted", "rejected", "waived"),
     "requested": ("under_review", "accepted", "rejected", "waived"),
@@ -1302,6 +1305,188 @@ def _audit_requirement_update_payload(app, before, after, actor, changes):
         "timestamp": _now_iso(),
         "changes": changes,
     }
+
+
+_CLIENT_UNSAFE_LABEL_TERMS = (
+    "adverse media",
+    "approval blocker",
+    "back-office",
+    "backoffice",
+    "false-positive",
+    "false positive",
+    "internal",
+    "officer",
+    "high risk",
+    "high-risk",
+    "risk level",
+    "screening concern",
+    "senior review",
+    "very high",
+    "very_high",
+    "waiver",
+)
+
+_CLIENT_UNSAFE_DESCRIPTION_TERMS = _CLIENT_UNSAFE_LABEL_TERMS + (
+    "approval",
+    "block approval",
+    "sanctions",
+    "screening risk",
+)
+
+
+def _text_contains_any(text, terms):
+    normalized = str(text or "").strip().lower()
+    return any(term in normalized for term in terms)
+
+
+def _load_requirement_source_rule(db, requirement):
+    rule_id = (requirement or {}).get("source_rule_id")
+    if rule_id in (None, ""):
+        return {}
+    try:
+        row = db.execute(
+            "SELECT client_safe_label, client_safe_description FROM enhanced_requirement_rules WHERE id = ?",
+            (rule_id,),
+        ).fetchone()
+    except Exception:
+        return {}
+    return _row_dict(row) or {}
+
+
+def _client_safe_requirement_fields(db, requirement):
+    """Return client-safe request copy without exposing routing/internal context."""
+    requirement = requirement or {}
+    rule = _load_requirement_source_rule(db, requirement)
+    label = _clean_text(rule.get("client_safe_label") or requirement.get("requirement_label"))
+    if not label:
+        return None, "Client-safe requirement label is missing"
+    if _text_contains_any(label, _CLIENT_UNSAFE_LABEL_TERMS):
+        return None, "Client-safe requirement label appears to contain internal language"
+
+    description = _clean_text(rule.get("client_safe_description"))
+    if not description:
+        fallback_description = _clean_text(requirement.get("requirement_description"))
+        if not _text_contains_any(fallback_description, _CLIENT_UNSAFE_DESCRIPTION_TERMS):
+            description = fallback_description
+
+    return {
+        "label": label,
+        "description": description,
+        "audience": requirement.get("audience"),
+        "requirement_type": requirement.get("requirement_type"),
+        "subject_scope": requirement.get("subject_scope"),
+    }, None
+
+
+def request_application_enhanced_requirement_from_client(
+    db,
+    application_id,
+    requirement_id,
+    actor=None,
+):
+    """Mark one eligible enhanced requirement as explicitly requested.
+
+    This is request orchestration only.  It does not create RMI rows, client
+    notifications, emails, portal prompts, document slots, memo content, or
+    approval blockers.
+    """
+    actor_role = (_audit_user(actor).get("role") or "").lower()
+    if actor_role not in APPLICATION_REQUIREMENT_REQUEST_ROLES:
+        return None, "Insufficient permissions", 403
+
+    app = _load_application(db, application_id)
+    if not app:
+        return None, "Application not found", 404
+
+    before = _load_application_requirement_for_app(db, app["id"], requirement_id)
+    if not before:
+        return None, "Enhanced requirement not found for application", 404
+
+    if not before.get("active"):
+        return None, "Inactive enhanced requirements cannot be requested from clients", 400
+
+    audience = str(before.get("audience") or "").strip().lower()
+    if audience not in APPLICATION_REQUIREMENT_REQUESTABLE_AUDIENCES:
+        return None, "Back-office-only enhanced requirements cannot be requested from clients", 400
+
+    current_status = str(before.get("status") or "generated").strip().lower()
+    if current_status == "requested":
+        return None, "Enhanced requirement has already been requested from the client", 409
+    if current_status not in APPLICATION_REQUIREMENT_REQUESTABLE_STATUSES:
+        return None, f"Enhanced requirement status cannot be requested from client: {current_status}", 400
+
+    client_request, safe_error = _client_safe_requirement_fields(db, before)
+    if safe_error:
+        return None, safe_error, 400
+
+    now = _now_iso()
+    requested_by = _audit_user(actor).get("sub")
+    db.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='requested',
+            requested_at=?,
+            requested_by=?,
+            updated_at=?,
+            updated_by=?
+        WHERE id=? AND application_id=?
+        """,
+        (now, requested_by, now, requested_by, before["id"], app["id"]),
+    )
+    after = _load_application_requirement_for_app(db, app["id"], before["id"])
+    target = _application_target(app)
+    changes = {
+        "status": {"before": before.get("status"), "after": "requested"},
+        "requested_at": {"before": before.get("requested_at"), "after": now},
+        "requested_by": {"before": before.get("requested_by"), "after": requested_by},
+        "client_request_label": client_request.get("label"),
+        "client_request_description_present": bool(client_request.get("description")),
+        "rmi_integration": "deferred",
+    }
+    payload = _audit_requirement_update_payload(app, before, after, actor, changes)
+    payload.update({
+        "requested_by": requested_by,
+        "requested_at": now,
+        "linked_rmi_item_id": after.get("linked_rmi_item_id"),
+        "client_request_label": client_request.get("label"),
+        "rmi_integration": "deferred",
+    })
+    _insert_audit(
+        db,
+        "application_enhanced_requirement.updated",
+        target,
+        payload,
+        actor=actor,
+        before_state=before,
+        after_state=after,
+    )
+    _insert_audit(
+        db,
+        "application_enhanced_requirement.status_changed",
+        target,
+        payload,
+        actor=actor,
+        before_state=before,
+        after_state=after,
+    )
+    _insert_audit(
+        db,
+        "application_enhanced_requirement.requested_from_client",
+        target,
+        payload,
+        actor=actor,
+        before_state=before,
+        after_state=after,
+    )
+
+    return {
+        "application_id": app["id"],
+        "application_ref": app.get("ref"),
+        "requirement": after,
+        "requested": True,
+        "client_request": client_request,
+        "rmi_integration": "deferred",
+    }, None, 200
 
 
 def update_application_enhanced_requirement(
