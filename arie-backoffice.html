@@ -13321,7 +13321,7 @@ async function confirmDocumentReview() {
 function renderMemoSections(data) {
   if (!data || !data.sections) return '<div class="memo-text" style="color:var(--text3);text-align:center;padding:40px;">No memo data available. Click "Generate Memo" to create one.</div>';
   var s = data.sections;
-  var sectionOrder = ['executive_summary','client_overview','ownership_and_control','risk_assessment','screening_results','document_verification','ai_explainability','red_flags_and_mitigants','compliance_decision','ongoing_monitoring','audit_and_governance'];
+  var sectionOrder = ['executive_summary','client_overview','ownership_and_control','risk_assessment','screening_results','document_verification','enhanced_review_edd','ai_explainability','red_flags_and_mitigants','compliance_decision','ongoing_monitoring','audit_and_governance'];
   var html = '';
 
   // ── EX-11: AI ADVISORY BANNER (always shown) ──
@@ -13412,6 +13412,45 @@ function renderMemoSections(data) {
       html += '<div><div style="font-size:10px;font-weight:700;color:var(--green);margin-bottom:6px;">✅ MITIGANTS</div>';
       (sec.mitigants||['None identified']).forEach(function(m) { html += '<div class="memo-mitigant">• ' + m + '</div>'; });
       html += '</div></div>';
+    }
+    // Enhanced Review / EDD — deterministic lifecycle summary
+    else if (key === 'enhanced_review_edd') {
+      var er = sec.summary || {};
+      var erOutstanding = (er.outstanding || []).length;
+      html += '<div class="memo-text">' + escapeHtml(sec.content || 'Information not provided') + '</div>';
+      if (er.triggered) {
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:10px 0;">';
+        [
+          ['Total', er.total_requirements || 0],
+          ['Client-facing', er.client_facing_count || 0],
+          ['Back-office', er.backoffice_only_count || 0],
+          ['Outstanding', erOutstanding],
+          ['Mandatory Open', er.mandatory_outstanding_count || 0],
+          ['Waived', er.waiver_count || 0]
+        ].forEach(function(card) {
+          html += '<div style="border:1px solid var(--border1);border-radius:6px;padding:8px;background:var(--surface2);">';
+          html += '<div style="font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:700;">' + escapeHtml(card[0]) + '</div>';
+          html += '<div style="font-size:18px;font-weight:700;color:var(--text1);">' + escapeHtml(card[1]) + '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+        (er.by_trigger || []).forEach(function(group) {
+          html += '<div style="border:1px solid var(--border1);border-radius:6px;padding:10px;margin:8px 0;background:var(--surface1);">';
+          html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">';
+          html += '<span style="font-size:11px;font-weight:700;color:var(--text1);">' + escapeHtml(group.trigger_label || group.trigger_key || 'Trigger') + '</span>';
+          html += '<span style="font-size:10px;color:var(--text3);">' + escapeHtml(group.total || 0) + ' requirement(s)</span>';
+          html += '</div>';
+          (group.requirements || []).slice(0, 10).forEach(function(item) {
+            html += '<div style="display:flex;gap:8px;align-items:flex-start;border-top:1px solid var(--border1);padding-top:6px;margin-top:6px;">';
+            html += '<span class="status-pill ' + escapeHtml((item.status || 'generated').replace(/_/g, '-')) + '">' + escapeHtml(item.memo_status || item.status || 'Status not recorded') + '</span>';
+            html += '<div style="font-size:11px;color:var(--text1);line-height:1.45;">';
+            html += '<strong>' + escapeHtml(item.requirement_label || item.requirement_key || 'Requirement') + '</strong>';
+            html += '<div style="font-size:10px;color:var(--text3);">Audience: ' + escapeHtml(item.audience || 'not recorded') + ' | Type: ' + escapeHtml(item.requirement_type || 'not recorded') + ' | Scope: ' + escapeHtml(item.subject_scope || 'not recorded') + '</div>';
+            html += '</div></div>';
+          });
+          html += '</div>';
+        });
+      }
     }
     // Compliance Decision — highlighted box
     else if (key === 'compliance_decision') {
