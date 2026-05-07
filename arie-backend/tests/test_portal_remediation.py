@@ -316,10 +316,10 @@ def test_kyc_submit_allows_incomplete_documents_with_at_least_one_upload(api_ser
     _ensure_client(conn)
     conn.execute(
         """
-        INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO applications (id, ref, client_id, company_name, country, status, risk_level, risk_score, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        ("submit_incomplete", "ARF-SUBMIT-INCOMPLETE", "portalclient001", "Submit Incomplete Ltd", "Mauritius", "pricing_review", json.dumps({
+        ("submit_incomplete", "ARF-SUBMIT-INCOMPLETE", "portalclient001", "Submit Incomplete Ltd", "Mauritius", "pricing_review", "MEDIUM", 45, json.dumps({
             "registered_entity_name": "Submit Incomplete Ltd",
             "country_of_incorporation": "Mauritius"
         })),
