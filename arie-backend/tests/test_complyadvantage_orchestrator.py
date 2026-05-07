@@ -146,11 +146,13 @@ def test_create_and_screen_accepts_workflow_handle_only_response():
     client = _client_for_single(data)
     orch = _orchestrator(client)
 
-    result = orch.create_and_screen(_customer("strict"))
+    result = orch.create_and_screen(_customer("strict"), screening_configuration_identifier="cfg-123")
 
     assert result.workflow_instance_identifier == "wf-pep"
     assert result.customer_input.person.full_name == "Test strict"
     assert result.monitoring_enabled is True
+    assert client.posts[0][1]["configuration"]["screening_configuration_identifier"] == "cfg-123"
+    assert "screening" not in client.posts[0][1]
 
     client.post_routes["/v2/workflows/create-and-screen"] = {"customer": {}}
     with pytest.raises(CAUnexpectedResponse):
@@ -327,6 +329,26 @@ def test_two_pass_relaxed_catches_canonical_match():
     assert canonical["surfaced_by_pass"] == "relaxed"
     assert "/v2/alerts/alert-relaxed-1/risks?page=1" in client.called_paths()
     assert "/v2/entity-screening/risks/risk-canonical" in client.called_paths()
+
+
+def test_two_pass_uses_single_screening_configuration_for_both_passes():
+    data = _fixture("two_pass_strict_misses_relaxed_catches.json")
+    client = _client_for_two_pass(data)
+
+    _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("relaxed"),
+        application_context=_context(data),
+        monitoring_enabled=False,
+        screening_configuration_identifier="cfg-123",
+    )
+
+    assert len(client.post_calls) == 2
+    assert all(
+        call["configuration"]["screening_configuration_identifier"] == "cfg-123"
+        for call in client.post_calls
+    )
+    assert all("screening" not in call for call in client.post_calls)
 
 
 def test_partial_deep_risk_failure_raises():

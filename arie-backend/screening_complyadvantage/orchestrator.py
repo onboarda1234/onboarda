@@ -84,7 +84,7 @@ class ComplyAdvantageScreeningOrchestrator:
         application_context,
         monitoring_enabled=True,
         db=None,
-        workflow_id=None,
+        screening_configuration_identifier=None,
         external_identifier=None,
     ):
         """Run strict and relaxed passes concurrently and return a normalized report dict."""
@@ -93,14 +93,14 @@ class ComplyAdvantageScreeningOrchestrator:
                 self._run_one_pass,
                 strict_customer,
                 monitoring_enabled=monitoring_enabled,
-                workflow_id=workflow_id,
+                screening_configuration_identifier=screening_configuration_identifier,
                 external_identifier=external_identifier,
             )
             relaxed_future = executor.submit(
                 self._run_one_pass,
                 relaxed_customer,
                 monitoring_enabled=monitoring_enabled,
-                workflow_id=workflow_id,
+                screening_configuration_identifier=screening_configuration_identifier,
                 external_identifier=external_identifier,
             )
             strict = strict_future.result()
@@ -120,11 +120,18 @@ class ComplyAdvantageScreeningOrchestrator:
         self._seed_subscription_if_needed(strict, application_context, db)
         return report
 
-    def create_and_screen(self, customer, *, monitoring_enabled=True, workflow_id=None, external_identifier=None):
+    def create_and_screen(
+        self,
+        customer,
+        *,
+        monitoring_enabled=True,
+        screening_configuration_identifier=None,
+        external_identifier=None,
+    ):
         payload = build_create_and_screen_payload(
             customer,
             monitoring_enabled=monitoring_enabled,
-            workflow_id=workflow_id,
+            screening_configuration_identifier=screening_configuration_identifier,
             external_identifier=external_identifier,
         )
         raw = self.client.post("/v2/workflows/create-and-screen", json_body=payload)
@@ -152,11 +159,18 @@ class ComplyAdvantageScreeningOrchestrator:
     def fetch_deep_risk(self, risk_id):
         return _fetch_deep_risk(self.client, risk_id)
 
-    def _run_one_pass(self, customer, *, monitoring_enabled, workflow_id, external_identifier):
+    def _run_one_pass(
+        self,
+        customer,
+        *,
+        monitoring_enabled,
+        screening_configuration_identifier,
+        external_identifier,
+    ):
         initial = self.create_and_screen(
             customer,
             monitoring_enabled=monitoring_enabled,
-            workflow_id=workflow_id,
+            screening_configuration_identifier=screening_configuration_identifier,
             external_identifier=external_identifier,
         )
         polled = self.poll_workflow_until_complete(initial.workflow_instance_identifier)

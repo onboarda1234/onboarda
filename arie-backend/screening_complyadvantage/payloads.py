@@ -100,9 +100,9 @@ def build_customer_person(person, *, strict=True):
 
 def build_customer_company(application_data, *, strict=True):
     """Build a CA customer.company dict from internal application data."""
-    name = _first(application_data, "company_name", "name", "legal_name") or "Unknown Company"
+    legal_name = _first(application_data, "company_name", "legal_name", "name") or "Unknown Company"
     company = _drop_empty({
-        "name": name,
+        "legal_name": legal_name,
     })
     if strict:
         company.update(_drop_empty({
@@ -122,15 +122,21 @@ def build_customer_company(application_data, *, strict=True):
     return _customer_envelope(company, "company", _first(application_data, "application_id", "id", "ref"))
 
 
-def build_create_and_screen_payload(customer, *, monitoring_enabled=True, workflow_id=None, external_identifier=None):
+def build_create_and_screen_payload(
+    customer,
+    *,
+    monitoring_enabled=True,
+    screening_configuration_identifier=None,
+    external_identifier=None,
+):
     """Wrap a customer dict in CA create-and-screen workflow payload shape."""
     payload = {
         "customer": deepcopy(customer),
         "monitoring": {"entity_screening": {"enabled": bool(monitoring_enabled)}},
         "configuration": {},
     }
-    if workflow_id:
-        payload["screening"] = {"workflow_id": workflow_id}
+    if screening_configuration_identifier:
+        payload["configuration"]["screening_configuration_identifier"] = screening_configuration_identifier
     if external_identifier:
         payload["customer"].setdefault("external_identifier", external_identifier)
         payload["customer"].setdefault("reference", external_identifier)

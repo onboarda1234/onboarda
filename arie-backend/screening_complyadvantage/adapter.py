@@ -107,6 +107,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
 
     def _screen_subject(self, *, strict_customer, relaxed_customer, context, external_identifier=None):
         active_provider = get_active_provider_name()
+        config = self._get_config()
         emit_metric(
             "ca_adapter_invocation",
             metric_name="ShadowCaActivity" if active_provider != COMPLYADVANTAGE_PROVIDER_NAME else "CaAdapterInvocations",
@@ -120,11 +121,18 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
             application_context=context,
             monitoring_enabled=True,
             db=self._db,
+            screening_configuration_identifier=config.screening_configuration_identifier,
             external_identifier=external_identifier,
         )
 
+    def _get_config(self):
+        if self._config is None:
+            self._config = CAConfig.from_env()
+        return self._config
+
     def _get_orchestrator(self):
         if self._orchestrator is None:
+            self._get_config()
             self._orchestrator = ComplyAdvantageScreeningOrchestrator(
                 self._get_client(),
                 poll_timeout_seconds=self._poll_timeout_seconds,
@@ -133,7 +141,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
 
     def _get_client(self):
         if self._client is None:
-            config = self._config or CAConfig.from_env()
+            config = self._get_config()
             self._client = ComplyAdvantageClient(config)
         return self._client
 
