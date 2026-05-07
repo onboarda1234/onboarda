@@ -415,7 +415,10 @@ def run_pipeline_on_scenarios():
         app = dict(app_row)
         dirs = [dict(r) for r in db.execute("SELECT * FROM directors WHERE application_id = ?", (app_id,)).fetchall()]
         uboss = [dict(r) for r in db.execute("SELECT * FROM ubos WHERE application_id = ?", (app_id,)).fetchall()]
-        docs = [dict(r) for r in db.execute("SELECT * FROM documents WHERE application_id = ?", (app_id,)).fetchall()]
+        docs = [dict(r) for r in db.execute(
+            "SELECT * FROM documents WHERE application_id = ? AND COALESCE(is_current, TRUE) = TRUE",
+            (app_id,),
+        ).fetchall()]
 
         # Enrich app with prescreening fields for memo_handler
         ps = json.loads(app.get("prescreening_data", "{}"))

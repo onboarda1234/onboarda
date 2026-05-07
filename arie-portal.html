@@ -5609,27 +5609,27 @@ function buildUploadPanelHTML(p) {
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128221; Certificate of Incorporation</label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-cert-inc-' + p.id + '\')" id="kyc-cert-inc-area-' + p.id + '"><span>&#128206;</span><span id="kyc-cert-inc-lbl-' + p.id + '">Click to upload</span></div>' +
-        '<input type="file" id="kyc-cert-inc-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'cert_inc\',this)" />' +
+        '<input type="file" id="kyc-cert-inc-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'cert_inc\',this,\'' + p.type + '\')" />' +
       '</div>' +
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128218; Register of Directors</label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-reg-dir-' + p.id + '\')" id="kyc-reg-dir-area-' + p.id + '"><span>&#128206;</span><span id="kyc-reg-dir-lbl-' + p.id + '">Click to upload</span></div>' +
-        '<input type="file" id="kyc-reg-dir-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'reg_dir\',this)" />' +
+        '<input type="file" id="kyc-reg-dir-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'reg_dir\',this,\'' + p.type + '\')" />' +
       '</div>' +
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128218; Register of Shareholders</label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-reg-sh-' + p.id + '\')" id="kyc-reg-sh-area-' + p.id + '"><span>&#128206;</span><span id="kyc-reg-sh-lbl-' + p.id + '">Click to upload</span></div>' +
-        '<input type="file" id="kyc-reg-sh-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'reg_sh\',this)" />' +
+        '<input type="file" id="kyc-reg-sh-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'reg_sh\',this,\'' + p.type + '\')" />' +
       '</div>' +
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128221; Certificate of Good Standing</label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-cert-gs-' + p.id + '\')" id="kyc-cert-gs-area-' + p.id + '"><span>&#128206;</span><span id="kyc-cert-gs-lbl-' + p.id + '">Click to upload</span></div>' +
-        '<input type="file" id="kyc-cert-gs-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'cert_gs\',this)" />' +
+        '<input type="file" id="kyc-cert-gs-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'cert_gs\',this,\'' + p.type + '\')" />' +
       '</div>' +
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128212; Latest Financial Statements</label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-fin-stmt-' + p.id + '\')" id="kyc-fin-stmt-area-' + p.id + '"><span>&#128206;</span><span id="kyc-fin-stmt-lbl-' + p.id + '">Click to upload</span></div>' +
-        '<input type="file" id="kyc-fin-stmt-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'fin_stmt\',this)" />' +
+        '<input type="file" id="kyc-fin-stmt-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'fin_stmt\',this,\'' + p.type + '\')" />' +
       '</div>' +
     '</div>';
   } else {
@@ -5637,12 +5637,12 @@ function buildUploadPanelHTML(p) {
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128706; Passport / Government ID</label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-passport-' + p.id + '\')" id="kyc-passport-area-' + p.id + '"><span>&#128206;</span><span id="kyc-passport-lbl-' + p.id + '">Click to upload</span></div>' +
-        '<input type="file" id="kyc-passport-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'passport\',this)" />' +
+        '<input type="file" id="kyc-passport-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'passport\',this,\'' + p.type + '\')" />' +
       '</div>' +
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#127968; Proof of Address</label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-poa-' + p.id + '\')" id="kyc-poa-area-' + p.id + '"><span>&#128206;</span><span id="kyc-poa-lbl-' + p.id + '">Click to upload</span></div>' +
-        '<input type="file" id="kyc-poa-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'poa\',this)" />' +
+        '<input type="file" id="kyc-poa-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'poa\',this,\'' + p.type + '\')" />' +
       '</div>' +
       '<div>' +
         '<label style="font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#128196; CV / LinkedIn Profile</label>' +
@@ -5651,12 +5651,12 @@ function buildUploadPanelHTML(p) {
           '<span style="font-size:11px;color:var(--text3);">or</span>' +
           '<input type="url" id="kyc-linkedin-' + p.id + '" placeholder="LinkedIn profile URL" style="flex:1;font-size:12px;padding:10px 12px;border:1px dashed var(--border2);border-radius:var(--radius-sm);" />' +
         '</div>' +
-        '<input type="file" id="kyc-cv-' + p.id + '" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" onchange="handleKYCUpload(\'' + p.id + '\',\'cv\',this)" />' +
+        '<input type="file" id="kyc-cv-' + p.id + '" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" onchange="handleKYCUpload(\'' + p.id + '\',\'cv\',this,\'' + p.type + '\')" />' +
       '</div>' +
       '<div class="pep-bank-ref-doc" id="pep-bankref-row-' + p.id + '" style="display:' + (p.isPEP ? 'block' : 'none') + ';">' +
         '<label style="font-size:11px;font-weight:600;color:#d97706;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:4px;">&#127974; Bank Reference Letter <span style="font-size:10px;font-weight:400;color:var(--text3);text-transform:none;">(Required for PEP)</span></label>' +
         '<div class="doc-upload-area" onclick="triggerUploadKYC(\'kyc-bankref-' + p.id + '\')" id="kyc-bankref-area-' + p.id + '"><span>&#128206;</span><span id="kyc-bankref-lbl-' + p.id + '">Click to upload bank reference letter</span></div>' +
-        '<input type="file" id="kyc-bankref-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'bankref\',this)" />' +
+        '<input type="file" id="kyc-bankref-' + p.id + '" style="display:none" accept=".pdf,.jpg,.jpeg,.png" onchange="handleKYCUpload(\'' + p.id + '\',\'bankref\',this,\'' + p.type + '\')" />' +
       '</div>' +
     '</div>';
   }
@@ -6781,13 +6781,75 @@ function ensureVerificationList(targetEl) {
   return list;
 }
 
+function normalizePersonType(value) {
+  var normalized = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+  if (normalized === 'director' || normalized === 'directors' || normalized === 'dir') return 'director';
+  if (normalized === 'ubo' || normalized === 'ubos' || normalized === 'beneficial_owner') return 'ubo';
+  if (normalized === 'intermediary' || normalized === 'intermediaries' || normalized === 'inter' || normalized === 'int') return 'intermediary';
+  return '';
+}
+
+function getKYCPersonType(personId, explicitType) {
+  var normalized = normalizePersonType(explicitType);
+  if (normalized) return normalized;
+  var card = document.getElementById('kyc-person-' + personId);
+  if (card) {
+    var activeBtn = card.querySelector('.kyc-type-btn.active');
+    if (activeBtn) {
+      normalized = normalizePersonType(activeBtn.textContent || activeBtn.value || '');
+      if (normalized) return normalized;
+    }
+  }
+  var value = String(personId || '').toLowerCase();
+  if (value.indexOf('dir') === 0) return 'director';
+  if (value.indexOf('ubo') === 0) return 'ubo';
+  if (value.indexOf('int') === 0 || value.indexOf('inter') === 0) return 'intermediary';
+  return '';
+}
+
+function getDocumentSlotKey(documentRecord) {
+  if (documentRecord && documentRecord.slot_key) return String(documentRecord.slot_key);
+  var docType = String((documentRecord && documentRecord.doc_type) || 'general');
+  var personId = String((documentRecord && documentRecord.person_id) || '').trim();
+  var personType = getKYCPersonType(personId, documentRecord && documentRecord.person_type) || 'unknown';
+  return personId ? ('person:' + personType + ':' + personId + ':' + docType) : ('entity:' + docType);
+}
+
+function isCurrentDocumentRecord(documentRecord) {
+  var value = documentRecord && documentRecord.is_current;
+  if (value == null) return true;
+  if (value === false || value === 0) return false;
+  return !/^(false|0|no)$/i.test(String(value).trim());
+}
+
+function isNewerDocumentRecord(candidate, existing) {
+  if (!existing) return true;
+  var candidateVersion = Number(candidate && candidate.version || 0);
+  var existingVersion = Number(existing && existing.version || 0);
+  if (candidateVersion !== existingVersion) return candidateVersion > existingVersion;
+  var candidateUploaded = Date.parse((candidate && (candidate.uploaded_at || candidate.verified_at)) || '') || 0;
+  var existingUploaded = Date.parse((existing && (existing.uploaded_at || existing.verified_at)) || '') || 0;
+  if (candidateUploaded !== existingUploaded) return candidateUploaded > existingUploaded;
+  return String(candidate && (candidate.id || candidate.doc_id) || '') > String(existing && (existing.id || existing.doc_id) || '');
+}
+
+function clearVerificationForSlot(targetEl, slotKey) {
+  var list = ensureVerificationList(targetEl);
+  if (!list) return;
+  list.querySelectorAll('.doc-verify-results').forEach(function(card) {
+    var cardSlot = card.getAttribute('data-doc-slot');
+    if (!slotKey || !cardSlot || cardSlot === slotKey) card.remove();
+  });
+}
+
 function renderPersistedVerification(targetEl, documentRecord) {
   if (!targetEl || !documentRecord || !documentRecord.id) return;
   var list = ensureVerificationList(targetEl);
   if (!list) return;
 
-  var existing = list.querySelector('[data-doc-id="' + documentRecord.id + '"]');
-  if (existing) existing.remove();
+  if (!isCurrentDocumentRecord(documentRecord)) return;
+  var slotKey = getDocumentSlotKey(documentRecord);
+  clearVerificationForSlot(targetEl, slotKey);
 
   var results = documentRecord.verification_results || {};
   var checks = Array.isArray(results.checks) ? results.checks : [];
@@ -6795,6 +6857,7 @@ function renderPersistedVerification(targetEl, documentRecord) {
   var card = document.createElement('div');
   card.className = 'doc-verify-results';
   card.setAttribute('data-doc-id', documentRecord.id);
+  card.setAttribute('data-doc-slot', slotKey);
   card.style.cssText = 'padding:10px 12px;border-radius:8px;background:var(--surface3);font-size:12px;';
 
   var meta = '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap;">' +
@@ -6851,6 +6914,10 @@ function renderCompanyVerification(docId, verificationResponse) {
     id: verificationResponse.doc_id || verificationResponse.id,
     doc_name: verificationResponse.doc_name,
     doc_type: verificationResponse.doc_type,
+    person_type: verificationResponse.person_type,
+    slot_key: verificationResponse.slot_key,
+    is_current: verificationResponse.is_current,
+    version: verificationResponse.version,
     verification_status: verificationResponse.verification_status || verificationResponse.status,
     verification_results: verificationResponse.verification_results || {}
   });
@@ -6864,6 +6931,11 @@ function renderPersonVerification(personId, docType, verificationResponse) {
     id: verificationResponse.doc_id || verificationResponse.id,
     doc_name: verificationResponse.doc_name,
     doc_type: verificationResponse.doc_type || docType,
+    person_id: verificationResponse.person_id || personId,
+    person_type: verificationResponse.person_type || getKYCPersonType(personId),
+    slot_key: verificationResponse.slot_key,
+    is_current: verificationResponse.is_current,
+    version: verificationResponse.version,
     verification_status: verificationResponse.verification_status || verificationResponse.status,
     verification_results: verificationResponse.verification_results || {}
   });
@@ -8032,6 +8104,7 @@ function handleUpload(docId, input) {
   if (!files || files.length === 0) return;
   const label = document.getElementById(docId + '-label');
   const item = document.getElementById(docId);
+  var apiDocType = DOC_TYPE_MAP[docId] || docId;
 
   // Build file names
   const names = Array.from(files).map(f => f.name).join(', ');
@@ -8040,16 +8113,27 @@ function handleUpload(docId, input) {
   // Upload to API if authenticated
   if (AUTH_TOKEN && currentApplicationId) {
     Promise.allSettled(Array.from(files).map(async function(file) {
-      var apiDocType = DOC_TYPE_MAP[docId] || docId;
       var fd = new FormData();
       fd.append('file', file);
       fd.append('doc_type', apiDocType);
       var resp = await apiCall('POST', '/applications/' + currentApplicationId + '/documents?doc_type=' + encodeURIComponent(apiDocType), fd, true);
       if (!resp.id) throw new Error('Document upload failed. Please try again or contact support.');
-      var verification = await apiCall('POST', '/documents/' + resp.id + '/verify');
+      var verification;
+      try {
+        verification = await apiCall('POST', '/documents/' + resp.id + '/verify');
+      } catch (verifyErr) {
+        verification = {
+          verification_status: 'pending',
+          verification_results: {},
+          verify_error: verifyErr && verifyErr.message ? verifyErr.message : 'Verification failed'
+        };
+      }
       verification.doc_id = verification.doc_id || resp.id;
       verification.doc_name = resp.doc_name || file.name;
       verification.doc_type = resp.doc_type || apiDocType;
+      verification.slot_key = resp.slot_key || getDocumentSlotKey({ doc_type: apiDocType });
+      verification.is_current = resp.is_current !== false;
+      verification.version = resp.version;
       return verification;
     })).then(function(results) {
       var successes = results.filter(function(result) { return result.status === 'fulfilled'; }).map(function(result) { return result.value; });
@@ -8059,18 +8143,27 @@ function handleUpload(docId, input) {
         throw (failures[0] && failures[0].reason) || new Error('Could not upload this document. Please try again.');
       }
 
-      label.textContent = '✓ ' + successes.map(function(result) { return result.doc_name || result.doc_id; }).join(', ');
+      var latest = successes.reduce(function(current, candidate) {
+        return isNewerDocumentRecord(candidate, current) ? candidate : current;
+      }, null);
+      var slotKey = latest ? getDocumentSlotKey({
+        slot_key: latest.slot_key,
+        doc_type: latest.doc_type || apiDocType
+      }) : getDocumentSlotKey({ doc_type: apiDocType });
+      clearVerificationForSlot(item, slotKey);
+
+      label.textContent = '✓ ' + ((latest && (latest.doc_name || latest.doc_id)) || names);
       item.classList.add('uploaded');
       uploadedDocs.add(docId);
       updateProgress();
 
-      uploadedDocIds[docId] = successes.map(function(result) { return result.doc_id; });
+      uploadedDocIds[docId] = latest && latest.doc_id ? [latest.doc_id] : [];
       addClearButton(docId);
-      successes.forEach(function(result) {
-        renderCompanyVerification(docId, result);
-      });
+      if (latest) renderCompanyVerification(docId, latest);
       if (failures.length) {
         showToast('warn', 'Partial Upload', successes.length + ' document(s) stored and verified, ' + failures.length + ' failed.');
+      } else if (successes.some(function(result) { return result.verify_error; })) {
+        showToast('warn', 'Verification Pending', 'Document stored. Verification will require review or retry.');
       } else {
         showToast('success', 'File Uploaded', 'Stored and verified: ' + names);
       }
@@ -9281,8 +9374,9 @@ function triggerUploadKYC(inputId) {
   document.getElementById(inputId).click();
 }
 
-function handleKYCUpload(personId, docType, input) {
+function handleKYCUpload(personId, docType, input, personType) {
   if (!input.files.length) return;
+  var resolvedPersonType = getKYCPersonType(personId, personType);
   // docType uses underscores (e.g. cert_inc) but HTML IDs use hyphens (e.g. kyc-cert-inc-lbl-)
   var docKey = docType.replace(/_/g, '-');
   const lbl = document.getElementById('kyc-' + docKey + '-lbl-' + personId);
@@ -9311,6 +9405,7 @@ function handleKYCUpload(personId, docType, input) {
     formData.append('file', input.files[0]);
     var uploadUrl = API_BASE + '/applications/' + currentApplicationId + '/documents?doc_type=' +
       encodeURIComponent(docType) + '&person_id=' + encodeURIComponent(personId);
+    if (resolvedPersonType) uploadUrl += '&person_type=' + encodeURIComponent(resolvedPersonType);
     var uploadedDocId = null;
     fetch(uploadUrl, {
       method: 'POST',
@@ -9335,27 +9430,40 @@ function handleKYCUpload(personId, docType, input) {
         headers: { 'Authorization': 'Bearer ' + AUTH_TOKEN, 'Content-Type': 'application/json' }
       }).then(function(r) {
         return r.json().then(function(data) {
-          if (!r.ok) throw new Error('_VERIFY_FAIL_:' + (data.error || 'Verification failed'));
+          if (!r.ok) {
+            return {
+              verification_status: 'pending',
+              verification_results: {},
+              verify_error: data.error || 'Verification failed'
+            };
+          }
           return data;
         });
       }).then(function(verification) {
         verification.doc_id = verification.doc_id || resp.id;
         verification.doc_name = resp.doc_name || fileName;
         verification.doc_type = resp.doc_type || docType;
+        verification.person_id = personId;
+        verification.person_type = resp.person_type || resolvedPersonType;
+        verification.slot_key = resp.slot_key || getDocumentSlotKey({ doc_type: docType, person_id: personId, person_type: resolvedPersonType });
+        verification.is_current = resp.is_current !== false;
+        verification.version = resp.version;
         if (lbl) lbl.textContent = fileName;
         if (area) { area.style.borderColor = 'var(--green)'; area.style.color = 'var(--green)'; }
         updateKYCBadge(personId);
+        clearVerificationForSlot(area ? area.parentElement : null, verification.slot_key);
         renderPersonVerification(personId, docType, verification);
-        showToast('success', 'Document Uploaded', 'Stored and verified: ' + fileName);
+        if (verification.verify_error) {
+          showToast('warn', 'Verification Pending', 'Document stored. Verification will require review or retry.');
+        } else {
+          showToast('success', 'Document Uploaded', 'Stored and verified: ' + fileName);
+        }
       });
     }).catch(function(err) {
       console.warn('KYC doc upload error:', err);
       resetUploadUI();
       var msg = err.message || '';
-      if (msg.indexOf('_VERIFY_FAIL_:') === 0) {
-        // Upload succeeded but verification failed — document is stored
-        showToast('warn', 'Verification Issue', 'Document uploaded but verification encountered an issue. A compliance officer will review it manually.');
-      } else if (msg === 'Session expired') {
+      if (msg === 'Session expired') {
         // Already handled above
       } else {
         showToast('error', 'Upload Failed', msg || 'Could not store and verify this document. Please try again.');
@@ -9765,8 +9873,20 @@ function syncPersistedApplicationDocuments(app) {
     return;
   }
 
-  var docsByPerson = {};
+  var docsBySlot = {};
   app.documents.forEach(function(doc) {
+    if (!doc || !doc.id || !isCurrentDocumentRecord(doc)) return;
+    var slotKey = getDocumentSlotKey(doc);
+    if (docsBySlot[slotKey]) {
+      console.warn('Duplicate current documents returned for upload slot', slotKey, docsBySlot[slotKey].id, doc.id);
+    }
+    if (isNewerDocumentRecord(doc, docsBySlot[slotKey])) {
+      docsBySlot[slotKey] = doc;
+    }
+  });
+  var activeDocs = Object.keys(docsBySlot).map(function(slotKey) { return docsBySlot[slotKey]; });
+  var docsByPerson = {};
+  activeDocs.forEach(function(doc) {
     if (doc.person_id) {
       docsByPerson[doc.person_id] = docsByPerson[doc.person_id] || [];
       docsByPerson[doc.person_id].push(doc);
@@ -9784,8 +9904,7 @@ function syncPersistedApplicationDocuments(app) {
       if (item) item.classList.add('uploaded');
       if (label) label.textContent = '✓ ' + (doc.doc_name || 'Previously uploaded');
       uploadedDocs.add(slotId);
-      uploadedDocIds[slotId] = uploadedDocIds[slotId] || [];
-      uploadedDocIds[slotId].push(doc.id);
+      uploadedDocIds[slotId] = [doc.id];
       addClearButton(slotId);
       renderPersistedVerification(item, doc);
     }

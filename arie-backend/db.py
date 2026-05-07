@@ -410,6 +410,13 @@ def _get_postgres_schema() -> str:
         s3_key TEXT,
         file_size INTEGER,
         mime_type TEXT,
+        slot_key TEXT,
+        is_current BOOLEAN DEFAULT TRUE,
+        version INTEGER DEFAULT 1,
+        superseded_at TIMESTAMP,
+        superseded_by_document_id TEXT REFERENCES documents(id),
+        replaced_reason TEXT,
+        replaced_by_user_id TEXT,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
         verification_results JSONB DEFAULT '{}',
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
@@ -965,6 +972,8 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_directors_application_id ON directors(application_id);
     CREATE INDEX IF NOT EXISTS idx_ubos_application_id ON ubos(application_id);
     CREATE INDEX IF NOT EXISTS idx_documents_application_id ON documents(application_id);
+    CREATE INDEX IF NOT EXISTS idx_documents_current_slot ON documents(application_id, slot_key, is_current);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_one_current_slot ON documents(application_id, slot_key) WHERE is_current IS TRUE;
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_category ON compliance_resources(category);
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
@@ -1290,6 +1299,13 @@ def _get_sqlite_schema() -> str:
         s3_key TEXT,
         file_size INTEGER,
         mime_type TEXT,
+        slot_key TEXT,
+        is_current INTEGER DEFAULT 1,
+        version INTEGER DEFAULT 1,
+        superseded_at TEXT,
+        superseded_by_document_id TEXT REFERENCES documents(id),
+        replaced_reason TEXT,
+        replaced_by_user_id TEXT,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
         verification_results TEXT DEFAULT '{}',
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
@@ -1853,6 +1869,8 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_directors_application_id ON directors(application_id);
     CREATE INDEX IF NOT EXISTS idx_ubos_application_id ON ubos(application_id);
     CREATE INDEX IF NOT EXISTS idx_documents_application_id ON documents(application_id);
+    CREATE INDEX IF NOT EXISTS idx_documents_current_slot ON documents(application_id, slot_key, is_current);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_one_current_slot ON documents(application_id, slot_key) WHERE is_current = 1;
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_category ON compliance_resources(category);
     CREATE INDEX IF NOT EXISTS idx_compliance_resources_created_at ON compliance_resources(created_at);
     CREATE INDEX IF NOT EXISTS idx_regulatory_documents_status ON regulatory_documents(status);
@@ -2537,6 +2555,333 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _document_row_get(row, key, default=None):
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        return row.get(key, default)
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+_DOCUMENT_PERSON_TYPE_PREFIXES = (
+    ("director", ("dir", "director")),
+    ("ubo", ("ubo",)),
+    ("intermediary", ("int", "inter", "intermediary")),
+)
+
+
+def _document_normalize_person_type(value):
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in ("director", "directors", "dir"):
+        return "director"
+    if normalized in ("ubo", "ubos", "beneficial_owner"):
+        return "ubo"
+    if normalized in ("intermediary", "intermediaries", "inter", "int"):
+        return "intermediary"
+    return None
+
+
+def _document_person_type_from_prefix(person_id):
+    value = str(person_id or "").strip().lower()
+    for person_type, prefixes in _DOCUMENT_PERSON_TYPE_PREFIXES:
+        if any(value.startswith(prefix) for prefix in prefixes):
+            return person_type
+    return None
+
+
+def _document_person_type_for_ref(db: DBConnection, application_id, person_id):
+    person_ref = str(person_id or "").strip()
+    if not person_ref:
+        return None
+
+    prefix_type = _document_person_type_from_prefix(person_ref)
+    matches = []
+    lookup_sql = {
+        "director": "SELECT 1 FROM directors WHERE application_id = ? AND (id = ? OR person_key = ?) LIMIT 1",
+        "ubo": "SELECT 1 FROM ubos WHERE application_id = ? AND (id = ? OR person_key = ?) LIMIT 1",
+        "intermediary": "SELECT 1 FROM intermediaries WHERE application_id = ? AND (id = ? OR person_key = ?) LIMIT 1",
+    }
+    for person_type, sql in lookup_sql.items():
+        table = {
+            "director": "directors",
+            "ubo": "ubos",
+            "intermediary": "intermediaries",
+        }[person_type]
+        if not _safe_table_exists(db, table):
+            continue
+        if db.execute(sql, (application_id, person_ref, person_ref)).fetchone():
+            matches.append(person_type)
+
+    if prefix_type and (not matches or prefix_type in matches):
+        return prefix_type
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        logger.warning(
+            "document versioning repair found ambiguous person reference; "
+            "application_id=%s person_id=%s matched_types=%s using=%s",
+            application_id,
+            person_ref,
+            matches,
+            matches[0],
+        )
+        return matches[0]
+    return prefix_type or "unknown"
+
+
+def _document_default_slot_key(doc_type, person_id=None, person_type=None):
+    doc_type = str(doc_type or "general").strip() or "general"
+    person_id = str(person_id or "").strip()
+    if person_id:
+        normalized_type = _document_normalize_person_type(person_type) or "unknown"
+        return f"person:{normalized_type}:{person_id}:{doc_type}"
+    return f"entity:{doc_type}"
+
+
+def _document_legacy_person_slot_key(doc_type, person_id=None):
+    doc_type = str(doc_type or "general").strip() or "general"
+    person_id = str(person_id or "").strip()
+    return f"person:{person_id}:{doc_type}" if person_id else None
+
+
+def _document_truthy_bool(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() not in ("0", "false", "f", "no", "n", "")
+
+
+def _ensure_document_versioning_columns(db: DBConnection):
+    """Ensure documents has active-versioning columns used by upload slots."""
+    columns = [
+        ("slot_key", "TEXT"),
+        ("is_current", "BOOLEAN DEFAULT TRUE" if db.is_postgres else "INTEGER DEFAULT 1"),
+        ("version", "INTEGER DEFAULT 1"),
+        ("superseded_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
+        ("superseded_by_document_id", "TEXT REFERENCES documents(id)"),
+        ("replaced_reason", "TEXT"),
+        ("replaced_by_user_id", "TEXT"),
+    ]
+    for column, definition in columns:
+        if not _safe_column_exists(db, "documents", column):
+            db.execute(f"ALTER TABLE documents ADD COLUMN {column} {definition}")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_documents_current_slot ON documents(application_id, slot_key, is_current)")
+
+
+def _ensure_document_current_slot_unique_index(db: DBConnection):
+    if db.is_postgres:
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_one_current_slot "
+            "ON documents(application_id, slot_key) WHERE is_current IS TRUE"
+        )
+    else:
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_one_current_slot "
+            "ON documents(application_id, slot_key) WHERE is_current = 1"
+        )
+
+
+def repair_document_current_versions(db: DBConnection):
+    """Backfill document slot/version state and repair duplicate active rows.
+
+    Existing deployments allowed multiple document rows for the same logical
+    upload slot. This keeps the historical rows, assigns deterministic versions,
+    and leaves only the latest row current for each application/slot.
+    """
+    _ensure_document_versioning_columns(db)
+    normalize_legacy_doc_types(db)
+    db.execute("DROP INDEX IF EXISTS idx_documents_one_current_slot")
+
+    try:
+        if _safe_table_exists(db, "rmi_request_items"):
+            db.execute("""
+                UPDATE documents
+                   SET slot_key = 'rmi:' || (
+                       SELECT i.id FROM rmi_request_items i
+                       WHERE i.document_id = documents.id
+                       LIMIT 1
+                   )
+                 WHERE (slot_key IS NULL OR slot_key = '')
+                   AND EXISTS (
+                       SELECT 1 FROM rmi_request_items i
+                       WHERE i.document_id = documents.id
+                   )
+            """)
+        if _safe_table_exists(db, "application_enhanced_requirements"):
+            db.execute("""
+                UPDATE documents
+                   SET slot_key = 'enhanced_requirement:' || (
+                       SELECT r.id FROM application_enhanced_requirements r
+                       WHERE r.linked_document_id = documents.id
+                       LIMIT 1
+                   )
+                 WHERE (slot_key IS NULL OR slot_key = '')
+                   AND EXISTS (
+                       SELECT 1 FROM application_enhanced_requirements r
+                       WHERE r.linked_document_id = documents.id
+                   )
+            """)
+        slot_rows = db.execute("""
+            SELECT id, application_id, person_id, doc_type, slot_key
+              FROM documents
+        """).fetchall()
+        for row in slot_rows:
+            doc_id = _document_row_get(row, "id")
+            current_slot_key = str(_document_row_get(row, "slot_key") or "").strip()
+            if current_slot_key.startswith("rmi:") or current_slot_key.startswith("enhanced_requirement:"):
+                continue
+            application_id = _document_row_get(row, "application_id")
+            person_id = _document_row_get(row, "person_id")
+            doc_type = _document_row_get(row, "doc_type")
+            person_type = _document_person_type_for_ref(db, application_id, person_id) if person_id else None
+            computed_slot_key = _document_default_slot_key(doc_type, person_id, person_type)
+            legacy_slot_key = _document_legacy_person_slot_key(doc_type, person_id)
+            if (
+                not current_slot_key
+                or (legacy_slot_key and current_slot_key == legacy_slot_key)
+                or current_slot_key == _document_default_slot_key(doc_type, person_id, "unknown")
+                or (not person_id and current_slot_key.startswith("entity:") and current_slot_key != computed_slot_key)
+                or (person_id and current_slot_key.startswith("person:") and current_slot_key != computed_slot_key)
+            ):
+                db.execute(
+                    "UPDATE documents SET slot_key = ? WHERE id = ?",
+                    (computed_slot_key, doc_id),
+                )
+    except Exception as e:
+        logger.error("document versioning slot-key backfill failed: %s", e, exc_info=True)
+        db.rollback()
+        raise
+
+    rows = db.execute("""
+        SELECT id, application_id, person_id, doc_type, slot_key,
+               uploaded_at, verified_at, reviewed_at, is_current, version,
+               superseded_at
+          FROM documents
+         ORDER BY application_id, slot_key, uploaded_at, id
+    """).fetchall()
+
+    groups = {}
+    for row in rows:
+        key = (
+            _document_row_get(row, "application_id", ""),
+            _document_row_get(row, "slot_key")
+            or _document_default_slot_key(
+                _document_row_get(row, "doc_type"),
+                _document_row_get(row, "person_id"),
+                _document_person_type_for_ref(
+                    db,
+                    _document_row_get(row, "application_id", ""),
+                    _document_row_get(row, "person_id"),
+                ) if _document_row_get(row, "person_id") else None,
+            ),
+        )
+        groups.setdefault(key, []).append(row)
+
+    repaired_groups = 0
+    ambiguous_groups = 0
+    for (application_id, slot_key), group in groups.items():
+        ordered = sorted(
+            group,
+            key=lambda r: (
+                str(_document_row_get(r, "uploaded_at") or ""),
+                str(_document_row_get(r, "verified_at") or ""),
+                str(_document_row_get(r, "reviewed_at") or ""),
+                str(_document_row_get(r, "id") or ""),
+            ),
+        )
+        current_count = sum(
+            1 for r in ordered
+            if _document_truthy_bool(_document_row_get(r, "is_current", True))
+        )
+        versions_missing = any(_document_row_get(r, "version") in (None, "") for r in ordered)
+        all_rows_already_superseded = all(bool(_document_row_get(r, "superseded_at")) for r in ordered)
+        needs_repair = (
+            len(ordered) > 1
+            and (
+                current_count > 1
+                or (current_count == 0 and not all_rows_already_superseded)
+            )
+        )
+        if not needs_repair and not versions_missing:
+            continue
+
+        if not needs_repair:
+            for idx, row in enumerate(ordered):
+                doc_id = _document_row_get(row, "id")
+                db.execute(
+                    """
+                    UPDATE documents
+                       SET slot_key = ?,
+                           version = COALESCE(version, ?)
+                     WHERE id = ?
+                    """,
+                    (slot_key, idx + 1, doc_id),
+                )
+            repaired_groups += 1
+            continue
+
+        timestamp_keys = [
+            (
+                str(_document_row_get(r, "uploaded_at") or ""),
+                str(_document_row_get(r, "verified_at") or ""),
+                str(_document_row_get(r, "reviewed_at") or ""),
+            )
+            for r in ordered
+        ]
+        if len(timestamp_keys) != len(set(timestamp_keys)):
+            ambiguous_groups += 1
+            logger.warning(
+                "document versioning repair used id tie-breaker for ambiguous slot ordering: "
+                "application_id=%s slot_key=%s document_ids=%s",
+                application_id,
+                slot_key,
+                [_document_row_get(r, "id") for r in ordered],
+            )
+
+        for idx, row in enumerate(ordered):
+            doc_id = _document_row_get(row, "id")
+            is_latest = idx == len(ordered) - 1
+            next_doc_id = None if is_latest else _document_row_get(ordered[idx + 1], "id")
+            db.execute(
+                """
+                UPDATE documents
+                   SET slot_key = ?,
+                       version = ?,
+                       is_current = ?,
+                       superseded_by_document_id = ?,
+                       superseded_at = CASE WHEN ? THEN NULL ELSE COALESCE(superseded_at, datetime('now')) END,
+                       replaced_reason = CASE WHEN ? THEN replaced_reason ELSE COALESCE(replaced_reason, 'migration_duplicate_slot_repair') END,
+                       replaced_by_user_id = CASE WHEN ? THEN replaced_by_user_id ELSE COALESCE(replaced_by_user_id, 'system') END
+                 WHERE id = ?
+                """,
+                (
+                    slot_key,
+                    idx + 1,
+                    True if is_latest else False,
+                    next_doc_id,
+                    is_latest,
+                    is_latest,
+                    is_latest,
+                    doc_id,
+                ),
+            )
+        repaired_groups += 1
+
+    if repaired_groups:
+        logger.info(
+            "document versioning repair completed: repaired_groups=%d ambiguous_groups=%d",
+            repaired_groups,
+            ambiguous_groups,
+        )
+    _ensure_document_current_slot_unique_index(db)
 
 
 def _run_migrations(db: DBConnection):
@@ -4328,6 +4673,22 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.34: Compliance-grade document slot versioning.
+    #
+    # One logical upload slot may have historical document rows, but exactly
+    # one row should be current evidence. This additive migration backfills the
+    # versioning columns and repairs legacy duplicate active rows.
+    try:
+        repair_document_current_versions(db)
+        db.commit()
+        logger.info("Migration v2.34: Ensured document slot versioning/current-document repair")
+    except Exception as e:
+        logger.error("Migration v2.34 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.
 
@@ -5402,25 +5763,45 @@ def normalize_legacy_doc_types(db: DBConnection):
     legacy key; already-canonical rows are untouched.
     """
     _DOC_TYPE_NORMALIZE = {
-        "doc-coi": "cert_inc", "doc-memarts": "memarts", "doc-shareholders": "reg_sh",
+        "doc-coi": "cert_inc", "certificate_of_incorporation": "cert_inc",
+        "certificate of incorporation": "cert_inc", "certificate-incorporation": "cert_inc",
+        "incorporation_certificate": "cert_inc", "incorporation certificate": "cert_inc",
+        "doc-memarts": "memarts", "memorandum_of_association": "memarts",
+        "memorandum of association": "memarts", "memorandum_and_articles": "memarts",
+        "memorandum and articles": "memarts", "articles_of_association": "memarts",
+        "articles of association": "memarts", "doc-shareholders": "reg_sh",
+        "register_of_shareholders": "reg_sh", "register of shareholders": "reg_sh",
+        "shareholder_register": "reg_sh", "shareholder register": "reg_sh",
         "doc-directors-reg": "reg_dir", "doc-financials": "fin_stmt", "doc-proof-address": "poa",
+        "register_of_directors": "reg_dir", "register of directors": "reg_dir",
+        "director_register": "reg_dir", "director register": "reg_dir",
+        "proof_of_address": "poa", "proof of address": "poa", "address_proof": "poa",
+        "financial_statements": "fin_stmt", "financial statements": "fin_stmt",
         "doc-board-res": "board_res", "doc-structure-chart": "structure_chart",
+        "board_resolution": "board_res", "board resolution": "board_res",
+        "structure chart": "structure_chart", "ownership_structure_chart": "structure_chart",
         "doc-bank-ref": "bankref", "doc-license-cert": "licence",
+        "bank_reference": "bankref", "bank reference": "bankref",
+        "license": "licence", "licence_certificate": "licence", "license_certificate": "licence",
         "doc-contracts": "contracts", "doc-source-wealth-proof": "source_wealth",
         "doc-source-funds-proof": "source_funds", "doc-bank-statements": "bank_statements",
+        "source_of_wealth": "source_wealth", "source of wealth": "source_wealth",
+        "source_of_funds": "source_funds", "source of funds": "source_funds",
+        "bank statements": "bank_statements",
         "doc-aml-policy": "aml_policy",
+        "aml policy": "aml_policy",
         "pep-declaration": "pep_declaration",
     }
     total_updated = 0
     for old_type, new_type in _DOC_TYPE_NORMALIZE.items():
         try:
             db.execute(
-                "UPDATE documents SET doc_type=? WHERE doc_type=?",
+                "UPDATE documents SET doc_type=? WHERE LOWER(doc_type)=LOWER(?)",
                 (new_type, old_type)
             )
             # rowcount is not always reliable across DB adapters, so we count separately
             count_row = db.execute(
-                "SELECT COUNT(*) as cnt FROM documents WHERE doc_type=?",
+                "SELECT COUNT(*) as cnt FROM documents WHERE LOWER(doc_type)=LOWER(?)",
                 (old_type,)
             ).fetchone()
             # If the count is 0 after update, the update worked (or there were none)
@@ -5430,7 +5811,7 @@ def normalize_legacy_doc_types(db: DBConnection):
     remaining = 0
     for old_type in _DOC_TYPE_NORMALIZE:
         try:
-            row = db.execute("SELECT COUNT(*) as cnt FROM documents WHERE doc_type=?", (old_type,)).fetchone()
+            row = db.execute("SELECT COUNT(*) as cnt FROM documents WHERE LOWER(doc_type)=LOWER(?)", (old_type,)).fetchone()
             remaining += (row["cnt"] if row else 0)
         except Exception:
             pass

@@ -89,6 +89,19 @@ def _remove_modern_backfills(db, keep_count):
     if "023" not in kept_versions:
         for column in ("client_response_text", "client_response_at", "client_response_by"):
             _drop_column_if_present(db, "application_enhanced_requirements", column)
+    if "024" not in kept_versions:
+        db.execute("DROP INDEX IF EXISTS idx_documents_current_slot")
+        db.execute("DROP INDEX IF EXISTS idx_documents_one_current_slot")
+        for column in (
+            "slot_key",
+            "is_current",
+            "version",
+            "superseded_at",
+            "superseded_by_document_id",
+            "replaced_reason",
+            "replaced_by_user_id",
+        ):
+            _drop_column_if_present(db, "documents", column)
     db.commit()
 
 
