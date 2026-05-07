@@ -3463,7 +3463,11 @@ function eddTriggerText(caseRow) {
     if (payload.source_alert_id != null) parts.push('alert #' + payload.source_alert_id);
     if (parts.length) return parts.join(' — ');
   }
-  return String((caseRow && (caseRow.trigger_notes || caseRow.trigger_source)) || '');
+  var flags = parseMaybeJsonArray(caseRow && (caseRow.edd_trigger_flags || caseRow.eddTriggerFlags));
+  if (caseRow && caseRow.trigger_notes) return String(caseRow.trigger_notes);
+  if (caseRow && caseRow.trigger_source) return String(caseRow.trigger_source);
+  if (flags.length) return flags.join(', ');
+  return 'Trigger reason unavailable';
 }
 
 function mapApplicationFromApi(a) {
@@ -7362,6 +7366,7 @@ function openEDDDetail(caseId) {
     '<div class="detail-row"><span class="label">Application</span><span class="value" style="font-family:monospace;">' + escapeHtml(c.application_id) + '</span></div>' +
     '<div class="detail-row"><span class="label">Risk Level</span><span class="value">' + riskBadgeForRecord(c) + '</span></div>' +
     '<div class="detail-row"><span class="label">Risk Score</span><span class="value" style="font-weight:700;">' + escapeHtml(formatRiskScoreForRecord(c)) + '</span></div>' +
+    '<div class="detail-row"><span class="label">EDD Required</span><span class="value" style="font-weight:700;">Yes</span></div>' +
     '<div class="detail-row"><span class="label">Current Stage</span><span class="value">' + eddStageBadge(c.stage) + '</span></div>' +
     '<div class="detail-row"><span class="label">Assigned Officer</span><span class="value">' + escapeHtml((function(){ var u = USERS.find(function(u){ return u.id === c.assigned_officer; }); return u ? u.name : (c.assigned_officer || 'Unassigned'); })()) + '</span></div>' +
     '<div class="detail-row"><span class="label">Trigger</span><span class="value">' + escapeHtml(eddTriggerText(c)) + '</span></div>' +

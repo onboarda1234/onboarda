@@ -93,6 +93,17 @@ class TestBackofficeRiskSourceOfTruth:
         assert "riskBadge(app.risk)" not in html
         assert "riskBadge(c.risk_level)" not in html
 
+    def test_backoffice_edd_detail_distinguishes_low_risk_from_edd_required(self):
+        html = _backoffice_html()
+
+        assert "function eddTriggerText(caseRow)" in html
+        assert "caseRow.edd_trigger_flags || caseRow.eddTriggerFlags" in html
+        assert "return 'Trigger reason unavailable';" in html
+        assert '<span class="label">Risk Level</span>' in html
+        assert '<span class="label">Risk Score</span>' in html
+        assert '<span class="label">EDD Required</span><span class="value" style="font-weight:700;">Yes</span>' in html
+        assert '<span class="label">Trigger</span>' in html
+
 
 class TestBackendRiskIntegrityMetadata:
     def test_high_risk_application_stays_authoritative(self):
