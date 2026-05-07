@@ -348,6 +348,170 @@ def _quality_cap(code, max_score, severity, reason, fix):
     }
 
 
+def _enhanced_review_empty_summary():
+    return {
+        "triggered": False,
+        "total_requirements": 0,
+        "by_trigger": [],
+        "requested": [],
+        "submitted": [],
+        "accepted": [],
+        "rejected": [],
+        "waived": [],
+        "outstanding": [],
+        "mandatory_outstanding_count": 0,
+        "blocking_outstanding_count": 0,
+        "client_facing_count": 0,
+        "backoffice_only_count": 0,
+        "document_submissions_count": 0,
+        "text_responses_count": 0,
+        "waiver_count": 0,
+        "senior_review_items": [],
+        "overall_status": "not_triggered",
+        "warnings": [],
+    }
+
+
+def _enhanced_review_summary(app):
+    summary = app.get("enhanced_review_summary")
+    if not isinstance(summary, dict):
+        return _enhanced_review_empty_summary()
+    normalized = _enhanced_review_empty_summary()
+    normalized.update(summary)
+    return normalized
+
+
+def _enhanced_review_item_line(item):
+    label = str(item.get("requirement_label") or item.get("requirement_key") or "Requirement")
+    status = str(item.get("memo_status") or item.get("status") or "Status not recorded")
+    parts = [
+        label,
+        status,
+        "audience: " + str(item.get("audience") or "not recorded"),
+        "type: " + str(item.get("requirement_type") or "not recorded"),
+    ]
+    if item.get("mandatory"):
+        parts.append("mandatory")
+    if item.get("blocking_approval"):
+        parts.append("blocking flag recorded")
+    if item.get("linked_document_present"):
+        parts.append("linked document present")
+    if item.get("client_response_submitted"):
+        parts.append("client response submitted")
+    if item.get("waiver_reason"):
+        parts.append("waiver reason: " + str(item.get("waiver_reason")))
+    return " — ".join(parts)
+
+
+def _enhanced_review_list(label, items, limit=8):
+    if not items:
+        return label + ": none."
+    lines = [_enhanced_review_item_line(item) for item in items[:limit]]
+    suffix = ""
+    if len(items) > limit:
+        suffix = " +" + str(len(items) - limit) + " more"
+    return label + ": " + "; ".join(lines) + suffix + "."
+
+
+def _build_enhanced_review_memo_section(summary):
+    summary = summary if isinstance(summary, dict) else _enhanced_review_empty_summary()
+    if not summary.get("triggered"):
+        content = (
+            "Enhanced Review / EDD: Not triggered based on the current application "
+            "data and available routing information."
+        )
+        return {
+            "title": "Enhanced Review / EDD",
+            "triggered": False,
+            "overall_status": "not_triggered",
+            "content": content,
+            "summary": summary,
+        }
+
+    by_trigger = summary.get("by_trigger") or []
+    trigger_lines = []
+    for group in by_trigger:
+        if not isinstance(group, dict):
+            continue
+        label = group.get("trigger_label") or group.get("trigger_key") or "Unknown trigger"
+        statuses = group.get("statuses") or {}
+        status_text = ", ".join(
+            str(k).replace("_", " ") + "=" + str(v)
+            for k, v in sorted(statuses.items())
+        ) or "no status breakdown"
+        reason_text = ""
+        reasons = [str(r) for r in (group.get("trigger_reasons") or []) if r]
+        if reasons:
+            reason_text = " Reason(s): " + ", ".join(reasons[:3]) + "."
+        trigger_lines.append(
+            str(label) + " (" + str(group.get("total") or 0) + " requirement(s); "
+            + status_text + ")." + reason_text
+        )
+
+    outstanding_count = len(summary.get("outstanding") or [])
+    mandatory_outstanding = int(summary.get("mandatory_outstanding_count") or 0)
+    blocking_outstanding = int(summary.get("blocking_outstanding_count") or 0)
+    if mandatory_outstanding or blocking_outstanding:
+        residual = (
+            "Enhanced Review remains incomplete pending resolution of outstanding "
+            "mandatory or blocking items."
+        )
+    elif outstanding_count:
+        residual = (
+            "No mandatory or blocking enhanced review items remain unresolved; "
+            "non-mandatory enhanced review items remain open."
+        )
+    else:
+        residual = (
+            "Enhanced Review requirements have been resolved based on accepted or "
+            "waived items."
+        )
+
+    content_parts = [
+        "Triggered: Yes.",
+        "Requirement count: "
+        + str(summary.get("total_requirements") or 0)
+        + " total; "
+        + str(summary.get("client_facing_count") or 0)
+        + " client-facing; "
+        + str(summary.get("backoffice_only_count") or 0)
+        + " back-office/internal; "
+        + str(outstanding_count)
+        + " outstanding.",
+        "Trigger groups: " + (" ".join(trigger_lines) if trigger_lines else "none recorded."),
+        _enhanced_review_list("Requested from client", summary.get("requested") or []),
+        _enhanced_review_list("Submitted by client / under review", summary.get("submitted") or []),
+        _enhanced_review_list("Accepted", summary.get("accepted") or []),
+        _enhanced_review_list("Rejected / further information required", summary.get("rejected") or []),
+        _enhanced_review_list("Waived", summary.get("waived") or []),
+        _enhanced_review_list("Outstanding", summary.get("outstanding") or []),
+    ]
+    senior_items = summary.get("senior_review_items") or []
+    if senior_items:
+        content_parts.append(_enhanced_review_list("Senior review tasks", senior_items))
+    content_parts.append(
+        "Mandatory outstanding: "
+        + str(mandatory_outstanding)
+        + "; blocking outstanding: "
+        + str(blocking_outstanding)
+        + ". "
+        + residual
+    )
+    warnings = summary.get("warnings") or []
+    if warnings:
+        content_parts.append("Warnings: " + "; ".join(str(w) for w in warnings[:5]) + ".")
+
+    return {
+        "title": "Enhanced Review / EDD",
+        "triggered": True,
+        "overall_status": summary.get("overall_status") or "incomplete",
+        "mandatory_outstanding_count": mandatory_outstanding,
+        "blocking_outstanding_count": blocking_outstanding,
+        "content": " ".join(content_parts),
+        "summary": summary,
+    }
+
+
 def build_compliance_memo(app, directors, ubos, documents):
     """
     Build a complete compliance memo from application data.
@@ -839,6 +1003,8 @@ def build_compliance_memo(app, directors, ubos, documents):
         decision_label = "SENIOR COMPLIANCE OFFICER REVIEW"
 
     mon_tier = "Enhanced" if aggregated_risk in ("HIGH", "VERY_HIGH") or all_peps else "Standard"
+    enhanced_review_summary = _enhanced_review_summary(app)
+    enhanced_review_section = _build_enhanced_review_memo_section(enhanced_review_summary)
 
     # ── Compile Rule Engine summary ───────────────────────────────────
     rule_engine_result = {
@@ -1075,6 +1241,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                        if pending_docs else "Full documentation received — high confidence in entity verification. Documentation set meets regulatory expectations.")
                 )
             },
+            "enhanced_review_edd": enhanced_review_section,
             "ai_explainability": {
                 "title": "AI Explainability Layer",
                 "risk_increasing_factors": [f for f in [
@@ -1270,7 +1437,13 @@ def build_compliance_memo(app, directors, ubos, documents):
             "factor_classification_rules": {
                 "always_risk_decreasing": ALWAYS_RISK_DECREASING,
                 "always_risk_increasing": ALWAYS_RISK_INCREASING
-            }
+            },
+            "enhanced_review_summary": enhanced_review_summary,
+            "enhanced_review_status": enhanced_review_summary.get("overall_status", "not_triggered"),
+            "enhanced_review_outstanding_count": len(enhanced_review_summary.get("outstanding") or []),
+            "enhanced_review_mandatory_outstanding_count": enhanced_review_summary.get("mandatory_outstanding_count", 0),
+            "enhanced_review_blocking_outstanding_count": enhanced_review_summary.get("blocking_outstanding_count", 0),
+            "enhanced_review_waiver_count": enhanced_review_summary.get("waiver_count", 0),
         }
     }
 
@@ -1358,6 +1531,13 @@ def build_compliance_memo(app, directors, ubos, documents):
         "party_sources": party_source_summary,
         "rule_engine_checks": len(rule_engine_result.get("rules_checked", [])),
         "rule_engine_violations": rule_engine_result.get("total_violations", 0),
+        "enhanced_review_sources": {
+            "total_requirements": enhanced_review_summary.get("total_requirements", 0),
+            "triggered": bool(enhanced_review_summary.get("triggered")),
+            "overall_status": enhanced_review_summary.get("overall_status", "not_triggered"),
+            "outstanding": len(enhanced_review_summary.get("outstanding") or []),
+            "waivers": enhanced_review_summary.get("waiver_count", 0),
+        },
         "risk_factors_used": {
             "pep_count": len(all_peps),
             "jurisdiction": country,

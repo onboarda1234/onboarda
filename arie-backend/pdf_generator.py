@@ -5,7 +5,7 @@ Sprint 4: Branded as "Onboarda Compliance Report" / "Powered by RegMind".
 
 Produces immutable, branded PDF snapshots of compliance memos with:
     - Onboarda/RegMind branding (config-driven)
-    - Full 11-section structured memo
+    - Full structured memo including Enhanced Review / EDD summary
     - Risk rating badges, decision highlighting
     - Validation status, supervisor verdict
     - Approval metadata, generation timestamp
@@ -488,24 +488,28 @@ def generate_memo_pdf(
     html += '<h2>6. Document Verification</h2>'
     html += _render_section_content(sections.get("document_verification", {}))
 
-    # ── Section 7: AI Explainability Layer ──
-    html += '<h2>7. AI Explainability Layer</h2>'
+    # ── Section 7: Enhanced Review / EDD ──
+    html += '<h2>7. Enhanced Review / EDD</h2>'
+    html += _render_section_content(sections.get("enhanced_review_edd", {}))
+
+    # ── Section 8: AI Explainability Layer ──
+    html += '<h2>8. AI Explainability Layer</h2>'
     ai_section = sections.get("ai_explainability", {})
     if isinstance(ai_section, dict) and (ai_section.get("risk_increasing_factors") or ai_section.get("risk_decreasing_factors")):
         html += _render_ai_explainability(ai_section)
     else:
         html += _render_section_content(ai_section)
 
-    # ── Section 8: Red Flags & Mitigants ──
-    html += '<h2>8. Red Flags &amp; Mitigants</h2>'
+    # ── Section 9: Red Flags & Mitigants ──
+    html += '<h2>9. Red Flags &amp; Mitigants</h2>'
     rf_section = sections.get("red_flags_and_mitigants", {})
     if isinstance(rf_section, dict) and (rf_section.get("red_flags") or rf_section.get("mitigants")):
         html += _render_red_flags(rf_section)
     else:
         html += _render_section_content(rf_section)
 
-    # ── Section 9: Compliance Decision ──
-    html += '<h2>9. Compliance Decision</h2>'
+    # ── Section 10: Compliance Decision ──
+    html += '<h2>10. Compliance Decision</h2>'
     decision_section = sections.get("compliance_decision", {})
     html += '<div class="section-content">'
     if isinstance(decision_section, dict):
@@ -518,12 +522,12 @@ def generate_memo_pdf(
         html += _render_section_content(decision_section)
     html += '</div>'
 
-    # ── Section 10: Ongoing Monitoring ──
-    html += '<h2>10. Ongoing Monitoring &amp; Review</h2>'
+    # ── Section 11: Ongoing Monitoring ──
+    html += '<h2>11. Ongoing Monitoring &amp; Review</h2>'
     html += _render_section_content(sections.get("ongoing_monitoring", {}))
 
-    # ── Section 11: Audit & Governance ──
-    html += '<h2>11. Audit &amp; Governance</h2>'
+    # ── Section 12: Audit & Governance ──
+    html += '<h2>12. Audit &amp; Governance</h2>'
     html += _render_section_content(sections.get("audit_and_governance", {}))
 
     # ── Validation & Supervisor Summary Box ──

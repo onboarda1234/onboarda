@@ -375,6 +375,39 @@ def test_memo_fingerprint_changes_when_screening_review_changes():
     assert first != changed
 
 
+def test_memo_fingerprint_changes_when_enhanced_review_summary_changes():
+    from server import _memo_generation_fingerprint
+
+    base_summary = {
+        "triggered": True,
+        "overall_status": "requested",
+        "outstanding": [{"id": 1, "requirement_key": "company_sof_evidence"}],
+    }
+    changed_summary = {
+        "triggered": True,
+        "overall_status": "complete",
+        "outstanding": [],
+    }
+
+    first = _memo_generation_fingerprint(
+        _app(enhanced_review_summary=base_summary),
+        _directors(),
+        _ubos(),
+        _documents(),
+    )
+    reordered_app = dict(reversed(list(_app(enhanced_review_summary=base_summary).items())))
+    second = _memo_generation_fingerprint(reordered_app, list(reversed(_directors())), _ubos(), _documents())
+    changed = _memo_generation_fingerprint(
+        _app(enhanced_review_summary=changed_summary),
+        _directors(),
+        _ubos(),
+        _documents(),
+    )
+
+    assert first == second
+    assert first != changed
+
+
 class _MemoLockDB:
     def __init__(self, *, is_postgres):
         self.is_postgres = is_postgres

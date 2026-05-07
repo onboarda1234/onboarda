@@ -141,6 +141,7 @@ from enhanced_requirements import (
     ALLOWED_REQUIREMENT_TYPES,
     ALLOWED_SUBJECT_SCOPES,
     ALLOWED_WAIVER_ROLES,
+    build_enhanced_review_memo_summary,
     diagnose_enhanced_requirement_config,
     fulfill_application_enhanced_requirement_document,
     generate_application_enhanced_requirements,
@@ -10123,7 +10124,7 @@ def _memo_row_subset(row, fields):
     return data
 
 
-def _memo_generation_fingerprint(app, directors, ubos, documents):
+def _memo_generation_fingerprint(app, directors, ubos, documents, enhanced_review_summary=None):
     """Stable input fingerprint for idempotent memo generation."""
     payload = {
         "fingerprint_version": "phase3_v1",
@@ -10139,6 +10140,9 @@ def _memo_generation_fingerprint(app, directors, ubos, documents):
         "documents": sorted(
             [_memo_row_subset(d, _MEMO_DOCUMENT_FINGERPRINT_FIELDS) for d in documents],
             key=lambda d: (str(d.get("id") or ""), str(d.get("doc_type") or ""), str(d.get("person_id") or "")),
+        ),
+        "enhanced_review_summary": _normalise_memo_fingerprint_value(
+            enhanced_review_summary or app.get("enhanced_review_summary") or {}
         ),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -10277,8 +10281,44 @@ class ComplianceMemoHandler(BaseHandler):
         app["operating_countries"] = ps.get("operating_countries") or ps.get("countries_of_operation") or ps.get("target_markets") or ""
         app["incorporation_date"] = ps.get("incorporation_date") or ""
         app["business_activity"] = ps.get("business_activity") or ps.get("business_description") or ""
+        try:
+            app["enhanced_review_summary"] = build_enhanced_review_memo_summary(db, real_id)
+        except Exception as exc:
+            logger.error(
+                "Failed to build enhanced review memo summary for %s: %s",
+                real_id,
+                exc,
+                exc_info=True,
+            )
+            app["enhanced_review_summary"] = {
+                "triggered": False,
+                "total_requirements": 0,
+                "by_trigger": [],
+                "requested": [],
+                "submitted": [],
+                "accepted": [],
+                "rejected": [],
+                "waived": [],
+                "outstanding": [],
+                "mandatory_outstanding_count": 0,
+                "blocking_outstanding_count": 0,
+                "client_facing_count": 0,
+                "backoffice_only_count": 0,
+                "document_submissions_count": 0,
+                "text_responses_count": 0,
+                "waiver_count": 0,
+                "senior_review_items": [],
+                "overall_status": "not_triggered",
+                "warnings": ["enhanced_review_summary_unavailable"],
+            }
 
-        memo_input_hash = _memo_generation_fingerprint(app, directors, ubos, documents)
+        memo_input_hash = _memo_generation_fingerprint(
+            app,
+            directors,
+            ubos,
+            documents,
+            app.get("enhanced_review_summary"),
+        )
         latest_memo_row = _latest_compliance_memo_row(db, real_id)
         reused_memo = _memo_payload_if_fingerprint_unchanged(latest_memo_row, memo_input_hash)
         if reused_memo:

@@ -70,6 +70,13 @@ APPLICATION_REQUIREMENT_CLIENT_FULFILLMENT_STATUSES = ("requested", "rejected")
 APPLICATION_REQUIREMENT_CLIENT_DOCUMENT_TYPES = ("document",)
 APPLICATION_REQUIREMENT_CLIENT_TEXT_TYPES = ("explanation", "declaration")
 APPLICATION_REQUIREMENT_CLIENT_RESPONSE_MAX_LENGTH = 10000
+APPLICATION_REQUIREMENT_MEMO_UNRESOLVED_STATUSES = (
+    "generated",
+    "requested",
+    "uploaded",
+    "under_review",
+    "rejected",
+)
 APPLICATION_REQUIREMENT_STATUS_TRANSITIONS = {
     "generated": ("under_review", "accepted", "rejected", "waived"),
     "requested": ("under_review", "accepted", "rejected", "waived"),
@@ -1008,6 +1015,235 @@ def _load_application_requirement_for_app(db, application_id, requirement_id):
 def _application_target(app):
     app = app or {}
     return "application:" + str(app.get("ref") or app.get("id") or "unknown")
+
+
+_MEMO_STATUS_LABELS = {
+    "generated": "Generated but not requested",
+    "requested": "Requested from client",
+    "uploaded": "Submitted by client",
+    "under_review": "Under officer review",
+    "accepted": "Accepted",
+    "rejected": "Rejected / further information required",
+    "waived": "Waived with reason",
+    "cancelled": "Cancelled",
+}
+
+
+def _memo_safe_text(value, max_chars=240):
+    """Return bounded memo text without raw JSON/debug payloads."""
+    text = _clean_text(value)
+    if not text:
+        return ""
+    if text[0] in "[{":
+        try:
+            json.loads(text)
+            return ""
+        except Exception:
+            pass
+    lowered = text.lower()
+    blocked_fragments = (
+        "screening_report",
+        "raw_payload",
+        "provider_payload",
+        "trigger_context",
+        "client_response_text",
+        "verification_results",
+    )
+    if any(fragment in lowered for fragment in blocked_fragments):
+        return ""
+    return text[:max_chars]
+
+
+def _memo_requirement_item(row):
+    """Sanitize one application enhanced requirement for officer memo use."""
+    item = serialize_application_requirement(row)
+    if not item:
+        return None
+    status = str(item.get("status") or "generated").strip().lower()
+    requirement_type = str(item.get("requirement_type") or "").strip().lower()
+    label = _memo_safe_text(item.get("requirement_label"), 180) or item.get("requirement_key")
+    trigger_label = _memo_safe_text(item.get("trigger_label"), 160) or item.get("trigger_key")
+    return {
+        "id": item.get("id"),
+        "trigger_key": item.get("trigger_key"),
+        "trigger_label": trigger_label,
+        "trigger_category": item.get("trigger_category"),
+        "requirement_key": item.get("requirement_key"),
+        "requirement_label": label,
+        "audience": item.get("audience"),
+        "requirement_type": requirement_type,
+        "subject_scope": item.get("subject_scope"),
+        "mandatory": bool(item.get("mandatory")),
+        "blocking_approval": bool(item.get("blocking_approval")),
+        "waivable": bool(item.get("waivable")),
+        "status": status,
+        "memo_status": _MEMO_STATUS_LABELS.get(status, status.replace("_", " ").title()),
+        "generation_source": item.get("generation_source"),
+        "trigger_reason_summary": _memo_safe_text(item.get("trigger_reason"), 240),
+        "requested_at": item.get("requested_at"),
+        "uploaded_at": item.get("uploaded_at"),
+        "reviewed_at": item.get("reviewed_at"),
+        "reviewed_by": item.get("reviewed_by"),
+        "linked_document_present": bool(item.get("linked_document_id")),
+        "linked_document_id": item.get("linked_document_id"),
+        "client_response_submitted": bool(
+            item.get("client_response_at") or item.get("client_response_text")
+        ),
+        "client_response_at": item.get("client_response_at"),
+        "client_response_by": item.get("client_response_by"),
+        "review_notes_present": bool(item.get("review_notes")),
+        "waived_at": item.get("waived_at"),
+        "waived_by": item.get("waived_by"),
+        "waiver_reason": _memo_safe_text(item.get("waiver_reason"), 500),
+    }
+
+
+def _memo_overall_status(active_items, unresolved_mandatory, unresolved_blocking):
+    if not active_items:
+        return "not_triggered"
+    if unresolved_mandatory or unresolved_blocking:
+        return "incomplete"
+    statuses = {str(item.get("status") or "").lower() for item in active_items}
+    if "waived" in statuses and statuses <= {"accepted", "waived"}:
+        return "waived_partial"
+    if statuses and statuses <= {"accepted", "waived"}:
+        return "complete"
+    if statuses & {"uploaded", "under_review"}:
+        return "in_progress"
+    if "requested" in statuses:
+        return "requested"
+    if "generated" in statuses:
+        return "generated"
+    return "incomplete"
+
+
+def build_enhanced_review_memo_summary(db, application_id):
+    """Build a sanitized Enhanced Review / EDD summary for memo generation.
+
+    The summary is officer/auditor-facing but deliberately excludes raw
+    trigger_context JSON, raw screening payloads, full client free text, and
+    officer internal notes.  It is read-only and has no workflow side effects.
+    """
+    empty = {
+        "triggered": False,
+        "total_requirements": 0,
+        "by_trigger": [],
+        "requested": [],
+        "submitted": [],
+        "accepted": [],
+        "rejected": [],
+        "waived": [],
+        "outstanding": [],
+        "mandatory_outstanding_count": 0,
+        "blocking_outstanding_count": 0,
+        "client_facing_count": 0,
+        "backoffice_only_count": 0,
+        "document_submissions_count": 0,
+        "text_responses_count": 0,
+        "waiver_count": 0,
+        "senior_review_items": [],
+        "overall_status": "not_triggered",
+        "warnings": [],
+    }
+    if not application_id:
+        return dict(empty)
+    if not _table_exists(db, "application_enhanced_requirements"):
+        summary = dict(empty)
+        summary["warnings"] = ["application_enhanced_requirements table is missing"]
+        return summary
+
+    rows = db.execute(
+        """
+        SELECT *
+        FROM application_enhanced_requirements
+        WHERE application_id = ?
+          AND active = 1
+        ORDER BY trigger_category, trigger_label, requirement_label, id
+        """,
+        (application_id,),
+    ).fetchall()
+    items = []
+    for row in rows:
+        item = _memo_requirement_item(row)
+        if item:
+            items.append(item)
+
+    if not items:
+        return dict(empty)
+
+    unresolved_statuses = set(APPLICATION_REQUIREMENT_MEMO_UNRESOLVED_STATUSES)
+    outstanding = [item for item in items if item["status"] in unresolved_statuses]
+    mandatory_outstanding = [
+        item for item in outstanding
+        if item.get("mandatory") and item["status"] not in ("accepted", "waived")
+    ]
+    blocking_outstanding = [
+        item for item in outstanding
+        if item.get("blocking_approval") and item["status"] not in ("accepted", "waived")
+    ]
+
+    grouped = {}
+    for item in items:
+        key = item.get("trigger_key") or "unknown"
+        group = grouped.setdefault(key, {
+            "trigger_key": key,
+            "trigger_label": item.get("trigger_label") or key,
+            "trigger_category": item.get("trigger_category"),
+            "total": 0,
+            "statuses": {},
+            "requirements": [],
+            "trigger_reasons": [],
+        })
+        group["total"] += 1
+        group["statuses"][item["status"]] = group["statuses"].get(item["status"], 0) + 1
+        reason = item.get("trigger_reason_summary")
+        if reason and reason not in group["trigger_reasons"]:
+            group["trigger_reasons"].append(reason)
+        group["requirements"].append(item)
+
+    senior_review_items = [
+        item for item in items
+        if item.get("requirement_type") == "review_task"
+        and (
+            "senior" in str(item.get("requirement_label") or "").lower()
+            or "senior" in str(item.get("requirement_key") or "").lower()
+        )
+    ]
+
+    summary = {
+        "triggered": True,
+        "total_requirements": len(items),
+        "by_trigger": list(grouped.values()),
+        "requested": [item for item in items if item["status"] == "requested"],
+        "submitted": [item for item in items if item["status"] in ("uploaded", "under_review")],
+        "accepted": [item for item in items if item["status"] == "accepted"],
+        "rejected": [item for item in items if item["status"] == "rejected"],
+        "waived": [item for item in items if item["status"] == "waived"],
+        "outstanding": outstanding,
+        "mandatory_outstanding_count": len(mandatory_outstanding),
+        "blocking_outstanding_count": len(blocking_outstanding),
+        "client_facing_count": len([i for i in items if i.get("audience") in ("client", "both")]),
+        "backoffice_only_count": len([i for i in items if i.get("audience") == "backoffice"]),
+        "document_submissions_count": len([i for i in items if i.get("linked_document_present")]),
+        "text_responses_count": len([i for i in items if i.get("client_response_submitted")]),
+        "waiver_count": len([i for i in items if i["status"] == "waived"]),
+        "senior_review_items": senior_review_items,
+        "overall_status": _memo_overall_status(
+            items,
+            mandatory_outstanding,
+            blocking_outstanding,
+        ),
+        "warnings": [],
+    }
+    if mandatory_outstanding:
+        summary["warnings"].append(
+            f"{len(mandatory_outstanding)} mandatory enhanced review requirement(s) remain unresolved"
+        )
+    if blocking_outstanding:
+        summary["warnings"].append(
+            f"{len(blocking_outstanding)} blocking enhanced review requirement(s) remain unresolved"
+        )
+    return summary
 
 
 def _is_yes(value):
