@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Tuple, Union
 from urllib.parse import quote as _url_quote
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 import logging
 
@@ -35,7 +36,7 @@ class S3Client:
 
         Args:
             bucket_name (str): S3 bucket name (resolved via get_s3_bucket() by default)
-            region (str): AWS region (default: AWS_DEFAULT_REGION env var or af-south-1)
+            region (str): AWS region (default: AWS_REGION/AWS_DEFAULT_REGION env var or af-south-1)
         """
         if bucket_name:
             self.bucket_name = bucket_name
@@ -47,22 +48,33 @@ class S3Client:
                 self.bucket_name = get_s3_bucket()
             except ImportError:
                 self.bucket_name = os.getenv('S3_BUCKET', 'arie-documents')
-        self.region = region or os.getenv('AWS_DEFAULT_REGION', 'af-south-1')
+        self.region = region or os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION', 'af-south-1')
+        self.endpoint_url = (
+            os.getenv('S3_ENDPOINT_URL')
+            or os.getenv('AWS_S3_ENDPOINT_URL')
+            or f"https://s3.{self.region}.amazonaws.com"
+        )
+        self.s3_config = Config(
+            signature_version='s3v4',
+            s3={'addressing_style': 'virtual'},
+        )
 
         # Use explicit credentials if available, otherwise boto3 default chain (IAM role)
         access_key = os.getenv('AWS_ACCESS_KEY_ID')
         secret_key = os.getenv('AWS_SECRET_ACCESS_KEY')
+        client_kwargs = {
+            'region_name': self.region,
+            'endpoint_url': self.endpoint_url,
+            'config': self.s3_config,
+        }
 
         if access_key and secret_key:
-            self.s3_client = boto3.client(
-                's3',
-                region_name=self.region,
-                aws_access_key_id=access_key,
-                aws_secret_access_key=secret_key
-            )
+            client_kwargs['aws_access_key_id'] = access_key
+            client_kwargs['aws_secret_access_key'] = secret_key
+            self.s3_client = boto3.client('s3', **client_kwargs)
         else:
             # Fall back to IAM role / default credential chain (ECS Fargate, EC2, etc.)
-            self.s3_client = boto3.client('s3', region_name=self.region)
+            self.s3_client = boto3.client('s3', **client_kwargs)
 
     def upload_document(
         self,
