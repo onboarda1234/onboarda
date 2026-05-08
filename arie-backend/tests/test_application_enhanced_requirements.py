@@ -767,6 +767,11 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
         "UPDATE application_enhanced_requirements SET status='requested', audience='client' WHERE id=?",
         (pending_req,),
     )
+    uploaded_req = _first_requirement_id(conn, blocked_app, offset=1)
+    conn.execute(
+        "UPDATE application_enhanced_requirements SET status='uploaded', audience='client' WHERE id=?",
+        (uploaded_req,),
+    )
     resolved_app = _insert_application(conn, risk_level="HIGH")
     _generate(conn, resolved_app)
     conn.execute(
@@ -802,6 +807,27 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     assert blocked_app in pending_ids
     assert resolved_app not in pending_ids
 
+    active_resp = requests.get(
+        f"{base_url}/api/applications?limit=50&enhanced_review=active",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert active_resp.status_code == 200, active_resp.text
+    active_ids = {app["id"] for app in active_resp.json()["applications"]}
+    assert blocked_app in active_ids
+    assert resolved_app in active_ids
+    assert standard_app not in active_ids
+
+    awaiting_resp = requests.get(
+        f"{base_url}/api/applications?limit=50&enhanced_review=awaiting_review",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert awaiting_resp.status_code == 200, awaiting_resp.text
+    awaiting_ids = {app["id"] for app in awaiting_resp.json()["applications"]}
+    assert blocked_app in awaiting_ids
+    assert resolved_app not in awaiting_ids
+
     blocked_resp = requests.get(
         f"{base_url}/api/applications?limit=50&enhanced_review=approval_blocked",
         headers=_headers("admin"),
@@ -812,6 +838,16 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     assert blocked_app in blocked_ids
     assert resolved_app not in blocked_ids
 
+    resolved_resp = requests.get(
+        f"{base_url}/api/applications?limit=50&enhanced_review=resolved",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert resolved_resp.status_code == 200, resolved_resp.text
+    resolved_ids = {app["id"] for app in resolved_resp.json()["applications"]}
+    assert resolved_app in resolved_ids
+    assert blocked_app not in resolved_ids
+
     client_resp = requests.get(
         f"{base_url}/api/applications?limit=50",
         headers=_client_headers("client001"),
@@ -819,6 +855,18 @@ def test_applications_list_includes_enhanced_operational_summary_and_filters(enh
     )
     assert client_resp.status_code == 200, client_resp.text
     assert all("enhanced_review_summary" not in app for app in client_resp.json()["applications"])
+
+
+def test_applications_enhanced_filter_sql_uses_postgres_safe_flag_predicates():
+    import inspect
+    import server
+
+    source = inspect.getsource(server.ApplicationsHandler.get)
+    assert "aer.active = 1" in source
+    assert "(aer.mandatory = 1 OR aer.blocking_approval = 1)" in source
+    assert "AND aer.active)" not in source
+    assert "AND aer.active " not in source
+    assert "AND (aer.mandatory OR aer.blocking_approval)" not in source
 
 
 def test_lifecycle_api_permissions_and_status_updates(enhanced_app_api_server):

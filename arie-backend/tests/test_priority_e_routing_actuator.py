@@ -138,7 +138,8 @@ def _make_db():
             final_risk_level TEXT,
             onboarding_lane TEXT,
             status TEXT,
-            is_fixture INTEGER DEFAULT 0
+            is_fixture INTEGER DEFAULT 0,
+            updated_at TEXT
         );
         CREATE TABLE edd_cases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,6 +272,41 @@ def test_g_h_actuator_creates_then_idempotent_edd_case(monkeypatch):
         (app_row["id"],)
     ).fetchone()
     assert lane_row["onboarding_lane"] == "EDD"
+
+
+def test_g_h_actuator_does_not_import_server_for_runtime_actuation(monkeypatch):
+    import routing_actuator as ra
+
+    class ExplodingServerModule:
+        def __getattr__(self, name):  # pragma: no cover - failure path assertion
+            raise AssertionError(f"routing_actuator must not import server.{name}")
+
+    monkeypatch.setitem(sys.modules, "server", ExplodingServerModule())
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "final_risk_level, onboarding_lane, status) VALUES (?,?,?,?,?,?,?)",
+        ("ARF-T-NOSERVER", "Crypto Co", "British Virgin Islands",
+         "Crypto / Digital Assets Exchange", "HIGH",
+         "Standard Review", "in_review"),
+    )
+    conn.commit()
+    app_row = dict(conn.execute(
+        "SELECT * FROM applications WHERE ref=?", ("ARF-T-NOSERVER",)
+    ).fetchone())
+
+    for _ in range(2):
+        out = ra.apply_routing_decision(
+            db=conn,
+            app_row=app_row,
+            source=ra.SOURCE_PRESCREENING_SUBMIT,
+            user={"sub": "u", "name": "u", "role": "admin"},
+        )
+        assert out["ran"] is True
+        assert out["route"] == "edd"
+        assert not any("Duplicated timeseries" in err for err in out.get("errors") or [])
+
+    assert conn.execute("SELECT COUNT(*) AS c FROM edd_cases").fetchone()["c"] == 1
 
 
 # ---------------------------------------------------------------- I

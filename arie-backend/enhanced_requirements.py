@@ -746,6 +746,27 @@ def default_rule_rows():
     return rows
 
 
+def _seed_actor_fk_value(db, actor):
+    """Return a FK-safe users.id for seed metadata, or None for system seed.
+
+    Production PostgreSQL enforces ``created_by`` / ``updated_by`` foreign
+    keys on ``enhanced_requirement_rules``. Startup default seeding is a
+    system action, and ``system`` is not an officer row. The columns are
+    nullable by design, so system-seeded defaults keep audit attribution in
+    ``audit_log`` while storing NULL in FK-constrained metadata columns.
+    """
+    actor_id = _clean_text(actor)
+    if not actor_id:
+        return None
+    try:
+        row = db.execute("SELECT id FROM users WHERE id=? LIMIT 1", (actor_id,)).fetchone()
+        if row:
+            return actor_id
+    except Exception:
+        return None
+    return None
+
+
 def seed_default_enhanced_requirement_rules(db, actor="system"):
     """Insert missing default rules without overwriting customized rows.
 
@@ -753,6 +774,7 @@ def seed_default_enhanced_requirement_rules(db, actor="system"):
     """
     inserted = 0
     inserted_keys = []
+    actor_fk = _seed_actor_fk_value(db, actor)
     for rule in default_rule_rows():
         existing = db.execute(
             "SELECT id FROM enhanced_requirement_rules WHERE trigger_key=? AND requirement_key=?",
@@ -791,8 +813,8 @@ def seed_default_enhanced_requirement_rules(db, actor="system"):
                 rule["client_safe_label"],
                 rule["client_safe_description"],
                 rule["internal_notes"],
-                actor,
-                actor,
+                actor_fk,
+                actor_fk,
             ),
         )
         inserted += 1
