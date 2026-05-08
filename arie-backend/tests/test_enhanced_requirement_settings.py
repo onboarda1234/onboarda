@@ -464,3 +464,41 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "Submitted" in portal_logic
     assert "Under review" in portal_logic
     assert "Additional information needed" in portal_logic
+
+
+def test_backoffice_edd_consolidation_routes_to_applications_without_deleting_legacy_view():
+    repo_root = Path(__file__).resolve().parents[2]
+    html = (repo_root / "arie-backoffice.html").read_text(encoding="utf-8")
+
+    nav = html[html.index('<nav class="sidebar-nav"'):html.index("</nav>")]
+    assert 'data-view="edd"' not in nav
+    assert "EDD Pipeline</div>" not in nav
+
+    assert 'id="view-edd"' in html
+    assert 'id="legacy-edd-consolidation-notice"' in html
+    assert "Enhanced Review cases are now managed from Applications" in html
+    assert "Open Applications — Enhanced Review" in html
+    assert "Open Applications — Approval Blocked" in html
+
+    assert "function openApplicationsEnhancedReview(filterValue)" in html
+    assert "function setApplicationsEnhancedFilter(value)" in html
+    assert "function applyBackofficeHashRoute()" in html
+    assert "showView('applications')" in html
+    assert "#applications?enhanced_review=" in html
+    assert "route.view === 'applications'" in html
+    assert "route.view === 'edd'" in html
+    assert "showView('edd')" in html
+    assert "'approval_blocked'" in html
+    assert "'pending_client'" in html
+    assert "'awaiting_review'" in html
+    assert "'resolved'" in html
+
+
+def test_backend_edd_case_apis_remain_registered_for_legacy_governance_continuity():
+    repo_root = Path(__file__).resolve().parents[2]
+    server_py = (repo_root / "arie-backend" / "server.py").read_text(encoding="utf-8")
+
+    assert "(r\"/api/edd/stats\", EDDStatsHandler)" in server_py
+    assert "(r\"/api/edd/cases/([^/]+)/findings\", EDDFindingsHandler)" in server_py
+    assert "(r\"/api/edd/cases/([^/]+)\", EDDDetailHandler)" in server_py
+    assert "(r\"/api/edd/cases\", EDDListHandler)" in server_py

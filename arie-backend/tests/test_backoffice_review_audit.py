@@ -658,9 +658,18 @@ class TestPrePhaseSixBackofficeUX:
         assert "snav-item:nth-child(3)" not in html
         assert 'document.querySelector(\'.snav-item[data-view="\' + name + \'"]\')' in html
 
-    def test_edd_pipeline_is_above_ongoing_monitoring(self):
+    def test_edd_pipeline_removed_from_main_nav_but_legacy_view_retained(self):
         html = self._read_backoffice()
-        assert html.index('data-view="edd"') < html.index('data-view="monitoring"')
+        nav = html[html.index('<nav class="sidebar-nav"'):html.index('</nav>')]
+        assert 'data-view="edd"' not in nav
+        assert "EDD Pipeline</div>" not in nav
+        assert 'id="view-edd"' in html
+        assert 'id="legacy-edd-consolidation-notice"' in html
+        assert "Enhanced Review cases are now managed from Applications" in html
+        assert "Open Applications — Enhanced Review" in html
+        assert "Open Applications — Approval Blocked" in html
+        assert "showView('edd')" in html
+        assert "SLA due date, senior reviewer assignment, structured EDD findings" in html
 
     def test_applications_page_has_search_and_page_size_controls(self):
         html = self._read_backoffice()
