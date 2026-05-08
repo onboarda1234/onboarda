@@ -64,6 +64,69 @@ def _parse_approval_timestamp(value: Any) -> datetime:
 # 1. Approval Gate Validators (P0-01, P0-02)
 # ============================================================================
 
+_CANONICAL_APPROVAL_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
+_APPROVAL_RISK_UNAVAILABLE_WARNING = "Risk unavailable — recalculation required"
+_APPROVAL_EDD_ZERO_SCORE_WARNING = "EDD required while canonical risk score is unavailable or zero"
+
+
+def _canonical_approval_risk_level(value: Any) -> Optional[str]:
+    level = str(value or "").strip().upper()
+    return level if level in _CANONICAL_APPROVAL_RISK_LEVELS else None
+
+
+def _canonical_approval_risk_score(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if score != score:
+        return None
+    return score
+
+
+def _approval_risk_integrity_error(app: Dict, action_label: str = "approve application") -> Optional[str]:
+    """Return a fail-closed approval error when canonical risk is unavailable.
+
+    A deterministic LOW score can legitimately be 0.  Treat zero as an integrity
+    problem only when the level is missing/non-LOW or the case is already on EDD,
+    where LOW/0 would hide the operational escalation.
+    """
+    if not isinstance(app, dict):
+        return f"{_APPROVAL_RISK_UNAVAILABLE_WARNING}. Cannot {action_label}."
+
+    status = str(app.get("status") or "").strip().lower()
+    if status == "draft":
+        return None
+
+    if app.get("has_authoritative_risk") is False:
+        warnings = app.get("risk_integrity_warnings") or [_APPROVAL_RISK_UNAVAILABLE_WARNING]
+        if isinstance(warnings, (list, tuple)):
+            warning_text = "; ".join(str(w) for w in warnings if w) or _APPROVAL_RISK_UNAVAILABLE_WARNING
+        else:
+            warning_text = str(warnings or _APPROVAL_RISK_UNAVAILABLE_WARNING)
+        return f"{warning_text}. Cannot {action_label} until risk is recomputed."
+
+    level = (
+        _canonical_approval_risk_level(app.get("final_risk_level"))
+        or _canonical_approval_risk_level(app.get("risk_level"))
+    )
+    score = _canonical_approval_risk_score(app.get("risk_score"))
+    warnings: List[str] = []
+    if level is None or score is None:
+        warnings.append(_APPROVAL_RISK_UNAVAILABLE_WARNING)
+    elif score == 0 and level != "LOW":
+        warnings.append(_APPROVAL_RISK_UNAVAILABLE_WARNING)
+    if status == "edd_required" and score == 0:
+        warnings.append(_APPROVAL_EDD_ZERO_SCORE_WARNING)
+
+    if warnings:
+        warning_text = "; ".join(dict.fromkeys(warnings))
+        return f"{warning_text}. Cannot {action_label} until risk is recomputed."
+    return None
+
+
 class ApprovalGateValidator:
     """
     Validates all preconditions before an application can be approved.
@@ -107,6 +170,10 @@ class ApprovalGateValidator:
             if status in pre_kyc_states:
                 return (False, f"Application is still in pre-review state '{status}'. "
                         "Cannot approve until compliance review is complete.")
+
+            risk_integrity_error = _approval_risk_integrity_error(app, "approve application")
+            if risk_integrity_error:
+                return (False, risk_integrity_error)
 
             # 2. Check screening exists in prescreening_data and mode is live
             prescreening_data = app.get('prescreening_data', '{}')

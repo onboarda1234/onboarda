@@ -946,7 +946,8 @@ class TestAuthenticatedAccess:
         with open(html_path, encoding="utf-8") as f:
             html = f.read()
         assert "c.risk_level || 'HIGH'" not in html
-        assert "riskBadge(c.risk_level)" in html
+        assert "riskBadgeForRecord(c)" in html
+        assert "Risk unavailable — recalculation required" in html
 
     def test_edd_list_excludes_fixture_rows_by_default_and_supports_include_fixtures(self, api_server):
         """Operational EDD queue should hide fixture/smoke rows unless explicitly opted in."""

@@ -2953,7 +2953,7 @@
             <p style="font-size:13px;color:var(--text2);margin-bottom:8px;">Based on the AI-powered 5-dimension risk scoring analysis of your application.</p>
             <div style="display:flex;gap:16px;align-items:center;">
               <div id="pending-risk-level-badge" style="display:inline-block;padding:6px 16px;border-radius:20px;font-weight:700;font-size:14px;letter-spacing:0.5px;background:#d97706;color:#fff;">HIGH RISK</div>
-              <div style="font-size:12px;color:var(--text3);">Score: <strong id="pending-risk-score">0</strong> / 100</div>
+              <div style="font-size:12px;color:var(--text3);">Score: <strong id="pending-risk-score">—</strong> / 100</div>
             </div>
           </div>
         </div>
@@ -3107,7 +3107,7 @@
             <p style="font-size:13px;color:var(--text2);margin-bottom:8px;">Based on AI-powered 5-dimension risk scoring of your pre-screening data.</p>
             <div style="display:flex;gap:16px;align-items:center;">
               <div id="pre-approval-risk-badge" style="display:inline-block;padding:6px 16px;border-radius:20px;font-weight:700;font-size:14px;letter-spacing:0.5px;background:#d97706;color:#fff;">HIGH RISK</div>
-              <div style="font-size:12px;color:var(--text3);">Score: <strong id="pre-approval-risk-score">0</strong> / 100</div>
+              <div style="font-size:12px;color:var(--text3);">Score: <strong id="pre-approval-risk-score">—</strong> / 100</div>
             </div>
           </div>
         </div>
@@ -3192,8 +3192,8 @@
         <!-- Risk Rating Summary -->
         <div id="pricing-risk-summary" style="background:linear-gradient(135deg,rgba(43,47,143,0.06),rgba(43,47,143,0.02));border:1px solid rgba(43,47,143,0.15);border-radius:var(--radius);padding:20px;margin-bottom:24px;text-align:center;">
           <div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px;">Your Risk Assessment Result</div>
-          <div id="pricing-risk-badge" style="display:inline-block;padding:8px 24px;border-radius:24px;font-weight:700;font-size:16px;letter-spacing:0.5px;margin-bottom:8px;background:#16a34a;color:#fff;">LOW RISK</div>
-          <div style="font-size:13px;color:var(--text3);">Composite Score: <strong id="pricing-risk-score-display">0</strong> / 100</div>
+          <div id="pricing-risk-badge" style="display:inline-block;padding:8px 24px;border-radius:24px;font-weight:700;font-size:16px;letter-spacing:0.5px;margin-bottom:8px;background:#6b7280;color:#fff;">RISK PENDING</div>
+          <div style="font-size:13px;color:var(--text3);">Composite Score: <strong id="pricing-risk-score-display">—</strong> / 100</div>
         </div>
 
         <div style="text-align:center;margin-bottom:24px;">
@@ -4895,24 +4895,25 @@ function resetPortalReviewState() {
 }
 
 function resetPortalPricingState() {
-  computedRiskLevel = 'LOW';
-  computedRiskScore = 0;
+  computedRiskLevel = '';
+  computedRiskScore = null;
   dimScores = {};
   serverPricing = null;
   serverScreening = null;
+  currentRiskDisplayState = buildRiskDisplayState({ status: 'draft' });
   var pricingRiskLevel = document.getElementById('pricing-risk-level');
-  if (pricingRiskLevel) pricingRiskLevel.textContent = 'LOW RISK';
+  if (pricingRiskLevel) pricingRiskLevel.textContent = 'Risk pending';
   var pricingPlanTitle = document.getElementById('pricing-plan-title');
-  if (pricingPlanTitle) pricingPlanTitle.textContent = 'Corporate Account — Standard';
+  if (pricingPlanTitle) pricingPlanTitle.textContent = 'Corporate Account — Pending';
   var pricingRiskBadge = document.getElementById('pricing-risk-badge');
   if (pricingRiskBadge) {
-    pricingRiskBadge.style.background = '#16a34a';
-    pricingRiskBadge.textContent = 'LOW RISK';
+    pricingRiskBadge.style.background = '#6b7280';
+    pricingRiskBadge.textContent = 'RISK PENDING';
   }
   var pricingRiskScore = document.getElementById('pricing-risk-score-display');
-  if (pricingRiskScore) pricingRiskScore.textContent = '0.0';
+  if (pricingRiskScore) pricingRiskScore.textContent = '—';
   var pendingRiskScore = document.getElementById('pending-risk-score');
-  if (pendingRiskScore) pendingRiskScore.textContent = '0.0';
+  if (pendingRiskScore) pendingRiskScore.textContent = '—';
 }
 
 function resetPortalApplicationState() {
@@ -5112,7 +5113,6 @@ function buildDraftDataFromApplication(app) {
   }
   var data = {
     appRef: app && app.ref ? app.ref : '',
-    computedRiskLevel: app && app.risk_level ? app.risk_level : '',
     prescreening: {},
     servicesRequired: Array.isArray(ps.services_required) ? ps.services_required : [],
     accountPurposes: Array.isArray(ps.account_purposes) ? ps.account_purposes : [],
@@ -5146,12 +5146,14 @@ function applyApplicationViewState(target) {
   if (target === 'pre-approval-hold') {
     var preApprovalRef = document.getElementById('pre-approval-ref-display');
     if (preApprovalRef) preApprovalRef.textContent = appRef || '—';
-    var preApprovalRisk = document.getElementById('pre-approval-risk-label');
-    if (preApprovalRisk) preApprovalRisk.textContent = (computedRiskLevel || 'HIGH').replace('_',' ') + ' Risk';
+    applyRiskCardDisplay('pre-approval-risk-badge', 'pre-approval-risk-score', 'pre-approval-risk-card');
   }
   if (target === 'compliance-hold') {
     var complianceRisk = document.getElementById('compliance-risk-label');
-    if (complianceRisk) complianceRisk.textContent = (computedRiskLevel || 'HIGH').replace('_',' ') + ' Risk';
+    if (complianceRisk) {
+      var complianceDisplay = renderRiskDisplay(currentRiskDisplayState || { risk_level: computedRiskLevel, risk_score: computedRiskScore });
+      complianceRisk.textContent = complianceDisplay.available ? complianceDisplay.badgeText.replace(' RISK', ' Risk') : complianceDisplay.warning;
+    }
     var complianceRef = document.getElementById('compliance-ref-display');
     if (complianceRef) complianceRef.textContent = appRef || '—';
   }
@@ -5166,7 +5168,7 @@ function applyApplicationViewState(target) {
 }
 
 function updateTotalRequiredDocs() {
-  var isHighRisk = (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH');
+  var isHighRisk = requiresEnhancedRiskDocs();
   var hasLicence = _licenceApplicable();
   TOTAL_REQUIRED_DOCS = (isHighRisk ? 15 : 11) + (hasLicence ? 1 : 0);
 }
@@ -6211,9 +6213,163 @@ async function submitPrescreening(e) {
 }
 
 // ─── Risk scoring engine ──────────────────────────────────
-var computedRiskLevel = 'LOW';
-var computedRiskScore = 0;
+var computedRiskLevel = '';
+var computedRiskScore = null;
 var dimScores = {};
+var currentRiskDisplayState = null;
+var VALID_RISK_LEVELS = ['LOW', 'MEDIUM', 'HIGH', 'VERY_HIGH'];
+var RISK_REQUIRED_STATUSES = [
+  'submitted', 'prescreening_submitted', 'pricing_review', 'pricing_accepted',
+  'pre_approval_review', 'pre_approved', 'kyc_documents', 'kyc_submitted',
+  'compliance_review', 'in_review', 'under_review', 'edd_required',
+  'approved', 'rejected', 'rmi_sent', 'withdrawn'
+];
+var RISK_UNAVAILABLE_TEXT = 'Risk unavailable — recalculation required';
+
+function parseMaybeJsonArray(value) {
+  if (Array.isArray(value)) return value.slice();
+  if (!value) return [];
+  if (typeof value === 'string') {
+    try {
+      var parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch(e) {
+      return [];
+    }
+  }
+  return [];
+}
+
+function normalizeRiskLevel(value) {
+  var level = String(value || '').trim().toUpperCase();
+  return VALID_RISK_LEVELS.indexOf(level) !== -1 ? level : '';
+}
+
+function normalizeRiskScore(value) {
+  if (value === null || value === undefined || value === '') return null;
+  var score = Number(value);
+  return Number.isFinite(score) && score >= 0 && score <= 100 ? score : null;
+}
+
+function riskRequiredForStatus(status) {
+  return RISK_REQUIRED_STATUSES.indexOf(status || '') !== -1;
+}
+
+function buildRiskDisplayState(app) {
+  app = app || {};
+  var status = app.status || '';
+  var level = normalizeRiskLevel(app.final_risk_level || app.risk_level);
+  var score = normalizeRiskScore(app.risk_score);
+  var eddFlags = parseMaybeJsonArray(app.edd_trigger_flags);
+  var warnings = parseMaybeJsonArray(app.risk_integrity_warnings);
+  var hasRisk = !!level && score !== null;
+
+  if (app.has_authoritative_risk === false) {
+    hasRisk = false;
+    if (warnings.indexOf(RISK_UNAVAILABLE_TEXT) === -1) warnings.push(RISK_UNAVAILABLE_TEXT);
+  }
+
+  if (level && level !== 'LOW' && score === 0) {
+    hasRisk = false;
+    if (warnings.indexOf(RISK_UNAVAILABLE_TEXT) === -1) warnings.push(RISK_UNAVAILABLE_TEXT);
+  }
+
+  if (riskRequiredForStatus(status) && !hasRisk && warnings.indexOf(RISK_UNAVAILABLE_TEXT) === -1) {
+    warnings.push(RISK_UNAVAILABLE_TEXT);
+  }
+
+  if (status === 'edd_required' && score === 0) {
+    var eddWarning = eddFlags.length
+      ? 'EDD required — ' + eddFlags.join(', ')
+      : 'EDD required — trigger reason unavailable';
+    if (warnings.indexOf(eddWarning) === -1) warnings.push(eddWarning);
+    hasRisk = false;
+  }
+
+  return {
+    status: status,
+    level: level,
+    score: score,
+    hasRisk: hasRisk,
+    eddTriggerFlags: eddFlags,
+    warnings: warnings
+  };
+}
+
+function hasAuthoritativeRisk(app) {
+  return buildRiskDisplayState(app).hasRisk;
+}
+
+function requiresEnhancedRiskDocs() {
+  var state = currentRiskDisplayState || {};
+  return computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH' || state.status === 'edd_required';
+}
+
+function renderRiskDisplay(appOrState) {
+  var state = appOrState && Object.prototype.hasOwnProperty.call(appOrState, 'hasRisk') ? appOrState : buildRiskDisplayState(appOrState);
+  var colors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
+  if (!state.hasRisk) {
+    return {
+      available: false,
+      badgeText: RISK_UNAVAILABLE_TEXT,
+      scoreText: '—',
+      color: '#dc2626',
+      warning: state.warnings[0] || RISK_UNAVAILABLE_TEXT
+    };
+  }
+  var levelDisplay = state.level.replace('_', ' ');
+  return {
+    available: true,
+    badgeText: levelDisplay + ' RISK',
+    scoreText: state.score.toFixed(1),
+    color: colors[state.level] || '#6b7280',
+    warning: state.warnings.join('; ')
+  };
+}
+
+function setCurrentRiskFromApp(app) {
+  currentRiskDisplayState = buildRiskDisplayState(app);
+  if (currentRiskDisplayState.hasRisk) {
+    computedRiskLevel = currentRiskDisplayState.level;
+    computedRiskScore = currentRiskDisplayState.score;
+  } else {
+    computedRiskLevel = '';
+    computedRiskScore = null;
+  }
+  return currentRiskDisplayState;
+}
+
+function setRiskScoreElement(scoreId, display) {
+  var scoreEl = document.getElementById(scoreId);
+  if (!scoreEl) return;
+  var wrapper = scoreEl.parentElement;
+  if (!wrapper) {
+    scoreEl.textContent = display.available ? display.scoreText : display.warning;
+    return;
+  }
+  if (display.available) {
+    wrapper.innerHTML = 'Score: <strong id="' + scoreId + '">' + display.scoreText + '</strong> / 100';
+  } else {
+    wrapper.innerHTML = '<strong id="' + scoreId + '" style="color:#dc2626;">' + escapeHtml(display.warning) + '</strong>';
+  }
+}
+
+function applyRiskCardDisplay(badgeId, scoreId, cardId, state) {
+  var display = renderRiskDisplay(state || currentRiskDisplayState || {
+    risk_level: computedRiskLevel,
+    risk_score: computedRiskScore
+  });
+  var badge = document.getElementById(badgeId);
+  if (badge) {
+    badge.style.background = display.color;
+    badge.textContent = display.badgeText;
+  }
+  setRiskScoreElement(scoreId, display);
+  var card = document.getElementById(cardId);
+  if (card) {
+    card.style.borderLeftColor = display.color;
+  }
+}
 
 // Server-authoritative pricing (populated from submit response).
 // Fallback values mirror backend PRICING_TIERS exactly.
@@ -6244,9 +6400,17 @@ function startRiskScoring(serverResult) {
     return;
   }
 
+  var serverRiskState = setCurrentRiskFromApp(serverResult);
+  if (!serverRiskState.hasRisk) {
+    document.getElementById('risk-computing').classList.add('hidden');
+    showToast('error', 'Risk Scoring Failed', renderRiskDisplay(serverRiskState).warning);
+    showView('prescreening');
+    return;
+  }
+
   var result = {
-    score: Number(serverResult.risk_score || 0),
-    level: serverResult.risk_level || 'LOW',
+    score: serverRiskState.score,
+    level: serverRiskState.level,
     dims: serverResult.risk_dimensions || {}
   };
   // Store server-authoritative pricing for display
@@ -6257,8 +6421,6 @@ function startRiskScoring(serverResult) {
   if (serverResult.screening) {
     serverScreening = serverResult.screening;
   }
-  computedRiskScore = Number(result.score || 0);
-  computedRiskLevel = result.level || 'LOW';
   dimScores = result.dims || {};
   var dims = ['dim1','dim2','dim3','dim4','dim5'];
   var dimVals = [
@@ -6358,7 +6520,7 @@ function showRiskResult(result) {
 
 function showHighRiskDocs() {
   // Show/hide docs based on risk level
-  var isHighRisk = (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH');
+  var isHighRisk = requiresEnhancedRiskDocs();
   var highRiskDocs = document.querySelectorAll('.high-risk-doc');
   highRiskDocs.forEach(function(el) {
     el.style.display = isHighRisk ? '' : 'none';
@@ -6366,23 +6528,7 @@ function showHighRiskDocs() {
 }
 
 function updatePendingRiskCard() {
-  var level = computedRiskLevel || 'HIGH';
-  var levelDisplay = level.replace('_',' ');
-  var badgeColors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
-  var badge = document.getElementById('pending-risk-level-badge');
-  var scoreEl = document.getElementById('pending-risk-score');
-  if (badge) {
-    badge.style.background = badgeColors[level] || '#d97706';
-    badge.textContent = levelDisplay + ' RISK';
-  }
-  if (scoreEl) {
-    scoreEl.textContent = (computedRiskScore || 0).toFixed(1);
-  }
-  // Update border color of the card
-  var card = document.getElementById('pending-risk-card');
-  if (card) {
-    card.style.borderLeftColor = badgeColors[level] || '#d97706';
-  }
+  applyRiskCardDisplay('pending-risk-level-badge', 'pending-risk-score', 'pending-risk-card');
 }
 
 function showPricingView() {
@@ -6391,29 +6537,41 @@ function showPricingView() {
 }
 
 function populatePricing(level) {
-  if (!level) level = computedRiskLevel || 'LOW';
+  if (!level) level = computedRiskLevel || '';
   // Use server-authoritative pricing if available, otherwise fallback to backend-aligned defaults
-  var p = serverPricing || PRICING_FALLBACK[level] || PRICING_FALLBACK.LOW;
-  var onboardingFee = Number(p.onboarding_fee || 0);
-  var annualFee = Number(p.annual_monitoring_fee || 0);
-  var currency = p.currency || 'USD';
-  var levelDisplay = (level || 'LOW').replace('_',' ');
-  document.getElementById('pricing-risk-level').textContent = levelDisplay + ' RISK';
-  document.getElementById('pricing-plan-title').textContent = 'Corporate Account — ' + (level === 'VERY_HIGH' ? 'Enhanced' : level === 'HIGH' ? 'Enhanced' : level === 'MEDIUM' ? 'Standard' : 'Standard');
+  var p = serverPricing || (level ? PRICING_FALLBACK[level] : null);
+  var display = renderRiskDisplay(currentRiskDisplayState || { risk_level: level, risk_score: computedRiskScore });
+  document.getElementById('pricing-risk-level').textContent = display.badgeText;
+  document.getElementById('pricing-plan-title').textContent = display.available ? 'Corporate Account — ' + (level === 'VERY_HIGH' ? 'Enhanced' : level === 'HIGH' ? 'Enhanced' : level === 'MEDIUM' ? 'Standard' : 'Standard') : 'Corporate Account — Pending Risk Recalculation';
 
   // Update risk rating display on pricing page
   var riskBadge = document.getElementById('pricing-risk-badge');
-  var riskScoreEl = document.getElementById('pricing-risk-score-display');
   if (riskBadge) {
-    var badgeColors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
-    riskBadge.style.background = badgeColors[level] || '#2563eb';
-    riskBadge.textContent = levelDisplay + ' RISK';
+    riskBadge.style.background = display.color;
+    riskBadge.textContent = display.badgeText;
   }
-  if (riskScoreEl) {
-    riskScoreEl.textContent = (computedRiskScore || 0).toFixed(1);
-  }
+  setRiskScoreElement('pricing-risk-score-display', display);
 
   var tbody = document.getElementById('pricing-table-body');
+  if (!p) {
+    tbody.innerHTML = '<tr><td colspan="2" style="color:#dc2626;font-weight:700;">' + RISK_UNAVAILABLE_TEXT + '</td></tr>';
+    var pricingAcceptBtn = document.getElementById('btn-accept-pricing');
+    if (pricingAcceptBtn) {
+      pricingAcceptBtn.disabled = true;
+      pricingAcceptBtn.style.opacity = '0.5';
+      pricingAcceptBtn.style.cursor = 'not-allowed';
+    }
+    return;
+  }
+  var pricingAcceptBtn = document.getElementById('btn-accept-pricing');
+  if (pricingAcceptBtn) {
+    pricingAcceptBtn.disabled = false;
+    pricingAcceptBtn.style.opacity = '';
+    pricingAcceptBtn.style.cursor = '';
+  }
+  var onboardingFee = Number(p.onboarding_fee || 0);
+  var annualFee = Number(p.annual_monitoring_fee || 0);
+  var currency = p.currency || 'USD';
   tbody.innerHTML = '' +
     '<tr><td><strong>Onboarding Fee</strong><div class="fee-desc">One-time account setup, compliance screening, and due diligence</div></td><td>' + currency + ' ' + onboardingFee.toLocaleString() + '.00</td></tr>' +
     '<tr><td><strong>Annual Monitoring Fee</strong><div class="fee-desc">Annual compliance monitoring, periodic review, and ongoing screening</div></td><td>' + currency + ' ' + annualFee.toLocaleString() + '.00</td></tr>';
@@ -6456,8 +6614,8 @@ async function acceptPricing() {
 }
 
 function showComplianceHold() {
-  var riskLvl = computedRiskLevel || 'HIGH';
-  document.getElementById('compliance-risk-label').textContent = riskLvl.replace('_',' ') + ' Risk';
+  var display = renderRiskDisplay(currentRiskDisplayState || { risk_level: computedRiskLevel, risk_score: computedRiskScore });
+  document.getElementById('compliance-risk-label').textContent = display.available ? display.badgeText.replace(' RISK', ' Risk') : display.warning;
   document.getElementById('compliance-ref-display').textContent = appRef || '—';
   showView('compliance-hold');
   showToast('info', 'Compliance Referral', 'Your application has been referred for manual compliance review.');
@@ -6465,21 +6623,9 @@ function showComplianceHold() {
 
 // ─── Pre-Approval Hold Flow (v2.1) ──────────────────────────
 function showPreApprovalHold() {
-  var level = computedRiskLevel || 'HIGH';
-  var levelDisplay = level.replace('_', ' ');
-  var badgeColors = { LOW: '#16a34a', MEDIUM: '#2563eb', HIGH: '#d97706', VERY_HIGH: '#dc2626' };
-
   var refEl = document.getElementById('pre-approval-ref-display');
   if (refEl) refEl.textContent = appRef || '—';
-
-  var badge = document.getElementById('pre-approval-risk-badge');
-  if (badge) {
-    badge.style.background = badgeColors[level] || '#d97706';
-    badge.textContent = levelDisplay + ' RISK';
-  }
-
-  var scoreEl = document.getElementById('pre-approval-risk-score');
-  if (scoreEl) scoreEl.textContent = (computedRiskScore || 0).toFixed(1);
+  applyRiskCardDisplay('pre-approval-risk-badge', 'pre-approval-risk-score', 'pre-approval-risk-card');
 
   showView('pre-approval-hold');
 }
@@ -7055,7 +7201,6 @@ function _attachBeforeUnloadGuard() {
 function collectFormData() {
   var data = {
     appRef: appRef,
-    computedRiskLevel: computedRiskLevel,
     uploadedDocs: Array.from(uploadedDocs),
     timestamp: new Date().toISOString(),
     prescreening: {},
@@ -7273,13 +7418,30 @@ function getCurrentStep() {
   return 0;
 }
 
-function restoreDraftFromData(data) {
+function sanitizeDraftRestoreData(data, options) {
+  if (!data || typeof data !== 'object') return data;
+  var sanitized = Object.assign({}, data);
+  var allowRiskRestore = options && options.allowRiskRestore === true;
+  if (!allowRiskRestore) {
+    delete sanitized.computedRiskLevel;
+    delete sanitized.computedRiskScore;
+  }
+  return sanitized;
+}
+
+function restoreDraftFromData(data, options) {
   // Restore form state from a collectFormData()-shaped object (loaded from API)
   try {
     if (!data || typeof data !== 'object') return false;
+    data = sanitizeDraftRestoreData(data, options);
 
     if (data.appRef) appRef = data.appRef;
-    if (data.computedRiskLevel) computedRiskLevel = data.computedRiskLevel;
+    if (options && options.allowRiskRestore === true) {
+      if (data.computedRiskLevel) computedRiskLevel = data.computedRiskLevel;
+      if (data.computedRiskScore !== null && data.computedRiskScore !== undefined && data.computedRiskScore !== '') {
+        computedRiskScore = normalizeRiskScore(data.computedRiskScore);
+      }
+    }
     if (Array.isArray(data.uploadedDocs)) uploadedDocs = new Set(data.uploadedDocs);
 
     // Restore simple form fields by element ID
@@ -7750,7 +7912,7 @@ function updateDocsReviewMessaging(summary) {
 
 function buildReviewScreen() {
   buildPrescreeningSummary();
-  var isHighRisk = (computedRiskLevel === 'HIGH' || computedRiskLevel === 'VERY_HIGH');
+  var isHighRisk = requiresEnhancedRiskDocs();
   var uploadedCount = 0;
   var missingCount = 0;
   var warningCount = 0;
@@ -7954,7 +8116,8 @@ async function finalSubmitFromReview() {
 // ═══════════════════════════════════════════════════════════
 function generateComplianceMemo() {
   // Read from authoritative DOM form fields, not synthetic lookup data
-  var level = computedRiskLevel || 'LOW';
+  var riskDisplay = renderRiskDisplay(currentRiskDisplayState || { risk_level: computedRiskLevel, risk_score: computedRiskScore });
+  var level = riskDisplay.available ? computedRiskLevel : '';
   var companyName = (document.getElementById('f-reg-name') || {}).value || 'N/A';
   var country = (document.getElementById('f-inc-country') || {}).value || 'N/A';
   var brn = (document.getElementById('f-brn') || {}).value || 'N/A';
@@ -7963,7 +8126,9 @@ function generateComplianceMemo() {
   var overview = document.getElementById('memo-client-overview');
   overview.innerHTML = '<strong>' + escapeHtml(companyName) + '</strong> (BRN: ' + escapeHtml(brn) + ') is a corporate entity incorporated in ' + escapeHtml(country) + '. The entity has applied for Payment Intermediary Services through Onboarda Ltd. ' +
     'The application was submitted on ' + new Date().toLocaleDateString('en-GB', {day:'numeric',month:'long',year:'numeric'}) + ' under reference <strong>' + escapeHtml(appRef || 'N/A') + '</strong>. ' +
-    'The AI risk scoring engine has assigned a <strong>' + escapeHtml(level.replace('_',' ')) + ' RISK</strong> classification based on a 5-dimension weighted assessment.';
+    (riskDisplay.available
+      ? 'The AI risk scoring engine has assigned a <strong>' + escapeHtml(level.replace('_',' ')) + ' RISK</strong> classification based on a 5-dimension weighted assessment.'
+      : '<strong style="color:#dc2626;">' + RISK_UNAVAILABLE_TEXT + '</strong>');
 
   // Ownership
   var ownership = document.getElementById('memo-ownership');
@@ -9941,22 +10106,22 @@ async function resumeApplication(ref, stage) {
       resetPortalApplicationState();
       currentApplicationId = app.id || '';
       appRef = app.ref || ref;
-      computedRiskLevel = app.risk_level || 'LOW';
-      computedRiskScore = Number(app.risk_score || 0);
+      setCurrentRiskFromApp(app);
       if (app.risk_dimensions) dimScores = app.risk_dimensions;
       var psDataForPricing = app.prescreening_data || {};
       serverPricing = psDataForPricing.pricing || null;
       serverScreening = psDataForPricing.screening_report || null;
       target = getApplicationView(app.status || stage);
 
-      restoredFields = restoreDraftFromData(buildDraftDataFromApplication(app)) || restoredFields;
+      restoredFields = restoreDraftFromData(buildDraftDataFromApplication(app), { allowRiskRestore: false }) || restoredFields;
 
       // Restore saved form data from save-resume API
       try {
         var savedSession = await apiCall('GET', '/save-resume?application_id=' + encodeURIComponent(currentApplicationId));
         if (savedSession && savedSession.form_data && typeof savedSession.form_data === 'object') {
           // App-specific saved session is the most recent authoritative client draft overlay.
-          restoredFields = restoreDraftFromData(savedSession.form_data) || restoredFields;
+          restoredFields = restoreDraftFromData(savedSession.form_data, { allowRiskRestore: false }) || restoredFields;
+          setCurrentRiskFromApp(app);
         }
       } catch (resumeErr) {
         console.warn('No saved session to restore or restore failed:', resumeErr);

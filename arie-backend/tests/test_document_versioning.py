@@ -474,8 +474,8 @@ def test_approval_gate_excludes_superseded_flagged_documents(tmp_path):
     )
     conn.execute(
         """INSERT INTO applications
-           (id, ref, client_id, company_name, country, status, prescreening_data)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           (id, ref, client_id, company_name, country, status, prescreening_data, risk_level, risk_score)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             app_id,
             "ARF-DOCVER-APPROVAL",
@@ -484,6 +484,8 @@ def test_approval_gate_excludes_superseded_flagged_documents(tmp_path):
             "Mauritius",
             "in_review",
             json.dumps(prescreening_data),
+            "MEDIUM",
+            42,
         ),
     )
     conn.execute(
