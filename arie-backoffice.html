@@ -808,7 +808,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="snav-item" data-view="cases" onclick="showView('cases',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span> Case Management</div>
     <div class="snav-section">Compliance</div>
     <div class="snav-item" data-view="screening" onclick="showView('screening',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></span> Screening Queue</div>
-    <div class="snav-item" data-view="edd" onclick="showView('edd',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span> EDD Pipeline</div>
     <div class="snav-item" data-view="monitoring" onclick="showView('monitoring',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Ongoing Monitoring</div>
     <div class="snav-item" data-view="lifecycle" onclick="showView('lifecycle',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9"/><path d="M21 12a9 9 0 0 1-9 9"/><path d="M16 7l5 0 0-5"/><path d="M8 17l-5 0 0 5"/></svg></span> Lifecycle</div>
     <div class="snav-item" data-view="change-mgmt" onclick="showView('change-mgmt',this)"><span class="snav-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span> Change Management</div>
@@ -1476,6 +1475,23 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 <!-- ═══════════════ EDD PIPELINE ═══════════════ -->
 <div class="view" id="view-edd">
+  <div class="card" id="legacy-edd-consolidation-notice" style="border-left:4px solid #7c3aed;background:rgba(124,58,237,0.04);">
+    <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+      <div style="max-width:760px;">
+        <div class="card-title">Enhanced Review cases are now managed from Applications</div>
+        <p style="margin:6px 0 0;font-size:13px;color:var(--text2);line-height:1.5;">
+          Use Applications as the operational command centre for Enhanced Review status, approval-blocked files, client submissions, officer review, requests, memo visibility, and approval readiness.
+        </p>
+        <p style="margin:8px 0 0;font-size:12px;color:var(--text3);line-height:1.5;">
+          This legacy EDD case view is retained for governance continuity where old EDD case fields remain unique: SLA due date, senior reviewer assignment, structured EDD findings, case-stage transitions, and closure controls.
+        </p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <button class="btn btn-primary btn-sm" onclick="openApplicationsEnhancedReview('active')">Open Applications — Enhanced Review</button>
+        <button class="btn btn-outline btn-sm" onclick="openApplicationsEnhancedReview('approval_blocked')">Open Applications — Approval Blocked</button>
+      </div>
+    </div>
+  </div>
   <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);">
     <div class="stat-card"><div class="stat-card-label">EDD Cases Active</div><div class="stat-card-value" style="color:#7c3aed;" id="edd-stat-active">0</div></div>
     <div class="stat-card"><div class="stat-card-label">Awaiting Senior Review</div><div class="stat-card-value" style="color:var(--amber);" id="edd-stat-awaiting">0</div></div>
@@ -5080,6 +5096,26 @@ function applicationMatchesEnhancedFilter(app, enhancedFilter) {
   if (enhancedFilter === 'awaiting_review') return Number(summary.submitted_awaiting_review_count || 0) > 0;
   if (enhancedFilter === 'resolved') return !!summary.enhanced_review_active && !summary.approval_blocked && summary.next_action_code === 'resolved';
   return true;
+}
+
+function setApplicationsEnhancedFilter(value) {
+  var allowed = ['active','approval_blocked','pending_client','awaiting_review','resolved'];
+  var normalized = allowed.indexOf(String(value || '')) >= 0 ? String(value || '') : '';
+  var filter = document.getElementById('filter-enhanced');
+  if (filter) filter.value = normalized;
+  applicationsCurrentPage = 1;
+  renderApplications();
+}
+
+function openApplicationsEnhancedReview(filterValue) {
+  var normalized = filterValue || 'active';
+  showView('applications');
+  setApplicationsEnhancedFilter(normalized);
+  if (window.history && window.history.replaceState) {
+    window.history.replaceState(null, '', '#applications?enhanced_review=' + encodeURIComponent(normalized));
+  } else {
+    window.location.hash = 'applications?enhanced_review=' + encodeURIComponent(normalized);
+  }
 }
 
 function renderApplications() {
@@ -10810,6 +10846,31 @@ function handleGlobalSearch(q) {
   }
 }
 
+function parseBackofficeHashRoute() {
+  var raw = String(window.location.hash || '').replace(/^#/, '');
+  if (!raw) return { view: '', params: new URLSearchParams('') };
+  var parts = raw.split('?');
+  return {
+    view: parts[0] || '',
+    params: new URLSearchParams(parts.slice(1).join('?') || '')
+  };
+}
+
+function applyBackofficeHashRoute() {
+  var route = parseBackofficeHashRoute();
+  if (!route.view) return false;
+  if (route.view === 'applications') {
+    showView('applications');
+    setApplicationsEnhancedFilter(route.params.get('enhanced_review') || '');
+    return true;
+  }
+  if (route.view === 'edd') {
+    showView('edd');
+    return true;
+  }
+  return false;
+}
+
 // ═══════════════════════════════════════════════════════════
 // KPI DASHBOARD
 // ═══════════════════════════════════════════════════════════
@@ -12443,7 +12504,7 @@ async function handleLogin(e) {
     await loadFromAPI();
     populateOfficerDropdowns();
     renderDashboardRecent();
-    showView('dashboard');
+    if (!applyBackofficeHashRoute()) showView('dashboard');
     hideLoginScreen();
     showToast('Welcome back, ' + (resp.user.name || currentUser.name));
   } catch(err) {
@@ -14824,6 +14885,7 @@ document.addEventListener('DOMContentLoaded', async function() {
       hideLoginScreen();
       renderDashboardRecent();
       document.body.className = 'role-' + (currentUser.role || 'admin');
+      applyBackofficeHashRoute();
       return;
     } catch(e) {
       console.warn('Token expired, clearing auth');
@@ -14834,6 +14896,10 @@ document.addEventListener('DOMContentLoaded', async function() {
   // No valid token — show login screen
   showLoginScreen();
   document.body.className = 'role-' + (currentUser.role || 'admin');
+});
+window.addEventListener('hashchange', function() {
+  if (document.getElementById('login-overlay') && !document.getElementById('login-overlay').classList.contains('hidden')) return;
+  applyBackofficeHashRoute();
 });
 
 // ═══════════════════════════════════════════════════════
