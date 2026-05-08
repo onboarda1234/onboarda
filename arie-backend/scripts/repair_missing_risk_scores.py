@@ -2,7 +2,8 @@
 """
 One-off repair for non-draft applications with missing or suspect risk fields.
 
-Default mode is dry-run. Pass --apply to persist deterministic recomputation.
+Default mode is dry-run. Pass --dry-run explicitly for scripted dry-runs, or
+pass --apply to persist deterministic recomputation.
 For safe apply, use --exclude-ambiguous for broad repair or target explicit
 records with --application-ref / --only-ref.
 
@@ -187,15 +188,29 @@ def _is_ambiguous_edd_low_recompute(app, risk):
     )
 
 
+def _same_risk_value(app, risk):
+    current_level = (app.get("risk_level") or "").upper()
+    next_level = (risk.get("level") or "").upper()
+    try:
+        current_score = float(app.get("risk_score"))
+        next_score = float(risk.get("score"))
+    except (TypeError, ValueError):
+        return False
+    return current_level == next_level and current_score == next_score
+
+
 def repair_missing_risk_scores(
     apply: bool = False,
     application_refs=None,
     exclude_ambiguous: bool = False,
 ):
     db = get_db()
+    recomputed = 0
     repaired = 0
     failed = 0
     by_status = {}
+    safe_to_apply = []
+    no_op_validation_cases = []
     proposed_changes = []
     unrecomputable = []
     excluded_ambiguous = []
@@ -206,11 +221,14 @@ def repair_missing_risk_scores(
             return {
                 "suspect": 0,
                 "recomputed": 0,
+                "applied_count": 0,
                 "failed": 0,
                 "applied": apply,
                 "statuses_affected": {},
                 "application_refs": refs,
                 "exclude_ambiguous": exclude_ambiguous,
+                "safe_to_apply": [],
+                "no_op_validation_cases": [],
                 "proposed_changes": [],
                 "excluded_ambiguous": [],
                 "unrecomputable": [],
@@ -225,6 +243,7 @@ def repair_missing_risk_scores(
             by_status[status] = by_status.get(status, 0) + 1
             try:
                 risk = recompute_application_risk(db, app)
+                recomputed += 1
                 change = {
                     "ref": app.get("ref"),
                     "company_name": app.get("company_name"),
@@ -238,6 +257,21 @@ def repair_missing_risk_scores(
                         "risk_score": risk.get("score"),
                     },
                 }
+                if _same_risk_value(app, risk):
+                    change["reason"] = (
+                        "stored risk already matches deterministic recomputation; "
+                        "no repair update required"
+                    )
+                    no_op_validation_cases.append(change)
+                    LOGGER.info(
+                        "NO-OP %s %s: %s/%s matches recomputation",
+                        app.get("ref"),
+                        app.get("company_name"),
+                        app.get("risk_level"),
+                        app.get("risk_score"),
+                    )
+                    continue
+
                 if exclude_ambiguous and _is_ambiguous_edd_low_recompute(app, risk):
                     change["reason"] = (
                         "edd_required record recomputed to LOW; review EDD trigger "
@@ -255,6 +289,7 @@ def repair_missing_risk_scores(
                     )
                     continue
 
+                safe_to_apply.append(change)
                 proposed_changes.append(change)
                 LOGGER.info(
                     "%s %s %s: %s/%s -> %s/%s",
@@ -293,12 +328,15 @@ def repair_missing_risk_scores(
                 pass
         return {
             "suspect": len(rows),
-            "recomputed": repaired,
+            "recomputed": recomputed,
+            "applied_count": repaired,
             "failed": failed,
             "applied": apply,
             "statuses_affected": by_status,
             "application_refs": refs,
             "exclude_ambiguous": exclude_ambiguous,
+            "safe_to_apply": safe_to_apply,
+            "no_op_validation_cases": no_op_validation_cases,
             "proposed_changes": proposed_changes,
             "excluded_ambiguous": excluded_ambiguous,
             "unrecomputable": unrecomputable,
@@ -309,6 +347,7 @@ def repair_missing_risk_scores(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true", help="Explicit dry-run mode; this is the default")
     parser.add_argument("--apply", action="store_true", help="Persist recomputed risk fields")
     parser.add_argument(
         "--exclude-ambiguous",
@@ -325,6 +364,8 @@ def main():
     )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
+    if args.apply and args.dry_run:
+        parser.error("--apply and --dry-run cannot be used together")
     if args.apply and not args.exclude_ambiguous and not _normalize_application_refs(args.application_refs):
         parser.error("--apply requires --exclude-ambiguous or --application-ref/--only-ref for safe targeted repair")
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")

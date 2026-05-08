@@ -236,25 +236,32 @@ class TestRepairScriptRiskZeroContract:
         assert "risk_score=0 can be a legitimate deterministic LOW score" in src
         assert "historical bug also" in src
         assert "statuses_affected" in src
+        assert "safe_to_apply" in src
+        assert "no_op_validation_cases" in src
         assert "proposed_changes" in src
         assert "unrecomputable" in src
 
     def test_repair_script_supports_safe_targeted_apply_options(self):
         src = _repair_script_source()
 
+        assert "--dry-run" in src
         assert "--exclude-ambiguous" in src
         assert "--application-ref" in src
         assert "--only-ref" in src
         assert "excluded_ambiguous" in src
+        assert "--apply and --dry-run cannot be used together" in src
         assert "--apply requires --exclude-ambiguous or --application-ref/--only-ref" in src
 
-    def test_repair_script_classifies_ambiguous_edd_low_recompute(self):
+    def test_repair_script_classifies_ambiguous_and_no_op_recompute(self):
         from scripts.repair_missing_risk_scores import (
             _is_ambiguous_edd_low_recompute,
             _normalize_application_refs,
+            _same_risk_value,
         )
 
         assert _normalize_application_refs(["ARF-1, ARF-2", "ARF-1"]) == ["ARF-1", "ARF-2"]
+        assert _same_risk_value({"risk_level": "LOW", "risk_score": 0}, {"level": "LOW", "score": 0.0})
+        assert not _same_risk_value({"risk_level": None, "risk_score": None}, {"level": "LOW", "score": 26.0})
         assert _is_ambiguous_edd_low_recompute(
             {"status": "edd_required"},
             {"level": "LOW", "score": 26.0},
