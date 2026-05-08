@@ -130,6 +130,8 @@ def _insert_application(
     sector="Technology",
     ownership_structure="Simple",
     prescreening=None,
+    status="submitted",
+    onboarding_lane=None,
 ):
     app_id = "app_" + uuid.uuid4().hex[:10]
     ref = "ARF-2026-" + uuid.uuid4().hex[:8]
@@ -138,8 +140,8 @@ def _insert_application(
         INSERT INTO applications
         (id, ref, company_name, country, sector, entity_type,
          ownership_structure, prescreening_data, risk_score, risk_level,
-         base_risk_level, final_risk_level, status)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+         base_risk_level, final_risk_level, status, onboarding_lane)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             app_id,
@@ -154,7 +156,8 @@ def _insert_application(
             risk_level,
             risk_level,
             risk_level,
-            "submitted",
+            status,
+            onboarding_lane,
         ),
     )
     db.commit()
@@ -320,6 +323,103 @@ def test_low_application_generates_zero_requirements(enhanced_app_db):
     assert result["config_ok"] is True
     assert result["triggers"] == []
     assert result["generated_count"] == 0
+
+
+def test_operational_summary_counts_and_next_actions(enhanced_app_db):
+    from enhanced_requirements import build_enhanced_requirement_operational_summary
+
+    db = enhanced_app_db
+    standard_app = _insert_application(db, risk_level="LOW")
+    standard_summary = build_enhanced_requirement_operational_summary(db, standard_app)
+    assert standard_summary["enhanced_review_active"] is False
+    assert standard_summary["approval_blocked"] is False
+    assert standard_summary["next_action_code"] == "none"
+
+    missing_app = _insert_application(db, risk_level="HIGH")
+    missing_summary = build_enhanced_requirement_operational_summary(db, missing_app)
+    assert missing_summary["enhanced_review_active"] is True
+    assert missing_summary["approval_blocked"] is True
+    assert missing_summary["missing_generated_requirements"] is True
+    assert missing_summary["next_action_code"] == "generate_requirements"
+
+    app_id = _insert_application(db, risk_level="HIGH")
+    _generate(db, app_id)
+    requested_req = _first_requirement_id(db, app_id, offset=0)
+    uploaded_req = _first_requirement_id(db, app_id, offset=1)
+    accepted_req = _first_requirement_id(db, app_id, offset=2)
+    waived_req = _first_requirement_id(db, app_id, offset=3)
+    optional_req = _first_requirement_id(db, app_id, offset=4)
+    db.execute(
+        "UPDATE application_enhanced_requirements SET status='requested', audience='client' WHERE id=?",
+        (requested_req,),
+    )
+    db.execute(
+        "UPDATE application_enhanced_requirements SET status='uploaded', uploaded_at=datetime('now') WHERE id=?",
+        (uploaded_req,),
+    )
+    db.execute(
+        "UPDATE application_enhanced_requirements SET status='accepted' WHERE id=?",
+        (accepted_req,),
+    )
+    db.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='waived', waived_at=datetime('now'), waived_by='sco001', waiver_reason='Senior waiver'
+        WHERE id=?
+        """,
+        (waived_req,),
+    )
+    db.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET mandatory=0, blocking_approval=0, status='generated'
+        WHERE id=?
+        """,
+        (optional_req,),
+    )
+    db.commit()
+
+    summary = build_enhanced_requirement_operational_summary(db, app_id)
+    assert summary["enhanced_review_active"] is True
+    assert summary["pending_client_count"] == 1
+    assert summary["submitted_awaiting_review_count"] == 1
+    assert summary["accepted_count"] >= 1
+    assert summary["waived_count"] >= 1
+    assert summary["approval_blocked"] is True
+    assert summary["next_action_code"] == "awaiting_client"
+
+    db.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='accepted'
+        WHERE application_id=? AND (mandatory=1 OR blocking_approval=1)
+        """,
+        (app_id,),
+    )
+    db.commit()
+    resolved = build_enhanced_requirement_operational_summary(db, app_id)
+    assert resolved["approval_blocked"] is False
+    assert resolved["next_action_code"] == "resolved"
+    assert resolved["unresolved_count"] >= 1
+
+
+def test_operational_summary_invalid_waiver_blocks(enhanced_app_db):
+    from enhanced_requirements import build_enhanced_requirement_operational_summary
+
+    db = enhanced_app_db
+    app_id = _insert_application(db, risk_level="HIGH")
+    _generate(db, app_id)
+    req_id = _first_requirement_id(db, app_id)
+    db.execute(
+        "UPDATE application_enhanced_requirements SET status='waived', waived_by='', waived_at='', waiver_reason='' WHERE id=?",
+        (req_id,),
+    )
+    db.commit()
+
+    summary = build_enhanced_requirement_operational_summary(db, app_id)
+    assert summary["approval_blocked"] is True
+    assert summary["invalid_waiver_count"] == 1
+    assert summary["next_action_code"] == "fix_invalid_waiver"
 
 
 @pytest.mark.parametrize(
@@ -644,6 +744,7 @@ def test_api_permissions_for_diagnostics_read_and_generate(enhanced_app_api_serv
     )
     assert co_read.status_code == 200, co_read.text
     assert co_read.json()["total"] > 0
+    assert co_read.json()["enhanced_review_summary"]["enhanced_review_active"] is True
 
     client_read = requests.get(
         f"{base_url}/api/applications/{app_id}/enhanced-requirements",
@@ -651,6 +752,73 @@ def test_api_permissions_for_diagnostics_read_and_generate(enhanced_app_api_serv
         timeout=5,
     )
     assert client_read.status_code == 403
+
+
+def test_applications_list_includes_enhanced_operational_summary_and_filters(enhanced_app_api_server):
+    base_url, db_path = enhanced_app_api_server
+    _sync_db_path(db_path)
+    from db import get_db
+
+    conn = get_db()
+    blocked_app = _insert_application(conn, risk_level="HIGH")
+    _generate(conn, blocked_app)
+    pending_req = _first_requirement_id(conn, blocked_app)
+    conn.execute(
+        "UPDATE application_enhanced_requirements SET status='requested', audience='client' WHERE id=?",
+        (pending_req,),
+    )
+    resolved_app = _insert_application(conn, risk_level="HIGH")
+    _generate(conn, resolved_app)
+    conn.execute(
+        """
+        UPDATE application_enhanced_requirements
+        SET status='accepted'
+        WHERE application_id=? AND (mandatory=1 OR blocking_approval=1)
+        """,
+        (resolved_app,),
+    )
+    standard_app = _insert_application(conn, risk_level="LOW")
+    conn.close()
+
+    list_resp = requests.get(
+        f"{base_url}/api/applications?limit=50",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert list_resp.status_code == 200, list_resp.text
+    apps = {app["id"]: app for app in list_resp.json()["applications"]}
+    assert apps[blocked_app]["enhanced_review_summary"]["approval_blocked"] is True
+    assert apps[blocked_app]["enhanced_review_summary"]["pending_client_count"] == 1
+    assert apps[resolved_app]["enhanced_review_summary"]["next_action_code"] == "resolved"
+    assert apps[standard_app]["enhanced_review_summary"]["enhanced_review_active"] is False
+
+    pending_resp = requests.get(
+        f"{base_url}/api/applications?limit=50&enhanced_review=pending_client",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert pending_resp.status_code == 200, pending_resp.text
+    pending_ids = {app["id"] for app in pending_resp.json()["applications"]}
+    assert blocked_app in pending_ids
+    assert resolved_app not in pending_ids
+
+    blocked_resp = requests.get(
+        f"{base_url}/api/applications?limit=50&enhanced_review=approval_blocked",
+        headers=_headers("admin"),
+        timeout=5,
+    )
+    assert blocked_resp.status_code == 200, blocked_resp.text
+    blocked_ids = {app["id"] for app in blocked_resp.json()["applications"]}
+    assert blocked_app in blocked_ids
+    assert resolved_app not in blocked_ids
+
+    client_resp = requests.get(
+        f"{base_url}/api/applications?limit=50",
+        headers=_client_headers("client001"),
+        timeout=5,
+    )
+    assert client_resp.status_code == 200, client_resp.text
+    assert all("enhanced_review_summary" not in app for app in client_resp.json()["applications"])
 
 
 def test_lifecycle_api_permissions_and_status_updates(enhanced_app_api_server):
