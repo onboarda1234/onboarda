@@ -10,6 +10,7 @@ ENV = {
     "COMPLYADVANTAGE_REALM": "regmind",
     "COMPLYADVANTAGE_USERNAME": " officer@example.test ",
     "COMPLYADVANTAGE_PASSWORD": " secret ",
+    "COMPLYADVANTAGE_SCREENING_CONFIG_ID": " cfg-123 ",
 }
 
 
@@ -26,6 +27,7 @@ def test_from_env_loads_and_normalizes(monkeypatch):
     assert config.realm == "regmind"
     assert config.username == "officer@example.test"
     assert config.password == "secret"
+    assert config.screening_configuration_identifier == "cfg-123"
 
 
 @pytest.mark.parametrize("name", ENV.keys())

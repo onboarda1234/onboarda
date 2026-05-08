@@ -142,6 +142,8 @@ from enhanced_requirements import (
     ALLOWED_SUBJECT_SCOPES,
     ALLOWED_WAIVER_ROLES,
     audit_enhanced_requirements_approval_block,
+    build_enhanced_requirement_operational_summaries,
+    build_enhanced_requirement_operational_summary,
     build_enhanced_review_memo_summary,
     diagnose_enhanced_requirement_config,
     fulfill_application_enhanced_requirement_document,
@@ -2575,6 +2577,7 @@ class ApplicationsHandler(BaseHandler):
         status = self.get_argument("status", None)
         risk = self.get_argument("risk", None)
         assigned = self.get_argument("assigned", None)
+        enhanced_review = (self.get_argument("enhanced_review", None) or "").strip().lower()
         limit = _bounded_int(self.get_argument("limit", 5000), 5000, min_value=1, max_value=5000)
         offset = _bounded_int(self.get_argument("offset", 0), 0, min_value=0, max_value=1000000)
 
@@ -2606,6 +2609,56 @@ class ApplicationsHandler(BaseHandler):
         if assigned:
             query += " AND a.assigned_to = ?"
             params.append(assigned)
+        if enhanced_review and user["type"] != "client":
+            risk_expr = "UPPER(COALESCE(a.final_risk_level, a.risk_level, ''))"
+            status_expr = "LOWER(COALESCE(a.status, ''))"
+            lane_expr = "LOWER(COALESCE(a.onboarding_lane, ''))"
+            requires_enhanced_expr = (
+                f"({risk_expr} IN ('HIGH', 'VERY_HIGH') "
+                f"OR {status_expr} IN ('edd_required', 'edd_approved') "
+                f"OR {lane_expr} = 'edd')"
+            )
+            active_exists_expr = (
+                "EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                "WHERE aer.application_id = a.id AND aer.active)"
+            )
+            missing_generated_expr = (
+                f"({requires_enhanced_expr} AND NOT {active_exists_expr})"
+            )
+            unresolved_expr = (
+                "EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                "WHERE aer.application_id = a.id AND aer.active "
+                "AND (aer.mandatory OR aer.blocking_approval) "
+                "AND aer.status IN ('generated','requested','uploaded','under_review','rejected'))"
+            )
+            invalid_waiver_expr = (
+                "EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                "WHERE aer.application_id = a.id AND aer.active "
+                "AND (aer.mandatory OR aer.blocking_approval) "
+                "AND aer.status = 'waived' "
+                "AND (aer.waiver_reason IS NULL OR TRIM(aer.waiver_reason) = '' "
+                "OR aer.waived_by IS NULL OR TRIM(aer.waived_by) = '' "
+                "OR aer.waived_at IS NULL OR TRIM(aer.waived_at) = ''))"
+            )
+            approval_blocked_expr = f"({missing_generated_expr} OR {unresolved_expr} OR {invalid_waiver_expr})"
+            if enhanced_review == "active":
+                query += f" AND ({active_exists_expr} OR {requires_enhanced_expr})"
+            elif enhanced_review == "approval_blocked":
+                query += f" AND {approval_blocked_expr}"
+            elif enhanced_review == "pending_client":
+                query += (
+                    " AND EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                    "WHERE aer.application_id = a.id AND aer.active "
+                    "AND aer.status = 'requested' AND aer.audience IN ('client','both'))"
+                )
+            elif enhanced_review == "awaiting_review":
+                query += (
+                    " AND EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
+                    "WHERE aer.application_id = a.id AND aer.active "
+                    "AND aer.status = 'uploaded')"
+                )
+            elif enhanced_review == "resolved":
+                query += f" AND {active_exists_expr} AND NOT {approval_blocked_expr}"
 
         total = db.execute(f"SELECT COUNT(*) AS c FROM ({query}) filtered", params).fetchone()["c"]
 
@@ -2640,6 +2693,9 @@ class ApplicationsHandler(BaseHandler):
                 docs_by_app.setdefault(d["application_id"], []).append(dict(d))
 
         rmi_by_app = _load_rmi_requests_for_apps(db, app_ids) if app_ids else {}
+        enhanced_summaries = {}
+        if user["type"] != "client" and app_ids:
+            enhanced_summaries = build_enhanced_requirement_operational_summaries(db, apps)
 
         # Stitch results back into each application
         for app in apps:
@@ -2656,6 +2712,8 @@ class ApplicationsHandler(BaseHandler):
                 doc.pop("application_id", None)
             app["documents"] = app_docs
             app["rmi_requests"] = rmi_by_app.get(app["id"], [])
+            if user["type"] != "client":
+                app["enhanced_review_summary"] = enhanced_summaries.get(app["id"])
             # Bug #4: Parse risk_dimensions from JSON string for API consumers
             if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
                 app["risk_dimensions"] = safe_json_loads(app["risk_dimensions"])
@@ -2893,6 +2951,12 @@ class ApplicationDetailHandler(BaseHandler):
                 doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
                 doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
         result["rmi_requests"] = _load_rmi_requests(db, result["id"])
+        if user["type"] != "client":
+            result["enhanced_review_summary"] = build_enhanced_requirement_operational_summary(
+                db,
+                result["id"],
+                app_row=result,
+            )
         stored_prescreening = parse_json_field(result.get("prescreening_data"), {})
         saved_session_prescreening = load_saved_session_prescreening(db, result)
         result["prescreening_data"] = merge_prescreening_sources(stored_prescreening, saved_session_prescreening)
@@ -6372,7 +6436,7 @@ class ApplicationEnhancedRequirementsHandler(BaseHandler):
         db = get_db()
         try:
             app = db.execute(
-                "SELECT id, ref FROM applications WHERE id = ? OR ref = ?",
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
                 (app_id, app_id),
             ).fetchone()
             if not app:
@@ -6390,6 +6454,11 @@ class ApplicationEnhancedRequirementsHandler(BaseHandler):
                 "application_id": app["id"],
                 "application_ref": app["ref"],
                 "requirements": requirements,
+                "enhanced_review_summary": build_enhanced_requirement_operational_summary(
+                    db,
+                    app["id"],
+                    app_row=app,
+                ),
                 "total": len(requirements),
             })
         finally:

@@ -400,6 +400,14 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "Only admins and senior compliance officers can waive enhanced requirements" in html
     assert "No enhanced requirements generated for this application." in html
     assert "Enhanced requirement configuration is incomplete. Requirements may not be fully generated." in html
+    assert 'id="filter-enhanced"' in html
+    assert "Enhanced Status" in html
+    assert "Next Action" in html
+    assert "applicationMatchesEnhancedFilter" in html
+    assert "buildEnhancedOperationalSummaryFallback" in html
+    assert 'id="detail-enhanced-review-summary"' in html
+    assert "Operational summary" in html
+    assert "Approval blocked" in html
 
     block = html.split("// APPLICATION ENHANCED REVIEW REQUIREMENTS — back-office display/actions", 1)[1]
     block = block.split("function renderUsers()", 1)[0]

@@ -1409,6 +1409,304 @@ def validate_enhanced_requirements_for_approval(db, application_id, app_row=None
     return result
 
 
+def _blank_enhanced_operational_summary():
+    return {
+        "enhanced_review_active": False,
+        "total": 0,
+        "unresolved_count": 0,
+        "mandatory_unresolved_count": 0,
+        "blocking_unresolved_count": 0,
+        "pending_client_count": 0,
+        "submitted_awaiting_review_count": 0,
+        "rejected_count": 0,
+        "accepted_count": 0,
+        "waived_count": 0,
+        "approval_blocked": False,
+        "next_action": "No enhanced review required",
+        "next_action_code": "none",
+        "status_label": "Clear",
+        "trigger_labels": [],
+        "last_updated_at": None,
+        "missing_generated_requirements": False,
+        "invalid_waiver_count": 0,
+        "unresolved_requirements": [],
+        "invalid_waivers": [],
+        "warnings": [],
+        "errors": [],
+    }
+
+
+def _item_timestamp(item):
+    candidates = (
+        item.get("updated_at"),
+        item.get("reviewed_at"),
+        item.get("uploaded_at"),
+        item.get("requested_at"),
+        item.get("waived_at"),
+        item.get("client_response_at"),
+        item.get("created_at"),
+    )
+    return max([str(value) for value in candidates if value] or [""], default="") or None
+
+
+def _approval_validation_from_items(db, app, items, *, table_missing=False):
+    result = {
+        "passed": True,
+        "has_requirements": False,
+        "unresolved_count": 0,
+        "blocking_unresolved_count": 0,
+        "mandatory_unresolved_count": 0,
+        "invalid_waiver_count": 0,
+        "unresolved_requirements": [],
+        "invalid_waivers": [],
+        "warnings": [],
+        "errors": [],
+        "missing_generated_requirements": False,
+    }
+    app = _row_dict(app) or {}
+    if not app:
+        result["passed"] = False
+        result["errors"].append("application_not_found")
+        return result
+
+    requires_enhanced = _application_requires_enhanced_requirements(app)
+    if table_missing:
+        if requires_enhanced:
+            result["passed"] = False
+            result["missing_generated_requirements"] = True
+            result["errors"].append(
+                "enhanced review requirements table is missing; re-run migrations before approval"
+            )
+        else:
+            result["warnings"].append("application_enhanced_requirements table is missing")
+        return result
+
+    items = [item for item in (items or []) if item]
+    result["has_requirements"] = bool(items)
+    if not items:
+        if requires_enhanced:
+            result["passed"] = False
+            result["missing_generated_requirements"] = True
+            result["errors"].append(
+                "enhanced review requirements are missing or not generated for this HIGH/EDD application"
+            )
+        return result
+
+    for item in items:
+        status = str(item.get("status") or "generated").strip().lower()
+        is_blocking = bool(item.get("mandatory")) or bool(item.get("blocking_approval"))
+        if status == "cancelled":
+            continue
+        if status == "accepted":
+            continue
+        if status == "waived":
+            waiver_ok, waiver_error = _valid_approval_waiver(db, item)
+            if waiver_ok:
+                continue
+            invalid = _approval_requirement_item(item, waiver_error)
+            result["invalid_waivers"].append(invalid)
+            result["invalid_waiver_count"] += 1
+            if is_blocking:
+                result["unresolved_requirements"].append(invalid)
+            continue
+        if is_blocking:
+            result["unresolved_requirements"].append(
+                _approval_requirement_item(
+                    item,
+                    "Accept the requirement or record a valid senior waiver before approval",
+                )
+            )
+
+    seen = set()
+    unresolved = []
+    for item in result["unresolved_requirements"]:
+        key = item.get("id") or (item.get("trigger_key"), item.get("requirement_key"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unresolved.append(item)
+    result["unresolved_requirements"] = unresolved
+    result["unresolved_count"] = len(unresolved)
+    result["mandatory_unresolved_count"] = len([item for item in unresolved if item.get("mandatory")])
+    result["blocking_unresolved_count"] = len([item for item in unresolved if item.get("blocking_approval")])
+    result["passed"] = not result["errors"] and result["unresolved_count"] == 0
+    return result
+
+
+def _build_enhanced_operational_summary_from_items(db, app, items, validation=None):
+    app = _row_dict(app) or {}
+    active_items = []
+    for item in items or []:
+        serialized = serialize_application_requirement(item) if not isinstance(item, dict) else dict(item)
+        if serialized and serialized.get("active") is not False:
+            active_items.append(serialized)
+
+    validation = validation or _approval_validation_from_items(db, app, active_items)
+    summary = _blank_enhanced_operational_summary()
+    summary["total"] = len(active_items)
+    summary["enhanced_review_active"] = bool(active_items) or bool(validation.get("missing_generated_requirements"))
+    summary["approval_blocked"] = not bool(validation.get("passed", True))
+    summary["missing_generated_requirements"] = bool(validation.get("missing_generated_requirements"))
+    summary["mandatory_unresolved_count"] = int(validation.get("mandatory_unresolved_count") or 0)
+    summary["blocking_unresolved_count"] = int(validation.get("blocking_unresolved_count") or 0)
+    summary["invalid_waiver_count"] = int(validation.get("invalid_waiver_count") or 0)
+    summary["unresolved_requirements"] = validation.get("unresolved_requirements") or []
+    summary["invalid_waivers"] = validation.get("invalid_waivers") or []
+    summary["warnings"] = validation.get("warnings") or []
+    summary["errors"] = validation.get("errors") or []
+
+    unresolved_statuses = set(APPLICATION_REQUIREMENT_APPROVAL_UNRESOLVED_STATUSES)
+    trigger_labels = []
+    timestamps = []
+    rejected_client_facing = 0
+    under_review_count = 0
+    optional_unresolved_count = 0
+
+    for item in active_items:
+        status = str(item.get("status") or "generated").strip().lower()
+        audience = str(item.get("audience") or "").strip().lower()
+        client_facing = audience in APPLICATION_REQUIREMENT_REQUESTABLE_AUDIENCES
+        is_blocking = bool(item.get("mandatory")) or bool(item.get("blocking_approval"))
+        if status in unresolved_statuses:
+            summary["unresolved_count"] += 1
+            if not is_blocking:
+                optional_unresolved_count += 1
+        if status == "requested" and client_facing:
+            summary["pending_client_count"] += 1
+        if status == "uploaded":
+            summary["submitted_awaiting_review_count"] += 1
+        if status == "rejected":
+            summary["rejected_count"] += 1
+            if client_facing:
+                rejected_client_facing += 1
+        if status == "accepted":
+            summary["accepted_count"] += 1
+        if status == "waived":
+            summary["waived_count"] += 1
+        if status == "under_review":
+            under_review_count += 1
+        label = _clean_text(item.get("trigger_label") or item.get("trigger_key"))
+        if label and label not in trigger_labels:
+            trigger_labels.append(label)
+        ts = _item_timestamp(item)
+        if ts:
+            timestamps.append(ts)
+
+    summary["trigger_labels"] = trigger_labels
+    summary["last_updated_at"] = max(timestamps) if timestamps else None
+
+    if summary["missing_generated_requirements"]:
+        summary["next_action_code"] = "generate_requirements"
+        summary["next_action"] = "Generate enhanced review requirements"
+        summary["status_label"] = "Approval blocked"
+    elif rejected_client_facing:
+        summary["next_action_code"] = "request_updated_info"
+        summary["next_action"] = "Request updated information from client"
+        summary["status_label"] = "Approval blocked" if summary["approval_blocked"] else "Pending client"
+    elif summary["pending_client_count"]:
+        summary["next_action_code"] = "awaiting_client"
+        summary["next_action"] = "Awaiting client submission"
+        summary["status_label"] = "Pending client"
+    elif summary["submitted_awaiting_review_count"]:
+        summary["next_action_code"] = "review_submitted"
+        summary["next_action"] = "Review submitted enhanced requirement evidence"
+        summary["status_label"] = "Awaiting review"
+    elif under_review_count:
+        summary["next_action_code"] = "complete_review"
+        summary["next_action"] = "Complete officer review"
+        summary["status_label"] = "Under review"
+    elif summary["invalid_waiver_count"]:
+        summary["next_action_code"] = "fix_invalid_waiver"
+        summary["next_action"] = "Fix invalid waiver"
+        summary["status_label"] = "Approval blocked"
+    elif summary["approval_blocked"]:
+        summary["next_action_code"] = "resolve_blockers"
+        summary["next_action"] = "Resolve outstanding enhanced review requirements"
+        summary["status_label"] = "Approval blocked"
+    elif summary["enhanced_review_active"] and not summary["approval_blocked"]:
+        summary["next_action_code"] = "resolved"
+        summary["next_action"] = "Enhanced review resolved"
+        summary["status_label"] = "Resolved" if optional_unresolved_count == 0 else "Enhanced review resolved"
+    else:
+        summary["next_action_code"] = "none"
+        summary["next_action"] = "No enhanced review required"
+        summary["status_label"] = "Clear"
+
+    if summary["approval_blocked"] and summary["status_label"] not in ("Pending client", "Awaiting review", "Under review"):
+        summary["status_label"] = "Approval blocked"
+    return summary
+
+
+def build_enhanced_requirement_operational_summary(db, application_id, app_row=None):
+    """Build read-only back-office operational visibility for enhanced requirements."""
+    app = _row_dict(app_row) if app_row is not None else _load_application(db, application_id)
+    if not app:
+        summary = _blank_enhanced_operational_summary()
+        summary["approval_blocked"] = True
+        summary["errors"] = ["application_not_found"]
+        summary["next_action_code"] = "error"
+        summary["next_action"] = "Application not found"
+        summary["status_label"] = "Unavailable"
+        return summary
+
+    app_id = app.get("id") or application_id
+    if not _table_exists(db, "application_enhanced_requirements"):
+        validation = _approval_validation_from_items(db, app, [], table_missing=True)
+        return _build_enhanced_operational_summary_from_items(db, app, [], validation)
+
+    rows = db.execute(
+        """
+        SELECT *
+        FROM application_enhanced_requirements
+        WHERE application_id = ?
+          AND active = 1
+        ORDER BY trigger_category, trigger_label, requirement_label, id
+        """,
+        (app_id,),
+    ).fetchall()
+    items = [serialize_application_requirement(row) for row in rows]
+    validation = validate_enhanced_requirements_for_approval(db, app_id, app_row=app)
+    return _build_enhanced_operational_summary_from_items(db, app, items, validation)
+
+
+def build_enhanced_requirement_operational_summaries(db, app_rows):
+    """Build operational summaries for a page of applications without N+1 row loads."""
+    apps = [_row_dict(app) for app in (app_rows or []) if _row_dict(app)]
+    if not apps:
+        return {}
+    summaries = {}
+    if not _table_exists(db, "application_enhanced_requirements"):
+        for app in apps:
+            validation = _approval_validation_from_items(db, app, [], table_missing=True)
+            summaries[app.get("id")] = _build_enhanced_operational_summary_from_items(db, app, [], validation)
+        return summaries
+
+    app_ids = [app.get("id") for app in apps if app.get("id")]
+    grouped = {app_id: [] for app_id in app_ids}
+    if app_ids:
+        placeholders = ",".join("?" for _ in app_ids)
+        rows = db.execute(
+            f"""
+            SELECT *
+            FROM application_enhanced_requirements
+            WHERE active = 1
+              AND application_id IN ({placeholders})
+            ORDER BY trigger_category, trigger_label, requirement_label, id
+            """,
+            app_ids,
+        ).fetchall()
+        for row in rows:
+            item = serialize_application_requirement(row)
+            if item:
+                grouped.setdefault(item.get("application_id"), []).append(item)
+
+    for app in apps:
+        items = grouped.get(app.get("id"), [])
+        validation = _approval_validation_from_items(db, app, items)
+        summaries[app.get("id")] = _build_enhanced_operational_summary_from_items(db, app, items, validation)
+    return summaries
+
+
 def format_enhanced_requirements_approval_error(validation):
     validation = validation or {}
     if validation.get("missing_generated_requirements"):
