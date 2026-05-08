@@ -1556,14 +1556,31 @@ def resolve_user_display_name(db, user_id):
 
 # ── Prometheus Metrics (optional) ──────────────────────────
 try:
-    from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+    from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+
+    def _metric_or_existing(factory, name, *args, **kwargs):
+        """Create a Prometheus metric once, reusing it on accidental re-imports."""
+        collectors = getattr(REGISTRY, "_names_to_collectors", {})
+        existing = collectors.get(name)
+        if existing is not None:
+            return existing
+        try:
+            return factory(name, *args, **kwargs)
+        except ValueError as exc:
+            if "Duplicated timeseries" not in str(exc):
+                raise
+            existing = collectors.get(name)
+            if existing is not None:
+                return existing
+            raise
+
     METRICS_ENABLED = True
-    REQUEST_COUNT = Counter("arie_http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"])
-    REQUEST_LATENCY = Histogram("arie_http_request_duration_seconds", "HTTP request latency", ["method", "endpoint"])
-    ACTIVE_CONNECTIONS = Gauge("arie_active_connections", "Active HTTP connections")
-    APPLICATION_COUNT = Gauge("arie_applications_total", "Total applications by status", ["status"])
-    SCREENING_COUNT = Counter("arie_screenings_total", "Total screenings run", ["source", "result"])
-    SAR_COUNT = Counter("arie_sar_reports_total", "Total SAR reports", ["status"])
+    REQUEST_COUNT = _metric_or_existing(Counter, "arie_http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"])
+    REQUEST_LATENCY = _metric_or_existing(Histogram, "arie_http_request_duration_seconds", "HTTP request latency", ["method", "endpoint"])
+    ACTIVE_CONNECTIONS = _metric_or_existing(Gauge, "arie_active_connections", "Active HTTP connections")
+    APPLICATION_COUNT = _metric_or_existing(Gauge, "arie_applications_total", "Total applications by status", ["status"])
+    SCREENING_COUNT = _metric_or_existing(Counter, "arie_screenings_total", "Total screenings run", ["source", "result"])
+    SAR_COUNT = _metric_or_existing(Counter, "arie_sar_reports_total", "Total SAR reports", ["status"])
     logger.info("Prometheus metrics enabled")
 except ImportError:
     METRICS_ENABLED = False
@@ -2613,6 +2630,8 @@ class ApplicationsHandler(BaseHandler):
             risk_expr = "UPPER(COALESCE(a.final_risk_level, a.risk_level, ''))"
             status_expr = "LOWER(COALESCE(a.status, ''))"
             lane_expr = "LOWER(COALESCE(a.onboarding_lane, ''))"
+            aer_active_expr = "aer.active = 1"
+            aer_required_expr = "(aer.mandatory = 1 OR aer.blocking_approval = 1)"
             requires_enhanced_expr = (
                 f"({risk_expr} IN ('HIGH', 'VERY_HIGH') "
                 f"OR {status_expr} IN ('edd_required', 'edd_approved') "
@@ -2620,21 +2639,21 @@ class ApplicationsHandler(BaseHandler):
             )
             active_exists_expr = (
                 "EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
-                "WHERE aer.application_id = a.id AND aer.active)"
+                f"WHERE aer.application_id = a.id AND {aer_active_expr})"
             )
             missing_generated_expr = (
                 f"({requires_enhanced_expr} AND NOT {active_exists_expr})"
             )
             unresolved_expr = (
                 "EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
-                "WHERE aer.application_id = a.id AND aer.active "
-                "AND (aer.mandatory OR aer.blocking_approval) "
+                f"WHERE aer.application_id = a.id AND {aer_active_expr} "
+                f"AND {aer_required_expr} "
                 "AND aer.status IN ('generated','requested','uploaded','under_review','rejected'))"
             )
             invalid_waiver_expr = (
                 "EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
-                "WHERE aer.application_id = a.id AND aer.active "
-                "AND (aer.mandatory OR aer.blocking_approval) "
+                f"WHERE aer.application_id = a.id AND {aer_active_expr} "
+                f"AND {aer_required_expr} "
                 "AND aer.status = 'waived' "
                 "AND (aer.waiver_reason IS NULL OR TRIM(aer.waiver_reason) = '' "
                 "OR aer.waived_by IS NULL OR TRIM(aer.waived_by) = '' "
@@ -2648,13 +2667,13 @@ class ApplicationsHandler(BaseHandler):
             elif enhanced_review == "pending_client":
                 query += (
                     " AND EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
-                    "WHERE aer.application_id = a.id AND aer.active "
+                    f"WHERE aer.application_id = a.id AND {aer_active_expr} "
                     "AND aer.status = 'requested' AND aer.audience IN ('client','both'))"
                 )
             elif enhanced_review == "awaiting_review":
                 query += (
                     " AND EXISTS (SELECT 1 FROM application_enhanced_requirements aer "
-                    "WHERE aer.application_id = a.id AND aer.active "
+                    f"WHERE aer.application_id = a.id AND {aer_active_expr} "
                     "AND aer.status = 'uploaded')"
                 )
             elif enhanced_review == "resolved":

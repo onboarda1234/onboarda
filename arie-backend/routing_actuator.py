@@ -40,11 +40,11 @@ that any of those upstream paths can call. It:
 3. Persists the resulting lane on ``applications.onboarding_lane``
    (``"EDD"`` when policy route == edd; otherwise the supplied
    level-based lane is left alone).
-4. Calls ``server._actuate_edd_routing`` to UPSERT the ``edd_cases``
+4. Calls the side-effect-safe EDD actuation helper to UPSERT the ``edd_cases``
    row (idempotent, will not duplicate, writes audit row
    ``edd_routing.actuated``).
 5. Writes the ``edd_routing.evaluated`` audit row (via
-   ``server._emit_edd_routing_audit``) so that drift can be analysed
+   ``edd_routing_policy.emit_routing_audit``) so that drift can be analysed
    even when actuation is a no-op (route=standard).
 6. Generates backend-only application enhanced requirement records
    when the evaluated route or durable application facts expose
@@ -302,9 +302,9 @@ def apply_routing_decision(
 
     # ---- Audit: edd_routing.evaluated ---------------------------------
     try:
-        from server import _emit_edd_routing_audit  # type: ignore
+        from edd_routing_policy import emit_routing_audit  # type: ignore
 
-        _emit_edd_routing_audit(
+        emit_routing_audit(
             db, user, application_ref, routing, client_ip
         )
     except Exception as e:
@@ -318,9 +318,9 @@ def apply_routing_decision(
     # ---- Actuate EDD case (idempotent) --------------------------------
     if routing.get("route") == ROUTE_EDD:
         try:
-            from server import _actuate_edd_routing  # type: ignore
+            from edd_actuation import actuate_edd_routing  # type: ignore
 
-            actuation = _actuate_edd_routing(
+            actuation = actuate_edd_routing(
                 db,
                 app_row,
                 routing,

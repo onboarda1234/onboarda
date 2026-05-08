@@ -1,0 +1,248 @@
+"""Side-effect-safe EDD routing actuation helpers.
+
+This module intentionally does not import ``server``. It is used by
+``routing_actuator`` on pre-screening/risk recompute paths where importing
+``server.py`` inside an already-running server process can re-register module
+globals such as Prometheus collectors.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime
+from typing import Any, Dict, Mapping, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+_CANONICAL_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
+_EDD_ACTUATION_TERMINAL_STAGES = ("edd_approved", "edd_rejected")
+
+
+def _canonical_risk_level(value: Any) -> Optional[str]:
+    key = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
+    return key if key in _CANONICAL_RISK_LEVELS else None
+
+
+def _canonical_risk_score(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if score < 0 or score > 100:
+        return None
+    return score
+
+
+def _application_risk_snapshot(app_row: Mapping[str, Any]) -> Tuple[Optional[str], Optional[float]]:
+    if not app_row:
+        return None, None
+    try:
+        app = dict(app_row)
+    except Exception:
+        app = app_row
+    level = (
+        _canonical_risk_level(app.get("final_risk_level"))
+        or _canonical_risk_level(app.get("risk_level"))
+    )
+    score = (
+        _canonical_risk_score(app.get("final_risk_score"))
+        if app.get("final_risk_score") not in (None, "")
+        else _canonical_risk_score(app.get("risk_score"))
+    )
+    if not level:
+        return None, None
+    if level != "LOW" and score == 0:
+        score = None
+    return level, score
+
+
+def actuate_edd_routing(
+    db,
+    app_row: Mapping[str, Any],
+    edd_routing: Mapping[str, Any],
+    supervisor_result: Optional[Mapping[str, Any]],
+    user: Optional[Mapping[str, Any]],
+    client_ip: str = "",
+) -> Dict[str, Any]:
+    """Create/update the EDD case for a deterministic EDD routing result.
+
+    Mirrors the existing server-owned EDD actuation semantics: one active EDD
+    case per application, append notes on re-confirmation, flip status to
+    ``edd_required`` when safe, and emit ``edd_routing.actuated`` audit.
+    The caller owns the transaction.
+    """
+    result = {"case_id": None, "created": False, "status_changed": False, "skipped": False}
+    try:
+        if not isinstance(edd_routing, Mapping) or edd_routing.get("route") != "edd":
+            result["skipped"] = True
+            return result
+        if not app_row:
+            result["skipped"] = True
+            return result
+
+        try:
+            app_dict = dict(app_row)
+        except Exception:
+            app_dict = app_row
+        application_id = app_dict.get("id")
+        if not application_id:
+            result["skipped"] = True
+            return result
+
+        placeholders = ",".join(["?"] * len(_EDD_ACTUATION_TERMINAL_STAGES))
+        existing = db.execute(
+            "SELECT id, stage FROM edd_cases WHERE application_id = ? "
+            "AND stage NOT IN (" + placeholders + ") "
+            "ORDER BY id ASC LIMIT 1",
+            (application_id, *_EDD_ACTUATION_TERMINAL_STAGES),
+        ).fetchone()
+
+        triggers = list(edd_routing.get("triggers") or [])
+        policy_version = edd_routing.get("policy_version", "")
+        evaluated_at = edd_routing.get("evaluated_at", "")
+        mandatory_reasons = list((supervisor_result or {}).get("mandatory_escalation_reasons") or [])
+        trigger_notes = (
+            "Auto-routed to EDD by policy " + str(policy_version)
+            + " | triggers: " + ", ".join(triggers[:8])
+            + (
+                " | mandatory_escalation: " + ", ".join(mandatory_reasons[:6])
+                if mandatory_reasons
+                else ""
+            )
+        )
+
+        if existing:
+            case_id = existing["id"]
+            try:
+                row = db.execute(
+                    "SELECT edd_notes FROM edd_cases WHERE id = ?",
+                    (case_id,),
+                ).fetchone()
+                existing_notes = []
+                if row and row.get("edd_notes"):
+                    raw = row["edd_notes"]
+                    if isinstance(raw, str):
+                        try:
+                            existing_notes = json.loads(raw) or []
+                        except Exception:
+                            existing_notes = []
+                    elif isinstance(raw, list):
+                        existing_notes = list(raw)
+                existing_notes.append(
+                    {
+                        "ts": datetime.now().isoformat(),
+                        "author": (user or {}).get("name") or "system",
+                        "source": "policy_routing",
+                        "policy_version": policy_version,
+                        "triggers": triggers,
+                        "mandatory_escalation_reasons": mandatory_reasons,
+                        "evaluated_at": evaluated_at,
+                        "note": "Routing re-confirmed by memo regeneration",
+                    }
+                )
+                db.execute(
+                    "UPDATE edd_cases SET edd_notes = ? WHERE id = ?",
+                    (json.dumps(existing_notes), case_id),
+                )
+            except Exception as exc:
+                logger.warning("Failed to append routing note to EDD case %s: %s", case_id, exc)
+            result["case_id"] = case_id
+            result["created"] = False
+        else:
+            initial_note = json.dumps(
+                [
+                    {
+                        "ts": datetime.now().isoformat(),
+                        "author": (user or {}).get("name") or "system",
+                        "source": "policy_routing",
+                        "policy_version": policy_version,
+                        "triggers": triggers,
+                        "mandatory_escalation_reasons": mandatory_reasons,
+                        "evaluated_at": evaluated_at,
+                        "note": "EDD case auto-created by routing policy actuation",
+                    }
+                ]
+            )
+            risk_level, risk_score = _application_risk_snapshot(app_dict)
+            insert_params = (
+                application_id,
+                app_dict.get("company_name") or "",
+                risk_level,
+                risk_score,
+                "triggered",
+                (user or {}).get("sub") or None,
+                "policy_routing",
+                trigger_notes,
+                initial_note,
+            )
+            if getattr(db, "is_postgres", False):
+                row = db.execute(
+                    "INSERT INTO edd_cases (application_id, client_name, "
+                    "risk_level, risk_score, stage, assigned_officer, "
+                    "trigger_source, trigger_notes, edd_notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?) RETURNING id",
+                    insert_params,
+                ).fetchone()
+                case_id = row["id"]
+            else:
+                cursor = db.execute(
+                    "INSERT INTO edd_cases (application_id, client_name, "
+                    "risk_level, risk_score, stage, assigned_officer, "
+                    "trigger_source, trigger_notes, edd_notes) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    insert_params,
+                )
+                case_id = getattr(cursor, "lastrowid", None)
+                if case_id is None:
+                    case_id = db.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+            result["case_id"] = case_id
+            result["created"] = True
+
+        current_status = (app_dict.get("status") or "")
+        if current_status not in ("edd_required", "edd_approved", "approved", "rejected"):
+            db.execute(
+                "UPDATE applications SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                ("edd_required", application_id),
+            )
+            result["status_changed"] = True
+
+        try:
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, "
+                "action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                (
+                    (user or {}).get("sub") or "system",
+                    (user or {}).get("name") or "system",
+                    (user or {}).get("role") or "system",
+                    "edd_routing.actuated",
+                    "application:" + str(app_dict.get("ref") or application_id),
+                    json.dumps(
+                        {
+                            "policy_version": policy_version,
+                            "route": edd_routing.get("route"),
+                            "triggers": triggers,
+                            "mandatory_escalation_reasons": mandatory_reasons,
+                            "evaluated_at": evaluated_at,
+                            "edd_case_id": result["case_id"],
+                            "edd_case_created": result["created"],
+                            "status_changed": result["status_changed"],
+                            "origin": "policy_routing",
+                        },
+                        default=str,
+                        sort_keys=True,
+                    ),
+                    client_ip or "",
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Failed to write edd_routing.actuated audit row: %s", exc)
+    except Exception as exc:
+        logger.error("EDD route actuation failed: %s", exc, exc_info=True)
+    return result
+
+
+# Backward-compatible alias for callers/tests that use the old private name.
+_actuate_edd_routing = actuate_edd_routing

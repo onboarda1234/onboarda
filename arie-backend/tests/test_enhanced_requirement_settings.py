@@ -150,6 +150,34 @@ def test_default_rules_seed_idempotently(enhanced_req_api_server):
     assert dupes == []
 
 
+def test_default_rules_seed_fk_safe_for_system_actor(enhanced_req_api_server):
+    from db import get_db
+    from enhanced_requirements import (
+        default_rule_rows,
+        diagnose_enhanced_requirement_config,
+        seed_default_enhanced_requirement_rules,
+    )
+
+    conn = get_db()
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("DELETE FROM enhanced_requirement_rules")
+    conn.commit()
+
+    inserted = seed_default_enhanced_requirement_rules(conn, actor="system")
+    conn.commit()
+    rows = conn.execute(
+        "SELECT trigger_key, requirement_key, created_by, updated_by FROM enhanced_requirement_rules"
+    ).fetchall()
+    diagnostics = diagnose_enhanced_requirement_config(conn)
+    conn.close()
+
+    assert inserted == len(default_rule_rows())
+    assert len(rows) == len(default_rule_rows())
+    assert all(row["created_by"] is None for row in rows)
+    assert all(row["updated_by"] is None for row in rows)
+    assert diagnostics["config_ok"] is True
+
+
 def test_list_endpoint_returns_seeded_rules_and_read_roles(enhanced_req_api_server):
     admin_resp = requests.get(
         f"{enhanced_req_api_server}/api/settings/enhanced-requirements",
