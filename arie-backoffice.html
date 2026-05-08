@@ -1042,6 +1042,14 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <option value="">All Officers</option>
       <option value="Unassigned">Unassigned</option>
     </select>
+    <select class="form-select" style="width:auto;" id="filter-enhanced" onchange="filterApplications()">
+      <option value="">All Enhanced Review</option>
+      <option value="active">Enhanced Review</option>
+      <option value="approval_blocked">Approval Blocked</option>
+      <option value="pending_client">Pending Client Submission</option>
+      <option value="awaiting_review">Submitted Awaiting Review</option>
+      <option value="resolved">Resolved Enhanced Review</option>
+    </select>
     <input type="text" class="form-input" style="width:260px;" id="applications-search" placeholder="Search applications..." oninput="filterApplications()" />
     <select class="form-select" style="width:auto;" id="applications-page-size" onchange="setApplicationsPageSize(this.value)" aria-label="Applications per page">
       <option value="10">10 per page</option>
@@ -1056,7 +1064,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
       <thead>
-        <tr><th>Reference</th><th>Company</th><th>Sector</th><th>Risk Level</th><th>Score</th><th>Lane</th><th>Status</th><th>Assigned To</th><th>Date</th></tr>
+        <tr><th>Reference</th><th>Company</th><th>Sector</th><th>Risk Level</th><th>Score</th><th>Review Route</th><th>Enhanced Status</th><th>Next Action</th><th>Status</th><th>Assigned To</th><th>Date</th></tr>
       </thead>
       <tbody id="applications-body"></tbody>
     </table>
@@ -1297,6 +1305,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <button class="btn btn-outline btn-sm" id="detail-enhanced-requirements-refresh" onclick="refreshApplicationEnhancedRequirements()" style="font-size:11px;display:none;">Refresh enhanced requirements</button>
       </div>
       <div id="detail-enhanced-requirements-message" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
+      <div id="detail-enhanced-review-summary" style="margin-bottom:12px;"></div>
       <div id="detail-enhanced-requirements-container">
         <div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading enhanced requirements…</div>
       </div>
@@ -3505,6 +3514,7 @@ function mapApplicationFromApi(a) {
     docs: backendDocuments.map(function(d) { return d.doc_type; }),
     _documents: backendDocuments,
     rmiRequests: a.rmi_requests || [],
+    enhancedReviewSummary: a.enhanced_review_summary || null,
     pepCount: (function() {
       var declared = (a.directors || []).filter(function(d) { return d.is_pep === 'Yes'; }).length +
                      (a.ubos || []).filter(function(u) { return u.is_pep === 'Yes'; }).length;
@@ -4922,12 +4932,61 @@ function updateOnboardingLanes() {
   el = document.getElementById('lane-edd-bar'); if (el) el.style.width = Math.round(edd / total * 100) + '%';
 }
 
+function getEnhancedReviewSummary(app) {
+  return (app && app.enhancedReviewSummary) || {};
+}
+
+function applicationReviewRouteLabel(app) {
+  var summary = getEnhancedReviewSummary(app);
+  if (summary.enhanced_review_active || /EDD/i.test(app.lane || '')) return 'Enhanced';
+  return 'Standard';
+}
+
+function applicationEnhancedStatusBadge(app) {
+  var summary = getEnhancedReviewSummary(app);
+  var label = summary.status_label || (summary.enhanced_review_active ? 'In progress' : 'Clear');
+  var code = summary.next_action_code || '';
+  var tone = 'green';
+  if (summary.approval_blocked || /blocked/i.test(label)) tone = 'red';
+  else if (code === 'awaiting_client' || code === 'request_updated_info') tone = 'amber';
+  else if (code === 'review_submitted' || code === 'complete_review') tone = 'purple';
+  else if (summary.enhanced_review_active && code !== 'resolved') tone = 'amber';
+  var badges = [enhancedRequirementDetailBadge(label, tone)];
+  if (summary.approval_blocked && !/blocked/i.test(label)) badges.push(enhancedRequirementDetailBadge('Approval blocked', 'red'));
+  var counts = [];
+  if (Number(summary.unresolved_count || 0) > 0) counts.push('Unresolved: ' + Number(summary.unresolved_count || 0));
+  if (Number(summary.pending_client_count || 0) > 0) counts.push('Pending client: ' + Number(summary.pending_client_count || 0));
+  if (Number(summary.submitted_awaiting_review_count || 0) > 0) counts.push('Awaiting review: ' + Number(summary.submitted_awaiting_review_count || 0));
+  return '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;">' +
+    '<div style="display:flex;gap:4px;flex-wrap:wrap;">' + badges.join('') + '</div>' +
+    (counts.length ? '<div style="font-size:10px;color:var(--text3);white-space:normal;">' + escapeHtml(counts.join(' · ')) + '</div>' : '') +
+  '</div>';
+}
+
+function applicationEnhancedNextAction(app) {
+  var summary = getEnhancedReviewSummary(app);
+  return summary.next_action || 'No enhanced review required';
+}
+
+function applicationMatchesEnhancedFilter(app, enhancedFilter) {
+  if (!enhancedFilter) return true;
+  var summary = getEnhancedReviewSummary(app);
+  if (enhancedFilter === 'active') return !!summary.enhanced_review_active;
+  if (enhancedFilter === 'approval_blocked') return !!summary.approval_blocked;
+  if (enhancedFilter === 'pending_client') return Number(summary.pending_client_count || 0) > 0;
+  if (enhancedFilter === 'awaiting_review') return Number(summary.submitted_awaiting_review_count || 0) > 0;
+  if (enhancedFilter === 'resolved') return !!summary.enhanced_review_active && !summary.approval_blocked && summary.next_action_code === 'resolved';
+  return true;
+}
+
 function renderApplications() {
   var tbody = document.getElementById('applications-body');
   var riskFilter = document.getElementById('filter-risk').value;
   var statusFilter = document.getElementById('filter-status').value;
   var assignedFilter = document.getElementById('filter-assigned').value;
-  var filtered = getFilteredApplications(riskFilter, statusFilter, assignedFilter);
+  var enhancedFilterEl = document.getElementById('filter-enhanced');
+  var enhancedFilter = enhancedFilterEl ? enhancedFilterEl.value : '';
+  var filtered = getFilteredApplications(riskFilter, statusFilter, assignedFilter, enhancedFilter);
   var totalPages = Math.max(1, Math.ceil(filtered.length / applicationsPageSize));
   if (applicationsCurrentPage > totalPages) applicationsCurrentPage = totalPages;
   if (applicationsCurrentPage < 1) applicationsCurrentPage = 1;
@@ -4936,13 +4995,13 @@ function renderApplications() {
   tbody.innerHTML = '';
   if (!pageApps.length) {
     var empty = document.createElement('tr');
-    empty.innerHTML = '<td colspan="9" style="text-align:center;color:var(--text3);padding:24px;">No applications match the current filters.</td>';
+    empty.innerHTML = '<td colspan="11" style="text-align:center;color:var(--text3);padding:24px;">No applications match the current filters.</td>';
     tbody.appendChild(empty);
   }
   pageApps.forEach(function(app) {
     var tr = document.createElement('tr');
     tr.onclick = function() { openAppDetail(app.ref); };
-    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScore(app.score)) + '</td><td style="font-size:12px;">' + escapeHtml(app.lane) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
+    tr.innerHTML = '<td style="font-weight:600;font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td style="font-size:12px;">' + escapeHtml(app.sector) + '</td><td>' + riskBadge(app.risk) + '</td><td style="font-weight:700;">' + escapeHtml(formatRiskScore(app.score)) + '</td><td style="font-size:12px;">' + escapeHtml(applicationReviewRouteLabel(app)) + '</td><td>' + applicationEnhancedStatusBadge(app) + '</td><td style="font-size:12px;max-width:210px;white-space:normal;">' + escapeHtml(applicationEnhancedNextAction(app)) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td>';
     tbody.appendChild(tr);
   });
   updateApplicationsPagination(filtered.length, totalPages);
@@ -4955,15 +5014,17 @@ function getApplicationsSearchText() {
 
 function applicationMatchesSearch(app, q) {
   if (!q) return true;
-  var fields = [app.ref, app.company, app.brn, app.sector, app.country, app.assigned, app.status, app.statusRaw];
+  var summary = getEnhancedReviewSummary(app);
+  var fields = [app.ref, app.company, app.brn, app.sector, app.country, app.assigned, app.status, app.statusRaw, summary.status_label, summary.next_action, (summary.trigger_labels || []).join(' ')];
   return fields.some(function(value) { return String(value || '').toLowerCase().indexOf(q) >= 0; });
 }
 
-function getFilteredApplications(riskFilter, statusFilter, assignedFilter) {
+function getFilteredApplications(riskFilter, statusFilter, assignedFilter, enhancedFilter) {
   var q = getApplicationsSearchText();
   return APPLICATIONS.filter(function(app) {
     if (riskFilter && app.risk !== riskFilter) return false;
     if (statusFilter && (app.statusRaw || '') !== statusFilter) return false;
+    if (!applicationMatchesEnhancedFilter(app, enhancedFilter)) return false;
     if (assignedFilter) {
       var normalizedAssigned = app.assignedId || 'Unassigned';
       if (normalizedAssigned !== assignedFilter) return false;
@@ -5535,6 +5596,7 @@ async function fetchApplicationDetail(ref) {
     latestMemoMeta: detail.latest_memo || null,
     latestMemo: detail.latest_memo_data || null,
     memoIsStale: detail.memo_is_stale || false,
+    enhancedReviewSummary: detail.enhanced_review_summary || null,
     updated_at: detail.updated_at || '',
     last_document_upload: detail.last_document_upload || '',
     screening_updated_at: detail.screening_updated_at || ''
@@ -6047,6 +6109,108 @@ function enhancedRequirementDocumentOptions(req) {
   return options;
 }
 
+function buildEnhancedOperationalSummaryFallback(requirements) {
+  requirements = Array.isArray(requirements) ? requirements : [];
+  var summary = {
+    enhanced_review_active: requirements.length > 0,
+    total: requirements.length,
+    unresolved_count: 0,
+    mandatory_unresolved_count: 0,
+    blocking_unresolved_count: 0,
+    pending_client_count: 0,
+    submitted_awaiting_review_count: 0,
+    rejected_count: 0,
+    accepted_count: 0,
+    waived_count: 0,
+    approval_blocked: false,
+    next_action: requirements.length ? 'Enhanced review resolved' : 'No enhanced review required',
+    next_action_code: requirements.length ? 'resolved' : 'none',
+    status_label: requirements.length ? 'Resolved' : 'Clear',
+    trigger_labels: []
+  };
+  var underReview = 0;
+  var rejectedClient = 0;
+  requirements.forEach(function(req) {
+    var status = String(req.status || 'generated').toLowerCase();
+    var audience = String(req.audience || '').toLowerCase();
+    var blocking = !!req.mandatory || !!req.blocking_approval;
+    var clientFacing = ['client','both'].indexOf(audience) >= 0;
+    if (['generated','requested','uploaded','under_review','rejected'].indexOf(status) >= 0) {
+      summary.unresolved_count++;
+      if (req.mandatory) summary.mandatory_unresolved_count++;
+      if (req.blocking_approval) summary.blocking_unresolved_count++;
+      if (blocking) summary.approval_blocked = true;
+    }
+    if (status === 'requested' && clientFacing) summary.pending_client_count++;
+    if (status === 'uploaded') summary.submitted_awaiting_review_count++;
+    if (status === 'rejected') {
+      summary.rejected_count++;
+      if (clientFacing) rejectedClient++;
+    }
+    if (status === 'accepted') summary.accepted_count++;
+    if (status === 'waived') summary.waived_count++;
+    if (status === 'under_review') underReview++;
+    var label = req.trigger_label || req.trigger_key || '';
+    if (label && summary.trigger_labels.indexOf(label) < 0) summary.trigger_labels.push(label);
+  });
+  if (rejectedClient) {
+    summary.next_action = 'Request updated information from client';
+    summary.next_action_code = 'request_updated_info';
+  } else if (summary.pending_client_count) {
+    summary.next_action = 'Awaiting client submission';
+    summary.next_action_code = 'awaiting_client';
+  } else if (summary.submitted_awaiting_review_count) {
+    summary.next_action = 'Review submitted enhanced requirement evidence';
+    summary.next_action_code = 'review_submitted';
+  } else if (underReview) {
+    summary.next_action = 'Complete officer review';
+    summary.next_action_code = 'complete_review';
+  }
+  summary.status_label = summary.approval_blocked ? 'Approval blocked'
+    : summary.next_action_code === 'awaiting_client' ? 'Pending client'
+    : summary.next_action_code === 'review_submitted' ? 'Awaiting review'
+    : summary.next_action_code === 'complete_review' ? 'Under review'
+    : summary.status_label;
+  return summary;
+}
+
+function renderEnhancedReviewOperationalSummary(summary, requirements) {
+  var container = document.getElementById('detail-enhanced-review-summary');
+  if (!container) return;
+  summary = summary || buildEnhancedOperationalSummaryFallback(requirements || []);
+  var blockedText = summary.approval_blocked ? 'Yes' : 'No';
+  var blockedTone = summary.approval_blocked ? 'red' : 'green';
+  var triggerText = (summary.trigger_labels || []).length ? summary.trigger_labels.join(', ') : '—';
+  var cards = [
+    ['Total', summary.total || 0],
+    ['Mandatory unresolved', summary.mandatory_unresolved_count || 0],
+    ['Blocking unresolved', summary.blocking_unresolved_count || 0],
+    ['Pending client', summary.pending_client_count || 0],
+    ['Awaiting review', summary.submitted_awaiting_review_count || 0],
+    ['Accepted / waived', (summary.accepted_count || 0) + ' / ' + (summary.waived_count || 0)]
+  ].map(function(item) {
+    return '<div style="padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface);">' +
+      '<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);letter-spacing:0.4px;">' + escapeHtml(item[0]) + '</div>' +
+      '<div style="font-size:18px;font-weight:800;color:var(--text1);margin-top:2px;">' + escapeHtml(String(item[1])) + '</div>' +
+    '</div>';
+  }).join('');
+  container.innerHTML =
+    '<div style="border:1px solid var(--border1);border-radius:10px;background:var(--surface2);padding:12px;margin-bottom:12px;">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;margin-bottom:10px;">' +
+        '<div>' +
+          '<div style="font-size:12px;font-weight:800;color:var(--text1);">Operational summary</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Next action: ' + escapeHtml(summary.next_action || 'No enhanced review required') + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:3px;">Triggers: ' + escapeHtml(triggerText) + '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+          applicationEnhancedStatusBadge({ enhancedReviewSummary: summary, lane: '' }) +
+          enhancedRequirementDetailBadge('Approval blocked: ' + blockedText, blockedTone) +
+        '</div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;">' + cards + '</div>' +
+    '</div>';
+}
+
 function renderApplicationEnhancedRequirementActions(req) {
   var linkedLabel = enhancedRequirementLinkedDocumentLabel(req);
   if (!canUpdateApplicationEnhancedRequirements()) {
@@ -6090,10 +6254,11 @@ function renderApplicationEnhancedRequirementActions(req) {
   '</div>';
 }
 
-function renderApplicationEnhancedRequirements(requirements, generationResult) {
+function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {
   var section = document.getElementById('detail-enhanced-requirements-section');
   var container = document.getElementById('detail-enhanced-requirements-container');
   var refreshBtn = document.getElementById('detail-enhanced-requirements-refresh');
+  var summaryEl = document.getElementById('detail-enhanced-review-summary');
   if (!section || !container) return;
   if (!canViewApplicationEnhancedRequirements()) {
     section.style.display = 'none';
@@ -6104,6 +6269,9 @@ function renderApplicationEnhancedRequirements(requirements, generationResult) {
 
   requirements = Array.isArray(requirements) ? requirements : [];
   APPLICATION_ENHANCED_REQUIREMENTS = requirements;
+  operationalSummary = operationalSummary || (currentApp && currentApp.enhancedReviewSummary) || buildEnhancedOperationalSummaryFallback(requirements);
+  if (currentApp) currentApp.enhancedReviewSummary = operationalSummary;
+  renderEnhancedReviewOperationalSummary(operationalSummary, requirements);
 
   if (generationResult) {
     if (generationResult.config_ok === false) {
@@ -6125,7 +6293,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult) {
   var internalFacing = requirements.filter(function(req) { return ['backoffice','both'].indexOf(String(req.audience || '').toLowerCase()) >= 0; }).length;
   var blocking = requirements.filter(function(req) { return !!req.blocking_approval; }).length;
   var outstanding = requirements.filter(enhancedRequirementOutstanding).length;
-  var summary = [
+  var requirementSummary = [
     ['Total', requirements.length],
     ['Client-facing', clientFacing],
     ['Back-office/internal', internalFacing],
@@ -6180,7 +6348,7 @@ function renderApplicationEnhancedRequirements(requirements, generationResult) {
     '</div>';
   }).join('');
 
-  container.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;">' + summary + '</div>' + groupHtml;
+  container.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;">' + requirementSummary + '</div>' + groupHtml;
 }
 
 async function loadApplicationEnhancedRequirements(app, generationResult) {
@@ -6195,11 +6363,13 @@ async function loadApplicationEnhancedRequirements(app, generationResult) {
   section.style.display = '';
   if (refreshBtn) refreshBtn.style.display = canManageEnhancedRequirements() ? '' : 'none';
   setEnhancedRequirementDetailMessage('', '');
+  if (summaryEl) summaryEl.innerHTML = '';
   container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text3);font-size:12px;">Loading enhanced requirements…</div>';
   try {
     var appKey = encodeURIComponent((app && (app.id || app.ref)) || '');
     var resp = await boApiCall('GET', '/applications/' + appKey + '/enhanced-requirements');
-    renderApplicationEnhancedRequirements(resp.requirements || [], generationResult);
+    if (currentApp && resp.enhanced_review_summary) currentApp.enhancedReviewSummary = resp.enhanced_review_summary;
+    renderApplicationEnhancedRequirements(resp.requirements || [], generationResult, resp.enhanced_review_summary);
   } catch (err) {
     console.warn('Unable to load application enhanced requirements:', err);
     setEnhancedRequirementDetailMessage('Unable to load enhanced requirements. Existing application review data remains available.', 'amber');
