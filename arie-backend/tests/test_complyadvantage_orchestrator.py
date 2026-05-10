@@ -31,8 +31,6 @@ def _context(data=None):
 def _customer(marker):
     return {
         "person": {
-            "first_name": "Test",
-            "last_name": marker,
             "full_name": f"Test {marker}",
             "metadata": {"pass": marker},
         }
@@ -349,6 +347,34 @@ def test_two_pass_uses_single_screening_configuration_for_both_passes():
         for call in client.post_calls
     )
     assert all("screening" not in call for call in client.post_calls)
+
+
+def test_two_pass_uses_distinct_external_identifiers_per_pass():
+    data = _fixture("two_pass_strict_misses_relaxed_catches.json")
+    client = _client_for_two_pass(data)
+
+    _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("relaxed"),
+        application_context=_context(data),
+        monitoring_enabled=False,
+        strict_external_identifier="app-1:director:key-d-1:strict",
+        relaxed_external_identifier="app-1:director:key-d-1:relaxed",
+    )
+
+    identifiers_by_pass = {
+        call["customer"]["person"]["metadata"]["pass"]: call["customer"]["external_identifier"]
+        for call in client.post_calls
+    }
+    references_by_pass = {
+        call["customer"]["person"]["metadata"]["pass"]: call["customer"]["reference"]
+        for call in client.post_calls
+    }
+    assert identifiers_by_pass == {
+        "strict": "app-1:director:key-d-1:strict",
+        "relaxed": "app-1:director:key-d-1:relaxed",
+    }
+    assert references_by_pass == identifiers_by_pass
 
 
 def test_partial_deep_risk_failure_raises():

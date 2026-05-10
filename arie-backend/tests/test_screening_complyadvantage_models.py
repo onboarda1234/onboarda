@@ -147,18 +147,13 @@ def test_known_webhook_type_preserves_extras():
 
 
 def test_input_models_minimal_request_validates():
-    request = CACreateAndScreenRequest(
-        customer=CACustomerInput(person=CACustomerPersonInput(first_name="Jane", last_name="Doe"))
-    )
-    assert request.customer.person.first_name == "Jane"
+    request = CACreateAndScreenRequest(customer=CACustomerInput(person=CACustomerPersonInput(full_name="Jane Doe")))
+    assert request.customer.person.full_name == "Jane Doe"
 
 
 def test_input_models_full_23_field_person_validates():
     person = CACustomerPersonInput(
-        first_name="Jane",
         last_name="Doe",
-        middle_name="A",
-        full_name="Jane A Doe",
         date_of_birth={"year": 1980},
         gender="F",
         nationality="MU",

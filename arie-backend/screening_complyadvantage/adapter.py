@@ -81,7 +81,11 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
                     screening_subject_kind="entity",
                     screening_subject_name=company_name,
                 ),
-                external_identifier=application_id,
+                external_identifier=_subject_external_identifier(
+                    application_id,
+                    "company",
+                    subject_name=company_name,
+                ),
             ))
         for director in directors or []:
             reports.append(self._screen_party(director, "director", application_id, client_id))
@@ -102,7 +106,12 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
                 screening_subject_person_key=_first(party, "person_key", "id"),
                 declared_pep=bool(_first(party, "is_pep", "declared_pep")),
             ),
-            external_identifier=application_id,
+            external_identifier=_subject_external_identifier(
+                application_id,
+                kind,
+                party=party,
+                subject_name=name,
+            ),
         )
 
     def _screen_subject(self, *, strict_customer, relaxed_customer, context, external_identifier=None):
@@ -123,6 +132,8 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
             db=self._db,
             screening_configuration_identifier=config.screening_configuration_identifier,
             external_identifier=external_identifier,
+            strict_external_identifier=_pass_external_identifier(external_identifier, "strict"),
+            relaxed_external_identifier=_pass_external_identifier(external_identifier, "relaxed"),
         )
 
     def _get_config(self):
@@ -199,6 +210,23 @@ def _stable_id(prefix, value):
 def _application_id(application_data, company_name):
     explicit_id = _first(application_data, "application_id", "id", "ref")
     return str(explicit_id or _stable_id("application", company_name or "unknown"))
+
+
+def _subject_external_identifier(application_id, subject_kind, *, party=None, subject_name=None):
+    scope = str(application_id or "application")
+    normalized_kind = {"entity": "company"}.get(subject_kind, str(subject_kind or "subject"))
+    subject_key = _first(party or {}, "person_key", "id")
+    if subject_key:
+        discriminator = f"key-{subject_key}"
+    else:
+        discriminator = f"name-{sha256(str(subject_name or 'unknown').encode('utf-8')).hexdigest()[:10]}"
+    return f"{scope}:{normalized_kind}:{discriminator}"
+
+
+def _pass_external_identifier(external_identifier, pass_name):
+    if not external_identifier:
+        return None
+    return f"{external_identifier}:{pass_name}"
 
 
 def _first(data, *keys):

@@ -66,8 +66,27 @@ def test_build_customer_person_strict_vs_relaxed():
     assert strict["addresses"][0]["full_address"] == "1 Road"
     assert strict["contact_information"]["email"] == "jane@example.test"
     assert relaxed["full_name"] == "Jane Doe"
+    assert "first_name" not in strict
+    assert "last_name" not in strict
     assert "nationality" not in relaxed
     assert "addresses" not in relaxed
+
+
+def test_build_customer_person_uses_last_name_only_when_full_name_missing():
+    customer = build_customer_person(
+        {
+            "person_key": "p-2",
+            "first_name": "Jane",
+            "last_name": "Doe",
+            "date_of_birth": "1980-01-31",
+        },
+        strict=False,
+    )
+
+    assert customer["person"] == {
+        "last_name": "Doe",
+        "date_of_birth": {"day": 31, "month": 1, "year": 1980},
+    }
 
 
 def test_build_customer_company_strict_vs_relaxed():
@@ -109,7 +128,7 @@ def test_monitoring_block_defaults_true_and_can_be_disabled():
 
 def test_create_and_screen_external_identifier_override_stays_customer_level():
     payload = build_create_and_screen_payload(
-        {"person": {"first_name": "Jane", "last_name": "Doe"}},
+        {"person": {"last_name": "Doe"}, "external_identifier": "stale", "reference": "stale"},
         external_identifier="app-1",
     )
 

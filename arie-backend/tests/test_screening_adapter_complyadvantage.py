@@ -137,3 +137,31 @@ def test_run_full_screening_propagates_db_for_each_subject():
     assert all(call["screening_configuration_identifier"] == "cfg-123" for call in orchestrator.calls)
     assert result["provider"] == "complyadvantage"
     assert "subscription_seeded" not in result
+
+
+def test_run_full_screening_uses_distinct_subject_and_pass_external_identifiers():
+    orchestrator = FakeOrchestrator()
+    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, config=FakeConfig())
+
+    adapter.run_full_screening(
+        {"application_id": "app-1", "client_id": "client-1", "company_name": "Acme Ltd"},
+        [{"person_key": "d-1", "full_name": "Jane Doe"}],
+        [{"person_key": "u-1", "full_name": "John Roe"}],
+    )
+
+    company_call, director_call, ubo_call = orchestrator.calls
+    assert company_call["strict_external_identifier"].endswith(":strict")
+    assert company_call["relaxed_external_identifier"].endswith(":relaxed")
+    assert ":company:" in company_call["strict_external_identifier"]
+    assert ":director:" in director_call["strict_external_identifier"]
+    assert ":ubo:" in ubo_call["strict_external_identifier"]
+    assert director_call["strict_external_identifier"] != director_call["relaxed_external_identifier"]
+    assert {
+        company_call["strict_external_identifier"],
+        director_call["strict_external_identifier"],
+        ubo_call["strict_external_identifier"],
+    } == {
+        "app-1:company:name-0f72986d73:strict",
+        "app-1:director:key-d-1:strict",
+        "app-1:ubo:key-u-1:strict",
+    }
