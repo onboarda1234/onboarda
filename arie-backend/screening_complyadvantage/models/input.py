@@ -71,7 +71,8 @@ class CACustomerPersonInput(CAWireModel):
 
 
 class CACustomerCompanyInput(CAWireModel):
-    name: str
+    legal_name: Optional[str] = None
+    name: Optional[str] = None
     registration_number: Optional[str] = None
     jurisdiction: Optional[str] = None
     incorporation_date: Optional[str] = None
@@ -83,6 +84,12 @@ class CACustomerCompanyInput(CAWireModel):
     customer_reference: Optional[str] = None
     custom_fields: Optional[dict] = None  # TODO: tighten CA field map after payload recon.
     metadata: Optional[dict] = None
+
+    @model_validator(mode="after")
+    def requires_supported_legal_name_field(self) -> "CACustomerCompanyInput":
+        if not (self.legal_name or self.name):
+            raise ValueError("CACustomerCompanyInput requires legal_name or name")
+        return self
 
 
 class CACustomerInput(CAWireModel):

@@ -8,6 +8,7 @@ from screening_complyadvantage.payloads import (
     to_ca_address,
     to_ca_dob,
 )
+from screening_complyadvantage.models import CACustomerInput
 
 
 def test_to_ca_dob_accepts_date_and_iso_string():
@@ -152,3 +153,12 @@ def test_build_customer_company_uses_legal_name_key_not_name():
 
     assert company["company"]["legal_name"] == "Acme Legal"
     assert "name" not in company["company"]
+
+
+def test_build_customer_company_validates_with_legal_name_only():
+    customer = build_customer_company({"legal_name": "Acme Legal", "application_id": "app-1"}, strict=False)
+
+    validated = CACustomerInput.model_validate(customer)
+
+    assert validated.company.legal_name == "Acme Legal"
+    assert validated.company.name is None

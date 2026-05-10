@@ -229,12 +229,20 @@ def test_legacy_address_field_names_are_extras_not_explicit_fields():
 
 
 def test_company_input_vs_profile_company_diverge_in_shape():
-    input_company = CACustomerCompanyInput(name="Acme Ltd", registration_number="BRN")
+    input_company = CACustomerCompanyInput(legal_name="Acme Ltd", registration_number="BRN")
     profile_company = CAProfileCompany(
         names=CAPaginatedCollection[CAProfileCompanyName](values=[{"name": "Acme Ltd"}])
     )
-    assert input_company.name == "Acme Ltd"
+    assert input_company.legal_name == "Acme Ltd"
+    assert input_company.name is None
     assert profile_company.names.values[0].name == "Acme Ltd"
+
+
+def test_company_input_accepts_legal_name_without_name():
+    company = CACustomerInput.model_validate({"company": {"legal_name": "Acme Ltd"}})
+
+    assert company.company.legal_name == "Acme Ltd"
+    assert company.company.name is None
 
 
 def test_dob_year_only_partial_dates_supported():
