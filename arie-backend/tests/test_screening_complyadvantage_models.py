@@ -147,18 +147,13 @@ def test_known_webhook_type_preserves_extras():
 
 
 def test_input_models_minimal_request_validates():
-    request = CACreateAndScreenRequest(
-        customer=CACustomerInput(person=CACustomerPersonInput(first_name="Jane", last_name="Doe"))
-    )
-    assert request.customer.person.first_name == "Jane"
+    request = CACreateAndScreenRequest(customer=CACustomerInput(person=CACustomerPersonInput(full_name="Jane Doe")))
+    assert request.customer.person.full_name == "Jane Doe"
 
 
 def test_input_models_full_23_field_person_validates():
     person = CACustomerPersonInput(
-        first_name="Jane",
         last_name="Doe",
-        middle_name="A",
-        full_name="Jane A Doe",
         date_of_birth={"year": 1980},
         gender="F",
         nationality="MU",
@@ -234,12 +229,20 @@ def test_legacy_address_field_names_are_extras_not_explicit_fields():
 
 
 def test_company_input_vs_profile_company_diverge_in_shape():
-    input_company = CACustomerCompanyInput(name="Acme Ltd", registration_number="BRN")
+    input_company = CACustomerCompanyInput(legal_name="Acme Ltd", registration_number="BRN")
     profile_company = CAProfileCompany(
         names=CAPaginatedCollection[CAProfileCompanyName](values=[{"name": "Acme Ltd"}])
     )
-    assert input_company.name == "Acme Ltd"
+    assert input_company.legal_name == "Acme Ltd"
+    assert input_company.name is None
     assert profile_company.names.values[0].name == "Acme Ltd"
+
+
+def test_company_input_accepts_legal_name_without_name():
+    company = CACustomerInput.model_validate({"company": {"legal_name": "Acme Ltd"}})
+
+    assert company.company.legal_name == "Acme Ltd"
+    assert company.company.name is None
 
 
 def test_dob_year_only_partial_dates_supported():

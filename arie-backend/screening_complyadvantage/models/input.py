@@ -39,8 +39,8 @@ class CAAddress(CAWireModel):
 
 
 class CACustomerPersonInput(CAWireModel):
-    first_name: str
-    last_name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     middle_name: Optional[str] = None
     full_name: Optional[str] = None
     date_of_birth: Optional[CADateOfBirth] = None
@@ -63,9 +63,16 @@ class CACustomerPersonInput(CAWireModel):
     custom_fields: Optional[dict] = None  # TODO: tighten CA field map after payload recon.
     metadata: Optional[dict] = None
 
+    @model_validator(mode="after")
+    def requires_supported_name_field(self) -> "CACustomerPersonInput":
+        if not (self.full_name or self.last_name):
+            raise ValueError("CACustomerPersonInput requires at least one of full_name or last_name")
+        return self
+
 
 class CACustomerCompanyInput(CAWireModel):
-    name: str
+    legal_name: Optional[str] = None
+    name: Optional[str] = None
     registration_number: Optional[str] = None
     jurisdiction: Optional[str] = None
     incorporation_date: Optional[str] = None
@@ -77,6 +84,12 @@ class CACustomerCompanyInput(CAWireModel):
     customer_reference: Optional[str] = None
     custom_fields: Optional[dict] = None  # TODO: tighten CA field map after payload recon.
     metadata: Optional[dict] = None
+
+    @model_validator(mode="after")
+    def requires_legal_name_or_name(self) -> "CACustomerCompanyInput":
+        if not (self.legal_name or self.name):
+            raise ValueError("CACustomerCompanyInput requires legal_name or name")
+        return self
 
 
 class CACustomerInput(CAWireModel):

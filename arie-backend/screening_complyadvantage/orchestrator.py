@@ -86,6 +86,8 @@ class ComplyAdvantageScreeningOrchestrator:
         db=None,
         screening_configuration_identifier=None,
         external_identifier=None,
+        strict_external_identifier=None,
+        relaxed_external_identifier=None,
     ):
         """Run strict and relaxed passes concurrently and return a normalized report dict."""
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -94,14 +96,14 @@ class ComplyAdvantageScreeningOrchestrator:
                 strict_customer,
                 monitoring_enabled=monitoring_enabled,
                 screening_configuration_identifier=screening_configuration_identifier,
-                external_identifier=external_identifier,
+                external_identifier=strict_external_identifier or external_identifier,
             )
             relaxed_future = executor.submit(
                 self._run_one_pass,
                 relaxed_customer,
                 monitoring_enabled=monitoring_enabled,
                 screening_configuration_identifier=screening_configuration_identifier,
-                external_identifier=external_identifier,
+                external_identifier=relaxed_external_identifier or external_identifier,
             )
             strict = strict_future.result()
             relaxed = relaxed_future.result()
