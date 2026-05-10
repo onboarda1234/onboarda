@@ -21,6 +21,7 @@ import os
 import sys
 import tempfile
 import uuid
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("ENVIRONMENT", "testing")
@@ -161,6 +162,23 @@ class _PRReviewHandlerBase(AsyncHTTPTestCase):
             "SELECT id FROM periodic_reviews ORDER BY id DESC LIMIT 1"
         ).fetchone()["id"]
 
+    def _create_document(self, *, doc_id="doc-1", doc_type="passport", expiry_date=None):
+        self._conn.execute(
+            "INSERT INTO documents "
+            "(id, application_id, doc_type, doc_name, file_path, expiry_date, uploaded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                doc_id,
+                self._app_id,
+                doc_type,
+                f"{doc_type}.pdf",
+                f"/tmp/{doc_type}.pdf",
+                expiry_date,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self._conn.commit()
+
     def _post(self, path, body, token=None):
         return self.fetch(
             path, method="POST",
@@ -175,6 +193,16 @@ class _PRReviewHandlerBase(AsyncHTTPTestCase):
         return self.fetch(
             path, method="GET",
             headers={"Authorization": f"Bearer {token or self.admin_token}"},
+        )
+
+    def _patch(self, path, body, token=None):
+        return self.fetch(
+            path, method="PATCH",
+            body=json.dumps(body or {}),
+            headers={
+                "Authorization": f"Bearer {token or self.admin_token}",
+                "Content-Type": "application/json",
+            },
         )
 
 
@@ -271,6 +299,60 @@ class TestRequiredItemsHandler(_PRReviewHandlerBase):
         rid = self._create_review(status="completed")
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/required-items/generate", {},
+        )
+        self.assertEqual(resp.code, 409)
+
+
+class TestRequiredItemPatchHandler(_PRReviewHandlerBase):
+    def test_officer_can_clear_item(self):
+        rid = self._create_review(status="in_progress")
+        generated = json.loads(self._post(
+            f"/api/monitoring/reviews/{rid}/required-items/generate", {},
+        ).body)
+        item_id = generated["items"][0]["id"]
+        resp = self._patch(
+            f"/api/monitoring/reviews/{rid}/required-items/{item_id}",
+            {"status": "cleared", "officer_note": "done"},
+        )
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertEqual(body["item"]["status"], "cleared")
+
+    def test_invalid_status_returns_400(self):
+        rid = self._create_review(status="in_progress")
+        generated = json.loads(self._post(
+            f"/api/monitoring/reviews/{rid}/required-items/generate", {},
+        ).body)
+        item_id = generated["items"][0]["id"]
+        resp = self._patch(
+            f"/api/monitoring/reviews/{rid}/required-items/{item_id}",
+            {"status": "bogus"},
+        )
+        self.assertEqual(resp.code, 400)
+
+    def test_client_role_forbidden(self):
+        rid = self._create_review(status="in_progress")
+        generated = json.loads(self._post(
+            f"/api/monitoring/reviews/{rid}/required-items/generate", {},
+        ).body)
+        item_id = generated["items"][0]["id"]
+        resp = self._patch(
+            f"/api/monitoring/reviews/{rid}/required-items/{item_id}",
+            {"status": "cleared", "officer_note": "done"},
+            token=self.client_token,
+        )
+        self.assertEqual(resp.code, 403)
+
+    def test_completed_review_cannot_be_mutated(self):
+        rid = self._create_review(status="completed")
+        self._conn.execute(
+            "UPDATE periodic_reviews SET required_items = ? WHERE id = ?",
+            (json.dumps([{"id": "item-1", "code": "kyc_refresh", "label": "x", "rationale": "y"}]), rid),
+        )
+        self._conn.commit()
+        resp = self._patch(
+            f"/api/monitoring/reviews/{rid}/required-items/item-1",
+            {"status": "cleared", "officer_note": "done"},
         )
         self.assertEqual(resp.code, 409)
 
@@ -386,6 +468,23 @@ class TestCompleteHandler(_PRReviewHandlerBase):
             {"outcome": "no_change"},
         )
         self.assertEqual(resp.code, 400)
+
+    def test_blocks_completion_for_expired_document(self):
+        self._create_document(
+            doc_id="passport-expired",
+            doc_type="passport",
+            expiry_date=(datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat(),
+        )
+        rid = self._create_review(status="in_progress")
+        self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            {"outcome": "no_change", "outcome_reason": "try"},
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        self.assertEqual(body["error"], "Periodic review cannot be completed")
+        self.assertTrue(body["blocking_items"])
 
 
 # ─────────────────────────────────────────────────────────────────

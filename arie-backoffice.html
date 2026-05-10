@@ -3427,25 +3427,19 @@ function normalizeMonitoringAlert(raw) {
 
 function reviewStatusFromRaw(raw) {
   var payload = parseFixturePayload(raw.trigger_reason, 'FIX_REVIEW_JSON:') || {};
-  var statusRaw = String(raw.status || '').toLowerCase();
+  var statusRaw = String(raw.ui_status || raw.status || '').toLowerCase();
   var fixtureState = String(payload.status || raw.trigger_type || '').toLowerCase();
   if (fixtureState === 'fixture_completed') statusRaw = 'completed';
   else if (fixtureState === 'fixture_in_progress') statusRaw = 'in_progress';
   if (!statusRaw) statusRaw = 'pending';
   var label;
-  if (statusRaw === 'completed') label = 'Completed';
-  else if (statusRaw === 'in_progress') label = 'In Progress';
-  else if (statusRaw === 'awaiting_information') label = 'Awaiting Information';
-  else if (statusRaw === 'pending_senior_review') label = 'Pending Senior Review';
-  else if (!raw.due_date) label = 'Upcoming';
-  else {
-    var due = new Date(raw.due_date);
-    var now = new Date();
-    var diff = (due - now) / 86400000;
-    if (diff < 0) label = 'Overdue';
-    else if (diff <= 14) label = 'Due Soon';
-    else label = 'Upcoming';
-  }
+  if (raw.ui_status_label) label = String(raw.ui_status_label);
+  else if (statusRaw === 'completed') label = 'Completed';
+  else if (statusRaw === 'in_review' || statusRaw === 'in_progress') label = 'In Review';
+  else if (statusRaw === 'waiting_for_info' || statusRaw === 'awaiting_information') label = 'Waiting for Info';
+  else if (statusRaw === 'senior_review' || statusRaw === 'pending_senior_review') label = 'Senior Review';
+  else if (statusRaw === 'escalated_to_edd') label = 'Escalated to EDD';
+  else label = 'Due';
   return { raw: statusRaw, label: label, payload: payload };
 }
 
@@ -8738,6 +8732,10 @@ function renderPrcReviewDetailSection(detail) {
     try { requiredItems = JSON.parse(requiredItems); } catch(e) { requiredItems = []; }
   }
   if (!Array.isArray(requiredItems)) requiredItems = [];
+  var uiState = detail.ui_status_label || statusInfo.label || state;
+  var openAlertsCount = Number(detail.open_alerts_count || 0);
+  var documentIssuesCount = Number(detail.open_document_issues_count || 0);
+  var screeningStatus = detail.screening_status || 'Pending review';
 
   // Outcome visualisation — ensure completed reviews with different
   // outcomes render visibly differently (AC2).
@@ -8748,7 +8746,7 @@ function renderPrcReviewDetailSection(detail) {
                    : 'var(--text3)';
   var outcomeLabel = outcome ? String(outcome).replace(/_/g,' ') : '(no outcome recorded)';
   var stateBadgeClass = (state === 'completed') ? 'approved'
-                    : (state === 'in_progress' || state === 'awaiting_information' || state === 'pending_senior_review') ? 'in-review'
+                    : (state === 'in_review' || state === 'in_progress' || state === 'awaiting_information' || state === 'waiting_for_info' || state === 'pending_senior_review' || state === 'senior_review') ? 'in-review'
                     : 'pending';
 
   // Linked chips using prcChipHtml for click-through.
@@ -8757,20 +8755,51 @@ function renderPrcReviewDetailSection(detail) {
   if (linkedEDDId != null)   chips.push(prcChipHtml('→ EDD #' + linkedEDDId, 'edd', linkedEDDId));
   var chipsHtml = chips.length ? chips.join(' ') : '<span style="color:var(--text3);font-size:11px;">No linked lifecycle objects.</span>';
 
-  // Required items rendered with rationale strings when present.
+  var canMutate = String(state || '').toLowerCase() !== 'completed';
+  var groupedItems = {};
+  requiredItems.forEach(function(it) {
+    var category = (it && it.category) || 'Checklist';
+    if (!groupedItems[category]) groupedItems[category] = [];
+    groupedItems[category].push(it);
+  });
   var itemsHtml;
   if (!requiredItems.length) {
     itemsHtml = '<div style="font-size:12px;color:var(--text3);">No required items generated yet.</div>';
   } else {
-    itemsHtml = '<ul style="margin:0 0 0 18px;padding:0;font-size:12px;">' +
-      requiredItems.map(function(it) {
-        var label = (it && (it.label || it.item || it.title)) || (typeof it === 'string' ? it : JSON.stringify(it));
-        var rationale = it && (it.rationale || it.reason || it.why);
-        return '<li style="margin-bottom:4px;"><strong>' + escapeHtml(String(label)) + '</strong>' +
-          (rationale ? '<div style="color:var(--text3);font-size:11px;">' + escapeHtml(String(rationale)) + '</div>' : '') +
-          '</li>';
-      }).join('') +
-      '</ul>';
+    itemsHtml = Object.keys(groupedItems).map(function(category) {
+      var sectionHtml = groupedItems[category].map(function(it) {
+        var itemId = it && it.id ? String(it.id) : '';
+        var severity = String((it && it.severity) || 'medium');
+        var status = String((it && it.status) || 'open');
+        var note = it && it.officer_note ? '<div style="margin-top:6px;font-size:11px;color:var(--text3);"><strong>Note:</strong> ' + escapeHtml(String(it.officer_note)) + '</div>' : '';
+        var resolved = (it && it.resolved_at) ? '<div style="margin-top:4px;font-size:11px;color:var(--text3);">Resolved ' + escapeHtml(String(it.resolved_at)) + (it.resolved_by ? ' by ' + escapeHtml(String(it.resolved_by)) : '') + '</div>' : '';
+        var actionBar = '';
+        if (canMutate && itemId) {
+          actionBar =
+            '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' +
+              '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'cleared\')">Clear</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'info_requested\',true)">Request Info</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'escalated\',true)">Escalate</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'not_applicable\',true)">Not Applicable</button>' +
+            '</div>';
+        }
+        return '<div style="padding:10px 12px;margin-bottom:10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);">' +
+          '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;">' +
+            '<div style="font-size:12px;font-weight:600;color:var(--text2);">' + escapeHtml(String(it.label || it.item_type || 'Checklist item')) + '</div>' +
+            '<div style="display:flex;gap:6px;align-items:center;">' +
+              '<span class="badge ' + (severity === 'critical' ? 'very-high' : severity === 'high' ? 'high' : severity === 'low' ? 'approved' : 'pending') + '" style="font-size:10px;">' + escapeHtml(severity) + '</span>' +
+              '<span class="badge ' + (status === 'cleared' ? 'approved' : status === 'not_applicable' ? 'draft' : status === 'escalated' ? 'high' : 'pending') + '" style="font-size:10px;">' + escapeHtml(status.replace(/_/g,' ')) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div style="margin-top:6px;font-size:11px;color:var(--text3);">' + escapeHtml(String(it.rationale || '')) + '</div>' +
+          note + resolved + actionBar +
+        '</div>';
+      }).join('');
+      return '<div style="margin-top:14px;">' +
+        '<div style="font-weight:700;font-size:12px;margin-bottom:8px;color:var(--text2);">' + escapeHtml(category) + '</div>' +
+        sectionHtml +
+      '</div>';
+    }).join('');
   }
 
   // Escalated-to-EDD indicator — use linked_edd_case_id as the signal
@@ -8782,7 +8811,10 @@ function renderPrcReviewDetailSection(detail) {
   host.innerHTML =
     '<div class="detail-section" style="margin-top:16px;">' +
       '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Review state &amp; outcome (authoritative)</div>' +
-      '<div class="detail-row"><span class="label">State</span><span class="value"><span class="badge ' + stateBadgeClass + '" style="font-size:11px;">' + escapeHtml(String(state)) + '</span></span></div>' +
+      '<div class="detail-row"><span class="label">State</span><span class="value"><span class="badge ' + stateBadgeClass + '" style="font-size:11px;">' + escapeHtml(String(uiState)) + '</span></span></div>' +
+      '<div class="detail-row"><span class="label">Open alerts</span><span class="value">' + escapeHtml(String(openAlertsCount)) + '</span></div>' +
+      '<div class="detail-row"><span class="label">Document issues</span><span class="value">' + escapeHtml(String(documentIssuesCount)) + '</span></div>' +
+      '<div class="detail-row"><span class="label">Screening status</span><span class="value" style="font-size:12px;">' + escapeHtml(String(screeningStatus)) + '</span></div>' +
       '<div class="detail-row"><span class="label">Trigger provenance</span><span class="value" style="font-size:12px;">' + escapeHtml(String(triggerSource)) + (reviewReason ? ' — ' + escapeHtml(String(reviewReason)) : '') + '</span></div>' +
       '<div class="detail-row"><span class="label">Outcome</span><span class="value" style="font-weight:700;color:' + outcomeColor + ';">' + escapeHtml(outcomeLabel) + '</span></div>' +
       (outcomeReason ? '<div class="detail-row"><span class="label">Outcome reason</span><span class="value" style="font-size:12px;">' + escapeHtml(String(outcomeReason)) + '</span></div>' : '') +
@@ -8810,6 +8842,12 @@ function renderPrcReviewDetailSection(detail) {
   requiredSection.style.marginTop = '16px';
   requiredSection.innerHTML =
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Required items (' + requiredItems.length + ')</div>' +
+    (canMutate ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' +
+      '<button class="btn btn-outline btn-sm" onclick="generateReviewChecklist(' + JSON.stringify(detail.id) + ')">Generate Checklist</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="transitionPeriodicReviewState(' + JSON.stringify(detail.id) + ',\'in_progress\')">Start Review</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="transitionPeriodicReviewState(' + JSON.stringify(detail.id) + ',\'awaiting_information\',true)">Waiting for Info</button>' +
+      '<button class="btn btn-outline btn-sm" onclick="escalatePeriodicReviewToEDD(' + JSON.stringify(detail.id) + ')">Escalate to EDD</button>' +
+    '</div>' : '') +
     itemsHtml;
   host.appendChild(requiredSection);
 
@@ -8818,6 +8856,74 @@ function renderPrcReviewDetailSection(detail) {
   // distinct visual states (generated / 404 / generation_failed).
   if (detail && detail.id != null) {
     try { renderPeriodicReviewMemo(detail.id, state, fixturePayload); } catch (e) { /* renderer logs */ }
+  }
+}
+
+async function refreshOpenPeriodicReview() {
+  if (!currentReviewRef || !currentReviewRef.id) return;
+  try {
+    var detail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(currentReviewRef.id));
+    currentReviewRef = normalizePeriodicReview(detail);
+    renderPrcReviewDetailSection(detail);
+    var idx = PERIODIC_REVIEWS.findIndex(function(r) { return r.id === currentReviewRef.id; });
+    if (idx >= 0) PERIODIC_REVIEWS[idx] = currentReviewRef;
+    renderPeriodicReviews();
+    renderMonitoring();
+  } catch (err) {
+    showToast('Failed to refresh review: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+async function transitionPeriodicReviewState(reviewId, state, requireReason) {
+  var body = { state: state };
+  if (requireReason) {
+    var reason = window.prompt('Provide a note for this review state change:', '');
+    if (!reason || !reason.trim()) return;
+    body.reason = reason.trim();
+  }
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + reviewId + '/state', body);
+    showToast('Review state updated');
+    await refreshOpenPeriodicReview();
+  } catch (err) {
+    showToast('Failed to update review state: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+async function generateReviewChecklist(reviewId) {
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + reviewId + '/required-items/generate', {});
+    showToast('Checklist generated');
+    await refreshOpenPeriodicReview();
+  } catch (err) {
+    showToast('Failed to generate checklist: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+async function updateReviewChecklistItem(reviewId, itemId, status, requireNote) {
+  var body = { status: status };
+  if (requireNote) {
+    var note = window.prompt('Add a note for this checklist update:', '');
+    if (!note || !note.trim()) return;
+    body.officer_note = note.trim();
+  }
+  try {
+    await boApiCall('PATCH', '/monitoring/reviews/' + reviewId + '/required-items/' + encodeURIComponent(itemId), body);
+    showToast('Checklist item updated');
+    await refreshOpenPeriodicReview();
+  } catch (err) {
+    showToast('Failed to update checklist item: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+async function escalatePeriodicReviewToEDD(reviewId) {
+  var triggerNotes = window.prompt('Optional EDD escalation note:', '') || '';
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + reviewId + '/escalate', { trigger_notes: triggerNotes });
+    showToast('Review escalated to EDD');
+    await refreshOpenPeriodicReview();
+  } catch (err) {
+    showToast('Failed to escalate review: ' + (err.message || 'unknown error'), 'error');
   }
 }
 
@@ -9495,7 +9601,10 @@ function openPeriodicReview(ref) {
     currentReviewRef = review;
     // Show/hide decision button based on status (completed reviews cannot be re-decided)
     var decideBtn = document.getElementById('review-modal-decide-btn');
-    if (decideBtn) decideBtn.style.display = (review.status === 'Completed' || review.raw_status === 'completed') ? 'none' : '';
+    if (decideBtn) {
+      decideBtn.textContent = 'Complete Review';
+      decideBtn.style.display = (review.status === 'Completed' || review.raw_status === 'completed') ? 'none' : '';
+    }
     document.getElementById('modal-periodic-review').classList.add('open');
     // PR-C Scope B — additive authoritative detail section (read-only).
     prcEnhanceReviewDetail(review);
@@ -9728,24 +9837,24 @@ function showReviewDecisionForm() {
   if (!currentReviewRef) return;
   var body = document.getElementById('review-modal-body');
   body.innerHTML += '<div id="review-decision-form" style="margin-top:20px;padding:16px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);">' +
-    '<div style="font-weight:700;font-size:14px;margin-bottom:12px;">Review Decision</div>' +
+    '<div style="font-weight:700;font-size:14px;margin-bottom:12px;">Complete Review</div>' +
     '<div style="margin-bottom:12px;">' +
-      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Decision <span style="color:var(--red);">*</span></label>' +
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Outcome <span style="color:var(--red);">*</span></label>' +
       '<select id="review-decision-select" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);">' +
-        '<option value="">Select decision...</option>' +
-        '<option value="continue">Continue Relationship</option>' +
+        '<option value="">Select outcome...</option>' +
+        '<option value="no_change">No Change</option>' +
         '<option value="enhanced_monitoring">Enhanced Monitoring</option>' +
-        '<option value="request_info">Request Additional Information</option>' +
-        '<option value="exit_relationship">Exit Relationship</option>' +
+        '<option value="edd_required">EDD Required</option>' +
+        '<option value="exit_recommended">Exit Recommended</option>' +
       '</select>' +
     '</div>' +
     '<div style="margin-bottom:12px;">' +
-      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Rationale / Notes <span style="color:var(--red);">*</span></label>' +
-      '<textarea id="review-decision-reason" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);resize:vertical;" placeholder="Provide the rationale for your decision..."></textarea>' +
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Outcome reason <span style="color:var(--red);">*</span></label>' +
+      '<textarea id="review-decision-reason" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);resize:vertical;" placeholder="Provide the rationale for this outcome..."></textarea>' +
     '</div>' +
     '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
       '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'review-decision-form\').remove();">Cancel</button>' +
-      '<button class="btn btn-primary btn-sm" onclick="submitReviewDecision()">Submit Decision</button>' +
+      '<button class="btn btn-primary btn-sm" onclick="submitReviewDecision()">Complete Review</button>' +
     '</div>' +
   '</div>';
   // Hide the footer decision button to avoid duplicate actions
@@ -9757,12 +9866,12 @@ async function submitReviewDecision() {
   if (!currentReviewRef || !currentReviewRef.id) return;
   var decision = document.getElementById('review-decision-select').value;
   var reason = document.getElementById('review-decision-reason').value.trim();
-  if (!decision) { showToast('Please select a decision', 'error'); return; }
+  if (!decision) { showToast('Please select an outcome', 'error'); return; }
   if (!reason) { showToast('Please provide a rationale', 'error'); return; }
   try {
-    await boApiCall('POST', '/monitoring/reviews/' + currentReviewRef.id + '/decision', {
-      decision: decision,
-      decision_reason: reason
+    await boApiCall('POST', '/monitoring/reviews/' + currentReviewRef.id + '/complete', {
+      outcome: decision,
+      outcome_reason: reason
     });
     currentReviewRef.status = 'Completed';
     // Update local PERIODIC_REVIEWS array
@@ -9771,10 +9880,17 @@ async function submitReviewDecision() {
     renderPeriodicReviews();
     renderMonitoring();
     closeModal('modal-periodic-review');
-    var decisionLabels = { continue: 'Continue Relationship', enhanced_monitoring: 'Enhanced Monitoring', request_info: 'Request Information', exit_relationship: 'Exit Relationship' };
-    showToast('Review decision recorded: ' + (decisionLabels[decision] || decision));
+    var decisionLabels = { no_change: 'No Change', enhanced_monitoring: 'Enhanced Monitoring', edd_required: 'EDD Required', exit_recommended: 'Exit Recommended' };
+    showToast('Review completed: ' + (decisionLabels[decision] || decision));
   } catch(err) {
-    showToast('Failed to submit decision: ' + (err.message || 'Unknown error'), 'error');
+    try {
+      var parsed = JSON.parse(err.message || '{}');
+      if (parsed && parsed.blocking_items) {
+        showToast('Completion blocked: ' + parsed.blocking_items.map(function(it) { return it.label; }).join('; '), 'error');
+        return;
+      }
+    } catch (e) {}
+    showToast('Failed to complete review: ' + (err.message || 'Unknown error'), 'error');
   }
 }
 

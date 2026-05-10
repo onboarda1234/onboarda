@@ -50,7 +50,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+import document_health_monitor as dhm
 import lifecycle_linkage as ll
+from environment import get_screening_validity_days
 from lifecycle_linkage import (
     InvalidLifecycleTransition,
     LifecycleLinkageError,
@@ -140,15 +142,40 @@ VALID_REVIEW_OUTCOMES = (
 REQUIRED_ITEM_CODES = (
     "kyc_refresh",
     "ubo_confirmation",
-    "ownership_change_review",
-    "business_activity_review",
     "jurisdiction_review",
+    "document_expired",
+    "document_expiring_soon",
+    "document_stale",
+    "document_expiry_missing",
+    "screening_refresh",
+    "risk_level_review",
+    "risk_level_change_review",
     "source_of_funds_refresh",
     "source_of_wealth_refresh",
     "licensing_refresh",
-    "document_expiry_refresh",
     "monitoring_alert_followup",
     "prior_outcome_followup",
+    "edd_followup",
+    "review_outcome_recorded",
+)
+
+ITEM_CATEGORY_CLIENT_PROFILE = "Client Profile"
+ITEM_CATEGORY_DOCUMENT_HEALTH = "Document Health"
+ITEM_CATEGORY_SCREENING_RISK = "Screening & Risk"
+ITEM_CATEGORY_MONITORING_ALERTS = "Monitoring Alerts"
+ITEM_CATEGORY_FINAL_OUTCOME = "Final Outcome"
+
+REQUIRED_ITEM_STATUS_OPEN = "open"
+REQUIRED_ITEM_STATUS_CLEARED = "cleared"
+REQUIRED_ITEM_STATUS_INFO_REQUESTED = "info_requested"
+REQUIRED_ITEM_STATUS_ESCALATED = "escalated"
+REQUIRED_ITEM_STATUS_NOT_APPLICABLE = "not_applicable"
+VALID_REQUIRED_ITEM_STATUSES = (
+    REQUIRED_ITEM_STATUS_OPEN,
+    REQUIRED_ITEM_STATUS_CLEARED,
+    REQUIRED_ITEM_STATUS_INFO_REQUESTED,
+    REQUIRED_ITEM_STATUS_ESCALATED,
+    REQUIRED_ITEM_STATUS_NOT_APPLICABLE,
 )
 
 # Terminal EDD stages -- mirrored from lifecycle_linkage so we never
@@ -181,6 +208,20 @@ class ReviewNotFound(PeriodicReviewEngineError):
 
 class ReviewClosedError(PeriodicReviewEngineError):
     """Raised when a mutating action is attempted on a completed review."""
+
+
+class InvalidRequiredItemStatus(PeriodicReviewEngineError):
+    pass
+
+
+class RequiredItemNotFound(PeriodicReviewEngineError):
+    pass
+
+
+class ReviewCompletionBlocked(PeriodicReviewEngineError):
+    def __init__(self, blocking_items: List[Dict[str, Any]]):
+        super().__init__("Periodic review cannot be completed")
+        self.blocking_items = blocking_items
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -274,6 +315,113 @@ def _coerce_state(value: Optional[str]) -> str:
     return STATE_PENDING
 
 
+def _parse_ts(value) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _severity_rank(value: Optional[str]) -> int:
+    return {
+        "low": 1,
+        "medium": 2,
+        "high": 3,
+        "critical": 4,
+    }.get(str(value or "medium").strip().lower(), 2)
+
+
+def _stable_item_id(category: str, item_type: str, source: str,
+                    source_id=None, label: Optional[str] = None) -> str:
+    parts = [
+        str(category or "").strip().lower().replace(" ", "_"),
+        str(item_type or "item").strip().lower(),
+        str(source or "").strip().lower().replace(" ", "_"),
+    ]
+    if source_id not in (None, ""):
+        parts.append(str(source_id).strip())
+    elif label:
+        parts.append(str(label).strip().lower().replace(" ", "_"))
+    return ":".join([p for p in parts if p])
+
+
+def _make_item(*, category: str, item_type: str, label: str, severity: str,
+               source: str, source_id=None, rationale: str,
+               code: Optional[str] = None,
+               status: str = REQUIRED_ITEM_STATUS_OPEN,
+               officer_note: Optional[str] = None,
+               resolved_by: Optional[str] = None,
+               resolved_at: Optional[str] = None) -> Dict[str, Any]:
+    item_id = _stable_item_id(category, item_type, source, source_id, label)
+    return {
+        "id": item_id,
+        "code": code or item_type,
+        "category": category,
+        "item_type": item_type,
+        "label": label,
+        "severity": str(severity or "medium").strip().lower(),
+        "source": source,
+        "source_id": source_id,
+        "status": status if status in VALID_REQUIRED_ITEM_STATUSES else REQUIRED_ITEM_STATUS_OPEN,
+        "rationale": rationale,
+        "officer_note": officer_note,
+        "resolved_by": resolved_by,
+        "resolved_at": resolved_at,
+    }
+
+
+def _normalize_required_item(item: Any, idx: int) -> Optional[Dict[str, Any]]:
+    if not isinstance(item, dict):
+        return None
+    label = item.get("label") or item.get("title") or item.get("item")
+    code = item.get("code") or item.get("item_type") or f"item_{idx + 1}"
+    category = item.get("category") or ITEM_CATEGORY_CLIENT_PROFILE
+    source = item.get("source") or "review"
+    source_id = item.get("source_id")
+    normalized = _make_item(
+        category=category,
+        item_type=item.get("item_type") or code,
+        label=label or code.replace("_", " "),
+        severity=item.get("severity") or "medium",
+        source=source,
+        source_id=source_id,
+        rationale=item.get("rationale") or item.get("reason") or "",
+        code=code,
+        status=item.get("status") or REQUIRED_ITEM_STATUS_OPEN,
+        officer_note=item.get("officer_note"),
+        resolved_by=item.get("resolved_by"),
+        resolved_at=item.get("resolved_at"),
+    )
+    if item.get("id"):
+        normalized["id"] = item["id"]
+    return normalized
+
+
+def _load_required_items(raw) -> List[Dict[str, Any]]:
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+    normalized = []
+    for idx, item in enumerate(items):
+        parsed = _normalize_required_item(item, idx)
+        if parsed is not None:
+            normalized.append(parsed)
+    return normalized
+
+
 # ─────────────────────────────────────────────────────────────────
 # Read helpers
 # ─────────────────────────────────────────────────────────────────
@@ -286,14 +434,7 @@ def get_review_state(db, review_id) -> str:
 def get_required_items(db, review_id) -> List[Dict[str, Any]]:
     """Return the structured required items for a review (or [])."""
     review = _fetch_review(db, review_id)
-    raw = _row_get(review, "required_items")
-    if not raw:
-        return []
-    try:
-        items = json.loads(raw)
-    except (TypeError, ValueError):
-        return []
-    return items if isinstance(items, list) else []
+    return _load_required_items(_row_get(review, "required_items"))
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -398,169 +539,298 @@ def _doc_uploaded_at_dt(row) -> Optional[datetime]:
         return None
 
 
+def _merge_existing_item_state(items: List[Dict[str, Any]],
+                               existing_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    existing_by_id = {it.get("id"): it for it in existing_items if it.get("id")}
+    merged = []
+    for item in items:
+        prior = existing_by_id.get(item.get("id"))
+        if prior:
+            item["status"] = prior.get("status") or REQUIRED_ITEM_STATUS_OPEN
+            item["officer_note"] = prior.get("officer_note")
+            item["resolved_by"] = prior.get("resolved_by")
+            item["resolved_at"] = prior.get("resolved_at")
+        merged.append(item)
+    return merged
+
+
+def _screening_refresh_item(application: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    prescreening_raw = _row_get(application, "prescreening_data") or "{}"
+    try:
+        prescreening = json.loads(prescreening_raw) if isinstance(prescreening_raw, str) else (prescreening_raw or {})
+    except (TypeError, ValueError):
+        prescreening = {}
+    screening_report = prescreening.get("screening_report") or {}
+    validity_days = get_screening_validity_days()
+    now = datetime.now(timezone.utc)
+
+    label = "Review current screening status"
+    severity = "low"
+    rationale = "Stored screening validity is current."
+    if not screening_report:
+        label = "Run screening refresh"
+        severity = "high"
+        rationale = "No screening_report is stored in prescreening_data."
+    else:
+        valid_until = _parse_ts(prescreening.get("screening_valid_until"))
+        if valid_until is None:
+            screened_at = _parse_ts(
+                screening_report.get("screened_at") or screening_report.get("timestamp")
+            )
+            valid_until = (
+                screened_at + timedelta(days=validity_days)
+                if screened_at is not None else None
+            )
+        if valid_until is None:
+            label = "Run screening refresh"
+            severity = "high"
+            rationale = "Screening freshness cannot be determined from stored application data."
+        elif valid_until < now:
+            label = "Run screening refresh"
+            severity = "high"
+            rationale = f"Stored screening validity expired on {valid_until.date().isoformat()}."
+        else:
+            rationale = f"Stored screening validity remains current until {valid_until.date().isoformat()}."
+
+    return _make_item(
+        category=ITEM_CATEGORY_SCREENING_RISK,
+        item_type="screening_refresh",
+        label=label,
+        severity=severity,
+        source="application",
+        source_id=_row_get(application, "id"),
+        rationale=rationale,
+    )
+
+
+def _fetch_open_monitoring_alerts(db, application_id, *,
+                                  include_document_health: bool) -> List[Any]:
+    if not application_id:
+        return []
+    placeholders = ",".join("?" for _ in dhm.DOCUMENT_ALERT_TYPES)
+    query = (
+        "SELECT id, alert_type, severity, summary, status "
+        "FROM monitoring_alerts WHERE application_id = ? "
+        "AND COALESCE(status, 'open') NOT IN ('dismissed','routed_to_review','routed_to_edd')"
+    )
+    params: List[Any] = [application_id]
+    if include_document_health:
+        query += f" AND alert_type IN ({placeholders})"
+    else:
+        query += f" AND alert_type NOT IN ({placeholders})"
+    params.extend(list(dhm.DOCUMENT_ALERT_TYPES))
+    return db.execute(query + " ORDER BY id ASC", params).fetchall()
+
+
+def _prior_completed_review(db, application_id, review_id):
+    if not application_id:
+        return None
+    return db.execute(
+        "SELECT id, risk_level, previous_risk_level, new_risk_level, outcome, decision "
+        "FROM periodic_reviews WHERE application_id = ? AND id != ? "
+        "AND status = 'completed' ORDER BY id DESC LIMIT 1",
+        (application_id, review_id),
+    ).fetchone()
+
+
 def _generate_items_for_context(db, review: Dict[str, Any],
                                 application: Optional[Dict[str, Any]],
                                 ) -> List[Dict[str, Any]]:
-    """Pure-ish helper that produces the required-items list.
-
-    Reads from the same DB connection but performs no writes. The
-    selection logic is intentionally small and deterministic so it is
-    easy to test and easy to extend without a generic workflow engine.
-    """
     items: List[Dict[str, Any]] = []
-
+    application_id = _row_get(review, "application_id")
+    review_id = _row_get(review, "id")
     risk_level = (
         _row_get(review, "risk_level")
         or (_row_get(application, "risk_level") if application else None)
+        or "MEDIUM"
     )
-    trigger_source = _row_get(review, "trigger_source")
-    review_reason = _row_get(review, "review_reason") or _row_get(
-        review, "trigger_reason"
-    )
-    application_id = _row_get(review, "application_id")
+    current_risk = _row_get(review, "risk_level") or _row_get(application, "risk_level")
+    prior = _prior_completed_review(db, application_id, review_id)
+    prior_risk = _row_get(prior, "new_risk_level") or _row_get(prior, "risk_level")
+
+    items.append(_make_item(
+        category=ITEM_CATEGORY_CLIENT_PROFILE,
+        item_type="kyc_refresh",
+        label="Confirm business activity and client profile unchanged",
+        severity="medium",
+        source="application",
+        source_id=application_id,
+        rationale="Baseline client profile review item.",
+    ))
+    items.append(_make_item(
+        category=ITEM_CATEGORY_CLIENT_PROFILE,
+        item_type="business_activity_review",
+        label="Confirm business activity unchanged",
+        severity="medium",
+        source="application",
+        source_id=application_id,
+        rationale=(
+            f"Recorded sector is {_row_get(application, 'sector') or 'not recorded'}; "
+            "confirm no material business activity change."
+        ),
+    ))
+    items.append(_make_item(
+        category=ITEM_CATEGORY_CLIENT_PROFILE,
+        item_type="ubo_confirmation",
+        label="Confirm ownership / UBO structure unchanged",
+        severity="medium",
+        source="application",
+        source_id=application_id,
+        rationale="Baseline ownership review item.",
+    ))
+    items.append(_make_item(
+        category=ITEM_CATEGORY_CLIENT_PROFILE,
+        item_type="ownership_change_review",
+        label="Confirm ownership structure unchanged",
+        severity="medium",
+        source="application",
+        source_id=application_id,
+        rationale="Recorded ownership structure should be re-confirmed during review.",
+    ))
+    items.append(_make_item(
+        category=ITEM_CATEGORY_CLIENT_PROFILE,
+        item_type="jurisdiction_review",
+        label="Confirm jurisdiction exposure unchanged",
+        severity="medium",
+        source="application",
+        source_id=application_id,
+        rationale=(
+            f"Recorded jurisdiction is "
+            f"{_row_get(application, 'country') or _row_get(application, 'jurisdiction') or 'not recorded'}."
+        ),
+    ))
+
     linked_alert_id = _row_get(review, "linked_monitoring_alert_id")
-
-    # --- 1. Baseline KYC + UBO refresh ---
-    items.append({
-        "code": "kyc_refresh",
-        "label": "Refresh client KYC pack",
-        "rationale": "Baseline periodic review item",
-    })
-    items.append({
-        "code": "ubo_confirmation",
-        "label": "Confirm UBO and control structure unchanged",
-        "rationale": "Baseline periodic review item",
-    })
-
-    # --- 2. Risk-tier driven items ---
-    if risk_level in ("HIGH", "VERY_HIGH"):
-        items.append({
-            "code": "source_of_funds_refresh",
-            "label": "Refresh source-of-funds evidence",
-            "rationale": f"Risk tier {risk_level} requires SoF refresh",
-        })
-        items.append({
-            "code": "source_of_wealth_refresh",
-            "label": "Refresh source-of-wealth evidence",
-            "rationale": f"Risk tier {risk_level} requires SoW refresh",
-        })
-    if risk_level == "VERY_HIGH":
-        items.append({
-            "code": "licensing_refresh",
-            "label": "Confirm licensing / regulatory standing",
-            "rationale": "VERY_HIGH risk tier requires licensing refresh",
-        })
-
-    # --- 3. Jurisdiction context (if available on application) ---
-    if application is not None:
-        jurisdiction = _row_get(application, "country") or _row_get(
-            application, "jurisdiction"
-        )
-        if jurisdiction:
-            items.append({
-                "code": "jurisdiction_review",
-                "label": "Confirm jurisdictional exposure unchanged",
-                "rationale": (
-                    f"Application registered in {jurisdiction}; confirm no "
-                    "jurisdiction change since last review"
-                ),
-            })
-        sector = _row_get(application, "sector")
-        if sector:
-            items.append({
-                "code": "business_activity_review",
-                "label": "Confirm business activity unchanged",
-                "rationale": (
-                    f"Recorded sector: {sector}; confirm activity unchanged"
-                ),
-            })
-        ownership_struct = _row_get(application, "ownership_structure")
-        if ownership_struct:
-            items.append({
-                "code": "ownership_change_review",
-                "label": "Confirm ownership structure unchanged",
-                "rationale": "Ownership structure recorded; confirm no change",
-            })
-
-    # --- 4. Document staleness ---
-    if application_id:
-        try:
-            doc_rows = db.execute(
-                "SELECT doc_type, doc_name, uploaded_at "
-                "FROM documents WHERE application_id = ? AND COALESCE(is_current, TRUE) = TRUE",
-                (application_id,),
-            ).fetchall()
-        except Exception:
-            doc_rows = []
-        cutoff = (
-            datetime.now(timezone.utc)
-            - timedelta(days=_DOCUMENT_STALENESS_DAYS)
-        ).timestamp()
-        stale_types = []
-        for doc in doc_rows:
-            uploaded = _doc_uploaded_at_dt(doc)
-            if uploaded is None:
-                continue
-            if uploaded.timestamp() < cutoff:
-                doc_type = _row_get(doc, "doc_type") or "unknown"
-                if doc_type not in stale_types:
-                    stale_types.append(doc_type)
-        if stale_types:
-            items.append({
-                "code": "document_expiry_refresh",
-                "label": "Refresh stale supporting documents",
-                "rationale": (
-                    "Stale documents detected: "
-                    + ", ".join(sorted(stale_types))
-                ),
-            })
-
-    # --- 5. Monitoring-alert origin context (PR-02 contract) ---
-    if trigger_source == "monitoring_alert" and linked_alert_id is not None:
-        items.append({
-            "code": "monitoring_alert_followup",
-            "label": "Investigate monitoring alert that triggered this review",
-            "rationale": (
+    if _row_get(review, "trigger_source") == "monitoring_alert" and linked_alert_id is not None:
+        items.append(_make_item(
+            category=ITEM_CATEGORY_MONITORING_ALERTS,
+            item_type="monitoring_alert_followup",
+            label="Investigate monitoring alert that triggered this review",
+            severity="medium",
+            source="monitoring_alert",
+            source_id=linked_alert_id,
+            rationale=(
                 f"Triggered by monitoring alert id={linked_alert_id}: "
-                + (review_reason or "no rationale recorded")
+                f"{_row_get(review, 'review_reason') or _row_get(review, 'trigger_reason') or 'no rationale recorded'}"
             ),
-        })
+        ))
 
-    # --- 6. Prior outcome follow-up ---
-    if application_id:
-        try:
-            prior = db.execute(
-                "SELECT outcome, decision FROM periodic_reviews "
-                "WHERE application_id = ? AND id != ? "
-                "AND status = 'completed' "
-                "ORDER BY id DESC LIMIT 1",
-                (application_id, _row_get(review, "id")),
-            ).fetchone()
-        except Exception:
-            prior = None
-        prior_outcome = _row_get(prior, "outcome") or _row_get(
-            prior, "decision"
-        )
-        if prior_outcome and prior_outcome in (
-            OUTCOME_ENHANCED_MONITORING,
-            OUTCOME_EDD_REQUIRED,
-            "enhanced_monitoring",
-            "request_info",
-        ):
-            items.append({
-                "code": "prior_outcome_followup",
-                "label": "Follow up on prior review outcome",
-                "rationale": (
-                    f"Previous review concluded with outcome={prior_outcome}; "
-                    "confirm follow-up actions are complete"
-                ),
-            })
+    for alert in _fetch_open_monitoring_alerts(db, application_id, include_document_health=True):
+        items.append(_make_item(
+            category=ITEM_CATEGORY_DOCUMENT_HEALTH,
+            item_type=_row_get(alert, "alert_type") or "document_health",
+            label=_row_get(alert, "summary") or "Review document health issue",
+            severity=str(_row_get(alert, "severity") or "medium").lower(),
+            source="monitoring_alert",
+            source_id=_row_get(alert, "id"),
+            rationale="Open document-health monitoring alert must be resolved in the review.",
+        ))
 
-    # Deduplicate by (code, label) preserving insertion order.
+    items.append(_screening_refresh_item(application))
+    items.append(_make_item(
+        category=ITEM_CATEGORY_SCREENING_RISK,
+        item_type="risk_level_review",
+        label=f"Review current risk level ({current_risk or 'unavailable'})",
+        severity="low",
+        source="review",
+        source_id=review_id,
+        rationale="Current risk level should be confirmed as part of the review.",
+    ))
+    if prior_risk and current_risk and prior_risk != current_risk:
+        items.append(_make_item(
+            category=ITEM_CATEGORY_SCREENING_RISK,
+            item_type="risk_level_change_review",
+            label=f"Assess risk level change from {prior_risk} to {current_risk}",
+            severity="medium",
+            source="periodic_review",
+            source_id=_row_get(prior, "id"),
+            rationale="Current risk differs from the prior completed periodic review.",
+        ))
+    if risk_level in ("HIGH", "VERY_HIGH"):
+        items.append(_make_item(
+            category=ITEM_CATEGORY_SCREENING_RISK,
+            item_type="source_of_funds_refresh",
+            label="Refresh source-of-funds evidence",
+            severity="high",
+            source="risk_level",
+            source_id=risk_level,
+            rationale=f"Risk tier {risk_level} requires a source-of-funds refresh.",
+        ))
+        items.append(_make_item(
+            category=ITEM_CATEGORY_SCREENING_RISK,
+            item_type="source_of_wealth_refresh",
+            label="Refresh source-of-wealth evidence",
+            severity="high",
+            source="risk_level",
+            source_id=risk_level,
+            rationale=f"Risk tier {risk_level} requires a source-of-wealth refresh.",
+        ))
+    if risk_level == "VERY_HIGH":
+        items.append(_make_item(
+            category=ITEM_CATEGORY_SCREENING_RISK,
+            item_type="licensing_refresh",
+            label="Confirm current regulatory licence standing",
+            severity="high",
+            source="risk_level",
+            source_id=risk_level,
+            rationale="Very-high-risk review requires explicit licensing refresh.",
+        ))
+
+    for alert in _fetch_open_monitoring_alerts(db, application_id, include_document_health=False):
+        items.append(_make_item(
+            category=ITEM_CATEGORY_MONITORING_ALERTS,
+            item_type="monitoring_alert_followup",
+            label=_row_get(alert, "summary") or f"Review monitoring alert #{_row_get(alert, 'id')}",
+            severity=str(_row_get(alert, "severity") or "medium").lower(),
+            source="monitoring_alert",
+            source_id=_row_get(alert, "id"),
+            rationale=(
+                f"Open monitoring alert type={_row_get(alert, 'alert_type') or 'unknown'} "
+                "must be resolved or documented."
+            ),
+        ))
+    prior_outcome = _row_get(prior, "outcome") or _row_get(prior, "decision")
+    if prior_outcome in (
+        OUTCOME_ENHANCED_MONITORING,
+        OUTCOME_EDD_REQUIRED,
+        "enhanced_monitoring",
+        "request_info",
+    ):
+        items.append(_make_item(
+            category=ITEM_CATEGORY_MONITORING_ALERTS,
+            item_type="prior_outcome_followup",
+            label="Follow up prior enhanced monitoring / EDD outcome",
+            severity="medium",
+            source="periodic_review",
+            source_id=_row_get(prior, "id"),
+            rationale=f"Previous review outcome was {prior_outcome}.",
+        ))
+    active_edd_id = _find_active_edd_for_application(db, application_id)
+    if active_edd_id is not None:
+        items.append(_make_item(
+            category=ITEM_CATEGORY_MONITORING_ALERTS,
+            item_type="edd_followup",
+            label=f"Review open EDD follow-up (EDD #{active_edd_id})",
+            severity="high",
+            source="edd_case",
+            source_id=active_edd_id,
+            rationale="Active EDD follow-up exists for this application.",
+        ))
+
+    items.append(_make_item(
+        category=ITEM_CATEGORY_FINAL_OUTCOME,
+        item_type="review_outcome_recorded",
+        label="Record periodic review outcome and rationale",
+        severity="low",
+        source="review",
+        source_id=review_id,
+        rationale="Periodic review must close with a documented outcome.",
+    ))
+
     seen = set()
     deduped: List[Dict[str, Any]] = []
     for it in items:
-        key = (it.get("code"), it.get("label"))
+        key = it.get("id")
         if key in seen:
             continue
         seen.add(key)
@@ -587,7 +857,19 @@ def generate_required_items(db, review_id, *,
         )
 
     application = _fetch_application(db, _row_get(review, "application_id"))
+    application_id = _row_get(review, "application_id")
+    if application_id:
+        dhm.sync_document_health_alerts_for_application(
+            db,
+            application_id,
+            user=user,
+            audit_writer=audit_writer,
+        )
     items = _generate_items_for_context(db, review, application)
+    items = _merge_existing_item_state(
+        items,
+        _load_required_items(_row_get(review, "required_items")),
+    )
     payload = json.dumps(items, default=str)
     ts = _utc_now_iso()
 
@@ -620,6 +902,73 @@ def generate_required_items(db, review_id, *,
         db, before_state=before, after_state=after,
     )
     return items
+
+
+# ─────────────────────────────────────────────────────────────────
+# Required-item updates
+# ─────────────────────────────────────────────────────────────────
+def update_required_item(db, review_id, item_id, *, status: str,
+                         officer_note: Optional[str] = None,
+                         user=None, audit_writer=None) -> Dict[str, Any]:
+    _require_audit_writer(audit_writer)
+    if status not in VALID_REQUIRED_ITEM_STATUSES:
+        raise InvalidRequiredItemStatus(
+            f"status={status!r} is not one of {VALID_REQUIRED_ITEM_STATUSES}"
+        )
+    if status == REQUIRED_ITEM_STATUS_NOT_APPLICABLE and not str(officer_note or "").strip():
+        raise PeriodicReviewEngineError("officer_note is required when status='not_applicable'")
+
+    review = _fetch_review(db, review_id)
+    if _coerce_state(_row_get(review, "status")) == STATE_COMPLETED:
+        raise ReviewClosedError(
+            f"periodic_review id={review_id} is already completed"
+        )
+
+    items = _load_required_items(_row_get(review, "required_items"))
+    updated_item = None
+    ts = _utc_now_iso()
+    for item in items:
+        if str(item.get("id")) != str(item_id):
+            continue
+        before_state = dict(item)
+        item["status"] = status
+        item["officer_note"] = officer_note
+        if status in (
+            REQUIRED_ITEM_STATUS_CLEARED,
+            REQUIRED_ITEM_STATUS_ESCALATED,
+            REQUIRED_ITEM_STATUS_NOT_APPLICABLE,
+        ):
+            item["resolved_by"] = (user or {}).get("sub")
+            item["resolved_at"] = ts
+        else:
+            item["resolved_by"] = None
+            item["resolved_at"] = None
+        updated_item = (before_state, dict(item))
+        break
+    if updated_item is None:
+        raise RequiredItemNotFound(f"required item {item_id!r} not found on review {review_id}")
+
+    db.execute(
+        "UPDATE periodic_reviews SET required_items = ? WHERE id = ?",
+        (json.dumps(items, default=str), review_id),
+    )
+    db.commit()
+    before_state, after_state = updated_item
+    _emit_audit(
+        audit_writer,
+        user,
+        "periodic_review.required_item.updated",
+        f"periodic_review:{review_id}",
+        {
+            "review_id": review_id,
+            "item_id": item_id,
+            "status": status,
+        },
+        db,
+        before_state=before_state,
+        after_state=after_state,
+    )
+    return after_state
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -877,6 +1226,114 @@ def escalate_review_to_edd(db, review_id, *,
 # ─────────────────────────────────────────────────────────────────
 # Outcome recording (review completion)
 # ─────────────────────────────────────────────────────────────────
+def _auto_clear_outcome_item(items: List[Dict[str, Any]], *, outcome: str,
+                             outcome_reason: str, user, ts: str) -> List[Dict[str, Any]]:
+    for item in items:
+        if item.get("item_type") != "review_outcome_recorded":
+            continue
+        item["status"] = REQUIRED_ITEM_STATUS_CLEARED
+        item["officer_note"] = f"{outcome}: {outcome_reason}"
+        item["resolved_by"] = (user or {}).get("sub")
+        item["resolved_at"] = ts
+    return items
+
+
+def _blocking_items_for_completion(db, review, items, *, outcome: str,
+                                   outcome_reason: str) -> List[Dict[str, Any]]:
+    blocking_items: List[Dict[str, Any]] = []
+    application_id = _row_get(review, "application_id")
+    if items:
+        application = _fetch_application(db, application_id)
+        screening_item = _screening_refresh_item(application)
+        if _severity_rank(screening_item.get("severity")) >= _severity_rank("high"):
+            blocking_items.append({
+                "item_type": screening_item["item_type"],
+                "label": screening_item["label"],
+                "severity": screening_item["severity"],
+            })
+
+        for alert in _fetch_open_monitoring_alerts(db, application_id, include_document_health=True):
+            alert_type = _row_get(alert, "alert_type")
+            severity = str(_row_get(alert, "severity") or "medium").lower()
+            if alert_type == "document_expired" and _severity_rank(severity) >= _severity_rank("high"):
+                blocking_items.append({
+                    "item_type": alert_type,
+                    "label": _row_get(alert, "summary") or "Expired document unresolved",
+                    "severity": severity,
+                })
+        for alert in _fetch_open_monitoring_alerts(db, application_id, include_document_health=False):
+            severity = str(_row_get(alert, "severity") or "medium").lower()
+            if _severity_rank(severity) >= _severity_rank("high"):
+                blocking_items.append({
+                    "item_type": "monitoring_alert_followup",
+                    "label": _row_get(alert, "summary") or "High-severity monitoring alert unresolved",
+                    "severity": severity,
+                })
+
+        for item in items:
+            status = item.get("status") or REQUIRED_ITEM_STATUS_OPEN
+            if status in (
+                REQUIRED_ITEM_STATUS_CLEARED,
+                REQUIRED_ITEM_STATUS_NOT_APPLICABLE,
+            ):
+                continue
+            item_type = item.get("item_type")
+            severity = str(item.get("severity") or "medium").lower()
+            if item_type == "document_expired" and _severity_rank(severity) >= _severity_rank("high"):
+                blocking_items.append({
+                    "item_type": item_type,
+                    "label": item.get("label"),
+                    "severity": severity,
+                })
+            elif item_type in ("screening_refresh", "edd_followup"):
+                if _severity_rank(severity) >= _severity_rank("high"):
+                    blocking_items.append({
+                        "item_type": item_type,
+                        "label": item.get("label"),
+                        "severity": severity,
+                    })
+            elif item_type == "monitoring_alert_followup" and _severity_rank(severity) >= _severity_rank("high"):
+                blocking_items.append({
+                    "item_type": item_type,
+                    "label": item.get("label"),
+                    "severity": severity,
+                })
+            elif _severity_rank(severity) >= _severity_rank("high"):
+                blocking_items.append({
+                    "item_type": item_type,
+                    "label": item.get("label"),
+                    "severity": severity,
+                })
+
+    if outcome == OUTCOME_EDD_REQUIRED:
+        linked_edd_case_id = _row_get(review, "linked_edd_case_id") or _find_active_edd_for_application(
+            db, application_id
+        )
+        if linked_edd_case_id is None:
+            blocking_items.append({
+                "item_type": "edd_case_required",
+                "label": "EDD outcome selected but no linked EDD case exists",
+                "severity": "high",
+            })
+
+    if not outcome_reason or not str(outcome_reason).strip():
+        blocking_items.append({
+            "item_type": "outcome_reason_required",
+            "label": "Outcome reason is required",
+            "severity": "high",
+        })
+
+    deduped = []
+    seen = set()
+    for item in blocking_items:
+        key = (item.get("item_type"), item.get("label"), item.get("severity"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 def record_review_outcome(db, review_id, *,
                           outcome: str,
                           outcome_reason: str,
@@ -929,13 +1386,30 @@ def record_review_outcome(db, review_id, *,
             f"periodic_review id={review_id} is already completed"
         )
 
+    application_id = _row_get(review, "application_id")
+    if application_id:
+        dhm.sync_document_health_alerts_for_application(
+            db,
+            application_id,
+            user=user,
+            audit_writer=audit_writer,
+        )
+    items = _load_required_items(_row_get(review, "required_items"))
+    blocking_items = _blocking_items_for_completion(
+        db, review, items, outcome=outcome, outcome_reason=outcome_reason
+    )
+    if blocking_items:
+        raise ReviewCompletionBlocked(blocking_items)
+
     ts = _utc_now_iso()
+    items = _auto_clear_outcome_item(items, outcome=outcome, outcome_reason=outcome_reason, user=user, ts=ts)
     before = {
         "status": current_state,
         "outcome": _row_get(review, "outcome"),
         "outcome_reason": _row_get(review, "outcome_reason"),
         "outcome_recorded_at": _row_get(review, "outcome_recorded_at"),
         "completed_at": _row_get(review, "completed_at"),
+        "required_items": _row_get(review, "required_items"),
     }
     db.execute(
         "UPDATE periodic_reviews "
@@ -944,14 +1418,24 @@ def record_review_outcome(db, review_id, *,
         "    outcome_reason = ?, "
         "    outcome_recorded_at = ?, "
         "    completed_at = ?, "
-        "    state_changed_at = ? "
+        "    state_changed_at = ?, "
+        "    required_items = ? "
         # NB: ``decision`` is intentionally NOT included in this UPDATE.
         # PR-03a contract: ``outcome`` is the authoritative outcome
         # field for the periodic review operating model; ``decision``
         # remains read-only legacy state owned by the pre-PR-03
         # ``PeriodicReviewDecisionHandler``. Do not co-write both.
         "WHERE id = ?",
-        (STATE_COMPLETED, outcome, outcome_reason, ts, ts, ts, review_id),
+        (
+            STATE_COMPLETED,
+            outcome,
+            outcome_reason,
+            ts,
+            ts,
+            ts,
+            json.dumps(items, default=str),
+            review_id,
+        ),
     )
     db.commit()
     # Stamp PR-01 closed_at + emit lifecycle.review.closed audit.
@@ -964,6 +1448,7 @@ def record_review_outcome(db, review_id, *,
         "outcome_reason": outcome_reason,
         "outcome_recorded_at": ts,
         "completed_at": ts,
+        "required_items": items,
     }
     _emit_audit(
         audit_writer, user, "periodic_review.outcome_recorded",
@@ -1007,11 +1492,15 @@ __all__ = [
     "InvalidReviewTransition",
     "ReviewNotFound",
     "ReviewClosedError",
+    "InvalidRequiredItemStatus",
+    "RequiredItemNotFound",
+    "ReviewCompletionBlocked",
     # Public helpers
     "get_review_state",
     "get_required_items",
     "transition_review_state",
     "generate_required_items",
+    "update_required_item",
     "escalate_review_to_edd",
     "record_review_outcome",
 ]

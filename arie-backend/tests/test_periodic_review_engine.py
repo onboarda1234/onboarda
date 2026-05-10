@@ -37,6 +37,7 @@ tests/test_monitoring_routing.py for consistency.
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -152,12 +153,13 @@ def _insert_review(conn, *, application_id="test-app-100",
 
 
 def _insert_alert(conn, *, application_id="test-app-100",
-                  client_name="Test Co Ltd", status="open"):
+                  client_name="Test Co Ltd", status="open",
+                  severity="medium"):
     conn.execute(
         "INSERT INTO monitoring_alerts "
         "(application_id, client_name, alert_type, severity, status) "
         "VALUES (?, ?, ?, ?, ?)",
-        (application_id, client_name, "adverse_media", "medium", status),
+        (application_id, client_name, "adverse_media", severity, status),
     )
     conn.commit()
     return conn.execute(
@@ -194,6 +196,25 @@ def _alert(conn, alert_id):
     return conn.execute(
         "SELECT * FROM monitoring_alerts WHERE id = ?", (alert_id,)
     ).fetchone()
+
+
+def _insert_doc(conn, *, doc_id="doc-1", doc_type="passport",
+                expiry_date=None, uploaded_at=None):
+    conn.execute(
+        "INSERT INTO documents "
+        "(id, application_id, doc_type, doc_name, file_path, expiry_date, uploaded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            doc_id,
+            "test-app-100",
+            doc_type,
+            f"{doc_type}.pdf",
+            f"/tmp/{doc_type}.pdf",
+            expiry_date,
+            uploaded_at or datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -371,6 +392,45 @@ class TestRequiredItemsGeneration:
         )
         codes = {it["code"] for it in items}
         assert "prior_outcome_followup" in codes
+
+    def test_document_health_alerts_populate_document_health_section(self, review_db, audit_sink):
+        from periodic_review_engine import generate_required_items
+        _insert_doc(
+            review_db,
+            doc_id="passport-expired",
+            doc_type="passport",
+            expiry_date=(datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat(),
+        )
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(
+            review_db, rid, user=USER, audit_writer=audit_sink,
+        )
+        document_items = [it for it in items if it["category"] == "Document Health"]
+        assert document_items
+        assert document_items[0]["item_type"] == "document_expired"
+
+    def test_open_monitoring_alerts_populate_monitoring_alerts_section(self, review_db, audit_sink):
+        from periodic_review_engine import generate_required_items
+        _insert_alert(review_db, status="open", severity="high")
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(
+            review_db, rid, user=USER, audit_writer=audit_sink,
+        )
+        monitoring_items = [it for it in items if it["category"] == "Monitoring Alerts"]
+        assert any(it["item_type"] == "monitoring_alert_followup" for it in monitoring_items)
+
+    def test_rich_items_persist_optional_fields(self, review_db, audit_sink):
+        from periodic_review_engine import generate_required_items
+        rid = _insert_review(review_db)
+        items = generate_required_items(
+            review_db, rid, user=USER, audit_writer=audit_sink,
+        )
+        sample = items[0]
+        for field in (
+            "category", "item_type", "label", "severity", "source",
+            "status", "rationale", "officer_note", "resolved_by", "resolved_at",
+        ):
+            assert field in sample
 
     def test_refuses_on_completed_review(self, review_db, audit_sink):
         from periodic_review_engine import (
@@ -689,6 +749,154 @@ class TestRecordOutcome:
                 user=USER, audit_writer=None,
             )
         assert _review(review_db, rid)["status"] == "in_progress"
+
+    def test_blocks_completion_for_critical_expired_document_item(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE, ReviewCompletionBlocked,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+        _insert_doc(
+            review_db,
+            doc_id="passport-block",
+            doc_type="passport",
+            expiry_date=(datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat(),
+        )
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        with pytest.raises(ReviewCompletionBlocked) as exc:
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_NO_CHANGE,
+                outcome_reason="attempted completion",
+                user=USER, audit_writer=audit_sink,
+            )
+        assert exc.value.blocking_items[0]["item_type"] == "document_expired"
+
+    def test_blocks_completion_for_high_monitoring_alert(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE, ReviewCompletionBlocked,
+        )
+        _insert_alert(review_db, status="open", severity="high")
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        with pytest.raises(ReviewCompletionBlocked):
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_NO_CHANGE,
+                outcome_reason="attempted completion",
+                user=USER, audit_writer=audit_sink,
+            )
+
+    def test_blocks_completion_when_edd_required_without_case(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_EDD_REQUIRED, ReviewCompletionBlocked,
+        )
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        with pytest.raises(ReviewCompletionBlocked):
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_EDD_REQUIRED,
+                outcome_reason="EDD required",
+                user=USER, audit_writer=audit_sink,
+            )
+
+    def test_allows_completion_when_only_low_items_open(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        result = record_review_outcome(
+            review_db, rid,
+            outcome=OUTCOME_NO_CHANGE,
+            outcome_reason="low items only",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert result["status"] == "completed"
+
+
+class TestRequiredItemUpdates:
+    def test_officer_can_clear_item(self, review_db, audit_sink):
+        from periodic_review_engine import generate_required_items, update_required_item
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        updated = update_required_item(
+            review_db, rid, items[0]["id"],
+            status="cleared",
+            officer_note="Confirmed",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert updated["status"] == "cleared"
+
+    def test_officer_can_request_info(self, review_db, audit_sink):
+        from periodic_review_engine import generate_required_items, update_required_item
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        updated = update_required_item(
+            review_db, rid, items[0]["id"],
+            status="info_requested",
+            officer_note="Need refreshed file",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert updated["status"] == "info_requested"
+
+    def test_officer_can_escalate_item(self, review_db, audit_sink):
+        from periodic_review_engine import generate_required_items, update_required_item
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        updated = update_required_item(
+            review_db, rid, items[0]["id"],
+            status="escalated",
+            officer_note="Escalate to SCO",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert updated["status"] == "escalated"
+
+    def test_not_applicable_requires_note(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, update_required_item,
+            PeriodicReviewEngineError,
+        )
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        with pytest.raises(PeriodicReviewEngineError):
+            update_required_item(
+                review_db, rid, items[0]["id"],
+                status="not_applicable",
+                user=USER, audit_writer=audit_sink,
+            )
+
+    def test_refuses_mutation_after_completion(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, update_required_item, ReviewClosedError,
+        )
+        rid = _insert_review(review_db, status="completed")
+        review_db.execute(
+            "UPDATE periodic_reviews SET required_items = ? WHERE id = ?",
+            (json.dumps([{"id": "x", "code": "kyc_refresh", "label": "x", "rationale": "y"}]), rid),
+        )
+        review_db.commit()
+        with pytest.raises(ReviewClosedError):
+            update_required_item(
+                review_db, rid, "x",
+                status="cleared",
+                officer_note="done",
+                user=USER, audit_writer=audit_sink,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────

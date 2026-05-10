@@ -1348,7 +1348,9 @@ def verify_document_layered(
     gate_hard_fail = any(r["result"] == CheckStatus.FAIL and r["id"].startswith("GATE")
                          for r in gate_results)
     if gate_hard_fail:
-        return _aggregate(all_results)
+        result = _aggregate(all_results)
+        result["extracted_fields"] = {}
+        return result
 
     # ── Extract document fields via Claude vision ──────────────���──
     # Claude extracts structured fields; rule engine then evaluates deterministically
@@ -1461,7 +1463,9 @@ def verify_document_layered(
         except Exception:
             pass
 
-    return _aggregate(all_results, confidence=ai_confidence)
+    result = _aggregate(all_results, confidence=ai_confidence)
+    result["extracted_fields"] = extracted_fields or {}
+    return result
 
 
 # ── Public helper: format result for backward compatibility ────────
