@@ -141,6 +141,24 @@ def _make_db():
             is_fixture INTEGER DEFAULT 0,
             updated_at TEXT
         );
+        CREATE TABLE users (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            role TEXT
+        );
+        CREATE TABLE directors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id INTEGER,
+            full_name TEXT,
+            is_pep TEXT DEFAULT 'No'
+        );
+        CREATE TABLE ubos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id INTEGER,
+            full_name TEXT,
+            ownership_pct REAL,
+            is_pep TEXT DEFAULT 'No'
+        );
         CREATE TABLE edd_cases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             application_id INTEGER,
@@ -168,6 +186,55 @@ def _make_db():
     )
     conn.commit()
     return conn
+
+
+def test_apply_routing_decision_detects_declared_pep_from_party_rows():
+    import routing_actuator as ra
+
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "final_risk_level, onboarding_lane, status) VALUES (?,?,?,?,?,?,?)",
+        (
+            "ARF-T-PEP-PARTY",
+            "Declared PEP Holdings",
+            "Mauritius",
+            "Consulting",
+            "MEDIUM",
+            "Standard Review",
+            "pricing_review",
+        ),
+    )
+    app_id = conn.execute(
+        "SELECT id FROM applications WHERE ref=?",
+        ("ARF-T-PEP-PARTY",),
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Priya Declared PEP", "Yes"),
+    )
+    conn.commit()
+    app_row = dict(conn.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone())
+
+    out = ra.apply_routing_decision(
+        db=conn,
+        app_row=app_row,
+        source=ra.SOURCE_PRESCREENING_SUBMIT,
+        user={"sub": "client001", "name": "Portal Client", "role": "client"},
+    )
+    conn.commit()
+
+    assert out["ran"] is True
+    assert out["route"] == "edd"
+    assert "declared_pep_present" in out["triggers"]
+    assert conn.execute(
+        "SELECT onboarding_lane FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone()["onboarding_lane"] == "EDD"
+    assert conn.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"] == 1
 
 
 # ---------------------------------------------------------------- G & H

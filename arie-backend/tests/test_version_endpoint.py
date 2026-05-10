@@ -11,6 +11,7 @@ import json
 import tempfile
 import threading
 import time
+from pathlib import Path
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,6 +24,18 @@ import tornado.ioloop
 import tornado.httpserver
 
 EXPECTED_KEYS = {"git_sha", "git_sha_short", "build_time", "image_tag", "environment", "service"}
+
+
+def test_deploy_staging_refreshes_runtime_version_environment():
+    workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "deploy-staging.yml"
+    text = workflow.read_text()
+
+    assert "echo \"git_sha=${{ github.sha }}\"" in text
+    assert "echo \"build_time=$BUILD_TIME\"" in text
+    assert "echo \"image_tag=$IMAGE_TAG\"" in text
+    assert "upsert_env('GIT_SHA', '$GIT_SHA')" in text
+    assert "upsert_env('BUILD_TIME', '$BUILD_TIME')" in text
+    assert "upsert_env('IMAGE_TAG', '$IMAGE_TAG')" in text
 
 
 def _find_free_port():

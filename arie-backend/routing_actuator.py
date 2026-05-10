@@ -94,6 +94,45 @@ def _norm_str(v: Any) -> str:
     return str(v).strip()
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in {"yes", "true", "1", "y"}
+
+
+def _declared_pep_present_in_party_rows(db, application_id: Any) -> bool:
+    if db is None or application_id in (None, ""):
+        return False
+    try:
+        rows = db.execute(
+            """
+            SELECT is_pep FROM directors WHERE application_id=?
+            UNION ALL
+            SELECT is_pep FROM ubos WHERE application_id=?
+            """,
+            (application_id, application_id),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            "Declared PEP routing fact lookup failed for app %s: %s",
+            application_id,
+            exc,
+        )
+        return False
+    for row in rows:
+        if hasattr(row, "keys"):
+            value = dict(row).get("is_pep")
+        elif isinstance(row, (tuple, list)) and row:
+            value = row[0]
+        else:
+            value = None
+        if _truthy(value):
+            return True
+    return False
+
+
 def build_routing_facts(
     *,
     app_row: Mapping[str, Any],
@@ -260,6 +299,10 @@ def apply_routing_decision(
         supervisor_mandatory_escalation=supervisor_mandatory_escalation,
         edd_trigger_flags=edd_trigger_flags,
     )
+    app_dict = dict(app_row)
+    application_id = app_dict.get("id")
+    if not facts.get("declared_pep_present") and _declared_pep_present_in_party_rows(db, application_id):
+        facts["declared_pep_present"] = True
 
     try:
         routing = evaluate_edd_routing(facts)
@@ -280,8 +323,6 @@ def apply_routing_decision(
     result["policy_version"] = routing.get("policy_version")
     result["triggers"] = list(routing.get("triggers") or [])
 
-    app_dict = dict(app_row)
-    application_id = app_dict.get("id")
     application_ref = app_dict.get("ref") or _norm_str(application_id)
 
     # ---- Persist lane decision -----------------------------------------

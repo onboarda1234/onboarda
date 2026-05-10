@@ -102,6 +102,7 @@ from environment import (
     enforce_startup_safety, get_environment_info,
     get_database_url, get_jwt_secret, get_cors_origin, get_s3_bucket
 )
+from screening_freshness_metadata import populate_screening_freshness_metadata
 
 # ── Sprint 2: Extracted modules ──────────────────────────
 from auth import (
@@ -136,6 +137,7 @@ from edd_routing_policy import (
     evaluate_edd_routing as _evaluate_edd_routing,
     emit_routing_audit as _emit_edd_routing_audit,
 )
+from edd_actuation import resolve_valid_assigned_officer as _resolve_valid_edd_assigned_officer
 from enhanced_requirements import (
     ALLOWED_AUDIENCES,
     ALLOWED_REQUIREMENT_TYPES,
@@ -473,13 +475,14 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
                 "note": "EDD case auto-created by routing policy actuation",
             }])
             risk_level, risk_score = _application_risk_snapshot(app_dict)
+            assigned_officer = _resolve_valid_edd_assigned_officer(db, user)
             insert_params = (
                 application_id,
                 app_dict.get("company_name") or "",
                 risk_level,
                 risk_score,
                 "triggered",
-                (user or {}).get("sub") or None,
+                assigned_officer,
                 "policy_routing",
                 trigger_notes,
                 initial_note,
@@ -3503,6 +3506,12 @@ class SubmitApplicationHandler(BaseHandler):
             )
             screening_report["screening_mode"] = "unknown"
 
+        populate_screening_freshness_metadata(
+            prescreening,
+            screening_report,
+            screened_by=user.get("sub"),
+        )
+
         # Compute risk score
         risk = compute_risk_score(scoring_input)
 
@@ -3526,6 +3535,7 @@ class SubmitApplicationHandler(BaseHandler):
         # mandate EDD. Run the deterministic v1 policy now so the case
         # is on the EDD lane and an edd_cases row is created
         # before the application reaches the officer queue.
+        _routing_outcome = {}
         try:
             from routing_actuator import (
                 apply_routing_decision,
@@ -3628,13 +3638,54 @@ class SubmitApplicationHandler(BaseHandler):
             db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
                        (json.dumps(prescreening, default=str), real_id))
 
-            # Notify compliance team for HIGH/VERY_HIGH risk — requires pre-approval
-            if risk["level"] in ("HIGH", "VERY_HIGH"):
+            # Post-persistence safety pass: the routing actuator also runs
+            # generation, but on PostgreSQL an earlier actuation failure can
+            # abort the transaction before requirements are written. Running
+            # idempotent generation after the durable application risk/lane
+            # fields are saved keeps HIGH/EDD/PEP cases from requiring a
+            # manual back-office generation step.
+            if (
+                risk["level"] in ("HIGH", "VERY_HIGH")
+                or risk.get("lane") == "EDD"
+                or (_routing_outcome or {}).get("route") == "edd"
+            ):
+                try:
+                    refreshed_app = db.execute(
+                        "SELECT * FROM applications WHERE id=?",
+                        (real_id,),
+                    ).fetchone()
+                    generation = generate_application_enhanced_requirements(
+                        db,
+                        real_id,
+                        app_row=refreshed_app,
+                        routing=_routing_outcome or None,
+                        actor=user,
+                        generation_source="prescreening_submit_post_persist",
+                    )
+                    if generation and generation.get("config_ok") is False:
+                        logger.error(
+                            "Enhanced requirement auto-generation config invalid: app_id=%s ref=%s errors=%s",
+                            real_id,
+                            app.get("ref", ""),
+                            generation.get("errors"),
+                        )
+                except Exception as generation_exc:
+                    logger.error(
+                        "Enhanced requirement auto-generation failed after prescreening persistence: app_id=%s ref=%s error=%s",
+                        real_id,
+                        app.get("ref", ""),
+                        generation_exc,
+                        exc_info=True,
+                    )
+
+            # Notify compliance team for HIGH/VERY_HIGH risk or policy-routed
+            # EDD cases — requires pre-approval.
+            if risk["level"] in ("HIGH", "VERY_HIGH") or risk.get("lane") == "EDD":
                 compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
                 for cu in compliance_users:
                     db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
                               (cu["id"], f"PRE-APPROVAL REQUIRED: {risk['level']}-Risk Application {app['ref']}",
-                               f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}). "
+                               f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}), Lane: {risk['lane']}. "
                                f"This application requires pre-approval before the client can proceed to KYC. "
                                f"Review pre-screening data and screening results in the Pre-Approval Queue."))
 
@@ -3668,7 +3719,7 @@ class SubmitApplicationHandler(BaseHandler):
             "risk_dimensions": risk["dimensions"],
             "onboarding_lane": risk["lane"],
             "status": result_status,
-            "requires_pre_approval": risk["level"] in ("HIGH", "VERY_HIGH"),
+            "requires_pre_approval": risk["level"] in ("HIGH", "VERY_HIGH") or risk.get("lane") == "EDD",
             "pricing": pricing,
             "screening": {
                 "total_hits": screening_report["total_hits"],
@@ -3710,6 +3761,11 @@ class PricingAcceptHandler(BaseHandler):
             db.close()
             return self.error(risk_error, 400)
         risk_level, _risk_score = _application_risk_snapshot(app)
+        app_snapshot = dict(app)
+        requires_pre_approval = (
+            risk_level in ("HIGH", "VERY_HIGH")
+            or str(app_snapshot.get("onboarding_lane") or "").strip().upper() == "EDD"
+        )
 
         # Update status: accepted pricing
         db.execute("UPDATE applications SET status='pricing_accepted', updated_at=datetime('now') WHERE id=?", (real_id,))
@@ -3717,7 +3773,7 @@ class PricingAcceptHandler(BaseHandler):
         # Route based on risk level after pricing acceptance:
         # LOW/MEDIUM → proceed directly to KYC & Documents (straight-through)
         # HIGH/VERY_HIGH → pre-approval review (KYC blocked until officer pre-approves)
-        if risk_level in ("HIGH", "VERY_HIGH"):
+        if requires_pre_approval:
             next_status = "pre_approval_review"
             db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
             message = "Pricing accepted. Your application is now undergoing an initial compliance review before document submission."
@@ -9664,16 +9720,11 @@ class ScreeningHandler(BaseHandler):
         # Store screening report
         prescreening = safe_json_loads(app["prescreening_data"])
         prescreening["screening_report"] = report
-        now_utc = datetime.now(timezone.utc)
-        prescreening["last_screened_at"] = now_utc.strftime("%Y-%m-%dT%H:%M:%S")
-        prescreening["screened_by"] = user["sub"]
-
-        # EX-10: Compute and store screening validity deadline
-        from environment import get_screening_validity_days
-        validity_days = get_screening_validity_days()
-        valid_until = now_utc + timedelta(days=validity_days)
-        prescreening["screening_valid_until"] = valid_until.strftime("%Y-%m-%dT%H:%M:%S")
-        prescreening["screening_validity_days"] = validity_days
+        screening_freshness = populate_screening_freshness_metadata(
+            prescreening,
+            report,
+            screened_by=user["sub"],
+        )
 
         db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now'), inputs_updated_at=datetime('now') WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
@@ -9716,8 +9767,8 @@ class ScreeningHandler(BaseHandler):
         response = dict(report)
         if risk_recomputed:
             response["risk_recomputed"] = True
-        response["screening_valid_until"] = prescreening["screening_valid_until"]
-        response["screening_validity_days"] = validity_days
+        response["screening_valid_until"] = screening_freshness["screening_valid_until"]
+        response["screening_validity_days"] = prescreening["screening_validity_days"]
         self.success(response)
 
 
