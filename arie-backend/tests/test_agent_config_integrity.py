@@ -535,6 +535,37 @@ class TestConflictDetection:
         db.close()
 
 
+class TestBackOfficeAgentNumberDisplay:
+    """Regression coverage for API row id vs configured agent number in the UI."""
+
+    BACKOFFICE_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "arie-backoffice.html",
+    )
+
+    def _read_backoffice(self):
+        with open(self.BACKOFFICE_PATH, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def test_api_agents_are_normalized_to_agent_number(self):
+        """The UI must display agent_number, not the database primary key id."""
+        src = self._read_backoffice()
+
+        assert "function normalizeAIAgentConfig(agent)" in src
+        assert "normalized.dbId = normalized.dbId || normalized.id" in src
+        assert "normalized.id = displayNumber" in src
+        assert "agentsResp.agents.map(normalizeAIAgentConfig)" in src
+
+    def test_save_uses_database_id_but_payload_keeps_agent_number(self):
+        """Saving should PUT to the DB row id while preserving Agent 1-10 numbering."""
+        src = self._read_backoffice()
+
+        assert "function getAIAgentRecordId(agent)" in src
+        assert "var recordId = getAIAgentRecordId(agent)" in src
+        assert "agent_number: agent.id" in src
+        assert "'/config/ai-agents/' + encodeURIComponent(recordId)" in src
+
+
 class TestPoADisambiguation:
     """P1-4: Verify poa exists for both entity and person with different categories."""
 

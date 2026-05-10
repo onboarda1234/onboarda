@@ -3646,7 +3646,7 @@ async function loadFromAPI() {
     // Load AI agents
     try {
       var agentsResp = await boApiCall('GET', '/config/ai-agents');
-      if (agentsResp.agents && agentsResp.agents.length > 0) AI_AGENTS = agentsResp.agents;
+      if (agentsResp.agents && agentsResp.agents.length > 0) AI_AGENTS = agentsResp.agents.map(normalizeAIAgentConfig);
     } catch(e) {}
 
     try {
@@ -11970,9 +11970,27 @@ var AI_AGENTS = [
     checks:['Document currency verification (rule)', 'Screening recency check (rule)', 'Policy change applicability check (rule)', 'Condition compliance tracking (rule)', 'Filing deadline monitoring (rule)', 'Inter-agent finding consolidation (rule)', 'Remediation tracker status (rule)', 'Compliance risk re-scoring (hybrid)', 'Review frequency recommendation (hybrid)', 'Compliance narrative generation (ai)', 'Escalation/closure recommendation (ai)'] }
 ];
 
+function normalizeAIAgentConfig(agent) {
+  var normalized = Object.assign({}, agent || {});
+  var displayNumber = parseInt(normalized.agent_number, 10);
+  if (isNaN(displayNumber) || displayNumber <= 0) displayNumber = parseInt(normalized.id, 10);
+  if (isNaN(displayNumber) || displayNumber <= 0) displayNumber = 0;
+  normalized.dbId = normalized.dbId || normalized.id;
+  normalized.id = displayNumber;
+  normalized.agent_number = displayNumber;
+  normalized.checks = Array.isArray(normalized.checks) ? normalized.checks : [];
+  normalized.enabled = !(normalized.enabled === false || normalized.enabled === 0 || normalized.enabled === '0');
+  return normalized;
+}
+
+function getAIAgentRecordId(agent) {
+  return agent && (agent.dbId || agent.record_id || agent.database_id || agent.id);
+}
+
 function renderAgentsPipeline() {
   var container = document.getElementById('agents-container');
   var html = '';
+  AI_AGENTS = AI_AGENTS.map(normalizeAIAgentConfig);
 
   // Summary stats
   var enabled = AI_AGENTS.filter(function(a){return a.enabled;}).length;
@@ -12097,8 +12115,9 @@ function saveAgents() {
   // Sync each agent to API
   if (BO_AUTH_TOKEN) {
     var savePromises = AI_AGENTS.map(function(agent) {
+      var recordId = getAIAgentRecordId(agent);
       var agentData = { agent_number: agent.id, name: agent.name, icon: agent.icon, stage: agent.stage, description: agent.description, enabled: agent.enabled, checks: agent.checks };
-      return boApiCall('PUT', '/config/ai-agents/' + agent.id, agentData);
+      return boApiCall('PUT', '/config/ai-agents/' + encodeURIComponent(recordId), agentData);
     });
     Promise.all(savePromises).then(function() {
       renderAgentsPipeline();
