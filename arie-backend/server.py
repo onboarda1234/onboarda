@@ -6697,6 +6697,27 @@ class RolesPermissionsHandler(BaseHandler):
 # AI AGENTS CONFIG ENDPOINTS
 # ══════════════════════════════════════════════════════════
 
+def _serialize_ai_agent(row):
+    """Return AI agent config with business numbering as the public id."""
+    agent = dict(row)
+    db_id = agent.get("id")
+    agent_number = agent.get("agent_number") or db_id
+    agent["db_id"] = db_id
+    agent["record_id"] = db_id
+    agent["id"] = agent_number
+    agent["checks"] = safe_json_loads(agent["checks"]) if agent.get("checks") else []
+    agent["enabled"] = bool(agent.get("enabled"))
+    return agent
+
+
+def _resolve_ai_agent_row(db, agent_id):
+    """Resolve either public agent_number or legacy database primary key."""
+    row = db.execute("SELECT * FROM ai_agents WHERE agent_number=?", (agent_id,)).fetchone()
+    if row:
+        return row
+    return db.execute("SELECT * FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
+
+
 class AIAgentsHandler(BaseHandler):
     """GET/POST /api/config/ai-agents"""
     def get(self):
@@ -6708,10 +6729,7 @@ class AIAgentsHandler(BaseHandler):
         db.close()
         agents = []
         for r in rows:
-            a = dict(r)
-            a["checks"] = safe_json_loads(a["checks"]) if a["checks"] else []
-            a["enabled"] = bool(a["enabled"])
-            agents.append(a)
+            agents.append(_serialize_ai_agent(r))
         self.success({"agents": agents})
 
     def post(self):
@@ -6741,10 +6759,12 @@ class AIAgentDetailHandler(BaseHandler):
         db = get_db()
 
         # P2-1: Read old state for audit diff
-        old_agent = db.execute("SELECT * FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
+        old_agent = _resolve_ai_agent_row(db, agent_id)
         if not old_agent:
             db.close()
             return self.error("Agent not found", 404)
+        agent_pk = old_agent["id"]
+        display_number = old_agent["agent_number"]
 
         # P2-3: Conflict detection — reject stale updates
         if data.get("expected_updated_at"):
@@ -6756,7 +6776,7 @@ class AIAgentDetailHandler(BaseHandler):
                       enabled=?, checks=?, updated_at=datetime('now') WHERE id=?""",
                    (data.get("name",""), data.get("icon",""), data.get("stage",""),
                     data.get("description",""), 1 if data.get("enabled",True) else 0,
-                    json.dumps(data.get("checks",[])), agent_id))
+                    json.dumps(data.get("checks",[])), agent_pk))
         db.commit()
 
         # P2-1: Build audit detail with old/new values
@@ -6767,11 +6787,11 @@ class AIAgentDetailHandler(BaseHandler):
             changes.append(f"name: '{old_agent['name']}' -> '{data['name']}'")
         if "stage" in data and data["stage"] != old_agent["stage"]:
             changes.append(f"stage: '{old_agent['stage']}' -> '{data['stage']}'")
-        detail = f"Agent {agent_id} updated: {data.get('name', old_agent['name'])}. Changes: "
+        detail = f"Agent {display_number} updated: {data.get('name', old_agent['name'])}. Changes: "
         detail += ", ".join(changes) if changes else "no field changes"
 
         # Return updated_at for conflict detection
-        updated_row = db.execute("SELECT updated_at FROM ai_agents WHERE id=?", (agent_id,)).fetchone()
+        updated_row = db.execute("SELECT updated_at FROM ai_agents WHERE id=?", (agent_pk,)).fetchone()
         db.close()
         self.log_audit(user, "Config Update", "AI Agents", detail)
         self.success({"status": "updated", "updated_at": updated_row["updated_at"] if updated_row else None})
@@ -6781,10 +6801,14 @@ class AIAgentDetailHandler(BaseHandler):
         if not user:
             return
         db = get_db()
-        db.execute("DELETE FROM ai_agents WHERE id=?", (agent_id,))
+        agent = _resolve_ai_agent_row(db, agent_id)
+        if not agent:
+            db.close()
+            return self.error("Agent not found", 404)
+        db.execute("DELETE FROM ai_agents WHERE id=?", (agent["id"],))
         db.commit()
         db.close()
-        self.log_audit(user, "Config", "AI Agents", f"Agent {agent_id} deleted")
+        self.log_audit(user, "Config", "AI Agents", f"Agent {agent['agent_number']} deleted")
         self.success({"status": "deleted"})
 
 

@@ -9201,7 +9201,8 @@ function monitoringAgentRuntimeMatch(catalogEntry) {
   for (var i = 0; i < MONITORING_AGENTS.length; i++) {
     var a = MONITORING_AGENTS[i];
     if (!a) continue;
-    if (Number(a.id) === Number(catalogEntry.id)) return a;
+    var runtimeNumber = a.agent_number || a.id;
+    if (Number(runtimeNumber) === Number(catalogEntry.id)) return a;
     if (a.name && String(a.name).toLowerCase() === byName) return a;
   }
   return null;
@@ -12275,6 +12276,7 @@ function saveAgents() {
 
 function generateAgentHealthData() {
   // Simulates realistic agent health telemetry based on actual AI_AGENTS config
+  AI_AGENTS = AI_AGENTS.map(normalizeAIAgentConfig);
   var now = Date.now();
   var range = document.getElementById('ah-time-range') ? document.getElementById('ah-time-range').value : '7d';
   var seed = Math.floor(now / 86400000); // changes daily for consistent demo data
