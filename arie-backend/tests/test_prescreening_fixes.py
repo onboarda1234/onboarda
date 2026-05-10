@@ -185,6 +185,27 @@ class TestBackendProfitDerivation(unittest.TestCase):
         assert profit.get("year_2") == 120000
         assert profit.get("year_3") == 200000
 
+    def test_prescreening_risk_input_preserves_application_context_ids(self):
+        from prescreening.risk_inputs import build_prescreening_risk_input
+
+        result = build_prescreening_risk_input(
+            application={
+                "id": "app-real-1",
+                "ref": "ARF-2026-TEST",
+                "client_id": "client-real-1",
+                "company_name": "Context Ltd",
+            },
+            prescreening_data={},
+            directors=[],
+            ubos=[],
+            intermediaries=[],
+        )
+
+        assert result["application_id"] == "app-real-1"
+        assert result["id"] == "app-real-1"
+        assert result["ref"] == "ARF-2026-TEST"
+        assert result["client_id"] == "client-real-1"
+
     def test_profit_handles_zero_revenue(self):
         from prescreening.normalize import normalize_prescreening_data
 

@@ -348,7 +348,12 @@ def _normalise_risk_as_alert(risk_id, raw):
 def _extract_alert_ids(workflow_raw):
     alerts = workflow_raw.get("alerts") or []
     ids = [_extract_identifier(item) for item in alerts]
-    return [value for value in ids if value]
+    step_details = workflow_raw.get("step_details") or {}
+    alerting = step_details.get("alerting") or {}
+    step_output = alerting.get("step_output") or alerting.get("output") or {}
+    step_alerts = step_output.get("alerts") or []
+    ids.extend(_extract_identifier(item) for item in step_alerts)
+    return list(dict.fromkeys(value for value in ids if value))
 
 
 def _extract_risk_id(risk_raw):

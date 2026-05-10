@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from copy import deepcopy
 from dataclasses import dataclass
 from unittest.mock import patch
 
@@ -234,6 +235,27 @@ def test_case_creation_completed_returns_full_report_with_three_layer_paths():
     assert "/v2/alerts/alert-pep/risks?page=1" in paths
     assert "/v2/entity-screening/risks/risk-pep" in paths
     assert "/v2/workflows/wf-pep/alerts" not in paths
+    assert report["total_hits"] == 1
+    assert report["any_pep_hits"] is True
+
+
+def test_case_creation_extracts_alerts_from_alerting_step_output():
+    data = deepcopy(_fixture("pep_canonical.json"))
+    alert = data["workflow"].pop("alerts")[0]
+    data["workflow"]["step_details"]["alerting"] = {
+        "status": "COMPLETED",
+        "step_output": {"alerts": [alert]},
+    }
+    client = _client_for_single(data)
+
+    report = _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("strict"),
+        application_context=_context(data),
+        monitoring_enabled=False,
+    )
+
+    assert "/v2/alerts/alert-pep/risks?page=1" in client.called_paths()
     assert report["total_hits"] == 1
     assert report["any_pep_hits"] is True
 

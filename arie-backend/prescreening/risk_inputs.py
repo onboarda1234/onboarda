@@ -92,6 +92,10 @@ def build_prescreening_risk_input(
 
     scorer_input = {
         **normalized,
+        "application_id": (application or {}).get("id"),
+        "id": (application or {}).get("id"),
+        "ref": (application or {}).get("ref"),
+        "client_id": (application or {}).get("client_id"),
         "company_name": first_non_empty((application or {}).get("company_name"), entity.get("legal_name")),
         "country": first_non_empty((application or {}).get("country"), entity.get("incorporation_country")),
         "sector": first_non_empty((application or {}).get("sector"), normalized.get("sector"), business.get("sector")),
