@@ -179,7 +179,7 @@ def test_polling_loop_uses_backoff_and_times_out_with_fake_clock():
         "status": "COMPLETED",
         "step_details": {
             "case-creation": {"status": "COMPLETED"},
-            "customer-creation": {"status": "COMPLETED", "output": {"customer_identifier": "cust-test"}},
+            "customer-creation": {"status": "COMPLETED", "step_output": {"customer_identifier": "cust-test"}},
         },
     }
     client = PathStrictFakeCAClient({}, {"/v2/workflows/wf": [in_progress, in_progress, complete]})
