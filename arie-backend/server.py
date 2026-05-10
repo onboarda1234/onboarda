@@ -2270,8 +2270,10 @@ class OfficerLoginHandler(BaseHandler):
             return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
         db = get_db()
-        user = db.execute("SELECT * FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
-        db.close()
+        try:
+            user = db.execute("SELECT * FROM users WHERE email = ? AND status = 'active'", (email,)).fetchone()
+        finally:
+            db.close()
 
         if not user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
             return self.error("Invalid credentials", 401)
@@ -2306,8 +2308,10 @@ class ClientLoginHandler(BaseHandler):
             return self.error("Too many login attempts. Please try again in 15 minutes.", 429)
 
         db = get_db()
-        client = db.execute("SELECT * FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
-        db.close()
+        try:
+            client = db.execute("SELECT * FROM clients WHERE email = ? AND status = 'active'", (email,)).fetchone()
+        finally:
+            db.close()
 
         if not client or not bcrypt.checkpw(password.encode(), client["password_hash"].encode()):
             return self.error("Invalid credentials", 401)
@@ -2657,7 +2661,7 @@ class ApplicationsHandler(BaseHandler):
                 "AND aer.status = 'waived' "
                 "AND (aer.waiver_reason IS NULL OR TRIM(aer.waiver_reason) = '' "
                 "OR aer.waived_by IS NULL OR TRIM(aer.waived_by) = '' "
-                "OR aer.waived_at IS NULL OR TRIM(aer.waived_at) = ''))"
+                "OR aer.waived_at IS NULL))"
             )
             approval_blocked_expr = f"({missing_generated_expr} OR {unresolved_expr} OR {invalid_waiver_expr})"
             if enhanced_review == "active":
