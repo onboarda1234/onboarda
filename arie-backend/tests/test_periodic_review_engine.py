@@ -793,6 +793,108 @@ class TestRecordOutcome:
                 user=USER, audit_writer=audit_sink,
             )
 
+    def test_dismissed_and_routed_alerts_do_not_block_completion(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+        _insert_alert(review_db, status="dismissed", severity="high")
+        _insert_alert(review_db, status="routed_to_review", severity="critical")
+        _insert_alert(review_db, status="routed_to_edd", severity="critical")
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        result = record_review_outcome(
+            review_db, rid,
+            outcome=OUTCOME_NO_CHANGE,
+            outcome_reason="terminal alerts only",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert result["status"] == "completed"
+
+    def test_resolved_at_alert_does_not_block_completion(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+        alert_id = _insert_alert(review_db, status="open", severity="critical")
+        review_db.execute(
+            "UPDATE monitoring_alerts SET resolved_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), alert_id),
+        )
+        review_db.commit()
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        result = record_review_outcome(
+            review_db, rid,
+            outcome=OUTCOME_NO_CHANGE,
+            outcome_reason="resolved_at only",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert result["status"] == "completed"
+
+    def test_blocks_completion_for_expired_regulatory_licence(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE, ReviewCompletionBlocked,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+        _insert_doc(
+            review_db,
+            doc_id="licence-block",
+            doc_type="licence",
+            expiry_date=(datetime.now(timezone.utc) - timedelta(days=3)).date().isoformat(),
+        )
+        rid = _insert_review(review_db, status="in_progress", risk_level="VERY_HIGH")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        with pytest.raises(ReviewCompletionBlocked) as exc:
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_NO_CHANGE,
+                outcome_reason="blocked licence",
+                user=USER, audit_writer=audit_sink,
+            )
+        assert any(item["severity"] == "critical" for item in exc.value.blocking_items)
+
+    def test_blocks_completion_for_stale_screening(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE, ReviewCompletionBlocked,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (
+                json.dumps({
+                    "screening_report": {"screened_at": (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()}
+                }),
+                "test-app-100",
+            ),
+        )
+        review_db.commit()
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        with pytest.raises(ReviewCompletionBlocked) as exc:
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_NO_CHANGE,
+                outcome_reason="stale screening",
+                user=USER, audit_writer=audit_sink,
+            )
+        assert any(item["item_type"] == "screening_refresh" for item in exc.value.blocking_items)
+
     def test_blocks_completion_when_edd_required_without_case(self, review_db, audit_sink):
         from periodic_review_engine import (
             generate_required_items, record_review_outcome,
@@ -807,6 +909,27 @@ class TestRecordOutcome:
                 outcome_reason="EDD required",
                 user=USER, audit_writer=audit_sink,
             )
+
+    def test_allows_edd_required_outcome_when_active_case_exists(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_EDD_REQUIRED,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+        _insert_edd(review_db)
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        result = record_review_outcome(
+            review_db, rid,
+            outcome=OUTCOME_EDD_REQUIRED,
+            outcome_reason="existing active edd",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert result["outcome"] == "edd_required"
 
     def test_allows_completion_when_only_low_items_open(self, review_db, audit_sink):
         from periodic_review_engine import (
@@ -827,6 +950,54 @@ class TestRecordOutcome:
             user=USER, audit_writer=audit_sink,
         )
         assert result["status"] == "completed"
+
+    def test_final_outcome_item_cleared_only_after_successful_completion(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        outcome_item = next(it for it in items if it["item_type"] == "review_outcome_recorded")
+        assert outcome_item["status"] == "open"
+        record_review_outcome(
+            review_db, rid,
+            outcome=OUTCOME_NO_CHANGE,
+            outcome_reason="all complete",
+            user=USER, audit_writer=audit_sink,
+        )
+        stored = _review(review_db, rid)
+        stored_items = json.loads(stored["required_items"])
+        stored_outcome_item = next(it for it in stored_items if it["item_type"] == "review_outcome_recorded")
+        assert stored_outcome_item["status"] == "cleared"
+
+    def test_failed_completion_does_not_mutate_outcome_fields(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE, ReviewCompletionBlocked,
+        )
+        _insert_alert(review_db, status="open", severity="high")
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        with pytest.raises(ReviewCompletionBlocked):
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_NO_CHANGE,
+                outcome_reason="should fail",
+                user=USER, audit_writer=audit_sink,
+            )
+        row = _review(review_db, rid)
+        assert row["status"] == "in_progress"
+        assert row["outcome"] is None
+        assert row["outcome_reason"] is None
+        items = json.loads(row["required_items"])
+        outcome_item = next(it for it in items if it["item_type"] == "review_outcome_recorded")
+        assert outcome_item["status"] == "open"
 
 
 class TestRequiredItemUpdates:
@@ -895,6 +1066,51 @@ class TestRequiredItemUpdates:
                 review_db, rid, "x",
                 status="cleared",
                 officer_note="done",
+                user=USER, audit_writer=audit_sink,
+            )
+
+    def test_monitoring_alert_item_cannot_be_cleared_directly(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, update_required_item, PeriodicReviewEngineError,
+        )
+        _insert_alert(review_db, status="open", severity="high")
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        alert_item = next(it for it in items if it["source"] == "monitoring_alert")
+        with pytest.raises(PeriodicReviewEngineError):
+            update_required_item(
+                review_db, rid, alert_item["id"],
+                status="cleared",
+                officer_note="done",
+                user=USER, audit_writer=audit_sink,
+            )
+
+    def test_underlying_alert_controls_completion_even_if_item_marked_cleared(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items, record_review_outcome,
+            OUTCOME_NO_CHANGE, ReviewCompletionBlocked,
+        )
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), "test-app-100"),
+        )
+        review_db.commit()
+        _insert_alert(review_db, status="open", severity="high")
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        for item in items:
+            if item["source"] == "monitoring_alert":
+                item["status"] = "cleared"
+        review_db.execute(
+            "UPDATE periodic_reviews SET required_items = ? WHERE id = ?",
+            (json.dumps(items), rid),
+        )
+        review_db.commit()
+        with pytest.raises(ReviewCompletionBlocked):
+            record_review_outcome(
+                review_db, rid,
+                outcome=OUTCOME_NO_CHANGE,
+                outcome_reason="underlying alert unresolved",
                 user=USER, audit_writer=audit_sink,
             )
 

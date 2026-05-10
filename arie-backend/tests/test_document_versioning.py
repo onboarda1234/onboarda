@@ -209,8 +209,38 @@ def test_existing_schema_without_slot_key_can_start_and_repair(tmp_path):
     assert "slot_key" in columns
     assert "is_current" in columns
     assert "version" in columns
+    assert "expiry_date" in columns
+    assert "valid_until" in columns
     assert "idx_documents_current_slot" in indexes
     assert "idx_documents_one_current_slot" in indexes
+
+
+def test_repeated_init_keeps_existing_document_rows_and_expiry_columns(tmp_path):
+    db_path = str(tmp_path / "repeat_init_documents.db")
+    _sync_db_path(db_path)
+    from db import get_db, init_db
+
+    init_db()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, expiry_date, valid_until) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("doc-repeat", "app-repeat", "passport", "passport.pdf", "/tmp/passport.pdf", "2030-01-01", "2030-02-01"),
+    )
+    conn.commit()
+    conn.close()
+
+    init_db()
+    conn = get_db()
+    row = conn.execute(
+        "SELECT doc_name, expiry_date, valid_until FROM documents WHERE id = ?",
+        ("doc-repeat",),
+    ).fetchone()
+    conn.close()
+
+    assert row["doc_name"] == "passport.pdf"
+    assert row["expiry_date"] == "2030-01-01"
+    assert row["valid_until"] == "2030-02-01"
 
 
 def test_replacement_supersedes_previous_document_and_active_apis_hide_history(document_versioning_server):

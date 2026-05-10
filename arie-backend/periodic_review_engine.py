@@ -52,6 +52,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import document_health_monitor as dhm
 import lifecycle_linkage as ll
+import monitoring_routing as mr
 from environment import get_screening_validity_days
 from lifecycle_linkage import (
     InvalidLifecycleTransition,
@@ -609,9 +610,8 @@ def _fetch_open_monitoring_alerts(db, application_id, *,
         return []
     placeholders = ",".join("?" for _ in dhm.DOCUMENT_ALERT_TYPES)
     query = (
-        "SELECT id, alert_type, severity, summary, status "
+        "SELECT id, alert_type, severity, summary, status, resolved_at "
         "FROM monitoring_alerts WHERE application_id = ? "
-        "AND COALESCE(status, 'open') NOT IN ('dismissed','routed_to_review','routed_to_edd')"
     )
     params: List[Any] = [application_id]
     if include_document_health:
@@ -619,7 +619,8 @@ def _fetch_open_monitoring_alerts(db, application_id, *,
     else:
         query += f" AND alert_type NOT IN ({placeholders})"
     params.extend(list(dhm.DOCUMENT_ALERT_TYPES))
-    return db.execute(query + " ORDER BY id ASC", params).fetchall()
+    rows = db.execute(query + " ORDER BY id ASC", params).fetchall()
+    return [row for row in rows if mr.is_alert_unresolved(row)]
 
 
 def _prior_completed_review(db, application_id, review_id):
@@ -930,6 +931,17 @@ def update_required_item(db, review_id, item_id, *, status: str,
     for item in items:
         if str(item.get("id")) != str(item_id):
             continue
+        if (
+            item.get("source") == "monitoring_alert"
+            and status in (
+                REQUIRED_ITEM_STATUS_CLEARED,
+                REQUIRED_ITEM_STATUS_NOT_APPLICABLE,
+            )
+        ):
+            raise PeriodicReviewEngineError(
+                "Linked monitoring-alert checklist items must be resolved via "
+                "the monitoring alert workflow before they can be cleared."
+            )
         before_state = dict(item)
         item["status"] = status
         item["officer_note"] = officer_note
@@ -1286,7 +1298,10 @@ def _blocking_items_for_completion(db, review, items, *, outcome: str,
                     "severity": severity,
                 })
             elif item_type in ("screening_refresh", "edd_followup"):
-                if _severity_rank(severity) >= _severity_rank("high"):
+                if (
+                    _severity_rank(severity) >= _severity_rank("high")
+                    and not (item_type == "edd_followup" and outcome == OUTCOME_EDD_REQUIRED)
+                ):
                     blocking_items.append({
                         "item_type": item_type,
                         "label": item.get("label"),

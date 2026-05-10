@@ -4788,7 +4788,11 @@ class DocumentVerifyHandler(BaseHandler):
             "subject_type": verification_context["subject_type"],
         })
         results = json.dumps(layered_results, default=str)
-        extracted_fields = (ai_result or {}).get("extracted_fields") or {}
+        extracted_fields = (
+            (ai_result or {}).get("extracted_fields")
+            or layered_results.get("extracted_fields")
+            or {}
+        )
         # Canonical extraction keys come from document_verification /
         # Claude field extraction. We accept the historical aliases here
         # so stored document metadata stays compatible across older
@@ -4799,11 +4803,27 @@ class DocumentVerifyHandler(BaseHandler):
             or extracted_fields.get("validity_to")
         )
         extracted_valid_until = extracted_fields.get("valid_until")
+        persisted_expiry = (
+            extracted_expiry
+            if extracted_expiry not in (None, "")
+            else doc.get("expiry_date")
+        )
+        persisted_valid_until = (
+            extracted_valid_until
+            if extracted_valid_until not in (None, "")
+            else doc.get("valid_until")
+        )
 
         db.execute(
             "UPDATE documents SET verification_status=?, verification_results=?, "
             "verified_at=datetime('now'), expiry_date=?, valid_until=? WHERE id=?",
-            (status, results, extracted_expiry, extracted_valid_until, doc_id),
+            (
+                status,
+                results,
+                persisted_expiry,
+                persisted_valid_until,
+                doc_id,
+            ),
         )
         db.commit()
         db.close()
@@ -12999,6 +13019,23 @@ class MonitoringAgentsHandler(BaseHandler):
         self.success({"agents": result})
 
 
+def _is_document_health_monitor_agent(agent_row):
+    agent_type = str(agent_row.get("agent_type") or "").strip().lower()
+    agent_name = str(agent_row.get("agent_name") or "").strip()
+    return (
+        agent_type in {
+            "periodic_review_preparation",
+            "ongoing_compliance_review",
+            "registry",
+        }
+        or agent_name in {
+            "Periodic Review Preparation Agent",
+            "Ongoing Compliance Review Agent",
+            "Registry Monitoring Agent",
+        }
+    )
+
+
 class MonitoringAgentRunHandler(BaseHandler):
     """POST /api/monitoring/agents/:id/run — Manually trigger agent run"""
     def post(self, agent_id):
@@ -13015,20 +13052,24 @@ class MonitoringAgentRunHandler(BaseHandler):
         now = datetime.now().isoformat()
         alerts_generated_delta = 0
         run_summary = None
-        agent_name = str(agent["agent_name"] or "")
-        if agent_name in (
-            "Periodic Review Preparation Agent",
-            "Ongoing Compliance Review Agent",
-        ):
+        if _is_document_health_monitor_agent(dict(agent)):
             import document_health_monitor as dhm
             run_summary = dhm.sync_document_health_alerts(
                 db,
                 user=user,
                 audit_writer=self.log_audit,
             )
+            run_summary["triggered"] = True
             alerts_generated_delta = run_summary.get("created", 0)
         else:
-            alerts_generated_delta = 1
+            run_summary = {
+                "triggered": False,
+                "reason": "agent_not_configured_for_document_health_sync",
+                "applications": 0,
+                "created": 0,
+                "updated": 0,
+                "resolved": 0,
+            }
         db.execute("""
             UPDATE monitoring_agent_status
                SET last_run=?,
@@ -13044,8 +13085,7 @@ class MonitoringAgentRunHandler(BaseHandler):
         db.close()
 
         payload = {"status": "agent_run_initiated", "agent": agent["agent_name"], "run_time": now}
-        if run_summary is not None:
-            payload["document_health_sync"] = run_summary
+        payload["document_health_sync"] = run_summary
         self.success(payload)
 
 
@@ -13230,21 +13270,27 @@ def _parse_review_id(handler, raw_review_id):
 
 
 def _serialize_periodic_review_row(db, review_row):
+    import document_health_monitor as dhm
+    import monitoring_routing as mr
     import periodic_review_engine as pre
 
     result = dict(review_row)
     items = pre.get_required_items(db, result["id"])
     result["required_items"] = items
     result["required_items_count"] = len(items)
+    alert_rows = db.execute(
+        "SELECT id, alert_type, status, resolved_at "
+        "FROM monitoring_alerts WHERE application_id = ? ORDER BY id ASC",
+        (result.get("application_id"),),
+    ).fetchall()
+    unresolved_alerts = [row for row in alert_rows if mr.is_alert_unresolved(row)]
     result["open_document_issues_count"] = len([
-        it for it in items
-        if it.get("category") == "Document Health"
-        and (it.get("status") or "open") in ("open", "info_requested", "escalated")
+        row for row in unresolved_alerts
+        if row["alert_type"] in dhm.DOCUMENT_ALERT_TYPES
     ])
     result["open_alerts_count"] = len([
-        it for it in items
-        if it.get("category") == "Monitoring Alerts"
-        and (it.get("status") or "open") in ("open", "info_requested", "escalated")
+        row for row in unresolved_alerts
+        if row["alert_type"] not in dhm.DOCUMENT_ALERT_TYPES
     ])
     screening_items = [it for it in items if it.get("item_type") == "screening_refresh"]
     if screening_items:

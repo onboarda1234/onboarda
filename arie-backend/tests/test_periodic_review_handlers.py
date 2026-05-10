@@ -179,6 +179,29 @@ class _PRReviewHandlerBase(AsyncHTTPTestCase):
         )
         self._conn.commit()
 
+    def _create_alert(self, *, status="open", severity="high", alert_type="adverse_media", resolved_at=None):
+        self._conn.execute(
+            "INSERT INTO monitoring_alerts "
+            "(application_id, client_name, alert_type, severity, status, resolved_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (self._app_id, "PR03 Test Co", alert_type, severity, status, resolved_at),
+        )
+        self._conn.commit()
+        return self._conn.execute(
+            "SELECT id FROM monitoring_alerts ORDER BY id DESC LIMIT 1"
+        ).fetchone()["id"]
+
+    def _create_monitoring_agent(self, *, name, agent_type, alerts_generated=0):
+        self._conn.execute(
+            "INSERT INTO monitoring_agent_status "
+            "(agent_name, agent_type, alerts_generated, status) VALUES (?, ?, ?, 'active')",
+            (name, agent_type, alerts_generated),
+        )
+        self._conn.commit()
+        return self._conn.execute(
+            "SELECT id FROM monitoring_agent_status ORDER BY id DESC LIMIT 1"
+        ).fetchone()["id"]
+
     def _post(self, path, body, token=None):
         return self.fetch(
             path, method="POST",
@@ -302,6 +325,22 @@ class TestRequiredItemsHandler(_PRReviewHandlerBase):
         )
         self.assertEqual(resp.code, 409)
 
+    def test_generated_items_expose_source_and_source_id(self):
+        alert_id = self._create_alert(status="open", severity="high")
+        rid = self._create_review(
+            status="in_progress",
+            trigger_source="monitoring_alert",
+            linked_alert_id=alert_id,
+            review_reason="linked alert context",
+        )
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/required-items/generate", {},
+        )
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        item = next(it for it in body["items"] if it["source"] == "monitoring_alert")
+        self.assertEqual(item["source_id"], alert_id)
+
 
 class TestRequiredItemPatchHandler(_PRReviewHandlerBase):
     def test_officer_can_clear_item(self):
@@ -355,6 +394,24 @@ class TestRequiredItemPatchHandler(_PRReviewHandlerBase):
             {"status": "cleared", "officer_note": "done"},
         )
         self.assertEqual(resp.code, 409)
+
+    def test_monitoring_alert_item_cannot_be_cleared(self):
+        alert_id = self._create_alert(status="open", severity="high")
+        rid = self._create_review(
+            status="in_progress",
+            trigger_source="monitoring_alert",
+            linked_alert_id=alert_id,
+            review_reason="linked alert context",
+        )
+        generated = json.loads(self._post(
+            f"/api/monitoring/reviews/{rid}/required-items/generate", {},
+        ).body)
+        item = next(it for it in generated["items"] if it["source"] == "monitoring_alert")
+        resp = self._patch(
+            f"/api/monitoring/reviews/{rid}/required-items/{item['id']}",
+            {"status": "cleared", "officer_note": "done"},
+        )
+        self.assertEqual(resp.code, 400)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -418,6 +475,11 @@ class TestEscalateHandler(_PRReviewHandlerBase):
 # ─────────────────────────────────────────────────────────────────
 class TestCompleteHandler(_PRReviewHandlerBase):
     def test_records_outcome_and_closes(self):
+        self._conn.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
+        )
+        self._conn.commit()
         rid = self._create_review(status="in_progress")
         resp = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
@@ -433,6 +495,11 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         self.assertIsNotNone(row["closed_at"])
 
     def test_replay_blocked(self):
+        self._conn.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
+        )
+        self._conn.commit()
         rid = self._create_review(status="in_progress")
         first = self._post(
             f"/api/monitoring/reviews/{rid}/complete",
@@ -470,6 +537,11 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         self.assertEqual(resp.code, 400)
 
     def test_blocks_completion_for_expired_document(self):
+        self._conn.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
+        )
+        self._conn.commit()
         self._create_document(
             doc_id="passport-expired",
             doc_type="passport",
@@ -485,6 +557,42 @@ class TestCompleteHandler(_PRReviewHandlerBase):
         body = json.loads(resp.body)
         self.assertEqual(body["error"], "Periodic review cannot be completed")
         self.assertTrue(body["blocking_items"])
+
+    def test_dismissed_and_routed_alerts_do_not_block(self):
+        self._conn.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
+        )
+        self._conn.commit()
+        self._create_alert(status="dismissed", severity="high")
+        self._create_alert(status="routed_to_review", severity="critical")
+        self._create_alert(status="routed_to_edd", severity="critical")
+        rid = self._create_review(status="in_progress")
+        self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            {"outcome": "no_change", "outcome_reason": "terminal alerts only"},
+        )
+        self.assertEqual(resp.code, 200)
+
+    def test_resolved_at_alert_does_not_block(self):
+        self._conn.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (json.dumps({"screening_report": {"screened_at": datetime.now(timezone.utc).isoformat()}}), self._app_id),
+        )
+        self._conn.commit()
+        self._create_alert(
+            status="open",
+            severity="critical",
+            resolved_at=datetime.now(timezone.utc).isoformat(),
+        )
+        rid = self._create_review(status="in_progress")
+        self._post(f"/api/monitoring/reviews/{rid}/required-items/generate", {})
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/complete",
+            {"outcome": "no_change", "outcome_reason": "resolved alert"},
+        )
+        self.assertEqual(resp.code, 200)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -582,6 +690,45 @@ class TestEscalatePriorityPersistence(_PRReviewHandlerBase):
             "SELECT priority FROM edd_cases WHERE id = ?", (edd_id,),
         ).fetchone()
         self.assertEqual(row["priority"], "high")
+
+
+class TestMonitoringAgentRunHandler(_PRReviewHandlerBase):
+    def test_registry_agent_triggers_document_health_sync(self):
+        agent_id = self._create_monitoring_agent(
+            name="Registry Monitoring Agent",
+            agent_type="registry",
+            alerts_generated=2,
+        )
+        self._create_document(
+            doc_id="passport-expired",
+            doc_type="passport",
+            expiry_date=(datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat(),
+        )
+        resp = self._post(f"/api/monitoring/agents/{agent_id}/run", {})
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertEqual(body["document_health_sync"]["created"], 1)
+        row = self._conn.execute(
+            "SELECT alerts_generated FROM monitoring_agent_status WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+        self.assertEqual(row["alerts_generated"], 3)
+
+    def test_non_document_health_agent_does_not_fake_alert_counts(self):
+        agent_id = self._create_monitoring_agent(
+            name="Adverse Media Agent",
+            agent_type="adverse_media",
+            alerts_generated=5,
+        )
+        resp = self._post(f"/api/monitoring/agents/{agent_id}/run", {})
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertFalse(body["document_health_sync"]["triggered"])
+        row = self._conn.execute(
+            "SELECT alerts_generated FROM monitoring_agent_status WHERE id = ?",
+            (agent_id,),
+        ).fetchone()
+        self.assertEqual(row["alerts_generated"], 5)
 
     def test_priority_persisted_when_reusing_linked_edd(self):
         # First escalate without priority -> creates EDD with NULL priority

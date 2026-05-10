@@ -109,6 +109,28 @@ def _alerts(conn):
 
 
 class TestDocumentHealthMonitor:
+    def test_requires_audit_writer_before_mutation(self, monitor_db):
+        from document_health_monitor import sync_document_health_alerts_for_application
+        from lifecycle_linkage import MissingAuditWriter
+
+        _insert_doc(
+            monitor_db,
+            doc_id="doc-no-audit",
+            doc_type="passport",
+            expiry_date=(datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat(),
+        )
+        with pytest.raises(MissingAuditWriter):
+            sync_document_health_alerts_for_application(
+                monitor_db, "app-doc-health", user=USER, audit_writer=None,
+            )
+        assert _alerts(monitor_db) == []
+
+    def test_current_document_sql_matches_db_dialect(self):
+        from document_health_monitor import _current_document_sql
+
+        assert _current_document_sql(type("DB", (), {"is_postgres": True})()) == "COALESCE(is_current, TRUE) = TRUE"
+        assert _current_document_sql(type("DB", (), {"is_postgres": False})()) == "COALESCE(is_current, 1) = 1"
+
     def test_creates_alert_for_expired_document(self, monitor_db, audit_sink):
         from document_health_monitor import sync_document_health_alerts_for_application
 
@@ -234,3 +256,50 @@ class TestDocumentHealthMonitor:
         )
         assert any(e["action"] == "monitoring.document_health_alert.created"
                    for e in audit_sink.events)
+
+    def test_update_and_resolution_audits_include_before_after_state(self, monitor_db, audit_sink):
+        from document_health_monitor import sync_document_health_alerts_for_application
+
+        _insert_doc(
+            monitor_db,
+            doc_id="doc-audit-update",
+            doc_type="passport",
+            expiry_date=(datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat(),
+        )
+        monitor_db.execute(
+            """
+            INSERT INTO monitoring_alerts
+                (application_id, client_name, alert_type, severity, detected_by,
+                 summary, source_reference, ai_recommendation, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "app-doc-health",
+                "Document Health Co",
+                "document_expired",
+                "low",
+                "document_health_monitor",
+                "stale summary",
+                "document:doc-audit-update",
+                "old recommendation",
+                "open",
+            ),
+        )
+        monitor_db.commit()
+        sync_document_health_alerts_for_application(
+            monitor_db, "app-doc-health", user=USER, audit_writer=audit_sink,
+        )
+        monitor_db.execute(
+            "UPDATE documents SET is_current = 0, superseded_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), "doc-audit-update"),
+        )
+        monitor_db.commit()
+        sync_document_health_alerts_for_application(
+            monitor_db, "app-doc-health", user=USER, audit_writer=audit_sink,
+        )
+
+        update_event = next(e for e in audit_sink.events if e["action"] == "monitoring.document_health_alert.updated")
+        resolve_event = next(e for e in audit_sink.events if e["action"] == "monitoring.document_health_alert.resolved")
+        assert update_event["before_state"]["summary"] != update_event["after_state"]["summary"]
+        assert resolve_event["before_state"]["status"] == "open"
+        assert resolve_event["after_state"]["status"] == "dismissed"

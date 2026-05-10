@@ -8772,17 +8772,27 @@ function renderPrcReviewDetailSection(detail) {
         var itemId = it && it.id ? String(it.id) : '';
         var severity = String((it && it.severity) || 'medium');
         var status = String((it && it.status) || 'open');
+        var source = String((it && it.source) || '');
+        var sourceId = (it && it.source_id != null) ? String(it.source_id) : '';
         var note = it && it.officer_note ? '<div style="margin-top:6px;font-size:11px;color:var(--text3);"><strong>Note:</strong> ' + escapeHtml(String(it.officer_note)) + '</div>' : '';
         var resolved = (it && it.resolved_at) ? '<div style="margin-top:4px;font-size:11px;color:var(--text3);">Resolved ' + escapeHtml(String(it.resolved_at)) + (it.resolved_by ? ' by ' + escapeHtml(String(it.resolved_by)) : '') + '</div>' : '';
+        var sourceMeta = source ? '<div style="margin-top:6px;font-size:11px;color:var(--text3);">Source: ' + escapeHtml(source.replace(/_/g,' ')) + (sourceId ? ' #' + escapeHtml(sourceId) : '') + '</div>' : '';
         var actionBar = '';
         if (canMutate && itemId) {
-          actionBar =
-            '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' +
-              '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'cleared\')">Clear</button>' +
-              '<button class="btn btn-outline btn-sm" onclick="requestReviewChecklistInfo(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ')">Request Info</button>' +
-              '<button class="btn btn-outline btn-sm" onclick="escalateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ')">Escalate</button>' +
-              '<button class="btn btn-outline btn-sm" onclick="markReviewChecklistItemNotApplicable(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ')">Not Applicable</button>' +
-            '</div>';
+          if (source === 'monitoring_alert' && sourceId) {
+            actionBar =
+              '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' +
+                '<button class="btn btn-outline btn-sm" onclick="openAlertDetailById(' + JSON.stringify(sourceId) + ')">Review linked alert</button>' +
+              '</div>';
+          } else {
+            actionBar =
+              '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' +
+                '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'cleared\')">Clear</button>' +
+                '<button class="btn btn-outline btn-sm" onclick="requestReviewChecklistInfo(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ')">Request Info</button>' +
+                '<button class="btn btn-outline btn-sm" onclick="escalateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ')">Escalate</button>' +
+                '<button class="btn btn-outline btn-sm" onclick="markReviewChecklistItemNotApplicable(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ')">Not Applicable</button>' +
+              '</div>';
+          }
         }
         return '<div style="padding:10px 12px;margin-bottom:10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);">' +
           '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;">' +
@@ -8793,7 +8803,7 @@ function renderPrcReviewDetailSection(detail) {
             '</div>' +
           '</div>' +
           '<div style="margin-top:6px;font-size:11px;color:var(--text3);">' + escapeHtml(String(it.rationale || '')) + '</div>' +
-          note + resolved + actionBar +
+          sourceMeta + note + resolved + actionBar +
         '</div>';
       }).join('');
       return '<div style="margin-top:14px;">' +

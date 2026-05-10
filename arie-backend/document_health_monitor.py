@@ -12,6 +12,9 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
+import lifecycle_linkage as ll
+import monitoring_routing as mr
+
 logger = logging.getLogger("arie.document_health_monitor")
 
 DOCUMENT_EXPIRING_SOON_DAYS = 30
@@ -27,7 +30,6 @@ DOCUMENT_ALERT_TYPES = (
     ALERT_TYPE_STALE,
     ALERT_TYPE_EXPIRY_MISSING,
 )
-TERMINAL_ALERT_STATUSES = {"dismissed", "routed_to_review", "routed_to_edd"}
 CRITICAL_IDENTITY_DOC_TYPES = {
     "passport",
     "national_id",
@@ -97,12 +99,20 @@ def _source_reference(document_id: Any) -> str:
     return f"document:{document_id}"
 
 
-def _document_type(doc) -> str:
+def _require_audit_writer(audit_writer):
+    if audit_writer is None:
+        raise ll.MissingAuditWriter(
+            "document_health_monitor requires a non-None audit_writer for "
+            "every alert mutation"
+        )
+
+
+def _get_document_type(doc) -> str:
     return str(_row_get(doc, "doc_type") or "").strip().lower()
 
 
 def _document_label(doc) -> str:
-    doc_type = _document_type(doc) or "document"
+    doc_type = _get_document_type(doc) or "document"
     doc_name = _row_get(doc, "doc_name") or ""
     if doc_name:
         return f"{doc_type} ({doc_name})"
@@ -195,14 +205,17 @@ def _issue_rationale(alert_type: str, doc, *, today: date,
     )
 
 
-def _is_open_status(status: Any) -> bool:
-    return str(status or "open").strip().lower() not in TERMINAL_ALERT_STATUSES
+def _current_document_sql(db) -> str:
+    return (
+        "COALESCE(is_current, TRUE) = TRUE"
+        if getattr(db, "is_postgres", False)
+        else "COALESCE(is_current, 1) = 1"
+    )
 
 
 def _emit_audit(audit_writer, *, user, action, target, detail,
                 db, before_state=None, after_state=None):
-    if audit_writer is None:
-        return
+    _require_audit_writer(audit_writer)
     try:
         audit_writer(
             dict(user or SYSTEM_USER),
@@ -218,14 +231,15 @@ def _emit_audit(audit_writer, *, user, action, target, detail,
 
 
 def _active_documents_for_application(db, application_id) -> List[Any]:
+    current_sql = _current_document_sql(db)
     return db.execute(
-        """
+        f"""
         SELECT id, application_id, person_id, doc_type, doc_name, uploaded_at,
                expiry_date, valid_until, verification_results, is_current,
                superseded_at, superseded_by_document_id
           FROM documents
          WHERE application_id = ?
-           AND COALESCE(is_current, 1) = 1
+           AND {current_sql}
            AND superseded_at IS NULL
         """,
         (application_id,),
@@ -236,7 +250,7 @@ def _document_issues(doc, *, today: date,
                      expiring_soon_days: int,
                      stale_after_days: int) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
-    doc_type = _document_type(doc)
+    doc_type = _get_document_type(doc)
     dates = _extract_document_expiry(doc)
     expiry_dt = dates["expiry_date"] or dates["valid_until"]
     if expiry_dt is not None:
@@ -306,6 +320,7 @@ def sync_document_health_alerts_for_application(
     expiring_soon_days: int = DOCUMENT_EXPIRING_SOON_DAYS,
     stale_after_days: int = DOCUMENT_STALE_AFTER_DAYS,
 ) -> Dict[str, Any]:
+    _require_audit_writer(audit_writer)
     if not application_id:
         return {"application_id": application_id, "created": 0, "updated": 0, "resolved": 0}
 
@@ -327,9 +342,12 @@ def sync_document_health_alerts_for_application(
     open_existing = {}
     for row in existing_rows:
         source_reference = str(_row_get(row, "source_reference") or "")
-        document_id = source_reference.split(":", 1)[1] if source_reference.startswith("document:") else None
+        document_id = None
+        if source_reference.startswith("document:"):
+            parts = source_reference.split(":", 1)
+            document_id = parts[1] if len(parts) == 2 and parts[1] else None
         key = (document_id, _row_get(row, "alert_type"))
-        if _is_open_status(_row_get(row, "status")):
+        if mr.is_alert_unresolved(row):
             open_existing[key] = row
 
     created = updated = resolved = 0
@@ -431,6 +449,7 @@ def sync_document_health_alerts_for_application(
         )
 
     for existing in open_existing.values():
+        resolved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         before_state = {
             "status": _row_get(existing, "status"),
             "resolved_at": _row_get(existing, "resolved_at"),
@@ -466,7 +485,7 @@ def sync_document_health_alerts_for_application(
             },
             db=db,
             before_state=before_state,
-            after_state={"status": "dismissed", "resolved_at": "CURRENT_TIMESTAMP"},
+            after_state={"status": "dismissed", "resolved_at": resolved_at},
         )
 
     if created or updated or resolved:
@@ -487,6 +506,7 @@ def sync_document_health_alerts(
     user=None,
     audit_writer=None,
 ) -> Dict[str, Any]:
+    _require_audit_writer(audit_writer)
     if application_ids is None:
         application_ids = [
             _row_get(r, "id")

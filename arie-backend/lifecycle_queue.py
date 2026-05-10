@@ -44,6 +44,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+import monitoring_routing as mr
+
 # ── Active / historical vocabularies ─────────────────────────────────
 # These mirror the engines' terminal sets (kept in this module so the
 # aggregator is self-contained and trivially testable). The engines remain
@@ -52,11 +54,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Monitoring alerts: terminal once dismissed or routed (see
 # monitoring_routing.TERMINAL_ALERT_STATUSES).
-HISTORICAL_ALERT_STATUSES = (
-    "dismissed",
-    "routed_to_review",
-    "routed_to_edd",
-)
+HISTORICAL_ALERT_STATUSES = mr.TERMINAL_ALERT_STATUSES
 ACTIVE_ALERT_STATUSES = (
     "open",
     "triaged",
@@ -295,9 +293,8 @@ def _materialise_alert(row, *, user_names: Dict[str, str],
         # PR-A: a quarantined row is NEITHER active NOR historical even
         # if its status would otherwise place it in one of those buckets.
         # The third bucket is explicit and additive.
-        "is_active": (not is_quarantined) and status in ACTIVE_ALERT_STATUSES,
-        "is_historical": (not is_quarantined)
-                         and status in HISTORICAL_ALERT_STATUSES,
+        "is_active": (not is_quarantined) and mr.is_alert_unresolved(row) and status in ACTIVE_ALERT_STATUSES,
+        "is_historical": (not is_quarantined) and mr.is_alert_terminal(row),
         "is_legacy_unmapped": is_quarantined,
         "quarantine_reasons": quarantine_reasons,
         "severity": _row_get(row, "severity"),
@@ -528,9 +525,9 @@ def _row_matches_alert_include(row, include: str) -> bool:
     status = _normalise_alert_state(row)
     is_quarantined, _ = is_legacy_unmapped(row)
     if include == "active":
-        return (not is_quarantined) and status in ACTIVE_ALERT_STATUSES
+        return (not is_quarantined) and mr.is_alert_unresolved(row) and status in ACTIVE_ALERT_STATUSES
     if include == "historical":
-        return (not is_quarantined) and status in HISTORICAL_ALERT_STATUSES
+        return (not is_quarantined) and mr.is_alert_terminal(row)
     if include == "legacy_unmapped":
         return is_quarantined
     if include == "all":
