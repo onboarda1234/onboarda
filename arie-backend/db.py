@@ -31,6 +31,17 @@ except ImportError:
     PSYCOPG2_AVAILABLE = False
 
 
+def _is_postgres_lock_timeout(exc: Exception) -> bool:
+    if not PSYCOPG2_AVAILABLE:
+        return False
+    lock_error = getattr(getattr(psycopg2, "errors", None), "LockNotAvailable", None)
+    return (
+        getattr(exc, "pgcode", None) == "55P03"
+        or (lock_error is not None and isinstance(exc, lock_error))
+        or "lock timeout" in str(exc).lower()
+    )
+
+
 # ============================================================================
 # Configuration (from unified config module)
 # ============================================================================
@@ -2694,7 +2705,17 @@ def repair_document_current_versions(db: DBConnection):
     """
     _ensure_document_versioning_columns(db)
     normalize_legacy_doc_types(db)
-    db.execute("DROP INDEX IF EXISTS idx_documents_one_current_slot")
+    try:
+        db.execute("DROP INDEX IF EXISTS idx_documents_one_current_slot")
+    except Exception as e:
+        if db.is_postgres and _is_postgres_lock_timeout(e):
+            logger.warning(
+                "document versioning repair skipped because idx_documents_one_current_slot "
+                "could not be locked; startup will retry on the next run: %s",
+                e,
+            )
+            return
+        raise
 
     try:
         if _safe_table_exists(db, "rmi_request_items"):
