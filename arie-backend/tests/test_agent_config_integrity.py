@@ -565,6 +565,37 @@ class TestBackOfficeAgentNumberDisplay:
         assert "agent_number: agent.id" in src
         assert "'/config/ai-agents/' + encodeURIComponent(recordId)" in src
 
+    def test_backend_serializes_public_agent_id_as_agent_number(self, temp_db):
+        """The API payload should not expose row primary keys as visible agent ids."""
+        from db import get_db
+        import server
+
+        db = get_db()
+        db.execute("DELETE FROM ai_agents")
+        db.execute(
+            """
+            INSERT INTO ai_agents
+              (id, agent_number, name, icon, stage, description, enabled, checks)
+            VALUES (151, 1, 'Identity Agent', 'x', 'Onboarding', 'Test', 1, ?)
+            """,
+            (json.dumps(["Check one"]),),
+        )
+        db.commit()
+
+        row = db.execute("SELECT * FROM ai_agents WHERE id=151").fetchone()
+        payload = server._serialize_ai_agent(row)
+        by_number = server._resolve_ai_agent_row(db, 1)
+        by_pk = server._resolve_ai_agent_row(db, 151)
+        db.close()
+
+        assert payload["id"] == 1
+        assert payload["agent_number"] == 1
+        assert payload["db_id"] == 151
+        assert payload["record_id"] == 151
+        assert payload["checks"] == ["Check one"]
+        assert by_number["id"] == 151
+        assert by_pk["id"] == 151
+
 
 class TestPoADisambiguation:
     """P1-4: Verify poa exists for both entity and person with different categories."""
