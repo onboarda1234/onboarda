@@ -37,6 +37,57 @@ def _make_screening_report(screened_at=None, screening_mode="live"):
     }
 
 
+def test_successful_screening_run_populates_missing_top_level_timestamp():
+    from screening_freshness_metadata import populate_screening_freshness_metadata
+
+    now = datetime(2026, 5, 10, 8, 30, 0, tzinfo=timezone.utc)
+    prescreening = {}
+    report = {
+        "total_hits": 0,
+        "overall_flags": [],
+        "company_screening": {"sanctions": {"api_status": "live"}},
+    }
+
+    meta = populate_screening_freshness_metadata(
+        prescreening,
+        report,
+        screened_by="client001",
+        now=now,
+        validity_days=90,
+    )
+
+    assert report["screened_at"] == "2026-05-10T08:30:00"
+    assert report["timestamp"] == "2026-05-10T08:30:00"
+    assert prescreening["last_screened_at"] == "2026-05-10T08:30:00"
+    assert prescreening["screened_by"] == "client001"
+    assert prescreening["screening_valid_until"] == "2026-08-08T08:30:00"
+    assert meta["screening_valid_until"] == "2026-08-08T08:30:00"
+
+
+def test_successful_screening_run_uses_provider_child_timestamp_when_present():
+    from screening_freshness_metadata import populate_screening_freshness_metadata
+
+    prescreening = {}
+    report = {
+        "total_hits": 0,
+        "overall_flags": [],
+        "director_screenings": [
+            {"screening": {"screened_at": "2026-05-09T22:15:00Z", "api_status": "live"}}
+        ],
+    }
+
+    populate_screening_freshness_metadata(
+        prescreening,
+        report,
+        now=datetime(2026, 5, 10, 8, 30, 0, tzinfo=timezone.utc),
+        validity_days=30,
+    )
+
+    assert report["screened_at"] == "2026-05-09T22:15:00"
+    assert report["timestamp"] == "2026-05-09T22:15:00"
+    assert prescreening["screening_valid_until"] == "2026-06-08T22:15:00"
+
+
 def _insert_app_and_memo(db, *,
                           screening_report=None,
                           prescreening_extras=None,

@@ -67,12 +67,18 @@ jobs:
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "git_sha=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
           echo "Pushed $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
       - name: Register new task definition with SHA-pinned image
         id: register-task-def
         env:
           NEW_IMAGE: ${{ steps.build-image.outputs.image }}
+          GIT_SHA: ${{ steps.build-image.outputs.git_sha }}
+          BUILD_TIME: ${{ steps.build-image.outputs.build_time }}
+          IMAGE_TAG: ${{ steps.build-image.outputs.image_tag }}
         run: |
           echo "Fetching current task definition for family: $ECS_TASK_FAMILY"
           TASK_DEF=$(aws ecs describe-task-definition \
@@ -100,6 +106,12 @@ jobs:
           # Phase 7 staging quick win: reject over-10MB document uploads in the browser
           # before the request body is sent. Defaults remain off in code; staging opts in.
           upsert_env('FF_SIZE_CAP_CLIENT_REJECT', 'true')
+          # Build provenance must track the image being deployed. ECS task
+          # env values override Dockerfile ENV values, so stale task
+          # definitions can otherwise make /api/version report an old SHA.
+          upsert_env('GIT_SHA', '$GIT_SHA')
+          upsert_env('BUILD_TIME', '$BUILD_TIME')
+          upsert_env('IMAGE_TAG', '$IMAGE_TAG')
           # Remove fields that can't be passed to register-task-definition
           for key in ['taskDefinitionArn', 'revision', 'status', 'requiresAttributes',
                       'compatibilities', 'registeredAt', 'registeredBy']:

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _CANONICAL_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
 _EDD_ACTUATION_TERMINAL_STAGES = ("edd_approved", "edd_rejected")
+_ASSIGNABLE_OFFICER_ROLES = {"admin", "sco", "co", "analyst"}
 
 
 def _canonical_risk_level(value: Any) -> Optional[str]:
@@ -57,6 +58,37 @@ def _application_risk_snapshot(app_row: Mapping[str, Any]) -> Tuple[Optional[str
     if level != "LOW" and score == 0:
         score = None
     return level, score
+
+
+def resolve_valid_assigned_officer(db, user: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """Return a valid officer user id for ``edd_cases.assigned_officer``.
+
+    Portal/client/system actors may trigger EDD routing but that FK points to
+    the back-office ``users`` table. Only assign when the actor is an existing
+    officer role; otherwise leave the case unassigned and rely on audit/notes
+    for actor provenance.
+    """
+
+    if db is None or not user:
+        return None
+    officer_id = str((user or {}).get("sub") or "").strip()
+    role = str((user or {}).get("role") or "").strip().lower()
+    if not officer_id or role not in _ASSIGNABLE_OFFICER_ROLES:
+        return None
+    try:
+        row = db.execute(
+            "SELECT id FROM users WHERE id = ? AND role IN ('admin','sco','co','analyst')",
+            (officer_id,),
+        ).fetchone()
+    except Exception as exc:
+        logger.warning("Could not validate EDD assigned officer %s: %s", officer_id, exc)
+        return None
+    if not row:
+        return None
+    try:
+        return row["id"]
+    except Exception:
+        return officer_id
 
 
 def actuate_edd_routing(
@@ -167,13 +199,14 @@ def actuate_edd_routing(
                 ]
             )
             risk_level, risk_score = _application_risk_snapshot(app_dict)
+            assigned_officer = resolve_valid_assigned_officer(db, user)
             insert_params = (
                 application_id,
                 app_dict.get("company_name") or "",
                 risk_level,
                 risk_score,
                 "triggered",
-                (user or {}).get("sub") or None,
+                assigned_officer,
                 "policy_routing",
                 trigger_notes,
                 initial_note,

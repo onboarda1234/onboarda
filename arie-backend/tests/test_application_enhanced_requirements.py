@@ -605,6 +605,44 @@ def test_auto_generation_maps_pep_and_crypto_triggers(enhanced_app_db):
     assert _count_app_reqs(db, crypto_app_id, "crypto_vasp") == _count_rules(db, "crypto_vasp")
 
 
+def test_auto_generation_detects_declared_pep_director_before_memo(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(db, risk_level="MEDIUM")
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Priya Declared PEP", "Yes"),
+    )
+    db.commit()
+
+    result = _apply_auto_generation(db, app_id)
+
+    assert result["route"] == "edd"
+    assert "declared_pep_present" in result["triggers"]
+    generation = result["enhanced_requirements_generation"]
+    assert generation["config_ok"] is True
+    assert "pep" in generation["triggers"]
+    assert _count_app_reqs(db, app_id, "pep") == _count_rules(db, "pep")
+
+
+def test_auto_generation_detects_declared_pep_ubo_before_memo(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(db, risk_level="MEDIUM")
+    db.execute(
+        "INSERT INTO ubos (application_id, full_name, ownership_pct, is_pep) VALUES (?,?,?,?)",
+        (app_id, "Priya Declared PEP", 55, "true"),
+    )
+    db.commit()
+
+    result = _apply_auto_generation(db, app_id)
+
+    assert result["route"] == "edd"
+    assert "declared_pep_present" in result["triggers"]
+    generation = result["enhanced_requirements_generation"]
+    assert generation["config_ok"] is True
+    assert "pep" in generation["triggers"]
+    assert _count_app_reqs(db, app_id, "pep") == _count_rules(db, "pep")
+
+
 def test_auto_generation_is_idempotent_and_preserves_reviewed(enhanced_app_db):
     db = enhanced_app_db
     app_id = _insert_application(db, risk_level="HIGH")

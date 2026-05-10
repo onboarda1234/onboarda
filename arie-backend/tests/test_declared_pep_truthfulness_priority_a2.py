@@ -246,6 +246,22 @@ def test_memo_with_declared_pep_does_not_emit_no_pep_exposure(is_pep_value):
     assert "no material pep concern" not in text
     assert "no material pep or jurisdictional concern" not in text
     assert "0 self-declared / detected match" not in text
+    assert "not a pep" not in text
+
+
+def test_memo_ownership_section_never_denies_truthy_declared_pep():
+    from memo_handler import build_compliance_memo
+
+    app, directors, ubos, docs = _memo_inputs(declared_pep="Yes")
+    directors[0]["full_name"] = "Priya Declared PEP"
+    directors[0]["is_pep"] = True
+
+    memo, _, _, _ = build_compliance_memo(app, directors, ubos, docs)
+    ownership = memo["sections"]["ownership_and_control"]["content"].lower()
+
+    assert "priya declared pep" in ownership
+    assert "not a pep" not in ownership
+    assert "pep declaration recorded" in ownership
 
 
 def test_memo_terminal_clear_non_pep_still_says_no_pep_exposure():

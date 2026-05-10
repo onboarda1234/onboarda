@@ -1102,13 +1102,13 @@ def build_compliance_memo(app, directors, ubos, documents):
                     f"The entity operates a {struct_complexity.lower()} corporate structure with {len(directors)} director(s) and {len(ubos)} UBO(s). "
                     + " ".join([
                         f"Director: {d['full_name']} ({d.get('nationality', 'nationality not provided')} national, DOB: {d.get('date_of_birth') or 'not provided'})"
-                        + (f" — identified as PEP. Enhanced due diligence required under FATF Recommendation 12." if d.get("is_pep") == "Yes" else " — not a PEP.")
+                        + (" — PEP declaration recorded. Enhanced due diligence required under FATF Recommendation 12." if _is_declared_pep(d) else " — PEP declaration not recorded.")
                         for d in directors
                     ]) + " "
                     + " ".join([
                         f"UBO: {u['full_name']} — {u.get('ownership_pct', 'Information not provided')}% direct ownership"
                         + f" ({u.get('nationality', 'nationality not provided')} national, DOB: {u.get('date_of_birth') or 'not provided'})"
-                        + (f". Identified as PEP — this UBO exercises both ownership and potential political influence, significantly elevating risk." if u.get("is_pep") == "Yes" else ".")
+                        + (". PEP declaration recorded — this UBO exercises both ownership and potential political influence, significantly elevating risk." if _is_declared_pep(u) else ".")
                         + (f" Ownership percentage information not provided — this represents a data gap that prevents full UBO analysis." if not u.get("ownership_pct") else "")
                         for u in ubos
                     ])
