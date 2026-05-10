@@ -369,7 +369,7 @@ def _extract_identifier(value):
 def _extract_customer_identifier(workflow_raw):
     step_details = workflow_raw.get("step_details") or {}
     customer_creation = step_details.get("customer-creation") or {}
-    output = customer_creation.get("output") or {}
+    output = customer_creation.get("step_output") or customer_creation.get("output") or {}
     customer_identifier = output.get("customer_identifier") or output.get("identifier")
     if not customer_identifier:
         customer_identifier = workflow_raw.get("customer_identifier")
