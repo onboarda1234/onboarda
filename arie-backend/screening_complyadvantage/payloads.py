@@ -103,21 +103,6 @@ def build_customer_company(application_data, *, strict=True):
     company = _drop_empty({
         "legal_name": legal_name,
     })
-    if strict:
-        company.update(_drop_empty({
-            "registration_number": _first(application_data, "registration_number", "brn"),
-            "jurisdiction": _first(application_data, "jurisdiction", "country_code", "country"),
-            "incorporation_date": _first(application_data, "incorporation_date"),
-            "entity_type": _first(application_data, "entity_type"),
-            "industry": _first(application_data, "industry", "sector"),
-            "website": _first(application_data, "website"),
-        }))
-        address = to_ca_address(
-            _first(application_data, "registered_address", "registered_office_address", "address") or application_data,
-            location_type="registered_address",
-        )
-        if address:
-            company["addresses"] = [address]
     return _customer_envelope(company, "company", _first(application_data, "application_id", "id", "ref"))
 
 

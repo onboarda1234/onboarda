@@ -116,8 +116,8 @@ def test_screen_company_delegates_to_entity_context():
 
     call = orchestrator.calls[0]
     assert call["application_context"].screening_subject_kind == "entity"
-    assert call["strict_customer"]["company"]["jurisdiction"] == "MU"
     assert call["strict_customer"]["company"]["legal_name"] == "Acme Ltd"
+    assert call["strict_customer"]["company"] == {"legal_name": "Acme Ltd"}
     assert call["screening_configuration_identifier"] == "cfg-123"
 
 

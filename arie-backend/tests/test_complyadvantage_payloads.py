@@ -109,10 +109,9 @@ def test_build_customer_company_strict_vs_relaxed():
     assert strict_customer["reference"] == "app-1"
     assert "external_identifier" not in strict
     assert "customer_reference" not in strict
-    assert strict["registration_number"] == "C123"
-    assert strict["addresses"][0]["location_type"] == "registered_address"
     assert strict["legal_name"] == "Acme Ltd"
     assert relaxed == {"legal_name": "Acme Ltd"}
+    assert strict == {"legal_name": "Acme Ltd"}
     assert relaxed_customer["reference"] == "app-1"
 
 
