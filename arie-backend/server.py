@@ -4789,6 +4789,10 @@ class DocumentVerifyHandler(BaseHandler):
         })
         results = json.dumps(layered_results, default=str)
         extracted_fields = (ai_result or {}).get("extracted_fields") or {}
+        # Canonical extraction keys come from document_verification /
+        # Claude field extraction. We accept the historical aliases here
+        # so stored document metadata stays compatible across older
+        # verification payloads.
         extracted_expiry = (
             extracted_fields.get("expiry_date")
             or extracted_fields.get("expiry")

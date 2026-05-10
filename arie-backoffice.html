@@ -3427,7 +3427,8 @@ function normalizeMonitoringAlert(raw) {
 
 function reviewStatusFromRaw(raw) {
   var payload = parseFixturePayload(raw.trigger_reason, 'FIX_REVIEW_JSON:') || {};
-  var statusRaw = String(raw.ui_status || raw.status || '').toLowerCase();
+  var uiStatus = raw && raw.ui_status;
+  var statusRaw = String((uiStatus === null || uiStatus === undefined || uiStatus === '') ? (raw.status || '') : uiStatus).toLowerCase();
   var fixtureState = String(payload.status || raw.trigger_type || '').toLowerCase();
   if (fixtureState === 'fixture_completed') statusRaw = 'completed';
   else if (fixtureState === 'fixture_in_progress') statusRaw = 'in_progress';
@@ -8778,9 +8779,9 @@ function renderPrcReviewDetailSection(detail) {
           actionBar =
             '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' +
               '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'cleared\')">Clear</button>' +
-              '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'info_requested\',true)">Request Info</button>' +
-              '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'escalated\',true)">Escalate</button>' +
-              '<button class="btn btn-outline btn-sm" onclick="updateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ',\'not_applicable\',true)">Not Applicable</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="requestReviewChecklistInfo(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ')">Request Info</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="escalateReviewChecklistItem(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ')">Escalate</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="markReviewChecklistItemNotApplicable(' + JSON.stringify(detail.id) + ',' + JSON.stringify(itemId) + ')">Not Applicable</button>' +
             '</div>';
         }
         return '<div style="padding:10px 12px;margin-bottom:10px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);">' +
@@ -8914,6 +8915,18 @@ async function updateReviewChecklistItem(reviewId, itemId, status, requireNote) 
   } catch (err) {
     showToast('Failed to update checklist item: ' + (err.message || 'unknown error'), 'error');
   }
+}
+
+function requestReviewChecklistInfo(reviewId, itemId) {
+  return updateReviewChecklistItem(reviewId, itemId, 'info_requested', true);
+}
+
+function escalateReviewChecklistItem(reviewId, itemId) {
+  return updateReviewChecklistItem(reviewId, itemId, 'escalated', true);
+}
+
+function markReviewChecklistItemNotApplicable(reviewId, itemId) {
+  return updateReviewChecklistItem(reviewId, itemId, 'not_applicable', true);
 }
 
 async function escalatePeriodicReviewToEDD(reviewId) {
