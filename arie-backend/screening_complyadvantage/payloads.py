@@ -4,6 +4,44 @@ from copy import deepcopy
 from datetime import date, datetime
 
 
+_COUNTRY_ALPHA2_ALIASES = {
+    "GB": "GB",
+    "UK": "GB",
+    "UNITED KINGDOM": "GB",
+    "GREAT BRITAIN": "GB",
+    "BRITAIN": "GB",
+    "BRITISH": "GB",
+    "MU": "MU",
+    "MAURITIUS": "MU",
+    "MAURITIAN": "MU",
+    "US": "US",
+    "USA": "US",
+    "UNITED STATES": "US",
+    "UNITED STATES OF AMERICA": "US",
+    "AMERICAN": "US",
+    "AE": "AE",
+    "UAE": "AE",
+    "UNITED ARAB EMIRATES": "AE",
+    "ZA": "ZA",
+    "SOUTH AFRICA": "ZA",
+    "SOUTH AFRICAN": "ZA",
+    "FR": "FR",
+    "FRANCE": "FR",
+    "FRENCH": "FR",
+    "PK": "PK",
+    "PAKISTAN": "PK",
+    "PAKISTANI": "PK",
+    "NG": "NG",
+    "NIGERIA": "NG",
+    "NIGERIAN": "NG",
+    "IR": "IR",
+    "IRAN": "IR",
+    "IRANIAN": "IR",
+    "KP": "KP",
+    "NORTH KOREA": "KP",
+    "NORTH KOREAN": "KP",
+}
+
 _FULL_ADDRESS_KEYS = (
     "full_address",
     "registered_address",
@@ -30,6 +68,29 @@ def to_ca_dob(value):
     return None
 
 
+def to_ca_country_code(value):
+    """Return a CA-compatible ISO 3166 alpha-2 country code, or None."""
+    if value in (None, ""):
+        return None
+    normalized = str(value).strip().upper()
+    if len(normalized) == 2 and normalized.isalpha():
+        return normalized
+    return _COUNTRY_ALPHA2_ALIASES.get(normalized)
+
+
+def to_ca_nationalities(value):
+    """Return CA's expected nationality array, omitting unmapped values."""
+    if value in (None, ""):
+        return None
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    codes = []
+    for item in values:
+        code = to_ca_country_code(item)
+        if code and code not in codes:
+            codes.append(code)
+    return codes or None
+
+
 def to_ca_address(data, *, location_type):
     """Map a RegMind address dict/string to CA's rich postal address shape."""
     if not data:
@@ -47,7 +108,7 @@ def to_ca_address(data, *, location_type):
         "postal_code": _first(source, "postal_code", "postcode", "zip"),
         "country_subdivision": _first(source, "country_subdivision", "state", "province", "region"),
         "country": _first(source, "country", "country_name"),
-        "country_code": _first(source, "country_code", "country_iso", "jurisdiction"),
+        "country_code": to_ca_country_code(_first(source, "country_code", "country_iso", "jurisdiction", "country", "country_name")),
         "location_type": location_type,
     }
     return _drop_empty(mapped)
@@ -67,8 +128,8 @@ def build_customer_person(person, *, strict=True):
     if strict:
         customer.update(_drop_empty({
             "gender": _first(person, "gender"),
-            "nationality": _first(person, "nationality"),
-            "country_of_birth": _first(person, "country_of_birth"),
+            "nationality": to_ca_nationalities(_first(person, "nationality")),
+            "country_of_birth": to_ca_country_code(_first(person, "country_of_birth")),
             "place_of_birth": _first(person, "place_of_birth"),
             "occupation": _first(person, "occupation"),
             "employer": _first(person, "employer"),

@@ -103,7 +103,7 @@ def test_screen_person_delegates_and_returns_plain_contract_dict():
     call = orchestrator.calls[0]
     assert call["db"] is db
     assert call["application_context"].screening_subject_name == "Jane Doe"
-    assert call["strict_customer"]["person"]["nationality"] == "MU"
+    assert call["strict_customer"]["person"]["nationality"] == ["MU"]
     assert "nationality" not in call["relaxed_customer"]["person"]
     assert call["screening_configuration_identifier"] == "cfg-123"
 
