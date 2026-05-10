@@ -6,6 +6,7 @@ plain-dict schema used by RegMind.
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -248,58 +249,113 @@ def derive_person_screening_from_match(
     match: MergedMatch,
     application_context: ScreeningApplicationContext,
     person_type: str,
+    screened_at: str | None = None,
 ) -> dict:
-    rollups = compute_match_rollups(match)
-    profile = match.profile
+    return derive_person_screening_from_matches([match], application_context, person_type, screened_at=screened_at)
+
+
+def derive_person_screening_from_matches(
+    matches: list[MergedMatch],
+    application_context: ScreeningApplicationContext,
+    person_type: str,
+    screened_at: str | None = None,
+) -> dict:
+    rollup_items = [compute_match_rollups(match) for match in matches]
+    first_match = matches[0] if matches else None
+    first_rollups = rollup_items[0] if rollup_items else {
+        "has_pep_hit": False,
+        "has_sanctions_hit": False,
+        "has_adverse_media_hit": False,
+        "is_rca": False,
+    }
+    provider_pep_match = any(item["has_pep_hit"] for item in rollup_items)
+    provider_sanctions_match = any(item["has_sanctions_hit"] for item in rollup_items)
+    provider_adverse_match = any(item["has_adverse_media_hit"] for item in rollup_items)
+    results = [
+        _legacy_screening_result_from_match(match, rollups)
+        for match, rollups in zip(matches, rollup_items)
+    ]
+    profile = first_match.profile if first_match else None
     nationality = ""
     if profile is not None and profile.person is not None:
         nationality = profile.person.nationality or (profile.person.countries[0] if profile.person.countries else "")
+    declared_pep = bool(application_context.declared_pep)
     return {
         "person_name": _profile_name(profile) or application_context.screening_subject_name,
         "person_type": person_type,
         "nationality": nationality,
-        "declared_pep": "Yes" if application_context.declared_pep else "No",
-        "has_pep_hit": rollups["has_pep_hit"],
-        "has_sanctions_hit": rollups["has_sanctions_hit"],
-        "has_adverse_media_hit": True if rollups["has_adverse_media_hit"] else None,
-        "adverse_media_coverage": "full" if rollups["has_adverse_media_hit"] else "none",
+        "declared_pep": "Yes" if declared_pep else "No",
+        "provider_detected_pep": provider_pep_match,
+        "undeclared_pep": bool(provider_pep_match and not declared_pep),
+        "has_pep_hit": provider_pep_match,
+        "has_sanctions_hit": provider_sanctions_match,
+        "has_adverse_media_hit": True if provider_adverse_match else None,
+        "adverse_media_coverage": "full" if provider_adverse_match else "none",
         "screening": {
             "provider": "complyadvantage",
             "source": "complyadvantage",
             "api_status": "live",
-            "profile_identifier": match.profile_identifier,
-            "matched": True,
-            "results": [_legacy_screening_result_from_match(match, rollups)],
+            "screened_at": screened_at,
+            "profile_identifier": first_match.profile_identifier if first_match else "",
+            "profile_identifiers": sorted({match.profile_identifier for match in matches if match.profile_identifier}),
+            "matched": bool(results),
+            "results": results,
         },
         "screening_state": "completed_match",
-        "requires_review": any((rollups["has_pep_hit"], rollups["has_sanctions_hit"], rollups["has_adverse_media_hit"])),
-        "is_rca": rollups["is_rca"],
-        "pep_classes": extract_pep_classes(match),
+        "requires_review": any((provider_pep_match, provider_sanctions_match, provider_adverse_match)),
+        "is_rca": any(item["is_rca"] for item in rollup_items if item["is_rca"] is not None) or first_rollups["is_rca"],
+        "pep_classes": sorted({value for match in matches for value in (extract_pep_classes(match) or [])}) or None,
     }
 
 
 def derive_company_screening_from_match(match: MergedMatch) -> dict:
-    rollups = compute_match_rollups(match)
-    result = _legacy_screening_result_from_match(match, rollups)
+    return derive_company_screening_from_matches([match])
+
+
+def derive_company_screening_from_matches(matches: list[MergedMatch], screened_at: str | None = None) -> dict:
+    sanctions_results = []
+    adverse_results = []
+    all_results = []
+    profile_identifiers = []
+    has_sanctions_hit = False
+    has_adverse_media_hit = False
+    for match in matches:
+        rollups = compute_match_rollups(match)
+        result = _legacy_screening_result_from_match(match, rollups)
+        all_results.append(result)
+        if match.profile_identifier:
+            profile_identifiers.append(match.profile_identifier)
+        if rollups["has_sanctions_hit"]:
+            has_sanctions_hit = True
+            sanctions_results.append(result)
+        if rollups["has_adverse_media_hit"]:
+            has_adverse_media_hit = True
+            adverse_results.append(result)
     return {
         "company_screening_coverage": "full",
-        "has_company_screening_hit": any((rollups["has_sanctions_hit"], rollups["has_adverse_media_hit"])),
+        "has_company_screening_hit": bool(has_sanctions_hit or has_adverse_media_hit),
         "company_screening": {
             "provider": "complyadvantage",
             "source": "complyadvantage",
             "api_status": "live",
-            "profile_identifier": match.profile_identifier,
+            "screened_at": screened_at,
+            "profile_identifier": profile_identifiers[0] if len(profile_identifiers) == 1 else None,
+            "profile_identifiers": sorted(set(profile_identifiers)),
+            "matched": bool(has_sanctions_hit or has_adverse_media_hit),
+            "results": all_results,
             "sanctions": {
                 "source": "complyadvantage",
                 "api_status": "live",
-                "matched": bool(rollups["has_sanctions_hit"]),
-                "results": [result] if rollups["has_sanctions_hit"] else [],
+                "screened_at": screened_at,
+                "matched": has_sanctions_hit,
+                "results": sanctions_results,
             },
             "adverse_media": {
                 "source": "complyadvantage",
                 "api_status": "live",
-                "matched": bool(rollups["has_adverse_media_hit"]),
-                "results": [result] if rollups["has_adverse_media_hit"] else [],
+                "screened_at": screened_at,
+                "matched": has_adverse_media_hit,
+                "results": adverse_results,
             },
         },
     }
@@ -308,10 +364,19 @@ def derive_company_screening_from_match(match: MergedMatch) -> dict:
 def _legacy_screening_result_from_match(match: MergedMatch, rollups: dict) -> dict:
     """Compatibility result shape used by existing Back Office review widgets."""
     indicators = [_indicator_payload(indicator) for indicator in _all_indicators(match.risk)]
+    risk_types = _risk_type_payloads(match.risk)
+    categories = _match_categories(rollups, indicators)
     return {
         "name": _profile_name(match.profile) or match.profile_identifier,
         "profile_identifier": match.profile_identifier,
+        "provider_profile_identifier": match.profile_identifier,
         "risk_id": match.risk_id,
+        "provider_risk_identifier": match.risk_id,
+        "match_category": categories[0] if categories else "other",
+        "match_categories": categories,
+        "risk_types": risk_types,
+        "risk_type_keys": [item["key"] for item in risk_types if item.get("key")],
+        "risk_type_labels": [item["label"] for item in risk_types if item.get("label")],
         "is_pep": bool(rollups.get("has_pep_hit")),
         "is_sanctioned": bool(rollups.get("has_sanctions_hit")),
         "is_adverse_media": bool(rollups.get("has_adverse_media_hit")),
@@ -326,8 +391,10 @@ def _legacy_screening_result_from_match(match: MergedMatch, rollups: dict) -> di
 def apply_top_level_rollups(director_screenings, ubo_screenings, company_screening) -> dict:
     persons = list(director_screenings) + list(ubo_screenings)
     adverse_hit = any(p.get("has_adverse_media_hit") for p in persons)
-    if company_screening.get("has_company_screening_hit"):
-        adverse_hit = adverse_hit or company_screening.get("company_screening", {}).get("has_adverse_media_hit", False)
+    company = company_screening.get("company_screening", {})
+    company_adverse = company.get("adverse_media") or {}
+    if company_screening.get("has_company_screening_hit") or company_adverse.get("matched"):
+        adverse_hit = adverse_hit or bool(company_adverse.get("matched"))
     return {
         "any_pep_hits": any(p.get("has_pep_hit") for p in persons),
         "any_sanctions_hits": any(p.get("has_sanctions_hit") for p in persons) or bool(company_screening.get("has_company_screening_hit")),
@@ -340,6 +407,7 @@ def apply_top_level_rollups(director_screenings, ubo_screenings, company_screeni
 
 
 def _build_report(matches, context, provider_specific, provenance):
+    screened_at = _screened_at(provider_specific)
     director_screenings = []
     ubo_screenings = []
     company_screening = {
@@ -349,15 +417,15 @@ def _build_report(matches, context, provider_specific, provenance):
     }
     if context.screening_subject_kind == "entity":
         if matches:
-            company_screening = derive_company_screening_from_match(matches[0])
+            company_screening = derive_company_screening_from_matches(matches, screened_at=screened_at)
         else:
-            company_screening = _empty_company_screening()
+            company_screening = _empty_company_screening(screened_at=screened_at)
     else:
         person_type = "ubo" if context.screening_subject_kind == "ubo" else "director"
         if matches:
-            person = derive_person_screening_from_match(matches[0], context, person_type)
+            person = derive_person_screening_from_matches(matches, context, person_type, screened_at=screened_at)
         else:
-            person = _empty_person_screening(context, person_type)
+            person = _empty_person_screening(context, person_type, screened_at=screened_at)
         if person_type == "ubo":
             ubo_screenings.append(person)
         else:
@@ -366,7 +434,7 @@ def _build_report(matches, context, provider_specific, provenance):
     report = {
         "provider": "complyadvantage",
         "normalized_version": "2.0",
-        "screened_at": "",
+        "screened_at": screened_at,
         **rollups,
         "company_screening": company_screening.get("company_screening", {}),
         "director_screenings": director_screenings,
@@ -384,12 +452,14 @@ def _build_report(matches, context, provider_specific, provenance):
     return report
 
 
-def _empty_person_screening(context, person_type):
+def _empty_person_screening(context, person_type, screened_at: str | None = None):
     return {
         "person_name": context.screening_subject_name,
         "person_type": person_type,
         "nationality": "",
         "declared_pep": "Yes" if context.declared_pep else "No",
+        "provider_detected_pep": False,
+        "undeclared_pep": False,
         "has_pep_hit": False,
         "has_sanctions_hit": False,
         "has_adverse_media_hit": None,
@@ -398,6 +468,7 @@ def _empty_person_screening(context, person_type):
             "provider": "complyadvantage",
             "source": "complyadvantage",
             "api_status": "live",
+            "screened_at": screened_at,
         },
         "screening_state": "completed_clear",
         "requires_review": bool(context.declared_pep),
@@ -406,7 +477,7 @@ def _empty_person_screening(context, person_type):
     }
 
 
-def _empty_company_screening():
+def _empty_company_screening(screened_at: str | None = None):
     return {
         "company_screening_coverage": "full",
         "has_company_screening_hit": False,
@@ -414,6 +485,9 @@ def _empty_company_screening():
             "provider": "complyadvantage",
             "source": "complyadvantage",
             "api_status": "live",
+            "screened_at": screened_at,
+            "matched": False,
+            "results": [],
         },
     }
 
@@ -475,6 +549,36 @@ def _indicator_label(indicator):
     )
 
 
+def _risk_type_payloads(risk):
+    payloads = []
+    seen = set()
+    for detail in getattr(risk, "values", []) or []:
+        risk_type = getattr(detail, "risk_type", None)
+        key = getattr(risk_type, "key", None)
+        if key in seen:
+            continue
+        seen.add(key)
+        payloads.append({
+            "key": key,
+            "label": getattr(risk_type, "label", None) or getattr(risk_type, "name", None) or key,
+            "name": getattr(risk_type, "name", None),
+        })
+    return payloads
+
+
+def _match_categories(rollups, indicators):
+    categories = []
+    if rollups.get("has_pep_hit"):
+        categories.append("PEP")
+    if rollups.get("has_sanctions_hit"):
+        categories.append("sanctions")
+    if rollups.get("has_adverse_media_hit"):
+        categories.append("adverse_media")
+    if any((item.get("type") == "CAWatchlistIndicator") for item in indicators):
+        categories.append("watchlist")
+    return categories
+
+
 def _profile_name(profile):
     if profile is None:
         return ""
@@ -497,6 +601,20 @@ def _overall_flags(matches):
         if rollups["has_adverse_media_hit"]:
             flags.append(f"ComplyAdvantage adverse media hit: {name}")
     return flags
+
+
+def _screened_at(provider_specific) -> str:
+    for workflow in (provider_specific.get("workflows") or {}).values():
+        if not isinstance(workflow, dict):
+            continue
+        for key in ("completed_at", "updated_at", "created_at", "timestamp"):
+            value = workflow.get(key)
+            if value:
+                return str(value)
+    resnapshot = provider_specific.get("resnapshot") or {}
+    if resnapshot.get("received_at"):
+        return str(resnapshot["received_at"])
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _build_provider_specific_block(

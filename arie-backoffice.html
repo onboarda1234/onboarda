@@ -6767,13 +6767,15 @@ function classifyScreeningHits(results) {
     total: hits.length,
     sanctions_hits: 0,
     pep_hits: 0,
+    adverse_media_hits: 0,
     other_hits: 0
   };
   hits.forEach(function(hit) {
     if (hit && hit.is_sanctioned) facts.sanctions_hits++;
     if (hit && hit.is_pep) facts.pep_hits++;
+    if (hit && hit.is_adverse_media) facts.adverse_media_hits++;
   });
-  facts.other_hits = Math.max(0, facts.total - facts.sanctions_hits - facts.pep_hits);
+  facts.other_hits = Math.max(0, facts.total - facts.sanctions_hits - facts.pep_hits - facts.adverse_media_hits);
   return facts;
 }
 
@@ -6997,12 +6999,65 @@ function screeningResultFacts(screeningRecord) {
     total_hits: hitFacts.total,
     sanctions_hits: hitFacts.sanctions_hits,
     pep_hits: hitFacts.pep_hits,
+    adverse_media_hits: hitFacts.adverse_media_hits,
     other_hits: hitFacts.other_hits,
     matched: !!screening.matched,
     source: screening.source || null,
     api_status: screening.api_status || null,
     screened_at: screening.screened_at || null
   };
+}
+
+function combinedScreeningFacts(records) {
+  var result = { total_hits:0, sanctions_hits:0, pep_hits:0, adverse_media_hits:0, other_hits:0, matched:false, source:null, api_status:null, screened_at:null };
+  (records || []).forEach(function(record) {
+    var facts = screeningResultFacts(record || {});
+    result.total_hits += facts.total_hits || 0;
+    result.sanctions_hits += facts.sanctions_hits || 0;
+    result.pep_hits += facts.pep_hits || 0;
+    result.adverse_media_hits += facts.adverse_media_hits || 0;
+    result.other_hits += facts.other_hits || 0;
+    result.matched = result.matched || !!facts.matched;
+    result.source = result.source || facts.source;
+    result.api_status = result.api_status || facts.api_status;
+    result.screened_at = result.screened_at || facts.screened_at;
+  });
+  return result;
+}
+
+function providerResultHighlights(results) {
+  var hits = Array.isArray(results) ? results : [];
+  if (!hits.length) return '';
+  return '<div style="margin-top:10px;"><strong>Provider result highlights</strong><ul style="margin:6px 0 0 18px;padding:0;">' + hits.slice(0, 8).map(function(hit) {
+    var parts = [];
+    if (hit.name) parts.push(hit.name);
+    if (Array.isArray(hit.match_categories) && hit.match_categories.length) parts.push(hit.match_categories.join(', '));
+    else {
+      if (hit.is_sanctioned) parts.push('sanctions');
+      if (hit.is_pep) parts.push('PEP');
+      if (hit.is_adverse_media) parts.push('adverse media');
+    }
+    if (Array.isArray(hit.risk_type_labels) && hit.risk_type_labels.length) parts.push(hit.risk_type_labels.slice(0, 3).join(', '));
+    if (hit.provider_risk_identifier || hit.risk_id) parts.push('risk ' + (hit.provider_risk_identifier || hit.risk_id));
+    var indicatorDetails = providerIndicatorDetails(hit.indicators || []);
+    return '<li>' + escapeHtml(parts.filter(Boolean).join(' — ')) + indicatorDetails + '</li>';
+  }).join('') + '</ul></div>';
+}
+
+function providerIndicatorDetails(indicators) {
+  var rows = (Array.isArray(indicators) ? indicators : []).slice(0, 3).map(function(indicator) {
+    var value = indicator.value || {};
+    var label = indicator.taxonomy_label || indicator.taxonomy_key || indicator.type || 'indicator';
+    var title = value.title || value.list_name || value.authority || value.position || '';
+    var url = value.canonical_url && value.canonical_url.url ? value.canonical_url.url : value.url;
+    var snippet = Array.isArray(value.snippets) && value.snippets[0] ? value.snippets[0].text : '';
+    var text = label + (title ? ': ' + title : '') + (snippet ? ' — ' + snippet : '');
+    return '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' +
+      escapeHtml(text) +
+      (url ? ' <a href="' + escapeHtml(url) + '" target="_blank" rel="noopener">source</a>' : '') +
+      '</div>';
+  });
+  return rows.join('');
 }
 
 function screeningFocusMatches(focus, subjectType, subjectName) {
@@ -7023,6 +7078,8 @@ function screeningReviewCard(title, badgesHtml, bodyHtml, isFocused) {
 function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus) {
   var company = screeningSummary.company_screening || {};
   var companySanctions = company.sanctions || {};
+  var companyAdverse = company.adverse_media || {};
+  var companyRecords = (company.sanctions || company.adverse_media) ? [companySanctions, companyAdverse] : [company];
   var ip = screeningSummary.ip_geolocation || {};
   var kycApplicants = screeningSummary.kyc_applicants || [];
   var ipFlags = [];
@@ -7032,9 +7089,13 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   if (ip.is_proxy) ipFlags.push('Proxy detected');
   if (ip.is_tor) ipFlags.push('Tor detected');
   var redApplicants = kycApplicants.filter(function(a) { return a.review_answer === 'RED'; }).map(function(a) { return a.person_name; });
-  var companyHits = screeningResultFacts(companySanctions);
+  var companyHits = combinedScreeningFacts(companyRecords);
+  var companyResults = []
+    .concat((companySanctions && companySanctions.results) || [])
+    .concat((companyAdverse && companyAdverse.results) || []);
+  if (!companyResults.length && Array.isArray(company.results)) companyResults = company.results;
   var badges = [
-    screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : (screeningSummary.screening_run_recorded ? 'screened_no_match' : 'awaiting_screening'), reviewRow ? reviewRow.status_label : (screeningSummary.screening_run_recorded ? 'No Provider Match' : 'Awaiting Screening')),
+    screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : (screeningSummary.screening_run_recorded ? (companyHits.matched ? 'review_required' : 'screened_no_match') : 'awaiting_screening'), reviewRow ? reviewRow.status_label : (screeningSummary.screening_run_recorded ? (companyHits.matched ? 'Review Required' : 'No Provider Match') : 'Awaiting Screening')),
     screeningBadge(reviewRow ? reviewRow.watchlist_status : (companyHits.matched ? 'match' : (screeningSummary.screening_run_recorded ? 'clear' : 'pending'))),
     screeningModeBadge(screeningSummary.screening_mode)
   ];
@@ -7048,19 +7109,11 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   body += '</div>';
   body += '<div style="font-size:12px;color:var(--text2);line-height:1.6;">';
   body += '<div><strong>Company screening source:</strong> ' + escapeHtml(company.source || 'Not recorded') + (company.api_status ? ' (' + escapeHtml(company.api_status) + ')' : '') + '</div>';
-  body += '<div style="margin-top:6px;"><strong>Stored screening summary:</strong> ' + escapeHtml(companyHits.matched ? 'Provider recorded company/entity watchlist matches requiring officer review.' : (screeningSummary.screening_run_recorded ? 'No company/entity provider matches recorded in the stored screening run.' : 'No stored screening run recorded yet.')) + '</div>';
-  if (companySanctions.results && companySanctions.results.length) {
-    body += '<div style="margin-top:10px;"><strong>Provider result highlights</strong><ul style="margin:6px 0 0 18px;padding:0;">' + companySanctions.results.slice(0, 5).map(function(hit) {
-      var parts = [];
-      if (hit.name) parts.push(hit.name);
-      if (hit.sanctions_list) parts.push(hit.sanctions_list);
-      if (hit.match_score != null) parts.push('score ' + hit.match_score + '%');
-      return '<li>' + escapeHtml(parts.join(' — ')) + '</li>';
-    }).join('') + '</ul></div>';
-  }
+  body += '<div style="margin-top:6px;"><strong>Stored screening summary:</strong> ' + escapeHtml(companyHits.matched ? 'Provider recorded company/entity matches requiring officer review.' : (screeningSummary.screening_run_recorded ? 'No company/entity provider matches recorded in the stored screening run.' : 'No stored screening run recorded yet.')) + '</div>';
+  body += providerResultHighlights(companyResults);
   if (ipFlags.length) body += '<div style="margin-top:10px;"><strong>IP / geolocation flags:</strong> ' + escapeHtml(ipFlags.join(' · ')) + '</div>';
   if (redApplicants.length) body += '<div style="margin-top:10px;"><strong>KYC review flags:</strong> RED outcome for ' + escapeHtml(redApplicants.join(', ')) + '</div>';
-  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> Distinct adverse-media results are not persisted in the current screening report.</div>';
+  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml(companyAdverse.matched ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media company match recorded.') + '</div>';
   body += '</div>';
   body += screeningReviewHistory(reviewRow);
 
@@ -7079,6 +7132,8 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   var screening = (screeningRecord || {}).screening || null;
   var facts = screeningResultFacts(screening);
   var personDeclaredPep = (person.pep === 'Yes');
+  var providerPep = facts.pep_hits > 0 || !!(screeningRecord || {}).provider_detected_pep || !!(screeningRecord || {}).has_pep_hit;
+  var undeclaredPep = !!(screeningRecord || {}).undeclared_pep;
   var badges = [
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : (screening ? (facts.matched ? 'review_required' : 'screened_no_match') : 'awaiting_screening'), reviewRow ? reviewRow.status_label : (screening ? (facts.matched ? 'Review Required' : 'No Provider Match') : 'Awaiting Screening')),
     screeningBadge(reviewRow ? reviewRow.watchlist_status : (screening ? (facts.sanctions_hits > 0 ? 'match' : (facts.other_hits > 0 ? 'review' : 'clear')) : 'pending')),
@@ -7086,7 +7141,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
     // serializer's pep_declared_status. The chip must never render
     // "Not Declared" while the body text below states "Declared PEP: Yes".
     screeningBadge(personDeclaredPep ? 'declared' : (reviewRow ? reviewRow.pep_declared_status : 'not_declared')),
-    screeningBadge(reviewRow ? reviewRow.pep_screening_status : (screening ? (facts.pep_hits > 0 || !!(screeningRecord || {}).undeclared_pep ? 'match' : (facts.other_hits > 0 ? 'review' : 'clear')) : 'pending'))
+    screeningBadge(reviewRow ? reviewRow.pep_screening_status : (screening ? (providerPep || undeclaredPep ? 'match' : (facts.other_hits > 0 || facts.adverse_media_hits > 0 ? 'review' : 'clear')) : 'pending'))
   ];
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow));
 
@@ -7105,21 +7160,13 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   } else {
     body += '<div><strong>Provider source:</strong> ' + escapeHtml(facts.source || 'Not recorded') + (facts.api_status ? ' (' + escapeHtml(facts.api_status) + ')' : '') + '</div>';
     body += '<div style="margin-top:6px;"><strong>Declared PEP:</strong> ' + escapeHtml(person.pep === 'Yes' ? 'Yes' : 'No') + '</div>';
+    body += '<div style="margin-top:6px;"><strong>Provider PEP Match:</strong> ' + escapeHtml(providerPep ? 'Yes' : 'No') + '</div>';
+    body += '<div style="margin-top:6px;"><strong>Undeclared PEP:</strong> ' + escapeHtml(undeclaredPep ? 'Yes' : 'No') + '</div>';
     body += '<div style="margin-top:6px;"><strong>Stored provider result:</strong> ' + escapeHtml(facts.matched ? 'Provider recorded one or more potential matches that require officer review.' : 'No provider matches were recorded for this screening subject.') + '</div>';
     if ((screeningRecord || {}).undeclared_pep) body += '<div style="margin-top:6px;"><strong>Undeclared PEP flag:</strong> Provider evidence indicates possible undeclared PEP exposure.</div>';
-    if (screening.results && screening.results.length) {
-      body += '<div style="margin-top:10px;"><strong>Provider result highlights</strong><ul style="margin:6px 0 0 18px;padding:0;">' + screening.results.slice(0, 5).map(function(hit) {
-        var labels = [];
-        if (hit.name) labels.push(hit.name);
-        if (hit.sanctions_list) labels.push(hit.sanctions_list);
-        if (hit.match_score != null) labels.push('score ' + hit.match_score + '%');
-        if (hit.is_sanctioned) labels.push('sanctions');
-        if (hit.is_pep) labels.push('pep');
-        return '<li>' + escapeHtml(labels.join(' — ')) + '</li>';
-      }).join('') + '</ul></div>';
-    }
+    body += providerResultHighlights(screening.results || []);
   }
-  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> Distinct adverse-media results are not persisted in the current screening report.</div>';
+  body += '<div style="margin-top:10px;"><strong>Adverse media:</strong> ' + escapeHtml(facts.adverse_media_hits > 0 ? 'Provider adverse-media evidence is persisted and listed above.' : 'No adverse-media person match recorded.') + '</div>';
   body += '</div>';
   body += screeningReviewHistory(reviewRow);
 

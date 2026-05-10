@@ -166,6 +166,45 @@ def test_normalize_pep_via_fixture():
     report = _single("pep_canonical.json")
     assert report["any_pep_hits"] is True
     assert report["director_screenings"][0]["pep_classes"] == ["PEP_CLASS_1", "PEP_CLASS_2"]
+    director = report["director_screenings"][0]
+    assert director["provider_detected_pep"] is True
+    assert director["undeclared_pep"] is False
+    assert report["screened_at"]
+    assert director["screening"]["screened_at"] == report["screened_at"]
+    result = director["screening"]["results"][0]
+    assert result["provider_risk_identifier"]
+    assert result["provider_profile_identifier"]
+    assert "PEP" in result["match_categories"]
+    assert result["risk_type_keys"]
+
+
+def test_normalize_undeclared_provider_pep_is_explicit():
+    data = _fixture("pep_canonical.json")
+    workflow, alerts, deep, customer_input, customer_response, _ = _objects(data)
+    report = normalize_single_pass(
+        workflow,
+        alerts,
+        deep,
+        customer_input,
+        customer_response,
+        ScreeningApplicationContext(
+            application_id="app-undeclared-provider-pep",
+            client_id="client-test",
+            declared_pep=False,
+            screening_subject_kind="director",
+            screening_subject_name="Test PEP Subject Tier 1",
+        ),
+        ResnapshotContext(
+            webhook_type="CASE_ALERT_LIST_UPDATED",
+            source_case_identifier="case-undeclared-provider-pep",
+            received_at="2026-01-01T00:00:00Z",
+        ),
+    )
+
+    director = report["director_screenings"][0]
+    assert director["declared_pep"] == "No"
+    assert director["provider_detected_pep"] is True
+    assert director["undeclared_pep"] is True
 
 
 def test_normalize_rca_via_fixture():
@@ -179,6 +218,36 @@ def test_normalize_adverse_media_via_fixture():
     articles = report["provider_specific"]["complyadvantage"]["matches"][0]["indicators"]
     assert articles[0]["value"]["canonical_url"]["domain"] == "test-fixture.example.com"
     assert articles[0]["value"]["snippets"] == [{"text": "Test snippet 1"}]
+
+
+def test_company_adverse_media_flows_to_company_summary():
+    data = _fixture("adverse_media_multi_source.json")
+    workflow, alerts, deep, customer_input, customer_response, _ = _objects(data)
+    report = normalize_single_pass(
+        workflow,
+        alerts,
+        deep,
+        customer_input,
+        customer_response,
+        ScreeningApplicationContext(
+            application_id="app-company-media",
+            client_id="client-test",
+            screening_subject_kind="entity",
+            screening_subject_name="Media Hit Ltd",
+        ),
+        ResnapshotContext(
+            webhook_type="CASE_ALERT_LIST_UPDATED",
+            source_case_identifier="case-company-media",
+            received_at="2026-01-01T00:00:00Z",
+        ),
+    )
+
+    assert report["has_company_screening_hit"] is True
+    assert report["has_adverse_media_hit"] is True
+    assert report["company_screening"]["matched"] is True
+    assert report["company_screening"]["adverse_media"]["matched"] is True
+    assert report["company_screening"]["adverse_media"]["results"][0]["is_adverse_media"] is True
+    assert report["company_screening_state"] == "completed_match"
 
 
 def test_provider_match_raw_extras_surfaces_profile_risk_and_indicator_sources():

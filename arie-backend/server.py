@@ -8627,11 +8627,14 @@ def _screening_hit_facts(screening_record):
     results = (screening_record or {}).get("results", []) or []
     sanctions_hits = sum(1 for hit in results if hit.get("is_sanctioned"))
     pep_hits = sum(1 for hit in results if hit.get("is_pep"))
+    adverse_hits = sum(1 for hit in results if hit.get("is_adverse_media"))
     return {
         "total_hits": len(results),
         "sanctions_hits": sanctions_hits,
         "pep_hits": pep_hits,
-        "other_hits": max(0, len(results) - sanctions_hits - pep_hits),
+        "adverse_media_hits": adverse_hits,
+        "other_hits": max(0, len(results) - sanctions_hits - pep_hits - adverse_hits),
+        "matched": bool((screening_record or {}).get("matched") or results),
     }
 
 
@@ -8798,6 +8801,40 @@ def _screening_structured_adverse_media_hit(value):
     return False
 
 
+def _screening_combined_company_facts(company_screening):
+    company = company_screening or {}
+    sanctions = company.get("sanctions") or {}
+    adverse = company.get("adverse_media") or {}
+    records = [sanctions, adverse] if (sanctions or adverse) else [company]
+    totals = {
+        "total_hits": 0,
+        "sanctions_hits": 0,
+        "pep_hits": 0,
+        "other_hits": 0,
+        "matched": False,
+        "adverse_media_hit": False,
+        "screened_at": company.get("screened_at"),
+    }
+    for record in records:
+        facts = _screening_hit_facts(record)
+        totals["total_hits"] += int(facts.get("total_hits") or 0)
+        totals["sanctions_hits"] += int(facts.get("sanctions_hits") or 0)
+        totals["pep_hits"] += int(facts.get("pep_hits") or 0)
+        totals["other_hits"] += int(facts.get("other_hits") or 0)
+        totals["matched"] = totals["matched"] or bool(facts.get("matched") or record.get("matched"))
+        totals["adverse_media_hit"] = totals["adverse_media_hit"] or bool(
+            _screening_structured_adverse_media_hit(record)
+            or record.get("is_adverse_media")
+        )
+        if not totals["screened_at"]:
+            totals["screened_at"] = record.get("screened_at")
+    totals["adverse_media_hit"] = totals["adverse_media_hit"] or bool(adverse.get("matched"))
+    totals["matched"] = totals["matched"] or bool(adverse.get("matched"))
+    if not totals["screened_at"]:
+        totals["screened_at"] = company.get("screened_at")
+    return totals
+
+
 def _screening_review_subject_context(db, app, subject_type, subject_name):
     prescreening = safe_json_loads(app.get("prescreening_data"))
     if not isinstance(prescreening, dict):
@@ -8809,24 +8846,30 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
     if subject_type == "entity":
         company_screening = report.get("company_screening") or {}
         company_sanctions = company_screening.get("sanctions") or {}
+        company_adverse = company_screening.get("adverse_media") or {}
         company_state = derive_screening_state(company_sanctions)
         company_subject = derive_subject_state(company_sanctions)
-        facts = _screening_hit_facts(company_sanctions)
+        facts = _screening_combined_company_facts(company_screening)
+        has_company_match = bool(facts["matched"] or company_adverse.get("matched"))
+        if company_state == _SCR_COMPLETED_CLEAR and has_company_match:
+            company_state = _SCR_COMPLETED_MATCH
         company_ip = report.get("ip_geolocation") or {}
         context = []
         if company_ip.get("risk_level"):
             context.append("IP risk: " + str(company_ip.get("risk_level")))
+        if company_adverse.get("matched"):
+            context.append("Company adverse media match")
         return {
             "watchlist_status": _screening_legacy_status(
                 company_state,
-                company_subject["has_provider_sanctions_hit"],
+                company_subject["has_provider_sanctions_hit"] or has_company_match,
             ),
             "pep_declared_status": "not_applicable",
             "pep_screening_status": "not_applicable",
             "screening_state": company_state,
             "total_hits": facts["total_hits"] or (report or {}).get("total_hits", 0),
             "entity_context": context,
-            "adverse_media_hit": _screening_structured_adverse_media_hit(report),
+            "adverse_media_hit": bool(facts["adverse_media_hit"] or _screening_structured_adverse_media_hit(report)),
         }
 
     if subject_type in ("director", "ubo"):
@@ -8850,7 +8893,7 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             context.append("Declared PEP")
         if (item or {}).get("undeclared_pep"):
             context.append("Undeclared PEP")
-        if item.get("adverse_media"):
+        if facts.get("adverse_media_hits", 0) > 0:
             context.append("Adverse media")
         return {
             "watchlist_status": _screening_legacy_status(
@@ -9046,18 +9089,22 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
 
         company_screening = (report or {}).get("company_screening") or {}
         company_sanctions = company_screening.get("sanctions") or {}
+        company_adverse = company_screening.get("adverse_media") or {}
         company_ip = (report or {}).get("ip_geolocation") or {}
         company_kyc = (report or {}).get("kyc_applicants") or []
         company_registry_found = company_screening.get("found")
+        company_facts = _screening_combined_company_facts(company_screening)
 
         # Priority A: derive canonical company sanctions state from provider
         # api_status. Never coerce pending/not_configured/error/unavailable
         # into "clear".
         company_sanctions_state = derive_screening_state(company_sanctions)
         company_sanctions_subject = derive_subject_state(company_sanctions)
+        company_has_provider_match = bool(company_facts["matched"] or company_adverse.get("matched"))
+        company_state = _SCR_COMPLETED_MATCH if company_sanctions_state == _SCR_COMPLETED_CLEAR and company_has_provider_match else company_sanctions_state
         company_watchlist_status = _screening_legacy_status(
-            company_sanctions_state,
-            company_sanctions_subject["has_provider_sanctions_hit"],
+            company_state,
+            company_sanctions_subject["has_provider_sanctions_hit"] or company_has_provider_match,
         )
 
         company_context = []
@@ -9076,6 +9123,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             rejected_kyc = [a.get("person_name") for a in company_kyc if a.get("review_answer") == "RED"]
             if rejected_kyc:
                 company_context.append("KYC RED: " + ", ".join(rejected_kyc))
+            if company_adverse.get("matched"):
+                company_context.append("Company adverse media match")
             # Surface explicit non-terminal sanctions state so officers cannot
             # mistake "we did not get a real answer" for "clear".
             if company_sanctions_state == _SCR_NOT_CONFIGURED:
@@ -9096,6 +9145,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
         if report:
             company_requires_review = (
                 company_sanctions_requires_review or
+                company_has_provider_match or
                 company_registry_found is False or
                 company_ip.get("risk_level") in ("HIGH", "VERY_HIGH") or
                 company_ip.get("is_vpn") or
@@ -9115,7 +9165,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             if not report:
                 entity_status_key = "awaiting_screening"
                 entity_status_label = "Awaiting Screening"
-            elif company_sanctions_state == _SCR_COMPLETED_MATCH:
+            elif company_state == _SCR_COMPLETED_MATCH:
                 entity_status_key = "review_required"
                 entity_status_label = "Review Required"
             elif company_sanctions_state == _SCR_NOT_CONFIGURED:
@@ -9152,9 +9202,9 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             }
             entity_screening_mode = _screening_queue_row_mode(
                 screening_mode,
-                company_sanctions_state,
-                entity_status_key,
-                company_context,
+                    company_state,
+                    entity_status_key,
+                    company_context,
                 company_provider_record,
             )
 
@@ -9167,15 +9217,15 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 "watchlist_status": company_watchlist_status,
                 "pep_declared_status": "not_applicable",
                 "pep_screening_status": "not_applicable",
-                "screening_state": company_sanctions_state,
+                "screening_state": company_state,
                 "entity_context": company_context,
                 "status_key": entity_status_key,
                 "status_label": entity_status_label,
                 "screening_mode": entity_screening_mode,
-                "screened_at": screened_at,
+                "screened_at": company_facts.get("screened_at") or screened_at,
                 "screened_by": screened_by,
                 "flag_count": len(overall_flags),
-                "total_hits": (report or {}).get("total_hits", 0),
+                "total_hits": company_facts["total_hits"] or (report or {}).get("total_hits", 0),
                 "review_required": company_requires_review,
                 **company_review_fields,
             })
@@ -9192,6 +9242,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             # not exactly match "Yes".
             declared_pep = normalize_is_pep(person.get("is_pep", "No")) == "Yes"
             provider_other = facts["other_hits"] > 0
+            provider_adverse = facts.get("adverse_media_hits", 0) > 0
 
             # Priority A: derive canonical state from api_status. Never let
             # pending/init/created/error/unavailable/not_configured collapse
@@ -9228,7 +9279,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             elif not item:
                 status_key = "incomplete_record"
                 status_label = "Incomplete Screening Record"
-            elif person_state == _SCR_COMPLETED_MATCH or has_sanctions_hit or has_pep_hit or provider_other:
+            elif person_state == _SCR_COMPLETED_MATCH or has_sanctions_hit or has_pep_hit or provider_other or provider_adverse:
                 status_key = "review_required"
                 status_label = "Review Required"
             elif person_state == _SCR_NOT_CONFIGURED:
@@ -9272,6 +9323,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 entity_context.append("API: " + screening.get("api_status"))
             if (item or {}).get("undeclared_pep"):
                 entity_context.append("Undeclared PEP")
+            if provider_adverse:
+                entity_context.append("Adverse media")
             if declared_pep:
                 # Always surface declared PEP separately from provider state
                 # so it cannot be lost behind a "Pending" or "Clear" label.

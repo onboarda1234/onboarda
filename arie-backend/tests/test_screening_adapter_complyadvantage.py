@@ -9,12 +9,57 @@ class FakeConfig:
     screening_configuration_identifier = "cfg-123"
 
 
-def _report():
+def _report(kind="director", name="Jane Doe"):
+    if kind == "entity":
+        return {
+            "provider": "complyadvantage",
+            "normalized_version": "2.0",
+            "screened_at": "2026-01-01T00:00:00Z",
+            "any_pep_hits": False,
+            "any_sanctions_hits": False,
+            "total_persons_screened": 0,
+            "adverse_media_coverage": "none",
+            "has_adverse_media_hit": None,
+            "company_screening_coverage": "full",
+            "has_company_screening_hit": False,
+            "company_screening": {"provider": "complyadvantage", "source": "complyadvantage", "api_status": "live", "matched": False, "results": []},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+            "any_non_terminal_subject": False,
+            "company_screening_state": "completed_clear",
+            "provenance": None,
+        }
+    person = {
+        "person_name": name,
+        "person_type": kind,
+        "nationality": "",
+        "declared_pep": "No",
+        "provider_detected_pep": True,
+        "undeclared_pep": True,
+        "has_pep_hit": True,
+        "has_sanctions_hit": False,
+        "has_adverse_media_hit": None,
+        "adverse_media_coverage": "none",
+        "screening": {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": True,
+            "results": [{"name": name, "is_pep": True}],
+        },
+        "screening_state": "completed_match",
+        "requires_review": True,
+        "is_rca": False,
+        "pep_classes": ["PEP_CLASS_1"],
+    }
     return {
         "provider": "complyadvantage",
         "normalized_version": "2.0",
-        "screened_at": "",
-        "any_pep_hits": False,
+        "screened_at": "2026-01-01T00:00:00Z",
+        "any_pep_hits": True,
         "any_sanctions_hits": False,
         "total_persons_screened": 1,
         "adverse_media_coverage": "none",
@@ -22,24 +67,10 @@ def _report():
         "company_screening_coverage": "none",
         "has_company_screening_hit": None,
         "company_screening": {},
-        "director_screenings": [{
-            "person_name": "Jane Doe",
-            "person_type": "director",
-            "nationality": "",
-            "declared_pep": "No",
-            "has_pep_hit": False,
-            "has_sanctions_hit": False,
-            "has_adverse_media_hit": None,
-            "adverse_media_coverage": "none",
-            "screening": {"provider": "complyadvantage"},
-            "screening_state": "completed_clear",
-            "requires_review": False,
-            "is_rca": False,
-            "pep_classes": None,
-        }],
-        "ubo_screenings": [],
+        "director_screenings": [person] if kind == "director" else [],
+        "ubo_screenings": [person] if kind == "ubo" else [],
         "overall_flags": [],
-        "total_hits": 0,
+        "total_hits": 1,
         "degraded_sources": [],
         "any_non_terminal_subject": False,
         "company_screening_state": "completed_clear",
@@ -53,7 +84,8 @@ class FakeOrchestrator:
 
     def screen_customer_two_pass(self, **kwargs):
         self.calls.append(kwargs)
-        return _report()
+        context = kwargs["application_context"]
+        return _report(context.screening_subject_kind, context.screening_subject_name)
 
 
 def test_adapter_basics_and_no_args_factory_construction():
@@ -165,3 +197,23 @@ def test_run_full_screening_uses_distinct_subject_and_pass_external_identifiers(
         "app-1:director:key-d-1:strict",
         "app-1:ubo:key-u-1:strict",
     }
+
+
+def test_run_full_screening_dedupes_same_natural_person_across_roles():
+    orchestrator = FakeOrchestrator()
+    adapter = ComplyAdvantageScreeningAdapter(orchestrator=orchestrator, config=FakeConfig())
+
+    result = adapter.run_full_screening(
+        {"application_id": "app-1", "client_id": "client-1", "company_name": "Acme Ltd"},
+        [{"person_key": "director-row", "full_name": "Same Person", "date_of_birth": "1980-01-01", "nationality": "MU", "is_pep": "No"}],
+        [{"person_key": "ubo-row", "full_name": "Same Person", "date_of_birth": "1980-01-01", "nationality": "MU", "is_pep": "No"}],
+    )
+
+    assert len(orchestrator.calls) == 2  # company + one shared natural-person screen
+    assert [call["application_context"].screening_subject_kind for call in orchestrator.calls] == ["entity", "director"]
+    assert len(result["director_screenings"]) == 1
+    assert len(result["ubo_screenings"]) == 1
+    assert result["director_screenings"][0]["person_name"] == "Same Person"
+    assert result["ubo_screenings"][0]["person_name"] == "Same Person"
+    assert result["director_screenings"][0]["screening"]["shared_subject_key"] == result["ubo_screenings"][0]["screening"]["shared_subject_key"]
+    assert result["total_hits"] == 1
