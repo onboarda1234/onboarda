@@ -332,7 +332,7 @@ def _workflow_complete(workflow):
     case_status = _status_value(case_detail.status) if case_detail else None
     if status == "COMPLETED" and case_status in (None, "COMPLETED", "SKIPPED"):
         return True
-    if status == "IN-PROGRESS" or case_status == "IN-PROGRESS":
+    if status in ("NOT-STARTED", "IN-PROGRESS") or case_status in ("NOT-STARTED", "IN-PROGRESS"):
         return False
     raise CAUnexpectedResponse("ComplyAdvantage workflow status unexpected")
 

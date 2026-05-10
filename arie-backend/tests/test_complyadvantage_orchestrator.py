@@ -171,7 +171,7 @@ def test_polling_loop_uses_backoff_and_times_out_with_fake_clock():
     in_progress = {
         "workflow_instance_identifier": "wf",
         "workflow_type": "screening",
-        "status": "IN-PROGRESS",
+        "status": "NOT-STARTED",
         "step_details": {"case-creation": {"status": "IN-PROGRESS"}},
     }
     complete = {
