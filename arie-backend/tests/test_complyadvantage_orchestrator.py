@@ -313,6 +313,73 @@ def test_case_creation_maps_mesh_profile_risk_indicators_to_pep_hit():
     assert provider_match["indicators"][0]["value"]["class"] == "PEP_CLASS_1"
 
 
+def test_case_creation_maps_mesh_list_risk_indicators_to_pep_hit():
+    data = deepcopy(_fixture("pep_canonical.json"))
+    alert = data["workflow"].pop("alerts")[0]
+    data["workflow"]["step_details"]["alerting"] = {
+        "status": "COMPLETED",
+        "step_output": {"alerts": [alert]},
+    }
+    mesh_risk = {
+        "identifier": "risk-mesh-pep-list",
+        "type": "ENTITY_SCREENING",
+        "decision": "NOT_REVIEWED",
+        "detail": {
+            "profile": {
+                "identifier": "profile-mesh-pep-list",
+                "person": {"names": {"values": [{"name": "Pravin Jugnauth"}]}},
+                "match_details": {},
+                "risk_types": ["r_pep_class_1"],
+                "risk_indicators": [{
+                    "risk_types": [{
+                        "key": "r_pep_class_1",
+                        "name": "PEP class 1",
+                        "taxonomy": "r_political_exposure.r_politically_exposed_persons.r_pep_class_1",
+                    }],
+                    "pep_indicators": {
+                        "values": [{
+                            "source_identifier": "S:7VP70D",
+                            "source_name": "Mauritius political leadership",
+                            "issuing_jurisdictions": ["MU"],
+                            "url": "https://example.test/pep-source",
+                            "class": "PEP_CLASS_1",
+                            "level": "NATIONAL",
+                            "scope_of_influence": "POLITICAL_PARTIES_BOARD_MEMBERS",
+                            "institution_type": "POLITICAL_PARTY",
+                            "political_positions": ["Leader"],
+                            "political_position_type": "SENIOR_POLITICAL_PARTY_OFFICIAL",
+                            "political_parties": ["Militant Socialist Movement"],
+                            "active_start_date": {"date": "2003-10-30T00:00:00Z"},
+                            "active_end_date": None,
+                            "locations": [{"full_address": "Mauritius", "country": "MU"}],
+                        }]
+                    },
+                }],
+            },
+        },
+    }
+    data["alerts_risks"] = {"alert-pep": [mesh_risk]}
+    data["deep_risks"] = {"risk-mesh-pep-list": mesh_risk}
+    client = _client_for_single(data)
+
+    report = _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("strict"),
+        application_context=_context(data),
+        monitoring_enabled=False,
+    )
+
+    assert report["total_hits"] == 1
+    assert report["any_pep_hits"] is True
+    assert report["overall_flags"] == ["ComplyAdvantage PEP hit: risk-mesh-pep-list"]
+    assert report["director_screenings"][0]["has_pep_hit"] is True
+    assert report["director_screenings"][0]["pep_classes"] == ["PEP_CLASS_1"]
+    provider_match = report["provider_specific"]["complyadvantage"]["matches"][0]
+    assert provider_match["indicators"][0]["taxonomy_key"] == "r_pep_class_1"
+    assert provider_match["indicators"][0]["value"]["class"] == "PEP_CLASS_1"
+    assert provider_match["indicators"][0]["value"]["position"] == "Leader"
+
+
 def test_case_creation_skipped_clean_path_fetches_no_risks_or_deep_risks():
     data = _fixture("clean_baseline.json")
     client = _client_for_single(data)

@@ -48,6 +48,12 @@ _PEP_AML_TYPE_TO_CLASS = {
     "pep-class-3": ("r_pep_class_3", "PEP Class 3", "PEP_CLASS_3"),
     "pep-class-4": ("r_pep_class_4", "PEP Class 4", "PEP_CLASS_4"),
 }
+_PEP_RISK_KEY_TO_CLASS = {
+    "r_pep_class_1": ("PEP Class 1", "PEP_CLASS_1"),
+    "r_pep_class_2": ("PEP Class 2", "PEP_CLASS_2"),
+    "r_pep_class_3": ("PEP Class 3", "PEP_CLASS_3"),
+    "r_pep_class_4": ("PEP Class 4", "PEP_CLASS_4"),
+}
 
 
 @dataclass
@@ -414,6 +420,8 @@ def _mesh_profile_from_risk(raw):
 
 def _parse_mesh_profile_risk_detail(profile):
     indicators = profile.get("risk_indicators") or {}
+    if isinstance(indicators, list):
+        return CARiskDetail(values=_parse_mesh_list_risk_indicators(indicators))
     if not isinstance(indicators, dict):
         return CARiskDetail(values=[])
 
@@ -422,6 +430,145 @@ def _parse_mesh_profile_risk_detail(profile):
     values.extend(_parse_mesh_media_indicators(indicators))
     values.extend(_parse_mesh_watchlist_indicators(indicators))
     return CARiskDetail(values=values)
+
+
+def _parse_mesh_list_risk_indicators(indicators):
+    parsed = []
+    for group in indicators:
+        if not isinstance(group, dict):
+            continue
+        risk_types = group.get("risk_types") if isinstance(group.get("risk_types"), list) else []
+        for risk_type_raw in risk_types:
+            if not isinstance(risk_type_raw, dict):
+                continue
+            risk_type = _mesh_risk_type(risk_type_raw)
+            key = risk_type.key
+            if key in _PEP_RISK_KEY_TO_CLASS:
+                parsed.extend(_parse_mesh_list_pep_group(group, risk_type))
+            elif key.startswith(_ADVERSE_MEDIA_RISK_PREFIX):
+                parsed.extend(_parse_mesh_list_media_group(group, risk_type))
+            elif key.startswith(_SANCTIONS_EXPOSURE_PREFIX) or key in _WATCHLIST_RISK_KEYS:
+                parsed.extend(_parse_mesh_list_watchlist_group(group, risk_type))
+    return parsed
+
+
+def _mesh_risk_type(raw):
+    return CARiskType(
+        key=raw.get("key") or raw.get("taxonomy") or "",
+        label=raw.get("name") or raw.get("label") or raw.get("key") or "",
+    )
+
+
+def _parse_mesh_list_pep_group(group, risk_type):
+    values = _indicator_values(group, "pep_indicators")
+    if not values:
+        values = [{}]
+    label, class_value = _PEP_RISK_KEY_TO_CLASS[risk_type.key]
+    if not risk_type.label:
+        risk_type = CARiskType(key=risk_type.key, label=label)
+    parsed = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        value = CAPEPValue.model_validate({
+            "class": item.get("class") or class_value,
+            "position": _first_list_value(item.get("political_positions")),
+            "country": _first_list_value(item.get("issuing_jurisdictions")) or _mesh_location_country(item),
+            "level": item.get("level"),
+            "scope_of_influence": item.get("scope_of_influence"),
+            "political_position_type": item.get("political_position_type"),
+            "institution_type": item.get("institution_type"),
+            "active_start_date": _mesh_date(item.get("active_start_date")),
+            "active_end_date": _mesh_date(item.get("active_end_date")),
+            "issuing_jurisdictions": _string_list(item.get("issuing_jurisdictions")),
+            "source_metadata": {
+                "source": "mesh_profile_risk_indicators",
+                "source_identifier": item.get("source_identifier"),
+                "source_name": item.get("source_name"),
+                "url": item.get("url"),
+            },
+        })
+        parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+            CAPEPIndicator(risk_type=risk_type, value=value)
+        ]))
+    return parsed
+
+
+def _parse_mesh_list_media_group(group, risk_type):
+    values = (
+        _indicator_values(group, "media_indicators")
+        or _indicator_values(group, "adverse_media_indicators")
+    )
+    parsed = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        value = CAMediaArticleValue.model_validate({
+            "title": item.get("title") or item.get("headline") or item.get("name"),
+            "url": item.get("url") or item.get("link"),
+            "publication_date": _mesh_date(item.get("publication_date") or item.get("published_at") or item.get("date")),
+            "source_name": item.get("source_name") or item.get("source"),
+            "categories": _string_list(item.get("aml_types")),
+            "source_metadata": {"source": "mesh_profile_risk_indicators"},
+        })
+        parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+            CAMediaIndicator(risk_type=risk_type, value=value)
+        ]))
+    return parsed
+
+
+def _parse_mesh_list_watchlist_group(group, risk_type):
+    values = (
+        _indicator_values(group, "sanction_indicators")
+        or _indicator_values(group, "sanctions_indicators")
+        or _indicator_values(group, "watchlist_indicators")
+    )
+    parsed = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        value = CAWatchlistValue.model_validate({
+            "list_name": item.get("source_name") or item.get("name") or item.get("list_name"),
+            "authority": item.get("authority"),
+            "issuing_jurisdictions": _string_list(item.get("issuing_jurisdictions")),
+            "start_date": _mesh_date(item.get("start_date")),
+            "end_date": _mesh_date(item.get("end_date")),
+            "source_metadata": {"source": "mesh_profile_risk_indicators"},
+        })
+        parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+            CAWatchlistIndicator(risk_type=risk_type, value=value)
+        ]))
+    return parsed
+
+
+def _indicator_values(group, key):
+    block = group.get(key)
+    if isinstance(block, dict) and isinstance(block.get("values"), list):
+        return block["values"]
+    if isinstance(block, list):
+        return block
+    return []
+
+
+def _mesh_date(value):
+    if isinstance(value, dict):
+        return value.get("date") or value.get("value")
+    return value
+
+
+def _string_list(values):
+    if not isinstance(values, list):
+        return []
+    return values
+
+
+def _mesh_location_country(item):
+    locations = item.get("locations")
+    if isinstance(locations, list) and locations:
+        first = locations[0]
+        if isinstance(first, dict):
+            return first.get("country") or first.get("country_code")
+    return None
 
 
 def _parse_mesh_pep_indicators(indicators):
