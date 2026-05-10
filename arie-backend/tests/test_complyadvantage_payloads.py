@@ -58,6 +58,10 @@ def test_to_ca_address_omits_empty_fields_and_uses_rich_postal_keys():
     }
 
 
+def test_to_ca_address_omits_location_type_only_address():
+    assert to_ca_address({"country_of_birth": "Mauritius"}, location_type="residential_address") == {}
+
+
 def test_build_customer_person_strict_vs_relaxed():
     party = {
         "person_key": "p-1",
@@ -68,6 +72,8 @@ def test_build_customer_person_strict_vs_relaxed():
         "nationality": "Mauritius",
         "country_of_birth": "Mauritius",
         "email": "jane@example.test",
+        "ownership_pct": 100,
+        "declared_pep": True,
         "address": {"full_address": "1 Road", "country_code": "MU"},
     }
 
@@ -84,6 +90,7 @@ def test_build_customer_person_strict_vs_relaxed():
     assert strict["country_of_birth"] == "MU"
     assert strict["addresses"][0]["full_address"] == "1 Road"
     assert strict["contact_information"]["email"] == "jane@example.test"
+    assert "metadata" not in strict
     assert relaxed["full_name"] == "Jane Doe"
     assert "first_name" not in strict
     assert "last_name" not in strict

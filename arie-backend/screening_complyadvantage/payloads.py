@@ -111,7 +111,10 @@ def to_ca_address(data, *, location_type):
         "country_code": to_ca_country_code(_first(source, "country_code", "country_iso", "jurisdiction", "country", "country_name")),
         "location_type": location_type,
     }
-    return _drop_empty(mapped)
+    address = _drop_empty(mapped)
+    if set(address) <= {"location_type"}:
+        return {}
+    return address
 
 
 def build_customer_person(person, *, strict=True):
@@ -149,12 +152,6 @@ def build_customer_person(person, *, strict=True):
         })
         if contact:
             customer["contact_information"] = contact
-        metadata = _drop_empty({
-            "ownership_pct": _first(person, "ownership_pct"),
-            "declared_pep": _first(person, "is_pep", "declared_pep"),
-        })
-        if metadata:
-            customer["metadata"] = metadata
     return _customer_envelope(customer, "person", _first(person, "person_key", "id"))
 
 
