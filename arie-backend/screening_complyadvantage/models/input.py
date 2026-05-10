@@ -86,7 +86,7 @@ class CACustomerCompanyInput(CAWireModel):
     metadata: Optional[dict] = None
 
     @model_validator(mode="after")
-    def requires_supported_legal_name_field(self) -> "CACustomerCompanyInput":
+    def requires_legal_name_or_name(self) -> "CACustomerCompanyInput":
         if not (self.legal_name or self.name):
             raise ValueError("CACustomerCompanyInput requires legal_name or name")
         return self
