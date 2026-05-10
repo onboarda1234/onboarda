@@ -195,6 +195,29 @@ def test_polling_loop_uses_backoff_and_times_out_with_fake_clock():
         ).poll_workflow_until_complete("wf")
 
 
+def test_polling_accepts_not_started_step_statuses_seen_in_ca_sandbox():
+    raw = {
+        "workflow_instance_identifier": "wf-not-started",
+        "workflow_type": "screening",
+        "status": "IN-PROGRESS",
+        "step_details": {
+            "initial-risk-scoring": {"status": "NOT-STARTED"},
+            "customer-screening": {"status": "NOT-STARTED"},
+            "alerting": {"status": "NOT-STARTED"},
+            "case-creation": {"status": "NOT-STARTED"},
+        },
+    }
+    client = PathStrictFakeCAClient({}, {"/v2/workflows/wf-not-started": raw})
+
+    with pytest.raises(CATimeout):
+        ComplyAdvantageScreeningOrchestrator(
+            client,
+            poll_timeout_seconds=0,
+            clock=lambda: 0,
+            sleep_fn=lambda _: None,
+        ).poll_workflow_until_complete("wf-not-started")
+
+
 def test_case_creation_completed_returns_full_report_with_three_layer_paths():
     data = _fixture("pep_canonical.json")
     client = _client_for_single(data)
