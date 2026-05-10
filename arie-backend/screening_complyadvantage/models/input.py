@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from .primitives import CADateOfBirth, CAWireModel
 
@@ -45,7 +45,7 @@ class CACustomerPersonInput(CAWireModel):
     full_name: Optional[str] = None
     date_of_birth: Optional[CADateOfBirth] = None
     gender: Optional[str] = None
-    nationality: Optional[str] = None
+    nationality: Optional[list[str]] = None
     country_of_birth: Optional[str] = None
     place_of_birth: Optional[str] = None
     residential_information: Optional[CAResidentialInformation] = None
@@ -62,6 +62,13 @@ class CACustomerPersonInput(CAWireModel):
     customer_reference: Optional[str] = None
     custom_fields: Optional[dict] = None  # TODO: tighten CA field map after payload recon.
     metadata: Optional[dict] = None
+
+    @field_validator("nationality", mode="before")
+    @classmethod
+    def accepts_legacy_single_nationality(cls, value):
+        if value in (None, "") or isinstance(value, list):
+            return value
+        return [value]
 
     @model_validator(mode="after")
     def requires_supported_name_field(self) -> "CACustomerPersonInput":

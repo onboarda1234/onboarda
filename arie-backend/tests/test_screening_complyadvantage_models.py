@@ -156,7 +156,7 @@ def test_input_models_full_23_field_person_validates():
         last_name="Doe",
         date_of_birth={"year": 1980},
         gender="F",
-        nationality="MU",
+        nationality=["MU"],
         country_of_birth="MU",
         place_of_birth="Port Louis",
         residential_information={"country_of_residence": "MU"},

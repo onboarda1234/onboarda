@@ -6,7 +6,9 @@ from screening_complyadvantage.payloads import (
     build_customer_person,
     monitoring_enabled_from_payload,
     to_ca_address,
+    to_ca_country_code,
     to_ca_dob,
+    to_ca_nationalities,
 )
 from screening_complyadvantage.models import CACustomerInput
 
@@ -15,6 +17,20 @@ def test_to_ca_dob_accepts_date_and_iso_string():
     assert to_ca_dob(date(1980, 1, 31)) == {"day": 31, "month": 1, "year": 1980}
     assert to_ca_dob("1980-01-31T00:00:00Z") == {"day": 31, "month": 1, "year": 1980}
     assert to_ca_dob("1980") is None
+
+
+def test_to_ca_country_code_maps_names_and_demonyms_to_alpha2():
+    assert to_ca_country_code("Mauritius") == "MU"
+    assert to_ca_country_code("Mauritian") == "MU"
+    assert to_ca_country_code("United Kingdom") == "GB"
+    assert to_ca_country_code("GB") == "GB"
+    assert to_ca_country_code("Unknownland") is None
+
+
+def test_to_ca_nationalities_returns_alpha2_array():
+    assert to_ca_nationalities("Mauritius") == ["MU"]
+    assert to_ca_nationalities(["Mauritius", "MU", "British"]) == ["MU", "GB"]
+    assert to_ca_nationalities("Unknownland") is None
 
 
 def test_to_ca_address_omits_empty_fields_and_uses_rich_postal_keys():
@@ -49,7 +65,8 @@ def test_build_customer_person_strict_vs_relaxed():
         "last_name": "Doe",
         "full_name": "Jane Doe",
         "date_of_birth": "1980-01-31",
-        "nationality": "MU",
+        "nationality": "Mauritius",
+        "country_of_birth": "Mauritius",
         "email": "jane@example.test",
         "address": {"full_address": "1 Road", "country_code": "MU"},
     }
@@ -63,7 +80,8 @@ def test_build_customer_person_strict_vs_relaxed():
     assert strict_customer["reference"] == "p-1"
     assert "external_identifier" not in strict
     assert "customer_reference" not in strict
-    assert strict["nationality"] == "MU"
+    assert strict["nationality"] == ["MU"]
+    assert strict["country_of_birth"] == "MU"
     assert strict["addresses"][0]["full_address"] == "1 Road"
     assert strict["contact_information"]["email"] == "jane@example.test"
     assert relaxed["full_name"] == "Jane Doe"
