@@ -59,7 +59,13 @@ def build_customer_person(person, *, strict=True):
     fallback_last_name = _first(person, "last_name", "surname")
     if not fallback_last_name:
         first_name = _first(person, "first_name")
-        fallback_last_name = _split_name(full_name or "")[1] or first_name or "Unknown"
+        split_last_name = _split_name(full_name or "")[1]
+        if split_last_name:
+            fallback_last_name = split_last_name
+        elif first_name:
+            fallback_last_name = first_name
+        else:
+            fallback_last_name = "Unknown"
     customer = {
         "date_of_birth": to_ca_dob(_first(person, "date_of_birth", "dob", "birth_date")),
     }
