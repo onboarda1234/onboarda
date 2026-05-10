@@ -65,11 +65,17 @@ STATUS_ASSIGNED = "assigned"
 STATUS_DISMISSED = "dismissed"
 STATUS_ROUTED_REVIEW = "routed_to_review"
 STATUS_ROUTED_EDD = "routed_to_edd"
+STATUS_RESOLVED = "resolved"
+STATUS_CLOSED = "closed"
 
 TERMINAL_ALERT_STATUSES = (
     STATUS_DISMISSED,
     STATUS_ROUTED_REVIEW,
     STATUS_ROUTED_EDD,
+)
+RESOLVED_ALERT_STATUS_ALIASES = (
+    STATUS_RESOLVED,
+    STATUS_CLOSED,
 )
 
 # EDD stages considered "active" for duplicate-prevention. Mirrors the
@@ -137,6 +143,22 @@ def _row_get(row, key, default=None):
         return v if v is not None else default
     except (KeyError, IndexError, TypeError):
         return default
+
+
+def is_alert_terminal(alert_or_status, *, resolved_at=None):
+    """Return True when a monitoring alert should no longer be treated as open."""
+    status = alert_or_status
+    if isinstance(alert_or_status, dict) or hasattr(alert_or_status, "keys"):
+        status = _row_get(alert_or_status, "status", STATUS_OPEN)
+        resolved_at = _row_get(alert_or_status, "resolved_at", resolved_at)
+    normalized = str(status or STATUS_OPEN).strip().lower()
+    if resolved_at not in (None, ""):
+        return True
+    return normalized in TERMINAL_ALERT_STATUSES or normalized in RESOLVED_ALERT_STATUS_ALIASES
+
+
+def is_alert_unresolved(alert_or_status, *, resolved_at=None):
+    return not is_alert_terminal(alert_or_status, resolved_at=resolved_at)
 
 
 def _fetch_alert(db, alert_id):

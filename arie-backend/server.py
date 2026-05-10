@@ -4792,9 +4792,43 @@ class DocumentVerifyHandler(BaseHandler):
             "subject_type": verification_context["subject_type"],
         })
         results = json.dumps(layered_results, default=str)
+        extracted_fields = (
+            (ai_result or {}).get("extracted_fields")
+            or layered_results.get("extracted_fields")
+            or {}
+        )
+        # Canonical extraction keys come from document_verification /
+        # Claude field extraction. We accept the historical aliases here
+        # so stored document metadata stays compatible across older
+        # verification payloads.
+        extracted_expiry = (
+            extracted_fields.get("expiry_date")
+            or extracted_fields.get("expiry")
+            or extracted_fields.get("validity_to")
+        )
+        extracted_valid_until = extracted_fields.get("valid_until")
+        persisted_expiry = (
+            extracted_expiry
+            if extracted_expiry not in (None, "")
+            else doc.get("expiry_date")
+        )
+        persisted_valid_until = (
+            extracted_valid_until
+            if extracted_valid_until not in (None, "")
+            else doc.get("valid_until")
+        )
 
-        db.execute("UPDATE documents SET verification_status=?, verification_results=?, verified_at=datetime('now') WHERE id=?",
-                   (status, results, doc_id))
+        db.execute(
+            "UPDATE documents SET verification_status=?, verification_results=?, "
+            "verified_at=datetime('now'), expiry_date=?, valid_until=? WHERE id=?",
+            (
+                status,
+                results,
+                persisted_expiry,
+                persisted_valid_until,
+                doc_id,
+            ),
+        )
         db.commit()
         db.close()
 
@@ -12989,6 +13023,23 @@ class MonitoringAgentsHandler(BaseHandler):
         self.success({"agents": result})
 
 
+def _is_document_health_monitor_agent(agent_row):
+    agent_type = str(agent_row.get("agent_type") or "").strip().lower()
+    agent_name = str(agent_row.get("agent_name") or "").strip()
+    return (
+        agent_type in {
+            "periodic_review_preparation",
+            "ongoing_compliance_review",
+            "registry",
+        }
+        or agent_name in {
+            "Periodic Review Preparation Agent",
+            "Ongoing Compliance Review Agent",
+            "Registry Monitoring Agent",
+        }
+    )
+
+
 class MonitoringAgentRunHandler(BaseHandler):
     """POST /api/monitoring/agents/:id/run — Manually trigger agent run"""
     def post(self, agent_id):
@@ -13002,11 +13053,33 @@ class MonitoringAgentRunHandler(BaseHandler):
             db.close()
             return self.error("Agent not found", 404)
 
-        # Simulate agent run - in production, this would trigger actual monitoring logic
         now = datetime.now().isoformat()
+        alerts_generated_delta = 0
+        run_summary = None
+        if _is_document_health_monitor_agent(dict(agent)):
+            import document_health_monitor as dhm
+            run_summary = dhm.sync_document_health_alerts(
+                db,
+                user=user,
+                audit_writer=self.log_audit,
+            )
+            run_summary["triggered"] = True
+            alerts_generated_delta = run_summary.get("created", 0)
+        else:
+            run_summary = {
+                "triggered": False,
+                "reason": "agent_not_configured_for_document_health_sync",
+                "applications": 0,
+                "created": 0,
+                "updated": 0,
+                "resolved": 0,
+            }
         db.execute("""
-            UPDATE monitoring_agent_status SET last_run=?, alerts_generated=alerts_generated+1 WHERE id=?
-        """, (now, agent_id))
+            UPDATE monitoring_agent_status
+               SET last_run=?,
+                   alerts_generated=alerts_generated+?
+             WHERE id=?
+        """, (now, alerts_generated_delta, agent_id))
 
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Agent Run", agent["agent_name"],
@@ -13015,7 +13088,9 @@ class MonitoringAgentRunHandler(BaseHandler):
         db.commit()
         db.close()
 
-        self.success({"status": "agent_run_initiated", "agent": agent["agent_name"], "run_time": now})
+        payload = {"status": "agent_run_initiated", "agent": agent["agent_name"], "run_time": now}
+        payload["document_health_sync"] = run_summary
+        self.success(payload)
 
 
 class PeriodicReviewsListHandler(BaseHandler):
@@ -13038,7 +13113,7 @@ class PeriodicReviewsListHandler(BaseHandler):
         query += " ORDER BY due_date ASC"
         reviews = db.execute(query, params).fetchall()
 
-        result = [dict(r) for r in reviews]
+        result = [_serialize_periodic_review_row(db, r) for r in reviews]
         db.close()
         self.success({"reviews": result})
 
@@ -13056,7 +13131,7 @@ class PeriodicReviewDetailHandler(BaseHandler):
             db.close()
             return self.error("Review not found", 404)
 
-        result = dict(review)
+        result = _serialize_periodic_review_row(db, review)
         if result["review_memo"]:
             result["review_memo"] = safe_json_loads(result["review_memo"])
 
@@ -13198,6 +13273,60 @@ def _parse_review_id(handler, raw_review_id):
     return rid
 
 
+def _serialize_periodic_review_row(db, review_row):
+    import document_health_monitor as dhm
+    import monitoring_routing as mr
+    import periodic_review_engine as pre
+
+    result = dict(review_row)
+    items = pre.get_required_items(db, result["id"])
+    result["required_items"] = items
+    result["required_items_count"] = len(items)
+    alert_rows = db.execute(
+        "SELECT id, alert_type, status, resolved_at "
+        "FROM monitoring_alerts WHERE application_id = ? ORDER BY id ASC",
+        (result.get("application_id"),),
+    ).fetchall()
+    unresolved_alerts = [row for row in alert_rows if mr.is_alert_unresolved(row)]
+    result["open_document_issues_count"] = len([
+        row for row in unresolved_alerts
+        if row["alert_type"] in dhm.DOCUMENT_ALERT_TYPES
+    ])
+    result["open_alerts_count"] = len([
+        row for row in unresolved_alerts
+        if row["alert_type"] not in dhm.DOCUMENT_ALERT_TYPES
+    ])
+    screening_items = [it for it in items if it.get("item_type") == "screening_refresh"]
+    if screening_items:
+        result["screening_status"] = screening_items[0].get("label")
+    elif result.get("status") == "completed":
+        result["screening_status"] = "Completed"
+    else:
+        result["screening_status"] = "Pending review"
+
+    raw_status = str(result.get("status") or "").strip().lower()
+    ui_status = "due"
+    ui_status_label = "Due"
+    if raw_status == "in_progress":
+        ui_status = "in_review"
+        ui_status_label = "In Review"
+    elif raw_status == "awaiting_information":
+        ui_status = "waiting_for_info"
+        ui_status_label = "Waiting for Info"
+    elif raw_status == "pending_senior_review":
+        ui_status = "senior_review"
+        ui_status_label = "Senior Review"
+    elif raw_status == "completed":
+        ui_status = "completed"
+        ui_status_label = "Completed"
+    elif result.get("linked_edd_case_id"):
+        ui_status = "escalated_to_edd"
+        ui_status_label = "Escalated to EDD"
+    result["ui_status"] = ui_status
+    result["ui_status_label"] = ui_status_label
+    return result
+
+
 class PeriodicReviewStateHandler(BaseHandler):
     """POST /api/monitoring/reviews/:id/state -- transition review state.
 
@@ -13229,6 +13358,11 @@ class PeriodicReviewStateHandler(BaseHandler):
                     new_state=new_state, reason=reason,
                     user=user, audit_writer=self.log_audit,
                 )
+                generated_items = None
+                if new_state == pre.STATE_IN_PROGRESS:
+                    generated_items = pre.generate_required_items(
+                        db, review_id, user=user, audit_writer=self.log_audit,
+                    )
             except pre.ReviewNotFound:
                 return self.error("Review not found", 404)
             except pre.InvalidReviewState as e:
@@ -13237,7 +13371,10 @@ class PeriodicReviewStateHandler(BaseHandler):
                 return self.error(str(e), 409)
             except pre.ReviewClosedError as e:
                 return self.error(str(e), 409)
-            self.success({"status": "state_changed", "result": result})
+            payload = {"status": "state_changed", "result": result}
+            if generated_items is not None:
+                payload["generated_checklist_count"] = len(generated_items)
+            self.success(payload)
         finally:
             db.close()
 
@@ -13293,6 +13430,47 @@ class PeriodicReviewRequiredItemsGenerateHandler(BaseHandler):
                 "count": len(items),
                 "items": items,
             })
+        finally:
+            db.close()
+
+
+class PeriodicReviewRequiredItemDetailHandler(BaseHandler):
+    """PATCH /api/monitoring/reviews/:id/required-items/:item_id."""
+    def patch(self, review_id, item_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        status = data.get("status")
+        if not status:
+            return self.error("status is required", 400)
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                item = pre.update_required_item(
+                    db,
+                    review_id,
+                    item_id,
+                    status=status,
+                    officer_note=data.get("officer_note"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.RequiredItemNotFound as e:
+                return self.error(str(e), 404)
+            except pre.InvalidRequiredItemStatus as e:
+                return self.error(str(e), 400)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.PeriodicReviewEngineError as e:
+                return self.error(str(e), 400)
+            self.success({"status": "required_item_updated", "item": item})
         finally:
             db.close()
 
@@ -13371,6 +13549,12 @@ class PeriodicReviewCompleteHandler(BaseHandler):
                 return self.error(str(e), 400)
             except pre.ReviewClosedError as e:
                 return self.error(str(e), 409)
+            except pre.ReviewCompletionBlocked as e:
+                self.set_status(409)
+                return self.finish({
+                    "error": "Periodic review cannot be completed",
+                    "blocking_items": e.blocking_items,
+                })
             except pre.PeriodicReviewEngineError as e:
                 return self.error(str(e), 400)
 
@@ -15792,6 +15976,8 @@ def make_app():
         (r"/api/monitoring/reviews/schedule", PeriodicReviewScheduleHandler),
         (r"/api/monitoring/reviews/([^/]+)/required-items/generate",
          PeriodicReviewRequiredItemsGenerateHandler),
+        (r"/api/monitoring/reviews/([^/]+)/required-items/([^/]+)",
+         PeriodicReviewRequiredItemDetailHandler),
         (r"/api/monitoring/reviews/([^/]+)/required-items",
          PeriodicReviewRequiredItemsHandler),
         (r"/api/monitoring/reviews/([^/]+)/state", PeriodicReviewStateHandler),

@@ -1504,6 +1504,136 @@ class TestAuthenticatedAccess:
         assert stored_results == body["verification_results"]
         assert stored["verified_at"]
 
+    def test_document_verify_persists_extracted_expiry_metadata(self, api_server, monkeypatch):
+        from auth import create_token
+        from db import get_db
+        import server as server_module
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as handle:
+            handle.write(b"%PDF-1.4 expiry persistence test")
+            file_path = handle.name
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "app_doc_verify_expiry",
+            "ARF-2026-VERIFYEXPIRY",
+            "testclient001",
+            "Verify Expiry Ltd",
+            "Mauritius",
+            "draft",
+            json.dumps({"registered_entity_name": "Verify Expiry Ltd", "country_of_incorporation": "Mauritius"})
+        ))
+        conn.execute("""
+            INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, file_size, mime_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_verify_expiry",
+            "app_doc_verify_expiry",
+            "licence",
+            "licence.pdf",
+            file_path,
+            os.path.getsize(file_path),
+            "application/pdf"
+        ))
+        conn.commit()
+        conn.close()
+
+        def fake_verify_document_layered(**kwargs):
+            return {
+                "checks": [{"label": "Expiry", "result": "pass", "message": "ok"}],
+                "overall": "verified",
+                "extracted_fields": {
+                    "expiry_date": "2030-01-01",
+                    "valid_until": "2030-02-01",
+                },
+            }
+
+        monkeypatch.setattr(server_module, "verify_document_layered", fake_verify_document_layered)
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/documents/doc_verify_expiry/verify",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10
+        )
+        assert resp.status_code == 200
+
+        conn = get_db()
+        stored = conn.execute(
+            "SELECT expiry_date, valid_until FROM documents WHERE id = ?",
+            ("doc_verify_expiry",),
+        ).fetchone()
+        conn.close()
+        assert stored["expiry_date"] == "2030-01-01"
+        assert stored["valid_until"] == "2030-02-01"
+
+    def test_document_verify_preserves_existing_expiry_when_no_extracted_fields(self, api_server, monkeypatch):
+        from auth import create_token
+        from db import get_db
+        import server as server_module
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as handle:
+            handle.write(b"%PDF-1.4 expiry preserve test")
+            file_path = handle.name
+
+        conn = get_db()
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "app_doc_verify_existing_expiry",
+            "ARF-2026-VERIFYEXISTING",
+            "testclient001",
+            "Verify Existing Expiry Ltd",
+            "Mauritius",
+            "draft",
+            json.dumps({"registered_entity_name": "Verify Existing Expiry Ltd", "country_of_incorporation": "Mauritius"})
+        ))
+        conn.execute("""
+            INSERT INTO documents
+                (id, application_id, doc_type, doc_name, file_path, file_size, mime_type, expiry_date, valid_until)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "doc_verify_existing_expiry",
+            "app_doc_verify_existing_expiry",
+            "licence",
+            "licence.pdf",
+            file_path,
+            os.path.getsize(file_path),
+            "application/pdf",
+            "2031-01-01",
+            "2031-02-01",
+        ))
+        conn.commit()
+        conn.close()
+
+        def fake_verify_document_layered(**kwargs):
+            return {
+                "checks": [{"id": "GATE-01", "label": "Gate", "result": "fail", "message": "bad file"}],
+                "overall": "flagged",
+                "extracted_fields": {},
+            }
+
+        monkeypatch.setattr(server_module, "verify_document_layered", fake_verify_document_layered)
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/documents/doc_verify_existing_expiry/verify",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10
+        )
+        assert resp.status_code == 200
+
+        conn = get_db()
+        stored = conn.execute(
+            "SELECT expiry_date, valid_until FROM documents WHERE id = ?",
+            ("doc_verify_existing_expiry",),
+        ).fetchone()
+        conn.close()
+        assert stored["expiry_date"] == "2031-01-01"
+        assert stored["valid_until"] == "2031-02-01"
+
 
 # ═══════════════════════════════════════════════════════════
 # 4. Security Headers — must be present on every response

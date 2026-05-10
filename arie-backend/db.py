@@ -2683,6 +2683,17 @@ def _ensure_document_versioning_columns(db: DBConnection):
     db.execute("CREATE INDEX IF NOT EXISTS idx_documents_current_slot ON documents(application_id, slot_key, is_current)")
 
 
+def _ensure_document_health_columns(db: DBConnection):
+    """Ensure documents can persist deterministic expiry metadata."""
+    columns = [
+        ("expiry_date", "TIMESTAMP" if db.is_postgres else "TEXT"),
+        ("valid_until", "TIMESTAMP" if db.is_postgres else "TEXT"),
+    ]
+    for column, definition in columns:
+        if not _safe_column_exists(db, "documents", column):
+            db.execute(f"ALTER TABLE documents ADD COLUMN {column} {definition}")
+
+
 def _ensure_document_current_slot_unique_index(db: DBConnection):
     if db.is_postgres:
         db.execute(
@@ -4701,6 +4712,19 @@ def _run_migrations(db: DBConnection):
         logger.info("Migration v2.34: Ensured document slot versioning/current-document repair")
     except Exception as e:
         logger.error("Migration v2.34 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.35: Persist document expiry metadata used by ongoing
+    # monitoring and periodic review document-health checks.
+    try:
+        _ensure_document_health_columns(db)
+        db.commit()
+        logger.info("Migration v2.35: Ensured document expiry metadata columns")
+    except Exception as e:
+        logger.error("Migration v2.35 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:
