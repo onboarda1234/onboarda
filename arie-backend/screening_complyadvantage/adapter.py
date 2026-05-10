@@ -1,5 +1,6 @@
 """ScreeningProvider adapter for ComplyAdvantage."""
 
+from copy import deepcopy
 from hashlib import sha256
 import os
 
@@ -87,10 +88,13 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
                     subject_name=company_name,
                 ),
             ))
-        for director in directors or []:
-            reports.append(self._screen_party(director, "director", application_id, client_id))
-        for ubo in ubos or []:
-            reports.append(self._screen_party(ubo, "ubo", application_id, client_id))
+        for group in _dedupe_person_roles(directors or [], ubos or []):
+            first_kind, first_party = group[0]
+            report = self._screen_party(first_party, first_kind, application_id, client_id)
+            if len(group) > 1:
+                report = dict(report)
+                report["_ca_role_associations"] = group
+            reports.append(report)
         return _combine_reports(reports)
 
     def _screen_party(self, party, kind, application_id, client_id):
@@ -104,7 +108,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
                 screening_subject_kind=kind,
                 screening_subject_name=name,
                 screening_subject_person_key=_first(party, "person_key", "id"),
-                declared_pep=bool(_first(party, "is_pep", "declared_pep")),
+                declared_pep=_declared_pep(_first(party, "is_pep", "declared_pep")),
             ),
             external_identifier=_subject_external_identifier(
                 application_id,
@@ -165,20 +169,31 @@ def _combine_reports(reports):
     degraded = []
     provider_subjects = []
     for report in reports:
-        directors.extend(report.get("director_screenings", []))
-        ubos.extend(report.get("ubo_screenings", []))
+        associations = report.get("_ca_role_associations") or []
+        if associations:
+            base = _first_person_screening(report)
+            for kind, party in associations:
+                cloned = _clone_person_screening_for_role(base, kind, party)
+                if kind == "ubo":
+                    ubos.append(cloned)
+                else:
+                    directors.append(cloned)
+        else:
+            directors.extend(report.get("director_screenings", []))
+            ubos.extend(report.get("ubo_screenings", []))
         flags.extend(report.get("overall_flags", []))
         degraded.extend(report.get("degraded_sources", []))
         provider_subjects.append(report.get("provider_specific", {}).get("complyadvantage", {}))
     company_screening = (company_report or {}).get("company_screening", {})
     has_company_hit = (company_report or {}).get("has_company_screening_hit")
     company_coverage = (company_report or {}).get("company_screening_coverage", "none")
-    adverse_hit = any(p.get("has_adverse_media_hit") for p in directors + ubos)
+    company_adverse = (company_screening.get("adverse_media") or {})
+    adverse_hit = any(p.get("has_adverse_media_hit") for p in directors + ubos) or bool(company_adverse.get("matched"))
     return create_normalized_screening_report(
         provider="complyadvantage",
         normalized_version="2.0",
         any_pep_hits=any(p.get("has_pep_hit") for p in directors + ubos),
-        any_sanctions_hits=any(p.get("has_sanctions_hit") for p in directors + ubos) or bool(has_company_hit),
+        any_sanctions_hits=any(p.get("has_sanctions_hit") for p in directors + ubos) or bool((company_screening.get("sanctions") or {}).get("matched")),
         total_persons_screened=len(directors) + len(ubos),
         adverse_media_coverage="full" if adverse_hit else "none",
         has_adverse_media_hit=True if adverse_hit else None,
@@ -196,6 +211,58 @@ def _combine_reports(reports):
         source_screening_report_hash=_reports_hash(reports),
         provenance=None,
     )
+
+
+def _first_person_screening(report):
+    items = (report.get("director_screenings") or []) + (report.get("ubo_screenings") or [])
+    return items[0] if items else {}
+
+
+def _clone_person_screening_for_role(base, kind, party):
+    cloned = deepcopy(base or {})
+    name = _first(party, "full_name", "name") or cloned.get("person_name") or "Unknown"
+    declared = _declared_pep(_first(party, "is_pep", "declared_pep"))
+    provider_pep = bool(cloned.get("provider_detected_pep") or cloned.get("has_pep_hit"))
+    cloned["person_name"] = name
+    cloned["person_type"] = kind
+    cloned["declared_pep"] = "Yes" if declared else "No"
+    cloned["provider_detected_pep"] = provider_pep
+    cloned["undeclared_pep"] = bool(provider_pep and not declared)
+    screening = cloned.get("screening")
+    if isinstance(screening, dict):
+        screening["person_key"] = _first(party, "person_key", "id")
+        screening["shared_subject_key"] = _person_dedupe_key(party)
+    return cloned
+
+
+def _dedupe_person_roles(directors, ubos):
+    groups = []
+    seen = {}
+    for kind, party in [("director", item) for item in directors] + [("ubo", item) for item in ubos]:
+        key = _person_dedupe_key(party)
+        if key in seen:
+            groups[seen[key]].append((kind, party))
+        else:
+            seen[key] = len(groups)
+            groups.append([(kind, party)])
+    return groups
+
+
+def _person_dedupe_key(party):
+    name = _normalize_text(_first(party, "full_name", "name") or "unknown")
+    dob = _normalize_text(_first(party, "date_of_birth", "birth_date", "dob") or "")
+    country = _normalize_text(_first(party, "nationality", "country", "country_of_residence") or "")
+    return "|".join((name, dob, country))
+
+
+def _normalize_text(value):
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _declared_pep(value):
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"yes", "true", "1", "y"}
 
 
 def _reports_hash(reports):

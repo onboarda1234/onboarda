@@ -125,6 +125,146 @@ def test_screening_queue_separates_declared_pep_from_provider_pep(db, temp_db):
     assert person_row["status_key"] == "declared_pep_review"
 
 
+def test_screening_queue_uses_company_adverse_media_as_entity_provider_truth(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_company_media",
+            "ARF-COMPANY-MEDIA",
+            "client_media",
+            "Company Media Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "pricing_review",
+            json.dumps(
+                {
+                    "screening_report": {
+                        "screened_at": "2026-01-03T00:00:00Z",
+                        "screening_mode": "live",
+                        "company_screening": {
+                            "provider": "complyadvantage",
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                            "screened_at": "2026-01-03T00:00:00Z",
+                            "matched": True,
+                            "sanctions": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                            "adverse_media": {
+                                "matched": True,
+                                "source": "complyadvantage",
+                                "api_status": "live",
+                                "results": [{
+                                    "name": "Company Media Ltd",
+                                    "is_adverse_media": True,
+                                    "match_categories": ["adverse_media"],
+                                    "provider_risk_identifier": "risk-media-1",
+                                }],
+                            },
+                        },
+                        "director_screenings": [],
+                        "ubo_screenings": [],
+                        "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                        "kyc_applicants": [],
+                        "overall_flags": ["ComplyAdvantage adverse media hit: Company Media Ltd"],
+                        "total_hits": 1,
+                    }
+                }
+            ),
+        ),
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-COMPANY-MEDIA" and r["subject_type"] == "entity")
+
+    assert row["status_key"] == "review_required"
+    assert row["status_label"] == "Review Required"
+    assert row["screening_state"] == "completed_match"
+    assert row["total_hits"] == 1
+    assert row["screened_at"] == "2026-01-03T00:00:00Z"
+    assert "Company adverse media match" in row["entity_context"]
+
+
+def test_screening_queue_surfaces_undeclared_provider_pep(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_undeclared_pep",
+            "ARF-UNDECLARED-PEP",
+            "client_pep",
+            "Undeclared Pep Co",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "pricing_review",
+            json.dumps(
+                {
+                    "screening_report": {
+                        "screened_at": "2026-01-04T00:00:00Z",
+                        "screening_mode": "live",
+                        "company_screening": {
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                            "sanctions": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                        },
+                        "director_screenings": [{
+                            "person_name": "Provider Pep",
+                            "person_type": "director",
+                            "declared_pep": "No",
+                            "provider_detected_pep": True,
+                            "undeclared_pep": True,
+                            "has_pep_hit": True,
+                            "screening": {
+                                "matched": True,
+                                "source": "complyadvantage",
+                                "api_status": "live",
+                                "screened_at": "2026-01-04T00:00:00Z",
+                                "results": [{
+                                    "name": "Provider Pep",
+                                    "is_pep": True,
+                                    "match_categories": ["PEP"],
+                                    "provider_risk_identifier": "risk-pep-1",
+                                }],
+                            },
+                        }],
+                        "ubo_screenings": [],
+                        "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                        "kyc_applicants": [],
+                        "overall_flags": ["ComplyAdvantage PEP hit: Provider Pep"],
+                        "total_hits": 1,
+                    }
+                }
+            ),
+        ),
+    )
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
+        ("app_undeclared_pep", "Provider Pep", "Mauritius", "No"),
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-UNDECLARED-PEP" and r["subject_name"] == "Provider Pep")
+
+    assert row["pep_declared_status"] == "not_declared"
+    assert row["pep_screening_status"] == "match"
+    assert row["status_key"] == "review_required"
+    assert row["screened_at"] == "2026-01-04T00:00:00Z"
+    assert "Undeclared PEP" in row["entity_context"]
+
+
 def test_screening_queue_does_not_label_not_configured_entity_as_live(temp_db):
     from server import _build_screening_queue_payload
     from db import get_db
