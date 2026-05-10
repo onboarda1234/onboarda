@@ -260,6 +260,59 @@ def test_case_creation_extracts_alerts_from_alerting_step_output():
     assert report["any_pep_hits"] is True
 
 
+def test_case_creation_maps_mesh_profile_risk_indicators_to_pep_hit():
+    data = deepcopy(_fixture("pep_canonical.json"))
+    alert = data["workflow"].pop("alerts")[0]
+    data["workflow"]["step_details"]["alerting"] = {
+        "status": "COMPLETED",
+        "step_output": {"alerts": [alert]},
+    }
+    mesh_risk = {
+        "identifier": "risk-mesh-pep",
+        "type": "ENTITY_SCREENING",
+        "decision": "NOT_REVIEWED",
+        "detail": {
+            "profile": {
+                "identifier": "profile-mesh-pep",
+                "matching_name": "pravind jugnauth",
+                "risk_indicators": {
+                    "aml_types": ["pep-class-1"],
+                    "peps": [{
+                        "aml_types": ["pep-class-1"],
+                        "active_start_dates": ["2003-10-30"],
+                        "country_codes": ["MU"],
+                        "fields": [
+                            {"tag": "political_position", "value": "Leader"},
+                            {"tag": "political_region", "value": "Mauritius"},
+                        ],
+                    }],
+                    "media": [],
+                    "lists": [],
+                },
+            },
+        },
+    }
+    data["alerts_risks"] = {"alert-pep": [mesh_risk]}
+    data["deep_risks"] = {"risk-mesh-pep": mesh_risk}
+    client = _client_for_single(data)
+
+    report = _orchestrator(client).screen_customer_two_pass(
+        strict_customer=_customer("strict"),
+        relaxed_customer=_customer("strict"),
+        application_context=_context(data),
+        monitoring_enabled=False,
+    )
+
+    assert report["total_hits"] == 1
+    assert report["any_pep_hits"] is True
+    assert report["overall_flags"] == ["ComplyAdvantage PEP hit: risk-mesh-pep"]
+    assert report["director_screenings"][0]["has_pep_hit"] is True
+    assert report["director_screenings"][0]["pep_classes"] == ["PEP_CLASS_1"]
+    provider_match = report["provider_specific"]["complyadvantage"]["matches"][0]
+    assert provider_match["indicators"][0]["taxonomy_key"] == "r_pep_class_1"
+    assert provider_match["indicators"][0]["value"]["class"] == "PEP_CLASS_1"
+
+
 def test_case_creation_skipped_clean_path_fetches_no_risks_or_deep_risks():
     data = _fixture("clean_baseline.json")
     client = _client_for_single(data)

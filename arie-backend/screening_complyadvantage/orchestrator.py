@@ -42,6 +42,12 @@ _RCA_RISK_KEY = "r_rca"
 _ADVERSE_MEDIA_RISK_PREFIX = "r_adverse_media"
 _WATCHLIST_RISK_KEYS = frozenset({"r_watchlist", "r_law_enforcement"})
 _SANCTIONS_EXPOSURE_PREFIX = "r_sanctions_exposure"
+_PEP_AML_TYPE_TO_CLASS = {
+    "pep-class-1": ("r_pep_class_1", "PEP Class 1", "PEP_CLASS_1"),
+    "pep-class-2": ("r_pep_class_2", "PEP Class 2", "PEP_CLASS_2"),
+    "pep-class-3": ("r_pep_class_3", "PEP Class 3", "PEP_CLASS_3"),
+    "pep-class-4": ("r_pep_class_4", "PEP Class 4", "PEP_CLASS_4"),
+}
 
 
 @dataclass
@@ -384,6 +390,10 @@ def _extract_customer_identifier(workflow_raw):
 
 
 def _parse_risk_detail(raw):
+    mesh_profile = _mesh_profile_from_risk(raw)
+    if mesh_profile is not None:
+        return _parse_mesh_profile_risk_detail(mesh_profile)
+
     values = []
     for item in raw.get("values", []):
         risk_type = CARiskType.model_validate(item["risk_type"])
@@ -392,6 +402,131 @@ def _parse_risk_detail(raw):
             indicators.append(_parse_indicator(risk_type, indicator.get("value", {})))
         values.append(CARiskDetailInner(risk_type=risk_type, indicators=indicators))
     return CARiskDetail(values=values)
+
+
+def _mesh_profile_from_risk(raw):
+    detail = raw.get("detail") if isinstance(raw, dict) else None
+    if isinstance(detail, dict) and isinstance(detail.get("profile"), dict):
+        return detail["profile"]
+    profile = raw.get("profile") if isinstance(raw, dict) else None
+    return profile if isinstance(profile, dict) else None
+
+
+def _parse_mesh_profile_risk_detail(profile):
+    indicators = profile.get("risk_indicators") or {}
+    if not isinstance(indicators, dict):
+        return CARiskDetail(values=[])
+
+    values = []
+    values.extend(_parse_mesh_pep_indicators(indicators))
+    values.extend(_parse_mesh_media_indicators(indicators))
+    values.extend(_parse_mesh_watchlist_indicators(indicators))
+    return CARiskDetail(values=values)
+
+
+def _parse_mesh_pep_indicators(indicators):
+    peps = indicators.get("peps") or []
+    aml_types = indicators.get("aml_types") or []
+    if not isinstance(peps, list):
+        peps = []
+    if not isinstance(aml_types, list):
+        aml_types = []
+
+    pep_aml_types = [
+        value for value in aml_types
+        if isinstance(value, str) and value.lower() in _PEP_AML_TYPE_TO_CLASS
+    ]
+    if not peps and pep_aml_types:
+        peps = [{"aml_types": pep_aml_types}]
+
+    parsed = []
+    for pep in peps:
+        if not isinstance(pep, dict):
+            continue
+        pep_types = pep.get("aml_types") if isinstance(pep.get("aml_types"), list) else pep_aml_types
+        pep_type = next(
+            (value.lower() for value in pep_types if isinstance(value, str) and value.lower() in _PEP_AML_TYPE_TO_CLASS),
+            pep_aml_types[0].lower() if pep_aml_types else "pep-class-1",
+        )
+        key, label, class_value = _PEP_AML_TYPE_TO_CLASS[pep_type]
+        risk_type = CARiskType(key=key, label=label)
+        value = CAPEPValue.model_validate({
+            "class": class_value,
+            "position": _mesh_field_value(pep, "political_position"),
+            "country": _first_list_value(pep.get("country_codes")) or _mesh_field_value(pep, "political_region"),
+            "active_start_date": _first_list_value(pep.get("active_start_dates")),
+            "active_end_date": _first_list_value(pep.get("active_end_dates")),
+            "source_metadata": {"source": "mesh_profile_risk_indicators"},
+        })
+        parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+            CAPEPIndicator(risk_type=risk_type, value=value)
+        ]))
+    return parsed
+
+
+def _parse_mesh_media_indicators(indicators):
+    media_items = indicators.get("media") or []
+    if not isinstance(media_items, list):
+        return []
+    parsed = []
+    risk_type = CARiskType(key="r_adverse_media_general", label="Adverse media")
+    for item in media_items:
+        if not isinstance(item, dict):
+            continue
+        value = CAMediaArticleValue.model_validate({
+            "title": item.get("title") or item.get("headline") or item.get("name"),
+            "url": item.get("url") or item.get("link"),
+            "publication_date": item.get("publication_date") or item.get("published_at") or item.get("date"),
+            "source_name": item.get("source_name") or item.get("source"),
+            "categories": item.get("aml_types") if isinstance(item.get("aml_types"), list) else [],
+            "source_metadata": {"source": "mesh_profile_risk_indicators"},
+        })
+        parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+            CAMediaIndicator(risk_type=risk_type, value=value)
+        ]))
+    return parsed
+
+
+def _parse_mesh_watchlist_indicators(indicators):
+    lists = indicators.get("lists") or []
+    if not isinstance(lists, list):
+        return []
+    parsed = []
+    for item in lists:
+        if not isinstance(item, dict):
+            continue
+        aml_types = item.get("aml_types") if isinstance(item.get("aml_types"), list) else []
+        is_sanctions = any("sanction" in str(value).lower() for value in aml_types)
+        key = "r_direct_sanctions_exposure" if is_sanctions else "r_watchlist"
+        label = "Sanctions exposure" if is_sanctions else "Watchlist"
+        risk_type = CARiskType(key=key, label=label)
+        value = CAWatchlistValue.model_validate({
+            "list_name": item.get("name") or item.get("list_name") or item.get("source"),
+            "authority": item.get("authority"),
+            "source_metadata": {"source": "mesh_profile_risk_indicators"},
+        })
+        parsed.append(CARiskDetailInner(risk_type=risk_type, indicators=[
+            CAWatchlistIndicator(risk_type=risk_type, value=value)
+        ]))
+    return parsed
+
+
+def _mesh_field_value(item, tag):
+    fields = item.get("fields") if isinstance(item, dict) else None
+    if not isinstance(fields, list):
+        return None
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        if field.get("tag") == tag or field.get("name") == tag:
+            return field.get("value")
+    return None
+
+
+def _first_list_value(values):
+    if isinstance(values, list) and values:
+        return values[0]
+    return None
 
 
 def _parse_indicator(risk_type, value):
