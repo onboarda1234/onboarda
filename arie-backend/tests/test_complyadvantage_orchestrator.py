@@ -374,6 +374,11 @@ def test_case_creation_maps_mesh_list_risk_indicators_to_pep_hit():
     assert report["overall_flags"] == ["ComplyAdvantage PEP hit: risk-mesh-pep-list"]
     assert report["director_screenings"][0]["has_pep_hit"] is True
     assert report["director_screenings"][0]["pep_classes"] == ["PEP_CLASS_1"]
+    screening = report["director_screenings"][0]["screening"]
+    assert screening["matched"] is True
+    assert screening["results"][0]["is_pep"] is True
+    assert screening["results"][0]["is_sanctioned"] is False
+    assert screening["results"][0]["pep_classes"] == ["PEP_CLASS_1"]
     provider_match = report["provider_specific"]["complyadvantage"]["matches"][0]
     assert provider_match["indicators"][0]["taxonomy_key"] == "r_pep_class_1"
     assert provider_match["indicators"][0]["value"]["class"] == "PEP_CLASS_1"

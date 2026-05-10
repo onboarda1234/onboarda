@@ -268,6 +268,8 @@ def derive_person_screening_from_match(
             "source": "complyadvantage",
             "api_status": "live",
             "profile_identifier": match.profile_identifier,
+            "matched": True,
+            "results": [_legacy_screening_result_from_match(match, rollups)],
         },
         "screening_state": "completed_match",
         "requires_review": any((rollups["has_pep_hit"], rollups["has_sanctions_hit"], rollups["has_adverse_media_hit"])),
@@ -278,6 +280,7 @@ def derive_person_screening_from_match(
 
 def derive_company_screening_from_match(match: MergedMatch) -> dict:
     rollups = compute_match_rollups(match)
+    result = _legacy_screening_result_from_match(match, rollups)
     return {
         "company_screening_coverage": "full",
         "has_company_screening_hit": any((rollups["has_sanctions_hit"], rollups["has_adverse_media_hit"])),
@@ -286,7 +289,37 @@ def derive_company_screening_from_match(match: MergedMatch) -> dict:
             "source": "complyadvantage",
             "api_status": "live",
             "profile_identifier": match.profile_identifier,
+            "sanctions": {
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": bool(rollups["has_sanctions_hit"]),
+                "results": [result] if rollups["has_sanctions_hit"] else [],
+            },
+            "adverse_media": {
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": bool(rollups["has_adverse_media_hit"]),
+                "results": [result] if rollups["has_adverse_media_hit"] else [],
+            },
         },
+    }
+
+
+def _legacy_screening_result_from_match(match: MergedMatch, rollups: dict) -> dict:
+    """Compatibility result shape used by existing Back Office review widgets."""
+    indicators = [_indicator_payload(indicator) for indicator in _all_indicators(match.risk)]
+    return {
+        "name": _profile_name(match.profile) or match.profile_identifier,
+        "profile_identifier": match.profile_identifier,
+        "risk_id": match.risk_id,
+        "is_pep": bool(rollups.get("has_pep_hit")),
+        "is_sanctioned": bool(rollups.get("has_sanctions_hit")),
+        "is_adverse_media": bool(rollups.get("has_adverse_media_hit")),
+        "sanctions_list": ", ".join(
+            sorted({item.get("taxonomy_label") for item in indicators if item.get("taxonomy_label")})
+        ),
+        "pep_classes": extract_pep_classes(match),
+        "indicators": indicators,
     }
 
 
