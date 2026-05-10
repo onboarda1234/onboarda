@@ -161,7 +161,7 @@ def test_run_full_screening_uses_distinct_subject_and_pass_external_identifiers(
         director_call["strict_external_identifier"],
         ubo_call["strict_external_identifier"],
     } == {
-        "app-1:company:name-0f72986d73ffd220:strict",
+        "app-1:company:name-0f72986d73ffd22009837ba841519e04:strict",
         "app-1:director:key-d-1:strict",
         "app-1:ubo:key-u-1:strict",
     }

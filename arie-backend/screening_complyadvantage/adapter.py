@@ -219,7 +219,7 @@ def _subject_external_identifier(application_id, subject_kind, *, party=None, su
     if subject_key:
         discriminator = f"key-{subject_key}"
     else:
-        discriminator = f"name-{sha256(str(subject_name or 'unknown').encode('utf-8')).hexdigest()[:16]}"
+        discriminator = f"name-{sha256(str(subject_name or 'unknown').encode('utf-8')).hexdigest()[:32]}"
     return f"{scope}:{normalized_kind}:{discriminator}"
 
 

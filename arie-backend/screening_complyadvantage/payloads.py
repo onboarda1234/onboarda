@@ -56,23 +56,13 @@ def to_ca_address(data, *, location_type):
 def build_customer_person(person, *, strict=True):
     """Build a CA customer.person dict from internal party data."""
     full_name = _first(person, "full_name", "name")
-    fallback_last_name = _first(person, "last_name", "surname")
-    if not fallback_last_name:
-        first_name = _first(person, "first_name")
-        split_last_name = _split_name(full_name or "")[1]
-        if split_last_name:
-            fallback_last_name = split_last_name
-        elif first_name:
-            fallback_last_name = first_name
-        else:
-            fallback_last_name = "Unknown"
     customer = {
         "date_of_birth": to_ca_dob(_first(person, "date_of_birth", "dob", "birth_date")),
     }
     if full_name:
         customer["full_name"] = full_name
     else:
-        customer["last_name"] = fallback_last_name
+        customer["last_name"] = _derive_last_name(person, full_name)
     customer = _drop_empty(customer)
     if strict:
         customer.update(_drop_empty({
@@ -189,6 +179,19 @@ def _split_name(full_name):
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], " ".join(parts[1:])
+
+
+def _derive_last_name(person, full_name):
+    last_name = _first(person, "last_name", "surname")
+    if last_name:
+        return last_name
+    split_last_name = _split_name(full_name or "")[1]
+    if split_last_name:
+        return split_last_name
+    first_name = _first(person, "first_name")
+    if first_name:
+        return first_name
+    return "Unknown"
 
 
 def _customer_envelope(subject, subject_key, reference):
