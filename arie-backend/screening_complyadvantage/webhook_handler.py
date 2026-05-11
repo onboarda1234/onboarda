@@ -11,11 +11,13 @@ deduplication: ``screening_reports_normalized`` is unique by provider/hash and
 jobs can repair inconsistent state.
 """
 
+import base64
 import hashlib
 import hmac
 import json
 import logging
 import os
+import re
 
 import tornado.ioloop
 from pydantic import ValidationError
@@ -30,7 +32,10 @@ from .webhook_storage import process_complyadvantage_webhook
 
 logger = logging.getLogger(__name__)
 
-_SIGNATURE_HEADER = "x-complyadvantage-signature"
+_LEGACY_SIGNATURE_HEADER = "x-complyadvantage-signature"
+_STANDARD_WEBHOOK_ID_HEADER = "webhook-id"
+_STANDARD_WEBHOOK_TIMESTAMP_HEADER = "webhook-timestamp"
+_STANDARD_WEBHOOK_SIGNATURE_HEADER = "webhook-signature"
 _KNOWN_TYPES = {"CASE_CREATED", "CASE_ALERT_LIST_UPDATED"}
 
 
@@ -42,9 +47,8 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
 
     def post(self):
         body = self.request.body
-        signature = self.request.headers.get(_SIGNATURE_HEADER, "")
         trace_id = inbound_trace_id(self.request.headers.get("X-Request-ID"))
-        signature_status = _signature_status(body, signature)
+        signature_status = _signature_status(body, self.request.headers)
         if signature_status == "invalid":
             logger.warning(
                 "ca_webhook_signature signature_mode=strict signature_invalid=true body_len=%d",
@@ -246,18 +250,70 @@ class ComplyAdvantageWebhookHandler(BaseHandler):
             )
 
 
-def _verify_signature(body, signature):
+def _verify_signature(body, headers):
     secret = os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET", "")
     if not secret or not isinstance(secret, str):
         return False
+    if _has_standard_webhook_headers(headers):
+        return _verify_standard_webhook_signature(body, headers, secret)
+    return _verify_legacy_signature(body, headers.get(_LEGACY_SIGNATURE_HEADER, ""), secret)
+
+
+def _verify_legacy_signature(body, signature, secret):
     expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature or "")
 
 
-def _signature_status(body, signature):
+def _verify_standard_webhook_signature(body, headers, secret):
+    webhook_id = _header_value(headers, _STANDARD_WEBHOOK_ID_HEADER)
+    timestamp = _header_value(headers, _STANDARD_WEBHOOK_TIMESTAMP_HEADER)
+    signature_header = _header_value(headers, _STANDARD_WEBHOOK_SIGNATURE_HEADER)
+    if not (webhook_id and timestamp and signature_header):
+        return False
+    signed_content = b".".join([
+        webhook_id.encode("utf-8"),
+        timestamp.encode("utf-8"),
+        body,
+    ])
+    expected = base64.b64encode(
+        hmac.new(secret.encode("utf-8"), signed_content, hashlib.sha256).digest()
+    ).decode("ascii")
+    return any(
+        hmac.compare_digest(expected, signature)
+        for version, signature in _standard_signature_entries(signature_header)
+        if version == "v1" and signature
+    )
+
+
+def _standard_signature_entries(signature_header):
+    # CA confirmed Standard-Webhooks format: `v1,<base64_hmac_sha256>`.
+    # During rotation, multiple entries may be separated by whitespace; this
+    # parser also tolerates comma-separated pairs without exposing values.
+    parts = [part.strip() for part in re.split(r"[\s,]+", str(signature_header or "")) if part.strip()]
+    for index in range(0, len(parts) - 1, 2):
+        yield parts[index], parts[index + 1]
+
+
+def _has_standard_webhook_headers(headers):
+    return any(
+        _header_value(headers, name)
+        for name in (
+            _STANDARD_WEBHOOK_ID_HEADER,
+            _STANDARD_WEBHOOK_TIMESTAMP_HEADER,
+            _STANDARD_WEBHOOK_SIGNATURE_HEADER,
+        )
+    )
+
+
+def _header_value(headers, name):
+    value = headers.get(name, "")
+    return str(value).strip() if value is not None else ""
+
+
+def _signature_status(body, headers):
     secret = os.environ.get("COMPLYADVANTAGE_WEBHOOK_SECRET", "")
     if secret:
-        return "valid" if _verify_signature(body, signature) else "invalid"
+        return "valid" if _verify_signature(body, headers) else "invalid"
     if _environment() in ("staging", "production"):
         return "deployed_secret_missing"
     return "disabled_non_production"
