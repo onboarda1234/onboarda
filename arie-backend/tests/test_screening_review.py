@@ -119,3 +119,175 @@ def test_screening_review_rationale_flows_into_memo():
     assert "Officer disposition evidence" in content
     assert "provider_no_relevant_match" in content
     assert "Officer confirmed no relevant provider match" in content
+
+
+def test_company_media_monitoring_alert_drives_screening_review_summary(db, temp_db):
+    from server import _build_screening_queue_payload, _load_application_monitoring_alerts
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_ca_media_review",
+            "ARF-CA-MEDIA",
+            "client_ca_media",
+            "CA Media Review Ltd",
+            "Singapore",
+            "Construction",
+            "SME",
+            "pricing_review",
+            json.dumps({
+                "screening_report": {
+                    "provider": "complyadvantage",
+                    "screened_at": "2026-05-11T02:04:41",
+                    "screening_mode": "live",
+                    "company_screening": {
+                        "provider": "complyadvantage",
+                        "source": "complyadvantage",
+                        "api_status": "live",
+                        "screened_at": "2026-05-11T02:04:41Z",
+                        "matched": False,
+                        "results": [],
+                        "sanctions": {
+                            "matched": False,
+                            "results": [],
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                        },
+                        "adverse_media": {
+                            "matched": False,
+                            "results": [],
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                        },
+                    },
+                    "director_screenings": [],
+                    "ubo_screenings": [],
+                    "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                    "kyc_applicants": [],
+                    "overall_flags": [],
+                    "total_hits": 0,
+                }
+            }),
+        ),
+    )
+    db.execute(
+        """
+        INSERT INTO monitoring_alerts
+        (application_id, client_name, alert_type, severity, detected_by, summary,
+         source_reference, status, provider, case_identifier, discovered_via, discovered_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_ca_media_review",
+            "CA Media Review Ltd",
+            "media",
+            "medium",
+            "complyadvantage",
+            "Company adverse media surfaced by ComplyAdvantage",
+            json.dumps({
+                "provider": "complyadvantage",
+                "case_identifier": "case-company-media-1",
+                "alert_identifier": "alert-company-media-1",
+                "risk_identifier": "risk-company-media-1",
+            }),
+            "open",
+            "complyadvantage",
+            "case-company-media-1",
+            "webhook_backfill",
+            "2026-05-11T02:04:57Z",
+        ),
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-CA-MEDIA" and r["subject_type"] == "entity")
+
+    assert row["status_key"] == "review_required"
+    assert row["status_label"] == "Review Required"
+    assert row["watchlist_status"] == "match"
+    assert row["review_required"] is True
+    assert row["total_hits"] == 1
+    assert "Company adverse media match" in row["entity_context"]
+
+    alerts = _load_application_monitoring_alerts(db, "app_ca_media_review")
+    assert alerts[0]["source_reference_json"]["alert_identifier"] == "alert-company-media-1"
+    assert alerts[0]["source_reference_json"]["risk_identifier"] == "risk-company-media-1"
+
+
+def test_undeclared_pep_queue_preserves_declaration_and_last_screened(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_ca_undeclared_pep_review",
+            "ARF-CA-UNDECLARED",
+            "client_ca_pep",
+            "CA PEP Review Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "pricing_review",
+            json.dumps({
+                "screening_report": {
+                    "provider": "complyadvantage",
+                    "screened_at": "2026-05-11T02:04:41",
+                    "screening_mode": "live",
+                    "company_screening": {
+                        "source": "complyadvantage",
+                        "api_status": "live",
+                        "sanctions": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                    },
+                    "director_screenings": [{
+                        "person_name": "Provider PEP",
+                        "person_type": "director",
+                        "declared_pep": "No",
+                        "provider_detected_pep": True,
+                        "undeclared_pep": True,
+                        "has_pep_hit": True,
+                        "screening": {
+                            "matched": True,
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                            "screened_at": "2026-05-11T02:04:52Z",
+                            "results": [{
+                                "name": "Provider PEP",
+                                "is_pep": True,
+                                "match_categories": ["PEP"],
+                                "risk_type_labels": ["PEP class 1"],
+                                "provider_risk_identifier": "risk-pep-1",
+                            }],
+                        },
+                    }],
+                    "ubo_screenings": [],
+                    "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                    "kyc_applicants": [],
+                    "overall_flags": ["ComplyAdvantage PEP hit: risk-pep-1"],
+                    "total_hits": 1,
+                }
+            }),
+        ),
+    )
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
+        ("app_ca_undeclared_pep_review", "Provider PEP", "Mauritius", "No"),
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-CA-UNDECLARED" and r["subject_type"] == "director")
+
+    assert row["pep_declared_status"] == "not_declared"
+    assert row["pep_screening_status"] == "match"
+    assert row["status_key"] == "review_required"
+    assert "Undeclared PEP" in row["entity_context"]
+    assert "Declared PEP" not in row["entity_context"]
+    assert row["screened_at"] == "2026-05-11T02:04:52Z"
