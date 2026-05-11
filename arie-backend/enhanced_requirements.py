@@ -56,6 +56,7 @@ APPLICATION_REQUIREMENT_STATUSES = (
 APPLICATION_REQUIREMENT_REVIEW_ROLES = ("admin", "sco", "co")
 APPLICATION_REQUIREMENT_WAIVER_ROLES = ("admin", "sco")
 APPLICATION_REQUIREMENT_REQUEST_ROLES = ("admin", "sco", "co")
+APPLICATION_REQUIREMENT_FK_AUDIT_ROLES = ("admin", "sco", "co", "analyst")
 APPLICATION_REQUIREMENT_NOTES_MAX_LENGTH = 4000
 APPLICATION_REQUIREMENT_REQUESTABLE_AUDIENCES = ("client", "both")
 APPLICATION_REQUIREMENT_REQUESTABLE_STATUSES = ("generated", "under_review", "rejected")
@@ -902,6 +903,36 @@ def _audit_user(actor):
         }
     text = str(actor or "system")
     return {"sub": text, "name": text, "role": "system"}
+
+
+def _actor_user_fk_value(db, actor):
+    """Return a FK-safe users.id for application requirement metadata.
+
+    Portal clients and system jobs can generate enhanced requirements, but
+    ``application_enhanced_requirements.created_by`` / ``updated_by`` point at
+    back-office ``users``.  Keep the actor in audit metadata and write NULL to
+    the FK columns unless the actor is an existing back-office user.
+    """
+    if db is None:
+        return None
+    actor_id = _clean_text(_audit_user(actor).get("sub"))
+    if not actor_id:
+        return None
+    try:
+        row = db.execute(
+            "SELECT id, role FROM users WHERE id=? LIMIT 1",
+            (actor_id,),
+        ).fetchone()
+    except Exception as exc:
+        logger.warning("Could not validate enhanced requirement actor %s: %s", actor_id, exc)
+        return None
+    if not row:
+        return None
+    row = _row_dict(row)
+    role = str(row.get("role") or "").strip().lower()
+    if role not in APPLICATION_REQUIREMENT_FK_AUDIT_ROLES:
+        return None
+    return row.get("id") or actor_id
 
 
 def _redact_audit_state(state):
@@ -2843,11 +2874,15 @@ def generate_application_enhanced_requirements(
         return result
 
     result["application_id"] = app.get("id") or application_id
+    actor_audit = _audit_user(actor)
+    actor_fk = _actor_user_fk_value(db, actor)
     target = _application_target(app)
     audit_base = {
         "application_id": app.get("id"),
         "application_ref": app.get("ref"),
-        "actor": _audit_user(actor).get("sub"),
+        "actor": actor_audit.get("sub"),
+        "actor_role": actor_audit.get("role"),
+        "actor_user_fk": actor_fk,
         "generation_source": generation_source,
         "timestamp": _now_iso(),
     }
@@ -2963,8 +2998,8 @@ def generate_application_enhanced_requirements(
             "; ".join(trigger_sources.get(rule["trigger_key"], [])),
             json.dumps(trigger_context, default=str, sort_keys=True),
             1,
-            _audit_user(actor).get("sub"),
-            _audit_user(actor).get("sub"),
+            actor_fk,
+            actor_fk,
         )
         if _db_is_postgres(db):
             inserted = db.execute(

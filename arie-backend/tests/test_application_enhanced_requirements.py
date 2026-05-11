@@ -164,17 +164,26 @@ def _insert_application(
     return app_id
 
 
-def _generate(db, app_id, source="test"):
+def _generate_for_actor(db, app_id, actor, source="test"):
     from enhanced_requirements import generate_application_enhanced_requirements
 
     result = generate_application_enhanced_requirements(
         db,
         app_id,
-        actor={"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        actor=actor,
         generation_source=source,
     )
     db.commit()
     return result
+
+
+def _generate(db, app_id, source="test"):
+    return _generate_for_actor(
+        db,
+        app_id,
+        {"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        source=source,
+    )
 
 
 def _first_requirement_id(db, app_id, *, offset=0):
@@ -241,7 +250,14 @@ def _count_app_reqs(db, app_id, trigger_key):
     ).fetchone()["c"]
 
 
-def _apply_auto_generation(db, app_id, *, source="prescreening_submit", risk_dict=None):
+def _apply_auto_generation(
+    db,
+    app_id,
+    *,
+    source="prescreening_submit",
+    risk_dict=None,
+    user=None,
+):
     import routing_actuator as ra
 
     app_row = db.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone()
@@ -249,11 +265,39 @@ def _apply_auto_generation(db, app_id, *, source="prescreening_submit", risk_dic
         db=db,
         app_row=app_row,
         risk_dict=risk_dict,
-        user={"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        user=user or {"sub": "admin001", "name": "Test Admin", "role": "admin"},
         source=source,
     )
     db.commit()
     return result
+
+
+def _req_actor_rows(db, app_id):
+    return db.execute(
+        """
+        SELECT trigger_key, requirement_key, created_by, updated_by
+        FROM application_enhanced_requirements
+        WHERE application_id=?
+        ORDER BY id
+        """,
+        (app_id,),
+    ).fetchall()
+
+
+def _last_generation_audit(db, app_id):
+    rows = db.execute(
+        """
+        SELECT detail
+        FROM audit_log
+        WHERE action='application_enhanced_requirements.generation_completed'
+        ORDER BY id DESC
+        """
+    ).fetchall()
+    for row in rows:
+        detail = json.loads(row["detail"])
+        if detail.get("application_id") == app_id:
+            return detail
+    return {}
 
 
 def test_application_enhanced_requirements_table_constraints(enhanced_app_db):
@@ -323,6 +367,171 @@ def test_low_application_generates_zero_requirements(enhanced_app_db):
     assert result["config_ok"] is True
     assert result["triggers"] == []
     assert result["generated_count"] == 0
+
+
+def test_generation_fk_safe_for_client_system_and_invalid_officer_actors(enhanced_app_db):
+    db = enhanced_app_db
+    db.execute("PRAGMA foreign_keys = ON")
+
+    actor_cases = (
+        {"sub": "client001", "name": "Portal Client", "role": "client"},
+        {"sub": "system", "name": "system", "role": "system"},
+        {"sub": "missing_co", "name": "Missing CO", "role": "co"},
+    )
+    for actor in actor_cases:
+        app_id = _insert_application(db, risk_level="HIGH")
+        result = _generate_for_actor(db, app_id, actor, source="prescreening_submit")
+
+        assert result["config_ok"] is True
+        assert result["generated_count"] == _count_rules(db, "high_or_very_high_risk")
+        rows = _req_actor_rows(db, app_id)
+        assert rows
+        assert all(row["created_by"] is None for row in rows)
+        assert all(row["updated_by"] is None for row in rows)
+        audit = _last_generation_audit(db, app_id)
+        assert audit["actor"] == actor["sub"]
+        assert audit["actor_role"] == actor["role"]
+        assert audit["actor_user_fk"] is None
+
+
+def test_generation_records_valid_admin_actor_fk(enhanced_app_db):
+    db = enhanced_app_db
+    db.execute("PRAGMA foreign_keys = ON")
+    app_id = _insert_application(db, risk_level="HIGH")
+
+    result = _generate_for_actor(
+        db,
+        app_id,
+        {"sub": "admin001", "name": "Test Admin", "role": "admin"},
+        source="manual_api",
+    )
+
+    assert result["generated_count"] == _count_rules(db, "high_or_very_high_risk")
+    rows = _req_actor_rows(db, app_id)
+    assert rows
+    assert all(row["created_by"] == "admin001" for row in rows)
+    assert all(row["updated_by"] == "admin001" for row in rows)
+    audit = _last_generation_audit(db, app_id)
+    assert audit["actor_user_fk"] == "admin001"
+
+
+def test_client_declared_pep_director_routes_and_generates_fk_safe_requirements(enhanced_app_db):
+    from enhanced_requirements import build_enhanced_requirement_operational_summary
+
+    db = enhanced_app_db
+    db.execute("PRAGMA foreign_keys = ON")
+    app_id = _insert_application(
+        db,
+        risk_level="MEDIUM",
+        status="pricing_review",
+        onboarding_lane="Standard Review",
+    )
+    db.execute(
+        "INSERT INTO directors (id, application_id, full_name, is_pep) VALUES (?,?,?,?)",
+        ("dir_pep_" + uuid.uuid4().hex[:8], app_id, "Priya Declared PEP", "Yes"),
+    )
+    db.commit()
+
+    result = _apply_auto_generation(
+        db,
+        app_id,
+        user={"sub": "client001", "name": "Portal Client", "role": "client"},
+    )
+
+    assert result["route"] == "edd"
+    assert "declared_pep_present" in result["triggers"]
+    assert _count_app_reqs(db, app_id, "pep") == _count_rules(db, "pep")
+    rows = _req_actor_rows(db, app_id)
+    assert all(row["created_by"] is None for row in rows)
+    assert all(row["updated_by"] is None for row in rows)
+    case = db.execute(
+        "SELECT assigned_officer FROM edd_cases WHERE application_id=?",
+        (app_id,),
+    ).fetchone()
+    assert case["assigned_officer"] is None
+    summary = build_enhanced_requirement_operational_summary(db, app_id)
+    assert summary["enhanced_review_active"] is True
+    assert summary["status_label"] != "Clear"
+    assert summary["total"] == _count_rules(db, "pep")
+
+
+def test_client_declared_pep_ubo_routes_and_generates_fk_safe_requirements(enhanced_app_db):
+    db = enhanced_app_db
+    db.execute("PRAGMA foreign_keys = ON")
+    app_id = _insert_application(
+        db,
+        risk_level="MEDIUM",
+        status="pricing_review",
+        onboarding_lane="Standard Review",
+    )
+    db.execute(
+        "INSERT INTO ubos (id, application_id, full_name, ownership_pct, is_pep) VALUES (?,?,?,?,?)",
+        ("ubo_pep_" + uuid.uuid4().hex[:8], app_id, "Uma Declared PEP", 100, "Yes"),
+    )
+    db.commit()
+
+    result = _apply_auto_generation(
+        db,
+        app_id,
+        user={"sub": "client001", "name": "Portal Client", "role": "client"},
+    )
+
+    assert result["route"] == "edd"
+    assert "declared_pep_present" in result["triggers"]
+    assert _count_app_reqs(db, app_id, "pep") == _count_rules(db, "pep")
+
+
+def test_client_crypto_opaque_route_generates_requirements_and_reuses_edd_case(enhanced_app_db):
+    db = enhanced_app_db
+    db.execute("PRAGMA foreign_keys = ON")
+    app_id = _insert_application(
+        db,
+        risk_level="MEDIUM",
+        sector="Crypto / Virtual Assets",
+        ownership_structure="Opaque multi-layered nominee structure",
+        status="pricing_review",
+        onboarding_lane="Standard Review",
+    )
+
+    user = {"sub": "client001", "name": "Portal Client", "role": "client"}
+    first = _apply_auto_generation(db, app_id, user=user)
+    second = _apply_auto_generation(db, app_id, user=user)
+
+    assert first["route"] == "edd"
+    assert "crypto_or_virtual_asset_sector" in first["triggers"]
+    assert "opaque_or_incomplete_ownership" in first["triggers"]
+    assert _count_app_reqs(db, app_id, "crypto_vasp") == _count_rules(db, "crypto_vasp")
+    assert _count_app_reqs(db, app_id, "opaque_ownership") == _count_rules(db, "opaque_ownership")
+    assert second["enhanced_requirements_generation"]["generated_count"] == 0
+    assert second["enhanced_requirements_generation"]["existing_count"] >= (
+        _count_rules(db, "crypto_vasp") + _count_rules(db, "opaque_ownership")
+    )
+    assert db.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"] == 1
+
+
+def test_client_high_risk_route_generates_high_risk_requirements(enhanced_app_db):
+    db = enhanced_app_db
+    db.execute("PRAGMA foreign_keys = ON")
+    app_id = _insert_application(
+        db,
+        risk_level="HIGH",
+        status="pricing_review",
+        onboarding_lane="EDD",
+    )
+
+    result = _apply_auto_generation(
+        db,
+        app_id,
+        risk_dict={"score": 72, "level": "HIGH", "final_risk_level": "HIGH", "lane": "EDD"},
+        user={"sub": "client001", "name": "Portal Client", "role": "client"},
+    )
+
+    assert result["route"] == "edd"
+    assert "high_or_very_high_risk" in result["triggers"]
+    assert _count_app_reqs(db, app_id, "high_or_very_high_risk") == _count_rules(db, "high_or_very_high_risk")
 
 
 def test_operational_summary_counts_and_next_actions(enhanced_app_db):

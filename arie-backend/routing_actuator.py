@@ -102,6 +102,30 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"yes", "true", "1", "y"}
 
 
+def _ownership_transparency_status(value: Any) -> str:
+    text = _norm_str(value).lower()
+    if text in {"opaque", "incomplete", "unknown", "high", "clear"}:
+        return text
+    opaque_tokens = (
+        "complex",
+        "shell",
+        "opaque",
+        "nominee",
+        "bearer",
+        "multi-layered",
+        "multi layered",
+        "layered",
+        "trust",
+        "3+",
+        "undisclosed",
+    )
+    if any(token in text for token in opaque_tokens):
+        return "opaque"
+    if text in {"simple", "transparent", "1-2"}:
+        return "clear"
+    return text
+
+
 def _declared_pep_present_in_party_rows(db, application_id: Any) -> bool:
     if db is None or application_id in (None, ""):
         return False
@@ -180,7 +204,7 @@ def build_routing_facts(
         or ar.get("jurisdiction_risk_tier")
         or ""
     )
-    ownership_transparency = (
+    ownership_transparency = _ownership_transparency_status(
         rd.get("ownership_transparency_status")
         or ar.get("ownership_transparency_status")
         or ar.get("ownership_structure")
