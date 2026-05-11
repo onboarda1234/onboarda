@@ -9074,6 +9074,7 @@ def _monitoring_company_media_facts(alerts):
     results = []
     for alert in media_alerts:
         source_ref = alert.get("source_reference_json") or {}
+        media_detail = _screening_media_detail_from_payload(source_ref)
         results.append({
             "name": alert.get("summary") or "ComplyAdvantage media alert",
             "match_category": "adverse media",
@@ -9087,6 +9088,9 @@ def _monitoring_company_media_facts(alerts):
             "discovered_via": alert.get("discovered_via"),
             "discovered_at": alert.get("discovered_at") or alert.get("created_at"),
             "summary": alert.get("summary"),
+            "media_title": media_detail.get("title"),
+            "media_url": media_detail.get("url"),
+            "media_snippet": media_detail.get("snippet"),
             "source_reference": alert.get("source_reference"),
             "source_reference_json": source_ref,
         })
@@ -9096,6 +9100,106 @@ def _monitoring_company_media_facts(alerts):
         "results": results,
         "alerts": media_alerts,
     }
+
+
+def _first_non_empty(*values):
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _screening_media_detail_from_payload(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    candidates = [
+        payload,
+        payload.get("media") if isinstance(payload.get("media"), dict) else None,
+        payload.get("article") if isinstance(payload.get("article"), dict) else None,
+        payload.get("source") if isinstance(payload.get("source"), dict) else None,
+    ]
+    media_items = payload.get("media") or payload.get("articles") or payload.get("sources")
+    if isinstance(media_items, list):
+        candidates.extend(item for item in media_items if isinstance(item, dict))
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        canonical = candidate.get("canonical_url")
+        canonical_url = canonical.get("url") if isinstance(canonical, dict) else canonical
+        snippets = candidate.get("snippets")
+        snippet = None
+        if isinstance(snippets, list) and snippets:
+            first = snippets[0]
+            snippet = first.get("text") if isinstance(first, dict) else str(first)
+        detail = {
+            "title": _first_non_empty(candidate.get("media_title"), candidate.get("title"), candidate.get("headline")),
+            "url": _first_non_empty(candidate.get("media_url"), candidate.get("url"), canonical_url, candidate.get("source_url")),
+            "snippet": _first_non_empty(candidate.get("media_snippet"), candidate.get("snippet"), snippet, candidate.get("summary")),
+        }
+        if any(detail.values()):
+            return detail
+    return {}
+
+
+def _screening_media_detail_from_indicators(indicators):
+    for indicator in indicators or []:
+        if not isinstance(indicator, dict):
+            continue
+        value = indicator.get("value") if isinstance(indicator.get("value"), dict) else {}
+        detail = _screening_media_detail_from_payload(value)
+        if detail:
+            return detail
+    return {}
+
+
+def _screening_provider_evidence(results):
+    evidence = []
+    for result in results or []:
+        if not isinstance(result, dict):
+            continue
+        source_ref = _decode_monitoring_source_reference(result.get("source_reference"))
+        source_ref.update(result.get("source_reference_json") or {})
+        media_detail = _screening_media_detail_from_payload(result) or _screening_media_detail_from_indicators(result.get("indicators"))
+        evidence.append({
+            "provider": result.get("provider") or result.get("source") or ("complyadvantage" if (
+                result.get("provider_risk_identifier")
+                or result.get("provider_alert_identifier")
+                or result.get("provider_profile_identifier")
+            ) else None),
+            "provider_case_identifier": _first_non_empty(
+                result.get("provider_case_identifier"),
+                result.get("case_identifier"),
+                source_ref.get("case_identifier"),
+            ),
+            "provider_alert_identifier": _first_non_empty(
+                result.get("provider_alert_identifier"),
+                result.get("alert_identifier"),
+                source_ref.get("alert_identifier"),
+            ),
+            "provider_risk_identifier": _first_non_empty(
+                result.get("provider_risk_identifier"),
+                result.get("risk_id"),
+                result.get("risk_identifier"),
+                source_ref.get("risk_identifier"),
+            ),
+            "provider_profile_identifier": _first_non_empty(
+                result.get("provider_profile_identifier"),
+                result.get("profile_identifier"),
+                source_ref.get("profile_identifier"),
+            ),
+            "matched_name": result.get("name"),
+            "match_category": result.get("match_category"),
+            "match_categories": result.get("match_categories") or [],
+            "risk_type_labels": result.get("risk_type_labels") or [],
+            "risk_type_keys": result.get("risk_type_keys") or [],
+            "summary": result.get("summary"),
+            "media_title": media_detail.get("title"),
+            "media_url": media_detail.get("url"),
+            "media_snippet": media_detail.get("snippet"),
+            "discovered_at": result.get("discovered_at"),
+            "discovered_via": result.get("discovered_via"),
+        })
+    return evidence
 
 
 def _screening_combined_company_facts(company_screening):
@@ -9515,6 +9619,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                     company_context,
                 company_provider_record,
             )
+            company_results = []
+            for record in (company_sanctions, company_adverse):
+                company_results.extend((record or {}).get("results") or [])
+            company_results.extend(company_media_alerts.get("results") or [])
+            if not company_results and isinstance(company_screening.get("results"), list):
+                company_results.extend(company_screening.get("results") or [])
 
             rows.append({
                 "application_id": app["id"],
@@ -9537,6 +9647,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                     int(company_facts["total_hits"] or 0),
                     int(company_media_alerts["total_hits"] or 0),
                 ) or (report or {}).get("total_hits", 0),
+                "provider_evidence": _screening_provider_evidence(company_results),
                 "review_required": company_requires_review,
                 **company_review_fields,
             })
@@ -9673,6 +9784,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 "screened_by": screened_by,
                 "flag_count": len(overall_flags),
                 "total_hits": facts["total_hits"],
+                "provider_evidence": _screening_provider_evidence(screening.get("results") or []),
                 "review_required": requires_review,
                 **person_review_fields,
             })

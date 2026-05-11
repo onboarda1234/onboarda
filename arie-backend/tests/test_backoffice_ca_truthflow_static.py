@@ -31,6 +31,35 @@ def test_backoffice_company_review_uses_monitoring_media_alerts():
     assert "monitoringAlertSubjectScope(alert) === 'entity'" in media_region
 
 
+def test_backoffice_screening_review_renders_provider_evidence_details():
+    html = BACKOFFICE_HTML.read_text()
+
+    assert "Provider evidence details" in html
+    assert "Case ID" in html
+    assert "Alert ID" in html
+    assert "Risk ID" in html
+    assert "Profile ID" in html
+
+    region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
+    assert "provider_case_identifier" in region
+    assert "provider_alert_identifier" in region
+    assert "provider_risk_identifier" in region
+    assert "provider_profile_identifier" in region
+    assert "media_title" in region
+    assert "media_snippet" in region
+    assert "target=\"_blank\" rel=\"noopener\"" in region
+
+
+def test_backoffice_screening_review_uses_backend_provider_evidence_payload():
+    html = BACKOFFICE_HTML.read_text()
+
+    entity_region = _function_region(html, "buildEntityScreeningReviewCard", "buildPersonScreeningReviewCard")
+    person_region = _function_region(html, "buildPersonScreeningReviewCard", "renderScreeningReviewPanel")
+
+    assert "reviewRow && reviewRow.provider_evidence" in entity_region
+    assert "reviewRow && reviewRow.provider_evidence" in person_region
+
+
 def test_backoffice_person_review_prefers_screening_declared_pep_truth():
     html = BACKOFFICE_HTML.read_text()
 
