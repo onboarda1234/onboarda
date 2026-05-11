@@ -459,7 +459,7 @@ class ApprovalGateValidator:
             screening_input_updated_at = (
                 app.get('screening_input_updated_at')
                 or app.get('risk_inputs_updated_at')
-                or app.get('inputs_updated_at')
+                or (app.get('inputs_updated_at') if submitted_at else None)
                 or submitted_at
             )
             screening_ts_str = screening_report.get('screened_at') or screening_report.get('timestamp')
