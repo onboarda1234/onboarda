@@ -8864,6 +8864,69 @@ def _decode_monitoring_source_reference(value):
     return decoded if isinstance(decoded, dict) else {}
 
 
+def _monitoring_subject_scope_from_report(report):
+    provider = (report or {}).get("provider_specific", {}).get("complyadvantage", {})
+    customer_input = provider.get("customer_input") or {}
+    if isinstance(customer_input, dict):
+        if isinstance(customer_input.get("company"), dict):
+            return "entity"
+        if isinstance(customer_input.get("person"), dict):
+            return "person"
+    company = (report or {}).get("company_screening") or {}
+    if isinstance(company, dict) and (
+        company.get("matched")
+        or ((company.get("adverse_media") or {}).get("matched"))
+        or ((company.get("sanctions") or {}).get("matched"))
+    ):
+        return "entity"
+    if (report or {}).get("director_screenings") or (report or {}).get("ubo_screenings"):
+        return "person"
+    return None
+
+
+def _monitoring_subject_scope_from_source_reference(source_ref):
+    for key in ("subject_scope", "subject_type", "screening_subject_kind", "customer_type", "entity_type"):
+        value = str((source_ref or {}).get(key) or "").strip().lower()
+        if value in ("entity", "company", "business", "organisation", "organization", "legal_entity"):
+            return "entity"
+        if value in ("person", "individual", "director", "ubo", "subject"):
+            return "person"
+    if (source_ref or {}).get("person_key"):
+        return "person"
+    if (source_ref or {}).get("company_identifier") or (source_ref or {}).get("company_name"):
+        return "entity"
+    return None
+
+
+def _monitoring_subject_scope_from_normalized_record(db, application_id, source_ref):
+    record_id = (source_ref or {}).get("normalized_record_id")
+    if not record_id:
+        return None
+    try:
+        row = db.execute(
+            """
+            SELECT normalized_report_json
+            FROM screening_reports_normalized
+            WHERE id = ? AND application_id = ? AND provider = ?
+            """,
+            (record_id, application_id, "complyadvantage"),
+        ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    report = safe_json_loads(row["normalized_report_json"])
+    return _monitoring_subject_scope_from_report(report if isinstance(report, dict) else {})
+
+
+def _monitoring_subject_scope(db, application_id, alert):
+    source_ref = alert.get("source_reference_json") or {}
+    return (
+        _monitoring_subject_scope_from_source_reference(source_ref)
+        or _monitoring_subject_scope_from_normalized_record(db, application_id, source_ref)
+    )
+
+
 def _load_application_monitoring_alerts(db, application_id):
     rows = db.execute(
         """
@@ -8879,6 +8942,7 @@ def _load_application_monitoring_alerts(db, application_id):
     for row in rows:
         alert = dict(row)
         alert["source_reference_json"] = _decode_monitoring_source_reference(alert.get("source_reference"))
+        alert["subject_scope"] = _monitoring_subject_scope(db, application_id, alert)
         alerts.append(alert)
     return alerts
 
@@ -8888,7 +8952,11 @@ def _monitoring_company_media_facts(alerts):
     for alert in alerts or []:
         alert_type = str(alert.get("alert_type") or "").strip().lower()
         provider = str(alert.get("provider") or "").strip().lower()
-        if provider == "complyadvantage" and alert_type in ("media", "adverse_media", "adverse media"):
+        if (
+            provider == "complyadvantage"
+            and alert_type in ("media", "adverse_media", "adverse media")
+            and alert.get("subject_scope") == "entity"
+        ):
             media_alerts.append(alert)
     results = []
     for alert in media_alerts:

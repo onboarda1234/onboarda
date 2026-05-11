@@ -18,6 +18,7 @@ def test_backoffice_company_review_uses_monitoring_media_alerts():
     html = BACKOFFICE_HTML.read_text()
 
     assert "monitoringAlerts: detail.monitoring_alerts || []" in html
+    assert "function monitoringAlertSubjectScope" in html
     assert "function companyMonitoringMediaFacts" in html
 
     region = _function_region(html, "buildEntityScreeningReviewCard", "buildPersonScreeningReviewCard")
@@ -25,6 +26,9 @@ def test_backoffice_company_review_uses_monitoring_media_alerts():
     assert "monitoringMedia.matched" in region
     assert ".concat(monitoringMedia.results || [])" in region
     assert "Provider adverse-media evidence is persisted and listed above." in region
+
+    media_region = _function_region(html, "companyMonitoringMediaFacts", "declaredPepFromScreeningRecord")
+    assert "monitoringAlertSubjectScope(alert) === 'entity'" in media_region
 
 
 def test_backoffice_person_review_prefers_screening_declared_pep_truth():

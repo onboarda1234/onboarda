@@ -7085,12 +7085,28 @@ function parseMonitoringSourceReference(value) {
   }
 }
 
+function monitoringAlertSubjectScope(alert) {
+  var direct = String((alert && alert.subject_scope) || '').trim().toLowerCase();
+  if (direct === 'entity' || direct === 'company') return 'entity';
+  if (direct === 'person' || direct === 'director' || direct === 'ubo' || direct === 'subject') return 'person';
+  var ref = parseMonitoringSourceReference((alert || {}).source_reference_json || (alert || {}).source_reference);
+  var fields = ['subject_scope', 'subject_type', 'screening_subject_kind', 'customer_type', 'entity_type'];
+  for (var i = 0; i < fields.length; i++) {
+    var value = String(ref[fields[i]] || '').trim().toLowerCase();
+    if (['entity', 'company', 'business', 'organisation', 'organization', 'legal_entity'].indexOf(value) !== -1) return 'entity';
+    if (['person', 'individual', 'director', 'ubo', 'subject'].indexOf(value) !== -1) return 'person';
+  }
+  if (ref.person_key) return 'person';
+  if (ref.company_identifier || ref.company_name) return 'entity';
+  return null;
+}
+
 function companyMonitoringMediaFacts(app) {
   var alerts = (app && Array.isArray(app.monitoringAlerts)) ? app.monitoringAlerts : [];
   var mediaAlerts = alerts.filter(function(alert) {
     var provider = String(alert.provider || '').toLowerCase();
     var type = String(alert.alert_type || '').toLowerCase().replace(/\s+/g, '_');
-    return provider === 'complyadvantage' && (type === 'media' || type === 'adverse_media');
+    return provider === 'complyadvantage' && (type === 'media' || type === 'adverse_media') && monitoringAlertSubjectScope(alert) === 'entity';
   });
   return {
     matched: mediaAlerts.length > 0,
