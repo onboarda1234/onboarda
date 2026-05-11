@@ -27,6 +27,12 @@ def map_normalized_to_monitoring_alert(normalized_report, *, case_identifier, cu
         "alert_identifier": alert_identifier,
         "normalized_record_id": normalized_record_id,
     }
+    subject_scope = _subject_scope(normalized_report)
+    if subject_scope:
+        source_reference["subject_scope"] = subject_scope
+    screening_subject = _screening_subject(normalized_report)
+    if screening_subject:
+        source_reference["screening_subject"] = screening_subject
     return {
         "provider": _PROVIDER,
         "case_identifier": case_identifier,
@@ -88,3 +94,62 @@ def _first_alert_identifier(normalized_report):
     if isinstance(first, dict):
         return first.get("identifier") or first.get("id")
     return first
+
+
+def _subject_scope(normalized_report):
+    for value in (
+        normalized_report.get("subject_scope"),
+        _provider(normalized_report).get("subject_scope"),
+        (_provider(normalized_report).get("screening_subject") or {}).get("scope"),
+    ):
+        normalized = _normalize_scope(value)
+        if normalized:
+            return normalized
+    screening_subject = normalized_report.get("screening_subject_kind") or (_provider(normalized_report).get("screening_subject") or {}).get("kind")
+    normalized = _normalize_scope(screening_subject)
+    if normalized:
+        return normalized
+    customer_input = _provider(normalized_report).get("customer_input") or {}
+    if isinstance(customer_input, dict):
+        if isinstance(customer_input.get("company"), dict):
+            return "entity"
+        if isinstance(customer_input.get("person"), dict):
+            return "person"
+    if normalized_report.get("company_screening"):
+        return "entity"
+    if normalized_report.get("director_screenings") or normalized_report.get("ubo_screenings"):
+        return "person"
+    return None
+
+
+def _screening_subject(normalized_report):
+    subject = _provider(normalized_report).get("screening_subject")
+    if isinstance(subject, dict):
+        compact = {key: value for key, value in subject.items() if value}
+        return compact or None
+    kind = normalized_report.get("screening_subject_kind")
+    scope = normalized_report.get("subject_scope")
+    person_key = normalized_report.get("screening_subject_person_key")
+    compact = {
+        key: value
+        for key, value in {
+            "kind": kind,
+            "scope": scope,
+            "person_key": person_key,
+        }.items()
+        if value
+    }
+    return compact or None
+
+
+def _provider(normalized_report):
+    return normalized_report.get("provider_specific", {}).get(_PROVIDER, {})
+
+
+def _normalize_scope(value):
+    value = str(value or "").strip().lower()
+    if value in ("entity", "company", "business", "organisation", "organization", "legal_entity"):
+        return "entity"
+    if value in ("person", "individual", "director", "ubo"):
+        return "person"
+    return None

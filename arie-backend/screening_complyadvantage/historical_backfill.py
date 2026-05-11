@@ -33,6 +33,7 @@ async def run_historical_backfill_for_subscription(
     application_id: str,
     client_id: str,
     customer_identifier: str,
+    person_key: str | None = None,
     discovered_via: str = "webhook_backfill",
     trigger_reason: str = "subscription_seed",
     trace_id: str | None = None,
@@ -51,6 +52,7 @@ async def run_historical_backfill_for_subscription(
             application_id=application_id,
             client_id=client_id,
             customer_identifier=customer_identifier,
+            person_key=person_key,
             discovered_via=discovered_via,
             trigger_reason=trigger_reason,
             trace_id=trace_id,
@@ -66,6 +68,7 @@ async def rerun_historical_backfill_for_customer(
     application_id: str,
     client_id: str,
     customer_identifier: str,
+    person_key: str | None = None,
     trace_id: str | None = None,
     backfill_run_id: str | None = None,
     agent_executor=None,
@@ -77,6 +80,7 @@ async def rerun_historical_backfill_for_customer(
         application_id=application_id,
         client_id=client_id,
         customer_identifier=customer_identifier,
+        person_key=person_key,
         discovered_via="manual_backfill",
         trigger_reason="manual_rerun",
         trace_id=trace_id,
@@ -92,6 +96,7 @@ async def _run_backfill(
     application_id,
     client_id,
     customer_identifier,
+    person_key,
     discovered_via,
     trigger_reason,
     trace_id,
@@ -143,8 +148,9 @@ async def _run_backfill(
         context = ScreeningApplicationContext(
             application_id=application_id,
             client_id=client_id,
-            screening_subject_kind="entity",
+            screening_subject_kind="subject" if person_key else "entity",
             screening_subject_name=customer_identifier,
+            screening_subject_person_key=person_key,
         )
         for case_summary in _fetch_cases_for_customer(guard, customer_identifier):
             result["cases_seen"] += 1

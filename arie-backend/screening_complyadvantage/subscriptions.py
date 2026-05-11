@@ -59,6 +59,7 @@ def seed_monitoring_subscription(
                 application_id=application_id,
                 client_id=client_id,
                 customer_identifier=customer_identifier,
+                person_key=person_key,
             )
     except Exception as exc:
         if _is_unique_violation(exc):
@@ -120,7 +121,7 @@ def _placeholder():
     return "?"
 
 
-def _schedule_historical_backfill(*, application_id, client_id, customer_identifier):
+def _schedule_historical_backfill(*, application_id, client_id, customer_identifier, person_key=None):
     """Launch the one-shot CA historical backfill after a subscription seed."""
     async def _runner():
         from db import get_db
@@ -136,6 +137,7 @@ def _schedule_historical_backfill(*, application_id, client_id, customer_identif
                     application_id=application_id,
                     client_id=client_id,
                     customer_identifier=customer_identifier,
+                    person_key=person_key,
                     discovered_via="webhook_backfill",
                     trigger_reason="subscription_seed",
                 )

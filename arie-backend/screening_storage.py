@@ -118,6 +118,17 @@ def persist_normalized_report(
         (client_id, application_id, provider, normalized_version,
          source_report_hash, report_json),
     )
+    row = db.execute(
+        """SELECT id FROM screening_reports_normalized
+           WHERE application_id=? AND provider=? AND source_screening_report_hash=?
+           ORDER BY id DESC LIMIT 1""",
+        (application_id, provider, source_report_hash),
+    ).fetchone()
+    if row is not None:
+        try:
+            return row["id"]
+        except (TypeError, KeyError, IndexError):
+            return row[0]
     return cursor.lastrowid
 
 
