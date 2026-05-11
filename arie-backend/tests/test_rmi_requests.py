@@ -268,6 +268,81 @@ def test_client_notifications_expose_rmi_and_upload_fulfills_item(rmi_api_server
     assert request_row["status"] == "open"
 
 
+def test_single_item_rmi_stays_pending_review_until_officer_accepts(rmi_api_server):
+    client_id, app_id, _ = _seed_client_application(
+        app_id="app_rmi_single_item_review",
+        app_ref="ARF-2026-RMI-006",
+    )
+    resp = _create_rmi_request(
+        rmi_api_server,
+        app_id,
+        items=[{"doc_type": "source_funds", "label": "Source of Funds Evidence"}],
+    )
+    assert resp.status_code == 201, resp.text
+    rmi_request_id = resp.json()["rmi_request_id"]
+
+    notif_resp = requests.get(
+        f"{rmi_api_server}/api/notifications",
+        headers=_client_headers(client_id),
+        timeout=5,
+    )
+    assert notif_resp.status_code == 200
+    first_item = notif_resp.json()["rmi_requests"][0]["items"][0]
+
+    upload_resp = requests.post(
+        f"{rmi_api_server}/api/applications/{app_id}/documents"
+        f"?doc_type={first_item['doc_type']}&rmi_item_id={first_item['id']}",
+        headers=_client_headers(client_id),
+        files={"file": ("source-funds.pdf", b"%PDF-1.4\n%EOF\n", "application/pdf")},
+        timeout=5,
+    )
+    assert upload_resp.status_code == 201, upload_resp.text
+
+    from db import get_db
+
+    conn = get_db()
+    item = conn.execute(
+        "SELECT status, document_id, reviewed_at FROM rmi_request_items WHERE id=?",
+        (first_item["id"],),
+    ).fetchone()
+    request_row = conn.execute(
+        "SELECT status, fulfilled_at FROM rmi_requests WHERE id=?",
+        (rmi_request_id,),
+    ).fetchone()
+    conn.close()
+
+    assert item["status"] == "uploaded"
+    assert item["document_id"] == upload_resp.json()["id"]
+    assert item["reviewed_at"] is None
+    assert request_row["status"] == "pending_review"
+    assert request_row["status"] != "fulfilled"
+    assert request_row["fulfilled_at"] is None
+
+    review_resp = requests.post(
+        f"{rmi_api_server}/api/documents/{upload_resp.json()['id']}/review",
+        json={"status": "accepted", "comment": "Accepted for RMI validation."},
+        headers=_officer_headers(),
+        timeout=5,
+    )
+    assert review_resp.status_code == 200, review_resp.text
+
+    conn = get_db()
+    item = conn.execute(
+        "SELECT status, reviewed_at FROM rmi_request_items WHERE id=?",
+        (first_item["id"],),
+    ).fetchone()
+    request_row = conn.execute(
+        "SELECT status, fulfilled_at FROM rmi_requests WHERE id=?",
+        (rmi_request_id,),
+    ).fetchone()
+    conn.close()
+
+    assert item["status"] == "accepted"
+    assert item["reviewed_at"] is not None
+    assert request_row["status"] == "fulfilled"
+    assert request_row["fulfilled_at"] is not None
+
+
 def test_rmi_upload_requires_matching_item_and_application(rmi_api_server):
     client_id, app_id, _ = _seed_client_application(
         app_id="app_rmi_upload_validation",

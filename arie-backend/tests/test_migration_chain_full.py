@@ -171,9 +171,11 @@ def _dsn():
 def test_monitoring_alert_discovered_via_pg_repair_replaces_all_constraints():
     """Existing PostgreSQL DBs can have old CHECK constraints with varied names."""
     db_source = (Path(__file__).resolve().parents[1] / "db.py").read_text(encoding="utf-8")
-    assert "FOR existing_constraint IN" in db_source
-    assert "pg_get_constraintdef(oid) ILIKE '%discovered_via%'" in db_source
-    assert "DROP CONSTRAINT IF EXISTS %I" in db_source
+    assert "_replace_postgres_column_check_constraint" in db_source
+    assert "pg_get_constraintdef(c.oid) ILIKE ?" in db_source
+    assert "DROP CONSTRAINT IF EXISTS {_pg_quote_identifier(name)}" in db_source
+    assert "DO $$" not in db_source
+    assert "DROP CONSTRAINT IF EXISTS %I" not in db_source
     for value in (
         "webhook_live",
         "webhook_backfill",
@@ -183,6 +185,175 @@ def test_monitoring_alert_discovered_via_pg_repair_replaces_all_constraints():
         "document_health",
     ):
         assert value in db_source
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return self.rows
+
+
+class _FakePostgresDB:
+    is_postgres = True
+
+    def __init__(self, constraint_rows):
+        self.constraint_rows = constraint_rows
+        self.calls = []
+
+    def execute(self, sql, params=()):
+        self.calls.append((sql, params))
+        if "information_schema.tables" in sql:
+            return _FakeResult([{"exists": 1}])
+        if "information_schema.columns" in sql:
+            return _FakeResult([{"exists": 1}])
+        if "FROM pg_constraint c" in sql:
+            return _FakeResult(self.constraint_rows)
+        return _FakeResult([])
+
+
+def test_pg_check_repair_uses_parameterized_catalog_lookup_and_quotes_identifiers():
+    import db as db_module
+
+    fake = _FakePostgresDB(
+        [
+            {
+                "conname": "monitoring_alerts_discovered_via_check",
+                "definition": "CHECK ((discovered_via = ANY (...)))",
+            },
+            {
+                "conname": 'legacy weird"check',
+                "definition": "CHECK (discovered_via IN ('webhook_live'))",
+            },
+        ]
+    )
+
+    dropped = db_module._replace_postgres_column_check_constraint(
+        fake,
+        table="monitoring_alerts",
+        column="discovered_via",
+        constraint_name="monitoring_alerts_discovered_via_check",
+        allowed_values=db_module.MONITORING_ALERT_DISCOVERED_VIA_VALUES,
+    )
+
+    assert dropped == ["monitoring_alerts_discovered_via_check", 'legacy weird"check']
+    catalog_calls = [call for call in fake.calls if "FROM pg_constraint c" in call[0]]
+    assert catalog_calls
+    assert catalog_calls[0][1] == (
+        "monitoring_alerts",
+        "%discovered_via%",
+        "%discovered_via%",
+        "discovered_via",
+    )
+    assert "%discovered_via%" not in catalog_calls[0][0]
+    statements = [sql for sql, _ in fake.calls]
+    assert any(
+        'DROP CONSTRAINT IF EXISTS "legacy weird""check"' in sql
+        for sql in statements
+    )
+    add_sql = statements[-1]
+    assert 'ADD CONSTRAINT "monitoring_alerts_discovered_via_check"' in add_sql
+    assert "'manual'" in add_sql
+    assert "'officer_created'" in add_sql
+    assert "'document_health'" in add_sql
+
+
+def test_rmi_status_pg_repair_allows_pending_review():
+    import db as db_module
+
+    fake = _FakePostgresDB(
+        [
+            {
+                "conname": "rmi_requests_status_check",
+                "definition": "CHECK ((status = ANY (ARRAY['open','fulfilled'])))",
+            }
+        ]
+    )
+
+    db_module._replace_postgres_column_check_constraint(
+        fake,
+        table="rmi_requests",
+        column="status",
+        constraint_name="rmi_requests_status_check",
+        allowed_values=db_module.RMI_REQUEST_STATUS_VALUES,
+    )
+
+    add_sql = fake.calls[-1][0]
+    for value in ("open", "pending_review", "partially_fulfilled", "fulfilled", "cancelled"):
+        assert f"'{value}'" in add_sql
+
+
+def test_live_pg_constraint_repairs_accept_runtime_values(monkeypatch):
+    """Optional PostgreSQL smoke test for long-lived DB CHECK repairs."""
+    db_module, db = _fresh_pg(monkeypatch)
+    try:
+        db.execute(
+            "ALTER TABLE monitoring_alerts DROP CONSTRAINT IF EXISTS monitoring_alerts_discovered_via_check"
+        )
+        db.execute(
+            "ALTER TABLE monitoring_alerts ADD CONSTRAINT old_discovered_via_check "
+            "CHECK(discovered_via IN ('webhook_live','webhook_backfill','manual_backfill'))"
+        )
+        db.execute("ALTER TABLE rmi_requests DROP CONSTRAINT IF EXISTS rmi_requests_status_check")
+        db.execute(
+            "ALTER TABLE rmi_requests ADD CONSTRAINT old_rmi_requests_status_check "
+            "CHECK(status IN ('open','partially_fulfilled','fulfilled','cancelled'))"
+        )
+        db.commit()
+
+        db_module._replace_postgres_column_check_constraint(
+            db,
+            table="monitoring_alerts",
+            column="discovered_via",
+            constraint_name="monitoring_alerts_discovered_via_check",
+            allowed_values=db_module.MONITORING_ALERT_DISCOVERED_VIA_VALUES,
+        )
+        db_module._replace_postgres_column_check_constraint(
+            db,
+            table="rmi_requests",
+            column="status",
+            constraint_name="rmi_requests_status_check",
+            allowed_values=db_module.RMI_REQUEST_STATUS_VALUES,
+        )
+
+        for discovered_via in ("manual", "officer_created", "document_health"):
+            db.execute(
+                "INSERT INTO monitoring_alerts (alert_type, severity, detected_by, summary, discovered_via) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("schema_smoke", "medium", "test", "schema smoke", discovered_via),
+            )
+
+        db.execute(
+            "INSERT INTO clients (id, email, password_hash, company_name) VALUES (?, ?, ?, ?)",
+            ("schema_rmi_client", "schema-rmi@example.com", "hash", "Schema RMI Ltd"),
+        )
+        db.execute(
+            """INSERT INTO applications
+               (id, ref, client_id, company_name, status)
+               VALUES (?, ?, ?, ?, ?)""",
+            ("schema_rmi_app", "ARF-SCHEMA-RMI", "schema_rmi_client", "Schema RMI Ltd", "rmi_sent"),
+        )
+        db.execute(
+            """INSERT INTO rmi_requests
+               (id, application_id, client_id, status, reason, deadline)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                "schema_rmi_request",
+                "schema_rmi_app",
+                "schema_rmi_client",
+                "pending_review",
+                "schema smoke",
+                "2099-01-01",
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
+        db_module.close_pg_pool()
 
 
 def _fresh_pg(monkeypatch):

@@ -15,6 +15,23 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+MONITORING_ALERT_DISCOVERED_VIA_VALUES = (
+    "webhook_live",
+    "webhook_backfill",
+    "manual_backfill",
+    "manual",
+    "officer_created",
+    "document_health",
+)
+
+RMI_REQUEST_STATUS_VALUES = (
+    "open",
+    "pending_review",
+    "partially_fulfilled",
+    "fulfilled",
+    "cancelled",
+)
+
 FILE_MIGRATIONS_REQUIRING_RUNNER = frozenset({
     # Migration 020 is a data backfill. It is not represented by init_db's
     # schema DDL, so long-lived databases must let the file runner execute it.
@@ -833,7 +850,7 @@ def _get_postgres_schema() -> str:
         id TEXT PRIMARY KEY,
         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
         client_id TEXT REFERENCES clients(id),
-        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','partially_fulfilled','fulfilled','cancelled')),
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','pending_review','partially_fulfilled','fulfilled','cancelled')),
         reason TEXT NOT NULL,
         deadline TEXT NOT NULL,
         created_by TEXT REFERENCES users(id),
@@ -1725,7 +1742,7 @@ def _get_sqlite_schema() -> str:
         id TEXT PRIMARY KEY,
         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
         client_id TEXT REFERENCES clients(id),
-        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','partially_fulfilled','fulfilled','cancelled')),
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','pending_review','partially_fulfilled','fulfilled','cancelled')),
         reason TEXT NOT NULL,
         deadline TEXT NOT NULL,
         created_by TEXT REFERENCES users(id),
@@ -2603,6 +2620,96 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _pg_quote_identifier(identifier: str) -> str:
+    """Quote a PostgreSQL identifier returned from pg_catalog."""
+    return '"' + str(identifier).replace('"', '""') + '"'
+
+
+def _sql_literal_list(values) -> str:
+    """Return a single-quoted SQL literal list for static enum values."""
+    return ", ".join("'" + str(value).replace("'", "''") + "'" for value in values)
+
+
+def _postgres_check_constraints_for_column(db: DBConnection, table: str, column: str):
+    """Return CHECK constraints that reference a column on a PostgreSQL table.
+
+    This deliberately uses query parameters for LIKE patterns.  Embedding
+    ``%column%`` in SQL text is unsafe with psycopg2 because the DB wrapper
+    sends the query through psycopg2's pyformat machinery.
+    """
+    if not db.is_postgres:
+        return []
+    if not _safe_table_exists(db, table):
+        return []
+    return db.execute(
+        """
+        SELECT c.conname, pg_get_constraintdef(c.oid) AS definition
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+         WHERE t.relname = ?
+           AND c.contype = 'c'
+           AND (
+                c.conname ILIKE ?
+                OR pg_get_constraintdef(c.oid) ILIKE ?
+                OR EXISTS (
+                    SELECT 1
+                      FROM pg_attribute a
+                     WHERE a.attrelid = c.conrelid
+                       AND a.attnum = ANY(c.conkey)
+                       AND a.attname = ?
+                )
+           )
+         ORDER BY c.conname
+        """,
+        (table, f"%{column}%", f"%{column}%", column),
+    ).fetchall()
+
+
+def _replace_postgres_column_check_constraint(
+    db: DBConnection,
+    *,
+    table: str,
+    column: str,
+    constraint_name: str,
+    allowed_values,
+) -> List[str]:
+    """Replace CHECK constraints for a PostgreSQL enum-like text column.
+
+    Long-lived staging databases have carried stale CHECK constraints whose
+    names are not reliable.  We therefore discover constraints by table +
+    constrained column, drop only those CHECK constraints, and recreate the
+    canonical constraint with the current allowed values.
+    """
+    if not db.is_postgres or not _safe_column_exists(db, table, column):
+        return []
+
+    constraints = _postgres_check_constraints_for_column(db, table, column)
+    dropped = []
+    quoted_table = _pg_quote_identifier(table)
+    for constraint in constraints:
+        name = constraint.get("conname")
+        if not name:
+            continue
+        db.execute(
+            f"ALTER TABLE {quoted_table} DROP CONSTRAINT IF EXISTS {_pg_quote_identifier(name)}"
+        )
+        dropped.append(name)
+
+    db.execute(
+        f"ALTER TABLE {quoted_table} ADD CONSTRAINT {_pg_quote_identifier(constraint_name)} "
+        f"CHECK ({_pg_quote_identifier(column)} IN ({_sql_literal_list(allowed_values)}))"
+    )
+    logger.info(
+        "Repaired PostgreSQL CHECK constraint %s.%s: dropped=%s allowed=%s",
+        table,
+        column,
+        dropped or [],
+        list(allowed_values),
+    )
+    return dropped
 
 
 def _document_row_get(row, key, default=None):
@@ -4220,42 +4327,17 @@ def _run_migrations(db: DBConnection):
         if not _safe_column_exists(db, "monitoring_alerts", "discovered_via"):
             db.execute(
                 "ALTER TABLE monitoring_alerts ADD COLUMN discovered_via TEXT NOT NULL "
-                "DEFAULT 'webhook_live' CHECK(discovered_via IN "
-                "('webhook_live','webhook_backfill','manual_backfill','manual','officer_created','document_health'))"
+                "DEFAULT 'webhook_live'"
             )
             cols_added.append("discovered_via")
-        elif db.is_postgres:
-            db.execute("""
-                DO $$
-                DECLARE existing_constraint record;
-                BEGIN
-                    FOR existing_constraint IN
-                        SELECT conname
-                          FROM pg_constraint
-                         WHERE conrelid = 'monitoring_alerts'::regclass
-                           AND contype = 'c'
-                           AND (
-                                pg_get_constraintdef(oid) ILIKE '%discovered_via%'
-                                OR conname ILIKE '%discovered_via%'
-                           )
-                    LOOP
-                        EXECUTE format(
-                            'ALTER TABLE monitoring_alerts DROP CONSTRAINT IF EXISTS %I',
-                            existing_constraint.conname
-                        );
-                    END LOOP;
-                    ALTER TABLE monitoring_alerts
-                        ADD CONSTRAINT monitoring_alerts_discovered_via_check
-                        CHECK(discovered_via IN (
-                            'webhook_live',
-                            'webhook_backfill',
-                            'manual_backfill',
-                            'manual',
-                            'officer_created',
-                            'document_health'
-                        ));
-                END $$;
-            """)
+        if db.is_postgres:
+            _replace_postgres_column_check_constraint(
+                db,
+                table="monitoring_alerts",
+                column="discovered_via",
+                constraint_name="monitoring_alerts_discovered_via_check",
+                allowed_values=MONITORING_ALERT_DISCOVERED_VIA_VALUES,
+            )
         if not _safe_column_exists(db, "monitoring_alerts", "discovered_at"):
             db.execute("ALTER TABLE monitoring_alerts ADD COLUMN discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
             cols_added.append("discovered_at")
@@ -4613,7 +4695,7 @@ def _run_migrations(db: DBConnection):
                         id TEXT PRIMARY KEY,
                         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
                         client_id TEXT REFERENCES clients(id),
-                        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','partially_fulfilled','fulfilled','cancelled')),
+                        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','pending_review','partially_fulfilled','fulfilled','cancelled')),
                         reason TEXT NOT NULL,
                         deadline TEXT NOT NULL,
                         created_by TEXT REFERENCES users(id),
@@ -4629,7 +4711,7 @@ def _run_migrations(db: DBConnection):
                         id TEXT PRIMARY KEY,
                         application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
                         client_id TEXT REFERENCES clients(id),
-                        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','partially_fulfilled','fulfilled','cancelled')),
+                        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','pending_review','partially_fulfilled','fulfilled','cancelled')),
                         reason TEXT NOT NULL,
                         deadline TEXT NOT NULL,
                         created_by TEXT REFERENCES users(id),
@@ -4677,6 +4759,14 @@ def _run_migrations(db: DBConnection):
         db.execute("CREATE INDEX IF NOT EXISTS idx_rmi_requests_status ON rmi_requests(status)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_rmi_items_request ON rmi_request_items(request_id)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_rmi_items_doc ON rmi_request_items(document_id)")
+        if db.is_postgres:
+            _replace_postgres_column_check_constraint(
+                db,
+                table="rmi_requests",
+                column="status",
+                constraint_name="rmi_requests_status_check",
+                allowed_values=RMI_REQUEST_STATUS_VALUES,
+            )
         db.commit()
         logger.info("Migration v2.30: Structured RMI tables and notification linkage ensured")
     except Exception as e:
