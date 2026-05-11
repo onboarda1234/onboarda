@@ -2977,6 +2977,7 @@ class ApplicationDetailHandler(BaseHandler):
                 doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
                 doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
         result["rmi_requests"] = _load_rmi_requests(db, result["id"])
+        result["monitoring_alerts"] = _load_application_monitoring_alerts(db, result["id"])
         if user["type"] != "client":
             result["enhanced_review_summary"] = build_enhanced_requirement_operational_summary(
                 db,
@@ -8936,6 +8937,133 @@ def _screening_structured_adverse_media_hit(value):
     return False
 
 
+def _decode_monitoring_source_reference(value):
+    """Return structured CA monitoring alert identifiers when available."""
+    decoded = safe_json_loads(value) if isinstance(value, str) else value
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _monitoring_subject_scope_from_report(report):
+    provider = (report or {}).get("provider_specific", {}).get("complyadvantage", {})
+    customer_input = provider.get("customer_input") or {}
+    if isinstance(customer_input, dict):
+        if isinstance(customer_input.get("company"), dict):
+            return "entity"
+        if isinstance(customer_input.get("person"), dict):
+            return "person"
+    company = (report or {}).get("company_screening") or {}
+    if isinstance(company, dict) and (
+        company.get("matched")
+        or ((company.get("adverse_media") or {}).get("matched"))
+        or ((company.get("sanctions") or {}).get("matched"))
+    ):
+        return "entity"
+    if (report or {}).get("director_screenings") or (report or {}).get("ubo_screenings"):
+        return "person"
+    return None
+
+
+def _monitoring_subject_scope_from_source_reference(source_ref):
+    for key in ("subject_scope", "subject_type", "screening_subject_kind", "customer_type", "entity_type"):
+        value = str((source_ref or {}).get(key) or "").strip().lower()
+        if value in ("entity", "company", "business", "organisation", "organization", "legal_entity"):
+            return "entity"
+        if value in ("person", "individual", "director", "ubo", "subject"):
+            return "person"
+    if (source_ref or {}).get("person_key"):
+        return "person"
+    if (source_ref or {}).get("company_identifier") or (source_ref or {}).get("company_name"):
+        return "entity"
+    return None
+
+
+def _monitoring_subject_scope_from_normalized_record(db, application_id, source_ref):
+    record_id = (source_ref or {}).get("normalized_record_id")
+    if not record_id:
+        return None
+    try:
+        row = db.execute(
+            """
+            SELECT normalized_report_json
+            FROM screening_reports_normalized
+            WHERE id = ? AND application_id = ? AND provider = ?
+            """,
+            (record_id, application_id, "complyadvantage"),
+        ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    report = safe_json_loads(row["normalized_report_json"])
+    return _monitoring_subject_scope_from_report(report if isinstance(report, dict) else {})
+
+
+def _monitoring_subject_scope(db, application_id, alert):
+    source_ref = alert.get("source_reference_json") or {}
+    return (
+        _monitoring_subject_scope_from_source_reference(source_ref)
+        or _monitoring_subject_scope_from_normalized_record(db, application_id, source_ref)
+    )
+
+
+def _load_application_monitoring_alerts(db, application_id):
+    rows = db.execute(
+        """
+        SELECT id, provider, case_identifier, alert_type, severity, summary,
+               source_reference, discovered_via, discovered_at, created_at
+        FROM monitoring_alerts
+        WHERE application_id = ?
+        ORDER BY id ASC
+        """,
+        (application_id,),
+    ).fetchall()
+    alerts = []
+    for row in rows:
+        alert = dict(row)
+        alert["source_reference_json"] = _decode_monitoring_source_reference(alert.get("source_reference"))
+        alert["subject_scope"] = _monitoring_subject_scope(db, application_id, alert)
+        alerts.append(alert)
+    return alerts
+
+
+def _monitoring_company_media_facts(alerts):
+    media_alerts = []
+    for alert in alerts or []:
+        alert_type = str(alert.get("alert_type") or "").strip().lower()
+        provider = str(alert.get("provider") or "").strip().lower()
+        if (
+            provider == "complyadvantage"
+            and alert_type in ("media", "adverse_media", "adverse media")
+            and alert.get("subject_scope") == "entity"
+        ):
+            media_alerts.append(alert)
+    results = []
+    for alert in media_alerts:
+        source_ref = alert.get("source_reference_json") or {}
+        results.append({
+            "name": alert.get("summary") or "ComplyAdvantage media alert",
+            "match_category": "adverse media",
+            "match_categories": ["adverse media"],
+            "risk_type_labels": ["Adverse media"],
+            "is_adverse_media": True,
+            "provider": alert.get("provider"),
+            "provider_case_identifier": alert.get("case_identifier") or source_ref.get("case_identifier"),
+            "provider_alert_identifier": source_ref.get("alert_identifier"),
+            "provider_risk_identifier": source_ref.get("risk_identifier"),
+            "discovered_via": alert.get("discovered_via"),
+            "discovered_at": alert.get("discovered_at") or alert.get("created_at"),
+            "summary": alert.get("summary"),
+            "source_reference": alert.get("source_reference"),
+            "source_reference_json": source_ref,
+        })
+    return {
+        "matched": bool(media_alerts),
+        "total_hits": len(media_alerts),
+        "results": results,
+        "alerts": media_alerts,
+    }
+
+
 def _screening_combined_company_facts(company_screening):
     company = company_screening or {}
     sanctions = company.get("sanctions") or {}
@@ -8979,20 +9107,23 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
         report = {}
 
     if subject_type == "entity":
+        monitoring_media = _monitoring_company_media_facts(
+            _load_application_monitoring_alerts(db, app["id"])
+        )
         company_screening = report.get("company_screening") or {}
         company_sanctions = company_screening.get("sanctions") or {}
         company_adverse = company_screening.get("adverse_media") or {}
         company_state = derive_screening_state(company_sanctions)
         company_subject = derive_subject_state(company_sanctions)
         facts = _screening_combined_company_facts(company_screening)
-        has_company_match = bool(facts["matched"] or company_adverse.get("matched"))
+        has_company_match = bool(facts["matched"] or company_adverse.get("matched") or monitoring_media["matched"])
         if company_state == _SCR_COMPLETED_CLEAR and has_company_match:
             company_state = _SCR_COMPLETED_MATCH
         company_ip = report.get("ip_geolocation") or {}
         context = []
         if company_ip.get("risk_level"):
             context.append("IP risk: " + str(company_ip.get("risk_level")))
-        if company_adverse.get("matched"):
+        if company_adverse.get("matched") or monitoring_media["matched"]:
             context.append("Company adverse media match")
         return {
             "watchlist_status": _screening_legacy_status(
@@ -9002,9 +9133,13 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             "pep_declared_status": "not_applicable",
             "pep_screening_status": "not_applicable",
             "screening_state": company_state,
-            "total_hits": facts["total_hits"] or (report or {}).get("total_hits", 0),
+            "total_hits": max(int(facts["total_hits"] or 0), int(monitoring_media["total_hits"] or 0)) or (report or {}).get("total_hits", 0),
             "entity_context": context,
-            "adverse_media_hit": bool(facts["adverse_media_hit"] or _screening_structured_adverse_media_hit(report)),
+            "adverse_media_hit": bool(
+                facts["adverse_media_hit"]
+                or monitoring_media["matched"]
+                or _screening_structured_adverse_media_hit(report)
+            ),
         }
 
     if subject_type in ("director", "ubo"):
@@ -9204,6 +9339,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
         ).fetchall():
             review = dict(review)
             review_map[(review.get("subject_type"), review.get("subject_name"))] = review
+        monitoring_alerts = _load_application_monitoring_alerts(db, app["id"])
+        company_media_alerts = _monitoring_company_media_facts(monitoring_alerts)
 
         prescreening = safe_json_loads(app.get("prescreening_data"))
         report = prescreening.get("screening_report") or None
@@ -9235,7 +9372,9 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
         # into "clear".
         company_sanctions_state = derive_screening_state(company_sanctions)
         company_sanctions_subject = derive_subject_state(company_sanctions)
-        company_has_provider_match = bool(company_facts["matched"] or company_adverse.get("matched"))
+        company_has_provider_match = bool(
+            company_facts["matched"] or company_adverse.get("matched") or company_media_alerts["matched"]
+        )
         company_state = _SCR_COMPLETED_MATCH if company_sanctions_state == _SCR_COMPLETED_CLEAR and company_has_provider_match else company_sanctions_state
         company_watchlist_status = _screening_legacy_status(
             company_state,
@@ -9258,7 +9397,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             rejected_kyc = [a.get("person_name") for a in company_kyc if a.get("review_answer") == "RED"]
             if rejected_kyc:
                 company_context.append("KYC RED: " + ", ".join(rejected_kyc))
-            if company_adverse.get("matched"):
+            if company_adverse.get("matched") or company_media_alerts["matched"]:
                 company_context.append("Company adverse media match")
             # Surface explicit non-terminal sanctions state so officers cannot
             # mistake "we did not get a real answer" for "clear".
@@ -9360,7 +9499,10 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 "screened_at": company_facts.get("screened_at") or screened_at,
                 "screened_by": screened_by,
                 "flag_count": len(overall_flags),
-                "total_hits": company_facts["total_hits"] or (report or {}).get("total_hits", 0),
+                "total_hits": max(
+                    int(company_facts["total_hits"] or 0),
+                    int(company_media_alerts["total_hits"] or 0),
+                ) or (report or {}).get("total_hits", 0),
                 "review_required": company_requires_review,
                 **company_review_fields,
             })
