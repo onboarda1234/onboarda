@@ -245,6 +245,7 @@ def test_client_notifications_expose_rmi_and_upload_fulfills_item(rmi_api_server
     assert item["status"] == "uploaded"
     assert item["document_id"] == upload_resp.json()["id"]
     assert request_row["status"] == "partially_fulfilled"
+    assert request_row["status"] != "fulfilled"
 
     delete_resp = requests.delete(
         f"{rmi_api_server}/api/applications/{app_id}/documents/{upload_resp.json()['id']}",

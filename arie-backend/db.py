@@ -63,6 +63,14 @@ _pg_pool = None  # Optional[pool.ThreadedConnectionPool]
 # PostgreSQL Pool Management
 # ============================================================================
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        return value if value > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
 def init_pg_pool():
     """Initialize PostgreSQL connection pool with production-safe timeouts.
 
@@ -79,15 +87,21 @@ def init_pg_pool():
                 "psycopg2-binary is required for PostgreSQL support. "
                 "Install it with: pip install psycopg2-binary --break-system-packages"
             )
+        minconn = _env_int("PG_POOL_MINCONN", 1)
+        maxconn = max(_env_int("PG_POOL_MAXCONN", 10), minconn)
         _pg_pool = psycopg2.pool.ThreadedConnectionPool(
-            1, 5,
+            minconn, maxconn,
             DATABASE_URL,
             sslmode='require',
             connect_timeout=10,
             options='-c statement_timeout=30000 -c lock_timeout=10000',
         )
-        logger.info("PostgreSQL connection pool initialized (minconn=1, maxconn=5, "
-                     "connect_timeout=10s, statement_timeout=30s, lock_timeout=10s)")
+        logger.info(
+            "PostgreSQL connection pool initialized (minconn=%s, maxconn=%s, "
+            "connect_timeout=10s, statement_timeout=30s, lock_timeout=10s)",
+            minconn,
+            maxconn,
+        )
 
 
 def close_pg_pool():
@@ -113,6 +127,7 @@ class DBConnection:
         self.conn = conn
         self.is_postgres = is_postgres
         self._cursor = None
+        self._closed = False
 
     def _translate_query(self, sql: str) -> str:
         """
@@ -255,12 +270,28 @@ class DBConnection:
 
     def close(self) -> None:
         """Close connection and return to pool if PostgreSQL."""
+        if self._closed:
+            return
+        self._closed = True
         if self._cursor:
-            self._cursor.close()
+            try:
+                self._cursor.close()
+            except Exception:
+                pass
+            self._cursor = None
         if self.is_postgres:
+            # Never return a failed transaction to the pool.  Rollback after a
+            # prior commit is harmless; rollback after an exception clears the
+            # aborted transaction state before the next borrower receives it.
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
             # Return connection to pool
             if _pg_pool:
                 _pg_pool.putconn(self.conn)
+            else:
+                self.conn.close()
         else:
             self.conn.close()
 
@@ -4196,20 +4227,23 @@ def _run_migrations(db: DBConnection):
         elif db.is_postgres:
             db.execute("""
                 DO $$
-                DECLARE existing_constraint text;
+                DECLARE existing_constraint record;
                 BEGIN
-                    SELECT conname INTO existing_constraint
-                      FROM pg_constraint
-                     WHERE conrelid = 'monitoring_alerts'::regclass
-                       AND contype = 'c'
-                       AND pg_get_constraintdef(oid) LIKE '%discovered_via%'
-                     LIMIT 1;
-                    IF existing_constraint IS NOT NULL THEN
+                    FOR existing_constraint IN
+                        SELECT conname
+                          FROM pg_constraint
+                         WHERE conrelid = 'monitoring_alerts'::regclass
+                           AND contype = 'c'
+                           AND (
+                                pg_get_constraintdef(oid) ILIKE '%discovered_via%'
+                                OR conname ILIKE '%discovered_via%'
+                           )
+                    LOOP
                         EXECUTE format(
-                            'ALTER TABLE monitoring_alerts DROP CONSTRAINT %I',
-                            existing_constraint
+                            'ALTER TABLE monitoring_alerts DROP CONSTRAINT IF EXISTS %I',
+                            existing_constraint.conname
                         );
-                    END IF;
+                    END LOOP;
                     ALTER TABLE monitoring_alerts
                         ADD CONSTRAINT monitoring_alerts_discovered_via_check
                         CHECK(discovered_via IN (

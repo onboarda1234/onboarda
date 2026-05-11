@@ -766,6 +766,10 @@ class TestMonitoringAgentRunHandler(_PRReviewHandlerBase):
         self.assertEqual(alert["alert_type"], "document_expired")
         self.assertEqual(alert["discovered_via"], "document_health")
 
+    def test_invalid_non_numeric_agent_key_returns_404_not_500(self):
+        resp = self._post("/api/monitoring/agents/not-a-real-agent/run", {})
+        self.assertEqual(resp.code, 404)
+
     def test_priority_persisted_when_reusing_linked_edd(self):
         # First escalate without priority -> creates EDD with NULL priority
         rid = self._create_review(risk_level="HIGH")
@@ -845,6 +849,43 @@ class TestMonitoringAlertCreateHandler(_PRReviewHandlerBase):
             (body["id"],),
         ).fetchone()
         self.assertEqual(row["discovered_via"], "manual")
+
+
+class TestDocumentListExpiryMetadata(_PRReviewHandlerBase):
+    def test_documents_endpoint_exposes_expiry_metadata(self):
+        self._create_document(
+            doc_id="passport-expiry-visible",
+            doc_type="passport",
+            expiry_date="2026-06-01",
+        )
+        self._conn.execute(
+            """
+            UPDATE documents
+               SET valid_until = ?,
+                   expiry_source = ?,
+                   expiry_confidence = ?,
+                   expiry_extracted_at = ?
+             WHERE id = ?
+            """,
+            (
+                "2026-06-01",
+                "manual_entry",
+                0.9,
+                datetime.now(timezone.utc).isoformat(),
+                "passport-expiry-visible",
+            ),
+        )
+        self._conn.commit()
+
+        resp = self._get(f"/api/applications/{self._app_id}/documents")
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        doc = next(d for d in body if d["id"] == "passport-expiry-visible")
+        self.assertEqual(doc["expiry_date"], "2026-06-01")
+        self.assertEqual(doc["valid_until"], "2026-06-01")
+        self.assertEqual(doc["expiry_source"], "manual_entry")
+        self.assertEqual(doc["expiry_confidence"], 0.9)
+        self.assertTrue(doc["expiry_extracted_at"])
 
 
 class TestPeriodicReviewScreeningRefreshHandler(_PRReviewHandlerBase):
