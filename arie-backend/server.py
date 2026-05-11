@@ -10739,6 +10739,33 @@ class MonitoringClientsHandler(BaseHandler):
         self.success({"clients_by_status": clients})
 
 
+_MONITORING_ALERT_DISCOVERY_SOURCES = {
+    "webhook_live",
+    "webhook_backfill",
+    "manual_backfill",
+    "manual",
+    "officer_created",
+    "document_health",
+}
+
+
+def _normalize_monitoring_alert_source(value):
+    source = str(value or "").strip().lower()
+    aliases = {
+        "manual entry": "manual",
+        "manual_entry": "manual",
+        "officer": "officer_created",
+        "officer-created": "officer_created",
+        "officer created": "officer_created",
+        "document-health": "document_health",
+        "document health": "document_health",
+    }
+    source = aliases.get(source, source)
+    if source in _MONITORING_ALERT_DISCOVERY_SOURCES:
+        return source
+    return "manual"
+
+
 class MonitoringAlertCreateHandler(BaseHandler):
     """GET/POST /api/monitoring/alerts — List and create monitoring alerts"""
     def get(self):
@@ -10796,12 +10823,22 @@ class MonitoringAlertCreateHandler(BaseHandler):
         detected_by = data.get("detected_by", user.get("name", "Officer"))
         source_reference = data.get("source_reference", "Manual entry")
         ai_recommendation = data.get("ai_recommendation", "")
+        discovered_via = _normalize_monitoring_alert_source(
+            data.get("discovered_via") or data.get("source") or "manual"
+        )
 
         db.execute("""
             INSERT INTO monitoring_alerts
-                (application_id, client_name, alert_type, severity, detected_by, summary, source_reference, ai_recommendation, status)
-            VALUES (?,?,?,?,?,?,?,?,?)
-        """, (application_id, client_name, alert_type, severity, detected_by, summary, source_reference, ai_recommendation, "open"))
+                (application_id, client_name, alert_type, severity, detected_by,
+                 summary, source_reference, ai_recommendation, status, discovered_via)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (
+            application_id, client_name, alert_type, severity, detected_by,
+            summary, source_reference, ai_recommendation, "open", discovered_via,
+        ))
+        created = db.execute(
+            "SELECT id, discovered_via FROM monitoring_alerts ORDER BY id DESC LIMIT 1"
+        ).fetchone()
 
         # Create notification for relevant users
         title = data.get("title", f"Monitoring Alert: {alert_type}")
@@ -10813,7 +10850,11 @@ class MonitoringAlertCreateHandler(BaseHandler):
         db.commit()
         db.close()
         self.log_audit(user, "Alert", "Monitoring", f"Alert created: {alert_type} — {severity}")
-        self.success({"status": "created"}, 201)
+        self.success({
+            "status": "created",
+            "id": created["id"] if created else None,
+            "discovered_via": created["discovered_via"] if created else discovered_via,
+        }, 201)
 
 
 # ══════════════════════════════════════════════════════════
@@ -13343,9 +13384,55 @@ class MonitoringAgentsHandler(BaseHandler):
             ORDER BY agent_name
         """).fetchall()
 
-        result = [dict(a) for a in agents]
+        result = [_serialize_monitoring_agent(db, dict(a)) for a in agents]
+        if not any(a.get("key") == "document_health" for a in result):
+            result.append(_document_health_agent_payload(db))
         db.close()
         self.success({"agents": result})
+
+
+def _document_health_agent_payload(db, row=None):
+    import document_health_monitor as dhm
+
+    payload = dict(row or {})
+    payload.setdefault("id", "document_health")
+    payload["key"] = "document_health"
+    payload["label"] = "Document Health Monitor"
+    payload["agent_name"] = "Document Health Monitor"
+    payload["agent_type"] = "document_health"
+    payload["status"] = payload.get("status") or "enabled"
+    payload["run_frequency"] = payload.get("run_frequency") or "Manual / daily"
+    payload["types"] = [dhm.ALERT_TYPE_EXPIRED, dhm.ALERT_TYPE_EXPIRING_SOON]
+    try:
+        row_count = db.execute(
+            """
+            SELECT COUNT(*) AS c
+              FROM monitoring_alerts
+             WHERE detected_by = ?
+               AND alert_type IN (?, ?)
+               AND COALESCE(status, 'open') NOT IN ('resolved','dismissed','closed')
+            """,
+            (
+                dhm.DOCUMENT_HEALTH_DETECTED_BY,
+                dhm.ALERT_TYPE_EXPIRED,
+                dhm.ALERT_TYPE_EXPIRING_SOON,
+            ),
+        ).fetchone()
+        payload["open_alerts"] = row_count["c"] if row_count else 0
+    except Exception:
+        payload["open_alerts"] = 0
+    return payload
+
+
+def _serialize_monitoring_agent(db, agent):
+    agent_type = str(agent.get("agent_type") or "").strip().lower()
+    agent_name = str(agent.get("agent_name") or "").strip()
+    if agent_type == "document_health" or agent_name == "Document Health Monitor":
+        return _document_health_agent_payload(db, agent)
+    agent.setdefault("key", agent_type or agent_name)
+    agent.setdefault("label", agent_name)
+    agent.setdefault("types", [])
+    return agent
 
 
 def _is_document_health_monitor_agent(agent_row):
@@ -13353,11 +13440,13 @@ def _is_document_health_monitor_agent(agent_row):
     agent_name = str(agent_row.get("agent_name") or "").strip()
     return (
         agent_type in {
+            "document_health",
             "periodic_review_preparation",
             "ongoing_compliance_review",
             "registry",
         }
         or agent_name in {
+            "Document Health Monitor",
             "Periodic Review Preparation Agent",
             "Ongoing Compliance Review Agent",
             "Registry Monitoring Agent",
@@ -13375,13 +13464,24 @@ class MonitoringAgentRunHandler(BaseHandler):
         db = get_db()
         agent = db.execute("SELECT * FROM monitoring_agent_status WHERE id = ?", (agent_id,)).fetchone()
         if not agent:
-            db.close()
-            return self.error("Agent not found", 404)
+            if str(agent_id).strip().lower() == "document_health":
+                agent = {
+                    "id": None,
+                    "agent_name": "Document Health Monitor",
+                    "agent_type": "document_health",
+                    "alerts_generated": 0,
+                    "status": "enabled",
+                }
+            else:
+                db.close()
+                return self.error("Agent not found", 404)
+        else:
+            agent = dict(agent)
 
         now = datetime.now().isoformat()
         alerts_generated_delta = 0
         run_summary = None
-        if _is_document_health_monitor_agent(dict(agent)):
+        if _is_document_health_monitor_agent(agent):
             import document_health_monitor as dhm
             run_summary = dhm.sync_document_health_alerts(
                 db,
@@ -13399,12 +13499,13 @@ class MonitoringAgentRunHandler(BaseHandler):
                 "updated": 0,
                 "resolved": 0,
             }
-        db.execute("""
-            UPDATE monitoring_agent_status
-               SET last_run=?,
-                   alerts_generated=alerts_generated+?
-             WHERE id=?
-        """, (now, alerts_generated_delta, agent_id))
+        if agent.get("id") is not None:
+            db.execute("""
+                UPDATE monitoring_agent_status
+                   SET last_run=?,
+                       alerts_generated=COALESCE(alerts_generated, 0)+?
+                 WHERE id=?
+            """, (now, alerts_generated_delta, agent["id"]))
 
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Agent Run", agent["agent_name"],
@@ -13414,6 +13515,8 @@ class MonitoringAgentRunHandler(BaseHandler):
         db.close()
 
         payload = {"status": "agent_run_initiated", "agent": agent["agent_name"], "run_time": now}
+        if _is_document_health_monitor_agent(agent):
+            payload["agent_key"] = "document_health"
         payload["document_health_sync"] = run_summary
         self.success(payload)
 
@@ -13800,6 +13903,49 @@ class PeriodicReviewRequiredItemDetailHandler(BaseHandler):
             db.close()
 
 
+class PeriodicReviewScreeningRefreshHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/run-screening-refresh.
+
+    This endpoint resolves the periodic-review screening checklist item
+    only after the application's stored screening freshness is current.
+    The actual screening run remains owned by the existing screening
+    endpoint; this handler gives review users a deterministic closure
+    action after that evidence exists.
+    """
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                item = pre.resolve_screening_refresh_item_if_current(
+                    db, review_id, user=user, audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.RequiredItemNotFound as e:
+                return self.error(str(e), 404)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.PeriodicReviewEngineError as e:
+                self.set_status(409)
+                return self.finish({
+                    "error": str(e),
+                    "next_action": (
+                        "Run the application screening refresh, then retry "
+                        "this periodic-review action."
+                    ),
+                })
+            self.success({"status": "screening_refresh_resolved", "item": item})
+        finally:
+            db.close()
+
+
 class PeriodicReviewEscalateHandler(BaseHandler):
     """POST /api/monitoring/reviews/:id/escalate -- escalate to EDD.
 
@@ -13913,13 +14059,16 @@ class PeriodicReviewCompleteHandler(BaseHandler):
 class PeriodicReviewMemoHandler(BaseHandler):
     """GET /api/periodic-reviews/:id/memo — Lightweight periodic review memo.
 
-    PR-D: returns the latest memo row for the given periodic review.
+    Returns the latest memo row for the given periodic review. If the
+    review exists but no memo has been persisted yet, the memo is
+    generated on demand so existing reviews do not produce a misleading
+    404.
 
     * 200 with ``status='generated'`` and full ``memo_data`` when the
       memo was generated successfully.
     * 200 with ``status='generation_failed'`` when a failure-indicator
-      row exists (review completed, but memo generation raised).
-    * 404 when no memo row exists at all (review not yet completed).
+      row exists.
+    * 404 only when the periodic review itself does not exist.
 
     Auth gating mirrors ``PeriodicReviewDetailHandler`` (admin|sco|co).
     Explicitly NOT ``compliance_memos``: this endpoint never reads or
@@ -13935,9 +14084,28 @@ class PeriodicReviewMemoHandler(BaseHandler):
         db = get_db()
         try:
             import periodic_review_memo as prm
+            review = db.execute(
+                "SELECT id FROM periodic_reviews WHERE id = ?",
+                (review_id,),
+            ).fetchone()
+            if review is None:
+                return self.error("Review not found", 404)
             memo = prm.fetch_latest_memo(db, review_id)
             if memo is None:
-                return self.error("Memo not found", 404)
+                generated_on_demand = True
+                try:
+                    prm.generate_periodic_review_memo(db, review_id)
+                except Exception:
+                    # The generator persists a generation_failed row before
+                    # re-raising. Return that row if available so the UI has
+                    # actionable state instead of a 404.
+                    pass
+                memo = prm.fetch_latest_memo(db, review_id)
+                if memo is None:
+                    return self.error("Memo generation failed", 500)
+                memo["generated_on_demand"] = generated_on_demand
+            else:
+                memo["generated_on_demand"] = False
             self.success(memo)
         finally:
             db.close()
@@ -16305,6 +16473,8 @@ def make_app():
          PeriodicReviewRequiredItemDetailHandler),
         (r"/api/monitoring/reviews/([^/]+)/required-items",
          PeriodicReviewRequiredItemsHandler),
+        (r"/api/monitoring/reviews/([^/]+)/run-screening-refresh",
+         PeriodicReviewScreeningRefreshHandler),
         (r"/api/monitoring/reviews/([^/]+)/state", PeriodicReviewStateHandler),
         (r"/api/monitoring/reviews/([^/]+)/escalate", PeriodicReviewEscalateHandler),
         (r"/api/monitoring/reviews/([^/]+)/complete", PeriodicReviewCompleteHandler),

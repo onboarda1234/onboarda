@@ -15,7 +15,8 @@ Covers:
 * Read endpoint ``GET /api/periodic-reviews/:id/memo``:
     - 200 + generated payload when memo exists,
     - 200 + ``status='generation_failed'`` when failure row exists,
-    - 404 when no memo row,
+    - 200 + generated payload when an existing review has no memo yet,
+    - 404 only when the review does not exist,
     - 401 when unauthenticated.
 * Isolation:
     - no row is ever written to ``compliance_memos``,
@@ -519,7 +520,7 @@ class TestCompleteHandlerHook(_PRDBase):
 # Read endpoint
 # ─────────────────────────────────────────────────────────────────
 class TestMemoReadEndpoint(_PRDBase):
-    def test_404_when_no_memo(self):
+    def test_generates_on_demand_when_review_has_no_memo(self):
         self._conn.execute(
             "INSERT INTO periodic_reviews "
             "(application_id, client_name, risk_level, status) "
@@ -532,6 +533,19 @@ class TestMemoReadEndpoint(_PRDBase):
         ).fetchone()["id"]
 
         resp = self._get(f"/api/periodic-reviews/{rid}/memo")
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body.decode())
+        self.assertEqual(body["status"], "generated")
+        self.assertTrue(body["generated_on_demand"])
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS c FROM periodic_review_memos "
+            "WHERE periodic_review_id = ?",
+            (rid,),
+        ).fetchone()
+        self.assertEqual(row["c"], 1)
+
+    def test_404_when_review_missing(self):
+        resp = self._get("/api/periodic-reviews/999999/memo")
         self.assertEqual(resp.code, 404)
 
     def test_200_with_generated_status(self):

@@ -428,6 +428,11 @@ def _get_postgres_schema() -> str:
         superseded_by_document_id TEXT REFERENCES documents(id),
         replaced_reason TEXT,
         replaced_by_user_id TEXT,
+        expiry_date TIMESTAMP,
+        valid_until TIMESTAMP,
+        expiry_source TEXT,
+        expiry_confidence REAL,
+        expiry_extracted_at TIMESTAMP,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
         verification_results JSONB DEFAULT '{}',
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
@@ -691,7 +696,7 @@ def _get_postgres_schema() -> str:
         provider TEXT,
         case_identifier TEXT,
         discovered_via TEXT NOT NULL DEFAULT 'webhook_live'
-            CHECK(discovered_via IN ('webhook_live','webhook_backfill','manual_backfill')),
+            CHECK(discovered_via IN ('webhook_live','webhook_backfill','manual_backfill','manual','officer_created','document_health')),
         discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         backfill_run_id TEXT,
         client_name TEXT,
@@ -1315,6 +1320,11 @@ def _get_sqlite_schema() -> str:
         superseded_by_document_id TEXT REFERENCES documents(id),
         replaced_reason TEXT,
         replaced_by_user_id TEXT,
+        expiry_date TEXT,
+        valid_until TEXT,
+        expiry_source TEXT,
+        expiry_confidence REAL,
+        expiry_extracted_at TEXT,
         verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
         verification_results TEXT DEFAULT '{}',
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
@@ -1578,7 +1588,7 @@ def _get_sqlite_schema() -> str:
         provider TEXT,
         case_identifier TEXT,
         discovered_via TEXT NOT NULL DEFAULT 'webhook_live'
-            CHECK(discovered_via IN ('webhook_live','webhook_backfill','manual_backfill')),
+            CHECK(discovered_via IN ('webhook_live','webhook_backfill','manual_backfill','manual','officer_created','document_health')),
         discovered_at TEXT DEFAULT (datetime('now')),
         backfill_run_id TEXT,
         client_name TEXT,
@@ -2688,6 +2698,9 @@ def _ensure_document_health_columns(db: DBConnection):
     columns = [
         ("expiry_date", "TIMESTAMP" if db.is_postgres else "TEXT"),
         ("valid_until", "TIMESTAMP" if db.is_postgres else "TEXT"),
+        ("expiry_source", "TEXT"),
+        ("expiry_confidence", "REAL"),
+        ("expiry_extracted_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
     ]
     for column, definition in columns:
         if not _safe_column_exists(db, "documents", column):
@@ -4177,9 +4190,38 @@ def _run_migrations(db: DBConnection):
             db.execute(
                 "ALTER TABLE monitoring_alerts ADD COLUMN discovered_via TEXT NOT NULL "
                 "DEFAULT 'webhook_live' CHECK(discovered_via IN "
-                "('webhook_live','webhook_backfill','manual_backfill'))"
+                "('webhook_live','webhook_backfill','manual_backfill','manual','officer_created','document_health'))"
             )
             cols_added.append("discovered_via")
+        elif db.is_postgres:
+            db.execute("""
+                DO $$
+                DECLARE existing_constraint text;
+                BEGIN
+                    SELECT conname INTO existing_constraint
+                      FROM pg_constraint
+                     WHERE conrelid = 'monitoring_alerts'::regclass
+                       AND contype = 'c'
+                       AND pg_get_constraintdef(oid) LIKE '%discovered_via%'
+                     LIMIT 1;
+                    IF existing_constraint IS NOT NULL THEN
+                        EXECUTE format(
+                            'ALTER TABLE monitoring_alerts DROP CONSTRAINT %I',
+                            existing_constraint
+                        );
+                    END IF;
+                    ALTER TABLE monitoring_alerts
+                        ADD CONSTRAINT monitoring_alerts_discovered_via_check
+                        CHECK(discovered_via IN (
+                            'webhook_live',
+                            'webhook_backfill',
+                            'manual_backfill',
+                            'manual',
+                            'officer_created',
+                            'document_health'
+                        ));
+                END $$;
+            """)
         if not _safe_column_exists(db, "monitoring_alerts", "discovered_at"):
             db.execute("ALTER TABLE monitoring_alerts ADD COLUMN discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
             cols_added.append("discovered_at")
@@ -5285,6 +5327,61 @@ def _seed_monitoring_demo_data(db: DBConnection):
     logger.info("Demo mode: monitoring demo data seeding complete")
 
 
+def _ensure_document_health_monitor_agent(db: DBConnection):
+    """Ensure the operational document-health monitor is registered.
+
+    Unlike demo monitoring rows, this agent backs a real scanner used by
+    staging/production workflows and must exist even when demo seeding is off.
+    """
+    existing = db.execute(
+        """
+        SELECT id FROM monitoring_agent_status
+         WHERE agent_type = ? OR agent_name = ?
+         ORDER BY id ASC LIMIT 1
+        """,
+        ("document_health", "Document Health Monitor"),
+    ).fetchone()
+    if existing:
+        db.execute(
+            """
+            UPDATE monitoring_agent_status
+               SET agent_name = ?,
+                   agent_type = ?,
+                   run_frequency = COALESCE(run_frequency, ?),
+                   clients_monitored = COALESCE(clients_monitored, 0),
+                   alerts_generated = COALESCE(alerts_generated, 0),
+                   status = CASE
+                       WHEN status IS NULL OR status = '' OR status IN ('inactive','disabled')
+                       THEN 'enabled'
+                       ELSE status
+                   END
+             WHERE id = ?
+            """,
+            (
+                "Document Health Monitor",
+                "document_health",
+                "Manual / daily",
+                existing["id"],
+            ),
+        )
+    else:
+        db.execute(
+            """
+            INSERT INTO monitoring_agent_status
+                (agent_name, agent_type, last_run, next_run, run_frequency,
+                 clients_monitored, alerts_generated, status)
+            VALUES (?, ?, NULL, NULL, ?, 0, 0, ?)
+            """,
+            (
+                "Document Health Monitor",
+                "document_health",
+                "Manual / daily",
+                "enabled",
+            ),
+        )
+    db.commit()
+
+
 def seed_initial_data(db: DBConnection):
     """Seed database with initial admin users, risk config, and AI agents."""
     import bcrypt
@@ -5303,6 +5400,7 @@ def seed_initial_data(db: DBConnection):
         logger.info("Database already seeded, skipping core initialization")
         # Still check if monitoring demo data needs seeding (added post-initial-seed)
         _seed_monitoring_demo_data(db)
+        _ensure_document_health_monitor_agent(db)
         return
 
     logger.info(f"Seed status: users={users_count}, agents={agents_count}, checks={checks_count}, risk={risk_count}")
@@ -5722,6 +5820,7 @@ def seed_initial_data(db: DBConnection):
     db.commit()
 
     _seed_monitoring_demo_data(db)
+    _ensure_document_health_monitor_agent(db)
 
     # Sprint 3: Seed default GDPR data retention policies
     # Based on Mauritius Data Protection Act 2017 + GDPR Article 5(1)(e)

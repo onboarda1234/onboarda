@@ -693,6 +693,21 @@ class TestEscalatePriorityPersistence(_PRReviewHandlerBase):
 
 
 class TestMonitoringAgentRunHandler(_PRReviewHandlerBase):
+    def test_agents_endpoint_includes_document_health_when_table_empty(self):
+        self._conn.execute("DELETE FROM monitoring_agent_status")
+        self._conn.commit()
+        resp = self._get("/api/monitoring/agents")
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        doc_agent = next(
+            agent for agent in body["agents"]
+            if agent.get("key") == "document_health"
+        )
+        self.assertEqual(doc_agent["label"], "Document Health Monitor")
+        self.assertEqual(doc_agent["agent_type"], "document_health")
+        self.assertIn("document_expired", doc_agent["types"])
+        self.assertIn("document_expiring_soon", doc_agent["types"])
+
     def test_registry_agent_triggers_document_health_sync(self):
         agent_id = self._create_monitoring_agent(
             name="Registry Monitoring Agent",
@@ -729,6 +744,27 @@ class TestMonitoringAgentRunHandler(_PRReviewHandlerBase):
             (agent_id,),
         ).fetchone()
         self.assertEqual(row["alerts_generated"], 5)
+
+    def test_document_health_virtual_agent_can_run_without_seeded_row(self):
+        self._conn.execute("DELETE FROM monitoring_agent_status")
+        self._conn.commit()
+        self._create_document(
+            doc_id="passport-expired-virtual",
+            doc_type="passport",
+            expiry_date=(datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat(),
+        )
+        resp = self._post("/api/monitoring/agents/document_health/run", {})
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertEqual(body["agent_key"], "document_health")
+        self.assertEqual(body["document_health_sync"]["created"], 1)
+        alert = self._conn.execute(
+            "SELECT alert_type, discovered_via FROM monitoring_alerts "
+            "WHERE source_reference = ?",
+            ("document:passport-expired-virtual",),
+        ).fetchone()
+        self.assertEqual(alert["alert_type"], "document_expired")
+        self.assertEqual(alert["discovered_via"], "document_health")
 
     def test_priority_persisted_when_reusing_linked_edd(self):
         # First escalate without priority -> creates EDD with NULL priority
@@ -788,3 +824,69 @@ class TestMonitoringAgentRunHandler(_PRReviewHandlerBase):
             "SELECT priority FROM edd_cases WHERE id = ?", (edd_id,),
         ).fetchone()
         self.assertEqual(row["priority"], "high")
+
+
+class TestMonitoringAlertCreateHandler(_PRReviewHandlerBase):
+    def test_manual_alert_is_not_labeled_webhook_live(self):
+        resp = self._post(
+            "/api/monitoring/alerts",
+            {
+                "application_id": self._app_id,
+                "alert_type": "Manual escalation",
+                "severity": "High",
+                "summary": "Officer-created alert",
+            },
+        )
+        self.assertEqual(resp.code, 201)
+        body = json.loads(resp.body)
+        self.assertEqual(body["discovered_via"], "manual")
+        row = self._conn.execute(
+            "SELECT discovered_via FROM monitoring_alerts WHERE id = ?",
+            (body["id"],),
+        ).fetchone()
+        self.assertEqual(row["discovered_via"], "manual")
+
+
+class TestPeriodicReviewScreeningRefreshHandler(_PRReviewHandlerBase):
+    def _set_screening_current(self):
+        now = datetime.now(timezone.utc)
+        self._conn.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (
+                json.dumps({
+                    "screening_report": {
+                        "screened_at": now.isoformat(),
+                        "timestamp": now.isoformat(),
+                    },
+                    "screening_valid_until": (
+                        now + timedelta(days=30)
+                    ).isoformat(),
+                }),
+                self._app_id,
+            ),
+        )
+        self._conn.commit()
+
+    def test_run_screening_refresh_resolves_item_when_screening_current(self):
+        self._set_screening_current()
+        rid = self._create_review(status="in_progress")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/run-screening-refresh",
+            {},
+        )
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertEqual(body["status"], "screening_refresh_resolved")
+        self.assertEqual(body["item"]["item_type"], "screening_refresh")
+        self.assertEqual(body["item"]["status"], "cleared")
+
+    def test_run_screening_refresh_blocks_when_screening_not_current(self):
+        rid = self._create_review(status="in_progress")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/run-screening-refresh",
+            {},
+        )
+        self.assertEqual(resp.code, 409)
+        body = json.loads(resp.body)
+        self.assertIn("Screening refresh is still required", body["error"])
+        self.assertIn("next_action", body)

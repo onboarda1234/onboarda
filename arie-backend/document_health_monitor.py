@@ -20,6 +20,7 @@ logger = logging.getLogger("arie.document_health_monitor")
 DOCUMENT_EXPIRING_SOON_DAYS = 30
 DOCUMENT_STALE_AFTER_DAYS = 365
 DOCUMENT_HEALTH_DETECTED_BY = "document_health_monitor"
+DOCUMENT_HEALTH_DISCOVERED_VIA = "document_health"
 ALERT_TYPE_EXPIRED = "document_expired"
 ALERT_TYPE_EXPIRING_SOON = "document_expiring_soon"
 ALERT_TYPE_STALE = "document_stale"
@@ -359,14 +360,15 @@ def sync_document_health_alerts_for_application(
             "severity": issue["severity"],
             "summary": issue["summary"],
             "source_reference": issue["source_reference"],
+            "discovered_via": DOCUMENT_HEALTH_DISCOVERED_VIA,
         }
         if existing is None:
             db.execute(
                 """
                 INSERT INTO monitoring_alerts
                     (application_id, client_name, alert_type, severity, detected_by,
-                     summary, source_reference, ai_recommendation, status)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                     summary, source_reference, ai_recommendation, status, discovered_via)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     application_id,
@@ -378,6 +380,7 @@ def sync_document_health_alerts_for_application(
                     issue["source_reference"],
                     issue["ai_recommendation"],
                     "open",
+                    DOCUMENT_HEALTH_DISCOVERED_VIA,
                 ),
             )
             new_row = db.execute(
@@ -406,9 +409,11 @@ def sync_document_health_alerts_for_application(
             "severity": _row_get(existing, "severity"),
             "summary": _row_get(existing, "summary"),
             "ai_recommendation": _row_get(existing, "ai_recommendation"),
+            "discovered_via": _row_get(existing, "discovered_via"),
         }
         if before_state["severity"] == issue["severity"] and before_state["summary"] == issue["summary"] and (
             _row_get(existing, "ai_recommendation") == issue["ai_recommendation"]
+            and _row_get(existing, "discovered_via") == DOCUMENT_HEALTH_DISCOVERED_VIA
         ):
             continue
 
@@ -419,7 +424,8 @@ def sync_document_health_alerts_for_application(
                    severity = ?,
                    summary = ?,
                    ai_recommendation = ?,
-                   source_reference = ?
+                   source_reference = ?,
+                   discovered_via = ?
              WHERE id = ?
             """,
             (
@@ -428,6 +434,7 @@ def sync_document_health_alerts_for_application(
                 issue["summary"],
                 issue["ai_recommendation"],
                 issue["source_reference"],
+                DOCUMENT_HEALTH_DISCOVERED_VIA,
                 _row_get(existing, "id"),
             ),
         )
@@ -457,7 +464,7 @@ def sync_document_health_alerts_for_application(
         db.execute(
             """
             UPDATE monitoring_alerts
-               SET status = 'dismissed',
+               SET status = 'resolved',
                    officer_action = 'auto_resolved',
                    officer_notes = ?,
                    resolved_at = CURRENT_TIMESTAMP,
@@ -468,6 +475,7 @@ def sync_document_health_alerts_for_application(
                 json.dumps({
                     "auto_resolved": True,
                     "reason": "document_issue_no_longer_current",
+                    "resolution": "superseded_or_no_longer_current",
                 }, sort_keys=True),
                 _row_get(existing, "id"),
             ),
@@ -483,10 +491,10 @@ def sync_document_health_alerts_for_application(
                 "alert_type": _row_get(existing, "alert_type"),
                 "source_reference": _row_get(existing, "source_reference"),
             },
-            db=db,
-            before_state=before_state,
-            after_state={"status": "dismissed", "resolved_at": resolved_at},
-        )
+                db=db,
+                before_state=before_state,
+                after_state={"status": "resolved", "resolved_at": resolved_at},
+            )
 
     if created or updated or resolved:
         db.commit()
@@ -538,6 +546,7 @@ __all__ = [
     "DOCUMENT_EXPIRING_SOON_DAYS",
     "DOCUMENT_STALE_AFTER_DAYS",
     "DOCUMENT_HEALTH_DETECTED_BY",
+    "DOCUMENT_HEALTH_DISCOVERED_VIA",
     "sync_document_health_alerts_for_application",
     "sync_document_health_alerts",
 ]

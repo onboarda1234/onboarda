@@ -1085,6 +1085,71 @@ class TestRequiredItemUpdates:
                 user=USER, audit_writer=audit_sink,
             )
 
+    def test_screening_refresh_resolution_requires_current_screening(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            resolve_screening_refresh_item_if_current,
+            PeriodicReviewEngineError,
+        )
+        rid = _insert_review(review_db, status="in_progress")
+        with pytest.raises(PeriodicReviewEngineError):
+            resolve_screening_refresh_item_if_current(
+                review_db, rid, user=USER, audit_writer=audit_sink,
+            )
+
+    def test_screening_refresh_resolution_clears_item_after_fresh_screening(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items,
+            resolve_screening_refresh_item_if_current,
+        )
+        now = datetime.now(timezone.utc)
+        review_db.execute(
+            "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+            (
+                json.dumps({
+                    "screening_report": {
+                        "screened_at": now.isoformat(),
+                        "timestamp": now.isoformat(),
+                    },
+                    "screening_valid_until": (
+                        now + timedelta(days=30)
+                    ).isoformat(),
+                }),
+                "test-app-100",
+            ),
+        )
+        review_db.commit()
+        rid = _insert_review(review_db, status="in_progress")
+        generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        item = resolve_screening_refresh_item_if_current(
+            review_db, rid, user=USER, audit_writer=audit_sink,
+        )
+        assert item["item_type"] == "screening_refresh"
+        assert item["status"] == "cleared"
+
+    def test_active_edd_followup_requires_rationale_to_clear(self, review_db, audit_sink):
+        from periodic_review_engine import (
+            generate_required_items,
+            update_required_item,
+            PeriodicReviewEngineError,
+        )
+        _insert_edd(review_db, stage="triggered")
+        rid = _insert_review(review_db, status="in_progress")
+        items = generate_required_items(review_db, rid, user=USER, audit_writer=audit_sink)
+        edd_item = next(it for it in items if it["item_type"] == "edd_followup")
+        with pytest.raises(PeriodicReviewEngineError):
+            update_required_item(
+                review_db, rid, edd_item["id"],
+                status="cleared",
+                user=USER, audit_writer=audit_sink,
+            )
+        updated = update_required_item(
+            review_db, rid, edd_item["id"],
+            status="cleared",
+            officer_note="EDD case reviewed; no periodic-review action remains.",
+            user=USER, audit_writer=audit_sink,
+        )
+        assert updated["status"] == "cleared"
+
     def test_underlying_alert_controls_completion_even_if_item_marked_cleared(self, review_db, audit_sink):
         from periodic_review_engine import (
             generate_required_items, record_review_outcome,

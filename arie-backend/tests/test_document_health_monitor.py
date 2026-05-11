@@ -147,6 +147,7 @@ class TestDocumentHealthMonitor:
         assert result["created"] == 1
         assert row["alert_type"] == "document_expired"
         assert row["severity"] == "high"
+        assert row["discovered_via"] == "document_health"
 
     def test_creates_alert_for_expiring_soon_document(self, monitor_db, audit_sink):
         from document_health_monitor import sync_document_health_alerts_for_application
@@ -224,7 +225,7 @@ class TestDocumentHealthMonitor:
             monitor_db, "app-doc-health", user=USER, audit_writer=audit_sink,
         )
         rows = _alerts(monitor_db)
-        assert rows[0]["status"] == "dismissed"
+        assert rows[0]["status"] == "resolved"
 
     def test_does_not_alert_for_non_current_superseded_document(self, monitor_db, audit_sink):
         from document_health_monitor import sync_document_health_alerts_for_application
@@ -302,4 +303,4 @@ class TestDocumentHealthMonitor:
         resolve_event = next(e for e in audit_sink.events if e["action"] == "monitoring.document_health_alert.resolved")
         assert update_event["before_state"]["summary"] != update_event["after_state"]["summary"]
         assert resolve_event["before_state"]["status"] == "open"
-        assert resolve_event["after_state"]["status"] == "dismissed"
+        assert resolve_event["after_state"]["status"] == "resolved"

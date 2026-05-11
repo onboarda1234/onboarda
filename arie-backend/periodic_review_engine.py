@@ -942,6 +942,25 @@ def update_required_item(db, review_id, item_id, *, status: str,
                 "Linked monitoring-alert checklist items must be resolved via "
                 "the monitoring alert workflow before they can be cleared."
             )
+        if (
+            item.get("item_type") == "edd_followup"
+            and status in (
+                REQUIRED_ITEM_STATUS_CLEARED,
+                REQUIRED_ITEM_STATUS_NOT_APPLICABLE,
+            )
+        ):
+            edd_case_id = item.get("source_id")
+            edd_case = None
+            if edd_case_id not in (None, ""):
+                edd_case = db.execute(
+                    "SELECT id, stage FROM edd_cases WHERE id = ?",
+                    (edd_case_id,),
+                ).fetchone()
+            edd_stage = _row_get(edd_case, "stage")
+            if edd_stage not in TERMINAL_EDD_STAGES and not str(officer_note or "").strip():
+                raise PeriodicReviewEngineError(
+                    "officer_note is required to clear an active EDD follow-up item"
+                )
         before_state = dict(item)
         item["status"] = status
         item["officer_note"] = officer_note
@@ -975,6 +994,73 @@ def update_required_item(db, review_id, item_id, *, status: str,
             "review_id": review_id,
             "item_id": item_id,
             "status": status,
+        },
+        db,
+        before_state=before_state,
+        after_state=after_state,
+    )
+    return after_state
+
+
+def resolve_screening_refresh_item_if_current(db, review_id, *,
+                                              user=None,
+                                              audit_writer=None) -> Dict[str, Any]:
+    """Clear the screening-refresh checklist item only after freshness is current."""
+    _require_audit_writer(audit_writer)
+    review = _fetch_review(db, review_id)
+    if _coerce_state(_row_get(review, "status")) == STATE_COMPLETED:
+        raise ReviewClosedError(
+            f"periodic_review id={review_id} is already completed"
+        )
+
+    application = _fetch_application(db, _row_get(review, "application_id"))
+    screening_item = _screening_refresh_item(application)
+    if _severity_rank(screening_item.get("severity")) >= _severity_rank("high"):
+        raise PeriodicReviewEngineError(
+            "Screening refresh is still required: "
+            + str(screening_item.get("rationale") or "freshness is not current")
+        )
+
+    items = _load_required_items(_row_get(review, "required_items"))
+    if not items:
+        items = generate_required_items(
+            db, review_id, user=user, audit_writer=audit_writer,
+        )
+        review = _fetch_review(db, review_id)
+        items = _load_required_items(_row_get(review, "required_items")) or items
+
+    ts = _utc_now_iso()
+    updated_item = None
+    for item in items:
+        if item.get("item_type") != "screening_refresh":
+            continue
+        before_state = dict(item)
+        item["status"] = REQUIRED_ITEM_STATUS_CLEARED
+        item["officer_note"] = screening_item.get("rationale")
+        item["resolved_by"] = (user or {}).get("sub")
+        item["resolved_at"] = ts
+        updated_item = (before_state, dict(item))
+        break
+    if updated_item is None:
+        raise RequiredItemNotFound(
+            f"screening_refresh item not found on review {review_id}"
+        )
+
+    db.execute(
+        "UPDATE periodic_reviews SET required_items = ? WHERE id = ?",
+        (json.dumps(items, default=str), review_id),
+    )
+    db.commit()
+    before_state, after_state = updated_item
+    _emit_audit(
+        audit_writer,
+        user,
+        "periodic_review.screening_refresh.resolved",
+        f"periodic_review:{review_id}",
+        {
+            "review_id": review_id,
+            "item_id": after_state.get("id"),
+            "rationale": screening_item.get("rationale"),
         },
         db,
         before_state=before_state,
@@ -1516,6 +1602,7 @@ __all__ = [
     "transition_review_state",
     "generate_required_items",
     "update_required_item",
+    "resolve_screening_refresh_item_if_current",
     "escalate_review_to_edd",
     "record_review_outcome",
 ]
