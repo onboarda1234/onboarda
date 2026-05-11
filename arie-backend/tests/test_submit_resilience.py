@@ -461,6 +461,14 @@ class TestHappyPathSubmit:
                                 "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
                                 (app_id,),
                             ).fetchone()
+                            req_count = db.execute(
+                                """
+                                SELECT COUNT(*) AS c
+                                FROM application_enhanced_requirements
+                                WHERE application_id=?
+                                """,
+                                (app_id,),
+                            ).fetchone()["c"]
                             db.close()
 
         assert success_calls == []
@@ -470,6 +478,7 @@ class TestHappyPathSubmit:
         assert app["status"] == "draft"
         assert app["risk_level"] is None
         assert app["onboarding_lane"] is None
+        assert req_count == 0
 
 
 # ---------------------------------------------------------------------------

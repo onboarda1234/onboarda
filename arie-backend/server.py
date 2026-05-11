@@ -3644,11 +3644,12 @@ class SubmitApplicationHandler(BaseHandler):
             # idempotent generation after the durable application risk/lane
             # fields are saved keeps HIGH/EDD/PEP cases from requiring a
             # manual back-office generation step.
-            requires_enhanced_generation = (
+            requires_compliance_preapproval = (
                 risk["level"] in ("HIGH", "VERY_HIGH")
                 or risk.get("lane") == "EDD"
                 or (_routing_outcome or {}).get("route") == "edd"
             )
+            requires_enhanced_generation = requires_compliance_preapproval
             generation = None
             generation_failure = None
             if requires_enhanced_generation:
@@ -3728,8 +3729,29 @@ class SubmitApplicationHandler(BaseHandler):
                     )
                     try:
                         db.rollback()
-                    except Exception:
-                        pass
+                    except Exception as rollback_exc:
+                        try:
+                            from observability import log_error
+
+                            log_error(
+                                "prescreening_enhanced_generation_rollback_failed",
+                                handler="SubmitApplicationHandler._do_submit",
+                                application_id=real_id,
+                                application_ref=app.get("ref", ""),
+                                error=str(rollback_exc),
+                            )
+                        except Exception as obs_exc:
+                            logger.debug(
+                                "Observability logging failed for rollback failure: %s",
+                                obs_exc,
+                            )
+                        logger.error(
+                            "Rollback failed after enhanced requirement auto-generation critical failure: app_id=%s ref=%s error=%s",
+                            real_id,
+                            app.get("ref", ""),
+                            rollback_exc,
+                            exc_info=True,
+                        )
                     return self.error(
                         "Enhanced review requirement generation failed. Please retry your submission.",
                         500,
@@ -3737,7 +3759,7 @@ class SubmitApplicationHandler(BaseHandler):
 
             # Notify compliance team for HIGH/VERY_HIGH risk or policy-routed
             # EDD cases — requires pre-approval.
-            if risk["level"] in ("HIGH", "VERY_HIGH") or risk.get("lane") == "EDD":
+            if requires_compliance_preapproval:
                 compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
                 for cu in compliance_users:
                     db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",

@@ -442,6 +442,10 @@ def test_client_declared_pep_director_routes_and_generates_fk_safe_requirements(
     assert "declared_pep_present" in result["triggers"]
     assert _count_app_reqs(db, app_id, "pep") == _count_rules(db, "pep")
     rows = _req_actor_rows(db, app_id)
+    assert rows
+    assert all(row["created_by"] is None for row in rows)
+    assert all(row["updated_by"] is None for row in rows)
+    rows = _req_actor_rows(db, app_id)
     assert all(row["created_by"] is None for row in rows)
     assert all(row["updated_by"] is None for row in rows)
     case = db.execute(

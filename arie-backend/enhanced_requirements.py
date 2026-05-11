@@ -924,6 +924,18 @@ def _actor_user_fk_value(db, actor):
             (actor_id,),
         ).fetchone()
     except Exception as exc:
+        try:
+            from observability import log_error
+
+            log_error(
+                "enhanced_requirement_actor_fk_validation_failed",
+                handler="_actor_user_fk_value",
+                actor_id=actor_id,
+                error=str(exc),
+                db_present=True,
+            )
+        except Exception as obs_exc:
+            logger.debug("Observability logging failed for actor FK validation: %s", obs_exc)
         logger.warning("Could not validate enhanced requirement actor %s: %s", actor_id, exc)
         return None
     if not row:
