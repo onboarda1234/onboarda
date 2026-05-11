@@ -102,6 +102,10 @@ def _remove_modern_backfills(db, keep_count):
             "replaced_by_user_id",
         ):
             _drop_column_if_present(db, "documents", column)
+    if "025" not in kept_versions:
+        db.execute("DROP INDEX IF EXISTS idx_provider_comparisons_app")
+        db.execute("DROP INDEX IF EXISTS uq_provider_comparisons_app_pair")
+        db.execute("DROP TABLE IF EXISTS screening_provider_comparisons")
     db.commit()
 
 

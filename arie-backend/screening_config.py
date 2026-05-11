@@ -67,6 +67,25 @@ def get_active_provider_name() -> str:
     return _PROVIDER_DEFAULTS.get(env, "sumsub")
 
 
+def get_shadow_provider_name() -> str | None:
+    """
+    Get the optional D2 shadow screening provider.
+
+    Resolution order:
+    1. SCREENING_SHADOW_PROVIDER environment variable
+    2. None
+
+    This is intentionally separate from SCREENING_PROVIDER.  The active
+    provider remains the operational source of truth; the shadow provider is
+    comparison-only and must never become authoritative by being set here.
+    """
+    env_val = os.environ.get("SCREENING_SHADOW_PROVIDER")
+    if env_val is None:
+        return None
+    value = env_val.strip().lower()
+    return value or None
+
+
 # ── Source of Truth Rules ──
 # In Sprint 1–2, all operational dimensions use the legacy source.
 # Normalized storage is non-authoritative scaffolding only.
