@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 from unittest.mock import MagicMock
 
@@ -164,6 +165,65 @@ def _routes(customer="cust-1", case_id="case-1"):
     }
 
 
+def _company_media_risk_page(risk_id="risk-media"):
+    return {
+        "risks": [
+            {
+                "identifier": risk_id,
+                "match_score": 0.88,
+                "profile": {
+                    "identifier": f"profile-{risk_id}",
+                    "entity_type": "company",
+                    "match_details": {"match_score": 0.88, "matched_name": "Synthetic Media Company"},
+                    "risk_types": ["r_adverse_media_general"],
+                    "risk_indicators": [],
+                    "company": {"names": {"values": [{"name": "Synthetic Media Company", "type": "PRIMARY"}]}},
+                },
+            }
+        ],
+        "next": None,
+        "first": "",
+        "prev": None,
+        "self": "",
+        "total_count": 1,
+    }
+
+
+def _company_media_deep():
+    return {
+        "values": [
+            {
+                "risk_type": {
+                    "key": "r_adverse_media_general",
+                    "label": "Adverse media",
+                    "name": "Adverse media",
+                },
+                "indicators": [
+                    {
+                        "value": {
+                            "title": "Synthetic company adverse media",
+                            "url": "https://example.test/company-media",
+                            "publication_date": "2026-01-01",
+                            "snippets": [{"text": "Synthetic company media finding"}],
+                            "source_name": "Example News",
+                        }
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def _company_media_routes(customer="cust-company", case_id="case-company"):
+    return {
+        ("/v2/cases", (("customer_identifier", customer),)): {"cases": [_case(case_id, customer)], "next": None},
+        f"/v2/cases/{case_id}": _case(case_id, customer),
+        f"/v2/cases/{case_id}/alerts": _alert_page("alert-media"),
+        "/v2/alerts/alert-media/risks": _company_media_risk_page(),
+        "/v2/entity-screening/risks/risk-media": _company_media_deep(),
+    }
+
+
 @pytest.mark.asyncio
 async def test_one_shot_backfill_runs_on_seeded_subscription_path(monkeypatch):
     conn = _db()
@@ -180,7 +240,36 @@ async def test_one_shot_backfill_runs_on_seeded_subscription_path(monkeypatch):
         backfill_scheduler=scheduler,
     )
 
-    assert scheduled == [{"application_id": "app-1", "client_id": "client-1", "customer_identifier": "cust-1"}]
+    assert scheduled == [{
+        "application_id": "app-1",
+        "client_id": "client-1",
+        "customer_identifier": "cust-1",
+        "person_key": None,
+    }]
+
+
+def test_seeded_person_subscription_passes_person_key_to_backfill_scheduler():
+    conn = _db()
+    scheduled = []
+
+    def scheduler(**kwargs):
+        scheduled.append(kwargs)
+
+    seed_monitoring_subscription(
+        conn,
+        "client-1",
+        "app-1",
+        "cust-person",
+        person_key="donald trump|1946-06-14|us",
+        backfill_scheduler=scheduler,
+    )
+
+    assert scheduled == [{
+        "application_id": "app-1",
+        "client_id": "client-1",
+        "customer_identifier": "cust-person",
+        "person_key": "donald trump|1946-06-14|us",
+    }]
 
 
 @pytest.mark.asyncio
@@ -228,6 +317,58 @@ async def test_case_enumeration_matches_customer_and_fetch_chain_preserves_listi
     normalized = conn.execute("SELECT normalized_report_json FROM screening_reports_normalized").fetchone()[0]
     assert "alert_risk_listing" in normalized
     assert "PEP_CLASS_2" in normalized
+
+
+@pytest.mark.asyncio
+async def test_company_media_backfill_persists_entity_scope_and_normalized_record_reference(monkeypatch):
+    monkeypatch.setattr(hb, "get_active_provider_name", lambda: "sumsub")
+    conn = _db()
+
+    await run_historical_backfill_for_subscription(
+        db=conn,
+        ca_client=FakeClient(_company_media_routes()),
+        application_id="app-company",
+        client_id="client-1",
+        customer_identifier="cust-company",
+        backfill_run_id="bf-company-media",
+    )
+
+    alert = conn.execute("SELECT * FROM monitoring_alerts WHERE case_identifier='case-company'").fetchone()
+    assert alert is not None
+    assert alert["alert_type"] == "media"
+    source_reference = json.loads(alert["source_reference"])
+    assert source_reference["subject_scope"] == "entity"
+    assert source_reference["normalized_record_id"] > 0
+
+    normalized = conn.execute(
+        "SELECT normalized_report_json FROM screening_reports_normalized WHERE id=?",
+        (source_reference["normalized_record_id"],),
+    ).fetchone()
+    assert normalized is not None
+    normalized_report = json.loads(normalized["normalized_report_json"])
+    assert normalized_report["subject_scope"] == "entity"
+    assert normalized_report["provider_specific"][COMPLYADVANTAGE_PROVIDER_NAME]["subject_scope"] == "entity"
+
+
+@pytest.mark.asyncio
+async def test_person_backfill_persists_person_scope_not_entity(monkeypatch):
+    monkeypatch.setattr(hb, "get_active_provider_name", lambda: "sumsub")
+    conn = _db()
+
+    await run_historical_backfill_for_subscription(
+        db=conn,
+        ca_client=FakeClient(_routes(customer="cust-person", case_id="case-person")),
+        application_id="app-person",
+        client_id="client-1",
+        customer_identifier="cust-person",
+        person_key="donald trump|1946-06-14|us",
+        backfill_run_id="bf-person",
+    )
+
+    alert = conn.execute("SELECT * FROM monitoring_alerts WHERE case_identifier='case-person'").fetchone()
+    source_reference = json.loads(alert["source_reference"])
+    assert source_reference["subject_scope"] == "person"
+    assert source_reference["screening_subject"]["person_key"] == "donald trump|1946-06-14|us"
 
 
 @pytest.mark.asyncio

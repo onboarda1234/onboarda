@@ -75,6 +75,17 @@ class ScreeningApplicationContext(BaseModel):
     declared_pep: Optional[bool] = None
 
 
+def subject_scope_for_context(context: ScreeningApplicationContext) -> Optional[Literal["entity", "person"]]:
+    """Return the monitoring-alert subject scope when the context is deterministic."""
+    if context.screening_subject_kind == "entity":
+        return "entity"
+    if context.screening_subject_kind in ("director", "ubo"):
+        return "person"
+    if context.screening_subject_kind == "subject" and context.screening_subject_person_key:
+        return "person"
+    return None
+
+
 class ResnapshotContext(BaseModel):
     """Webhook resnapshot metadata. Used only by normalize_single_pass."""
 
@@ -408,6 +419,15 @@ def apply_top_level_rollups(director_screenings, ubo_screenings, company_screeni
 
 def _build_report(matches, context, provider_specific, provenance):
     screened_at = _screened_at(provider_specific)
+    subject_scope = subject_scope_for_context(context)
+    subject_context = {
+        "kind": context.screening_subject_kind,
+        "scope": subject_scope,
+        "person_key": context.screening_subject_person_key,
+    }
+    provider_specific.setdefault("screening_subject", subject_context)
+    if subject_scope:
+        provider_specific.setdefault("subject_scope", subject_scope)
     director_screenings = []
     ubo_screenings = []
     company_screening = {
@@ -435,6 +455,10 @@ def _build_report(matches, context, provider_specific, provenance):
         "provider": "complyadvantage",
         "normalized_version": "2.0",
         "screened_at": screened_at,
+        "screening_subject_kind": context.screening_subject_kind,
+        "screening_subject_name": context.screening_subject_name,
+        "screening_subject_person_key": context.screening_subject_person_key,
+        "subject_scope": subject_scope,
         **rollups,
         "company_screening": company_screening.get("company_screening", {}),
         "director_screenings": director_screenings,

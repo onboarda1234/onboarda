@@ -112,6 +112,30 @@ def _normalized(hash_value="hash-1"):
     }
 
 
+def _normalized_for_context(context, hash_value="hash-scoped"):
+    scope = "person" if context.screening_subject_person_key else "entity"
+    kind = context.screening_subject_kind
+    return {
+        "provider": COMPLYADVANTAGE_PROVIDER_NAME,
+        "source_screening_report_hash": hash_value,
+        "subject_scope": scope,
+        "screening_subject_kind": kind,
+        "screening_subject_person_key": context.screening_subject_person_key,
+        "provider_specific": {
+            COMPLYADVANTAGE_PROVIDER_NAME: {
+                "subject_scope": scope,
+                "screening_subject": {
+                    "kind": kind,
+                    "scope": scope,
+                    "person_key": context.screening_subject_person_key,
+                },
+                "matches": [{"indicators": [{"type": "CAMediaIndicator", "taxonomy_key": "r_adverse_media_general"}]}],
+                "workflows": {"strict": {"alerts": [{"identifier": "alert-1"}]}},
+            }
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_process_sequence_writes_normalized_alert_subscription_and_agent(monkeypatch):
     conn = _db()
@@ -139,6 +163,30 @@ async def test_process_sequence_writes_normalized_alert_subscription_and_agent(m
     assert sub["monitoring_event_count"] == 1
     assert sub["last_webhook_type"] == "CASE_ALERT_LIST_UPDATED"
     agent.assert_called_once_with("app-1", {"db_path": "/tmp/test.db"})
+
+
+@pytest.mark.asyncio
+async def test_entity_subscription_webhook_persists_entity_scoped_media_source_reference(monkeypatch):
+    conn = _db()
+    conn.execute("DELETE FROM screening_monitoring_subscriptions")
+    conn.execute(
+        "INSERT INTO screening_monitoring_subscriptions (client_id, application_id, provider, person_key, customer_identifier) VALUES (?, ?, ?, ?, ?)",
+        ("client-1", "app-entity", COMPLYADVANTAGE_PROVIDER_NAME, None, "cust-1"),
+    )
+    conn.commit()
+    monkeypatch.setattr("screening_complyadvantage.webhook_storage.get_active_provider_name", lambda: "sumsub")
+
+    await process_complyadvantage_webhook(
+        _envelope(),
+        db_factory=lambda: NoCloseDB(conn),
+        client_factory=lambda: object(),
+        fetch_normalized=lambda client, envelope, context: _normalized_for_context(context),
+    )
+
+    alert = conn.execute("SELECT * FROM monitoring_alerts").fetchone()
+    source_reference = json.loads(alert["source_reference"])
+    assert source_reference["subject_scope"] == "entity"
+    assert source_reference["normalized_record_id"] > 0
 
 
 @pytest.mark.asyncio
