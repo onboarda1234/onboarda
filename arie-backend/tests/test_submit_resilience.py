@@ -338,6 +338,148 @@ class TestHappyPathSubmit:
         assert "screening" in data
         assert "degraded_sources" in data["screening"]
 
+    def test_edd_submit_persists_state_and_enhanced_requirements_for_client_actor(self, temp_db):
+        """EDD/high-risk success must not leave the durable app row in draft."""
+        server = _get_server_module()
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+        mock_risk = {
+            "score": 72,
+            "level": "HIGH",
+            "final_risk_level": "HIGH",
+            "dimensions": {"D1": 4, "D2": 4, "D3": 3, "D4": 3, "D5": 4},
+            "lane": "EDD",
+            "escalations": [],
+            "requires_compliance_approval": True,
+        }
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        db = _get_project_db(temp_db)
+                        app_id = _setup_test_app(db)
+                        db.execute("PRAGMA foreign_keys = ON")
+
+                        handler._do_submit(
+                            db,
+                            {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                            app_id,
+                        )
+
+                        app = db.execute(
+                            """
+                            SELECT status, risk_score, risk_level, onboarding_lane, submitted_at
+                            FROM applications
+                            WHERE id=?
+                            """,
+                            (app_id,),
+                        ).fetchone()
+                        reqs = db.execute(
+                            """
+                            SELECT created_by, updated_by
+                            FROM application_enhanced_requirements
+                            WHERE application_id=?
+                            """,
+                            (app_id,),
+                        ).fetchall()
+                        db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert success_calls[0][0]["status"] == "pricing_review"
+        assert app["status"] == "pricing_review"
+        assert app["risk_level"] == "HIGH"
+        assert app["onboarding_lane"] == "EDD"
+        assert app["risk_score"] == 72
+        assert app["submitted_at"]
+        assert reqs
+        assert all(row["created_by"] is None for row in reqs)
+        assert all(row["updated_by"] is None for row in reqs)
+
+    def test_edd_submit_does_not_return_success_when_generation_fails(self, temp_db):
+        """A critical generation failure must not produce a false 200 response."""
+        server = _get_server_module()
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+        mock_risk = {
+            "score": 72,
+            "level": "HIGH",
+            "final_risk_level": "HIGH",
+            "dimensions": {"D1": 4, "D2": 4, "D3": 3, "D4": 3, "D5": 4},
+            "lane": "EDD",
+            "escalations": [],
+            "requires_compliance_approval": True,
+        }
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        with patch.object(
+                            server,
+                            "generate_application_enhanced_requirements",
+                            side_effect=RuntimeError("simulated generation failure"),
+                        ):
+                            db = _get_project_db(temp_db)
+                            app_id = _setup_test_app(db)
+                            db.execute("PRAGMA foreign_keys = ON")
+
+                            handler._do_submit(
+                                db,
+                                {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                                app_id,
+                            )
+
+                            app = db.execute(
+                                "SELECT status, risk_level, onboarding_lane FROM applications WHERE id=?",
+                                (app_id,),
+                            ).fetchone()
+                            req_count = db.execute(
+                                """
+                                SELECT COUNT(*) AS c
+                                FROM application_enhanced_requirements
+                                WHERE application_id=?
+                                """,
+                                (app_id,),
+                            ).fetchone()["c"]
+                            db.close()
+
+        assert success_calls == []
+        assert error_calls
+        assert error_calls[-1][1] == 500
+        assert "enhanced review requirement generation failed" in error_calls[-1][0].lower()
+        assert app["status"] == "draft"
+        assert app["risk_level"] is None
+        assert app["onboarding_lane"] is None
+        assert req_count == 0
+
 
 # ---------------------------------------------------------------------------
 # 5. Structured logging / expected status code behavior

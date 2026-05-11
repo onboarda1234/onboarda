@@ -3644,11 +3644,15 @@ class SubmitApplicationHandler(BaseHandler):
             # idempotent generation after the durable application risk/lane
             # fields are saved keeps HIGH/EDD/PEP cases from requiring a
             # manual back-office generation step.
-            if (
+            requires_compliance_preapproval = (
                 risk["level"] in ("HIGH", "VERY_HIGH")
                 or risk.get("lane") == "EDD"
                 or (_routing_outcome or {}).get("route") == "edd"
-            ):
+            )
+            requires_enhanced_generation = requires_compliance_preapproval
+            generation = None
+            generation_failure = None
+            if requires_enhanced_generation:
                 try:
                     refreshed_app = db.execute(
                         "SELECT * FROM applications WHERE id=?",
@@ -3670,6 +3674,7 @@ class SubmitApplicationHandler(BaseHandler):
                             generation.get("errors"),
                         )
                 except Exception as generation_exc:
+                    generation_failure = generation_exc
                     logger.error(
                         "Enhanced requirement auto-generation failed after prescreening persistence: app_id=%s ref=%s error=%s",
                         real_id,
@@ -3678,9 +3683,83 @@ class SubmitApplicationHandler(BaseHandler):
                         exc_info=True,
                     )
 
+            if requires_enhanced_generation:
+                persisted_app = db.execute(
+                    """
+                    SELECT status, risk_score, risk_level, onboarding_lane, submitted_at
+                    FROM applications
+                    WHERE id=?
+                    """,
+                    (real_id,),
+                ).fetchone()
+                persisted = dict(persisted_app or {})
+                durable_state_missing = (
+                    not persisted
+                    or str(persisted.get("status") or "").strip().lower() == "draft"
+                    or persisted.get("risk_score") in (None, "")
+                    or not str(persisted.get("risk_level") or "").strip()
+                    or not str(persisted.get("onboarding_lane") or "").strip()
+                    or not persisted.get("submitted_at")
+                )
+                generated_or_existing = 0
+                if generation:
+                    try:
+                        generated_or_existing = (
+                            int(generation.get("generated_count") or 0)
+                            + int(generation.get("existing_count") or 0)
+                        )
+                    except Exception:
+                        generated_or_existing = 0
+                generation_invalid = (
+                    generation_failure is not None
+                    or not generation
+                    or generation.get("config_ok") is False
+                    or generated_or_existing <= 0
+                )
+                if durable_state_missing or generation_invalid:
+                    logger.error(
+                        "Enhanced requirement auto-generation critical failure: app_id=%s ref=%s durable_state_missing=%s generation_invalid=%s persisted_state=%s generation=%s error=%s",
+                        real_id,
+                        app.get("ref", ""),
+                        durable_state_missing,
+                        generation_invalid,
+                        persisted,
+                        generation,
+                        generation_failure,
+                    )
+                    try:
+                        db.rollback()
+                    except Exception as rollback_exc:
+                        try:
+                            from observability import log_error
+
+                            log_error(
+                                "prescreening_enhanced_generation_rollback_failed",
+                                handler="SubmitApplicationHandler._do_submit",
+                                application_id=real_id,
+                                application_ref=app.get("ref", ""),
+                                error=str(rollback_exc),
+                            )
+                        except Exception as obs_exc:
+                            logger.debug(
+                                "Observability logging failed for rollback failure: %s",
+                                obs_exc,
+                            )
+                        logger.error(
+                            "Rollback failed after enhanced requirement auto-generation critical failure: app_id=%s ref=%s error=%s",
+                            real_id,
+                            app.get("ref", ""),
+                            rollback_exc,
+                            exc_info=True,
+                        )
+                    return self.error(
+                        "Enhanced review requirement generation failed. Please retry your submission.",
+                        500,
+                    )
+
             # Notify compliance team for HIGH/VERY_HIGH risk or policy-routed
             # EDD cases — requires pre-approval.
-            if risk["level"] in ("HIGH", "VERY_HIGH") or risk.get("lane") == "EDD":
+            if requires_compliance_preapproval:
                 compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
                 for cu in compliance_users:
                     db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
