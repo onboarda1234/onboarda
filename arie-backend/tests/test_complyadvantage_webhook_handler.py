@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -20,8 +21,13 @@ def _fixture(name):
         return json.load(f)
 
 
-def _signed(body, secret="fixture-secret"):
+def _legacy_signed(body, secret="fixture-secret"):
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+
+
+def _standard_signed(body, secret="fixture-secret", webhook_id="msg-fixture", webhook_timestamp="1700000000"):
+    signed_content = b".".join([webhook_id.encode("utf-8"), webhook_timestamp.encode("utf-8"), body])
+    return base64.b64encode(hmac.new(secret.encode("utf-8"), signed_content, hashlib.sha256).digest()).decode("ascii")
 
 
 def _call_handler(
@@ -30,6 +36,9 @@ def _call_handler(
     secret="fixture-secret",
     signature=None,
     include_signature=True,
+    signature_scheme="standard",
+    webhook_id="msg-fixture",
+    webhook_timestamp="1700000000",
     environment="development",
     storage_callback=None,
     request_id=None,
@@ -40,6 +49,9 @@ def _call_handler(
         secret=secret,
         signature=signature,
         include_signature=include_signature,
+        signature_scheme=signature_scheme,
+        webhook_id=webhook_id,
+        webhook_timestamp=webhook_timestamp,
         environment=environment,
         storage_callback=storage_callback,
         request_id=request_id,
@@ -52,15 +64,34 @@ def _call_handler_body(
     secret="fixture-secret",
     signature=None,
     include_signature=True,
+    signature_scheme="standard",
+    webhook_id="msg-fixture",
+    webhook_timestamp="1700000000",
     environment="development",
     storage_callback=None,
     request_id=None,
 ):
     headers = {}
     if include_signature:
-        headers["x-complyadvantage-signature"] = (
-            signature if signature is not None else _signed(body, secret or "fixture-secret")
-        )
+        if signature_scheme == "standard":
+            headers["webhook-id"] = webhook_id
+            headers["webhook-timestamp"] = webhook_timestamp
+            headers["webhook-signature"] = (
+                signature if signature is not None else f"v1,{_standard_signed(body, secret or 'fixture-secret', webhook_id, webhook_timestamp)}"
+            )
+        elif signature_scheme == "legacy":
+            headers["x-complyadvantage-signature"] = (
+                signature if signature is not None else _legacy_signed(body, secret or "fixture-secret")
+            )
+        elif signature_scheme == "both":
+            headers["webhook-id"] = webhook_id
+            headers["webhook-timestamp"] = webhook_timestamp
+            headers["webhook-signature"] = (
+                signature if signature is not None else f"v1,{_standard_signed(body, secret or 'fixture-secret', webhook_id, webhook_timestamp)}"
+            )
+            headers["x-complyadvantage-signature"] = _legacy_signed(body, secret or "fixture-secret")
+        else:
+            raise AssertionError(f"unknown signature scheme {signature_scheme}")
     if request_id is not None:
         headers["X-Request-ID"] = request_id
     app = Application()
@@ -90,10 +121,20 @@ def _call_handler_body(
 def test_verify_signature_success_and_failure(monkeypatch):
     body = b'{"webhook_type":"CASE_CREATED"}'
     monkeypatch.setenv("COMPLYADVANTAGE_WEBHOOK_SECRET", "fixture-secret")
-    assert _verify_signature(body, _signed(body)) is True
-    assert _verify_signature(body, "bad") is False
+    valid_headers = HTTPHeaders({
+        "webhook-id": "msg-fixture",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": f"v1,{_standard_signed(body)}",
+    })
+    invalid_headers = HTTPHeaders({
+        "webhook-id": "msg-fixture",
+        "webhook-timestamp": "1700000000",
+        "webhook-signature": "v1,bad",
+    })
+    assert _verify_signature(body, valid_headers) is True
+    assert _verify_signature(body, invalid_headers) is False
     monkeypatch.delenv("COMPLYADVANTAGE_WEBHOOK_SECRET", raising=False)
-    assert _verify_signature(body, _signed(body)) is False
+    assert _verify_signature(body, valid_headers) is False
 
 
 def test_known_case_created_returns_202_and_spawns_callback():
@@ -196,6 +237,79 @@ def test_case_alert_list_updated_empty_alert_identifiers_is_noop_without_spawn_o
     storage.assert_not_called()
     assert "ca_webhook_empty_alert_identifiers" in caplog.text
     assert "no_op=true" in caplog.text
+
+
+def test_valid_standard_webhooks_signature_returns_202_and_spawns_callback():
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler(_fixture("webhook_case_created.json"))
+
+    assert handler._status_code == 202
+    fake_loop.spawn_callback.assert_called_once()
+
+
+def test_malformed_standard_webhooks_signature_returns_401_without_spawn():
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler(_fixture("webhook_case_created.json"), signature="not-versioned")
+
+    assert handler._status_code == 401
+    assert b"".join(handler._write_buffer) == b""
+    fake_loop.spawn_callback.assert_not_called()
+
+
+def test_invalid_standard_webhooks_signature_returns_401_without_spawn():
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler(_fixture("webhook_case_created.json"), signature="v1,bad")
+
+    assert handler._status_code == 401
+    assert b"".join(handler._write_buffer) == b""
+    fake_loop.spawn_callback.assert_not_called()
+
+
+def test_standard_webhooks_accepts_any_matching_rotation_signature():
+    payload = _fixture("webhook_case_created.json")
+    body = json.dumps(payload, sort_keys=True).encode("utf-8")
+    signature = f"v1,bad v1,{_standard_signed(body)}"
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler(payload, signature=signature)
+
+    assert handler._status_code == 202
+    fake_loop.spawn_callback.assert_called_once()
+
+
+def test_standard_webhooks_verifies_exact_raw_body_bytes():
+    payload = _fixture("webhook_case_created.json")
+    compact = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    pretty = json.dumps(payload, sort_keys=True, indent=2).encode("utf-8")
+    signature = f"v1,{_standard_signed(compact)}"
+    fake_loop = MagicMock()
+
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler_body(pretty, signature=signature)
+
+    assert handler._status_code == 401
+    fake_loop.spawn_callback.assert_not_called()
+
+
+def test_legacy_signature_remains_temporarily_supported_without_standard_headers():
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler(_fixture("webhook_case_created.json"), signature_scheme="legacy")
+
+    assert handler._status_code == 202
+    fake_loop.spawn_callback.assert_called_once()
+
+
+def test_standard_webhooks_takes_precedence_over_valid_legacy_signature():
+    fake_loop = MagicMock()
+    with patch("tornado.ioloop.IOLoop.current", return_value=fake_loop):
+        handler = _call_handler(_fixture("webhook_case_created.json"), signature_scheme="both", signature="v1,bad")
+
+    assert handler._status_code == 401
+    fake_loop.spawn_callback.assert_not_called()
 
 
 def test_bad_signature_returns_401_without_spawn_or_body(caplog):
