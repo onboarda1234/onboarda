@@ -8,6 +8,7 @@ import pytest
 from screening_config import (
     is_abstraction_enabled,
     get_active_provider_name,
+    get_shadow_provider_name,
     SOURCE_OF_TRUTH_RULES,
     get_source_of_truth,
 )
@@ -91,6 +92,22 @@ class TestProviderName:
     def test_lowercases(self, monkeypatch):
         monkeypatch.setenv("SCREENING_PROVIDER", "ComplyAdvantage")
         assert get_active_provider_name() == "complyadvantage"
+
+
+class TestShadowProviderName:
+    """SCREENING_SHADOW_PROVIDER is opt-in only for D2 comparison runs."""
+
+    def test_default_is_none(self, monkeypatch):
+        monkeypatch.delenv("SCREENING_SHADOW_PROVIDER", raising=False)
+        assert get_shadow_provider_name() is None
+
+    def test_empty_env_is_none(self, monkeypatch):
+        monkeypatch.setenv("SCREENING_SHADOW_PROVIDER", "   ")
+        assert get_shadow_provider_name() is None
+
+    def test_normalizes_provider_name(self, monkeypatch):
+        monkeypatch.setenv("SCREENING_SHADOW_PROVIDER", " ComplyAdvantage ")
+        assert get_shadow_provider_name() == "complyadvantage"
 
 
 class TestSourceOfTruth:

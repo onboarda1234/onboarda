@@ -22,12 +22,21 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
 
     provider_name = COMPLYADVANTAGE_PROVIDER_NAME
 
-    def __init__(self, client=None, config=None, orchestrator=None, poll_timeout_seconds=300, db=None):
+    def __init__(
+        self,
+        client=None,
+        config=None,
+        orchestrator=None,
+        poll_timeout_seconds=300,
+        db=None,
+        monitoring_enabled=True,
+    ):
         self._client = client
         self._config = config
         self._orchestrator = orchestrator
         self._poll_timeout_seconds = poll_timeout_seconds
         self._db = db
+        self._monitoring_enabled = bool(monitoring_enabled)
 
     def is_configured(self) -> bool:
         try:
@@ -132,7 +141,7 @@ class ComplyAdvantageScreeningAdapter(ScreeningProvider):
             strict_customer=strict_customer,
             relaxed_customer=relaxed_customer,
             application_context=context,
-            monitoring_enabled=True,
+            monitoring_enabled=self._monitoring_enabled,
             db=self._db,
             screening_configuration_identifier=config.screening_configuration_identifier,
             external_identifier=external_identifier,

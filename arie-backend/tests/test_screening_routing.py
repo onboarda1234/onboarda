@@ -7,6 +7,7 @@ from screening_routing import run_screening_for_active_provider
 
 def test_sumsub_route_preserves_legacy_runner(monkeypatch):
     monkeypatch.setattr("screening_routing.get_active_provider_name", lambda: "sumsub")
+    monkeypatch.setattr("screening_routing.maybe_schedule_shadow_screening", lambda *args, **kwargs: None)
     db = object()
     sentinel = {"legacy_shape": True}
     calls = []
@@ -26,6 +27,61 @@ def test_sumsub_route_preserves_legacy_runner(monkeypatch):
 
     assert result is sentinel
     assert calls == [({"application_id": "app-1"}, [{"full_name": "Director"}], [], "203.0.113.10")]
+
+
+def test_sumsub_route_schedules_shadow_after_primary_success(monkeypatch):
+    monkeypatch.setattr("screening_routing.get_active_provider_name", lambda: "sumsub")
+    sentinel = {"legacy_shape": True, "total_hits": 0}
+    scheduled = []
+
+    def legacy_runner(application_data, directors, ubos, client_ip=None):
+        return sentinel
+
+    def schedule(application_data, directors, ubos, primary_report, client_ip=None):
+        scheduled.append((application_data, directors, ubos, primary_report, client_ip))
+
+    monkeypatch.setattr("screening_routing.maybe_schedule_shadow_screening", schedule)
+
+    result = run_screening_for_active_provider(
+        {"application_id": "app-shadow"},
+        [{"full_name": "Director"}],
+        [{"full_name": "Owner"}],
+        client_ip="203.0.113.13",
+        legacy_runner=legacy_runner,
+    )
+
+    assert result is sentinel
+    assert scheduled == [
+        (
+            {"application_id": "app-shadow"},
+            [{"full_name": "Director"}],
+            [{"full_name": "Owner"}],
+            sentinel,
+            "203.0.113.13",
+        )
+    ]
+
+
+def test_sumsub_route_returns_primary_when_shadow_schedule_fails(monkeypatch):
+    monkeypatch.setattr("screening_routing.get_active_provider_name", lambda: "sumsub")
+    sentinel = {"legacy_shape": True}
+
+    def legacy_runner(application_data, directors, ubos, client_ip=None):
+        return sentinel
+
+    def schedule(*args, **kwargs):
+        raise RuntimeError("shadow unavailable")
+
+    monkeypatch.setattr("screening_routing.maybe_schedule_shadow_screening", schedule)
+
+    result = run_screening_for_active_provider(
+        {"application_id": "app-shadow-fail"},
+        [],
+        [],
+        legacy_runner=legacy_runner,
+    )
+
+    assert result is sentinel
 
 
 def test_complyadvantage_route_uses_registered_provider_with_db(monkeypatch):

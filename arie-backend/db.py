@@ -1213,6 +1213,24 @@ def _get_postgres_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_app_id ON screening_reports_normalized(application_id);
     CREATE UNIQUE INDEX IF NOT EXISTS uq_screening_normalized_app_provider_hash ON screening_reports_normalized(application_id, provider, source_screening_report_hash);
 
+    -- D2 provider-pair comparison artifacts (Sumsub-primary / CA-shadow)
+    CREATE TABLE IF NOT EXISTS screening_provider_comparisons (
+        id SERIAL PRIMARY KEY,
+        application_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        primary_provider TEXT NOT NULL,
+        shadow_provider TEXT NOT NULL,
+        comparison_kind TEXT NOT NULL DEFAULT 'screening_shadow',
+        primary_normalized_record_id INTEGER,
+        shadow_normalized_record_id INTEGER,
+        mismatch_class TEXT NOT NULL,
+        comparison_json TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_provider_comparisons_app ON screening_provider_comparisons(application_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_comparisons_app_pair ON screening_provider_comparisons(application_id, primary_provider, shadow_provider, comparison_kind);
+
     -- Screening Monitoring Subscriptions (Phase C1.a: ComplyAdvantage scaffolding)
     CREATE TABLE IF NOT EXISTS screening_monitoring_subscriptions (
         id SERIAL PRIMARY KEY,
@@ -2097,6 +2115,24 @@ def _get_sqlite_schema() -> str:
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_client_app ON screening_reports_normalized(client_id, application_id);
     CREATE INDEX IF NOT EXISTS idx_screening_normalized_app_id ON screening_reports_normalized(application_id);
     CREATE UNIQUE INDEX IF NOT EXISTS uq_screening_normalized_app_provider_hash ON screening_reports_normalized(application_id, provider, source_screening_report_hash);
+
+    -- D2 provider-pair comparison artifacts (Sumsub-primary / CA-shadow)
+    CREATE TABLE IF NOT EXISTS screening_provider_comparisons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        primary_provider TEXT NOT NULL,
+        shadow_provider TEXT NOT NULL,
+        comparison_kind TEXT NOT NULL DEFAULT 'screening_shadow',
+        primary_normalized_record_id INTEGER,
+        shadow_normalized_record_id INTEGER,
+        mismatch_class TEXT NOT NULL,
+        comparison_json TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_provider_comparisons_app ON screening_provider_comparisons(application_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_comparisons_app_pair ON screening_provider_comparisons(application_id, primary_provider, shadow_provider, comparison_kind);
 
     -- Screening Monitoring Subscriptions (Phase C1.a: ComplyAdvantage scaffolding)
     CREATE TABLE IF NOT EXISTS screening_monitoring_subscriptions (
@@ -4351,6 +4387,59 @@ def _run_migrations(db: DBConnection):
             logger.info("Migration v2.24b: monitoring_alerts provenance columns already exist")
     except Exception as e:
         logger.error("Migration v2.24b failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.24c: Add durable D2 provider-pair comparison artifacts.
+    try:
+        if db.is_postgres:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS screening_provider_comparisons (
+                    id SERIAL PRIMARY KEY,
+                    application_id TEXT NOT NULL,
+                    client_id TEXT NOT NULL,
+                    primary_provider TEXT NOT NULL,
+                    shadow_provider TEXT NOT NULL,
+                    comparison_kind TEXT NOT NULL DEFAULT 'screening_shadow',
+                    primary_normalized_record_id INTEGER,
+                    shadow_normalized_record_id INTEGER,
+                    mismatch_class TEXT NOT NULL,
+                    comparison_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        else:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS screening_provider_comparisons (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    application_id TEXT NOT NULL,
+                    client_id TEXT NOT NULL,
+                    primary_provider TEXT NOT NULL,
+                    shadow_provider TEXT NOT NULL,
+                    comparison_kind TEXT NOT NULL DEFAULT 'screening_shadow',
+                    primary_normalized_record_id INTEGER,
+                    shadow_normalized_record_id INTEGER,
+                    mismatch_class TEXT NOT NULL,
+                    comparison_json TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )
+            """)
+        db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_provider_comparisons_app "
+            "ON screening_provider_comparisons(application_id)"
+        )
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_comparisons_app_pair "
+            "ON screening_provider_comparisons(application_id, primary_provider, shadow_provider, comparison_kind)"
+        )
+        db.commit()
+        logger.info("Migration v2.24c: screening_provider_comparisons table ensured")
+    except Exception as e:
+        logger.error("Migration v2.24c failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:

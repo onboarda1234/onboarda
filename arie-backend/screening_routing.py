@@ -18,6 +18,7 @@ from screening_provider import (
     ProviderNotRegistered,
     get_provider,
 )
+from screening_shadow import maybe_schedule_shadow_screening
 
 logger = logging.getLogger("arie.screening_routing")
 
@@ -41,7 +42,23 @@ def run_screening_for_active_provider(
 
     if provider_name == SUMSUB_PROVIDER_NAME:
         runner = legacy_runner or _default_legacy_runner()
-        return runner(application_data, directors, ubos, client_ip=client_ip)
+        result = runner(application_data, directors, ubos, client_ip=client_ip)
+        try:
+            maybe_schedule_shadow_screening(
+                application_data,
+                directors,
+                ubos,
+                result,
+                client_ip=client_ip,
+            )
+        except Exception:
+            logger.error(
+                "screening_shadow_schedule_failed active_provider=%s shadow_provider=%s",
+                provider_name,
+                COMPLYADVANTAGE_PROVIDER_NAME,
+                exc_info=True,
+            )
+        return result
 
     provider = _build_provider(provider_name, db=db)
     logger.info("screening_routing active_provider=%s", provider_name)

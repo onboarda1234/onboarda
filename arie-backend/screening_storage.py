@@ -60,6 +60,28 @@ _CREATE_INDEXES_SQL = [
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_screening_normalized_app_provider_hash ON screening_reports_normalized(application_id, provider, source_screening_report_hash)",
 ]
 
+_CREATE_COMPARISONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS screening_provider_comparisons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    primary_provider TEXT NOT NULL,
+    shadow_provider TEXT NOT NULL,
+    comparison_kind TEXT NOT NULL DEFAULT 'screening_shadow',
+    primary_normalized_record_id INTEGER,
+    shadow_normalized_record_id INTEGER,
+    mismatch_class TEXT NOT NULL,
+    comparison_json TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+)
+"""
+
+_CREATE_COMPARISONS_INDEXES_SQL = [
+    "CREATE INDEX IF NOT EXISTS idx_provider_comparisons_app ON screening_provider_comparisons(application_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_comparisons_app_pair ON screening_provider_comparisons(application_id, primary_provider, shadow_provider, comparison_kind)",
+]
+
 
 def ensure_normalized_table(db) -> None:
     """
@@ -73,6 +95,14 @@ def ensure_normalized_table(db) -> None:
     """
     db.execute(_CREATE_TABLE_SQL)
     for idx_sql in _CREATE_INDEXES_SQL:
+        db.execute(idx_sql)
+    db.commit()
+
+
+def ensure_provider_comparisons_table(db) -> None:
+    """Ensure the D2 provider-pair comparison table exists."""
+    db.execute(_CREATE_COMPARISONS_TABLE_SQL)
+    for idx_sql in _CREATE_COMPARISONS_INDEXES_SQL:
         db.execute(idx_sql)
     db.commit()
 
@@ -94,6 +124,7 @@ def persist_normalized_report(
     source_report_hash: str,
     provider: str = "sumsub",
     normalized_version: str = "1.0",
+    source: str = "migration_scaffolding",
 ) -> int:
     """
     Persist a normalized screening report using an idempotent upsert.
@@ -110,19 +141,78 @@ def persist_normalized_report(
            (client_id, application_id, provider, normalized_version,
             source_screening_report_hash, normalized_report_json,
             normalization_status, source)
-           VALUES (?, ?, ?, ?, ?, ?, 'success', 'migration_scaffolding')
+           VALUES (?, ?, ?, ?, ?, ?, 'success', ?)
            ON CONFLICT(application_id, provider, source_screening_report_hash)
            DO UPDATE SET
              normalized_report_json = EXCLUDED.normalized_report_json,
+             source = EXCLUDED.source,
              updated_at = CURRENT_TIMESTAMP""",
         (client_id, application_id, provider, normalized_version,
-         source_report_hash, report_json),
+         source_report_hash, report_json, source),
     )
     row = db.execute(
         """SELECT id FROM screening_reports_normalized
            WHERE application_id=? AND provider=? AND source_screening_report_hash=?
            ORDER BY id DESC LIMIT 1""",
         (application_id, provider, source_report_hash),
+    ).fetchone()
+    if row is not None:
+        try:
+            row_id = row["id"]
+        except (TypeError, KeyError, IndexError):
+            row_id = row[0]
+        if isinstance(row_id, int):
+            return row_id
+    return cursor.lastrowid
+
+
+def persist_provider_comparison(
+    db,
+    *,
+    application_id: str,
+    client_id: str,
+    primary_provider: str,
+    shadow_provider: str,
+    comparison_kind: str,
+    primary_normalized_record_id: int | None,
+    shadow_normalized_record_id: int | None,
+    mismatch_class: str,
+    comparison: dict,
+) -> int:
+    """Persist one idempotent provider-pair comparison artifact."""
+    comparison_json = json.dumps(comparison, sort_keys=True, default=str)
+    cursor = db.execute(
+        """INSERT INTO screening_provider_comparisons
+           (application_id, client_id, primary_provider, shadow_provider,
+            comparison_kind, primary_normalized_record_id,
+            shadow_normalized_record_id, mismatch_class, comparison_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(application_id, primary_provider, shadow_provider, comparison_kind)
+           DO UPDATE SET
+             client_id = EXCLUDED.client_id,
+             primary_normalized_record_id = EXCLUDED.primary_normalized_record_id,
+             shadow_normalized_record_id = EXCLUDED.shadow_normalized_record_id,
+             mismatch_class = EXCLUDED.mismatch_class,
+             comparison_json = EXCLUDED.comparison_json,
+             updated_at = CURRENT_TIMESTAMP""",
+        (
+            application_id,
+            client_id,
+            primary_provider,
+            shadow_provider,
+            comparison_kind,
+            primary_normalized_record_id,
+            shadow_normalized_record_id,
+            mismatch_class,
+            comparison_json,
+        ),
+    )
+    row = db.execute(
+        """SELECT id FROM screening_provider_comparisons
+           WHERE application_id=? AND primary_provider=? AND shadow_provider=?
+             AND comparison_kind=?
+           ORDER BY id DESC LIMIT 1""",
+        (application_id, primary_provider, shadow_provider, comparison_kind),
     ).fetchone()
     if row is not None:
         try:

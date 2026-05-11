@@ -9,9 +9,11 @@ import pytest
 
 from screening_storage import (
     ensure_normalized_table,
+    ensure_provider_comparisons_table,
     compute_report_hash,
     persist_normalized_report,
     persist_normalization_failure,
+    persist_provider_comparison,
     get_normalized_report,
     delete_normalized_reports_for_application,
 )
@@ -47,6 +49,14 @@ class TestEnsureTable:
         names = [r["name"] for r in rows]
         assert "idx_screening_normalized_client_app" in names
         assert "idx_screening_normalized_app_id" in names
+
+    def test_provider_comparison_table_created(self, norm_db):
+        ensure_provider_comparisons_table(norm_db)
+
+        row = norm_db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='screening_provider_comparisons'"
+        ).fetchone()
+        assert row is not None
 
 
 class TestComputeReportHash:
@@ -90,6 +100,27 @@ class TestPersistNormalizedReport:
         assert row["is_authoritative"] == 0
         assert row["source"] == "migration_scaffolding"
 
+    def test_custom_source_stored(self, norm_db):
+        row_id = persist_normalized_report(
+            norm_db,
+            "client_1",
+            "app_1",
+            {"provider": "complyadvantage"},
+            "hash-ca",
+            provider="complyadvantage",
+            normalized_version="2.0",
+            source="d2_shadow",
+        )
+        norm_db.commit()
+
+        row = norm_db.execute(
+            "SELECT provider, normalized_version, source FROM screening_reports_normalized WHERE id=?",
+            (row_id,),
+        ).fetchone()
+        assert row["provider"] == "complyadvantage"
+        assert row["normalized_version"] == "2.0"
+        assert row["source"] == "d2_shadow"
+
     def test_report_json_stored(self, norm_db):
         report = {"total_hits": 5, "director_screenings": []}
         row_id = persist_normalized_report(
@@ -121,6 +152,43 @@ class TestPersistNormalizedReport:
         ).fetchall()
         assert len(rows) == 1
         assert rows[0]["application_id"] == "app_1"
+
+
+class TestPersistProviderComparison:
+    def test_insert_and_upsert(self, norm_db):
+        ensure_provider_comparisons_table(norm_db)
+
+        first_id = persist_provider_comparison(
+            norm_db,
+            application_id="app-1",
+            client_id="client-1",
+            primary_provider="sumsub",
+            shadow_provider="complyadvantage",
+            comparison_kind="screening_shadow",
+            primary_normalized_record_id=1,
+            shadow_normalized_record_id=2,
+            mismatch_class="ca_only",
+            comparison={"mismatch_class": "ca_only"},
+        )
+        second_id = persist_provider_comparison(
+            norm_db,
+            application_id="app-1",
+            client_id="client-1",
+            primary_provider="sumsub",
+            shadow_provider="complyadvantage",
+            comparison_kind="screening_shadow",
+            primary_normalized_record_id=3,
+            shadow_normalized_record_id=4,
+            mismatch_class="exact_match",
+            comparison={"mismatch_class": "exact_match"},
+        )
+        norm_db.commit()
+
+        assert first_id == second_id
+        rows = norm_db.execute("SELECT * FROM screening_provider_comparisons").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["mismatch_class"] == "exact_match"
+        assert json.loads(rows[0]["comparison_json"])["mismatch_class"] == "exact_match"
 
 
 class TestPersistFailure:
