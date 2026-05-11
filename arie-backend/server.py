@@ -2934,6 +2934,200 @@ def _memo_final_status(memo_row):
     return "draft"
 
 
+OFFICER_CORRECTION_TARGETS = frozenset({
+    "application",
+    "director",
+    "ubo",
+    "intermediary",
+    "risk_field",
+    "pep_status",
+})
+OFFICER_CORRECTION_MATERIALITIES = frozenset({"tier1", "tier2", "tier3"})
+OFFICER_CORRECTION_APPLICATION_FIELDS = frozenset({
+    "company_name",
+    "brn",
+    "country",
+    "sector",
+    "entity_type",
+    "ownership_structure",
+})
+OFFICER_CORRECTION_RISK_FIELDS = frozenset({
+    "source_of_funds",
+    "source_of_wealth",
+    "expected_volume",
+    "monthly_volume",
+    "business_description",
+    "trading_name",
+    "expected_volumes",
+})
+OFFICER_CORRECTION_DIRECTOR_FIELDS = frozenset({
+    "first_name",
+    "last_name",
+    "full_name",
+    "nationality",
+    "date_of_birth",
+    "is_pep",
+    "verified_pep",
+    "pep_status",
+})
+OFFICER_CORRECTION_UBO_FIELDS = frozenset(
+    set(OFFICER_CORRECTION_DIRECTOR_FIELDS) | {"ownership_pct"}
+)
+OFFICER_CORRECTION_INTERMEDIARY_FIELDS = frozenset({
+    "entity_name",
+    "jurisdiction",
+    "ownership_pct",
+})
+OFFICER_CORRECTION_TIER1_FIELDS = frozenset({
+    "country",
+    "jurisdiction",
+    "sector",
+    "ownership_structure",
+    "ownership_pct",
+    "is_pep",
+    "verified_pep",
+    "pep_status",
+    "source_of_funds",
+    "source_of_wealth",
+    "expected_volume",
+    "expected_volumes",
+    "monthly_volume",
+})
+OFFICER_CORRECTION_TIER2_FIELDS = frozenset({
+    "company_name",
+    "entity_type",
+    "business_description",
+    "trading_name",
+    "full_name",
+    "first_name",
+    "last_name",
+    "nationality",
+    "date_of_birth",
+    "entity_name",
+    "brn",
+})
+OFFICER_CORRECTION_RISK_RELEVANT_FIELDS = frozenset({
+    "country",
+    "jurisdiction",
+    "sector",
+    "ownership_structure",
+    "ownership_pct",
+    "is_pep",
+    "verified_pep",
+    "pep_status",
+    "source_of_funds",
+    "source_of_wealth",
+    "expected_volume",
+    "expected_volumes",
+    "monthly_volume",
+    "entity_type",
+})
+OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS = frozenset(
+    set(OFFICER_CORRECTION_TIER1_FIELDS)
+    | {
+        "company_name",
+        "entity_type",
+        "ownership_structure",
+        "business_description",
+        "trading_name",
+        "full_name",
+        "entity_name",
+    }
+)
+
+
+def _officer_correction_now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_officer_correction_json(value, fallback):
+    parsed = safe_json_loads(value)
+    return parsed if isinstance(parsed, type(fallback)) else fallback
+
+
+def _correction_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in ("1", "true", "yes", "y")
+
+
+def _normalize_officer_correction_materiality(target_type, field_changes, requested=None):
+    requested_materiality = str(requested or "").strip().lower()
+    if requested_materiality in OFFICER_CORRECTION_MATERIALITIES:
+        return requested_materiality
+    field_names = {str(name or "").strip() for name in (field_changes or {}).keys() if str(name or "").strip()}
+    if target_type == "pep_status" or field_names & OFFICER_CORRECTION_TIER1_FIELDS:
+        return "tier1"
+    if field_names & OFFICER_CORRECTION_TIER2_FIELDS:
+        return "tier2"
+    return "tier2" if field_names else "tier3"
+
+
+def _officer_correction_target_config(target_type, payload):
+    subject_type = str((payload or {}).get("subject_type") or "").strip().lower()
+    if target_type == "application":
+        return {"table": "applications", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_APPLICATION_FIELDS}
+    if target_type == "risk_field":
+        return {"table": "applications", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_RISK_FIELDS}
+    if target_type == "director":
+        return {"table": "directors", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_DIRECTOR_FIELDS}
+    if target_type == "ubo":
+        return {"table": "ubos", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_UBO_FIELDS}
+    if target_type == "intermediary":
+        return {"table": "intermediaries", "id_field": "id", "allowed_fields": OFFICER_CORRECTION_INTERMEDIARY_FIELDS}
+    if target_type == "pep_status":
+        if subject_type not in ("director", "ubo"):
+            raise ValueError("pep_status corrections require subject_type 'director' or 'ubo'")
+        return _officer_correction_target_config(subject_type, payload)
+    raise ValueError(f"Unsupported correction target_type '{target_type}'")
+
+
+def _decorate_party_pep_visibility(party):
+    item = dict(party or {})
+    pep_decl = parse_json_field(item.get("pep_declaration"), {})
+    item["pep_declaration"] = pep_decl
+    if "declared_pep" in pep_decl:
+        item["declared_pep"] = _correction_bool(pep_decl.get("declared_pep"))
+    elif "declared_pep" not in item:
+        item["declared_pep"] = _correction_bool(item.get("is_pep"))
+    if "verified_pep" in pep_decl:
+        item["verified_pep"] = _correction_bool(pep_decl.get("verified_pep"))
+    elif "verified_pep" not in item:
+        item["verified_pep"] = _correction_bool(item.get("is_pep"))
+    item["pep_status"] = pep_decl.get("pep_status") or (
+        "verified_pep" if item.get("verified_pep") else "not_pep"
+    )
+    return item
+
+
+def _list_application_corrections(db, application_id, limit=100):
+    rows = db.execute(
+        """
+        SELECT *
+        FROM application_corrections
+        WHERE application_id = ?
+        ORDER BY corrected_at DESC, id DESC
+        LIMIT ?
+        """,
+        (application_id, limit),
+    ).fetchall()
+    results = []
+    for row in rows:
+        item = dict(row)
+        item["before_state"] = _parse_officer_correction_json(item.get("before_state"), {})
+        item["after_state"] = _parse_officer_correction_json(item.get("after_state"), {})
+        item["downstream_state"] = _parse_officer_correction_json(item.get("downstream_state"), {})
+        results.append(item)
+    return results
+
+
+def _correction_log_audit(handler, user, action, target, detail, db=None, **kwargs):
+    kwargs.setdefault("commit", False)
+    handler.log_audit(user, action, target, detail, db=db, **kwargs)
+
+
 class ApplicationDetailHandler(BaseHandler):
     """GET/PUT/PATCH /api/applications/:id"""
     def get(self, app_id):
@@ -2959,6 +3153,8 @@ class ApplicationDetailHandler(BaseHandler):
         result["first_approver_name"] = resolve_user_display_name(db, result.get("first_approver_id"))
         result["decision_by_name"] = resolve_user_display_name(db, result.get("decision_by"))
         result["directors"], result["ubos"], result["intermediaries"] = get_application_parties(db, result["id"])
+        result["directors"] = [_decorate_party_pep_visibility(party) for party in result["directors"]]
+        result["ubos"] = [_decorate_party_pep_visibility(party) for party in result["ubos"]]
         include_history = self.get_argument("include_history", "false").lower() == "true"
         result["documents"] = [dict(d) for d in db.execute(
             f"SELECT * FROM documents WHERE application_id = ? AND {ACTIVE_DOCUMENT_SQL} "
@@ -3033,6 +3229,10 @@ class ApplicationDetailHandler(BaseHandler):
             result["latest_memo"] = None
             result["latest_memo_data"] = None
             result["memo_is_stale"] = False
+        result["memo_requires_regeneration"] = bool(result.get("memo_is_stale"))
+        result["supervisor_requires_rerun"] = bool(result.get("memo_is_stale") and result.get("latest_memo"))
+        if user["type"] != "client":
+            result["officer_corrections"] = _list_application_corrections(db, result["id"])
         db.close()
 
         self.success(result)
@@ -3339,6 +3539,516 @@ class ApplicationDetailHandler(BaseHandler):
         db.commit()
         db.close()
         self.success({"status": "deleted", "id": app["id"], "ref": app["ref"]})
+
+
+class ApplicationCorrectionHandler(BaseHandler):
+    """GET/POST /api/applications/:id/corrections."""
+
+    def get(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co", "analyst"])
+        if not user:
+            return
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+            self.success({
+                "application_id": app["id"],
+                "corrections": _list_application_corrections(db, app["id"]),
+            })
+        finally:
+            db.close()
+
+    def post(self, app_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+
+        payload = self.get_json() or {}
+        target_type = str(payload.get("target_type") or "").strip().lower()
+        if target_type not in OFFICER_CORRECTION_TARGETS:
+            return self.error("Unsupported target_type", 400)
+
+        field_changes = payload.get("field_changes") or {}
+        if not isinstance(field_changes, dict):
+            return self.error("field_changes must be an object", 400)
+        if target_type == "pep_status" and not field_changes:
+            field_changes = {
+                "verified_pep": payload.get("verified_pep"),
+            }
+        field_changes = {
+            str(key).strip(): value
+            for key, value in field_changes.items()
+            if str(key).strip()
+        }
+        if not field_changes:
+            return self.error("At least one field change is required", 400)
+
+        try:
+            target_config = _officer_correction_target_config(target_type, payload)
+        except ValueError as exc:
+            return self.error(str(exc), 400)
+
+        unsupported = sorted(set(field_changes) - set(target_config["allowed_fields"]))
+        if unsupported:
+            return self.error(
+                "Unsupported field(s) for target: " + ", ".join(unsupported),
+                400,
+            )
+
+        materiality = _normalize_officer_correction_materiality(
+            target_type,
+            field_changes,
+            payload.get("materiality"),
+        )
+        correction_reason = str(payload.get("correction_reason") or payload.get("reason") or "").strip()
+        evidence_source = str(payload.get("evidence_source") or payload.get("evidence") or "").strip()
+        correction_note = str(payload.get("correction_note") or payload.get("note") or "").strip()
+        correction_source = str(payload.get("correction_source") or "officer_review").strip() or "officer_review"
+        if materiality in ("tier1", "tier2"):
+            missing = []
+            if not correction_reason:
+                missing.append("correction_reason")
+            if not evidence_source:
+                missing.append("evidence_source")
+            if not correction_note:
+                missing.append("correction_note")
+            if missing:
+                return self.error(
+                    "Material corrections require: " + ", ".join(missing),
+                    400,
+                )
+
+        db = get_db()
+        try:
+            app = db.execute(
+                "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if not app:
+                return self.error("Application not found", 404)
+            if not self.check_app_ownership(user, app):
+                return
+
+            app_dict = dict(app)
+            target_id = str(payload.get("target_id") or "").strip() or None
+            subject_type = str(payload.get("subject_type") or "").strip().lower() or None
+            correction_ts = _officer_correction_now()
+            risk_relevant = bool(
+                target_type == "pep_status"
+                or set(field_changes).intersection(OFFICER_CORRECTION_RISK_RELEVANT_FIELDS)
+            )
+            memo_visible = bool(
+                target_type == "pep_status"
+                or set(field_changes).intersection(OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS)
+            )
+            substantive_change = bool(materiality == "tier1" or risk_relevant or memo_visible)
+
+            before_state, after_state = self._apply_officer_correction(
+                db=db,
+                app=app_dict,
+                target_type=target_type,
+                target_config=target_config,
+                target_id=target_id,
+                subject_type=subject_type,
+                field_changes=field_changes,
+                correction_reason=correction_reason,
+                evidence_source=evidence_source,
+                correction_note=correction_note,
+                correction_source=correction_source,
+                correction_ts=correction_ts,
+                substantive_change=substantive_change,
+                user=user,
+            )
+
+            downstream_state = self._run_correction_downstream(
+                db,
+                app_dict["id"],
+                app_dict["ref"],
+                materiality,
+                target_type,
+                field_changes,
+                risk_relevant,
+                memo_visible,
+                user,
+            )
+
+            db.execute(
+                """
+                INSERT INTO application_corrections
+                (application_id, target_type, target_id, subject_type, field_scope,
+                 materiality, correction_reason, evidence_source, correction_note,
+                 correction_source, before_state, after_state, downstream_state,
+                 corrected_by, corrected_by_name, corrected_by_role, corrected_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    app_dict["id"],
+                    target_type,
+                    target_id,
+                    subject_type,
+                    ",".join(sorted(field_changes.keys())),
+                    materiality,
+                    correction_reason,
+                    evidence_source,
+                    correction_note,
+                    correction_source,
+                    json.dumps(before_state, default=str, sort_keys=True),
+                    json.dumps(after_state, default=str, sort_keys=True),
+                    json.dumps(downstream_state, default=str, sort_keys=True),
+                    user.get("sub", ""),
+                    user.get("name", ""),
+                    user.get("role", ""),
+                    correction_ts,
+                ),
+            )
+            _correction_log_audit(
+                self,
+                user,
+                "Officer Correction",
+                app_dict["ref"],
+                (
+                    f"target_type={target_type}; field_scope={','.join(sorted(field_changes.keys()))}; "
+                    f"materiality={materiality}; source={correction_source}; "
+                    f"reason={correction_reason or 'n/a'}; evidence={evidence_source or 'n/a'}"
+                )[:4000],
+                db=db,
+                before_state=before_state,
+                after_state=after_state,
+            )
+            db.commit()
+
+            refreshed_app = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (app_dict["id"],),
+            ).fetchone()
+            summary = build_enhanced_requirement_operational_summary(
+                db,
+                app_dict["id"],
+                app_row=dict(refreshed_app) if refreshed_app else None,
+            )
+            latest_memo = db.execute(
+                """
+                SELECT id, created_at
+                FROM compliance_memos
+                WHERE application_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (app_dict["id"],),
+            ).fetchone()
+            memo_requires_regeneration = bool(latest_memo and substantive_change)
+            self.success({
+                "status": "corrected",
+                "application_id": app_dict["id"],
+                "target_type": target_type,
+                "target_id": target_id,
+                "materiality": materiality,
+                "before_state": before_state,
+                "after_state": after_state,
+                "downstream_state": {
+                    **downstream_state,
+                    "memo_requires_regeneration": memo_requires_regeneration,
+                    "supervisor_requires_rerun": memo_requires_regeneration,
+                    "enhanced_review_summary": summary,
+                },
+            })
+        except ValueError as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return self.error(str(exc), 400)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.error(
+                "officer correction failed: app_id=%s target_type=%s error=%s",
+                app_id,
+                target_type,
+                exc,
+                exc_info=True,
+            )
+            return self.error("Failed to apply officer correction", 500)
+        finally:
+            db.close()
+
+    def _load_target_row(self, db, app_id, target_config, target_id):
+        if target_config["table"] == "applications":
+            row = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (app_id,),
+            ).fetchone()
+        else:
+            if not target_id:
+                raise ValueError("target_id is required for this correction target")
+            row = db.execute(
+                f"SELECT * FROM {target_config['table']} WHERE application_id = ? AND {target_config['id_field']} = ?",
+                (app_id, target_id),
+            ).fetchone()
+        if not row:
+            raise ValueError("Correction target not found")
+        return dict(row)
+
+    def _touch_application_after_correction(self, db, app_id, correction_ts, substantive_change):
+        if substantive_change:
+            db.execute(
+                "UPDATE applications SET updated_at = ?, inputs_updated_at = ? WHERE id = ?",
+                (correction_ts, correction_ts, app_id),
+            )
+        else:
+            db.execute(
+                "UPDATE applications SET updated_at = ? WHERE id = ?",
+                (correction_ts, app_id),
+            )
+
+    def _apply_officer_correction(
+        self,
+        db,
+        app,
+        target_type,
+        target_config,
+        target_id,
+        subject_type,
+        field_changes,
+        correction_reason,
+        evidence_source,
+        correction_note,
+        correction_source,
+        correction_ts,
+        substantive_change,
+        user,
+    ):
+        target_row = self._load_target_row(db, app["id"], target_config, target_id)
+        if target_type == "application":
+            before_state = {field: target_row.get(field) for field in field_changes}
+            after_state = dict(before_state)
+            for field, value in field_changes.items():
+                after_state[field] = value
+            assignments = ", ".join(f"{field} = ?" for field in field_changes)
+            params = [after_state[field] for field in field_changes]
+            params.extend([correction_ts, app["id"]])
+            db.execute(
+                f"UPDATE applications SET {assignments}, updated_at = ? WHERE id = ?",
+                tuple(params),
+            )
+            self._touch_application_after_correction(db, app["id"], correction_ts, substantive_change)
+            return before_state, after_state
+
+        if target_type == "risk_field":
+            prescreening = parse_json_field(app.get("prescreening_data"), {})
+            before_state = {field: prescreening.get(field) for field in field_changes}
+            after_state = dict(before_state)
+            for field, value in field_changes.items():
+                if field == "expected_volumes":
+                    prescreening["expected_volume"] = value
+                    after_state[field] = value
+                else:
+                    prescreening[field] = value
+                    after_state[field] = value
+            db.execute(
+                "UPDATE applications SET prescreening_data = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(prescreening, default=str), correction_ts, app["id"]),
+            )
+            self._touch_application_after_correction(db, app["id"], correction_ts, substantive_change)
+            return before_state, after_state
+
+        if target_type == "pep_status" or any(field in field_changes for field in ("is_pep", "verified_pep", "pep_status")):
+            return self._apply_pep_correction(
+                db=db,
+                app_id=app["id"],
+                target_type=subject_type or target_type,
+                target_id=target_id,
+                correction_ts=correction_ts,
+                substantive_change=substantive_change,
+                correction_reason=correction_reason,
+                evidence_source=evidence_source,
+                correction_note=correction_note,
+                correction_source=correction_source,
+                field_changes=field_changes,
+                user=user,
+            )
+
+        before_state = {field: target_row.get(field) for field in field_changes}
+        after_state = dict(before_state)
+        normalized_updates = {}
+        for field, value in field_changes.items():
+            normalized = value
+            if field == "ownership_pct":
+                try:
+                    normalized = max(0.0, min(100.0, float(value)))
+                except (TypeError, ValueError):
+                    raise ValueError("ownership_pct must be numeric")
+            elif field == "date_of_birth" and value:
+                _check_dob_not_future(value)
+                normalized = _validate_date_of_birth(value)
+            normalized_updates[field] = normalized
+            after_state[field] = normalized
+
+        if target_config["table"] in ("directors", "ubos"):
+            first_name = normalized_updates.get("first_name", target_row.get("first_name", ""))
+            last_name = normalized_updates.get("last_name", target_row.get("last_name", ""))
+            full_name = normalized_updates.get("full_name")
+            if "first_name" in normalized_updates or "last_name" in normalized_updates:
+                full_name = build_full_name({"first_name": first_name, "last_name": last_name}) or full_name
+            if full_name:
+                normalized_updates["full_name"] = full_name
+                after_state["full_name"] = full_name
+
+        assignments = ", ".join(f"{field} = ?" for field in normalized_updates)
+        params = [normalized_updates[field] for field in normalized_updates]
+        params.extend([app["id"], target_id])
+        db.execute(
+            f"UPDATE {target_config['table']} SET {assignments} WHERE application_id = ? AND {target_config['id_field']} = ?",
+            tuple(params),
+        )
+        self._touch_application_after_correction(db, app["id"], correction_ts, substantive_change)
+        return before_state, after_state
+
+    def _apply_pep_correction(
+        self,
+        db,
+        app_id,
+        target_type,
+        target_id,
+        correction_ts,
+        substantive_change,
+        correction_reason,
+        evidence_source,
+        correction_note,
+        correction_source,
+        field_changes,
+        user,
+    ):
+        table = "directors" if target_type == "director" else "ubos"
+        row = db.execute(
+            f"SELECT * FROM {table} WHERE application_id = ? AND id = ?",
+            (app_id, target_id),
+        ).fetchone()
+        if not row:
+            raise ValueError("Correction target not found")
+        row = dict(row)
+        pep_declaration = parse_json_field(row.get("pep_declaration"), {})
+        declared_pep = pep_declaration.get("declared_pep")
+        if declared_pep is None:
+            declared_pep = _correction_bool(row.get("is_pep"))
+        verified_input = field_changes.get("verified_pep")
+        if verified_input is None:
+            verified_input = field_changes.get("is_pep")
+        if verified_input is None and "pep_status" in field_changes:
+            verified_input = str(field_changes.get("pep_status") or "").strip().lower() not in ("not_pep", "clear", "false", "no")
+        verified_pep = _correction_bool(verified_input)
+        pep_status = str(field_changes.get("pep_status") or ("verified_pep" if verified_pep else "not_pep")).strip() or ("verified_pep" if verified_pep else "not_pep")
+        before_state = {
+            "declared_pep": _correction_bool(declared_pep),
+            "verified_pep": _correction_bool(pep_declaration.get("verified_pep", row.get("is_pep"))),
+            "pep_status": pep_declaration.get("pep_status") or ("verified_pep" if _correction_bool(row.get("is_pep")) else "not_pep"),
+        }
+        updated_pep_declaration = dict(pep_declaration)
+        updated_pep_declaration.update({
+            "declared_pep": _correction_bool(declared_pep),
+            "verified_pep": verified_pep,
+            "pep_status": pep_status,
+            "correction_reason": correction_reason,
+            "evidence_source": evidence_source,
+            "correction_note": correction_note,
+            "correction_source": correction_source,
+            "corrected_at": correction_ts,
+            "corrected_by": user.get("sub", ""),
+        })
+        db.execute(
+            f"UPDATE {table} SET is_pep = ?, pep_declaration = ? WHERE application_id = ? AND id = ?",
+            (
+                normalize_is_pep(verified_pep),
+                json.dumps(updated_pep_declaration, default=str, sort_keys=True),
+                app_id,
+                target_id,
+            ),
+        )
+        self._touch_application_after_correction(db, app_id, correction_ts, substantive_change)
+        after_state = {
+            "declared_pep": _correction_bool(declared_pep),
+            "verified_pep": verified_pep,
+            "pep_status": pep_status,
+            "pep_declaration": updated_pep_declaration,
+        }
+        return before_state, after_state
+
+    def _run_correction_downstream(
+        self,
+        db,
+        app_id,
+        app_ref,
+        materiality,
+        target_type,
+        field_changes,
+        risk_relevant,
+        memo_visible,
+        user,
+    ):
+        downstream = {
+            "risk_recomputed": False,
+            "risk_relevant": risk_relevant,
+            "memo_visible": memo_visible,
+            "enhanced_requirements_generated": 0,
+            "next_action_code": "none",
+        }
+        audit_fn = lambda *args, **kwargs: _correction_log_audit(self, *args, **kwargs)
+        if materiality == "tier1" or (materiality == "tier2" and risk_relevant):
+            rr = recompute_risk(
+                db,
+                app_id,
+                f"officer_correction:{target_type}",
+                user=user,
+                log_audit_fn=audit_fn,
+            )
+            downstream["risk_recomputed"] = bool(rr.get("recomputed"))
+            downstream["risk_result"] = rr
+
+        if materiality == "tier1":
+            refreshed_app = db.execute(
+                "SELECT * FROM applications WHERE id = ?",
+                (app_id,),
+            ).fetchone()
+            generation = generate_application_enhanced_requirements(
+                db,
+                app_id,
+                app_row=refreshed_app,
+                actor=user,
+                generation_source="officer_correction",
+            )
+            downstream["enhanced_requirements_generation"] = generation
+            downstream["enhanced_requirements_generated"] = int(generation.get("generated_count") or 0)
+
+        refreshed_app = db.execute(
+            "SELECT * FROM applications WHERE id = ?",
+            (app_id,),
+        ).fetchone()
+        refreshed_app_dict = dict(refreshed_app) if refreshed_app else {}
+        summary = build_enhanced_requirement_operational_summary(
+            db,
+            app_id,
+            app_row=refreshed_app_dict or None,
+        )
+        downstream["risk_level"] = refreshed_app_dict.get("risk_level")
+        downstream["final_risk_level"] = refreshed_app_dict.get("final_risk_level")
+        downstream["status"] = refreshed_app_dict.get("status")
+        downstream["onboarding_lane"] = refreshed_app_dict.get("onboarding_lane")
+        downstream["next_action_code"] = summary.get("next_action_code")
+        downstream["next_action"] = summary.get("next_action")
+        downstream["approval_blocked_until_refresh"] = bool(
+            materiality == "tier1" or memo_visible
+        )
+        downstream["target_application_ref"] = app_ref
+        return downstream
 
 
 class SubmitApplicationHandler(BaseHandler):
@@ -16464,6 +17174,7 @@ def make_app():
         (r"/api/applications/([^/]+)/decision-records", DecisionRecordsHandler),
         (r"/api/applications/([^/]+)/evidence-pack", ApplicationEvidencePackHandler),
         (r"/api/applications/([^/]+)/audit-log", ApplicationAuditLogHandler),
+        (r"/api/applications/([^/]+)/corrections", ApplicationCorrectionHandler),
         (r"/api/applications/([^/]+)/notes", ApplicationNotesHandler),
         (r"/api/applications/([^/]+)/notify", ClientNotificationHandler),
         (r"/api/applications/([^/]+)/rmi", ApplicationRMIRequestsHandler),

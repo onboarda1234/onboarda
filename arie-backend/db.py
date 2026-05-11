@@ -4985,6 +4985,80 @@ def _run_migrations(db: DBConnection):
         except Exception:
             pass
 
+    # Migration v2.36: Officer correction audit store.
+    # Preserves client-submitted values alongside officer-verified corrections
+    # without replacing the existing change-management workflow.
+    try:
+        if not _safe_table_exists(db, "application_corrections"):
+            if db.is_postgres:
+                db.execute(
+                    """
+                    CREATE TABLE application_corrections (
+                        id BIGSERIAL PRIMARY KEY,
+                        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                        target_type TEXT NOT NULL,
+                        target_id TEXT,
+                        subject_type TEXT,
+                        field_scope TEXT,
+                        materiality TEXT NOT NULL,
+                        correction_reason TEXT NOT NULL,
+                        evidence_source TEXT,
+                        correction_note TEXT,
+                        correction_source TEXT,
+                        before_state TEXT NOT NULL,
+                        after_state TEXT NOT NULL,
+                        downstream_state TEXT DEFAULT '{}',
+                        corrected_by TEXT,
+                        corrected_by_name TEXT,
+                        corrected_by_role TEXT,
+                        corrected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            else:
+                db.execute(
+                    """
+                    CREATE TABLE application_corrections (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                        target_type TEXT NOT NULL,
+                        target_id TEXT,
+                        subject_type TEXT,
+                        field_scope TEXT,
+                        materiality TEXT NOT NULL,
+                        correction_reason TEXT NOT NULL,
+                        evidence_source TEXT,
+                        correction_note TEXT,
+                        correction_source TEXT,
+                        before_state TEXT NOT NULL,
+                        after_state TEXT NOT NULL,
+                        downstream_state TEXT DEFAULT '{}',
+                        corrected_by TEXT,
+                        corrected_by_name TEXT,
+                        corrected_by_role TEXT,
+                        corrected_at TEXT DEFAULT (datetime('now'))
+                    )
+                    """
+                )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_application_corrections_app "
+                "ON application_corrections(application_id, corrected_at)"
+            )
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_application_corrections_target "
+                "ON application_corrections(target_type, target_id)"
+            )
+            db.commit()
+            logger.info("Migration v2.36: Created application_corrections table")
+        else:
+            logger.info("Migration v2.36: application_corrections table already exists")
+    except Exception as e:
+        logger.error("Migration v2.36 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.
 
