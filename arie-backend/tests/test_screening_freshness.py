@@ -161,6 +161,7 @@ class TestFreshScreeningAllowsApproval:
                 "screening_validity_days": 90,
             },
             submitted_at=(now - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S"),
             memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         can, err = ApprovalGateValidator.validate_approval(app, db)
@@ -181,10 +182,54 @@ class TestFreshScreeningAllowsApproval:
                 "screening_validity_days": 90,
             },
             submitted_at=(now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S"),
             memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         can, err = ApprovalGateValidator.validate_approval(app, db)
         assert can, f"Expected approval to pass but got: {err}"
+
+    def test_operational_submission_after_screening_does_not_stale_inputs(self, db):
+        """KYC/document handoff after screening does not stale screening by itself."""
+        from security_hardening import ApprovalGateValidator
+        now = datetime.now(timezone.utc)
+        screened_at = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+        valid_until = (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S")
+
+        app = _insert_app_and_memo(
+            db,
+            screening_report=_make_screening_report(screened_at=screened_at),
+            prescreening_extras={
+                "screening_valid_until": valid_until,
+                "screening_validity_days": 90,
+            },
+            submitted_at=now.strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"),
+            memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        can, err = ApprovalGateValidator.validate_approval(app, db)
+        assert can, f"Expected operational submission timestamp not to stale screening: {err}"
+
+    def test_screening_relevant_input_update_after_screening_blocks(self, db):
+        """A substantive app/party/prescreening update after screening still blocks."""
+        from security_hardening import ApprovalGateValidator
+        now = datetime.now(timezone.utc)
+        screened_at = (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
+        valid_until = (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S")
+
+        app = _insert_app_and_memo(
+            db,
+            screening_report=_make_screening_report(screened_at=screened_at),
+            prescreening_extras={
+                "screening_valid_until": valid_until,
+                "screening_validity_days": 90,
+            },
+            submitted_at=(now - timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"),
+            memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        can, err = ApprovalGateValidator.validate_approval(app, db)
+        assert not can
+        assert "screening-relevant" in err.lower()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -209,6 +254,7 @@ class TestExpiredScreeningBlocksApproval:
                 "screening_validity_days": 90,
             },
             submitted_at=(now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S"),
             memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         can, err = ApprovalGateValidator.validate_approval(app, db)
@@ -227,6 +273,7 @@ class TestExpiredScreeningBlocksApproval:
             screening_report=_make_screening_report(screened_at=screened_at),
             # No screening_valid_until — Gate 9 falls back to computation
             submitted_at=(now - timedelta(days=110)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(days=110)).strftime("%Y-%m-%d %H:%M:%S"),
             memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         can, err = ApprovalGateValidator.validate_approval(app, db)
@@ -248,6 +295,7 @@ class TestExpiredScreeningBlocksApproval:
                 "screening_validity_days": 90,
             },
             submitted_at=(now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S"),
             memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         can, err = ApprovalGateValidator.validate_approval(app, db)
@@ -474,6 +522,7 @@ class TestConfigurableValidityPeriod:
                 "screening_validity_days": 7,
             },
             submitted_at=(now - timedelta(days=11)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(days=11)).strftime("%Y-%m-%d %H:%M:%S"),
             memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         can, err = ApprovalGateValidator.validate_approval(app, db)
@@ -495,6 +544,7 @@ class TestConfigurableValidityPeriod:
                 "screening_validity_days": 7,
             },
             submitted_at=(now - timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S"),
             memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         can, err = ApprovalGateValidator.validate_approval(app, db)
@@ -936,6 +986,7 @@ class TestFreshnessValidationAuditLog:
                 "screening_validity_days": 90,
             },
             submitted_at=(now - timedelta(days=6)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(days=6)).strftime("%Y-%m-%d %H:%M:%S"),
             memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         with caplog.at_level(logging.INFO):
@@ -970,6 +1021,7 @@ class TestFreshnessValidationAuditLog:
                 "screening_validity_days": 90,
             },
             submitted_at=(now - timedelta(days=11)).strftime("%Y-%m-%d %H:%M:%S"),
+            app_updated_at=(now - timedelta(days=11)).strftime("%Y-%m-%d %H:%M:%S"),
             memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
         with caplog.at_level(logging.INFO):

@@ -2172,15 +2172,22 @@ _CLIENT_UNSAFE_LABEL_TERMS = (
     "approval blocker",
     "back-office",
     "backoffice",
+    "edd",
+    "enhanced due diligence",
     "false-positive",
     "false positive",
     "internal",
     "officer",
     "high risk",
     "high-risk",
+    "pep",
+    "politically exposed",
     "risk level",
+    "sanction",
+    "screening",
     "screening concern",
     "senior review",
+    "trigger",
     "very high",
     "very_high",
     "waiver",
@@ -2197,6 +2204,54 @@ _CLIENT_UNSAFE_DESCRIPTION_TERMS = _CLIENT_UNSAFE_LABEL_TERMS + (
 def _text_contains_any(text, terms):
     normalized = str(text or "").strip().lower()
     return any(term in normalized for term in terms)
+
+
+_PORTAL_SAFE_COPY_BY_REQUIREMENT_KEY = {
+    "pep_declaration_details": (
+        "Additional declaration details",
+        "Please provide the requested declaration details so our team can complete the review.",
+    ),
+    "pep_role_position": (
+        "Role and public-position information",
+        "Please provide the role, position, and related context requested for the relevant person.",
+    ),
+    "pep_jurisdiction": (
+        "Public-position jurisdiction information",
+        "Please provide the jurisdiction details requested for the relevant person.",
+    ),
+    "pep_sow_evidence": (
+        "Source of wealth evidence",
+        "Please upload evidence supporting the source of wealth for the relevant person.",
+    ),
+    "pep_linked_sof_evidence": (
+        "Source of funds evidence",
+        "Please upload evidence supporting the source of funds for the proposed relationship.",
+    ),
+}
+
+
+def _portal_safe_fallback_copy(requirement):
+    requirement = requirement or {}
+    key = str(requirement.get("requirement_key") or "").strip().lower()
+    if key in _PORTAL_SAFE_COPY_BY_REQUIREMENT_KEY:
+        label, description = _PORTAL_SAFE_COPY_BY_REQUIREMENT_KEY[key]
+        return {"label": label, "description": description}
+
+    requirement_type = str(requirement.get("requirement_type") or "").strip().lower()
+    if requirement_type == "document":
+        return {
+            "label": "Supporting document",
+            "description": "Please upload the requested supporting document.",
+        }
+    if requirement_type in ("declaration", "explanation"):
+        return {
+            "label": "Additional information",
+            "description": "Please provide the requested information so our team can complete the review.",
+        }
+    return {
+        "label": "Additional information required",
+        "description": "Please provide the requested information so our team can complete the review.",
+    }
 
 
 def _load_requirement_source_rule(db, requirement):
@@ -2218,16 +2273,33 @@ def _client_safe_requirement_fields(db, requirement):
     requirement = requirement or {}
     rule = _load_requirement_source_rule(db, requirement)
     label = _clean_text(rule.get("client_safe_label") or requirement.get("requirement_label"))
+    used_fallback = False
     if not label:
-        return None, "Client-safe requirement label is missing"
+        fallback = _portal_safe_fallback_copy(requirement)
+        label = fallback["label"]
+        used_fallback = True
     if _text_contains_any(label, _CLIENT_UNSAFE_LABEL_TERMS):
-        return None, "Client-safe requirement label appears to contain internal language"
+        fallback = _portal_safe_fallback_copy(requirement)
+        label = fallback["label"]
+        used_fallback = True
 
     description = _clean_text(rule.get("client_safe_description"))
     if not description:
         fallback_description = _clean_text(requirement.get("requirement_description"))
         if not _text_contains_any(fallback_description, _CLIENT_UNSAFE_DESCRIPTION_TERMS):
             description = fallback_description
+    if not description or _text_contains_any(description, _CLIENT_UNSAFE_DESCRIPTION_TERMS):
+        fallback = _portal_safe_fallback_copy(requirement)
+        description = fallback["description"]
+        used_fallback = True
+    if _text_contains_any(label, _CLIENT_UNSAFE_LABEL_TERMS) or _text_contains_any(description, _CLIENT_UNSAFE_DESCRIPTION_TERMS):
+        return None, "No safe client wording available for enhanced requirement"
+    if used_fallback:
+        logger.warning(
+            "portal_enhanced_requirement_safe_fallback=true requirement_id=%s requirement_key=%s",
+            requirement.get("id"),
+            requirement.get("requirement_key"),
+        )
 
     return {
         "label": label,

@@ -408,17 +408,19 @@ class BaseHandler(tornado.web.RequestHandler):
         should use the default commit=True.
         """
         own_db = db is None
-        if own_db:
-            db = get_db()
-        db.execute(
-            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
-            (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip(),
-             _safe_json(before_state), _safe_json(after_state))
-        )
-        if own_db or commit:
-            db.commit()
-        if own_db:
-            db.close()
+        try:
+            if own_db:
+                db = get_db()
+            db.execute(
+                "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
+                (user.get("sub",""), user.get("name",""), user.get("role",""), action, target, detail, self.get_client_ip(),
+                 _safe_json(before_state), _safe_json(after_state))
+            )
+            if own_db or commit:
+                db.commit()
+        finally:
+            if own_db and db is not None:
+                db.close()
 
     def _governance_audit_target(self, target):
         text = str(target or "unknown")

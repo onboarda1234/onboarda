@@ -1632,8 +1632,8 @@ def test_request_from_client_rejects_ineligible_requirements(enhanced_app_api_se
         headers=_headers("admin"),
         timeout=5,
     )
-    assert unsafe_resp.status_code == 400
-    assert "internal language" in unsafe_resp.text
+    assert unsafe_resp.status_code == 200
+    assert unsafe_resp.json()["requirement"]["status"] == "requested"
 
     backoffice_resp = requests.post(
         f"{base_url}/api/applications/{pep_app_id}/enhanced-requirements/{backoffice_req}/request",
@@ -1675,7 +1675,7 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
     rejected_req = _requirement_id_by_key(conn, app_id, "material_ubo_sow_evidence")
     accepted_req = _requirement_id_by_key(conn, app_id, "pep_sow_evidence")
     waived_req = _requirement_id_by_key(conn, app_id, "pep_linked_sof_evidence")
-    cancelled_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
+    pep_requested_req = _requirement_id_by_key(conn, app_id, "pep_declaration_details")
     backoffice_req = _requirement_id_by_key(conn, app_id, "mandatory_senior_review")
     conn.execute(
         """
@@ -1687,12 +1687,12 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
             WHEN ? THEN 'rejected'
             WHEN ? THEN 'accepted'
             WHEN ? THEN 'waived'
-            WHEN ? THEN 'cancelled'
+            WHEN ? THEN 'requested'
             WHEN ? THEN 'requested'
             ELSE status
         END,
-        requested_at = CASE WHEN id IN (?,?,?,?,?) THEN datetime('now') ELSE requested_at END,
-        requested_by = CASE WHEN id IN (?,?,?,?,?) THEN 'co001' ELSE requested_by END
+        requested_at = CASE WHEN id IN (?,?,?,?,?,?) THEN datetime('now') ELSE requested_at END,
+        requested_by = CASE WHEN id IN (?,?,?,?,?,?) THEN 'co001' ELSE requested_by END
         WHERE application_id=?
         """,
         (
@@ -1702,17 +1702,19 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
             rejected_req,
             accepted_req,
             waived_req,
-            cancelled_req,
+            pep_requested_req,
             backoffice_req,
             requested_req,
             uploaded_req,
             under_review_req,
             rejected_req,
+            pep_requested_req,
             backoffice_req,
             requested_req,
             uploaded_req,
             under_review_req,
             rejected_req,
+            pep_requested_req,
             backoffice_req,
             app_id,
         ),
@@ -1730,14 +1732,14 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
     assert body["application_id"] == app_id
     requirements = body["requirements"]
     returned_ids = {item["id"] for item in requirements}
-    assert returned_ids == {requested_req, uploaded_req, under_review_req, rejected_req}
+    assert returned_ids == {requested_req, uploaded_req, under_review_req, rejected_req, pep_requested_req}
     assert {item["status"] for item in requirements} == {
         "required",
         "submitted",
         "under_review",
         "additional_information_needed",
     }
-    assert body["total"] == 4
+    assert body["total"] == 5
 
     forbidden_fields = {
         "trigger_key",
@@ -1754,11 +1756,18 @@ def test_portal_enhanced_requirements_are_client_safe_and_owned(enhanced_app_api
     }
     forbidden_text = (
         "screening concern",
+        "screening",
         "sanctions concern",
+        "pep",
+        "politically exposed",
+        "edd",
+        "enhanced due diligence",
         "high risk",
         "very high",
         "approval blocker",
+        "internal",
         "officer notes",
+        "waiver",
     )
     for item in requirements:
         assert not forbidden_fields.intersection(item)

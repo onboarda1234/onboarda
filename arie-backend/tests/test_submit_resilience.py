@@ -410,6 +410,78 @@ class TestHappyPathSubmit:
         assert all(row["created_by"] is None for row in reqs)
         assert all(row["updated_by"] is None for row in reqs)
 
+    def test_post_commit_notification_failure_does_not_convert_submit_to_500(self, temp_db):
+        """Durable EDD submit success must survive non-critical notification failure."""
+        server = _get_server_module()
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+        mock_risk = {
+            "score": 72,
+            "level": "HIGH",
+            "final_risk_level": "HIGH",
+            "dimensions": {"D1": 4, "D2": 4, "D3": 3, "D4": 3, "D5": 4},
+            "lane": "EDD",
+            "escalations": [],
+            "requires_compliance_approval": True,
+        }
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        db = _get_project_db(temp_db)
+                        app_id = _setup_test_app(db)
+                        db.execute(
+                            "INSERT OR IGNORE INTO users (id, email, password_hash, full_name, role) VALUES (?,?,?,?,?)",
+                            ("co-notify", "co-notify@example.com", "hash", "CO Notify", "co"),
+                        )
+                        db.commit()
+
+                        original_execute = db.execute
+
+                        def failing_notification_execute(sql, params=()):
+                            if "INSERT INTO notifications" in sql:
+                                raise sqlite3.OperationalError("notifications table temporarily locked")
+                            return original_execute(sql, params)
+
+                        db.execute = failing_notification_execute
+                        handler._do_submit(
+                            db,
+                            {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                            app_id,
+                        )
+                        app = db.execute(
+                            "SELECT status, risk_level, onboarding_lane, submitted_at FROM applications WHERE id=?",
+                            (app_id,),
+                        ).fetchone()
+                        req_count = db.execute(
+                            "SELECT COUNT(*) AS c FROM application_enhanced_requirements WHERE application_id=?",
+                            (app_id,),
+                        ).fetchone()["c"]
+                        db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        assert success_calls[0][0]["status"] == "pricing_review"
+        assert app["status"] == "pricing_review"
+        assert app["risk_level"] == "HIGH"
+        assert app["onboarding_lane"] == "EDD"
+        assert app["submitted_at"]
+        assert req_count > 0
+
     def test_edd_submit_does_not_return_success_when_generation_fails(self, temp_db):
         """A critical generation failure must not produce a false 200 response."""
         server = _get_server_module()

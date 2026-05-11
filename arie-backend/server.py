@@ -3758,17 +3758,19 @@ class SubmitApplicationHandler(BaseHandler):
                         500,
                     )
 
-            # Notify compliance team for HIGH/VERY_HIGH risk or policy-routed
-            # EDD cases — requires pre-approval.
-            if requires_compliance_preapproval:
-                compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
-                for cu in compliance_users:
-                    db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
-                              (cu["id"], f"PRE-APPROVAL REQUIRED: {risk['level']}-Risk Application {app['ref']}",
-                               f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}), Lane: {risk['lane']}. "
-                               f"This application requires pre-approval before the client can proceed to KYC. "
-                               f"Review pre-screening data and screening results in the Pre-Approval Queue."))
-
+            flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
+            _after = {"status": "pricing_review", "risk_score": risk["score"],
+                      "risk_level": risk["level"], "onboarding_lane": risk["lane"]}
+            self.log_audit(
+                user,
+                "Pre-Screening Submitted",
+                app["ref"],
+                f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}",
+                db=db,
+                before_state=_before,
+                after_state=_after,
+                commit=False,
+            )
             db.commit()
         except Exception as db_exc:
             logger.error(
@@ -3784,12 +3786,30 @@ class SubmitApplicationHandler(BaseHandler):
                 "Failed to save screening results. Please retry your submission.", 500
             )
 
-        flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
-        _after = {"status": "pricing_review", "risk_score": risk["score"],
-                  "risk_level": risk["level"], "onboarding_lane": risk["lane"]}
-        self.log_audit(user, "Pre-Screening Submitted", app["ref"],
-                       f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}",
-                       before_state=_before, after_state=_after)
+        # Notify compliance after durable state is committed. Notification
+        # failures must not turn a successfully committed submit into a 500.
+        if requires_compliance_preapproval:
+            try:
+                compliance_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co')").fetchall()
+                for cu in compliance_users:
+                    db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                              (cu["id"], f"PRE-APPROVAL REQUIRED: {risk['level']}-Risk Application {app['ref']}",
+                               f"Pre-screening {app['ref']} ({app['company_name']}) — Risk: {risk['level']} (Score: {risk['score']}), Lane: {risk['lane']}. "
+                               f"This application requires pre-approval before the client can proceed to KYC. "
+                               f"Review pre-screening data and screening results in the Pre-Approval Queue."))
+                db.commit()
+            except Exception as notify_exc:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                logger.warning(
+                    "Pre-screening compliance notification failed after durable submit: app_id=%s ref=%s error=%s",
+                    real_id,
+                    app.get("ref", ""),
+                    str(notify_exc)[:300],
+                    exc_info=True,
+                )
 
         result_status = "pricing_review"
         self.success({
@@ -3869,10 +3889,17 @@ class PricingAcceptHandler(BaseHandler):
             db.execute("UPDATE applications SET status=? WHERE id=?", (next_status, real_id))
             message = "Pricing accepted. Please proceed with KYC verification and document upload."
 
+        self.log_audit(
+            user,
+            "Pricing Accepted",
+            app["ref"],
+            f"Pricing accepted — Risk: {risk_level}, Next: {next_status}",
+            db=db,
+            commit=False,
+        )
         db.commit()
         db.close()
 
-        self.log_audit(user, "Pricing Accepted", app["ref"], f"Pricing accepted — Risk: {risk_level}, Next: {next_status}")
         self.success({"status": next_status, "message": message, "risk_level": risk_level})
 
 
@@ -3953,11 +3980,17 @@ class KYCSubmitHandler(BaseHandler):
                       (cu["id"], f"KYC Submitted — Ready for Review: {app['ref']}",
                        f"{app['company_name']} has completed KYC & document upload. Risk: {risk_level} (Score: {risk_score}). Awaiting compliance approval."))
 
+        self.log_audit(
+            user,
+            "KYC Submitted",
+            app["ref"],
+            f"KYC documents submitted for compliance review — {doc_count} document(s)",
+            db=db,
+            commit=False,
+        )
         db.commit()
         db.close()
 
-        self.log_audit(user, "KYC Submitted", app["ref"],
-                       f"KYC documents submitted for compliance review — {doc_count} document(s)")
         self.success({
             "status": "kyc_submitted",
             "message": "Your documents have been submitted for compliance review. An officer will review your application shortly.",
@@ -4226,6 +4259,7 @@ class DocumentUploadHandler(BaseHandler):
         docs = [dict(d) for d in db.execute(
             "SELECT id, application_id, person_id, doc_type, doc_name, file_size, mime_type, "
             "slot_key, is_current, version, superseded_at, superseded_by_document_id, "
+            "expiry_date, valid_until, expiry_source, expiry_confidence, expiry_extracted_at, "
             "verification_status, verification_results, verified_at, review_status, "
             f"review_comment, reviewed_by, reviewed_at FROM documents WHERE application_id = ?{where_active} "
             "ORDER BY uploaded_at DESC, id DESC",
@@ -9979,11 +10013,16 @@ class ScreeningHandler(BaseHandler):
                             log_audit_fn=self.log_audit)
         risk_recomputed = rr.get("recomputed", False)
 
+        self.log_audit(
+            user,
+            "Screening",
+            app["ref"],
+            f"Full screening run — {report['total_hits']} hit(s), {len(report['overall_flags'])} flag(s)",
+            db=db,
+            commit=False,
+        )
         db.commit()
         db.close()
-
-        self.log_audit(user, "Screening", app["ref"],
-                       f"Full screening run — {report['total_hits']} hit(s), {len(report['overall_flags'])} flag(s)")
 
         response = dict(report)
         if risk_recomputed:
@@ -10781,30 +10820,32 @@ class MonitoringAlertCreateHandler(BaseHandler):
         client_id = self.get_argument("client", None)
 
         db = get_db()
-        # Exclude fixture-linked alerts by default (application_id NOT LIKE 'f1xed%')
-        fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
-        query = f"SELECT * FROM monitoring_alerts WHERE {fx_excl}"
-        params = list(fx_params)
+        try:
+            # Exclude fixture-linked alerts by default (application_id NOT LIKE 'f1xed%')
+            fx_excl, fx_params = fixture_app_id_exclude_clause("application_id")
+            query = f"SELECT * FROM monitoring_alerts WHERE {fx_excl}"
+            params = list(fx_params)
 
-        if severity:
-            query += " AND severity = ?"
-            params.append(severity)
-        if alert_type:
-            query += " AND alert_type = ?"
-            params.append(alert_type)
-        if status_filter:
-            query += " AND status = ?"
-            params.append(status_filter)
-        if client_id:
-            query += " AND application_id = ?"
-            params.append(client_id)
+            if severity:
+                query += " AND severity = ?"
+                params.append(severity)
+            if alert_type:
+                query += " AND alert_type = ?"
+                params.append(alert_type)
+            if status_filter:
+                query += " AND status = ?"
+                params.append(status_filter)
+            if client_id:
+                query += " AND application_id = ?"
+                params.append(client_id)
 
-        query += " ORDER BY created_at DESC"
-        alerts = db.execute(query, params).fetchall()
+            query += " ORDER BY created_at DESC"
+            alerts = db.execute(query, params).fetchall()
 
-        result = [dict(a) for a in alerts]
-        db.close()
-        self.success({"alerts": result, "total": len(result)})
+            result = [dict(a) for a in alerts]
+            self.success({"alerts": result, "total": len(result)})
+        finally:
+            db.close()
 
     def post(self):
         user = self.require_auth(roles=["admin", "sco", "co"])
@@ -10813,48 +10854,63 @@ class MonitoringAlertCreateHandler(BaseHandler):
 
         data = self.get_json()
         db = get_db()
+        try:
+            # Insert the alert into monitoring_alerts
+            alert_type = data.get("alert_type", data.get("type", "Manual"))
+            severity = data.get("severity", "Medium")
+            client_name = data.get("client_name", "")
+            application_id = data.get("application_id")
+            summary = data.get("summary", data.get("message", ""))
+            detected_by = data.get("detected_by", user.get("name", "Officer"))
+            source_reference = data.get("source_reference", "Manual entry")
+            ai_recommendation = data.get("ai_recommendation", "")
+            discovered_via = _normalize_monitoring_alert_source(
+                data.get("discovered_via") or data.get("source") or "manual"
+            )
 
-        # Insert the alert into monitoring_alerts
-        alert_type = data.get("alert_type", data.get("type", "Manual"))
-        severity = data.get("severity", "Medium")
-        client_name = data.get("client_name", "")
-        application_id = data.get("application_id")
-        summary = data.get("summary", data.get("message", ""))
-        detected_by = data.get("detected_by", user.get("name", "Officer"))
-        source_reference = data.get("source_reference", "Manual entry")
-        ai_recommendation = data.get("ai_recommendation", "")
-        discovered_via = _normalize_monitoring_alert_source(
-            data.get("discovered_via") or data.get("source") or "manual"
-        )
+            db.execute("""
+                INSERT INTO monitoring_alerts
+                    (application_id, client_name, alert_type, severity, detected_by,
+                     summary, source_reference, ai_recommendation, status, discovered_via)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+            """, (
+                application_id, client_name, alert_type, severity, detected_by,
+                summary, source_reference, ai_recommendation, "open", discovered_via,
+            ))
+            created = db.execute(
+                "SELECT id, discovered_via FROM monitoring_alerts ORDER BY id DESC LIMIT 1"
+            ).fetchone()
 
-        db.execute("""
-            INSERT INTO monitoring_alerts
-                (application_id, client_name, alert_type, severity, detected_by,
-                 summary, source_reference, ai_recommendation, status, discovered_via)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
-        """, (
-            application_id, client_name, alert_type, severity, detected_by,
-            summary, source_reference, ai_recommendation, "open", discovered_via,
-        ))
-        created = db.execute(
-            "SELECT id, discovered_via FROM monitoring_alerts ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+            # Create notification for relevant users
+            title = data.get("title", f"Monitoring Alert: {alert_type}")
+            alert_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
+            for u in alert_users:
+                db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
+                          (u["id"], title, summary))
 
-        # Create notification for relevant users
-        title = data.get("title", f"Monitoring Alert: {alert_type}")
-        alert_users = db.execute("SELECT id FROM users WHERE role IN ('sco','co','admin')").fetchall()
-        for u in alert_users:
-            db.execute("INSERT INTO notifications (user_id, title, message) VALUES (?,?,?)",
-                      (u["id"], title, summary))
-
-        db.commit()
-        db.close()
-        self.log_audit(user, "Alert", "Monitoring", f"Alert created: {alert_type} — {severity}")
-        self.success({
-            "status": "created",
-            "id": created["id"] if created else None,
-            "discovered_via": created["discovered_via"] if created else discovered_via,
-        }, 201)
+            self.log_audit(
+                user,
+                "Alert",
+                "Monitoring",
+                f"Alert created: {alert_type} — {severity}",
+                db=db,
+                commit=False,
+            )
+            db.commit()
+            self.success({
+                "status": "created",
+                "id": created["id"] if created else None,
+                "discovered_via": created["discovered_via"] if created else discovered_via,
+            }, 201)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring alert create failed")
+            self.error("Failed to create monitoring alert.", 500)
+        finally:
+            db.close()
 
 
 # ══════════════════════════════════════════════════════════
@@ -11872,15 +11928,20 @@ def _sync_rmi_request_status(db, request_id):
     if not items:
         return
     statuses = [str(item.get("status") or "requested") for item in items]
-    fulfilled = {"uploaded", "accepted"}
-    if all(status in fulfilled for status in statuses):
+    accepted = {"accepted"}
+    submitted_for_review = {"uploaded", "accepted"}
+    if all(status in accepted for status in statuses):
         new_status = "fulfilled"
         db.execute(
             "UPDATE rmi_requests SET status = ?, fulfilled_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
             (new_status, request_id),
         )
-    elif any(status in fulfilled for status in statuses):
-        new_status = "partially_fulfilled"
+    elif any(status in submitted_for_review for status in statuses):
+        new_status = (
+            "pending_review"
+            if all(status in submitted_for_review for status in statuses)
+            else "partially_fulfilled"
+        )
         db.execute(
             "UPDATE rmi_requests SET status = ?, fulfilled_at = NULL, updated_at = datetime('now') WHERE id = ?",
             (new_status, request_id),
@@ -13462,63 +13523,82 @@ class MonitoringAgentRunHandler(BaseHandler):
             return
 
         db = get_db()
-        agent = db.execute("SELECT * FROM monitoring_agent_status WHERE id = ?", (agent_id,)).fetchone()
-        if not agent:
-            if str(agent_id).strip().lower() == "document_health":
-                agent = {
+        try:
+            agent_key = str(agent_id or "").strip().lower()
+            agent = None
+            if agent_key == "document_health":
+                row = db.execute(
+                    """
+                    SELECT *
+                      FROM monitoring_agent_status
+                     WHERE agent_type = ? OR agent_name = ?
+                     ORDER BY id
+                     LIMIT 1
+                    """,
+                    ("document_health", "Document Health Monitor"),
+                ).fetchone()
+                agent = dict(row) if row else {
                     "id": None,
                     "agent_name": "Document Health Monitor",
                     "agent_type": "document_health",
                     "alerts_generated": 0,
                     "status": "enabled",
                 }
-            else:
-                db.close()
+            elif agent_key.isdigit():
+                row = db.execute("SELECT * FROM monitoring_agent_status WHERE id = ?", (int(agent_key),)).fetchone()
+                agent = dict(row) if row else None
+            if not agent:
                 return self.error("Agent not found", 404)
-        else:
-            agent = dict(agent)
 
-        now = datetime.now().isoformat()
-        alerts_generated_delta = 0
-        run_summary = None
-        if _is_document_health_monitor_agent(agent):
-            import document_health_monitor as dhm
-            run_summary = dhm.sync_document_health_alerts(
-                db,
-                user=user,
-                audit_writer=self.log_audit,
-            )
-            run_summary["triggered"] = True
-            alerts_generated_delta = run_summary.get("created", 0)
-        else:
-            run_summary = {
-                "triggered": False,
-                "reason": "agent_not_configured_for_document_health_sync",
-                "applications": 0,
-                "created": 0,
-                "updated": 0,
-                "resolved": 0,
-            }
-        if agent.get("id") is not None:
-            db.execute("""
-                UPDATE monitoring_agent_status
-                   SET last_run=?,
-                       alerts_generated=COALESCE(alerts_generated, 0)+?
-                 WHERE id=?
-            """, (now, alerts_generated_delta, agent["id"]))
+            now = datetime.now().isoformat()
+            alerts_generated_delta = 0
+            run_summary = None
+            if _is_document_health_monitor_agent(agent):
+                import document_health_monitor as dhm
+                run_summary = dhm.sync_document_health_alerts(
+                    db,
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+                run_summary["triggered"] = True
+                alerts_generated_delta = run_summary.get("created", 0)
+            else:
+                run_summary = {
+                    "triggered": False,
+                    "reason": "agent_not_configured_for_document_health_sync",
+                    "applications": 0,
+                    "created": 0,
+                    "updated": 0,
+                    "resolved": 0,
+                }
+            if agent.get("id") is not None:
+                db.execute("""
+                    UPDATE monitoring_agent_status
+                       SET last_run=?,
+                           alerts_generated=COALESCE(alerts_generated, 0)+?
+                     WHERE id=?
+                """, (now, alerts_generated_delta, agent["id"]))
 
-        db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
-                   (user.get("sub",""), user.get("name",""), user.get("role",""), "Agent Run", agent["agent_name"],
-                    f"Manual run triggered for {agent['agent_name']}", self.get_client_ip()))
+            db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                       (user.get("sub",""), user.get("name",""), user.get("role",""), "Agent Run", agent["agent_name"],
+                        f"Manual run triggered for {agent['agent_name']}", self.get_client_ip()))
 
-        db.commit()
-        db.close()
+            db.commit()
 
-        payload = {"status": "agent_run_initiated", "agent": agent["agent_name"], "run_time": now}
-        if _is_document_health_monitor_agent(agent):
-            payload["agent_key"] = "document_health"
-        payload["document_health_sync"] = run_summary
-        self.success(payload)
+            payload = {"status": "agent_run_initiated", "agent": agent["agent_name"], "run_time": now}
+            if _is_document_health_monitor_agent(agent):
+                payload["agent_key"] = "document_health"
+            payload["document_health_sync"] = run_summary
+            self.success(payload)
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Monitoring agent run failed: agent_id=%s", agent_id)
+            self.error("Failed to run monitoring agent.", 500)
+        finally:
+            db.close()
 
 
 class PeriodicReviewsListHandler(BaseHandler):
@@ -14052,6 +14132,13 @@ class PeriodicReviewCompleteHandler(BaseHandler):
                 "result": result,
                 "memo": memo_result,
             })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Periodic review completion failed: review_id=%s", review_id)
+            self.error("Failed to complete periodic review.", 500)
         finally:
             db.close()
 

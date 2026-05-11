@@ -168,6 +168,23 @@ def _dsn():
     return os.environ.get("TEST_POSTGRES_DSN") or os.environ.get("DATABASE_URL_TEST")
 
 
+def test_monitoring_alert_discovered_via_pg_repair_replaces_all_constraints():
+    """Existing PostgreSQL DBs can have old CHECK constraints with varied names."""
+    db_source = (Path(__file__).resolve().parents[1] / "db.py").read_text(encoding="utf-8")
+    assert "FOR existing_constraint IN" in db_source
+    assert "pg_get_constraintdef(oid) ILIKE '%discovered_via%'" in db_source
+    assert "DROP CONSTRAINT IF EXISTS %I" in db_source
+    for value in (
+        "webhook_live",
+        "webhook_backfill",
+        "manual_backfill",
+        "manual",
+        "officer_created",
+        "document_health",
+    ):
+        assert value in db_source
+
+
 def _fresh_pg(monkeypatch):
     dsn = _dsn()
     if not dsn:

@@ -451,17 +451,30 @@ class ApprovalGateValidator:
                     "Live AI verification required for approval."
                 )
 
-            # 8. Screening freshness: check screening was run after application submission
+            # 8. Screening freshness: check screening was run after the latest
+            # screening-relevant application inputs.  KYC/document submission is
+            # an operational workflow event and must not stale screening unless
+            # it also changes prescreening/company/party risk inputs.
             submitted_at = app.get('submitted_at')
+            screening_input_updated_at = (
+                app.get('screening_input_updated_at')
+                or app.get('risk_inputs_updated_at')
+                or (app.get('inputs_updated_at') if submitted_at else None)
+                or submitted_at
+            )
             screening_ts_str = screening_report.get('screened_at') or screening_report.get('timestamp')
-            if submitted_at and screening_ts_str:
+            if screening_input_updated_at and screening_ts_str:
                 try:
-                    sub_ts = _parse_approval_timestamp(submitted_at)
+                    sub_ts = _parse_approval_timestamp(screening_input_updated_at)
                     scr_ts = _parse_approval_timestamp(screening_ts_str)
-                    if sub_ts > scr_ts:
+                    # Same-request screening persistence may write
+                    # inputs_updated_at a few seconds after screened_at. Treat
+                    # that as timestamp skew, not a substantive post-screening
+                    # input change.
+                    if sub_ts > scr_ts + timedelta(seconds=5):
                         return (
                             False,
-                            "Screening was run before the latest submission. "
+                            "Screening was run before the latest screening-relevant application update. "
                             "Re-submit the application to trigger fresh screening."
                         )
                 except (ValueError, TypeError) as ts_err:
