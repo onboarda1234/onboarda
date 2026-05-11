@@ -126,9 +126,11 @@ def persist_normalized_report(
     ).fetchone()
     if row is not None:
         try:
-            return row["id"]
+            row_id = row["id"]
         except (TypeError, KeyError, IndexError):
-            return row[0]
+            row_id = row[0]
+        if isinstance(row_id, int):
+            return row_id
     return cursor.lastrowid
 
 
