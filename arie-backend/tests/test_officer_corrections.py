@@ -106,7 +106,7 @@ def _headers(role="admin"):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _now(offset_hours=0):
+def _timestamp_with_offset(offset_hours=0):
     return (datetime.now(timezone.utc) + timedelta(hours=offset_hours)).strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -165,10 +165,10 @@ def _insert_case(db, *, country="United Kingdom", sector="Technology", brn="BRN-
             45,
             "Standard Review",
             json.dumps(prescreening),
-            _now(-4),
-            _now(-3),
-            _now(-3),
-            _now(-3),
+            _timestamp_with_offset(-4),
+            _timestamp_with_offset(-3),
+            _timestamp_with_offset(-3),
+            _timestamp_with_offset(-3),
         ),
     )
     db.execute(
@@ -226,7 +226,7 @@ def _insert_case(db, *, country="United Kingdom", sector="Technology", brn="BRN-
         VALUES (?, 1, ?, 'admin001', 'APPROVE_WITH_CONDITIONS',
                 'approved', 8.8, 'pass', 'CONSISTENT', 0, ?)
         """,
-        (app_id, memo_data, _now(-2)),
+        (app_id, memo_data, _timestamp_with_offset(-2)),
     )
     db.commit()
     return {"app_id": app_id, "ref": ref, "director_id": director_id, "ubo_id": ubo_id}

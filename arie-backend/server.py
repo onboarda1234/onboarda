@@ -3790,6 +3790,9 @@ class ApplicationCorrectionHandler(BaseHandler):
         else:
             if not target_id:
                 raise ValueError("target_id is required for this correction target")
+            # Safe SQL identifier interpolation: table/id_field come only from
+            # _officer_correction_target_config(), which returns hard-coded
+            # whitelist values for each supported correction target.
             row = db.execute(
                 f"SELECT * FROM {target_config['table']} WHERE application_id = ? AND {target_config['id_field']} = ?",
                 (app_id, target_id),
@@ -3833,6 +3836,9 @@ class ApplicationCorrectionHandler(BaseHandler):
             after_state = dict(before_state)
             for field, value in field_changes.items():
                 after_state[field] = value
+            # Safe SQL identifier interpolation: assignments are composed only
+            # from OFFICER_CORRECTION_APPLICATION_FIELDS after whitelist
+            # validation in post().
             assignments = ", ".join(f"{field} = ?" for field in field_changes)
             params = [after_state[field] for field in field_changes]
             params.extend([correction_ts, app["id"]])
@@ -3903,6 +3909,8 @@ class ApplicationCorrectionHandler(BaseHandler):
                 normalized_updates["full_name"] = full_name
                 after_state["full_name"] = full_name
 
+        # Safe SQL identifier interpolation: table/id_field are hard-coded
+        # whitelist values and assignments use only validated field names.
         assignments = ", ".join(f"{field} = ?" for field in normalized_updates)
         params = [normalized_updates[field] for field in normalized_updates]
         params.extend([app["id"], target_id])
@@ -3929,6 +3937,8 @@ class ApplicationCorrectionHandler(BaseHandler):
         user,
     ):
         table = "directors" if target_type == "director" else "ubos"
+        # Safe SQL identifier interpolation: table is reduced to one of two
+        # hard-coded values above and never comes directly from request data.
         row = db.execute(
             f"SELECT * FROM {table} WHERE application_id = ? AND id = ?",
             (app_id, target_id),
@@ -4001,8 +4011,10 @@ class ApplicationCorrectionHandler(BaseHandler):
             "enhanced_requirements_generated": 0,
             "next_action_code": "none",
         }
-        audit_fn = lambda *args, **kwargs: _correction_log_audit(self, *args, **kwargs)
         if materiality == "tier1" or (materiality == "tier2" and risk_relevant):
+            def audit_fn(*args, **kwargs):
+                return _correction_log_audit(self, *args, **kwargs)
+
             rr = recompute_risk(
                 db,
                 app_id,

@@ -4983,7 +4983,7 @@ def _run_migrations(db: DBConnection):
         try:
             db.rollback()
         except Exception:
-            pass
+            logger.warning("Rollback after migration v2.35 failed", exc_info=True)
 
     # Migration v2.36: Officer correction audit store.
     # Preserves client-submitted values alongside officer-verified corrections
