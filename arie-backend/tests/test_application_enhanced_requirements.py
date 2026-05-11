@@ -635,6 +635,96 @@ def test_operational_summary_invalid_waiver_blocks(enhanced_app_db):
     assert summary["next_action_code"] == "fix_invalid_waiver"
 
 
+def _screening_report_for_terminality(*, state="completed_clear", material=False, pending=False):
+    api_status = "pending" if pending else "live"
+    person = {
+        "person_name": "Screened Director",
+        "person_type": "director",
+        "declared_pep": "No",
+        "has_pep_hit": bool(material),
+        "has_sanctions_hit": False,
+        "has_adverse_media_hit": None,
+        "provider_detected_pep": bool(material),
+        "screening_state": "pending_provider" if pending else state,
+        "screening": {
+            "source": "complyadvantage",
+            "api_status": api_status,
+            "matched": bool(material),
+            "results": [{"name": "Screened Director", "is_pep": True}] if material else [],
+        },
+    }
+    return {
+        "screened_at": "2026-05-10T10:00:00Z",
+        "screening_mode": "live",
+        "any_pep_hits": bool(material),
+        "any_sanctions_hits": False,
+        "has_adverse_media_hit": None,
+        "has_company_screening_hit": False,
+        "total_hits": 1 if material else 0,
+        "any_non_terminal_subject": bool(pending),
+        "company_screening_state": "completed_clear",
+        "company_screening": {
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": False,
+            "results": [],
+        },
+        "director_screenings": [person],
+        "ubo_screenings": [],
+    }
+
+
+def test_clean_low_risk_clear_screening_does_not_generate_screening_concern(enhanced_app_db):
+    from enhanced_requirements import build_enhanced_requirement_operational_summary
+
+    db = enhanced_app_db
+    app_id = _insert_application(
+        db,
+        risk_level="LOW",
+        prescreening={"screening_report": _screening_report_for_terminality()},
+    )
+
+    result = _generate(db, app_id)
+
+    assert "screening_concern" not in result["triggers"]
+    assert _count_app_reqs(db, app_id, "screening_concern") == 0
+    summary = build_enhanced_requirement_operational_summary(db, app_id)
+    assert summary["approval_blocked"] is False
+
+
+def test_non_terminal_screening_does_not_generate_screening_concern(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(
+        db,
+        risk_level="LOW",
+        prescreening={"screening_report": _screening_report_for_terminality(pending=True)},
+    )
+
+    result = _generate(db, app_id)
+
+    assert "screening_concern" not in result["triggers"]
+    assert _count_app_reqs(db, app_id, "screening_concern") == 0
+
+
+def test_terminal_material_screening_match_generates_screening_concern(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(
+        db,
+        risk_level="LOW",
+        prescreening={
+            "screening_report": _screening_report_for_terminality(
+                state="completed_match",
+                material=True,
+            )
+        },
+    )
+
+    result = _generate(db, app_id)
+
+    assert "screening_concern" in result["triggers"]
+    assert _count_app_reqs(db, app_id, "screening_concern") == _count_rules(db, "screening_concern")
+
+
 @pytest.mark.parametrize(
     "app_kwargs,setup,trigger_key",
     [

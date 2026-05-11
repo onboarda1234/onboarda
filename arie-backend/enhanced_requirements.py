@@ -1877,6 +1877,13 @@ def _screening_summary_from_app(app):
     if not isinstance(report, dict):
         report = _loads_json(report, {})
     existing = prescreening.get("screening_terminality_summary") if isinstance(prescreening, dict) else {}
+    if report:
+        try:
+            from screening_state import build_screening_terminality_summary
+
+            return build_screening_terminality_summary(report, prescreening)
+        except Exception:
+            logger.exception("Failed to build canonical screening terminality summary")
     if isinstance(existing, dict) and existing:
         return existing
     try:

@@ -106,6 +106,151 @@ class TestCanonicalStateModel:
         assert state_label("completed_clear", declared_pep=False) == "No Provider Match"
 
 
+class TestScreeningTerminalitySummary:
+    def test_clean_terminal_clear_is_not_material_screening_concern(self):
+        from screening_state import build_screening_terminality_summary
+
+        report = {
+            "screened_at": "2026-05-10T10:00:00Z",
+            "any_pep_hits": False,
+            "any_sanctions_hits": False,
+            "has_adverse_media_hit": None,
+            "has_company_screening_hit": False,
+            "total_hits": 0,
+            "any_non_terminal_subject": False,
+            "company_screening_state": "completed_clear",
+            "company_screening": {
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+            },
+            "director_screenings": [
+                {
+                    "person_name": "Clean Director",
+                    "has_pep_hit": False,
+                    "has_sanctions_hit": False,
+                    "has_adverse_media_hit": None,
+                    "provider_detected_pep": False,
+                    "screening_state": "completed_clear",
+                    "screening": {
+                        "source": "complyadvantage",
+                        "api_status": "live",
+                        "matched": False,
+                        "results": [],
+                    },
+                }
+            ],
+            "ubo_screenings": [],
+        }
+
+        summary = build_screening_terminality_summary(report)
+        assert summary["terminal"] is True
+        assert summary["has_terminal_match"] is False
+        assert summary["has_non_terminal"] is False
+
+    def test_non_material_provider_profile_does_not_become_material_match(self):
+        from screening_state import build_screening_terminality_summary
+
+        report = {
+            "screened_at": "2026-05-10T10:00:00Z",
+            "any_pep_hits": False,
+            "any_sanctions_hits": False,
+            "has_adverse_media_hit": None,
+            "has_company_screening_hit": False,
+            "total_hits": 1,
+            "any_non_terminal_subject": False,
+            "company_screening_state": "completed_clear",
+            "company_screening": {
+                "source": "complyadvantage",
+                "api_status": "live",
+                "matched": False,
+                "results": [],
+            },
+            "director_screenings": [
+                {
+                    "person_name": "False Positive Profile",
+                    "has_pep_hit": False,
+                    "has_sanctions_hit": False,
+                    "has_adverse_media_hit": None,
+                    "provider_detected_pep": False,
+                    "screening_state": "completed_match",
+                    "screening": {
+                        "source": "complyadvantage",
+                        "api_status": "live",
+                        "matched": True,
+                        "results": [{"name": "False Positive Profile", "match_category": "other"}],
+                    },
+                }
+            ],
+            "ubo_screenings": [],
+        }
+
+        summary = build_screening_terminality_summary(report)
+        assert summary["terminal"] is True
+        assert summary["has_terminal_match"] is False
+        assert summary["has_non_terminal"] is False
+
+    def test_non_terminal_screening_is_not_material_screening_concern(self):
+        from screening_state import build_screening_terminality_summary
+
+        report = {
+            "screened_at": "2026-05-10T10:00:00Z",
+            "total_hits": 0,
+            "any_non_terminal_subject": True,
+            "director_screenings": [
+                {
+                    "person_name": "Pending Director",
+                    "screening_state": "pending_provider",
+                    "screening": {
+                        "source": "complyadvantage",
+                        "api_status": "pending",
+                        "matched": False,
+                        "results": [],
+                    },
+                }
+            ],
+            "ubo_screenings": [],
+        }
+
+        summary = build_screening_terminality_summary(report)
+        assert summary["terminal"] is False
+        assert summary["has_terminal_match"] is False
+        assert summary["has_non_terminal"] is True
+
+    def test_terminal_material_match_is_preserved(self):
+        from screening_state import build_screening_terminality_summary
+
+        report = {
+            "screened_at": "2026-05-10T10:00:00Z",
+            "any_pep_hits": True,
+            "any_sanctions_hits": False,
+            "total_hits": 1,
+            "any_non_terminal_subject": False,
+            "director_screenings": [
+                {
+                    "person_name": "Provider PEP",
+                    "has_pep_hit": True,
+                    "has_sanctions_hit": False,
+                    "has_adverse_media_hit": None,
+                    "screening_state": "completed_match",
+                    "screening": {
+                        "source": "complyadvantage",
+                        "api_status": "live",
+                        "matched": True,
+                        "results": [{"name": "Provider PEP", "is_pep": True}],
+                    },
+                }
+            ],
+            "ubo_screenings": [],
+        }
+
+        summary = build_screening_terminality_summary(report)
+        assert summary["terminal"] is True
+        assert summary["has_terminal_match"] is True
+        assert summary["has_non_terminal"] is False
+
+
 # ── Normalizer: pending must not look clear ───────────────────────────
 
 
