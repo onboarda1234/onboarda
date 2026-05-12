@@ -51,10 +51,10 @@ def test_backoffice_screening_review_renders_provider_evidence_details():
     assert "screening-evidence-body" in html
     assert "function openScreeningEvidenceDrawer" in html
     assert "View evidence" in html
-    assert "Case ID" in html
-    assert "Alert ID" in html
-    assert "Risk ID" in html
-    assert "Profile ID" in html
+    assert "Provider case ID" in html
+    assert "Provider alert ID" in html
+    assert "Provider risk ID" in html
+    assert "Provider profile ID" in html
 
     region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
     assert "provider_case_identifier" in region
@@ -73,6 +73,7 @@ def test_backoffice_screening_evidence_drawer_renders_structured_review_fields()
 
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
     assert "Match Semantics" in drawer_region
+    assert "Traceability" in drawer_region
     assert "Media Evidence" in drawer_region
     assert "PEP Evidence" in drawer_region
     assert "Sanctions / Watchlist Evidence" in drawer_region
@@ -90,6 +91,61 @@ def test_backoffice_screening_evidence_drawer_renders_structured_review_fields()
     assert "Open media source" in drawer_region
 
 
+def test_backoffice_screening_evidence_drawer_uses_review_friendly_fallbacks():
+    html = BACKOFFICE_HTML.read_text()
+
+    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+    register_region = _function_region(html, "registerScreeningEvidence", "evidenceInfoGrid")
+    title_region = _function_region(html, "evidencePrimaryLabel", "isPepEvidenceRelevant")
+
+    assert "function formatProviderName" in html
+    assert "|| 'ComplyAdvantage'" in register_region
+    assert "var provider = formatProviderName(hit.provider || hit.source || hit._provider) || 'ComplyAdvantage'" in drawer_region
+    assert "Provider', provider" in drawer_region
+    assert "Not recorded" not in drawer_region
+    assert "function isUuidLike" in html
+    assert "evidencePrimaryLabel(hit, hit)" in drawer_region
+    assert "!isUuidLike(candidate)" in title_region
+    assert "Screening Evidence — ' + matchedName" in drawer_region
+
+
+def test_backoffice_screening_evidence_drawer_normalizes_categories_and_sections():
+    html = BACKOFFICE_HTML.read_text()
+
+    category_region = _function_region(html, "normalizeEvidenceCategoryLabel", "evidenceCategories")
+    categories_region = _function_region(html, "evidenceCategories", "evidencePrimaryLabel")
+    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+
+    assert "Unclassified provider hit" in categories_region
+    assert "key === 'other'" in category_region
+    assert "Adverse media" in category_region
+    assert "Sanctions" in category_region
+    assert "Watchlist / warning" in category_region
+    assert "Regulatory" in category_region
+    assert "function isPepEvidenceRelevant" in html
+    assert "if (isPepEvidenceRelevant(hit, categories, riskLabels))" in drawer_region
+    assert "if (mediaTitle || mediaSnippet || mediaUrl)" in drawer_region
+
+
+def test_backoffice_screening_evidence_groups_repeated_hits_before_rendering():
+    html = BACKOFFICE_HTML.read_text()
+
+    grouping_region = _function_region(html, "groupProviderEvidenceHits", "openScreeningEvidenceDrawer")
+    provider_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
+    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+
+    assert "function providerEvidenceGroupKey" in html
+    assert "function groupProviderEvidenceHits" in html
+    assert "_group_count" in grouping_region
+    assert "_grouped_risk_identifiers" in grouping_region
+    assert "_grouped_alert_identifiers" in grouping_region
+    assert "var hits = groupProviderEvidenceHits" in provider_region
+    assert "evidence records grouped for this profile/category" in provider_region
+    assert "Evidence records grouped" in drawer_region
+    assert "Grouped alert IDs" in drawer_region
+    assert "Grouped risk IDs" in drawer_region
+
+
 def test_backoffice_screening_review_uses_backend_provider_evidence_payload():
     html = BACKOFFICE_HTML.read_text()
 
@@ -100,6 +156,8 @@ def test_backoffice_screening_review_uses_backend_provider_evidence_payload():
     assert "reviewRow && reviewRow.provider_evidence" in person_region
     assert "providerResultHighlights(companyResults, {" in entity_region
     assert "providerResultHighlights([].concat(screening.results || []).concat((reviewRow && reviewRow.provider_evidence) || []), {" in person_region
+    assert "provider: company.source || company.provider || screeningSummary.provider" in entity_region
+    assert "provider: facts.source || screeningSummary.provider" in person_region
 
 
 def test_backoffice_person_review_prefers_screening_declared_pep_truth():
