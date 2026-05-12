@@ -3004,7 +3004,6 @@ OFFICER_CORRECTION_TIER2_FIELDS = frozenset({
     "nationality",
     "date_of_birth",
     "entity_name",
-    "brn",
 })
 OFFICER_CORRECTION_RISK_RELEVANT_FIELDS = frozenset({
     "country",
@@ -3034,6 +3033,29 @@ OFFICER_CORRECTION_MEMO_VISIBLE_FIELDS = frozenset(
         "entity_name",
     }
 )
+OFFICER_CORRECTION_HIGH_RISK_COUNTRY_FIELDS = frozenset({"country", "jurisdiction"})
+OFFICER_CORRECTION_HIGH_RISK_SECTOR_FIELDS = frozenset({"sector"})
+OFFICER_CORRECTION_ALWAYS_TIER1_FIELDS = frozenset({
+    "ownership_structure",
+    "ownership_pct",
+    "is_pep",
+    "verified_pep",
+    "pep_status",
+    "source_of_funds",
+    "source_of_wealth",
+    "expected_volume",
+    "expected_volumes",
+    "monthly_volume",
+    "sanctions_status",
+    "sanctions_match",
+    "adverse_media_status",
+    "adverse_media_match",
+})
+OFFICER_CORRECTION_MATERIALITY_ORDER = {
+    "tier3": 1,
+    "tier2": 2,
+    "tier1": 3,
+}
 
 
 def _officer_correction_now():
@@ -3055,14 +3077,99 @@ def _correction_bool(value):
 
 def _normalize_officer_correction_materiality(target_type, field_changes, requested=None):
     requested_materiality = str(requested or "").strip().lower()
-    if requested_materiality in OFFICER_CORRECTION_MATERIALITIES:
-        return requested_materiality
+    system_materiality = _system_derived_officer_correction_materiality(
+        target_type,
+        field_changes,
+    )
+    if requested_materiality not in OFFICER_CORRECTION_MATERIALITIES:
+        return system_materiality
+    return _max_officer_correction_materiality(
+        system_materiality,
+        requested_materiality,
+    )
+
+
+def _max_officer_correction_materiality(*tiers):
+    valid = [
+        str(tier or "").strip().lower()
+        for tier in tiers
+        if str(tier or "").strip().lower() in OFFICER_CORRECTION_MATERIALITIES
+    ]
+    if not valid:
+        return "tier3"
+    return max(
+        valid,
+        key=lambda tier: OFFICER_CORRECTION_MATERIALITY_ORDER.get(tier, 0),
+    )
+
+
+def _system_derived_officer_correction_materiality(target_type, field_changes):
     field_names = {str(name or "").strip() for name in (field_changes or {}).keys() if str(name or "").strip()}
-    if target_type == "pep_status" or field_names & OFFICER_CORRECTION_TIER1_FIELDS:
+    if target_type == "pep_status":
+        return "tier1"
+    if field_names & OFFICER_CORRECTION_ALWAYS_TIER1_FIELDS:
+        return "tier1"
+    if _officer_correction_values_force_tier1(field_changes):
+        return "tier1"
+    if field_names & (OFFICER_CORRECTION_TIER1_FIELDS - OFFICER_CORRECTION_ALWAYS_TIER1_FIELDS):
         return "tier1"
     if field_names & OFFICER_CORRECTION_TIER2_FIELDS:
         return "tier2"
-    return "tier2" if field_names else "tier3"
+    return "tier3" if field_names else "tier3"
+
+
+def _officer_correction_values_force_tier1(field_changes):
+    if not isinstance(field_changes, dict):
+        return False
+    for field, value in field_changes.items():
+        field_name = str(field or "").strip()
+        if field_name in OFFICER_CORRECTION_HIGH_RISK_COUNTRY_FIELDS and _officer_correction_is_high_risk_country(value):
+            return True
+        if field_name in OFFICER_CORRECTION_HIGH_RISK_SECTOR_FIELDS and _officer_correction_is_high_risk_sector(value):
+            return True
+        if field_name in ("sanctions_status", "sanctions_match") and _correction_bool(value):
+            return True
+        if field_name in ("adverse_media_status", "adverse_media_match") and _correction_bool(value):
+            return True
+    return False
+
+
+def _officer_correction_is_high_risk_country(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    raw_lower = raw.lower()
+    if raw_lower in {
+        "iran",
+        "north korea",
+        "syria",
+        "crimea",
+        "donetsk",
+        "luhansk",
+        "sudan",
+    }:
+        return True
+    try:
+        from rule_engine import classify_country
+
+        return int(classify_country(raw) or 0) >= 3
+    except Exception:
+        return False
+
+
+def _officer_correction_is_high_risk_sector(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    raw_lower = raw.lower()
+    if any(token in raw_lower for token in ("crypto", "vasp", "virtual asset", "digital asset", "exchange")):
+        return True
+    try:
+        from rule_engine import score_sector
+
+        return int(score_sector(raw) or 0) >= 3
+    except Exception:
+        return False
 
 
 def _officer_correction_target_config(target_type, payload):
@@ -3677,6 +3784,7 @@ class ApplicationCorrectionHandler(BaseHandler):
                 risk_relevant,
                 memo_visible,
                 user,
+                self.get_client_ip(),
             )
 
             db.execute(
@@ -4003,6 +4111,7 @@ class ApplicationCorrectionHandler(BaseHandler):
         risk_relevant,
         memo_visible,
         user,
+        client_ip,
     ):
         downstream = {
             "risk_recomputed": False,
@@ -4010,6 +4119,8 @@ class ApplicationCorrectionHandler(BaseHandler):
             "memo_visible": memo_visible,
             "enhanced_requirements_generated": 0,
             "next_action_code": "none",
+            "edd_routing_evaluated": False,
+            "edd_routing_actuated": False,
         }
         if materiality == "tier1" or (materiality == "tier2" and risk_relevant):
             def audit_fn(*args, **kwargs):
@@ -4021,6 +4132,7 @@ class ApplicationCorrectionHandler(BaseHandler):
                 f"officer_correction:{target_type}",
                 user=user,
                 log_audit_fn=audit_fn,
+                apply_routing_policy=(materiality != "tier1"),
             )
             downstream["risk_recomputed"] = bool(rr.get("recomputed"))
             downstream["risk_result"] = rr
@@ -4030,13 +4142,42 @@ class ApplicationCorrectionHandler(BaseHandler):
                 "SELECT * FROM applications WHERE id = ?",
                 (app_id,),
             ).fetchone()
-            generation = generate_application_enhanced_requirements(
-                db,
-                app_id,
-                app_row=refreshed_app,
-                actor=user,
-                generation_source="officer_correction",
+            refreshed_app_dict = dict(refreshed_app) if refreshed_app else {}
+            from routing_actuator import (
+                apply_routing_decision,
+                SOURCE_RISK_RECOMPUTE,
             )
+
+            risk_dict = {
+                "score": refreshed_app_dict.get("risk_score"),
+                "level": refreshed_app_dict.get("risk_level"),
+                "final_risk_level": refreshed_app_dict.get("final_risk_level") or refreshed_app_dict.get("risk_level"),
+                "base_risk_level": refreshed_app_dict.get("base_risk_level") or refreshed_app_dict.get("risk_level"),
+                "sector_label": refreshed_app_dict.get("sector"),
+            }
+            routing_outcome = apply_routing_decision(
+                db=db,
+                app_row=refreshed_app,
+                risk_dict=risk_dict,
+                user=user,
+                client_ip=client_ip or "",
+                source=SOURCE_RISK_RECOMPUTE,
+            )
+            downstream["edd_routing"] = routing_outcome
+            downstream["edd_routing_evaluated"] = bool(routing_outcome.get("ran"))
+            downstream["edd_routing_actuated"] = bool((routing_outcome.get("actuation") or {}).get("case_id"))
+            downstream["edd_routing_route"] = routing_outcome.get("route")
+            downstream["edd_routing_triggers"] = routing_outcome.get("triggers") or []
+            downstream["edd_routing_errors"] = routing_outcome.get("errors") or []
+            generation = routing_outcome.get("enhanced_requirements_generation")
+            if not generation:
+                generation = generate_application_enhanced_requirements(
+                    db,
+                    app_id,
+                    app_row=refreshed_app,
+                    actor=user,
+                    generation_source="officer_correction",
+                )
             downstream["enhanced_requirements_generation"] = generation
             downstream["enhanced_requirements_generated"] = int(generation.get("generated_count") or 0)
 

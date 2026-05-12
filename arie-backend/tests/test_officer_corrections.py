@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+import sqlite3
 import socket
 import sys
 import threading
@@ -262,6 +263,36 @@ def _enhanced(base_url, app_id):
     return resp.json()
 
 
+def _post_correction(base_url, app_id, payload):
+    resp = requests.post(
+        f"{base_url}/api/applications/{app_id}/corrections",
+        headers=_headers("admin"),
+        json=payload,
+        timeout=5,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def _active_edd_cases(db, app_id):
+    return db.execute(
+        """
+        SELECT *
+        FROM edd_cases
+        WHERE application_id = ?
+          AND stage NOT IN ('edd_approved', 'edd_rejected')
+        ORDER BY id
+        """,
+        (app_id,),
+    ).fetchall()
+
+
+def _db_conn(path):
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def test_pep_correction_preserves_declared_pep_and_marks_workflow_stale(officer_correction_api_server):
     base_url, db_path = officer_correction_api_server
     conn = _fresh_db(db_path)
@@ -303,6 +334,29 @@ def test_pep_correction_preserves_declared_pep_and_marks_workflow_stale(officer_
     assert corrections[0]["after_state"]["verified_pep"] is True
 
 
+def test_pep_correction_requested_tier3_still_forces_tier1(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    body = _post_correction(
+        base_url,
+        case["app_id"],
+        {
+            "target_type": "pep_status",
+            "subject_type": "ubo",
+            "target_id": case["ubo_id"],
+            "materiality": "tier3",
+            "field_changes": {"verified_pep": True},
+            "correction_reason": "Screening hit confirms the UBO is a PEP.",
+            "evidence_source": "Sumsub screening report",
+            "correction_note": "Officer verified PEP exposure during review.",
+        },
+    )
+    assert body["materiality"] == "tier1"
+
+
 def test_sector_correction_recomputes_risk_and_audits_before_after(officer_correction_api_server):
     base_url, db_path = officer_correction_api_server
     conn = _fresh_db(db_path)
@@ -332,6 +386,27 @@ def test_sector_correction_recomputes_risk_and_audits_before_after(officer_corre
     assert detail["sector"] == "Crypto Exchange"
 
 
+def test_sector_correction_requested_tier3_still_forces_tier1(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn, sector="Technology")
+    conn.close()
+
+    body = _post_correction(
+        base_url,
+        case["app_id"],
+        {
+            "target_type": "application",
+            "materiality": "tier3",
+            "field_changes": {"sector": "Crypto Exchange"},
+            "correction_reason": "Registry evidence shows the applicant operates a VASP business.",
+            "evidence_source": "Business model review",
+            "correction_note": "Sector corrected from portal declaration to verified sector.",
+        },
+    )
+    assert body["materiality"] == "tier1"
+
+
 def test_jurisdiction_correction_refreshes_high_risk_requirements(officer_correction_api_server):
     base_url, db_path = officer_correction_api_server
     conn = _fresh_db(db_path)
@@ -356,6 +431,27 @@ def test_jurisdiction_correction_refreshes_high_risk_requirements(officer_correc
     enhanced = _enhanced(base_url, case["app_id"])
     trigger_keys = {item["trigger_key"] for item in enhanced["requirements"]}
     assert "high_risk_jurisdiction" in trigger_keys
+
+
+def test_high_risk_country_requested_tier3_still_forces_tier1(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn, country="United Kingdom")
+    conn.close()
+
+    body = _post_correction(
+        base_url,
+        case["app_id"],
+        {
+            "target_type": "application",
+            "materiality": "tier3",
+            "field_changes": {"country": "Iran"},
+            "correction_reason": "Incorporation documents show the entity is registered in Iran.",
+            "evidence_source": "Certificate of incorporation",
+            "correction_note": "Jurisdiction corrected after officer document review.",
+        },
+    )
+    assert body["materiality"] == "tier1"
 
 
 def test_ownership_percentage_correction_preserves_before_after_states(officer_correction_api_server):
@@ -386,6 +482,70 @@ def test_ownership_percentage_correction_preserves_before_after_states(officer_c
     detail = _detail(base_url, case["app_id"])
     ubo = next(item for item in detail["ubos"] if item["id"] == case["ubo_id"])
     assert float(ubo["ownership_pct"]) == 80.0
+
+
+def test_ownership_percentage_requested_tier3_still_forces_tier1(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    body = _post_correction(
+        base_url,
+        case["app_id"],
+        {
+            "target_type": "ubo",
+            "target_id": case["ubo_id"],
+            "materiality": "tier3",
+            "field_changes": {"ownership_pct": 80},
+            "correction_reason": "Share register shows an 80% holding.",
+            "evidence_source": "Certified shareholder register",
+            "correction_note": "Ownership corrected to verified percentage.",
+        },
+    )
+    assert body["materiality"] == "tier1"
+
+
+def test_source_of_funds_requested_tier3_still_forces_tier1(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    body = _post_correction(
+        base_url,
+        case["app_id"],
+        {
+            "target_type": "risk_field",
+            "materiality": "tier3",
+            "field_changes": {"source_of_funds": "PEP linked transfer"},
+            "correction_reason": "Officer verified updated source of funds.",
+            "evidence_source": "Source of funds review",
+            "correction_note": "Material source of funds correction.",
+        },
+    )
+    assert body["materiality"] == "tier1"
+
+
+def test_source_of_wealth_requested_tier3_still_forces_tier1(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    body = _post_correction(
+        base_url,
+        case["app_id"],
+        {
+            "target_type": "risk_field",
+            "materiality": "tier3",
+            "field_changes": {"source_of_wealth": "Politically exposed holdings"},
+            "correction_reason": "Officer verified updated source of wealth.",
+            "evidence_source": "Source of wealth review",
+            "correction_note": "Material source of wealth correction.",
+        },
+    )
+    assert body["materiality"] == "tier1"
 
 
 def test_non_material_typo_correction_audits_without_memo_staleness(officer_correction_api_server):
@@ -485,3 +645,107 @@ def test_document_checklist_refreshes_after_material_risk_change(officer_correct
     assert apps_resp.status_code == 200, apps_resp.text
     apps = {item["id"]: item for item in apps_resp.json()["applications"]}
     assert apps[case["app_id"]]["enhanced_review_summary"]["next_action_code"] != "none"
+
+
+def test_verified_pep_correction_explicitly_routes_to_edd_and_audits(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    body = _post_correction(
+        base_url,
+        case["app_id"],
+        {
+            "target_type": "pep_status",
+            "subject_type": "ubo",
+            "target_id": case["ubo_id"],
+            "field_changes": {"verified_pep": True},
+            "correction_reason": "Screening hit confirms the UBO is a PEP.",
+            "evidence_source": "Sumsub screening report",
+            "correction_note": "Officer verified PEP exposure during review.",
+        },
+    )
+    assert body["downstream_state"]["edd_routing_evaluated"] is True
+    assert body["downstream_state"]["edd_routing_route"] == "edd"
+    assert body["downstream_state"]["edd_routing_actuated"] is True
+    assert body["downstream_state"]["status"] == "edd_required"
+    assert body["downstream_state"]["onboarding_lane"] == "EDD"
+
+    conn = _db_conn(db_path)
+    cases = _active_edd_cases(conn, case["app_id"])
+    assert len(cases) == 1
+    assert cases[0]["stage"] == "triggered"
+    evaluated = conn.execute(
+        "SELECT COUNT(*) AS c FROM audit_log WHERE action = 'edd_routing.evaluated' AND target = ?",
+        (f"application:{case['ref']}",),
+    ).fetchone()
+    actuated = conn.execute(
+        "SELECT COUNT(*) AS c FROM audit_log WHERE action = 'edd_routing.actuated' AND target = ?",
+        (f"application:{case['ref']}",),
+    ).fetchone()
+    assert evaluated["c"] >= 1
+    assert actuated["c"] >= 1
+    conn.close()
+
+
+def test_high_risk_jurisdiction_correction_routes_to_edd(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn, country="United Kingdom")
+    conn.close()
+
+    body = _post_correction(
+        base_url,
+        case["app_id"],
+        {
+            "target_type": "application",
+            "field_changes": {"country": "Iran"},
+            "correction_reason": "Incorporation documents show the entity is registered in Iran.",
+            "evidence_source": "Certificate of incorporation",
+            "correction_note": "Jurisdiction corrected after officer document review.",
+        },
+    )
+    assert body["downstream_state"]["edd_routing_evaluated"] is True
+    assert body["downstream_state"]["edd_routing_route"] == "edd"
+    assert body["downstream_state"]["status"] == "edd_required"
+    assert body["downstream_state"]["onboarding_lane"] == "EDD"
+
+
+def test_repeated_material_correction_reuses_edd_case_idempotently(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    payload = {
+        "target_type": "pep_status",
+        "subject_type": "ubo",
+        "target_id": case["ubo_id"],
+        "field_changes": {"verified_pep": True},
+        "correction_reason": "Screening hit confirms the UBO is a PEP.",
+        "evidence_source": "Sumsub screening report",
+        "correction_note": "Officer verified PEP exposure during review.",
+    }
+    first = _post_correction(base_url, case["app_id"], payload)
+    second = _post_correction(base_url, case["app_id"], payload)
+    assert first["downstream_state"]["edd_routing_route"] == "edd"
+    assert second["downstream_state"]["edd_routing_route"] == "edd"
+
+    conn = _db_conn(db_path)
+    cases = _active_edd_cases(conn, case["app_id"])
+    assert len(cases) == 1
+    conn.close()
+
+
+def test_backoffice_html_exposes_officer_correction_controls():
+    html_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "arie-backoffice.html",
+    )
+    with open(html_path, "r", encoding="utf-8") as handle:
+        src = handle.read()
+    assert "btn-open-officer-correction" in src
+    assert "modal-officer-correction" in src
+    assert "detail-officer-corrections" in src
+    assert "detail-correction-warning" in src
