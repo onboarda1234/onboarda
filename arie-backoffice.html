@@ -2911,54 +2911,60 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 
 <div class="modal-overlay" id="modal-officer-correction">
   <div class="modal" style="width:680px;max-height:85vh;overflow-y:auto;">
-    <div class="modal-header"><h3>Officer Correction</h3><button class="modal-close" onclick="closeModal('modal-officer-correction')">&times;</button></div>
+    <div class="modal-header"><h3>Record Correction</h3><button class="modal-close" onclick="closeModal('modal-officer-correction')">&times;</button></div>
     <div class="modal-body">
       <div id="officer-correction-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid #dc2626;background:#fef2f2;color:#991b1b;font-size:12px;"></div>
       <div class="form-group">
-        <div class="form-label">Correction Target</div>
+        <div class="form-label">What do you need to correct?</div>
         <select class="form-select" id="officer-correction-target" onchange="updateOfficerCorrectionForm()">
-          <option value="application">Application</option>
-          <option value="risk_field">Risk Field</option>
-          <option value="director">Director</option>
-          <option value="ubo">UBO</option>
-          <option value="intermediary">Intermediary</option>
-          <option value="pep_status">PEP Status</option>
+          <option value="company">Company details</option>
+          <option value="person">Person / PEP information</option>
+          <option value="risk">Risk information</option>
+        </select>
+      </div>
+      <div class="form-group" id="officer-correction-person-target-group" style="display:none;">
+        <div class="form-label">Which person information?</div>
+        <select class="form-select" id="officer-correction-person-target" onchange="updateOfficerCorrectionForm()">
+          <option value="director">Director details</option>
+          <option value="ubo">UBO details</option>
+          <option value="intermediary">Intermediary details</option>
+          <option value="pep">PEP verification</option>
         </select>
       </div>
       <div class="form-group" id="officer-correction-subject-group" style="display:none;">
-        <div class="form-label">Subject</div>
+        <div class="form-label" id="officer-correction-subject-label">Which person?</div>
         <select class="form-select" id="officer-correction-subject" onchange="updateOfficerCorrectionForm()"></select>
       </div>
       <div class="form-group" id="officer-correction-pep-subject-type-group" style="display:none;">
-        <div class="form-label">PEP Subject Type</div>
+        <div class="form-label">Select person</div>
         <select class="form-select" id="officer-correction-pep-subject-type" onchange="updateOfficerCorrectionForm()">
           <option value="ubo">UBO</option>
           <option value="director">Director</option>
         </select>
       </div>
       <div class="form-group">
-        <div class="form-label">Field</div>
+        <div class="form-label">Which field?</div>
         <select class="form-select" id="officer-correction-field" onchange="updateOfficerCorrectionCurrentValue()"></select>
       </div>
       <div class="form-group">
-        <div class="form-label">Current / Client-Declared Value</div>
+        <div class="form-label">Current value</div>
         <div id="officer-correction-current-value" style="padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);min-height:42px;"></div>
       </div>
-      <div class="form-group">
-        <div class="form-label">New Officer-Verified Value</div>
+      <div class="form-group" id="officer-correction-new-value-group">
+        <div class="form-label" id="officer-correction-new-value-label">Corrected value</div>
         <input class="form-input" id="officer-correction-new-value" type="text" placeholder="Enter the verified value" />
       </div>
-      <div class="form-group">
-        <div class="form-label">Correction Reason</div>
-        <textarea class="form-input" id="officer-correction-reason" rows="3" placeholder="Why is this correction required?"></textarea>
-      </div>
-      <div class="form-group">
-        <div class="form-label">Evidence Source</div>
-        <input class="form-input" id="officer-correction-evidence" type="text" placeholder="Screening report, registry extract, officer review, etc." />
+      <div class="form-group" id="officer-correction-pep-status-group" style="display:none;">
+        <div class="form-label">Verified PEP status</div>
+        <select class="form-select" id="officer-correction-pep-status" onchange="updateOfficerCorrectionCurrentValue()">
+          <option value="confirmed_pep">Confirmed PEP</option>
+          <option value="not_pep">Officer verified not PEP</option>
+          <option value="pending_review">Pending review</option>
+        </select>
       </div>
       <div class="form-group" style="margin-bottom:0;">
-        <div class="form-label">Correction Note</div>
-        <textarea class="form-input" id="officer-correction-note" rows="3" placeholder="Record the verified correction note for audit purposes"></textarea>
+        <div class="form-label">Reason / Evidence</div>
+        <textarea class="form-input" id="officer-correction-reason" rows="4" placeholder="Explain the correction and the evidence you relied on."></textarea>
       </div>
     </div>
     <div class="modal-footer">
@@ -10727,8 +10733,42 @@ function officerCorrectionFieldOptions(targetType) {
   return options[targetType] || [];
 }
 
+function officerCorrectionFieldLabel(fieldName, targetType) {
+  if (targetType === 'pep_status' || fieldName === 'verified_pep' || fieldName === 'pep_status') return 'Verified PEP status';
+  var allOptions = ['application', 'risk_field', 'director', 'ubo', 'intermediary'].reduce(function(map, type) {
+    officerCorrectionFieldOptions(type).forEach(function(option) {
+      map[option.value] = option.label;
+    });
+    return map;
+  }, {});
+  return allOptions[fieldName] || String(fieldName || 'Correction').replace(/_/g, ' ');
+}
+
+function officerCorrectionSelectedCategory() {
+  return (document.getElementById('officer-correction-target') || {}).value || 'company';
+}
+
+function officerCorrectionSelectedPersonTarget() {
+  return (document.getElementById('officer-correction-person-target') || {}).value || 'director';
+}
+
+function officerCorrectionResolvedTargetType() {
+  var category = officerCorrectionSelectedCategory();
+  if (category === 'risk') return 'risk_field';
+  if (category === 'person') {
+    var personTarget = officerCorrectionSelectedPersonTarget();
+    return personTarget === 'pep' ? 'pep_status' : personTarget;
+  }
+  return 'application';
+}
+
+function officerCorrectionIsPepFlow() {
+  return officerCorrectionResolvedTargetType() === 'pep_status';
+}
+
 function officerCorrectionSubjects(targetType) {
   if (!currentApp) return [];
+  targetType = targetType || officerCorrectionResolvedTargetType();
   if (targetType === 'director') return currentApp.directors || [];
   if (targetType === 'ubo') return currentApp.ubos || [];
   if (targetType === 'intermediary') return currentApp.intermediaries || [];
@@ -10778,8 +10818,49 @@ function officerCorrectionCurrentValue(app, targetType, fieldName, subjectId) {
   return normalizeDetailValue(subject[fieldName]);
 }
 
+function officerCorrectionHistoryField(item) {
+  var fieldChanges = parseJson(item.field_changes, {}) || {};
+  var fieldName = Object.keys(fieldChanges)[0];
+  return officerCorrectionFieldLabel(fieldName, item.target_type);
+}
+
+function officerCorrectionHistoryReasonEvidence(item) {
+  var pieces = [];
+  [item.correction_reason, item.evidence_source].forEach(function(part) {
+    var text = String(part || '').trim();
+    if (text && pieces.indexOf(text) < 0) pieces.push(text);
+  });
+  return pieces.join(' | ') || '—';
+}
+
+function officerCorrectionHistoryPepValue(state) {
+  state = state || {};
+  var status = String(state.pep_status || '').trim().toLowerCase();
+  if (status === 'confirmed_pep') return 'Confirmed PEP';
+  if (status === 'not_pep') return 'Officer verified not PEP';
+  if (status === 'false_positive') return 'False positive';
+  if (status === 'pending_review') return 'Pending review';
+  if (state.officer_verified_pep === true || state.verified_pep === true) return 'Confirmed PEP';
+  if (state.officer_verified_pep === false || state.verified_pep === false) return 'Officer verified not PEP';
+  return 'Not verified yet';
+}
+
+function officerCorrectionHistoryValue(state, item) {
+  if (!state || typeof state !== 'object') return '—';
+  if ((item.target_type || '') === 'pep_status') return officerCorrectionHistoryPepValue(state);
+  var fieldChanges = parseJson(item.field_changes, {}) || {};
+  var fieldName = Object.keys(fieldChanges)[0];
+  if (!fieldName) {
+    fieldName = Object.keys(state).filter(function(key) { return typeof state[key] !== 'object'; })[0];
+  }
+  var value = state[fieldName];
+  if (value == null || value === '') return '—';
+  if (fieldName === 'ownership_pct') return normalizeDetailValue(value) + '%';
+  return normalizeDetailValue(value);
+}
+
 function updateOfficerCorrectionCurrentValue() {
-  var targetType = (document.getElementById('officer-correction-target') || {}).value || 'application';
+  var targetType = officerCorrectionResolvedTargetType();
   var fieldName = (document.getElementById('officer-correction-field') || {}).value || '';
   var subjectId = (document.getElementById('officer-correction-subject') || {}).value || '';
   var currentValue = officerCorrectionCurrentValue(currentApp, targetType, fieldName, subjectId);
@@ -10788,15 +10869,29 @@ function updateOfficerCorrectionCurrentValue() {
 }
 
 function updateOfficerCorrectionForm() {
-  var targetType = (document.getElementById('officer-correction-target') || {}).value || 'application';
+  var category = officerCorrectionSelectedCategory();
+  var targetType = officerCorrectionResolvedTargetType();
+  var personTargetGroup = document.getElementById('officer-correction-person-target-group');
   var subjectGroup = document.getElementById('officer-correction-subject-group');
   var pepTypeGroup = document.getElementById('officer-correction-pep-subject-type-group');
+  var pepStatusGroup = document.getElementById('officer-correction-pep-status-group');
+  var newValueGroup = document.getElementById('officer-correction-new-value-group');
+  var newValueLabel = document.getElementById('officer-correction-new-value-label');
+  var subjectLabel = document.getElementById('officer-correction-subject-label');
   var subjectSelect = document.getElementById('officer-correction-subject');
   var fieldSelect = document.getElementById('officer-correction-field');
   if (!fieldSelect || !subjectSelect) return;
 
+  personTargetGroup.style.display = category === 'person' ? 'block' : 'none';
   pepTypeGroup.style.display = targetType === 'pep_status' ? 'block' : 'none';
   subjectGroup.style.display = ['director', 'ubo', 'intermediary', 'pep_status'].indexOf(targetType) >= 0 ? 'block' : 'none';
+  pepStatusGroup.style.display = targetType === 'pep_status' ? 'block' : 'none';
+  newValueGroup.style.display = targetType === 'pep_status' ? 'none' : 'block';
+  fieldSelect.disabled = targetType === 'pep_status';
+  if (newValueLabel) newValueLabel.textContent = targetType === 'pep_status' ? 'Corrected value' : 'Corrected value';
+  if (subjectLabel) {
+    subjectLabel.textContent = targetType === 'intermediary' ? 'Which intermediary?' : 'Which person?';
+  }
 
   var subjects = officerCorrectionSubjects(targetType);
   subjectSelect.innerHTML = subjects.map(function(item) {
@@ -10816,14 +10911,16 @@ function openOfficerCorrectionModal() {
     return;
   }
   setOfficerCorrectionError('');
+  var target = document.getElementById('officer-correction-target');
+  var personTarget = document.getElementById('officer-correction-person-target');
+  var pepStatus = document.getElementById('officer-correction-pep-status');
   var newValue = document.getElementById('officer-correction-new-value');
   var reason = document.getElementById('officer-correction-reason');
-  var evidence = document.getElementById('officer-correction-evidence');
-  var note = document.getElementById('officer-correction-note');
+  if (target) target.value = 'company';
+  if (personTarget) personTarget.value = 'director';
+  if (pepStatus) pepStatus.value = 'confirmed_pep';
   if (newValue) newValue.value = '';
   if (reason) reason.value = '';
-  if (evidence) evidence.value = '';
-  if (note) note.value = '';
   updateOfficerCorrectionForm();
   document.getElementById('modal-officer-correction').classList.add('open');
 }
@@ -10836,11 +10933,8 @@ function renderOfficerCorrectionWarning(app) {
     el.innerHTML = '';
     return;
   }
-  var warnings = [];
-  if (app.memoRequiresRegeneration) warnings.push('compliance memo regeneration');
-  if (app.supervisorRequiresRerun) warnings.push('supervisor rerun');
   el.style.display = 'block';
-  el.innerHTML = '<strong>Officer correction follow-up required:</strong> Complete ' + escapeHtml(warnings.join(' and ')) + ' before approval can proceed.';
+  el.innerHTML = '<strong>RegMind follow-up:</strong> Recent corrections updated the risk, memo status, and approval blockers where required.';
 }
 
 function renderOfficerCorrectionHistory(app) {
@@ -10852,45 +10946,39 @@ function renderOfficerCorrectionHistory(app) {
     return;
   }
   el.innerHTML = corrections.map(function(item) {
-    var beforeState = item.before_state || {};
-    var afterState = item.after_state || {};
-    var beforeText = Object.keys(beforeState).map(function(key) {
-      return key + ': ' + normalizeDetailValue(beforeState[key]);
-    }).join(' | ') || '—';
-    var afterText = Object.keys(afterState).map(function(key) {
-      var value = afterState[key];
-      if (typeof value === 'object') return null;
-      return key + ': ' + normalizeDetailValue(value);
-    }).filter(Boolean).join(' | ') || '—';
+    var beforeText = officerCorrectionHistoryValue(item.before_state || {}, item);
+    var afterText = officerCorrectionHistoryValue(item.after_state || {}, item);
+    var fieldLabel = officerCorrectionHistoryField(item);
     return '<div style="padding:12px;margin-bottom:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
-      '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
-        '<strong style="font-size:13px;color:var(--text1);">' + escapeHtml((item.target_type || 'correction').replace(/_/g, ' ')) + '</strong>' +
-        '<span class="badge pending">' + escapeHtml((item.materiality || '').toUpperCase()) + '</span>' +
-      '</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-bottom:4px;">' + escapeHtml((item.corrected_by_name || item.corrected_by || 'Officer') + ' · ' + normalizeDetailValue(item.corrected_at)) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Field corrected:</strong> ' + escapeHtml(fieldLabel) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Before:</strong> ' + escapeHtml(beforeText) + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>After:</strong> ' + escapeHtml(afterText) + '</div>' +
-      '<div style="font-size:12px;color:var(--text2);"><strong>Reason:</strong> ' + escapeHtml(item.correction_reason || '—') + ' · <strong>Evidence:</strong> ' + escapeHtml(item.evidence_source || '—') + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Officer:</strong> ' + escapeHtml(item.corrected_by_name || item.corrected_by || 'Officer') + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Date:</strong> ' + escapeHtml(normalizeDetailValue(item.corrected_at)) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);"><strong>Reason / Evidence:</strong> ' + escapeHtml(officerCorrectionHistoryReasonEvidence(item)) + '</div>' +
     '</div>';
   }).join('');
 }
 
 async function submitOfficerCorrection() {
   if (!currentApp || !currentApp.id) return;
-  var targetType = (document.getElementById('officer-correction-target') || {}).value || 'application';
+  var targetType = officerCorrectionResolvedTargetType();
   var fieldName = (document.getElementById('officer-correction-field') || {}).value || '';
   var subjectId = (document.getElementById('officer-correction-subject') || {}).value || '';
   var pepSubjectType = (document.getElementById('officer-correction-pep-subject-type') || {}).value || 'ubo';
+  var pepStatus = (document.getElementById('officer-correction-pep-status') || {}).value || 'confirmed_pep';
   var newValueRaw = (document.getElementById('officer-correction-new-value') || {}).value || '';
-  var reason = ((document.getElementById('officer-correction-reason') || {}).value || '').trim();
-  var evidence = ((document.getElementById('officer-correction-evidence') || {}).value || '').trim();
-  var note = ((document.getElementById('officer-correction-note') || {}).value || '').trim();
-  if (!fieldName || !newValueRaw.trim() || !reason || !evidence || !note) {
-    setOfficerCorrectionError('Field, new value, correction reason, evidence source, and correction note are required.');
+  var explanation = ((document.getElementById('officer-correction-reason') || {}).value || '').trim();
+  if (!fieldName || (!officerCorrectionIsPepFlow() && !newValueRaw.trim()) || !explanation) {
+    setOfficerCorrectionError('Which field, corrected value, and reason / evidence are required.');
     return;
   }
   var fieldValue = newValueRaw.trim();
-  if (fieldName === 'verified_pep') {
+  if (officerCorrectionIsPepFlow()) {
+    if (pepStatus === 'confirmed_pep') fieldValue = true;
+    else if (pepStatus === 'not_pep') fieldValue = false;
+    else fieldValue = null;
+  } else if (fieldName === 'verified_pep') {
     fieldValue = ['true', 'yes', '1', 'pep'].indexOf(fieldValue.toLowerCase()) >= 0;
   } else if (fieldName === 'ownership_pct') {
     fieldValue = Number(fieldValue);
@@ -10902,12 +10990,15 @@ async function submitOfficerCorrection() {
   var payload = {
     target_type: targetType,
     field_changes: {},
-    correction_reason: reason,
-    evidence_source: evidence,
-    correction_note: note,
+    correction_reason: explanation,
+    evidence_source: explanation,
+    correction_note: explanation,
     correction_source: 'backoffice_ui'
   };
   payload.field_changes[fieldName] = fieldValue;
+  if (targetType === 'pep_status') {
+    payload.field_changes.pep_status = pepStatus;
+  }
   if (['director', 'ubo', 'intermediary'].indexOf(targetType) >= 0) {
     payload.target_id = subjectId;
   }
@@ -10920,7 +11011,7 @@ async function submitOfficerCorrection() {
     await boApiCall('POST', '/applications/' + currentApp.id + '/corrections', payload);
     closeModal('modal-officer-correction');
     await refreshCurrentAppDetail();
-    showToast('Officer correction saved.');
+    showToast('Correction saved. RegMind updated the risk, EDD requirements, memo status, and approval blockers where required.');
   } catch (err) {
     setOfficerCorrectionError(err.message || 'Failed to save correction.');
   }

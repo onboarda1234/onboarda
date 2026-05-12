@@ -868,6 +868,14 @@ def test_backoffice_html_exposes_officer_correction_controls():
     assert "modal-officer-correction" in src
     assert "detail-officer-corrections" in src
     assert "detail-correction-warning" in src
+    assert "Company details" in src
+    assert "Person / PEP information" in src
+    assert "Risk information" in src
+    assert "Reason / Evidence" in src
+    assert "Correction saved. RegMind updated the risk, EDD requirements, memo status, and approval blockers where required." in src
+    assert "Correction Target" not in src
+    assert "Evidence Source" not in src
+    assert "Correction Note" not in src
 
 
 def test_backoffice_html_uses_tri_state_pep_copy():
@@ -885,3 +893,17 @@ def test_backoffice_html_uses_tri_state_pep_copy():
     assert "subject.verified_pep ? 'Yes' : 'No'" not in src
     assert "!!d.declared_pep" not in src
     assert "!!u.verified_pep" not in src
+
+
+def test_backoffice_html_simplifies_correction_history_copy():
+    html_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "arie-backoffice.html",
+    )
+    with open(html_path, "r", encoding="utf-8") as handle:
+        src = handle.read()
+    assert "<strong>Field corrected:</strong>" in src
+    assert "<strong>Officer:</strong>" in src
+    assert "<strong>Date:</strong>" in src
+    assert "<strong>Reason / Evidence:</strong>" in src
+    assert "escapeHtml((item.materiality || '').toUpperCase())" not in src
