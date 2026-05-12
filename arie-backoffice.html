@@ -10888,7 +10888,7 @@ function updateOfficerCorrectionForm() {
   pepStatusGroup.style.display = targetType === 'pep_status' ? 'block' : 'none';
   newValueGroup.style.display = targetType === 'pep_status' ? 'none' : 'block';
   fieldSelect.disabled = targetType === 'pep_status';
-  if (newValueLabel) newValueLabel.textContent = targetType === 'pep_status' ? 'Corrected value' : 'Corrected value';
+  if (newValueLabel) newValueLabel.textContent = 'Corrected value';
   if (subjectLabel) {
     subjectLabel.textContent = targetType === 'intermediary' ? 'Which intermediary?' : 'Which person?';
   }
