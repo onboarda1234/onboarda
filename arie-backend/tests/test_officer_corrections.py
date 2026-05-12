@@ -407,6 +407,28 @@ def test_missing_declared_pep_is_not_rendered_as_no(officer_correction_api_serve
     assert director["pep_status"] == "not_verified"
 
 
+def test_party_with_no_pep_data_stays_unknown_and_unverified(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(
+        conn,
+        director_is_pep=None,
+        ubo_is_pep=None,
+        director_pep_declaration={},
+        ubo_pep_declaration={},
+    )
+    conn.close()
+
+    detail = _detail(base_url, case["app_id"])
+    ubo = next(item for item in detail["ubos"] if item["id"] == case["ubo_id"])
+    assert ubo["client_declared_pep"] is None
+    assert ubo["officer_verified_pep"] is None
+    assert ubo["client_declared_pep_display"] == "Not captured"
+    assert ubo["officer_verified_pep_display"] == "Not verified yet"
+    assert ubo["pep_status"] == "not_verified"
+    assert ubo["pep_verification_source"] == "not_verified"
+
+
 def test_untouched_declared_non_pep_keeps_declaration_separate_from_verification(officer_correction_api_server):
     base_url, db_path = officer_correction_api_server
     conn = _fresh_db(db_path)
@@ -857,6 +879,8 @@ def test_backoffice_html_uses_tri_state_pep_copy():
         src = handle.read()
     assert "Not captured" in src
     assert "Not verified yet" in src
+    assert "client_declared_pep_display" in src
+    assert "officer_verified_pep_display" in src
     assert "subject.declared_pep ? 'Yes' : 'No'" not in src
     assert "subject.verified_pep ? 'Yes' : 'No'" not in src
     assert "!!d.declared_pep" not in src
