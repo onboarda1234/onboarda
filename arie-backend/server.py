@@ -3075,6 +3075,145 @@ def _correction_bool(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "y")
 
 
+PEP_STATUS_VALUES = frozenset({
+    "declared_no",
+    "declared_yes",
+    "not_verified",
+    "confirmed_pep",
+    "false_positive",
+    "not_pep",
+    "pending_review",
+})
+PEP_VERIFICATION_SOURCES = frozenset({
+    "client_declaration",
+    "officer_correction",
+    "screening_review",
+    "not_verified",
+})
+
+
+def _optional_bool(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return None
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if text in ("1", "true", "yes", "y"):
+        return True
+    if text in ("0", "false", "no", "n"):
+        return False
+    return None
+
+
+def _normalize_pep_status(status):
+    normalized = str(status or "").strip().lower()
+    return normalized if normalized in PEP_STATUS_VALUES else None
+
+
+def _normalize_pep_verification_source(source):
+    normalized = str(source or "").strip().lower()
+    return normalized if normalized in PEP_VERIFICATION_SOURCES else None
+
+
+def _pep_status_to_verified_value(status):
+    normalized = _normalize_pep_status(status)
+    if normalized == "confirmed_pep":
+        return True
+    if normalized in ("false_positive", "not_pep"):
+        return False
+    return None
+
+
+def _derive_party_pep_visibility(item, pep_decl):
+    record = dict(item or {})
+    pep_data = dict(pep_decl or {})
+    explicit_declared = pep_data.get("client_declared_pep", pep_data.get("declared_pep"))
+    explicit_verified = pep_data.get("officer_verified_pep", pep_data.get("verified_pep"))
+    client_declared_pep = _optional_bool(explicit_declared)
+    officer_verified_pep = _optional_bool(explicit_verified)
+
+    legacy_is_pep = _optional_bool(record.get("is_pep"))
+    has_verification_record = (
+        "verified_pep" in pep_data
+        or "officer_verified_pep" in pep_data
+        or bool(pep_data.get("corrected_at"))
+        or bool(pep_data.get("evidence_source"))
+        or bool(pep_data.get("correction_reason"))
+        or bool(pep_data.get("correction_note"))
+        or bool(pep_data.get("corrected_by"))
+        or _normalize_pep_verification_source(
+            pep_data.get("pep_verification_source") or pep_data.get("correction_source")
+        ) in ("officer_correction", "screening_review")
+    )
+    if client_declared_pep is None and not has_verification_record and legacy_is_pep is not None:
+        client_declared_pep = legacy_is_pep
+
+    pep_status = _normalize_pep_status(pep_data.get("pep_status"))
+    if pep_status is None:
+        if officer_verified_pep is True:
+            pep_status = "confirmed_pep"
+        elif officer_verified_pep is False:
+            pep_status = "not_pep"
+        elif client_declared_pep is True:
+            pep_status = "declared_yes"
+        elif client_declared_pep is False:
+            pep_status = "declared_no"
+        else:
+            pep_status = "not_verified"
+
+    pep_verification_source = _normalize_pep_verification_source(
+        pep_data.get("pep_verification_source") or pep_data.get("correction_source")
+    )
+    if pep_verification_source is None:
+        if officer_verified_pep is not None:
+            pep_verification_source = "officer_correction"
+        elif client_declared_pep is not None:
+            pep_verification_source = "client_declaration"
+        else:
+            pep_verification_source = "not_verified"
+
+    if pep_status == "pending_review" and officer_verified_pep is None:
+        officer_verified_pep_display = "Pending review"
+    elif officer_verified_pep is True:
+        officer_verified_pep_display = "Yes"
+    elif officer_verified_pep is False:
+        officer_verified_pep_display = "No"
+    else:
+        officer_verified_pep_display = "Not verified yet"
+
+    status_display = {
+        "declared_no": "Client declared not PEP",
+        "declared_yes": "Client declared PEP",
+        "not_verified": "Not verified yet",
+        "confirmed_pep": "Confirmed PEP",
+        "false_positive": "False positive",
+        "not_pep": "Officer verified not PEP",
+        "pending_review": "Pending review",
+    }[pep_status]
+
+    return {
+        "client_declared_pep": client_declared_pep,
+        "officer_verified_pep": officer_verified_pep,
+        "pep_status": pep_status,
+        "pep_status_display": status_display,
+        "pep_verification_source": pep_verification_source,
+        "client_declared_pep_display": (
+            "Yes" if client_declared_pep is True else
+            "No" if client_declared_pep is False else
+            "Not captured"
+        ),
+        "officer_verified_pep_display": officer_verified_pep_display,
+    }
+
+
 def _normalize_officer_correction_materiality(target_type, field_changes, requested=None):
     requested_materiality = str(requested or "").strip().lower()
     system_materiality = _system_derived_officer_correction_materiality(
@@ -3195,17 +3334,10 @@ def _decorate_party_pep_visibility(party):
     item = dict(party or {})
     pep_decl = parse_json_field(item.get("pep_declaration"), {})
     item["pep_declaration"] = pep_decl
-    if "declared_pep" in pep_decl:
-        item["declared_pep"] = _correction_bool(pep_decl.get("declared_pep"))
-    elif "declared_pep" not in item:
-        item["declared_pep"] = _correction_bool(item.get("is_pep"))
-    if "verified_pep" in pep_decl:
-        item["verified_pep"] = _correction_bool(pep_decl.get("verified_pep"))
-    elif "verified_pep" not in item:
-        item["verified_pep"] = _correction_bool(item.get("is_pep"))
-    item["pep_status"] = pep_decl.get("pep_status") or (
-        "verified_pep" if item.get("verified_pep") else "not_pep"
-    )
+    pep_visibility = _derive_party_pep_visibility(item, pep_decl)
+    item.update(pep_visibility)
+    item["declared_pep"] = pep_visibility["client_declared_pep"]
+    item["verified_pep"] = pep_visibility["officer_verified_pep"]
     return item
 
 
@@ -4059,26 +4191,41 @@ class ApplicationCorrectionHandler(BaseHandler):
             raise ValueError("Correction target not found")
         row = dict(row)
         pep_declaration = parse_json_field(row.get("pep_declaration"), {})
-        declared_pep = pep_declaration.get("declared_pep")
-        if declared_pep is None:
-            declared_pep = _correction_bool(row.get("is_pep"))
+        current_pep_state = _derive_party_pep_visibility(row, pep_declaration)
+        declared_pep = current_pep_state.get("client_declared_pep")
         verified_input = field_changes.get("verified_pep")
         if verified_input is None:
             verified_input = field_changes.get("is_pep")
         if verified_input is None and "pep_status" in field_changes:
-            verified_input = str(field_changes.get("pep_status") or "").strip().lower() not in ("not_pep", "clear", "false", "no")
-        verified_pep = _correction_bool(verified_input)
-        pep_status = str(field_changes.get("pep_status") or ("verified_pep" if verified_pep else "not_pep")).strip() or ("verified_pep" if verified_pep else "not_pep")
+            verified_input = _pep_status_to_verified_value(field_changes.get("pep_status"))
+        verified_pep = _optional_bool(verified_input)
+        pep_status = _normalize_pep_status(field_changes.get("pep_status"))
+        if pep_status is None:
+            if verified_pep is True:
+                pep_status = "confirmed_pep"
+            elif verified_pep is False:
+                pep_status = "not_pep"
+            else:
+                pep_status = current_pep_state.get("pep_status") or "pending_review"
+        pep_verification_source = _normalize_pep_verification_source(correction_source)
+        if pep_verification_source in (None, "client_declaration", "not_verified"):
+            pep_verification_source = "officer_correction"
         before_state = {
-            "declared_pep": _correction_bool(declared_pep),
-            "verified_pep": _correction_bool(pep_declaration.get("verified_pep", row.get("is_pep"))),
-            "pep_status": pep_declaration.get("pep_status") or ("verified_pep" if _correction_bool(row.get("is_pep")) else "not_pep"),
+            "declared_pep": current_pep_state.get("client_declared_pep"),
+            "client_declared_pep": current_pep_state.get("client_declared_pep"),
+            "verified_pep": current_pep_state.get("officer_verified_pep"),
+            "officer_verified_pep": current_pep_state.get("officer_verified_pep"),
+            "pep_status": current_pep_state.get("pep_status"),
+            "pep_verification_source": current_pep_state.get("pep_verification_source"),
         }
         updated_pep_declaration = dict(pep_declaration)
         updated_pep_declaration.update({
-            "declared_pep": _correction_bool(declared_pep),
+            "declared_pep": declared_pep,
+            "client_declared_pep": declared_pep,
             "verified_pep": verified_pep,
+            "officer_verified_pep": verified_pep,
             "pep_status": pep_status,
+            "pep_verification_source": pep_verification_source,
             "correction_reason": correction_reason,
             "evidence_source": evidence_source,
             "correction_note": correction_note,
@@ -4089,7 +4236,7 @@ class ApplicationCorrectionHandler(BaseHandler):
         db.execute(
             f"UPDATE {table} SET is_pep = ?, pep_declaration = ? WHERE application_id = ? AND id = ?",
             (
-                normalize_is_pep(verified_pep),
+                normalize_is_pep(verified_pep) if verified_pep is not None else row.get("is_pep"),
                 json.dumps(updated_pep_declaration, default=str, sort_keys=True),
                 app_id,
                 target_id,
@@ -4097,9 +4244,12 @@ class ApplicationCorrectionHandler(BaseHandler):
         )
         self._touch_application_after_correction(db, app_id, correction_ts, substantive_change)
         after_state = {
-            "declared_pep": _correction_bool(declared_pep),
+            "declared_pep": declared_pep,
+            "client_declared_pep": declared_pep,
             "verified_pep": verified_pep,
+            "officer_verified_pep": verified_pep,
             "pep_status": pep_status,
+            "pep_verification_source": pep_verification_source,
             "pep_declaration": updated_pep_declaration,
         }
         return before_state, after_state

@@ -119,7 +119,17 @@ def _boolish(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "y")
 
 
-def _insert_case(db, *, country="United Kingdom", sector="Technology", brn="BRN-001"):
+def _insert_case(
+    db,
+    *,
+    country="United Kingdom",
+    sector="Technology",
+    brn="BRN-001",
+    director_is_pep="No",
+    ubo_is_pep="No",
+    director_pep_declaration=None,
+    ubo_pep_declaration=None,
+):
     suffix = uuid.uuid4().hex[:8]
     client_id = f"client_{suffix}"
     app_id = f"app_{suffix}"
@@ -186,8 +196,8 @@ def _insert_case(db, *, country="United Kingdom", sector="Technology", brn="BRN-
             "Director",
             "Alice Director",
             "GB",
-            "No",
-            json.dumps({"declared_pep": False}),
+            director_is_pep,
+            json.dumps({"declared_pep": False} if director_pep_declaration is None else director_pep_declaration),
             "1980-02-01",
         ),
     )
@@ -206,8 +216,8 @@ def _insert_case(db, *, country="United Kingdom", sector="Technology", brn="BRN-
             "Bob Owner",
             "GB",
             25.0,
-            "No",
-            json.dumps({"declared_pep": False}),
+            ubo_is_pep,
+            json.dumps({"declared_pep": False} if ubo_pep_declaration is None else ubo_pep_declaration),
             "1985-04-10",
         ),
     )
@@ -323,8 +333,12 @@ def test_pep_correction_preserves_declared_pep_and_marks_workflow_stale(officer_
 
     detail = _detail(base_url, case["app_id"])
     ubo = next(item for item in detail["ubos"] if item["id"] == case["ubo_id"])
+    assert ubo["client_declared_pep"] is False
+    assert ubo["officer_verified_pep"] is True
     assert ubo["declared_pep"] is False
     assert ubo["verified_pep"] is True
+    assert ubo["pep_status"] == "confirmed_pep"
+    assert ubo["pep_verification_source"] == "screening_review"
     assert _boolish(ubo["is_pep"]) is True
     assert detail["memo_requires_regeneration"] is True
     assert detail["supervisor_requires_rerun"] is True
@@ -355,6 +369,57 @@ def test_pep_correction_requested_tier3_still_forces_tier1(officer_correction_ap
         },
     )
     assert body["materiality"] == "tier1"
+
+
+def test_historical_party_without_verified_pep_stays_unverified(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    detail = _detail(base_url, case["app_id"])
+    ubo = next(item for item in detail["ubos"] if item["id"] == case["ubo_id"])
+    assert ubo["client_declared_pep"] is False
+    assert ubo["officer_verified_pep"] is None
+    assert ubo["verified_pep"] is None
+    assert ubo["officer_verified_pep_display"] == "Not verified yet"
+    assert ubo["pep_status"] == "declared_no"
+    assert ubo["pep_verification_source"] == "client_declaration"
+
+
+def test_missing_declared_pep_is_not_rendered_as_no(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(
+        conn,
+        director_is_pep=None,
+        director_pep_declaration={},
+    )
+    conn.close()
+
+    detail = _detail(base_url, case["app_id"])
+    director = next(item for item in detail["directors"] if item["id"] == case["director_id"])
+    assert director["client_declared_pep"] is None
+    assert director["declared_pep"] is None
+    assert director["client_declared_pep_display"] == "Not captured"
+    assert director["officer_verified_pep"] is None
+    assert director["officer_verified_pep_display"] == "Not verified yet"
+    assert director["pep_status"] == "not_verified"
+
+
+def test_untouched_declared_non_pep_keeps_declaration_separate_from_verification(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn)
+    conn.close()
+
+    detail = _detail(base_url, case["app_id"])
+    director = next(item for item in detail["directors"] if item["id"] == case["director_id"])
+    assert director["client_declared_pep"] is False
+    assert director["client_declared_pep_display"] == "No"
+    assert director["officer_verified_pep"] is None
+    assert director["officer_verified_pep_display"] == "Not verified yet"
+    assert director["pep_verification_source"] == "client_declaration"
 
 
 def test_sector_correction_recomputes_risk_and_audits_before_after(officer_correction_api_server):
@@ -689,6 +754,38 @@ def test_verified_pep_correction_explicitly_routes_to_edd_and_audits(officer_cor
     conn.close()
 
 
+def test_officer_correction_verified_false_requires_evidence_and_sets_verified_not_pep(officer_correction_api_server):
+    base_url, db_path = officer_correction_api_server
+    conn = _fresh_db(db_path)
+    case = _insert_case(conn, ubo_is_pep=None, ubo_pep_declaration={})
+    conn.close()
+
+    body = _post_correction(
+        base_url,
+        case["app_id"],
+        {
+            "target_type": "pep_status",
+            "subject_type": "ubo",
+            "target_id": case["ubo_id"],
+            "field_changes": {"verified_pep": False},
+            "correction_reason": "Officer confirmed the screening alert was not a PEP match.",
+            "evidence_source": "Manual screening disposition review",
+            "correction_note": "False PEP alert resolved by officer review.",
+            "correction_source": "officer_correction",
+        },
+    )
+    assert body["after_state"]["officer_verified_pep"] is False
+    assert body["after_state"]["pep_status"] == "not_pep"
+    assert body["after_state"]["pep_verification_source"] == "officer_correction"
+
+    detail = _detail(base_url, case["app_id"])
+    ubo = next(item for item in detail["ubos"] if item["id"] == case["ubo_id"])
+    assert ubo["officer_verified_pep"] is False
+    assert ubo["officer_verified_pep_display"] == "No"
+    assert ubo["pep_status"] == "not_pep"
+    assert ubo["pep_verification_source"] == "officer_correction"
+
+
 def test_high_risk_jurisdiction_correction_routes_to_edd(officer_correction_api_server):
     base_url, db_path = officer_correction_api_server
     conn = _fresh_db(db_path)
@@ -749,3 +846,18 @@ def test_backoffice_html_exposes_officer_correction_controls():
     assert "modal-officer-correction" in src
     assert "detail-officer-corrections" in src
     assert "detail-correction-warning" in src
+
+
+def test_backoffice_html_uses_tri_state_pep_copy():
+    html_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "arie-backoffice.html",
+    )
+    with open(html_path, "r", encoding="utf-8") as handle:
+        src = handle.read()
+    assert "Not captured" in src
+    assert "Not verified yet" in src
+    assert "subject.declared_pep ? 'Yes' : 'No'" not in src
+    assert "subject.verified_pep ? 'Yes' : 'No'" not in src
+    assert "!!d.declared_pep" not in src
+    assert "!!u.verified_pep" not in src
