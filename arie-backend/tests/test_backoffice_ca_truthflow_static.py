@@ -113,10 +113,11 @@ def test_backoffice_screening_evidence_drawer_normalizes_categories_and_sections
     html = BACKOFFICE_HTML.read_text()
 
     category_region = _function_region(html, "normalizeEvidenceCategoryLabel", "evidenceCategories")
-    categories_region = _function_region(html, "evidenceCategories", "evidencePrimaryLabel")
+    categories_region = _function_region(html, "evidenceCategories", "evidenceGroupedIdentifiers")
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
 
-    assert "Unclassified provider hit" in categories_region
+    assert "Potential provider match" in categories_region
+    assert "Unclassified provider hit" not in categories_region
     assert "key === 'other'" in category_region
     assert "Adverse media" in category_region
     assert "Sanctions" in category_region
@@ -133,17 +134,40 @@ def test_backoffice_screening_evidence_groups_repeated_hits_before_rendering():
     grouping_region = _function_region(html, "groupProviderEvidenceHits", "openScreeningEvidenceDrawer")
     provider_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+    grouped_ids_region = _function_region(html, "evidenceGroupedIdentifiers", "evidenceReviewRationale")
 
     assert "function providerEvidenceGroupKey" in html
     assert "function groupProviderEvidenceHits" in html
+    assert "function evidenceGroupedIdentifiers" in html
     assert "_group_count" in grouping_region
     assert "_grouped_risk_identifiers" in grouping_region
     assert "_grouped_alert_identifiers" in grouping_region
+    assert "return grouped.length > 1 ? grouped : [];" in grouped_ids_region
     assert "var hits = groupProviderEvidenceHits" in provider_region
     assert "evidence records grouped for this profile/category" in provider_region
     assert "Evidence records grouped" in drawer_region
     assert "Grouped alert IDs" in drawer_region
     assert "Grouped risk IDs" in drawer_region
+    assert "var groupedAlertIdentifiers = evidenceGroupedIdentifiers(hit._grouped_alert_identifiers);" in drawer_region
+    assert "var groupedRiskIdentifiers = evidenceGroupedIdentifiers(hit._grouped_risk_identifiers);" in drawer_region
+    assert "['Grouped alert IDs', groupedAlertIdentifiers]" in drawer_region
+    assert "['Grouped risk IDs', groupedRiskIdentifiers]" in drawer_region
+
+
+def test_backoffice_screening_evidence_drawer_adds_officer_review_rationale():
+    html = BACKOFFICE_HTML.read_text()
+
+    rationale_region = _function_region(html, "evidenceReviewRationale", "evidencePrimaryLabel")
+    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+
+    assert "function evidenceReviewRationale" in html
+    assert "categoryLabel = 'PEP'" in rationale_region
+    assert "categoryLabel = 'adverse media'" in rationale_region
+    assert "categoryLabel = 'provider'" in rationale_region
+    assert "potential ' + categoryLabel + ' match" in rationale_region
+    assert "Review the evidence and traceability details before recording a decision." in rationale_region
+    assert "var reviewRationale = evidenceReviewRationale(categories);" in drawer_region
+    assert "escapeHtml(reviewRationale)" in drawer_region
 
 
 def test_backoffice_screening_review_uses_backend_provider_evidence_payload():

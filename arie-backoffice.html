@@ -7217,7 +7217,27 @@ function evidenceCategories(hit) {
     seen[key] = true;
     return true;
   });
-  return normalized.length ? normalized : ['Unclassified provider hit'];
+  return normalized.length ? normalized : ['Potential provider match'];
+}
+
+function evidenceGroupedIdentifiers(values) {
+  var grouped = [];
+  (Array.isArray(values) ? values : [values]).forEach(function(value) {
+    var normalized = String(value || '').trim();
+    if (normalized && grouped.indexOf(normalized) === -1) grouped.push(normalized);
+  });
+  return grouped.length > 1 ? grouped : [];
+}
+
+function evidenceReviewRationale(categories) {
+  var text = (Array.isArray(categories) ? categories : []).join(' ').toLowerCase();
+  var categoryLabel = 'provider';
+  if (text.indexOf('pep') !== -1) categoryLabel = 'PEP';
+  else if (text.indexOf('adverse') !== -1 || text.indexOf('media') !== -1) categoryLabel = 'adverse media';
+  else if (text.indexOf('sanction') !== -1) categoryLabel = 'sanctions';
+  else if (text.indexOf('watchlist') !== -1 || text.indexOf('warning') !== -1) categoryLabel = 'watchlist';
+  else if (text.indexOf('regulatory') !== -1) categoryLabel = 'regulatory';
+  return 'Provider returned a potential ' + categoryLabel + ' match for this screening subject. Review the evidence and traceability details before recording a decision.';
 }
 
 function evidencePrimaryLabel(hit, context) {
@@ -7367,12 +7387,16 @@ function openScreeningEvidenceDrawer(key) {
   var subjectScope = hit.subject_scope || hit._subject_type || '';
   var subjectType = hit._subject_type || subjectScope || 'screening subject';
   var discovered = hit.discovered_at || hit._screened_at || hit.screened_at || '';
+  var groupedAlertIdentifiers = evidenceGroupedIdentifiers(hit._grouped_alert_identifiers);
+  var groupedRiskIdentifiers = evidenceGroupedIdentifiers(hit._grouped_risk_identifiers);
+  var reviewRationale = evidenceReviewRationale(categories);
   var drawerTitle = 'Screening Evidence — ' + matchedName;
 
   var body = '';
   body += '<div style="padding:12px 14px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.04);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text2);">' +
     '<div style="font-weight:700;color:var(--text1);font-size:14px;">' + escapeHtml(matchedName) + '</div>' +
     '<div style="margin-top:6px;">' + evidenceBadgeList(categories) + '</div>' +
+    '<div style="margin-top:4px;">' + escapeHtml(reviewRationale) + '</div>' +
     '<div style="margin-top:4px;">' + escapeHtml(hit.summary || 'Provider evidence attached to this screening subject. Review the identifiers, categories, source detail, and timestamps before recording an officer disposition.') + '</div>' +
   '</div>';
 
@@ -7432,8 +7456,8 @@ function openScreeningEvidenceDrawer(key) {
       ['Provider alert ID', hit.provider_alert_identifier || hit.alert_identifier],
       ['Provider risk ID', hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier],
       ['Provider profile ID', hit.provider_profile_identifier || hit.profile_identifier],
-      ['Grouped alert IDs', hit._grouped_alert_identifiers],
-      ['Grouped risk IDs', hit._grouped_risk_identifiers],
+      ['Grouped alert IDs', groupedAlertIdentifiers],
+      ['Grouped risk IDs', groupedRiskIdentifiers],
       ['Discovered via', hit.discovered_via],
     ])
   );
