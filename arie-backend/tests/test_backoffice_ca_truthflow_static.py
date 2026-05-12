@@ -134,7 +134,7 @@ def test_backoffice_screening_evidence_groups_repeated_hits_before_rendering():
     grouping_region = _function_region(html, "groupProviderEvidenceHits", "openScreeningEvidenceDrawer")
     provider_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
-    grouped_ids_region = _function_region(html, "evidenceGroupedIdentifiers", "evidenceReviewRationale")
+    grouped_ids_region = _function_region(html, "evidenceGroupedIdentifiers", "evidenceReviewCategoryLabel")
 
     assert "function providerEvidenceGroupKey" in html
     assert "function groupProviderEvidenceHits" in html
@@ -142,6 +142,7 @@ def test_backoffice_screening_evidence_groups_repeated_hits_before_rendering():
     assert "_group_count" in grouping_region
     assert "_grouped_risk_identifiers" in grouping_region
     assert "_grouped_alert_identifiers" in grouping_region
+    assert "var seen = {};" in grouped_ids_region
     assert "return grouped.length > 1 ? grouped : [];" in grouped_ids_region
     assert "var hits = groupProviderEvidenceHits" in provider_region
     assert "evidence records grouped for this profile/category" in provider_region
@@ -157,15 +158,18 @@ def test_backoffice_screening_evidence_groups_repeated_hits_before_rendering():
 def test_backoffice_screening_evidence_drawer_adds_officer_review_rationale():
     html = BACKOFFICE_HTML.read_text()
 
+    category_label_region = _function_region(html, "evidenceReviewCategoryLabel", "evidenceReviewRationale")
     rationale_region = _function_region(html, "evidenceReviewRationale", "evidencePrimaryLabel")
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
 
+    assert "var EVIDENCE_REVIEW_GUIDANCE" in html
+    assert "function evidenceReviewCategoryLabel" in html
     assert "function evidenceReviewRationale" in html
-    assert "categoryLabel = 'PEP'" in rationale_region
-    assert "categoryLabel = 'adverse media'" in rationale_region
-    assert "categoryLabel = 'provider'" in rationale_region
-    assert "potential ' + categoryLabel + ' match" in rationale_region
-    assert "Review the evidence and traceability details before recording a decision." in rationale_region
+    assert "return 'PEP';" in category_label_region
+    assert "return 'adverse media';" in category_label_region
+    assert "return 'provider';" in category_label_region
+    assert "potential ' + evidenceReviewCategoryLabel(categories) + ' match" in rationale_region
+    assert "EVIDENCE_REVIEW_GUIDANCE" in rationale_region
     assert "var reviewRationale = evidenceReviewRationale(categories);" in drawer_region
     assert "escapeHtml(reviewRationale)" in drawer_region
 

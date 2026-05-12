@@ -7222,22 +7222,30 @@ function evidenceCategories(hit) {
 
 function evidenceGroupedIdentifiers(values) {
   var grouped = [];
+  var seen = {};
   (Array.isArray(values) ? values : [values]).forEach(function(value) {
     var normalized = String(value || '').trim();
-    if (normalized && grouped.indexOf(normalized) === -1) grouped.push(normalized);
+    if (!normalized || seen[normalized]) return;
+    seen[normalized] = true;
+    grouped.push(normalized);
   });
   return grouped.length > 1 ? grouped : [];
 }
 
-function evidenceReviewRationale(categories) {
+var EVIDENCE_REVIEW_GUIDANCE = 'Review the evidence and traceability details before recording a decision.';
+
+function evidenceReviewCategoryLabel(categories) {
   var text = (Array.isArray(categories) ? categories : []).join(' ').toLowerCase();
-  var categoryLabel = 'provider';
-  if (text.indexOf('pep') !== -1) categoryLabel = 'PEP';
-  else if (text.indexOf('adverse') !== -1 || text.indexOf('media') !== -1) categoryLabel = 'adverse media';
-  else if (text.indexOf('sanction') !== -1) categoryLabel = 'sanctions';
-  else if (text.indexOf('watchlist') !== -1 || text.indexOf('warning') !== -1) categoryLabel = 'watchlist';
-  else if (text.indexOf('regulatory') !== -1) categoryLabel = 'regulatory';
-  return 'Provider returned a potential ' + categoryLabel + ' match for this screening subject. Review the evidence and traceability details before recording a decision.';
+  if (text.indexOf('pep') !== -1) return 'PEP';
+  if (text.indexOf('adverse') !== -1 || text.indexOf('media') !== -1) return 'adverse media';
+  if (text.indexOf('sanction') !== -1) return 'sanctions';
+  if (text.indexOf('watchlist') !== -1 || text.indexOf('warning') !== -1) return 'watchlist';
+  if (text.indexOf('regulatory') !== -1) return 'regulatory';
+  return 'provider';
+}
+
+function evidenceReviewRationale(categories) {
+  return 'Provider returned a potential ' + evidenceReviewCategoryLabel(categories) + ' match for this screening subject. ' + EVIDENCE_REVIEW_GUIDANCE;
 }
 
 function evidencePrimaryLabel(hit, context) {
