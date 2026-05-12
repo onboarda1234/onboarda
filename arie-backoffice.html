@@ -1099,6 +1099,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
       <button class="btn btn-success btn-sm" onclick="approveApplication()" id="btn-approve" style="font-size:11px;">✅ Approve</button>
       <button class="btn btn-danger btn-sm" onclick="rejectApplication()" id="btn-reject" style="font-size:11px;">❌ Reject</button>
       <button class="btn btn-warning btn-sm" onclick="requestMoreInfo()" id="btn-rmi" style="font-size:11px;">📋 More Info</button>
+      <button class="btn btn-outline btn-sm" onclick="openOfficerCorrectionModal()" id="btn-open-officer-correction" style="font-size:11px;">✏️ Officer Correction</button>
       <button class="btn btn-outline btn-sm" onclick="openOverrideModal()" id="btn-override" style="font-size:11px;background:rgba(124,58,237,0.1);border-color:rgba(124,58,237,0.3);color:#7c3aed;">🔄 Override</button>
       <button class="btn btn-outline btn-sm" onclick="reassignCase()" style="font-size:11px;">👤 Reassign</button>
       <button class="btn btn-outline btn-sm" onclick="escalateCase()" style="font-size:11px;">⬆️ Escalate</button>
@@ -1111,6 +1112,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   </div>
 
   <div id="detail-approval-blockers" style="display:none;margin:0 0 16px;padding:12px 14px;border-radius:8px;border:1px solid var(--border1);background:var(--surface2);font-size:12px;line-height:1.5;"></div>
+  <div id="detail-correction-warning" style="display:none;margin:0 0 16px;padding:12px 14px;border-radius:8px;border:1px solid #f59e0b;background:#fef3c7;font-size:12px;line-height:1.5;color:#92400e;"></div>
 
   <!-- Content tabs -->
   <div style="display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid var(--border1);flex-wrap:wrap;">
@@ -1157,6 +1159,13 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <div class="detail-section">
           <div class="detail-section-title">Business Profile</div>
           <div id="detail-business"></div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+            <span>Officer Correction History</span>
+            <button class="btn btn-outline btn-sm" onclick="openOfficerCorrectionModal()" style="font-size:11px;">Add correction</button>
+          </div>
+          <div id="detail-officer-corrections"></div>
         </div>
       </div>
 
@@ -2906,6 +2915,71 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-document-review')">Cancel</button>
       <button class="btn btn-primary" onclick="confirmDocumentReview()">Save Review</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-officer-correction">
+  <div class="modal" style="width:680px;max-height:85vh;overflow-y:auto;">
+    <div class="modal-header"><h3>Record Correction</h3><button class="modal-close" onclick="closeModal('modal-officer-correction')">&times;</button></div>
+    <div class="modal-body">
+      <div id="officer-correction-error" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid #dc2626;background:#fef2f2;color:#991b1b;font-size:12px;"></div>
+      <div class="form-group">
+        <div class="form-label">What do you need to correct?</div>
+        <select class="form-select" id="officer-correction-target" onchange="updateOfficerCorrectionForm()">
+          <option value="company">Company details</option>
+          <option value="person">Person / PEP information</option>
+          <option value="risk">Risk information</option>
+        </select>
+      </div>
+      <div class="form-group" id="officer-correction-person-target-group" style="display:none;">
+        <div class="form-label">Which person information?</div>
+        <select class="form-select" id="officer-correction-person-target" onchange="updateOfficerCorrectionForm()">
+          <option value="director">Director details</option>
+          <option value="ubo">UBO details</option>
+          <option value="intermediary">Intermediary details</option>
+          <option value="pep">PEP verification</option>
+        </select>
+      </div>
+      <div class="form-group" id="officer-correction-subject-group" style="display:none;">
+        <div class="form-label" id="officer-correction-subject-label">Which person?</div>
+        <select class="form-select" id="officer-correction-subject" onchange="updateOfficerCorrectionForm()"></select>
+      </div>
+      <div class="form-group" id="officer-correction-pep-subject-type-group" style="display:none;">
+        <div class="form-label">Select person</div>
+        <select class="form-select" id="officer-correction-pep-subject-type" onchange="updateOfficerCorrectionForm()">
+          <option value="ubo">UBO</option>
+          <option value="director">Director</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Which field?</div>
+        <select class="form-select" id="officer-correction-field" onchange="updateOfficerCorrectionCurrentValue()"></select>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Current value</div>
+        <div id="officer-correction-current-value" style="padding:10px 12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text2);min-height:42px;"></div>
+      </div>
+      <div class="form-group" id="officer-correction-new-value-group">
+        <div class="form-label" id="officer-correction-new-value-label">Corrected value</div>
+        <input class="form-input" id="officer-correction-new-value" type="text" placeholder="Enter the verified value" />
+      </div>
+      <div class="form-group" id="officer-correction-pep-status-group" style="display:none;">
+        <div class="form-label">Verified PEP status</div>
+        <select class="form-select" id="officer-correction-pep-status" onchange="updateOfficerCorrectionCurrentValue()">
+          <option value="confirmed_pep">Confirmed PEP</option>
+          <option value="not_pep">Officer verified not PEP</option>
+          <option value="pending_review">Pending review</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <div class="form-label">Reason / Evidence</div>
+        <textarea class="form-input" id="officer-correction-reason" rows="4" placeholder="Explain the correction and the evidence you relied on."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-officer-correction')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitOfficerCorrection()">Save Correction</button>
     </div>
   </div>
 </div>
@@ -5274,7 +5348,9 @@ function detailValueFromAliases(record, keys) {
 }
 
 function normalizePepDisplay(value) {
-  return String(value).toLowerCase() === 'yes' || value === true || value === 1 || value === '1' ? 'Yes' : 'No';
+  if (value === true || value === 1 || value === '1' || String(value || '').toLowerCase() === 'yes') return 'Yes';
+  if (value === false || value === 0 || value === '0' || String(value || '').toLowerCase() === 'no') return 'No';
+  return 'Pending review';
 }
 
 function buildPartyDisplayName(person) {
@@ -5672,8 +5748,17 @@ async function fetchApplicationDetail(ref) {
       last_name: d.last_name || '',
       nat: d.nationality || '',
       dob: d.date_of_birth || '',
-      pep: normalizePepDisplay(d.is_pep),
-      pep_declaration: d.pep_declaration || {}
+      pep: d.pep_status_display || normalizePepDisplay(d.is_pep),
+      pep_declaration: d.pep_declaration || {},
+      declared_pep: d.declared_pep,
+      verified_pep: d.verified_pep,
+      client_declared_pep: d.client_declared_pep,
+      officer_verified_pep: d.officer_verified_pep,
+      pep_status: d.pep_status || '',
+      pep_verification_source: d.pep_verification_source || 'not_verified',
+      client_declared_pep_display: d.client_declared_pep_display || 'Not captured',
+      officer_verified_pep_display: d.officer_verified_pep_display || 'Not verified yet',
+      pep_status_display: d.pep_status_display || 'Not verified yet'
     };
   });
   var ubos = (detail.ubos || []).map(function(u) {
@@ -5686,8 +5771,17 @@ async function fetchApplicationDetail(ref) {
       nat: u.nationality || '',
       dob: u.date_of_birth || '',
       pct: u.ownership_pct || 0,
-      pep: normalizePepDisplay(u.is_pep),
-      pep_declaration: u.pep_declaration || {}
+      pep: u.pep_status_display || normalizePepDisplay(u.is_pep),
+      pep_declaration: u.pep_declaration || {},
+      declared_pep: u.declared_pep,
+      verified_pep: u.verified_pep,
+      client_declared_pep: u.client_declared_pep,
+      officer_verified_pep: u.officer_verified_pep,
+      pep_status: u.pep_status || '',
+      pep_verification_source: u.pep_verification_source || 'not_verified',
+      client_declared_pep_display: u.client_declared_pep_display || 'Not captured',
+      officer_verified_pep_display: u.officer_verified_pep_display || 'Not verified yet',
+      pep_status_display: u.pep_status_display || 'Not verified yet'
     };
   });
   var intermediaries = (detail.intermediaries || []).map(function(i) {
@@ -5750,6 +5844,9 @@ async function fetchApplicationDetail(ref) {
     latestMemo: detail.latest_memo_data || null,
     memoIsStale: detail.memo_is_stale || false,
     enhancedReviewSummary: detail.enhanced_review_summary || null,
+    officerCorrections: detail.officer_corrections || [],
+    memoRequiresRegeneration: !!detail.memo_requires_regeneration,
+    supervisorRequiresRerun: !!detail.supervisor_requires_rerun,
     updated_at: detail.updated_at || '',
     last_document_upload: detail.last_document_upload || '',
     screening_updated_at: detail.screening_updated_at || ''
@@ -5911,7 +6008,9 @@ function renderAuthoritativeAppDetail(app, options) {
     var labels = [];
     if (nationality !== '—') labels.push(nationality);
     if (d.dob) labels.push('DOB: ' + escapeHtml(d.dob));
-    labels.push('PEP: ' + normalizePepDisplay(d.pep));
+    labels.push('PEP: ' + escapeHtml(d.pep_status_display || normalizePepDisplay(d.pep)));
+    labels.push('Declared PEP: ' + escapeHtml(d.client_declared_pep_display || 'Not captured'));
+    labels.push('Verified PEP: ' + escapeHtml(d.officer_verified_pep_display || 'Not verified yet'));
     return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(labels.join(' | ')) + '</div>' +
@@ -5924,7 +6023,9 @@ function renderAuthoritativeAppDetail(app, options) {
     var nationality = normalizeDetailValue(u.nat);
     if (nationality !== '—') meta.push('Nationality: ' + escapeHtml(nationality));
     if (u.dob) meta.push('DOB: ' + escapeHtml(u.dob));
-    meta.push('PEP: ' + escapeHtml(normalizePepDisplay(u.pep)));
+    meta.push('PEP: ' + escapeHtml(u.pep_status_display || normalizePepDisplay(u.pep)));
+    meta.push('Declared PEP: ' + escapeHtml(u.client_declared_pep_display || 'Not captured'));
+    meta.push('Verified PEP: ' + escapeHtml(u.officer_verified_pep_display || 'Not verified yet'));
     return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + meta.join(' | ') + '</div>' +
@@ -5938,6 +6039,8 @@ function renderAuthoritativeAppDetail(app, options) {
     '</div>';
   }).join('') : '<div style="font-size:12px;color:var(--text3);">No intermediary shareholders persisted.</div>';
   document.getElementById('detail-persons').innerHTML = personsHtml;
+  renderOfficerCorrectionWarning(app);
+  renderOfficerCorrectionHistory(app);
 
   document.getElementById('detail-business').innerHTML =
     '<div class="detail-row"><span class="label">Sector</span><span class="value">' + escapeHtml(normalizeDetailValue(app.sector)) + '</span></div>' +
@@ -5994,6 +6097,11 @@ function renderAuthoritativeAppDetail(app, options) {
     var staleBanner = '';
     if (app.memoIsStale) {
       staleBanner = '<div style="margin-bottom:12px;padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;">⚠️ This compliance memo may be outdated — application data has been updated since the memo was generated. Consider regenerating the memo.</div>';
+    }
+    if (app.memoRequiresRegeneration || app.supervisorRequiresRerun) {
+      staleBanner += '<div style="margin-bottom:12px;padding:10px 14px;background:#fef2f2;border:1px solid #dc2626;border-radius:8px;font-size:12px;color:#991b1b;font-weight:600;">🚫 Officer corrections require memo regeneration' +
+        (app.supervisorRequiresRerun ? ' and supervisor rerun' : '') +
+        ' before approval can proceed.</div>';
     }
     memoEl.innerHTML = staleBanner + renderMemoSections(app.latestMemo);
     showValidationPanelIfMemoExists();
@@ -10922,6 +11030,343 @@ async function refreshCurrentAppDetail() {
   }
 }
 
+function setOfficerCorrectionError(message) {
+  var el = document.getElementById('officer-correction-error');
+  if (!el) return;
+  if (!message) {
+    el.style.display = 'none';
+    el.textContent = '';
+    return;
+  }
+  el.textContent = message;
+  el.style.display = 'block';
+}
+
+function officerCorrectionFieldOptions(targetType) {
+  var options = {
+    application: [
+      { value: 'company_name', label: 'Company name' },
+      { value: 'sector', label: 'Sector / industry' },
+      { value: 'country', label: 'Jurisdiction / country' },
+      { value: 'entity_type', label: 'Entity type' },
+      { value: 'ownership_structure', label: 'Ownership structure' },
+      { value: 'brn', label: 'Registration / BRN' }
+    ],
+    risk_field: [
+      { value: 'source_of_funds', label: 'Source of funds' },
+      { value: 'source_of_wealth', label: 'Source of wealth' },
+      { value: 'expected_volume', label: 'Expected volume' },
+      { value: 'monthly_volume', label: 'Monthly volume' },
+      { value: 'business_description', label: 'Business description' },
+      { value: 'trading_name', label: 'Trading name' }
+    ],
+    director: [
+      { value: 'full_name', label: 'Full name' },
+      { value: 'nationality', label: 'Nationality' },
+      { value: 'date_of_birth', label: 'Date of birth' }
+    ],
+    ubo: [
+      { value: 'full_name', label: 'Full name' },
+      { value: 'nationality', label: 'Nationality' },
+      { value: 'date_of_birth', label: 'Date of birth' },
+      { value: 'ownership_pct', label: 'Ownership percentage' }
+    ],
+    intermediary: [
+      { value: 'entity_name', label: 'Entity name' },
+      { value: 'jurisdiction', label: 'Jurisdiction' },
+      { value: 'ownership_pct', label: 'Ownership percentage' }
+    ],
+    pep_status: [
+      { value: 'verified_pep', label: 'Verified PEP status' }
+    ]
+  };
+  return options[targetType] || [];
+}
+
+function officerCorrectionFieldLabel(fieldName, targetType) {
+  if (targetType === 'pep_status' || fieldName === 'verified_pep' || fieldName === 'pep_status') return 'Verified PEP status';
+  var allOptions = ['application', 'risk_field', 'director', 'ubo', 'intermediary'].reduce(function(map, type) {
+    officerCorrectionFieldOptions(type).forEach(function(option) {
+      map[option.value] = option.label;
+    });
+    return map;
+  }, {});
+  return allOptions[fieldName] || String(fieldName || 'Correction').replace(/_/g, ' ');
+}
+
+function officerCorrectionSelectedCategory() {
+  return (document.getElementById('officer-correction-target') || {}).value || 'company';
+}
+
+function officerCorrectionSelectedPersonTarget() {
+  return (document.getElementById('officer-correction-person-target') || {}).value || 'director';
+}
+
+function officerCorrectionResolvedTargetType() {
+  var category = officerCorrectionSelectedCategory();
+  if (category === 'risk') return 'risk_field';
+  if (category === 'person') {
+    var personTarget = officerCorrectionSelectedPersonTarget();
+    return personTarget === 'pep' ? 'pep_status' : personTarget;
+  }
+  return 'application';
+}
+
+function officerCorrectionIsPepFlow() {
+  return officerCorrectionResolvedTargetType() === 'pep_status';
+}
+
+function officerCorrectionSubjects(targetType) {
+  if (!currentApp) return [];
+  targetType = targetType || officerCorrectionResolvedTargetType();
+  if (targetType === 'director') return currentApp.directors || [];
+  if (targetType === 'ubo') return currentApp.ubos || [];
+  if (targetType === 'intermediary') return currentApp.intermediaries || [];
+  if (targetType === 'pep_status') {
+    var pepType = (document.getElementById('officer-correction-pep-subject-type') || {}).value || 'ubo';
+    return pepType === 'director' ? (currentApp.directors || []) : (currentApp.ubos || []);
+  }
+  return [];
+}
+
+function officerCorrectionCurrentValue(app, targetType, fieldName, subjectId) {
+  if (!app) return 'No application selected.';
+  var ps = app.prescreeningData || {};
+  if (targetType === 'application') {
+    var applicationValues = {
+      company_name: app.company,
+      sector: app.sector,
+      country: app.country,
+      entity_type: app.entityType,
+      ownership_structure: app.ownershipStructure,
+      brn: app.brn
+    };
+    return normalizeDetailValue(applicationValues[fieldName]);
+  }
+  if (targetType === 'risk_field') {
+    var riskValues = {
+      source_of_funds: ps.source_of_funds || [ps.source_of_funds_initial_type, ps.source_of_funds_initial_detail].filter(Boolean).join(' — '),
+      source_of_wealth: ps.source_of_wealth || ps.source_of_wealth_type || '',
+      expected_volume: ps.expected_volume || '',
+      monthly_volume: ps.monthly_volume || ps.expected_monthly_volume || '',
+      trading_name: ps.trading_name || '',
+      business_description: ps.business_description || ps.business_overview || ''
+    };
+    return normalizeDetailValue(riskValues[fieldName]);
+  }
+  var subjects = officerCorrectionSubjects(targetType);
+  var subject = subjects.find(function(item) { return item.id === subjectId; }) || {};
+  if (targetType === 'pep_status') {
+    return 'Client declared: ' + (subject.client_declared_pep_display || 'Not captured') + ' | Officer verified: ' + (subject.officer_verified_pep_display || 'Not verified yet');
+  }
+  if (fieldName === 'ownership_pct') return normalizeDetailValue(subject.pct) + '%';
+  if (fieldName === 'entity_name') return normalizeDetailValue(subject.entity_name || subject.name);
+  if (fieldName === 'jurisdiction') return normalizeDetailValue(subject.jurisdiction);
+  if (fieldName === 'full_name') return normalizeDetailValue(subject.name);
+  if (fieldName === 'nationality') return normalizeDetailValue(subject.nat);
+  if (fieldName === 'date_of_birth') return normalizeDetailValue(subject.dob);
+  return normalizeDetailValue(subject[fieldName]);
+}
+
+function officerCorrectionHistoryField(item) {
+  var fieldChanges = parseJson(item.field_changes, {}) || {};
+  var fieldName = Object.keys(fieldChanges)[0];
+  return officerCorrectionFieldLabel(fieldName, item.target_type);
+}
+
+function officerCorrectionHistoryReasonEvidence(item) {
+  var pieces = [];
+  [item.correction_reason, item.evidence_source].forEach(function(part) {
+    var text = String(part || '').trim();
+    if (text && pieces.indexOf(text) < 0) pieces.push(text);
+  });
+  return pieces.join(' | ') || '—';
+}
+
+function officerCorrectionHistoryPepValue(state) {
+  state = state || {};
+  var status = String(state.pep_status || '').trim().toLowerCase();
+  if (status === 'confirmed_pep') return 'Confirmed PEP';
+  if (status === 'not_pep') return 'Officer verified not PEP';
+  if (status === 'false_positive') return 'False positive';
+  if (status === 'pending_review') return 'Pending review';
+  if (state.officer_verified_pep === true || state.verified_pep === true) return 'Confirmed PEP';
+  if (state.officer_verified_pep === false || state.verified_pep === false) return 'Officer verified not PEP';
+  return 'Not verified yet';
+}
+
+function officerCorrectionHistoryValue(state, item) {
+  if (!state || typeof state !== 'object') return '—';
+  if ((item.target_type || '') === 'pep_status') return officerCorrectionHistoryPepValue(state);
+  var fieldChanges = parseJson(item.field_changes, {}) || {};
+  var fieldName = Object.keys(fieldChanges)[0];
+  if (!fieldName) {
+    fieldName = Object.keys(state).filter(function(key) { return typeof state[key] !== 'object'; })[0];
+  }
+  var value = state[fieldName];
+  if (value == null || value === '') return '—';
+  if (fieldName === 'ownership_pct') return normalizeDetailValue(value) + '%';
+  return normalizeDetailValue(value);
+}
+
+function updateOfficerCorrectionCurrentValue() {
+  var targetType = officerCorrectionResolvedTargetType();
+  var fieldName = (document.getElementById('officer-correction-field') || {}).value || '';
+  var subjectId = (document.getElementById('officer-correction-subject') || {}).value || '';
+  var currentValue = officerCorrectionCurrentValue(currentApp, targetType, fieldName, subjectId);
+  var el = document.getElementById('officer-correction-current-value');
+  if (el) el.textContent = currentValue;
+}
+
+function updateOfficerCorrectionForm() {
+  var category = officerCorrectionSelectedCategory();
+  var targetType = officerCorrectionResolvedTargetType();
+  var personTargetGroup = document.getElementById('officer-correction-person-target-group');
+  var subjectGroup = document.getElementById('officer-correction-subject-group');
+  var pepTypeGroup = document.getElementById('officer-correction-pep-subject-type-group');
+  var pepStatusGroup = document.getElementById('officer-correction-pep-status-group');
+  var newValueGroup = document.getElementById('officer-correction-new-value-group');
+  var newValueLabel = document.getElementById('officer-correction-new-value-label');
+  var subjectLabel = document.getElementById('officer-correction-subject-label');
+  var subjectSelect = document.getElementById('officer-correction-subject');
+  var fieldSelect = document.getElementById('officer-correction-field');
+  if (!fieldSelect || !subjectSelect) return;
+
+  personTargetGroup.style.display = category === 'person' ? 'block' : 'none';
+  pepTypeGroup.style.display = targetType === 'pep_status' ? 'block' : 'none';
+  subjectGroup.style.display = ['director', 'ubo', 'intermediary', 'pep_status'].indexOf(targetType) >= 0 ? 'block' : 'none';
+  pepStatusGroup.style.display = targetType === 'pep_status' ? 'block' : 'none';
+  newValueGroup.style.display = targetType === 'pep_status' ? 'none' : 'block';
+  fieldSelect.disabled = targetType === 'pep_status';
+  if (newValueLabel) newValueLabel.textContent = 'Corrected value';
+  if (subjectLabel) {
+    subjectLabel.textContent = targetType === 'intermediary' ? 'Which intermediary?' : 'Which person?';
+  }
+
+  var subjects = officerCorrectionSubjects(targetType);
+  subjectSelect.innerHTML = subjects.map(function(item) {
+    return '<option value="' + escapeHtml(item.id || '') + '">' + escapeHtml(item.name || item.entity_name || item.full_name || 'Subject') + '</option>';
+  }).join('') || '<option value="">No subject available</option>';
+
+  var options = officerCorrectionFieldOptions(targetType);
+  fieldSelect.innerHTML = options.map(function(item) {
+    return '<option value="' + escapeHtml(item.value) + '">' + escapeHtml(item.label) + '</option>';
+  }).join('');
+  updateOfficerCorrectionCurrentValue();
+}
+
+function openOfficerCorrectionModal() {
+  if (!currentApp || !currentApp.id) {
+    showToast('Open an application first.', 'warn');
+    return;
+  }
+  setOfficerCorrectionError('');
+  var target = document.getElementById('officer-correction-target');
+  var personTarget = document.getElementById('officer-correction-person-target');
+  var pepStatus = document.getElementById('officer-correction-pep-status');
+  var newValue = document.getElementById('officer-correction-new-value');
+  var reason = document.getElementById('officer-correction-reason');
+  if (target) target.value = 'company';
+  if (personTarget) personTarget.value = 'director';
+  if (pepStatus) pepStatus.value = 'confirmed_pep';
+  if (newValue) newValue.value = '';
+  if (reason) reason.value = '';
+  updateOfficerCorrectionForm();
+  document.getElementById('modal-officer-correction').classList.add('open');
+}
+
+function renderOfficerCorrectionWarning(app) {
+  var el = document.getElementById('detail-correction-warning');
+  if (!el) return;
+  if (!app || (!app.memoRequiresRegeneration && !app.supervisorRequiresRerun)) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = 'block';
+  el.innerHTML = '<strong>RegMind follow-up:</strong> Recent corrections updated the risk, memo status, and approval blockers where required.';
+}
+
+function renderOfficerCorrectionHistory(app) {
+  var el = document.getElementById('detail-officer-corrections');
+  if (!el) return;
+  var corrections = (app && app.officerCorrections) || [];
+  if (!corrections.length) {
+    el.innerHTML = '<div style="padding:12px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text3);">No officer corrections have been recorded for this application.</div>';
+    return;
+  }
+  el.innerHTML = corrections.map(function(item) {
+    var beforeText = officerCorrectionHistoryValue(item.before_state || {}, item);
+    var afterText = officerCorrectionHistoryValue(item.after_state || {}, item);
+    var fieldLabel = officerCorrectionHistoryField(item);
+    return '<div style="padding:12px;margin-bottom:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Field corrected:</strong> ' + escapeHtml(fieldLabel) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Before:</strong> ' + escapeHtml(beforeText) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>After:</strong> ' + escapeHtml(afterText) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Officer:</strong> ' + escapeHtml(item.corrected_by_name || item.corrected_by || 'Officer') + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;"><strong>Date:</strong> ' + escapeHtml(normalizeDetailValue(item.corrected_at)) + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);"><strong>Reason / Evidence:</strong> ' + escapeHtml(officerCorrectionHistoryReasonEvidence(item)) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function submitOfficerCorrection() {
+  if (!currentApp || !currentApp.id) return;
+  var targetType = officerCorrectionResolvedTargetType();
+  var fieldName = (document.getElementById('officer-correction-field') || {}).value || '';
+  var subjectId = (document.getElementById('officer-correction-subject') || {}).value || '';
+  var pepSubjectType = (document.getElementById('officer-correction-pep-subject-type') || {}).value || 'ubo';
+  var pepStatus = (document.getElementById('officer-correction-pep-status') || {}).value || 'confirmed_pep';
+  var newValueRaw = (document.getElementById('officer-correction-new-value') || {}).value || '';
+  var explanation = ((document.getElementById('officer-correction-reason') || {}).value || '').trim();
+  if (!fieldName || (!officerCorrectionIsPepFlow() && !newValueRaw.trim()) || !explanation) {
+    setOfficerCorrectionError('Which field, corrected value, and reason / evidence are required.');
+    return;
+  }
+  var fieldValue = newValueRaw.trim();
+  if (officerCorrectionIsPepFlow()) {
+    if (pepStatus === 'confirmed_pep') fieldValue = true;
+    else if (pepStatus === 'not_pep') fieldValue = false;
+    else fieldValue = null;
+  } else if (fieldName === 'verified_pep') {
+    fieldValue = ['true', 'yes', '1', 'pep'].indexOf(fieldValue.toLowerCase()) >= 0;
+  } else if (fieldName === 'ownership_pct') {
+    fieldValue = Number(fieldValue);
+    if (!isFinite(fieldValue)) {
+      setOfficerCorrectionError('Ownership percentage must be numeric.');
+      return;
+    }
+  }
+  var payload = {
+    target_type: targetType,
+    field_changes: {},
+    correction_reason: explanation,
+    evidence_source: explanation,
+    correction_note: explanation,
+    correction_source: 'backoffice_ui'
+  };
+  payload.field_changes[fieldName] = fieldValue;
+  if (targetType === 'pep_status') {
+    payload.field_changes.pep_status = pepStatus;
+  }
+  if (['director', 'ubo', 'intermediary'].indexOf(targetType) >= 0) {
+    payload.target_id = subjectId;
+  }
+  if (targetType === 'pep_status') {
+    payload.subject_type = pepSubjectType;
+    payload.target_id = subjectId;
+  }
+  try {
+    setOfficerCorrectionError('');
+    await boApiCall('POST', '/applications/' + currentApp.id + '/corrections', payload);
+    closeModal('modal-officer-correction');
+    await refreshCurrentAppDetail();
+    showToast('Correction saved. RegMind updated the risk, EDD requirements, memo status, and approval blockers where required.');
+  } catch (err) {
+    setOfficerCorrectionError(err.message || 'Failed to save correction.');
+  }
+}
+
 async function confirmDecision() {
   if (!currentApp) return;
 
@@ -11319,6 +11764,7 @@ function closeModal(id) {
   document.getElementById(id).classList.remove('open');
   if (id === 'modal-decision-reason') setDecisionError('');
   if (id === 'modal-rmi-request') setRMIError('');
+  if (id === 'modal-officer-correction') setOfficerCorrectionError('');
   if (id === 'modal-screening-disposition') {
     setScreeningDispositionError('');
     pendingScreeningDisposition = null;

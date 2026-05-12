@@ -1065,7 +1065,7 @@ def _get_risk_config_version(db):
     return None
 
 
-def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None):
+def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routing_policy=True):
     """Recompute risk score for a single application and persist the result.
 
     Args:
@@ -1075,6 +1075,12 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None):
         user: Optional user dict (for audit logging).
         log_audit_fn: Optional callable(user, action, target, detail, **kwargs)
                       for audit logging. If None, audit is skipped.
+        apply_routing_policy: When True (default), recomputation also runs the
+                      canonical deterministic EDD routing evaluation + actuation
+                      step. Callers may set this to False only when they will
+                      immediately invoke the same routing helper themselves
+                      after recomputation and want to avoid duplicate routing
+                      audit/actuation writes.
 
     Returns:
         dict with keys:
@@ -1184,43 +1190,41 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None):
                 logger.warning("recompute_risk audit log failed: %s", e)
 
 
-        # Priority E: re-run EDD routing policy after every recompute.
-        # If the new risk profile (level, sector, jurisdiction, PEP,
-        # ownership) crosses an EDD trigger, an edd_cases row is
-        # upserted idempotently and onboarding_lane is set to "EDD".
-        # If the case is no longer EDD-required, lane is left alone
-        # for officer review (we do NOT auto-demote).
-        try:
-            from routing_actuator import (
-                apply_routing_decision,
-                SOURCE_RISK_RECOMPUTE,
-            )
+        # Priority E: re-run EDD routing policy after every recompute unless a
+        # caller explicitly owns the routing step and will execute it
+        # immediately afterwards using the same established helper.
+        if apply_routing_policy:
             try:
-                _app_post = db.execute(
-                    "SELECT * FROM applications WHERE id = ?", (app_id,)
-                ).fetchone()
-            except Exception:
-                _app_post = app
-            _risk_dict = {
-                "score": new_score,
-                "level": new_level,
-                "final_risk_level": new_level,
-                "base_risk_level": new_level,
-                "sector_label": (dict(_app_post or {})).get("sector"),
-            }
-            apply_routing_decision(
-                db=db,
-                app_row=(dict(_app_post) if _app_post else app),
-                risk_dict=_risk_dict,
-                user=user,
-                client_ip="",
-                source=SOURCE_RISK_RECOMPUTE,
-            )
-        except Exception as _re_err:
-            logger.warning(
-                "apply_routing_decision (recompute) failed for app_id=%s: %s",
-                app_id, _re_err,
-            )
+                from routing_actuator import (
+                    apply_routing_decision,
+                    SOURCE_RISK_RECOMPUTE,
+                )
+                try:
+                    _app_post = db.execute(
+                        "SELECT * FROM applications WHERE id = ?", (app_id,)
+                    ).fetchone()
+                except Exception:
+                    _app_post = app
+                _risk_dict = {
+                    "score": new_score,
+                    "level": new_level,
+                    "final_risk_level": new_level,
+                    "base_risk_level": new_level,
+                    "sector_label": (dict(_app_post or {})).get("sector"),
+                }
+                apply_routing_decision(
+                    db=db,
+                    app_row=(dict(_app_post) if _app_post else app),
+                    risk_dict=_risk_dict,
+                    user=user,
+                    client_ip="",
+                    source=SOURCE_RISK_RECOMPUTE,
+                )
+            except Exception as _re_err:
+                logger.warning(
+                    "apply_routing_decision (recompute) failed for app_id=%s: %s",
+                    app_id, _re_err,
+                )
 
     except Exception as e:
         logger.warning("recompute_risk failed for app_id=%s: %s", app_id, e)
