@@ -1075,6 +1075,12 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         user: Optional user dict (for audit logging).
         log_audit_fn: Optional callable(user, action, target, detail, **kwargs)
                       for audit logging. If None, audit is skipped.
+        apply_routing_policy: When True (default), recomputation also runs the
+                      canonical deterministic EDD routing evaluation + actuation
+                      step. Callers may set this to False only when they will
+                      immediately invoke the same routing helper themselves
+                      after recomputation and want to avoid duplicate routing
+                      audit/actuation writes.
 
     Returns:
         dict with keys:

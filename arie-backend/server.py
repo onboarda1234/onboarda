@@ -3944,6 +3944,8 @@ class ApplicationCorrectionHandler(BaseHandler):
             after_state = dict(before_state)
             for field, value in field_changes.items():
                 after_state[field] = value
+            if not set(field_changes).issubset(set(target_config["allowed_fields"])):
+                raise ValueError("Unsafe application correction fields rejected")
             # Safe SQL identifier interpolation: assignments are composed only
             # from OFFICER_CORRECTION_APPLICATION_FIELDS after whitelist
             # validation in post().
@@ -4017,6 +4019,8 @@ class ApplicationCorrectionHandler(BaseHandler):
                 normalized_updates["full_name"] = full_name
                 after_state["full_name"] = full_name
 
+        if not set(normalized_updates).issubset(set(target_config["allowed_fields"])):
+            raise ValueError("Unsafe subject correction fields rejected")
         # Safe SQL identifier interpolation: table/id_field are hard-coded
         # whitelist values and assignments use only validated field names.
         assignments = ", ".join(f"{field} = ?" for field in normalized_updates)
