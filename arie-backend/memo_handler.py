@@ -576,37 +576,33 @@ def build_compliance_memo(app, directors, ubos, documents):
     # the screening narrative below.
     try:
         from screening_state import (
-            derive_screening_state as _derive_state,
-            COMPLETED_CLEAR as _S_CLEAR,
-            COMPLETED_MATCH as _S_MATCH,
-            NOT_CONFIGURED as _S_NCFG,
-            FAILED as _S_FAILED,
-            TERMINAL_STATES as _S_TERMINAL,
+            build_screening_terminality_summary as _build_screening_terminality_summary,
         )
     except ImportError:  # pragma: no cover — defensive: never break memo build
-        _derive_state = lambda _x: "not_started"
-        _S_CLEAR = "completed_clear"
-        _S_MATCH = "completed_match"
-        _S_NCFG = "not_configured"
-        _S_FAILED = "failed"
-        _S_TERMINAL = frozenset({_S_CLEAR, _S_MATCH})
+        _build_screening_terminality_summary = lambda _report, _prescreening=None: {
+            "terminal": False,
+            "has_non_terminal": True,
+            "has_failed": False,
+            "has_not_configured": False,
+            "has_terminal_match": False,
+            "company_screening_configured": False,
+            "person_states": [],
+            "company_state": None,
+        }
 
-    _person_states = []
-    for entry in (screening_report.get("director_screenings", []) +
-                  screening_report.get("ubo_screenings", [])):
-        _person_states.append(_derive_state((entry or {}).get("screening") or {}))
-    _company_state = _derive_state(
-        ((screening_report.get("company_screening") or {}).get("sanctions") or {})
-    )
-    _all_states = _person_states + ([_company_state] if screening_report.get("company_screening") else [])
+    _screening_terminality = _build_screening_terminality_summary(screening_report, prescreening_data)
+    _person_states = list(_screening_terminality.get("person_states") or [])
+    _company_state = _screening_terminality.get("company_state")
 
     # ``screening_terminal`` is True only if every screened subject has a
     # terminal provider answer. Otherwise the memo must qualify its
-    # screening claims.
-    screening_terminal = bool(_all_states) and all(s in _S_TERMINAL for s in _all_states)
-    screening_has_non_terminal = any(s not in _S_TERMINAL for s in _all_states)
-    screening_has_failed = any(s == _S_FAILED for s in _all_states)
-    screening_has_not_configured = any(s == _S_NCFG for s in _all_states)
+    # screening claims. ``has_terminal_match`` is stricter: it means a
+    # material terminal concern (PEP/sanctions/adverse/company hit), not
+    # merely provider metadata or a non-material profile.
+    screening_terminal = bool(_screening_terminality.get("terminal"))
+    screening_has_non_terminal = bool(_screening_terminality.get("has_non_terminal"))
+    screening_has_failed = bool(_screening_terminality.get("has_failed"))
+    screening_has_not_configured = bool(_screening_terminality.get("has_not_configured"))
     # Coverage of self-declared PEP exposure is independent of provider
     # state and remains a first-class signal.
     has_declared_pep = bool(pep_directors or pep_ubos)
@@ -1736,7 +1732,7 @@ def build_compliance_memo(app, directors, ubos, documents):
         else "incomplete" if _is_incomplete
         else "transparent"
     )
-    _has_terminal_match = any(s == _S_MATCH for s in _all_states)
+    _has_terminal_match = bool(_screening_terminality.get("has_terminal_match"))
     edd_trigger_flags = []
     try:
         _raw_esc = app.get("risk_escalations") or "[]"
@@ -1776,9 +1772,9 @@ def build_compliance_memo(app, directors, ubos, documents):
             "has_failed": screening_has_failed,
             "has_not_configured": screening_has_not_configured,
             "has_terminal_match": _has_terminal_match,
-            "company_screening_configured": bool(screening_report.get("company_screening")),
+            "company_screening_configured": bool(_screening_terminality.get("company_screening_configured")),
         },
-        "company_screening_configured": bool(screening_report.get("company_screening")),
+        "company_screening_configured": bool(_screening_terminality.get("company_screening_configured")),
         "edd_trigger_flags": edd_trigger_flags,
         "decision_recommendation": decision,
         "monitoring_tier": mon_tier,
