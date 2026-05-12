@@ -7062,8 +7062,34 @@ function evidenceDisplayValue(value) {
   if (value === false) return 'No';
   if (value === null || value === undefined || value === '') return '';
   if (Array.isArray(value)) return value.filter(Boolean).join(', ');
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'object') return '';
   return String(value);
+}
+
+function formatProviderName(value) {
+  var raw = String(value || '').trim();
+  var key = raw.toLowerCase().replace(/[\s_-]+/g, '');
+  if (!raw) return '';
+  if (key === 'ca' || key === 'complyadvantage') return 'ComplyAdvantage';
+  if (key === 'sumsub') return 'Sumsub';
+  if (key === 'opencorporates') return 'OpenCorporates';
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+function isUuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || '').trim());
+}
+
+function normalizeEvidenceCategoryLabel(value) {
+  var raw = String(value || '').trim();
+  var key = raw.toLowerCase().replace(/[_-]+/g, ' ');
+  if (!key || key === 'other' || key === 'unknown') return '';
+  if (key.indexOf('adverse') !== -1 || key.indexOf('media') !== -1) return 'Adverse media';
+  if (key.indexOf('pep') !== -1 || key.indexOf('political') !== -1) return 'PEP';
+  if (key.indexOf('sanction') !== -1) return 'Sanctions';
+  if (key.indexOf('watchlist') !== -1 || key.indexOf('warning') !== -1) return 'Watchlist / warning';
+  if (key.indexOf('regulatory') !== -1 || key.indexOf('regulation') !== -1) return 'Regulatory';
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
 function evidenceCategories(hit) {
@@ -7076,14 +7102,39 @@ function evidenceCategories(hit) {
   if (hit.is_adverse_media) cats.push('adverse media');
   if (!cats.length && Array.isArray(hit.risk_type_labels)) cats = cats.concat(hit.risk_type_labels);
   var seen = {};
-  return cats.filter(function(cat) {
-    cat = String(cat || '').trim();
+  var normalized = cats.map(normalizeEvidenceCategoryLabel).filter(function(cat) {
     if (!cat) return false;
     var key = cat.toLowerCase();
     if (seen[key]) return false;
     seen[key] = true;
     return true;
   });
+  return normalized.length ? normalized : ['Unclassified provider hit'];
+}
+
+function evidencePrimaryLabel(hit, context) {
+  hit = hit || {};
+  context = context || {};
+  var candidates = [
+    hit.matched_name,
+    hit.profile_name,
+    hit.name,
+    context.subject_name,
+    hit._subject_name
+  ];
+  for (var i = 0; i < candidates.length; i++) {
+    var candidate = String(candidates[i] || '').trim();
+    if (candidate && !isUuidLike(candidate)) return candidate;
+  }
+  return (formatProviderName(hit.provider || hit.source || context.provider) || 'ComplyAdvantage') + ' Evidence';
+}
+
+function isPepEvidenceRelevant(hit, categories, riskLabels) {
+  var text = (categories || []).concat(riskLabels || []).join(' ').toLowerCase();
+  return text.indexOf('pep') !== -1 ||
+    hit.is_pep === true ||
+    hit._provider_detected_pep === 'Yes' ||
+    hit._undeclared_pep === 'Yes';
 }
 
 function screeningEvidenceKey(hit, context, index) {
@@ -7107,6 +7158,7 @@ function registerScreeningEvidence(hit, context, index) {
     _application_ref: (context || {}).application_ref || '',
     _subject_type: (context || {}).subject_type || hit.subject_scope || '',
     _subject_name: (context || {}).subject_name || '',
+    _provider: formatProviderName((hit || {}).provider || (hit || {}).source || (context || {}).provider) || 'ComplyAdvantage',
     _screened_at: (context || {}).screened_at || hit.screened_at || '',
     _declared_pep: (context || {}).declared_pep,
     _provider_detected_pep: (context || {}).provider_detected_pep,
@@ -7143,6 +7195,55 @@ function evidenceBadgeList(values) {
   }).join('') + '</div>';
 }
 
+function mergeUniqueList(target, values) {
+  target = Array.isArray(target) ? target : [];
+  (Array.isArray(values) ? values : [values]).forEach(function(value) {
+    if (value && target.indexOf(value) === -1) target.push(value);
+  });
+  return target;
+}
+
+function providerEvidenceGroupKey(hit, context) {
+  hit = hit || {};
+  var categories = evidenceCategories(hit).join('|').toLowerCase();
+  var label = evidencePrimaryLabel(hit, context).toLowerCase();
+  return [
+    hit.provider_case_identifier || hit.case_identifier || '',
+    hit.provider_profile_identifier || hit.profile_identifier || '',
+    label,
+    categories
+  ].join('|');
+}
+
+function groupProviderEvidenceHits(results, context) {
+  var grouped = [];
+  var byKey = {};
+  (Array.isArray(results) ? results : []).forEach(function(hit) {
+    hit = hit || {};
+    var key = providerEvidenceGroupKey(hit, context || {});
+    if (!byKey[key]) {
+      byKey[key] = Object.assign({}, hit, {
+        _group_count: 1,
+        _grouped_risk_identifiers: [],
+        _grouped_alert_identifiers: []
+      });
+      grouped.push(byKey[key]);
+    } else {
+      byKey[key]._group_count += 1;
+      byKey[key].summary = byKey[key].summary || hit.summary;
+      byKey[key].media_title = byKey[key].media_title || hit.media_title || hit.title;
+      byKey[key].media_snippet = byKey[key].media_snippet || hit.media_snippet || hit.snippet;
+      byKey[key].media_url = byKey[key].media_url || hit.media_url || hit.url;
+      byKey[key].risk_type_labels = mergeUniqueList(byKey[key].risk_type_labels, hit.risk_type_labels || []);
+      byKey[key].risk_type_keys = mergeUniqueList(byKey[key].risk_type_keys, hit.risk_type_keys || []);
+      byKey[key].match_categories = mergeUniqueList(byKey[key].match_categories, hit.match_categories || hit.match_category || []);
+    }
+    mergeUniqueList(byKey[key]._grouped_risk_identifiers, hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier);
+    mergeUniqueList(byKey[key]._grouped_alert_identifiers, hit.provider_alert_identifier || hit.alert_identifier);
+  });
+  return grouped;
+}
+
 function openScreeningEvidenceDrawer(key) {
   var hit = SCREENING_EVIDENCE_DETAILS[key];
   if (!hit) { showToast('Screening evidence is no longer available', 'error'); return; }
@@ -7150,18 +7251,20 @@ function openScreeningEvidenceDrawer(key) {
   var categories = evidenceCategories(hit);
   var riskLabels = Array.isArray(hit.risk_type_labels) ? hit.risk_type_labels : [];
   var riskKeys = Array.isArray(hit.risk_type_keys) ? hit.risk_type_keys : [];
-  var provider = hit.provider || hit.source || 'Not recorded';
-  var matchedName = hit.matched_name || hit.name || hit.profile_name || 'Provider match';
+  var provider = formatProviderName(hit.provider || hit.source || hit._provider) || 'ComplyAdvantage';
+  var matchedName = evidencePrimaryLabel(hit, hit);
   var mediaUrl = hit.media_url || hit.url || '';
   var mediaTitle = hit.media_title || hit.title || '';
   var mediaSnippet = hit.media_snippet || hit.snippet || '';
   var subjectScope = hit.subject_scope || hit._subject_type || '';
   var subjectType = hit._subject_type || subjectScope || 'screening subject';
   var discovered = hit.discovered_at || hit._screened_at || hit.screened_at || '';
+  var drawerTitle = 'Screening Evidence — ' + matchedName;
 
   var body = '';
   body += '<div style="padding:12px 14px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.04);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text2);">' +
-    '<div style="font-weight:700;color:var(--text1);font-size:13px;">' + escapeHtml(matchedName) + '</div>' +
+    '<div style="font-weight:700;color:var(--text1);font-size:14px;">' + escapeHtml(matchedName) + '</div>' +
+    '<div style="margin-top:6px;">' + evidenceBadgeList(categories) + '</div>' +
     '<div style="margin-top:4px;">' + escapeHtml(hit.summary || 'Provider evidence attached to this screening subject. Review the identifiers, categories, source detail, and timestamps before recording an officer disposition.') + '</div>' +
   '</div>';
 
@@ -7169,13 +7272,9 @@ function openScreeningEvidenceDrawer(key) {
     ['Application', hit._application_ref],
     ['Subject', [hit._subject_name, subjectType].filter(Boolean).join(' / ')],
     ['Provider', provider],
-    ['Provider case ID', hit.provider_case_identifier || hit.case_identifier],
-    ['Provider alert ID', hit.provider_alert_identifier || hit.alert_identifier],
-    ['Provider risk ID', hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier],
-    ['Provider profile ID', hit.provider_profile_identifier || hit.profile_identifier],
     ['Discovered / screened', discovered ? String(discovered).replace('T', ' ').slice(0, 19) : ''],
-    ['Discovered via', hit.discovered_via],
     ['Subject scope', subjectScope],
+    ['Evidence records grouped', hit._group_count && hit._group_count > 1 ? String(hit._group_count) : ''],
   ]);
 
   body += evidenceSection('Match Semantics',
@@ -7198,13 +7297,13 @@ function openScreeningEvidenceDrawer(key) {
     );
   }
 
-  if (categories.join(' ').toLowerCase().indexOf('pep') !== -1 || riskLabels.join(' ').toLowerCase().indexOf('pep') !== -1 || hit._provider_detected_pep) {
+  if (isPepEvidenceRelevant(hit, categories, riskLabels)) {
     body += evidenceSection('PEP Evidence',
       evidenceInfoGrid([
+        ['PEP class / labels', riskLabels],
         ['Declared PEP', hit._declared_pep],
         ['Provider PEP match', hit._provider_detected_pep],
         ['Undeclared PEP', hit._undeclared_pep],
-        ['PEP class / labels', riskLabels],
       ])
     );
   }
@@ -7219,23 +7318,31 @@ function openScreeningEvidenceDrawer(key) {
     );
   }
 
-  document.getElementById('screening-evidence-title').textContent = 'Screening Evidence — ' + matchedName;
+  body += evidenceSection('Traceability',
+    evidenceInfoGrid([
+      ['Provider case ID', hit.provider_case_identifier || hit.case_identifier],
+      ['Provider alert ID', hit.provider_alert_identifier || hit.alert_identifier],
+      ['Provider risk ID', hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier],
+      ['Provider profile ID', hit.provider_profile_identifier || hit.profile_identifier],
+      ['Grouped alert IDs', hit._grouped_alert_identifiers],
+      ['Grouped risk IDs', hit._grouped_risk_identifiers],
+      ['Discovered via', hit.discovered_via],
+    ])
+  );
+
+  document.getElementById('screening-evidence-title').textContent = drawerTitle;
   document.getElementById('screening-evidence-body').innerHTML = body;
   document.getElementById('modal-screening-evidence').classList.add('open');
 }
 
 function providerResultHighlights(results, context) {
-  var hits = Array.isArray(results) ? results : [];
+  context = context || {};
+  var hits = groupProviderEvidenceHits(Array.isArray(results) ? results : [], context);
   if (!hits.length) return '';
   return '<div style="margin-top:10px;"><strong>Provider evidence details</strong>' + hits.slice(0, 8).map(function(hit, index) {
-    var parts = [];
-    if (hit.name || hit.matched_name) parts.push(hit.name || hit.matched_name);
-    if (Array.isArray(hit.match_categories) && hit.match_categories.length) parts.push(hit.match_categories.join(', '));
-    else {
-      if (hit.is_sanctioned) parts.push('sanctions');
-      if (hit.is_pep) parts.push('PEP');
-      if (hit.is_adverse_media) parts.push('adverse media');
-    }
+    var parts = [evidencePrimaryLabel(hit, context)];
+    var categories = evidenceCategories(hit);
+    if (categories.length) parts.push(categories.join(', '));
     var riskLabels = Array.isArray(hit.risk_type_labels) && hit.risk_type_labels.length ? hit.risk_type_labels.slice(0, 4).join(', ') : '';
     var riskId = hit.provider_risk_identifier || hit.risk_id || '';
     var caseId = hit.provider_case_identifier || hit.case_identifier || '';
@@ -7255,20 +7362,21 @@ function providerResultHighlights(results, context) {
         '</div>'
       : '';
     var traceRows = [
-      ['Provider', hit.provider || hit.source || 'Not recorded'],
+      ['Provider', formatProviderName(hit.provider || hit.source || context.provider) || 'ComplyAdvantage'],
+      ['Category', categories.join(', ')],
       ['Case ID', caseId],
-      ['Alert ID', alertId],
-      ['Risk ID', riskId],
-      ['Profile ID', profileId],
       ['Risk labels', riskLabels],
       ['Discovered', discovered]
     ].filter(function(row) { return row[1]; }).map(function(row) {
       return '<div><span style="color:var(--text3);">' + escapeHtml(row[0]) + ':</span> <span style="font-family:' + (row[0].indexOf('ID') !== -1 ? 'monospace' : 'inherit') + ';">' + escapeHtml(String(row[1])) + '</span></div>';
     }).join('');
+    var groupedNote = hit._group_count && hit._group_count > 1
+      ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(String(hit._group_count) + ' evidence records grouped for this profile/category. IDs are available in the evidence drawer.') + '</div>'
+      : '';
     return '<div style="margin-top:8px;padding:10px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
       '<div style="font-weight:600;color:var(--text1);">' + escapeHtml(parts.filter(Boolean).join(' — ') || 'Provider match') + '</div>' +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px;margin-top:6px;font-size:11px;color:var(--text2);">' + traceRows + '</div>' +
-      summary + media + indicatorDetails +
+      groupedNote + summary + media + indicatorDetails +
       '<div style="margin-top:8px;"><button type="button" class="btn btn-outline btn-sm" onclick="openScreeningEvidenceDrawer(\'' + evidenceKey + '\')">View evidence</button>' +
       (mediaUrl ? ' <a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open source</a>' : '') +
       '</div>' +
@@ -7426,6 +7534,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
     application_ref: app.ref,
     subject_type: 'entity',
     subject_name: app.company,
+    provider: company.source || company.provider || screeningSummary.provider,
     screened_at: screeningSummary.screened_at
   });
   if (ipFlags.length) body += '<div style="margin-top:10px;"><strong>IP / geolocation flags:</strong> ' + escapeHtml(ipFlags.join(' · ')) + '</div>';
@@ -7485,6 +7594,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
       application_ref: app.ref,
       subject_type: person.subject_type,
       subject_name: person.name,
+      provider: facts.source || screeningSummary.provider,
       screened_at: facts.screened_at || screeningSummary.screened_at,
       declared_pep: personDeclaredPep ? 'Yes' : 'No',
       provider_detected_pep: providerPep ? 'Yes' : 'No',
