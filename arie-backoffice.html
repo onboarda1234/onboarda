@@ -6995,34 +6995,54 @@ function screeningModeBadge(mode) {
 
 function screeningResultFacts(screeningRecord) {
   var screening = screeningRecord || {};
-  var hitFacts = classifyScreeningHits(screening.results || []);
+  var hitFacts = classifyScreeningHits(dedupScreeningResults(screening.results || []));
   return {
     total_hits: hitFacts.total,
     sanctions_hits: hitFacts.sanctions_hits,
     pep_hits: hitFacts.pep_hits,
     adverse_media_hits: hitFacts.adverse_media_hits,
     other_hits: hitFacts.other_hits,
-    matched: !!screening.matched,
+    matched: !!screening.matched || hitFacts.total > 0,
     source: screening.source || null,
     api_status: screening.api_status || null,
     screened_at: screening.screened_at || null
   };
 }
 
+function screeningResultIdentity(hit) {
+  hit = hit || {};
+  return hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier ||
+    hit.provider_profile_identifier || hit.profile_identifier || JSON.stringify(hit);
+}
+
+function dedupScreeningResults(results) {
+  var seen = {};
+  return (Array.isArray(results) ? results : []).filter(function(hit) {
+    var key = screeningResultIdentity(hit);
+    if (seen[key]) return false;
+    seen[key] = true;
+    return true;
+  });
+}
+
 function combinedScreeningFacts(records) {
   var result = { total_hits:0, sanctions_hits:0, pep_hits:0, adverse_media_hits:0, other_hits:0, matched:false, source:null, api_status:null, screened_at:null };
+  var allResults = [];
   (records || []).forEach(function(record) {
-    var facts = screeningResultFacts(record || {});
-    result.total_hits += facts.total_hits || 0;
-    result.sanctions_hits += facts.sanctions_hits || 0;
-    result.pep_hits += facts.pep_hits || 0;
-    result.adverse_media_hits += facts.adverse_media_hits || 0;
-    result.other_hits += facts.other_hits || 0;
-    result.matched = result.matched || !!facts.matched;
-    result.source = result.source || facts.source;
-    result.api_status = result.api_status || facts.api_status;
-    result.screened_at = result.screened_at || facts.screened_at;
+    record = record || {};
+    allResults = allResults.concat(record.results || []);
+    result.matched = result.matched || !!record.matched;
+    result.source = result.source || record.source || record.provider;
+    result.api_status = result.api_status || record.api_status;
+    result.screened_at = result.screened_at || record.screened_at;
   });
+  var facts = screeningResultFacts({ matched: result.matched, results: dedupScreeningResults(allResults) });
+  result.total_hits = facts.total_hits || 0;
+  result.sanctions_hits = facts.sanctions_hits || 0;
+  result.pep_hits = facts.pep_hits || 0;
+  result.adverse_media_hits = facts.adverse_media_hits || 0;
+  result.other_hits = facts.other_hits || 0;
+  result.matched = result.matched || !!facts.matched;
   return result;
 }
 
@@ -7175,7 +7195,7 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
   var companySanctions = company.sanctions || {};
   var companyAdverse = company.adverse_media || {};
   var monitoringMedia = companyMonitoringMediaFacts(app);
-  var companyRecords = (company.sanctions || company.adverse_media) ? [companySanctions, companyAdverse] : [company];
+  var companyRecords = [company, companySanctions, companyAdverse];
   var ip = screeningSummary.ip_geolocation || {};
   var kycApplicants = screeningSummary.kyc_applicants || [];
   var ipFlags = [];
@@ -7192,10 +7212,12 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
     companyHits.total_hits = Math.max(companyHits.total_hits || 0, monitoringMedia.total_hits || 0);
   }
   var companyResults = []
+    .concat((company && company.results) || [])
     .concat((companySanctions && companySanctions.results) || [])
     .concat((companyAdverse && companyAdverse.results) || [])
     .concat(monitoringMedia.results || [])
     .concat((reviewRow && reviewRow.provider_evidence) || []);
+  companyResults = dedupScreeningResults(companyResults);
   if (!companyResults.length && Array.isArray(company.results)) companyResults = company.results;
   var badges = [
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : (screeningSummary.screening_run_recorded ? (companyHits.matched ? 'review_required' : 'screened_no_match') : 'awaiting_screening'), reviewRow ? reviewRow.status_label : (screeningSummary.screening_run_recorded ? (companyHits.matched ? 'Review Required' : 'No Provider Match') : 'Awaiting Screening')),

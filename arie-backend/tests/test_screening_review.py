@@ -395,7 +395,7 @@ def test_undeclared_pep_queue_preserves_declaration_and_last_screened(db, temp_d
     )
     db.execute(
         "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
-        ("app_ca_undeclared_pep_review", "Provider PEP", "Mauritius", "No"),
+        ("app_ca_undeclared_pep_review", "Provider PEP", "Mauritius", "Yes"),
     )
     db.commit()
 
