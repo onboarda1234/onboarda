@@ -494,6 +494,33 @@ def test_backoffice_application_enhanced_requirements_visibility_is_wired():
     assert "Additional information needed" in portal_logic
 
 
+def test_backoffice_application_enhanced_requirements_loader_guards_summary_and_render_failures():
+    repo_root = Path(__file__).resolve().parents[2]
+    html = (repo_root / "arie-backoffice.html").read_text(encoding="utf-8")
+
+    loader_block = html.split("async function loadApplicationEnhancedRequirements(app, generationResult) {", 1)[1]
+    loader_block = loader_block.split("async function refreshApplicationEnhancedRequirements()", 1)[0]
+    render_block = html.split("function renderApplicationEnhancedRequirements(requirements, generationResult, operationalSummary) {", 1)[1]
+    render_block = render_block.split("async function loadApplicationEnhancedRequirements(app, generationResult) {", 1)[0]
+
+    assert "var summaryEl = document.getElementById('detail-enhanced-review-summary');" in loader_block
+    assert "if (summaryEl) summaryEl.innerHTML = '';" in loader_block
+    assert "Loading enhanced requirements…" in loader_block
+    assert "renderApplicationEnhancedRequirements(resp.requirements || [], generationResult, resp.enhanced_review_summary);" in loader_block
+    assert "Unable to render application enhanced requirements:" in loader_block
+    assert "Enhanced requirements are available but could not be displayed." in loader_block
+    assert "Unable to load application enhanced requirements:" in loader_block
+    assert "Enhanced requirements could not be loaded." in loader_block
+    assert "JSON.stringify(resp" not in loader_block
+    assert "JSON.stringify(requirements" not in loader_block
+
+    assert "if (!container) return;" in html
+    assert "renderEnhancedReviewOperationalSummary(operationalSummary, requirements);" in render_block
+    assert "No enhanced requirements generated for this application." in render_block
+    assert "req.requirement_label || req.requirement_key || ''" in render_block
+    assert "container.innerHTML = '<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px;\">' + requirementSummary + '</div>' + groupHtml;" in render_block
+
+
 def test_backoffice_edd_consolidation_routes_to_applications_without_deleting_legacy_view():
     repo_root = Path(__file__).resolve().parents[2]
     html = (repo_root / "arie-backoffice.html").read_text(encoding="utf-8")

@@ -6627,6 +6627,7 @@ async function loadApplicationEnhancedRequirements(app, generationResult) {
   var section = document.getElementById('detail-enhanced-requirements-section');
   var container = document.getElementById('detail-enhanced-requirements-container');
   var refreshBtn = document.getElementById('detail-enhanced-requirements-refresh');
+  var summaryEl = document.getElementById('detail-enhanced-review-summary');
   if (!section || !container) return;
   if (!canViewApplicationEnhancedRequirements()) {
     section.style.display = 'none';
@@ -6641,9 +6642,17 @@ async function loadApplicationEnhancedRequirements(app, generationResult) {
     var appKey = encodeURIComponent((app && (app.id || app.ref)) || '');
     var resp = await boApiCall('GET', '/applications/' + appKey + '/enhanced-requirements');
     if (currentApp && resp.enhanced_review_summary) currentApp.enhancedReviewSummary = resp.enhanced_review_summary;
-    renderApplicationEnhancedRequirements(resp.requirements || [], generationResult, resp.enhanced_review_summary);
+    try {
+      renderApplicationEnhancedRequirements(resp.requirements || [], generationResult, resp.enhanced_review_summary);
+    } catch (renderErr) {
+      console.warn('Unable to render application enhanced requirements:', renderErr);
+      if (summaryEl) summaryEl.innerHTML = '';
+      setEnhancedRequirementDetailMessage('Unable to display enhanced requirements right now. Existing application review data remains available.', 'amber');
+      container.innerHTML = '<div style="padding:20px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text3);">Enhanced requirements are available but could not be displayed.</div>';
+    }
   } catch (err) {
     console.warn('Unable to load application enhanced requirements:', err);
+    if (summaryEl) summaryEl.innerHTML = '';
     setEnhancedRequirementDetailMessage('Unable to load enhanced requirements. Existing application review data remains available.', 'amber');
     container.innerHTML = '<div style="padding:20px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text3);">Enhanced requirements could not be loaded.</div>';
   }
