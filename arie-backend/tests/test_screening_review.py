@@ -194,6 +194,9 @@ def test_company_media_monitoring_alert_drives_screening_review_summary(db, temp
                 "case_identifier": "case-company-media-1",
                 "alert_identifier": "alert-company-media-1",
                 "risk_identifier": "risk-company-media-1",
+                "media_title": "Synthetic infrastructure enforcement article",
+                "media_url": "https://example.test/company-media",
+                "media_snippet": "Synthetic adverse-media snippet for officer review.",
             }),
             "open",
             "complyadvantage",
@@ -213,6 +216,16 @@ def test_company_media_monitoring_alert_drives_screening_review_summary(db, temp
     assert row["review_required"] is True
     assert row["total_hits"] == 1
     assert "Company adverse media match" in row["entity_context"]
+    assert row["provider_evidence"]
+    evidence = row["provider_evidence"][0]
+    assert evidence["provider"] == "complyadvantage"
+    assert evidence["provider_case_identifier"] == "case-company-media-1"
+    assert evidence["provider_alert_identifier"] == "alert-company-media-1"
+    assert evidence["provider_risk_identifier"] == "risk-company-media-1"
+    assert evidence["match_categories"] == ["adverse media"]
+    assert evidence["media_title"] == "Synthetic infrastructure enforcement article"
+    assert evidence["media_url"] == "https://example.test/company-media"
+    assert evidence["media_snippet"] == "Synthetic adverse-media snippet for officer review."
 
     alerts = _load_application_monitoring_alerts(db, "app_ca_media_review")
     assert alerts[0]["subject_scope"] == "entity"
@@ -365,6 +378,9 @@ def test_undeclared_pep_queue_preserves_declaration_and_last_screened(db, temp_d
                                 "match_categories": ["PEP"],
                                 "risk_type_labels": ["PEP class 1"],
                                 "provider_risk_identifier": "risk-pep-1",
+                                "provider_alert_identifier": "alert-pep-1",
+                                "provider_case_identifier": "case-pep-1",
+                                "provider_profile_identifier": "profile-pep-1",
                             }],
                         },
                     }],
@@ -392,3 +408,12 @@ def test_undeclared_pep_queue_preserves_declaration_and_last_screened(db, temp_d
     assert "Undeclared PEP" in row["entity_context"]
     assert "Declared PEP" not in row["entity_context"]
     assert row["screened_at"] == "2026-05-11T02:04:52Z"
+    assert row["provider_evidence"]
+    evidence = row["provider_evidence"][0]
+    assert evidence["matched_name"] == "Provider PEP"
+    assert evidence["provider_case_identifier"] == "case-pep-1"
+    assert evidence["provider_alert_identifier"] == "alert-pep-1"
+    assert evidence["provider_risk_identifier"] == "risk-pep-1"
+    assert evidence["provider_profile_identifier"] == "profile-pep-1"
+    assert evidence["match_categories"] == ["PEP"]
+    assert evidence["risk_type_labels"] == ["PEP class 1"]
