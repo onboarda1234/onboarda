@@ -218,6 +218,40 @@ class TestScreeningTerminalitySummary:
         assert summary["has_terminal_match"] is False
         assert summary["has_non_terminal"] is True
 
+    def test_pending_possible_match_metadata_is_not_terminal_match(self):
+        from screening_state import build_screening_terminality_summary
+
+        report = {
+            "screened_at": "2026-05-10T10:00:00Z",
+            "any_pep_hits": True,
+            "any_sanctions_hits": False,
+            "has_adverse_media_hit": None,
+            "total_hits": 1,
+            "any_non_terminal_subject": True,
+            "director_screenings": [
+                {
+                    "person_name": "Possible Pending Match",
+                    "has_pep_hit": True,
+                    "has_sanctions_hit": False,
+                    "has_adverse_media_hit": None,
+                    "provider_detected_pep": True,
+                    "screening_state": "pending_provider",
+                    "screening": {
+                        "source": "complyadvantage",
+                        "api_status": "pending",
+                        "matched": True,
+                        "results": [{"name": "Possible Pending Match", "is_pep": True}],
+                    },
+                }
+            ],
+            "ubo_screenings": [],
+        }
+
+        summary = build_screening_terminality_summary(report)
+        assert summary["terminal"] is False
+        assert summary["has_non_terminal"] is True
+        assert summary["has_terminal_match"] is False
+
     def test_terminal_material_match_is_preserved(self):
         from screening_state import build_screening_terminality_summary
 

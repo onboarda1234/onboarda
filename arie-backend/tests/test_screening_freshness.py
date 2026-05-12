@@ -599,6 +599,41 @@ class TestExistingGatesNotWeakened:
         assert not can
         assert "simulated" in err.lower()
 
+    def test_pending_possible_match_still_blocks_through_completeness_gate(self, db):
+        """Pending possible-match metadata must fail closed outside EDD material escalation."""
+        from security_hardening import ApprovalGateValidator
+        now = datetime.now(timezone.utc)
+        report = _make_screening_report(screened_at=now.strftime("%Y-%m-%dT%H:%M:%S"))
+        report["any_non_terminal_subject"] = True
+        report["any_pep_hits"] = True
+        report["total_hits"] = 1
+        report["director_screenings"] = [
+            {
+                "person_name": "Pending Possible PEP",
+                "screening_state": "pending_provider",
+                "has_pep_hit": True,
+                "screening": {
+                    "api_status": "pending",
+                    "source": "complyadvantage",
+                    "matched": True,
+                    "results": [{"name": "Pending Possible PEP", "is_pep": True}],
+                },
+            }
+        ]
+        app = _insert_app_and_memo(
+            db,
+            screening_report=report,
+            prescreening_extras={
+                "screening_valid_until": (now + timedelta(days=89)).strftime("%Y-%m-%dT%H:%M:%S"),
+                "screening_validity_days": 90,
+            },
+            submitted_at=(now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S"),
+            memo_created_at=now.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        can, err = ApprovalGateValidator.validate_approval(app, db)
+        assert not can
+        assert "pending" in err.lower()
+
     def test_stale_memo_still_blocks(self, db):
         """Gate 7: stale memo still blocks approval."""
         from security_hardening import ApprovalGateValidator

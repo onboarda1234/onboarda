@@ -392,16 +392,34 @@ def build_screening_terminality_summary(report: Optional[dict], prescreening: Op
     has_failed = any(state == FAILED for state in states)
     has_not_configured = any(state == NOT_CONFIGURED for state in states)
 
-    material_hit = any(_entry_has_material_hit(entry) for entry in person_entries if isinstance(entry, dict))
-    company = report.get("company_screening") if isinstance(report.get("company_screening"), dict) else {}
-    material_hit = material_hit or _company_has_material_hit(report, company)
+    terminal = bool(states) and all(state in TERMINAL_STATES for state in states) and not has_non_terminal
 
-    if any(
+    terminal_person_hit = any(
+        state in TERMINAL_STATES and _entry_has_material_hit(entry)
+        for entry, state in zip(
+            [entry for entry in person_entries if isinstance(entry, dict)],
+            person_states,
+        )
+    )
+    company = report.get("company_screening") if isinstance(report.get("company_screening"), dict) else {}
+    terminal_company_hit = (
+        company_state in TERMINAL_STATES
+        and _company_has_material_hit(report, company)
+    )
+    material_hit = terminal_person_hit or terminal_company_hit
+
+    report_material_flags = any(
         _truthy_flag(report.get(key))
         for key in ("any_pep_hits", "any_sanctions_hits", "has_adverse_media_hit", "has_company_screening_hit")
-    ):
+    )
+    # Report-level rollups are material only when the report is terminal.
+    # Pending/partial rows may carry possible-match metadata, but that is
+    # handled by the screening completeness gate, not by material EDD routing.
+    if report_material_flags and (terminal or not states):
         material_hit = True
-    if any(_truthy_flag(prescreening.get(key)) for key in ("screening_concern", "material_screening_concern")):
+
+    explicit_material = any(_truthy_flag(prescreening.get(key)) for key in ("screening_concern", "material_screening_concern"))
+    if explicit_material and (terminal or not states):
         material_hit = True
 
     granular_fields_present = any(
@@ -410,11 +428,12 @@ def build_screening_terminality_summary(report: Optional[dict], prescreening: Op
     ) or any(_entry_has_granular_material_fields(entry) for entry in person_entries if isinstance(entry, dict))
     if not material_hit and not granular_fields_present:
         try:
-            material_hit = int(report.get("total_hits") or 0) > 0
+            legacy_total_hits = int(report.get("total_hits") or 0) > 0
         except Exception:
-            material_hit = False
+            legacy_total_hits = False
+        if legacy_total_hits and (terminal or not states):
+            material_hit = True
 
-    terminal = bool(states) and all(state in TERMINAL_STATES for state in states) and not has_non_terminal
     if not states and material_hit:
         # Legacy total_hits-only report: keep it as terminal material evidence.
         terminal = True

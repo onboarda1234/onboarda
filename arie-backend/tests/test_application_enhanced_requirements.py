@@ -706,6 +706,25 @@ def test_non_terminal_screening_does_not_generate_screening_concern(enhanced_app
     assert _count_app_reqs(db, app_id, "screening_concern") == 0
 
 
+def test_non_terminal_possible_match_metadata_does_not_generate_screening_concern(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(
+        db,
+        risk_level="LOW",
+        prescreening={
+            "screening_report": _screening_report_for_terminality(
+                pending=True,
+                material=True,
+            )
+        },
+    )
+
+    result = _generate(db, app_id)
+
+    assert "screening_concern" not in result["triggers"]
+    assert _count_app_reqs(db, app_id, "screening_concern") == 0
+
+
 def test_terminal_material_screening_match_generates_screening_concern(enhanced_app_db):
     db = enhanced_app_db
     app_id = _insert_application(

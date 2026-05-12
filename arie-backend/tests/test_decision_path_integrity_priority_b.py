@@ -217,6 +217,32 @@ class TestAgent5InputContract:
         assert screening["has_non_terminal"] is True
         assert "material_screening_concern" not in supervisor.get("mandatory_escalation_reasons", [])
 
+    def test_non_terminal_possible_match_metadata_is_not_material_escalation(self):
+        app = _make_app(country="United Kingdom", api_status="pending", risk_level="LOW", risk_score=22)
+        prescreening = json.loads(app["prescreening_data"])
+        director = prescreening["screening_report"]["director_screenings"][0]
+        director["screening_state"] = "pending_provider"
+        director["has_pep_hit"] = True
+        director["provider_detected_pep"] = True
+        director["screening"]["matched"] = True
+        director["screening"]["results"] = [{"name": "Possible Pending PEP", "is_pep": True}]
+        prescreening["screening_report"]["any_non_terminal_subject"] = True
+        prescreening["screening_report"]["any_pep_hits"] = True
+        prescreening["screening_report"]["total_hits"] = 1
+        app["prescreening_data"] = json.dumps(prescreening)
+        directors = [{"full_name": "Test Director", "nationality": "United Kingdom",
+                      "date_of_birth": "1980-01-01", "is_pep": "No", "ownership_pct": 0}]
+        ubos = [{"full_name": "Sole UBO", "nationality": "United Kingdom",
+                 "date_of_birth": "1981-01-01", "is_pep": "No", "ownership_pct": 100}]
+
+        memo, _, supervisor, _ = build_compliance_memo(app, directors, ubos, _clean_documents())
+        screening = memo["metadata"]["agent5_input_contract"]["screening_terminality_summary"]
+
+        assert screening["terminal"] is False
+        assert screening["has_non_terminal"] is True
+        assert screening["has_terminal_match"] is False
+        assert "material_screening_concern" not in supervisor.get("mandatory_escalation_reasons", [])
+
     def test_terminal_material_match_sets_material_escalation(self):
         app = _make_app(country="United Kingdom", api_status="live", risk_level="LOW", risk_score=22)
         prescreening = json.loads(app["prescreening_data"])
