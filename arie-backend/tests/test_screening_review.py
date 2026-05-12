@@ -222,6 +222,7 @@ def test_company_media_monitoring_alert_drives_screening_review_summary(db, temp
     assert evidence["provider_case_identifier"] == "case-company-media-1"
     assert evidence["provider_alert_identifier"] == "alert-company-media-1"
     assert evidence["provider_risk_identifier"] == "risk-company-media-1"
+    assert evidence["subject_scope"] == "entity"
     assert evidence["match_categories"] == ["adverse media"]
     assert evidence["media_title"] == "Synthetic infrastructure enforcement article"
     assert evidence["media_url"] == "https://example.test/company-media"
@@ -381,6 +382,7 @@ def test_undeclared_pep_queue_preserves_declaration_and_last_screened(db, temp_d
                                 "provider_alert_identifier": "alert-pep-1",
                                 "provider_case_identifier": "case-pep-1",
                                 "provider_profile_identifier": "profile-pep-1",
+                                "subject_scope": "person",
                             }],
                         },
                     }],
@@ -415,5 +417,6 @@ def test_undeclared_pep_queue_preserves_declaration_and_last_screened(db, temp_d
     assert evidence["provider_alert_identifier"] == "alert-pep-1"
     assert evidence["provider_risk_identifier"] == "risk-pep-1"
     assert evidence["provider_profile_identifier"] == "profile-pep-1"
+    assert evidence["subject_scope"] == "person"
     assert evidence["match_categories"] == ["PEP"]
     assert evidence["risk_type_labels"] == ["PEP class 1"]

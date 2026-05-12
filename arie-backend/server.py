@@ -9082,6 +9082,8 @@ def _monitoring_company_media_facts(alerts):
             "risk_type_labels": ["Adverse media"],
             "is_adverse_media": True,
             "provider": alert.get("provider"),
+            "subject_scope": "entity",
+            "screening_subject": source_ref.get("screening_subject"),
             "provider_case_identifier": alert.get("case_identifier") or source_ref.get("case_identifier"),
             "provider_alert_identifier": source_ref.get("alert_identifier"),
             "provider_risk_identifier": source_ref.get("risk_identifier"),
@@ -9172,6 +9174,14 @@ def _screening_provider_evidence(results):
                 or result.get("provider_alert_identifier")
                 or result.get("provider_profile_identifier")
             ) else None),
+            "subject_scope": _first_non_empty(
+                result.get("subject_scope"),
+                source_ref.get("subject_scope"),
+            ),
+            "screening_subject": _first_non_empty(
+                result.get("screening_subject"),
+                source_ref.get("screening_subject"),
+            ),
             "provider_case_identifier": _first_non_empty(
                 result.get("provider_case_identifier"),
                 result.get("case_identifier"),
@@ -9204,6 +9214,8 @@ def _screening_provider_evidence(results):
             "media_snippet": media_detail.get("snippet"),
             "discovered_at": result.get("discovered_at"),
             "discovered_via": result.get("discovered_via"),
+            "authority": _first_non_empty(result.get("authority"), result.get("program"), source_ref.get("authority")),
+            "list_name": _first_non_empty(result.get("list_name"), result.get("sanctions_list"), source_ref.get("list_name")),
         })
     return evidence
 
