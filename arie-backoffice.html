@@ -7224,7 +7224,7 @@ function evidenceCategories(hit) {
     seen[key] = true;
     return true;
   });
-  return normalized.length ? normalized : ['Potential provider match'];
+  return normalized.length ? normalized : ['Provider screening hit'];
 }
 
 function evidenceGroupedIdentifiers(values) {
@@ -7239,7 +7239,7 @@ function evidenceGroupedIdentifiers(values) {
   return grouped.length > 1 ? grouped : [];
 }
 
-var EVIDENCE_REVIEW_GUIDANCE = 'Review the evidence and traceability details before recording a decision.';
+var EVIDENCE_REVIEW_GUIDANCE = 'Review the evidence, source context, and traceability details before recording a decision.';
 
 function evidenceReviewCategoryLabel(categories) {
   var text = (Array.isArray(categories) ? categories : []).join(' ').toLowerCase();
@@ -7248,11 +7248,30 @@ function evidenceReviewCategoryLabel(categories) {
   if (text.indexOf('sanction') !== -1) return 'sanctions';
   if (text.indexOf('watchlist') !== -1 || text.indexOf('warning') !== -1) return 'watchlist';
   if (text.indexOf('regulatory') !== -1) return 'regulatory';
-  return 'provider';
+  return 'provider screening';
 }
 
-function evidenceReviewRationale(categories) {
-  return 'Provider returned a potential ' + evidenceReviewCategoryLabel(categories) + ' match for this screening subject. ' + EVIDENCE_REVIEW_GUIDANCE;
+function evidenceSubjectLabel(hit, fallback) {
+  hit = hit || {};
+  var scope = String(hit.subject_scope || hit._subject_type || fallback || '').toLowerCase();
+  if (scope === 'entity' || scope === 'company') return 'entity';
+  if (scope === 'director') return 'director';
+  if (scope === 'ubo') return 'UBO';
+  if (scope === 'person' || scope === 'subject') return 'screening subject';
+  return scope || 'screening subject';
+}
+
+function evidenceReviewRationale(provider, categories, hit, matchedName) {
+  var providerName = formatProviderName(provider) || 'Provider';
+  var category = evidenceReviewCategoryLabel(categories);
+  var subject = evidenceSubjectLabel(hit);
+  var target = matchedName && matchedName !== (providerName + ' Evidence') ? ' for ' + matchedName : ' for this ' + subject;
+  if (category === 'PEP') return providerName + ' found a potential PEP match' + target + '.';
+  if (category === 'adverse media') return providerName + ' found potential adverse media' + target + '.';
+  if (category === 'sanctions') return providerName + ' found a potential sanctions match' + target + '.';
+  if (category === 'watchlist') return providerName + ' found a potential watchlist or warning match' + target + '.';
+  if (category === 'regulatory') return providerName + ' found a potential regulatory match' + target + '.';
+  return providerName + ' returned a provider screening hit' + target + '.';
 }
 
 function evidencePrimaryLabel(hit, context) {
@@ -7278,6 +7297,16 @@ function isPepEvidenceRelevant(hit, categories, riskLabels) {
     hit.is_pep === true ||
     hit._provider_detected_pep === 'Yes' ||
     hit._undeclared_pep === 'Yes';
+}
+
+function evidenceCategoryPriority(hit, context) {
+  var text = evidenceCategories(hit || {}).concat((hit && hit.risk_type_labels) || []).join(' ').toLowerCase();
+  if (text.indexOf('sanction') !== -1) return 1;
+  if (text.indexOf('pep') !== -1) return 2;
+  if (text.indexOf('adverse') !== -1 || text.indexOf('media') !== -1) return 3;
+  if (text.indexOf('watchlist') !== -1 || text.indexOf('warning') !== -1) return 4;
+  if (text.indexOf('regulatory') !== -1) return 5;
+  return 9;
 }
 
 function screeningEvidenceKey(hit, context, index) {
@@ -7328,6 +7357,14 @@ function evidenceSection(title, body) {
     '<div style="font-size:12px;font-weight:700;color:var(--text1);margin-bottom:8px;">' + escapeHtml(title) + '</div>' +
     body +
   '</div>';
+}
+
+function evidenceTraceabilitySection(body) {
+  if (!body) return '';
+  return '<details style="margin-top:14px;padding:12px 14px;border:1px solid var(--border1);border-radius:8px;background:var(--surface2);">' +
+    '<summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--text1);">Technical traceability</summary>' +
+    '<div style="margin-top:10px;color:var(--text2);">' + body + '</div>' +
+  '</details>';
 }
 
 function evidenceBadgeList(values) {
@@ -7387,6 +7424,55 @@ function groupProviderEvidenceHits(results, context) {
   return grouped;
 }
 
+function firstEvidenceIndicatorValue(hit, predicate) {
+  var indicators = Array.isArray((hit || {}).indicators) ? hit.indicators : [];
+  for (var i = 0; i < indicators.length; i++) {
+    var indicator = indicators[i] || {};
+    var value = indicator.value || {};
+    if (!predicate || predicate(indicator, value)) return { indicator: indicator, value: value };
+  }
+  return { indicator: {}, value: {} };
+}
+
+function evidenceSourceUrl(hit) {
+  var direct = hit.media_url || hit.url || '';
+  if (direct) return direct;
+  var found = firstEvidenceIndicatorValue(hit, function(indicator, value) {
+    return value.url || (value.canonical_url && value.canonical_url.url) || (value.source_metadata && value.source_metadata.url);
+  });
+  return found.value.url || (found.value.canonical_url && found.value.canonical_url.url) || (found.value.source_metadata && found.value.source_metadata.url) || '';
+}
+
+function evidenceSourceTitle(hit) {
+  var direct = hit.media_title || hit.title || '';
+  if (direct) return direct;
+  var found = firstEvidenceIndicatorValue(hit, function(indicator, value) {
+    return value.title || value.source_name || (value.source_metadata && value.source_metadata.source_name);
+  });
+  return found.value.title || found.value.source_name || (found.value.source_metadata && found.value.source_metadata.source_name) || '';
+}
+
+function evidenceSourcePublisher(hit) {
+  var found = firstEvidenceIndicatorValue(hit, function(indicator, value) {
+    return value.publisher || value.source || (value.source_metadata && (value.source_metadata.source || value.source_metadata.source_name));
+  });
+  return found.value.publisher || found.value.source || (found.value.source_metadata && (found.value.source_metadata.source_name || found.value.source_metadata.source)) || '';
+}
+
+function evidenceSourceDate(hit) {
+  var found = firstEvidenceIndicatorValue(hit, function(indicator, value) {
+    return value.publication_date || value.published_at || value.date;
+  });
+  return found.value.publication_date || found.value.published_at || found.value.date || '';
+}
+
+function evidencePepContext(hit) {
+  var found = firstEvidenceIndicatorValue(hit, function(indicator, value) {
+    return /pep/i.test(indicator.type || indicator.taxonomy_key || indicator.taxonomy_label || '') || value.position || value.country || value.class;
+  });
+  return found.value || {};
+}
+
 function openScreeningEvidenceDrawer(key) {
   var hit = SCREENING_EVIDENCE_DETAILS[key];
   if (!hit) { showToast('Screening evidence is no longer available', 'error'); return; }
@@ -7396,51 +7482,49 @@ function openScreeningEvidenceDrawer(key) {
   var riskKeys = Array.isArray(hit.risk_type_keys) ? hit.risk_type_keys : [];
   var provider = formatProviderName(hit.provider || hit.source || hit._provider) || 'ComplyAdvantage';
   var matchedName = evidencePrimaryLabel(hit, hit);
-  var mediaUrl = hit.media_url || hit.url || '';
-  var mediaTitle = hit.media_title || hit.title || '';
+  var mediaUrl = evidenceSourceUrl(hit);
+  var mediaTitle = evidenceSourceTitle(hit);
+  var mediaPublisher = evidenceSourcePublisher(hit);
+  var mediaDate = evidenceSourceDate(hit);
   var mediaSnippet = hit.media_snippet || hit.snippet || '';
   var subjectScope = hit.subject_scope || hit._subject_type || '';
   var subjectType = hit._subject_type || subjectScope || 'screening subject';
   var discovered = hit.discovered_at || hit._screened_at || hit.screened_at || '';
   var groupedAlertIdentifiers = evidenceGroupedIdentifiers(hit._grouped_alert_identifiers);
   var groupedRiskIdentifiers = evidenceGroupedIdentifiers(hit._grouped_risk_identifiers);
-  var reviewRationale = evidenceReviewRationale(categories);
+  var reviewRationale = evidenceReviewRationale(provider, categories, hit, matchedName);
   var drawerTitle = 'Screening Evidence — ' + matchedName;
+  var pepContext = evidencePepContext(hit);
 
   var body = '';
-  body += '<div style="padding:12px 14px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.04);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text2);">' +
-    '<div style="font-weight:700;color:var(--text1);font-size:14px;">' + escapeHtml(matchedName) + '</div>' +
-    '<div style="margin-top:6px;">' + evidenceBadgeList(categories) + '</div>' +
-    '<div style="margin-top:4px;">' + escapeHtml(reviewRationale) + '</div>' +
-    '<div style="margin-top:4px;">' + escapeHtml(hit.summary || 'Provider evidence attached to this screening subject. Review the identifiers, categories, source detail, and timestamps before recording an officer disposition.') + '</div>' +
+  body += '<div style="padding:14px 16px;border-left:4px solid var(--brand);background:rgba(43,47,143,0.04);border-radius:8px;font-size:12px;line-height:1.5;color:var(--text2);">' +
+    '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text3);font-weight:700;">Why this needs review</div>' +
+    '<div style="margin-top:6px;font-weight:700;color:var(--text1);font-size:15px;">' + escapeHtml(reviewRationale) + '</div>' +
+    (hit.summary ? '<div style="margin-top:8px;">' + escapeHtml(hit.summary) + '</div>' : '') +
   '</div>';
 
-  body += evidenceInfoGrid([
-    ['Application', hit._application_ref],
-    ['Subject', [hit._subject_name, subjectType].filter(Boolean).join(' / ')],
-    ['Provider', provider],
-    ['Discovered / screened', discovered ? String(discovered).replace('T', ' ').slice(0, 19) : ''],
-    ['Subject scope', subjectScope],
-    ['Evidence records grouped', hit._group_count && hit._group_count > 1 ? String(hit._group_count) : ''],
-  ]);
-
-  body += evidenceSection('Match Semantics',
+  body += evidenceSection('Evidence summary',
     evidenceBadgeList(categories.concat(riskLabels)) +
     evidenceInfoGrid([
-      ['Risk type keys', riskKeys],
+      ['Matched person/company', matchedName],
+      ['Role / scope', evidenceSubjectLabel(hit, subjectType)],
+      ['Provider', provider],
+      ['Discovered / screened', discovered ? String(discovered).replace('T', ' ').slice(0, 19) : ''],
       ['Matched entity/profile', matchedName],
       ['Subject scope', subjectScope],
+      ['Evidence records grouped', hit._group_count && hit._group_count > 1 ? String(hit._group_count) : ''],
     ])
   );
 
   if (mediaTitle || mediaSnippet || mediaUrl) {
     body += evidenceSection('Media Evidence',
       evidenceInfoGrid([
-        ['Media title', mediaTitle],
-        ['Media snippet', mediaSnippet],
-        ['Media URL', mediaUrl],
+        ['Article / source title', mediaTitle],
+        ['Publisher / source', mediaPublisher],
+        ['Publication date', mediaDate],
+        ['Snippet', mediaSnippet],
       ]) +
-      (mediaUrl ? '<div style="margin-top:10px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open media source</a></div>' : '')
+      (mediaUrl ? '<div style="margin-top:10px;"><a class="btn btn-outline btn-sm" href="' + escapeHtml(mediaUrl) + '" target="_blank" rel="noopener">Open source</a></div>' : '')
     );
   }
 
@@ -7448,6 +7532,8 @@ function openScreeningEvidenceDrawer(key) {
     body += evidenceSection('PEP Evidence',
       evidenceInfoGrid([
         ['PEP class / labels', riskLabels],
+        ['Role / title', hit.position || pepContext.position],
+        ['Country', hit.country || pepContext.country],
         ['Declared PEP', hit._declared_pep],
         ['Provider PEP match', hit._provider_detected_pep],
         ['Undeclared PEP', hit._undeclared_pep],
@@ -7465,14 +7551,16 @@ function openScreeningEvidenceDrawer(key) {
     );
   }
 
-  body += evidenceSection('Traceability',
+  body += evidenceTraceabilitySection(
     evidenceInfoGrid([
+      ['Application', hit._application_ref],
       ['Provider case ID', hit.provider_case_identifier || hit.case_identifier],
       ['Provider alert ID', hit.provider_alert_identifier || hit.alert_identifier],
       ['Provider risk ID', hit.provider_risk_identifier || hit.risk_id || hit.risk_identifier],
       ['Provider profile ID', hit.provider_profile_identifier || hit.profile_identifier],
       ['Grouped alert IDs', groupedAlertIdentifiers],
       ['Grouped risk IDs', groupedRiskIdentifiers],
+      ['Risk type keys', riskKeys],
       ['Discovered via', hit.discovered_via],
     ])
   );
@@ -7484,7 +7572,9 @@ function openScreeningEvidenceDrawer(key) {
 
 function providerResultHighlights(results, context) {
   context = context || {};
-  var hits = groupProviderEvidenceHits(Array.isArray(results) ? results : [], context);
+  var hits = groupProviderEvidenceHits(Array.isArray(results) ? results : [], context).sort(function(a, b) {
+    return evidenceCategoryPriority(a, context) - evidenceCategoryPriority(b, context);
+  });
   if (!hits.length) return '';
   return '<div style="margin-top:10px;"><strong>Provider evidence details</strong>' + hits.slice(0, 8).map(function(hit, index) {
     var parts = [evidencePrimaryLabel(hit, context)];

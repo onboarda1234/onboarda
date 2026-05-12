@@ -72,8 +72,9 @@ def test_backoffice_screening_evidence_drawer_renders_structured_review_fields()
     html = BACKOFFICE_HTML.read_text()
 
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
-    assert "Match Semantics" in drawer_region
-    assert "Traceability" in drawer_region
+    assert "Why this needs review" in drawer_region
+    assert "Evidence summary" in drawer_region
+    assert "Technical traceability" in html
     assert "Media Evidence" in drawer_region
     assert "PEP Evidence" in drawer_region
     assert "Sanctions / Watchlist Evidence" in drawer_region
@@ -85,10 +86,25 @@ def test_backoffice_screening_evidence_drawer_renders_structured_review_fields()
     assert "Declared PEP" in drawer_region
     assert "Provider PEP match" in drawer_region
     assert "Undeclared PEP" in drawer_region
-    assert "Media title" in drawer_region
-    assert "Media snippet" in drawer_region
-    assert "Media URL" in drawer_region
-    assert "Open media source" in drawer_region
+    assert "Article / source title" in drawer_region
+    assert "Publisher / source" in drawer_region
+    assert "Publication date" in drawer_region
+    assert "Snippet" in drawer_region
+    assert "Open source" in drawer_region
+
+
+def test_backoffice_screening_evidence_drawer_is_evidence_first_before_traceability():
+    html = BACKOFFICE_HTML.read_text()
+
+    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+
+    assert drawer_region.index("Why this needs review") < drawer_region.index("Evidence summary")
+    assert drawer_region.index("Evidence summary") < drawer_region.index("evidenceTraceabilitySection")
+    assert drawer_region.index("Evidence summary") < drawer_region.index("Provider risk ID")
+    assert "function evidenceTraceabilitySection" in html
+    assert "<details" in html
+    assert "<summary" in html
+    assert "Technical traceability" in html
 
 
 def test_backoffice_screening_evidence_drawer_uses_review_friendly_fallbacks():
@@ -116,7 +132,8 @@ def test_backoffice_screening_evidence_drawer_normalizes_categories_and_sections
     categories_region = _function_region(html, "evidenceCategories", "evidenceGroupedIdentifiers")
     drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
 
-    assert "Potential provider match" in categories_region
+    assert "Provider screening hit" in categories_region
+    assert "Potential provider match" not in categories_region
     assert "Unclassified provider hit" not in categories_region
     assert "key === 'other'" in category_region
     assert "Adverse media" in category_region
@@ -167,11 +184,41 @@ def test_backoffice_screening_evidence_drawer_adds_officer_review_rationale():
     assert "function evidenceReviewRationale" in html
     assert "return 'PEP';" in category_label_region
     assert "return 'adverse media';" in category_label_region
-    assert "return 'provider';" in category_label_region
-    assert "potential ' + evidenceReviewCategoryLabel(categories) + ' match" in rationale_region
-    assert "EVIDENCE_REVIEW_GUIDANCE" in rationale_region
-    assert "var reviewRationale = evidenceReviewRationale(categories);" in drawer_region
+    assert "return 'provider screening';" in category_label_region
+    assert "found a potential PEP match" in rationale_region
+    assert "found potential adverse media" in rationale_region
+    assert "returned a provider screening hit" in rationale_region
+    assert "var reviewRationale = evidenceReviewRationale(provider, categories, hit, matchedName);" in drawer_region
     assert "escapeHtml(reviewRationale)" in drawer_region
+
+
+def test_backoffice_screening_evidence_drawer_prioritizes_human_readable_fields():
+    html = BACKOFFICE_HTML.read_text()
+
+    drawer_region = _function_region(html, "openScreeningEvidenceDrawer", "providerResultHighlights")
+
+    assert "Matched person/company" in drawer_region
+    assert "Role / scope" in drawer_region
+    assert "Provider', provider" in drawer_region
+    assert "Role / title" in drawer_region
+    assert "Country" in drawer_region
+    assert "Provider risk ID" in drawer_region
+    assert drawer_region.index("Matched person/company") < drawer_region.index("Provider risk ID")
+    assert drawer_region.index("Role / scope") < drawer_region.index("Provider profile ID")
+
+
+def test_backoffice_screening_evidence_sorts_decision_useful_hits_first():
+    html = BACKOFFICE_HTML.read_text()
+
+    priority_region = _function_region(html, "evidenceCategoryPriority", "screeningEvidenceKey")
+    provider_region = _function_region(html, "providerResultHighlights", "providerIndicatorDetails")
+
+    assert "function evidenceCategoryPriority" in html
+    assert "text.indexOf('sanction')" in priority_region
+    assert "text.indexOf('pep')" in priority_region
+    assert "text.indexOf('adverse')" in priority_region
+    assert ".sort(function(a, b)" in provider_region
+    assert "evidenceCategoryPriority(a, context) - evidenceCategoryPriority(b, context)" in provider_region
 
 
 def test_backoffice_screening_review_uses_backend_provider_evidence_payload():
