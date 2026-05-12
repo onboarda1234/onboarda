@@ -191,6 +191,69 @@ def test_screening_queue_uses_company_adverse_media_as_entity_provider_truth(db,
     assert "Company adverse media match" in row["entity_context"]
 
 
+def test_screening_queue_uses_top_level_company_results_when_subrecords_are_clear(db, temp_db):
+    from server import _build_screening_queue_payload
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_company_top_level_media",
+            "ARF-COMPANY-TOP-MEDIA",
+            "client_media_top",
+            "Company Top Media Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "pricing_review",
+            json.dumps(
+                {
+                    "screening_report": {
+                        "screened_at": "2026-01-03T00:00:00Z",
+                        "screening_mode": "live",
+                        "company_screening": {
+                            "provider": "complyadvantage",
+                            "source": "complyadvantage",
+                            "api_status": "live",
+                            "screened_at": "2026-01-03T00:00:00Z",
+                            "matched": False,
+                            "results": [{
+                                "name": "Company Top Media Ltd",
+                                "is_adverse_media": True,
+                                "match_categories": ["adverse_media"],
+                                "provider_risk_identifier": "risk-company-top-media-1",
+                            }],
+                            "sanctions": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                            "adverse_media": {"matched": False, "results": [], "source": "complyadvantage", "api_status": "live"},
+                        },
+                        "director_screenings": [],
+                        "ubo_screenings": [],
+                        "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                        "kyc_applicants": [],
+                        "overall_flags": ["ComplyAdvantage adverse media hit: Company Top Media Ltd"],
+                        "total_hits": 1,
+                    }
+                }
+            ),
+        ),
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-COMPANY-TOP-MEDIA" and r["subject_type"] == "entity")
+
+    assert row["status_key"] == "review_required"
+    assert row["status_label"] == "Review Required"
+    assert row["screening_state"] == "completed_match"
+    assert row["watchlist_status"] == "match"
+    assert row["review_required"] is True
+    assert row["total_hits"] == 1
+    assert "Company adverse media match" in row["entity_context"]
+
+
 def test_screening_queue_surfaces_undeclared_provider_pep(db, temp_db):
     from server import _build_screening_queue_payload
 
@@ -251,7 +314,7 @@ def test_screening_queue_surfaces_undeclared_provider_pep(db, temp_db):
     )
     db.execute(
         "INSERT INTO directors (application_id, full_name, nationality, is_pep) VALUES (?, ?, ?, ?)",
-        ("app_undeclared_pep", "Provider Pep", "Mauritius", "No"),
+        ("app_undeclared_pep", "Provider Pep", "Mauritius", "Yes"),
     )
     db.commit()
 
@@ -263,6 +326,7 @@ def test_screening_queue_surfaces_undeclared_provider_pep(db, temp_db):
     assert row["status_key"] == "review_required"
     assert row["screened_at"] == "2026-01-04T00:00:00Z"
     assert "Undeclared PEP" in row["entity_context"]
+    assert "Declared PEP" not in row["entity_context"]
 
 
 def test_screening_queue_does_not_label_not_configured_entity_as_live(temp_db):

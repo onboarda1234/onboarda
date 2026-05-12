@@ -31,6 +31,18 @@ def test_backoffice_company_review_uses_monitoring_media_alerts():
     assert "monitoringAlertSubjectScope(alert) === 'entity'" in media_region
 
 
+def test_backoffice_company_review_includes_top_level_company_results():
+    html = BACKOFFICE_HTML.read_text()
+
+    facts_region = _function_region(html, "screeningResultFacts", "screeningResultIdentity")
+    assert "hitFacts.total > 0" in facts_region
+
+    entity_region = _function_region(html, "buildEntityScreeningReviewCard", "buildPersonScreeningReviewCard")
+    assert "var companyRecords = [company, companySanctions, companyAdverse]" in entity_region
+    assert ".concat((company && company.results) || [])" in entity_region
+    assert "companyResults = dedupScreeningResults(companyResults)" in entity_region
+
+
 def test_backoffice_screening_review_renders_provider_evidence_details():
     html = BACKOFFICE_HTML.read_text()
 

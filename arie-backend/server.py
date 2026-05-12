@@ -9102,6 +9102,12 @@ def _monitoring_company_media_facts(alerts):
     }
 
 
+def _declared_pep_from_screening_item(item, fallback_value="No"):
+    if isinstance(item, dict) and "declared_pep" in item:
+        return normalize_is_pep(item.get("declared_pep")) == "Yes"
+    return normalize_is_pep(fallback_value) == "Yes"
+
+
 def _first_non_empty(*values):
     for value in values:
         if value not in (None, "", [], {}):
@@ -9202,27 +9208,56 @@ def _screening_provider_evidence(results):
     return evidence
 
 
+def _screening_result_identity(hit):
+    if not isinstance(hit, dict):
+        return repr(hit)
+    for key in (
+        "provider_risk_identifier",
+        "risk_id",
+        "risk_identifier",
+        "provider_profile_identifier",
+        "profile_identifier",
+    ):
+        if hit.get(key):
+            return f"{key}:{hit.get(key)}"
+    return json.dumps(hit, sort_keys=True, default=str)
+
+
+def _dedup_screening_results(results):
+    deduped = []
+    seen = set()
+    for hit in results or []:
+        marker = _screening_result_identity(hit)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(hit)
+    return deduped
+
+
 def _screening_combined_company_facts(company_screening):
     company = company_screening or {}
     sanctions = company.get("sanctions") or {}
     adverse = company.get("adverse_media") or {}
-    records = [sanctions, adverse] if (sanctions or adverse) else [company]
+    records = [company, sanctions, adverse]
+    all_results = _dedup_screening_results(
+        result
+        for record in records
+        for result in ((record or {}).get("results") or [])
+    )
     totals = {
-        "total_hits": 0,
-        "sanctions_hits": 0,
-        "pep_hits": 0,
+        "total_hits": len(all_results),
+        "sanctions_hits": sum(1 for hit in all_results if hit.get("is_sanctioned")),
+        "pep_hits": sum(1 for hit in all_results if hit.get("is_pep")),
         "other_hits": 0,
-        "matched": False,
-        "adverse_media_hit": False,
+        "matched": bool(all_results),
+        "adverse_media_hit": any(hit.get("is_adverse_media") for hit in all_results),
         "screened_at": company.get("screened_at"),
     }
+    classified_hits = totals["sanctions_hits"] + totals["pep_hits"] + sum(1 for hit in all_results if hit.get("is_adverse_media"))
+    totals["other_hits"] = max(0, totals["total_hits"] - classified_hits)
     for record in records:
-        facts = _screening_hit_facts(record)
-        totals["total_hits"] += int(facts.get("total_hits") or 0)
-        totals["sanctions_hits"] += int(facts.get("sanctions_hits") or 0)
-        totals["pep_hits"] += int(facts.get("pep_hits") or 0)
-        totals["other_hits"] += int(facts.get("other_hits") or 0)
-        totals["matched"] = totals["matched"] or bool(facts.get("matched") or record.get("matched"))
+        totals["matched"] = totals["matched"] or bool(record.get("matched"))
         totals["adverse_media_hit"] = totals["adverse_media_hit"] or bool(
             _screening_structured_adverse_media_hit(record)
             or record.get("is_adverse_media")
@@ -9261,7 +9296,7 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
         context = []
         if company_ip.get("risk_level"):
             context.append("IP risk: " + str(company_ip.get("risk_level")))
-        if company_adverse.get("matched") or monitoring_media["matched"]:
+        if facts["adverse_media_hit"] or company_adverse.get("matched") or monitoring_media["matched"]:
             context.append("Company adverse media match")
         return {
             "watchlist_status": _screening_legacy_status(
@@ -9288,9 +9323,9 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             for p in db.execute(f"SELECT * FROM {table} WHERE application_id = ?", (app["id"],)).fetchall()
         ]
         person = next((p for p in people if (p.get("full_name") or "") == subject_name), {})
-        declared_pep = normalize_is_pep(person.get("is_pep", "No")) == "Yes"
         combined = (report.get("director_screenings") or []) + (report.get("ubo_screenings") or [])
         item = next((i for i in combined if (i.get("person_name") or i.get("name")) == subject_name), {})
+        declared_pep = _declared_pep_from_screening_item(item, person.get("is_pep", "No"))
         screening = (item or {}).get("screening") or {}
         facts = _screening_hit_facts(screening)
         person_state = derive_screening_state(screening)
@@ -9535,7 +9570,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             rejected_kyc = [a.get("person_name") for a in company_kyc if a.get("review_answer") == "RED"]
             if rejected_kyc:
                 company_context.append("KYC RED: " + ", ".join(rejected_kyc))
-            if company_adverse.get("matched") or company_media_alerts["matched"]:
+            if company_facts["adverse_media_hit"] or company_adverse.get("matched") or company_media_alerts["matched"]:
                 company_context.append("Company adverse media match")
             # Surface explicit non-terminal sanctions state so officers cannot
             # mistake "we did not get a real answer" for "clear".
@@ -9620,11 +9655,10 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 company_provider_record,
             )
             company_results = []
-            for record in (company_sanctions, company_adverse):
+            for record in (company_screening, company_sanctions, company_adverse):
                 company_results.extend((record or {}).get("results") or [])
             company_results.extend(company_media_alerts.get("results") or [])
-            if not company_results and isinstance(company_screening.get("results"), list):
-                company_results.extend(company_screening.get("results") or [])
+            company_results = _dedup_screening_results(company_results)
 
             rows.append({
                 "application_id": app["id"],
@@ -9662,7 +9696,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             # raw == "Yes" check silently flattened declared PEP into
             # "Not Declared" on the queue chip whenever stored data did
             # not exactly match "Yes".
-            declared_pep = normalize_is_pep(person.get("is_pep", "No")) == "Yes"
+            declared_pep = _declared_pep_from_screening_item(item, person.get("is_pep", "No"))
             provider_other = facts["other_hits"] > 0
             provider_adverse = facts.get("adverse_media_hits", 0) > 0
 
