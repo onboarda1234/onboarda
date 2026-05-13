@@ -4592,9 +4592,9 @@ class SubmitApplicationHandler(BaseHandler):
                 client_ip=self.get_client_ip() if hasattr(self, 'get_client_ip') else '',
                 source=SOURCE_PRESCREENING_SUBMIT,
             )
-            if _routing_outcome.get('route') == 'edd':
+            if str(_routing_outcome.get("route") or "").lower() == "edd":
                 risk['lane'] = 'EDD'
-                _apply_edd_route_risk_floor(risk, _routing_outcome)
+                risk = _apply_edd_route_risk_floor(risk, _routing_outcome)
         except Exception as _routing_err:
             logger.warning(
                 'apply_routing_decision (prescreening_submit) failed: %s',
