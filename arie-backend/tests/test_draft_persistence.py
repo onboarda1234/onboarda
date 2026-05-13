@@ -868,7 +868,7 @@ def test_officer_token_cannot_use_draft_endpoints(api_server):
     able to read or write portal client drafts via this endpoint."""
     from auth import create_token
 
-    officer_token = create_token("officer001", "officer", "Officer Test", "co")
+    officer_token = create_token("officer001", "co", "Officer Test", "officer")
     headers = {"Authorization": f"Bearer {officer_token}"}
 
     r_get = http_requests.get(
