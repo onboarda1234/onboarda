@@ -4920,6 +4920,91 @@ class PricingAcceptHandler(BaseHandler):
         self.success({"status": next_status, "message": message, "risk_level": risk_level})
 
 
+def _kyc_requires_pre_approval(app):
+    """Return whether the current application facts require pre-KYC approval."""
+    app_snapshot = dict(app or {})
+    risk_level, _risk_score = _application_risk_snapshot(app_snapshot)
+    onboarding_lane = str(app_snapshot.get("onboarding_lane") or "").strip().upper()
+    status = str(app_snapshot.get("status") or "").strip().lower()
+    return (
+        risk_level in ("HIGH", "VERY_HIGH")
+        or onboarding_lane == "EDD"
+        or status == "pre_approval_review"
+    )
+
+
+def _kyc_prerequisite_error(app, *, action):
+    """Validate KYC collection/submission prerequisites.
+
+    KYC is unlocked by PricingAcceptHandler after pricing acceptance and, where
+    required, officer pre-approval. Treat the resulting kyc_documents status as
+    the authoritative server-side collection state.
+    """
+    status = str((app or {}).get("status") or "").strip().lower()
+    if status != "kyc_documents":
+        if status in ("draft", "submitted", "prescreening_submitted"):
+            return (
+                "pricing_not_accepted",
+                f"KYC {action} is locked until prescreening is complete and pricing has been accepted.",
+            )
+        if status == "pricing_review":
+            return (
+                "pricing_not_accepted",
+                f"KYC {action} is locked until pricing has been accepted.",
+            )
+        if status in ("pricing_accepted", "pre_approval_review", "pre_approved"):
+            return (
+                "pre_approval_or_routing_incomplete",
+                f"KYC {action} is locked until the application is routed to KYC Documents.",
+            )
+        return (
+            "invalid_kyc_state",
+            f"KYC {action} is only allowed while the application is in KYC Documents.",
+        )
+
+    if _kyc_requires_pre_approval(app) and (app or {}).get("pre_approval_decision") != "PRE_APPROVE":
+        return (
+            "pre_approval_required",
+            f"KYC {action} is locked until required pre-approval is completed.",
+        )
+
+    return None, None
+
+
+def _audit_blocked_kyc_transition(handler, db, user, app, *, attempted_action,
+                                  reason_code, message, status_code):
+    detail = {
+        "event": "kyc_transition_blocked",
+        "attempted_action": attempted_action,
+        "reason_code": reason_code,
+        "message": str(message or "")[:500],
+        "application_id": (app or {}).get("id"),
+        "application_ref": (app or {}).get("ref"),
+        "current_status": (app or {}).get("status"),
+        "risk_level": (app or {}).get("risk_level"),
+        "onboarding_lane": (app or {}).get("onboarding_lane"),
+        "pre_approval_decision": (app or {}).get("pre_approval_decision"),
+        "response_code": status_code,
+    }
+    try:
+        handler.log_audit(
+            user,
+            f"KYC Transition Blocked: {reason_code}",
+            (app or {}).get("ref") or (app or {}).get("id") or "kyc-transition",
+            json.dumps(detail, sort_keys=True),
+            db=db,
+            commit=True,
+        )
+    except Exception as exc:
+        logger.error(
+            "kyc_transition_block_audit_failed=true action=%s reason_code=%s app=%s error=%s",
+            attempted_action,
+            reason_code,
+            (app or {}).get("ref") or (app or {}).get("id"),
+            exc,
+        )
+
+
 class KYCSubmitHandler(BaseHandler):
     """POST /api/applications/:id/submit-kyc — Submit KYC documents for compliance review"""
     def post(self, app_id):
@@ -4937,11 +5022,17 @@ class KYCSubmitHandler(BaseHandler):
             db.close()
             return
 
-        # Allow KYC submission from multiple valid states (handles edge cases where pricing was accepted client-side)
-        valid_kyc_submit_statuses = ("kyc_documents", "pricing_accepted", "pricing_review", "submitted", "draft", "pre_approved")
-        if app["status"] not in valid_kyc_submit_statuses:
+        reason_code, prerequisite_error = _kyc_prerequisite_error(app, action="submission")
+        if prerequisite_error:
+            _audit_blocked_kyc_transition(
+                self, db, user, app,
+                attempted_action="submit_kyc",
+                reason_code=reason_code,
+                message=prerequisite_error,
+                status_code=409,
+            )
             db.close()
-            return self.error(f"Application cannot be submitted from status '{app['status']}'", 400)
+            return self.error(prerequisite_error, 409)
 
         real_id = app["id"]
 
@@ -4951,6 +5042,13 @@ class KYCSubmitHandler(BaseHandler):
             (real_id,),
         ).fetchone()["c"]
         if doc_count == 0:
+            _audit_blocked_kyc_transition(
+                self, db, user, app,
+                attempted_action="submit_kyc",
+                reason_code="missing_required_documents",
+                message="Please upload at least one document before submitting",
+                status_code=400,
+            )
             db.close()
             return self.error("Please upload at least one document before submitting", 400)
 
@@ -4958,6 +5056,17 @@ class KYCSubmitHandler(BaseHandler):
         rr = recompute_risk(db, real_id, "kyc_submission", user=user,
                             log_audit_fn=self.log_audit)
         refreshed_app = db.execute("SELECT * FROM applications WHERE id=?", (real_id,)).fetchone()
+        reason_code, prerequisite_error = _kyc_prerequisite_error(refreshed_app or app, action="submission")
+        if prerequisite_error:
+            _audit_blocked_kyc_transition(
+                self, db, user, refreshed_app or app,
+                attempted_action="submit_kyc",
+                reason_code=reason_code,
+                message=prerequisite_error,
+                status_code=409,
+            )
+            db.close()
+            return self.error(prerequisite_error, 409)
         risk_app_for_submission = dict(refreshed_app or app)
         risk_app_for_submission["status"] = "kyc_submitted"
         risk_error = _application_risk_integrity_error(risk_app_for_submission, "submit KYC documents")
@@ -5304,7 +5413,11 @@ class DocumentUploadHandler(BaseHandler):
             return
 
         db = get_db()
-        app = db.execute("SELECT id, ref, client_id, risk_level, status, pre_approval_decision FROM applications WHERE id=? OR ref=?", (app_id, app_id)).fetchone()
+        app = db.execute(
+            "SELECT id, ref, client_id, risk_level, status, onboarding_lane, pre_approval_decision "
+            "FROM applications WHERE id=? OR ref=?",
+            (app_id, app_id),
+        ).fetchone()
         if not app:
             self._audit_upload_rejected(user, app_id, "application_not_found", "Application not found", status_code=404, db=db)
             db.close()
@@ -5345,22 +5458,22 @@ class DocumentUploadHandler(BaseHandler):
                 db.close()
                 return self.error("Uploaded document type does not match the requested document slot", 400)
 
-        # v2.1: KYC access control — HIGH/VERY_HIGH risk requires pre-approval before document upload
-        # In production, this gate is enforced; in staging, allow uploads for testing
-        risk_level = (app.get("risk_level") or "").upper()
-        if risk_level in ("HIGH", "VERY_HIGH") and ENVIRONMENT == "production":
-            if app.get("pre_approval_decision") != "PRE_APPROVE":
+        rmi_status_allowed = str(app.get("status") or "").lower() == "rmi_sent"
+        if not rmi_status_allowed:
+            reason_code, prerequisite_error = _kyc_prerequisite_error(app, action="upload")
+            if prerequisite_error:
                 self._audit_upload_rejected(
-                    user, app["ref"], "pre_approval_required",
-                    "Pre-approval required before document upload",
-                    doc_type=requested_doc_type, db=db, status_code=403,
+                    user,
+                    app["ref"],
+                    reason_code,
+                    prerequisite_error,
+                    doc_type=requested_doc_type,
+                    rmi_item_id=rmi_item_id,
+                    db=db,
+                    status_code=409,
                 )
                 db.close()
-                return self.error(
-                    "Pre-approval required: HIGH/VERY_HIGH risk applications must be pre-approved "
-                    "by a compliance officer before KYC documents can be uploaded.",
-                    403
-                )
+                return self.error(prerequisite_error, 409)
 
         if "file" not in self.request.files:
             self._audit_upload_rejected(

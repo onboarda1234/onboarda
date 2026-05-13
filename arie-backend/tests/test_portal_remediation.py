@@ -84,6 +84,93 @@ def _ensure_client(db, client_id="portalclient001", email="portal@test.com"):
     db.commit()
 
 
+def _portal_client_token(client_id="portalclient001"):
+    from auth import create_token
+
+    return create_token(client_id, "client", "Portal Client", "client")
+
+
+def _seed_kyc_application(
+    db,
+    *,
+    app_id,
+    ref,
+    status="kyc_documents",
+    risk_level="MEDIUM",
+    risk_score=45,
+    onboarding_lane="STANDARD",
+    pre_approval_decision=None,
+):
+    _ensure_client(db)
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, status, risk_level, risk_score,
+         onboarding_lane, pre_approval_decision, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id,
+            ref,
+            "portalclient001",
+            f"{ref} Ltd",
+            "Mauritius",
+            status,
+            risk_level,
+            risk_score,
+            onboarding_lane,
+            pre_approval_decision,
+            json.dumps({
+                "registered_entity_name": f"{ref} Ltd",
+                "country_of_incorporation": "Mauritius",
+            }),
+        ),
+    )
+    db.execute(
+        """
+        INSERT INTO directors
+        (id, application_id, person_key, first_name, last_name, full_name, nationality,
+         is_pep, pep_declaration, date_of_birth)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            f"dir_{app_id}",
+            app_id,
+            "dir1",
+            "Jane",
+            "Director",
+            "Jane Director",
+            "Mauritius",
+            "No",
+            "{}",
+            "1985-01-01",
+        ),
+    )
+
+
+def _insert_uploaded_document(db, app_id, *, doc_id=None):
+    temp_dir = tempfile.mkdtemp(prefix="portal-submit-")
+    file_path = os.path.join(temp_dir, f"{app_id}.pdf")
+    with open(file_path, "wb") as handle:
+        handle.write(b"%PDF-1.4\n%EOF\n")
+    db.execute(
+        """
+        INSERT INTO documents
+        (id, application_id, doc_type, doc_name, file_path, verification_status, verification_results)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            doc_id or f"doc_{app_id}",
+            app_id,
+            "cert_inc",
+            f"{app_id}.pdf",
+            file_path,
+            "flagged",
+            json.dumps({"warnings": ["Name mismatch"]}),
+        ),
+    )
+
+
 def test_application_detail_ignores_other_application_saved_session(api_server):
     from auth import create_token
     from db import get_db
@@ -304,44 +391,20 @@ def test_backoffice_incomplete_submission_banner_is_present():
 
 
 def test_kyc_submit_allows_incomplete_documents_with_at_least_one_upload(api_server):
-    from auth import create_token
     from db import get_db
 
-    temp_dir = tempfile.mkdtemp(prefix="portal-submit-")
-    file_path = os.path.join(temp_dir, "coi.pdf")
-    with open(file_path, "wb") as handle:
-        handle.write(b"certificate")
-
     conn = get_db()
-    _ensure_client(conn)
-    conn.execute(
-        """
-        INSERT INTO applications (id, ref, client_id, company_name, country, status, risk_level, risk_score, prescreening_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        ("submit_incomplete", "ARF-SUBMIT-INCOMPLETE", "portalclient001", "Submit Incomplete Ltd", "Mauritius", "pricing_review", "MEDIUM", 45, json.dumps({
-            "registered_entity_name": "Submit Incomplete Ltd",
-            "country_of_incorporation": "Mauritius"
-        })),
+    _seed_kyc_application(
+        conn,
+        app_id="submit_incomplete",
+        ref="ARF-SUBMIT-INCOMPLETE",
+        status="kyc_documents",
     )
-    conn.execute(
-        """
-        INSERT INTO directors (id, application_id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration, date_of_birth)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        ("dir_submit_incomplete", "submit_incomplete", "dir1", "Jane", "Director", "Jane Director", "Mauritius", "No", "{}", "1985-01-01"),
-    )
-    conn.execute(
-        """
-        INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, verification_status, verification_results)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        ("doc_submit_incomplete", "submit_incomplete", "cert_inc", "coi.pdf", file_path, "flagged", json.dumps({"warnings": ["Name mismatch"]})),
-    )
+    _insert_uploaded_document(conn, "submit_incomplete", doc_id="doc_submit_incomplete")
     conn.commit()
     conn.close()
 
-    token = create_token("portalclient001", "client", "Portal Client", "client")
+    token = _portal_client_token()
     resp = http_requests.post(
         f"{api_server}/api/applications/ARF-SUBMIT-INCOMPLETE/submit-kyc",
         headers={"Authorization": f"Bearer {token}"},
@@ -359,32 +422,19 @@ def test_kyc_submit_allows_incomplete_documents_with_at_least_one_upload(api_ser
 
 
 def test_kyc_submit_still_blocks_when_no_documents_uploaded(api_server):
-    from auth import create_token
     from db import get_db
 
     conn = get_db()
-    _ensure_client(conn)
-    conn.execute(
-        """
-        INSERT INTO applications (id, ref, client_id, company_name, country, status, prescreening_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        ("submit_no_docs", "ARF-SUBMIT-NO-DOCS", "portalclient001", "Submit No Docs Ltd", "Mauritius", "pricing_review", json.dumps({
-            "registered_entity_name": "Submit No Docs Ltd",
-            "country_of_incorporation": "Mauritius"
-        })),
-    )
-    conn.execute(
-        """
-        INSERT INTO directors (id, application_id, person_key, first_name, last_name, full_name, nationality, is_pep, pep_declaration, date_of_birth)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        ("dir_submit_no_docs", "submit_no_docs", "dir1", "Jane", "Director", "Jane Director", "Mauritius", "No", "{}", "1985-01-01"),
+    _seed_kyc_application(
+        conn,
+        app_id="submit_no_docs",
+        ref="ARF-SUBMIT-NO-DOCS",
+        status="kyc_documents",
     )
     conn.commit()
     conn.close()
 
-    token = create_token("portalclient001", "client", "Portal Client", "client")
+    token = _portal_client_token()
     resp = http_requests.post(
         f"{api_server}/api/applications/ARF-SUBMIT-NO-DOCS/submit-kyc",
         headers={"Authorization": f"Bearer {token}"},
@@ -392,3 +442,162 @@ def test_kyc_submit_still_blocks_when_no_documents_uploaded(api_server):
     )
     assert resp.status_code == 400
     assert "upload at least one document" in resp.json()["error"].lower()
+
+    conn = get_db()
+    audit = conn.execute(
+        "SELECT action, detail FROM audit_log WHERE target=? ORDER BY timestamp DESC, id DESC LIMIT 1",
+        ("ARF-SUBMIT-NO-DOCS",),
+    ).fetchone()
+    conn.close()
+    assert audit["action"] == "KYC Transition Blocked: missing_required_documents"
+    assert json.loads(audit["detail"])["reason_code"] == "missing_required_documents"
+
+
+def test_kyc_upload_from_pricing_review_is_blocked_and_audited(api_server):
+    from db import get_db
+
+    conn = get_db()
+    _seed_kyc_application(
+        conn,
+        app_id="upload_pricing_review",
+        ref="ARF-UPLOAD-PRICING-REVIEW",
+        status="pricing_review",
+    )
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/ARF-UPLOAD-PRICING-REVIEW/documents?doc_type=cert_inc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        files={"file": ("coi.pdf", b"%PDF-1.4\n%EOF\n", "application/pdf")},
+        timeout=3,
+    )
+    assert resp.status_code == 409
+    assert "pricing" in resp.json()["error"].lower()
+
+    conn = get_db()
+    audit = conn.execute(
+        "SELECT action, detail FROM audit_log WHERE target=? ORDER BY timestamp DESC, id DESC LIMIT 1",
+        ("ARF-UPLOAD-PRICING-REVIEW",),
+    ).fetchone()
+    conn.close()
+    assert audit["action"] == "Upload Rejected: pricing_not_accepted"
+    assert json.loads(audit["detail"])["reason_code"] == "pricing_not_accepted"
+
+
+def test_kyc_submit_from_pricing_review_is_blocked_and_audited(api_server):
+    from db import get_db
+
+    conn = get_db()
+    _seed_kyc_application(
+        conn,
+        app_id="submit_pricing_review",
+        ref="ARF-SUBMIT-PRICING-REVIEW",
+        status="pricing_review",
+    )
+    _insert_uploaded_document(conn, "submit_pricing_review")
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/ARF-SUBMIT-PRICING-REVIEW/submit-kyc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        timeout=3,
+    )
+    assert resp.status_code == 409
+    assert "pricing" in resp.json()["error"].lower()
+
+    conn = get_db()
+    app_status = conn.execute("SELECT status FROM applications WHERE id=?", ("submit_pricing_review",)).fetchone()["status"]
+    audit = conn.execute(
+        "SELECT action, detail FROM audit_log WHERE target=? ORDER BY timestamp DESC, id DESC LIMIT 1",
+        ("ARF-SUBMIT-PRICING-REVIEW",),
+    ).fetchone()
+    conn.close()
+    assert app_status == "pricing_review"
+    assert audit["action"] == "KYC Transition Blocked: pricing_not_accepted"
+    assert json.loads(audit["detail"])["current_status"] == "pricing_review"
+
+
+def test_kyc_submit_before_pricing_acceptance_is_blocked(api_server):
+    from db import get_db
+
+    conn = get_db()
+    _seed_kyc_application(
+        conn,
+        app_id="submit_before_pricing",
+        ref="ARF-SUBMIT-BEFORE-PRICING",
+        status="submitted",
+    )
+    _insert_uploaded_document(conn, "submit_before_pricing")
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/ARF-SUBMIT-BEFORE-PRICING/submit-kyc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        timeout=3,
+    )
+    assert resp.status_code == 409
+    assert "pricing" in resp.json()["error"].lower()
+
+
+def test_high_risk_kyc_submit_without_preapproval_is_blocked(api_server):
+    from db import get_db
+
+    conn = get_db()
+    _seed_kyc_application(
+        conn,
+        app_id="submit_high_no_preapproval",
+        ref="ARF-SUBMIT-HIGH-NO-PRE",
+        status="kyc_documents",
+        risk_level="HIGH",
+        risk_score=78,
+        onboarding_lane="EDD",
+        pre_approval_decision=None,
+    )
+    _insert_uploaded_document(conn, "submit_high_no_preapproval")
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/ARF-SUBMIT-HIGH-NO-PRE/submit-kyc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        timeout=3,
+    )
+    assert resp.status_code == 409
+    assert "pre-approval" in resp.json()["error"].lower()
+
+    conn = get_db()
+    status = conn.execute("SELECT status FROM applications WHERE id=?", ("submit_high_no_preapproval",)).fetchone()["status"]
+    audit = conn.execute(
+        "SELECT action, detail FROM audit_log WHERE target=? ORDER BY timestamp DESC, id DESC LIMIT 1",
+        ("ARF-SUBMIT-HIGH-NO-PRE",),
+    ).fetchone()
+    conn.close()
+    assert status == "kyc_documents"
+    assert audit["action"] == "KYC Transition Blocked: pre_approval_required"
+    assert json.loads(audit["detail"])["pre_approval_decision"] is None
+
+
+def test_valid_kyc_documents_case_can_upload(api_server):
+    from db import get_db
+
+    conn = get_db()
+    _seed_kyc_application(
+        conn,
+        app_id="upload_valid_kyc",
+        ref="ARF-UPLOAD-VALID-KYC",
+        status="kyc_documents",
+    )
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/ARF-UPLOAD-VALID-KYC/documents?doc_type=cert_inc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        files={"file": ("coi.pdf", b"%PDF-1.4\n%EOF\n", "application/pdf")},
+        timeout=3,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["doc_type"] == "cert_inc"
