@@ -115,6 +115,32 @@ class TestBackendRiskIntegrityMetadata:
         assert decorated["has_authoritative_risk"] is True
         assert decorated["risk_integrity_warnings"] == []
 
+    def test_backoffice_snapshot_prefers_authoritative_final_risk(self):
+        from server import _application_risk_snapshot
+
+        level, score = _application_risk_snapshot({
+            "status": "pricing_review",
+            "risk_level": "LOW",
+            "final_risk_level": "MEDIUM",
+            "risk_score": 40,
+        })
+
+        assert level == "MEDIUM"
+        assert score == 40
+
+    def test_memo_risk_context_prefers_authoritative_final_risk(self):
+        from memo_handler import _risk_display_context
+
+        display = _risk_display_context({
+            "risk_level": "LOW",
+            "final_risk_level": "MEDIUM",
+            "risk_score": 40,
+        })
+
+        assert display["available"] is True
+        assert display["level"] == "MEDIUM"
+        assert "MEDIUM" in display["summary"]
+
     def test_very_high_risk_application_stays_authoritative(self):
         from server import _decorate_application_risk_integrity
 

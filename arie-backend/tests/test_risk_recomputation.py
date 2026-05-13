@@ -247,6 +247,54 @@ class TestRecomputeRiskAudit:
         assert entry["after_state"]["risk_computed_at"] is not None
         db.close()
 
+    def test_audit_records_final_risk_floor_reason(self, temp_db):
+        """Risk recomputation audit must explain when final risk is floored above raw LOW."""
+        from rule_engine import recompute_risk
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, app_ref = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Crypto VASP exchange",
+            entity_type="Listed Company",
+        )
+
+        audit_calls = []
+
+        def mock_audit(user, action, target, detail, **kwargs):
+            audit_calls.append({
+                "action": action,
+                "target": target,
+                "detail": detail,
+                "before_state": kwargs.get("before_state"),
+                "after_state": kwargs.get("after_state"),
+            })
+
+        result = recompute_risk(
+            db,
+            app_id,
+            "final_risk_truth_regression",
+            user=_make_user(),
+            log_audit_fn=mock_audit,
+            apply_routing_policy=False,
+        )
+        db.commit()
+
+        assert result["recomputed"] is True
+        assert result["base_risk_level"] == "LOW"
+        assert result["final_risk_level"] != "LOW"
+        assert "floor_rule_high_risk_sector" in result["risk_escalations"]
+
+        entry = [a for a in audit_calls if a["action"] == "Risk Recomputed"][-1]
+        assert entry["target"] == app_ref
+        assert "Floor/elevation reason" in entry["detail"]
+        assert "High-risk sector floor" in entry["after_state"]["elevation_reason_text"]
+        assert entry["after_state"]["base_risk_level"] == "LOW"
+        assert entry["after_state"]["final_risk_level"] != "LOW"
+        db.close()
+
     def test_no_audit_when_no_user(self, temp_db):
         """Without user/log_audit_fn, recompute should still work but skip audit."""
         from rule_engine import recompute_risk

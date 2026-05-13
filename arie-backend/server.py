@@ -117,6 +117,7 @@ from rule_engine import (
     HIGH_RISK_COUNTRIES, ALWAYS_RISK_DECREASING, ALWAYS_RISK_INCREASING,
     RISK_WEIGHTS, RISK_RANK,
     classify_country, score_sector, compute_risk_score, classify_risk_level,
+    apply_risk_floor,
     validate_risk_config,
     recompute_risk, recompute_risk_for_active_apps,
 )
@@ -292,6 +293,29 @@ def _edd_trigger_flags_from_app(app):
     if app.get("elevation_reason_text"):
         flags.append(str(app.get("elevation_reason_text")))
     return _unique_list(flags)
+
+
+def _apply_edd_route_risk_floor(risk, routing_outcome):
+    """Keep final risk truthful when deterministic routing sends a LOW case to EDD."""
+    if not isinstance(risk, dict) or not isinstance(routing_outcome, dict):
+        return risk
+    if str(routing_outcome.get("route") or "").lower() != "edd":
+        return risk
+    current = _canonical_risk_level(risk.get("final_risk_level") or risk.get("level"))
+    if current != "LOW":
+        return risk
+    triggers = ", ".join(str(t) for t in (routing_outcome.get("triggers") or []) if t)
+    reason = "EDD routing floor: deterministic routing required EDD"
+    if triggers:
+        reason += f" ({triggers})"
+    floored = apply_risk_floor(
+        risk,
+        "MEDIUM",
+        "floor_rule_edd_routing",
+        reason,
+    )
+    floored["lane"] = "EDD"
+    return floored
 
 
 def _decorate_application_risk_integrity(app):
@@ -4568,8 +4592,9 @@ class SubmitApplicationHandler(BaseHandler):
                 client_ip=self.get_client_ip() if hasattr(self, 'get_client_ip') else '',
                 source=SOURCE_PRESCREENING_SUBMIT,
             )
-            if _routing_outcome.get('route') == 'edd':
+            if str(_routing_outcome.get("route") or "").lower() == "edd":
                 risk['lane'] = 'EDD'
+                risk = _apply_edd_route_risk_floor(risk, _routing_outcome)
         except Exception as _routing_err:
             logger.warning(
                 'apply_routing_decision (prescreening_submit) failed: %s',
@@ -4653,6 +4678,9 @@ class SubmitApplicationHandler(BaseHandler):
             # Store pricing in prescreening data
             prescreening["pricing"] = pricing
             prescreening["pricing"]["risk_level"] = risk["level"]
+            prescreening["pricing"]["final_risk_level"] = risk.get("final_risk_level", risk["level"])
+            prescreening["pricing"]["base_risk_level"] = risk.get("base_risk_level", risk["level"])
+            prescreening["pricing"]["elevation_reason_text"] = risk.get("elevation_reason_text", "")
             db.execute("UPDATE applications SET prescreening_data=? WHERE id=?",
                        (json.dumps(prescreening, default=str), real_id))
 
@@ -4776,13 +4804,27 @@ class SubmitApplicationHandler(BaseHandler):
                     )
 
             flags_summary = f", Flags: {len(screening_report['overall_flags'])}" if screening_report["overall_flags"] else ""
-            _after = {"status": "pricing_review", "risk_score": risk["score"],
-                      "risk_level": risk["level"], "onboarding_lane": risk["lane"]}
+            elevation_summary = (
+                f", Floor/Elevation: {risk.get('elevation_reason_text')}"
+                if risk.get("elevation_reason_text")
+                else ""
+            )
+            _after = {
+                "status": "pricing_review",
+                "risk_score": risk["score"],
+                "base_risk_score": risk.get("base_risk_score"),
+                "base_risk_level": risk.get("base_risk_level", risk["level"]),
+                "risk_level": risk["level"],
+                "final_risk_level": risk.get("final_risk_level", risk["level"]),
+                "risk_escalations": risk.get("escalations", []),
+                "elevation_reason_text": risk.get("elevation_reason_text", ""),
+                "onboarding_lane": risk["lane"],
+            }
             self.log_audit(
                 user,
                 "Pre-Screening Submitted",
                 app["ref"],
-                f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}",
+                f"Pre-screening submitted — Score: {risk['score']}, Level: {risk['level']}, Lane: {risk['lane']}{flags_summary}{elevation_summary}",
                 db=db,
                 before_state=_before,
                 after_state=_after,
@@ -4833,6 +4875,11 @@ class SubmitApplicationHandler(BaseHandler):
             "ref": app["ref"],
             "risk_score": risk["score"],
             "risk_level": risk["level"],
+            "base_risk_score": risk.get("base_risk_score"),
+            "base_risk_level": risk.get("base_risk_level", risk["level"]),
+            "final_risk_level": risk.get("final_risk_level", risk["level"]),
+            "risk_escalations": risk.get("escalations", []),
+            "elevation_reason_text": risk.get("elevation_reason_text", ""),
             "risk_dimensions": risk["dimensions"],
             "onboarding_lane": risk["lane"],
             "status": result_status,
