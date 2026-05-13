@@ -872,7 +872,7 @@ class TestAuthenticatedAccess:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             ("app_upload_reject", "ARF-UPLOAD-REJECT", "testclient001",
-             "Upload Reject Ltd", "Mauritius", "Technology", "SME", "draft"),
+             "Upload Reject Ltd", "Mauritius", "Technology", "SME", "kyc_documents"),
         )
         conn.commit()
         conn.close()

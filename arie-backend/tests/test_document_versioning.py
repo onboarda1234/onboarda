@@ -100,7 +100,7 @@ def _officer_headers():
     return {"Authorization": f"Bearer {token}"}
 
 
-def _seed_application(app_id, client_id, status="draft"):
+def _seed_application(app_id, client_id, status="kyc_documents"):
     from db import get_db
 
     conn = get_db()
