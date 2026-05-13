@@ -338,6 +338,79 @@ class TestHappyPathSubmit:
         assert "screening" in data
         assert "degraded_sources" in data["screening"]
 
+    def test_edd_routed_low_risk_is_floored_before_persisting(self, temp_db):
+        """A policy-routed EDD case must not persist or return final LOW risk."""
+        server = _get_server_module()
+
+        success_calls = []
+        error_calls = []
+        handler = _make_handler(server, error_calls, success_calls)
+
+        mock_report = {
+            "screened_at": "2026-01-01T00:00:00",
+            "company_screening": {"found": True, "source": "mocked"},
+            "director_screenings": [],
+            "ubo_screenings": [],
+            "ip_geolocation": {},
+            "overall_flags": [],
+            "total_hits": 0,
+            "degraded_sources": [],
+        }
+
+        mock_risk = {
+            "score": 28,
+            "level": "LOW",
+            "base_risk_score": 28,
+            "base_risk_level": "LOW",
+            "final_risk_level": "LOW",
+            "dimensions": {"D1": 1, "D2": 1, "D3": 1, "D4": 4, "D5": 1},
+            "lane": "Fast Lane",
+            "sector_label": "Crypto VASP exchange",
+            "sector_risk_tier": "very_high",
+            "escalations": [],
+            "elevation_reason_text": "",
+            "requires_compliance_approval": False,
+        }
+
+        with patch.object(server, "run_full_screening", return_value=mock_report):
+            with patch.object(server, "compute_risk_score", return_value=mock_risk):
+                with patch.object(server, "determine_screening_mode", return_value="simulated"):
+                    with patch.object(server, "store_screening_mode", return_value=True):
+                        db = _get_project_db(temp_db)
+                        app_id = _setup_test_app(db)
+
+                        handler._do_submit(
+                            db,
+                            {"sub": "testuser", "name": "Test", "role": "client", "type": "client"},
+                            app_id,
+                        )
+                        app = db.execute(
+                            """
+                            SELECT risk_score, risk_level, final_risk_level,
+                                   base_risk_level, elevation_reason_text, onboarding_lane
+                            FROM applications
+                            WHERE id=?
+                            """,
+                            (app_id,),
+                        ).fetchone()
+                        db.close()
+
+        assert error_calls == []
+        assert len(success_calls) == 1
+        data = success_calls[0][0]
+        assert data["risk_level"] != "LOW"
+        assert data["final_risk_level"] == data["risk_level"]
+        assert data["onboarding_lane"] == "EDD"
+        assert "floor_rule_edd_routing" in data["risk_escalations"]
+        assert app["risk_level"] != "LOW"
+        assert app["final_risk_level"] == app["risk_level"]
+        assert app["base_risk_level"] == "LOW"
+        assert app["risk_score"] == 28
+        assert "EDD routing floor" in app["elevation_reason_text"]
+        audit_after = handler.log_audit.call_args.kwargs["after_state"]
+        assert audit_after["final_risk_level"] == data["risk_level"]
+        assert "EDD routing floor" in audit_after["elevation_reason_text"]
+
     def test_edd_submit_persists_state_and_enhanced_requirements_for_client_actor(self, temp_db):
         """EDD/high-risk success must not leave the durable app row in draft."""
         server = _get_server_module()

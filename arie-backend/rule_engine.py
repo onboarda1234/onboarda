@@ -172,6 +172,94 @@ RISK_WEIGHTS = {
 }
 
 RISK_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
+RISK_SCORE_FLOORS = {"LOW": 0.0, "MEDIUM": 40.0, "HIGH": 55.0, "VERY_HIGH": 70.0}
+RISK_LANE_MAP = {
+    "LOW": "Fast Lane",
+    "MEDIUM": "Standard Review",
+    "HIGH": "EDD",
+    "VERY_HIGH": "EDD",
+}
+
+
+def _append_unique(items, value):
+    if value and value not in items:
+        items.append(value)
+
+
+def _risk_tier_from_score(score):
+    try:
+        score = int(score)
+    except (TypeError, ValueError):
+        return ""
+    if score >= 4:
+        return "very_high"
+    if score >= 3:
+        return "elevated"
+    if score <= 1:
+        return "low"
+    return "standard"
+
+
+def _score_after_floor(current_score, minimum_level):
+    if minimum_level == "MEDIUM":
+        return current_score
+    return max(current_score, RISK_SCORE_FLOORS[minimum_level])
+
+
+def _ownership_transparency_tier(ownership_structure):
+    return "opaque" if _is_opaque_ownership(ownership_structure) else "clear"
+
+
+def apply_risk_floor(risk_dict, minimum_level, reason_code, reason_text):
+    """Mutate a risk result so the final displayed level cannot sit below a mandatory floor."""
+    if not isinstance(risk_dict, dict):
+        return risk_dict
+
+    minimum = str(minimum_level or "").strip().upper()
+    if minimum not in RISK_RANK:
+        return risk_dict
+
+    current = str(
+        risk_dict.get("final_risk_level")
+        or risk_dict.get("level")
+        or risk_dict.get("risk_level")
+        or ""
+    ).strip().upper()
+    if current not in RISK_RANK:
+        current = "LOW"
+
+    if RISK_RANK[current] >= RISK_RANK[minimum]:
+        return risk_dict
+
+    previous_score = risk_dict.get("score")
+    try:
+        previous_score_num = float(previous_score)
+    except (TypeError, ValueError):
+        previous_score_num = 0.0
+
+    risk_dict.setdefault("base_risk_score", previous_score_num)
+    risk_dict.setdefault("base_risk_level", current)
+    risk_dict["score"] = _score_after_floor(previous_score_num, minimum)
+    risk_dict["level"] = minimum
+    risk_dict["final_risk_level"] = minimum
+    risk_dict["lane"] = RISK_LANE_MAP.get(minimum, "Standard Review")
+
+    escalations = risk_dict.get("escalations")
+    if not isinstance(escalations, list):
+        escalations = []
+    _append_unique(escalations, reason_code)
+    risk_dict["escalations"] = escalations
+
+    existing = str(risk_dict.get("elevation_reason_text") or "").strip()
+    reason = str(reason_text or "").strip()
+    if reason and reason not in existing:
+        risk_dict["elevation_reason_text"] = f"{existing}; {reason}" if existing else reason
+    elif existing:
+        risk_dict["elevation_reason_text"] = existing
+    else:
+        risk_dict["elevation_reason_text"] = ""
+
+    return risk_dict
 
 
 # ══════════════════════════════════════════════════════════
@@ -623,8 +711,9 @@ def compute_risk_score(app_data, config_override=None):
     Thresholds: LOW 0-39, MEDIUM 40-54, HIGH 55-69, VERY_HIGH 70-100
 
     Returns: {
-        score: float (0-100),
+        score: float (0-100),                               # raw/floor-adjusted score; MEDIUM floors preserve raw score
         level: str (LOW|MEDIUM|HIGH|VERY_HIGH),          # final risk level (post-elevation)
+        base_risk_score: float,                             # score-based risk before floor/elevation
         base_risk_level: str,                             # score-based level before elevation
         final_risk_level: str,                            # same as level (explicit alias)
         dimensions: {d1..d5},
@@ -909,12 +998,34 @@ def compute_risk_score(app_data, config_override=None):
     composite = round((weighted_avg - 1) / 3 * 100, 1)
 
     # ── Classify risk level from score (single canonical mapping) ──
+    base_score = composite
     base_level = classify_risk_level(composite, config)
     level = base_level  # will be elevated below if conditions met
 
     # ── Collect escalation flags ──
     escalations = []
     elevation_reasons = []
+
+    def apply_local_floor(minimum_level, reason_code, reason_text):
+        nonlocal composite, level
+        minimum = str(minimum_level or "").strip().upper()
+        if minimum not in RISK_RANK:
+            return
+        if RISK_RANK.get(level, 0) >= RISK_RANK[minimum]:
+            return
+        previous_level = level
+        level = minimum
+        composite = _score_after_floor(composite, minimum)
+        _append_unique(escalations, reason_code)
+        elevation_reasons.append(reason_text)
+        logger.info(
+            "RISK FLOOR: %s -> %s because %s (base_score=%s, final_score=%s)",
+            previous_level,
+            minimum,
+            reason_code,
+            base_score,
+            composite,
+        )
 
     # ── FLOOR RULE 1: Sanctioned / FATF_BLACK incorporation country → force VERY_HIGH ──
     # If the incorporation country is sanctioned or FATF blacklisted,
@@ -950,25 +1061,26 @@ def compute_risk_score(app_data, config_override=None):
     country_scores_cfg = (config.get("country_risk_scores") if config else None) or None
     sector_scores_cfg = (config.get("sector_risk_scores") if config else None) or None
 
-    # ── ELEVATION RULE 1: MEDIUM + FATF grey-list + high-risk sector + opaque structure → HIGH ──
+    # ── ELEVATION RULE 1: FATF grey-list + high-risk sector + opaque structure → HIGH ──
     # Narrow combination: all three conditions must be true simultaneously.
-    if level == "MEDIUM":
-        is_grey = _is_elevated_jurisdiction(data.get("country"), country_scores_cfg)
-        is_hr_sector = _is_high_risk_sector(data.get("sector"), sector_scores_cfg)
-        is_opaque = _is_opaque_ownership(data.get("ownership_structure"))
+    is_grey = _is_elevated_jurisdiction(data.get("country"), country_scores_cfg)
+    is_hr_sector = _is_high_risk_sector(data.get("sector"), sector_scores_cfg)
+    is_opaque = _is_opaque_ownership(data.get("ownership_structure"))
 
-        if is_grey and is_hr_sector and is_opaque:
-            logger.info(
-                "ELEVATION RULE 1: MEDIUM + FATF grey-list + high-risk sector + opaque structure → HIGH "
-                "(country=%s, sector=%s, ownership=%s, score=%s)",
-                data.get("country"), data.get("sector"), data.get("ownership_structure"), composite
-            )
+    if is_grey and is_hr_sector and is_opaque:
+        logger.info(
+            "ELEVATION RULE 1: FATF grey-list + high-risk sector + opaque structure → HIGH "
+            "(country=%s, sector=%s, ownership=%s, score=%s)",
+            data.get("country"), data.get("sector"), data.get("ownership_structure"), composite
+        )
+        if RISK_RANK.get(level, 0) < RISK_RANK.get("HIGH", 3):
             level = "HIGH"
-            escalations.append("elevation_grey_sector_opaque")
-            elevation_reasons.append(
-                f"Combination elevation: FATF grey-list jurisdiction ({data.get('country')}), "
-                f"high-risk sector ({data.get('sector')}), opaque ownership structure"
-            )
+            composite = max(composite, RISK_SCORE_FLOORS["HIGH"])
+        _append_unique(escalations, "elevation_grey_sector_opaque")
+        elevation_reasons.append(
+            f"Combination elevation: FATF grey-list jurisdiction ({data.get('country')}), "
+            f"high-risk sector ({data.get('sector')}), opaque ownership structure"
+        )
 
     # ── ELEVATION RULE 2: Screening-driven elevation ──
     # If screening identifies a material unresolved concern, elevate at least to HIGH.
@@ -981,6 +1093,7 @@ def compute_risk_score(app_data, config_override=None):
                 level, composite, screening_reasons
             )
             level = "HIGH"
+            composite = max(composite, RISK_SCORE_FLOORS["HIGH"])
             escalations.append("elevation_screening_concern")
             elevation_reasons.append(
                 f"Screening-driven elevation to HIGH: {', '.join(screening_reasons)}"
@@ -1007,6 +1120,39 @@ def compute_risk_score(app_data, config_override=None):
                 f"{'high-risk sector + elevated jurisdiction + ' if is_hr_sector_severe and is_elevated_jur else ''}"
                 f"screening concerns ({', '.join(screening_reasons)})"
             )
+
+    # ── FLOOR RULE 3: EDD-policy trigger factors cannot remain final LOW ──
+    # The routing policy sends declared PEP, high-risk sector, elevated
+    # jurisdiction and opaque ownership cases into EDD. The regulator-facing
+    # final risk classification must therefore not persist/display LOW while
+    # those controls are required.
+    if pep_scores:
+        apply_local_floor(
+            "MEDIUM",
+            "floor_rule_declared_pep",
+            "Declared PEP floor: declared PEP exposure requires at least MEDIUM final risk",
+        )
+
+    if _is_high_risk_sector(data.get("sector"), sector_scores_cfg):
+        apply_local_floor(
+            "MEDIUM",
+            "floor_rule_high_risk_sector",
+            f"High-risk sector floor: {data.get('sector') or 'unspecified'} requires at least MEDIUM final risk",
+        )
+
+    if _is_elevated_jurisdiction(data.get("country"), country_scores_cfg):
+        apply_local_floor(
+            "MEDIUM",
+            "floor_rule_elevated_jurisdiction",
+            f"Elevated jurisdiction floor: {data.get('country') or 'unspecified'} requires at least MEDIUM final risk",
+        )
+
+    if _is_opaque_ownership(data.get("ownership_structure")):
+        apply_local_floor(
+            "MEDIUM",
+            "floor_rule_opaque_ownership",
+            "Opaque ownership floor: opaque/complex ownership requires at least MEDIUM final risk",
+        )
 
     # ── ESCALATION RULE A: Any sub-factor scores 4 → mandatory compliance approval ──
     # Per Excel Methodology: "Compliance approval is MANDATORY when any individual
@@ -1035,18 +1181,22 @@ def compute_risk_score(app_data, config_override=None):
 
     elevation_reason_text = "; ".join(elevation_reasons) if elevation_reasons else ""
 
-    lane_map = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}
-
     return {
         "score": composite,
         "level": level,
+        "base_risk_score": base_score,
         "base_risk_level": base_level,
         "final_risk_level": level,
         "dimensions": {"d1": round(d1, 2), "d2": round(d2, 2), "d3": round(d3, 2), "d4": round(d4, 2), "d5": round(d5, 2)},
-        "lane": lane_map.get(level, "Standard Review"),
+        "lane": RISK_LANE_MAP.get(level, "Standard Review"),
         "escalations": escalations,
         "elevation_reason_text": elevation_reason_text,
         "requires_compliance_approval": requires_compliance_approval,
+        "declared_pep_present": bool(pep_scores),
+        "sector_label": data.get("sector") or "",
+        "sector_risk_tier": _risk_tier_from_score(d4),
+        "jurisdiction_risk_tier": _risk_tier_from_score(d2_inc),
+        "ownership_transparency_status": _ownership_transparency_tier(data.get("ownership_structure")),
     }
 
 
@@ -1097,6 +1247,11 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         "recomputed": False,
         "old_score": None, "old_level": None,
         "new_score": None, "new_level": None,
+        "base_risk_score": None,
+        "base_risk_level": None,
+        "final_risk_level": None,
+        "elevation_reason_text": "",
+        "risk_escalations": [],
         "changed": False,
     }
 
@@ -1136,6 +1291,11 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         new_level = new_risk["level"]
         result["new_score"] = new_score
         result["new_level"] = new_level
+        result["base_risk_score"] = new_risk.get("base_risk_score")
+        result["base_risk_level"] = new_risk.get("base_risk_level")
+        result["final_risk_level"] = new_risk.get("final_risk_level", new_level)
+        result["elevation_reason_text"] = new_risk.get("elevation_reason_text", "")
+        result["risk_escalations"] = list(new_risk.get("escalations", []))
         result["recomputed"] = True
         result["changed"] = (old_score != new_score or old_level != new_level)
 
@@ -1172,16 +1332,32 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         # Audit trail
         if log_audit_fn and user:
             before_state = {
-                "risk_score": old_score, "risk_level": old_level,
+                "risk_score": old_score,
+                "risk_level": old_level,
+                "final_risk_level": app.get("final_risk_level") or old_level,
+                "base_risk_level": app.get("base_risk_level") or old_level,
+                "elevation_reason_text": app.get("elevation_reason_text") or "",
             }
             after_state = {
-                "risk_score": new_score, "risk_level": new_level,
+                "risk_score": new_score,
+                "base_risk_score": new_risk.get("base_risk_score"),
+                "base_risk_level": new_risk.get("base_risk_level", new_level),
+                "risk_level": new_level,
+                "final_risk_level": new_risk.get("final_risk_level", new_level),
+                "risk_escalations": new_risk.get("escalations", []),
+                "elevation_reason_text": new_risk.get("elevation_reason_text", ""),
                 "risk_computed_at": now_ts,
                 "risk_config_version": config_version,
             }
+            floor_detail = (
+                f". Floor/elevation reason: {new_risk.get('elevation_reason_text')}"
+                if new_risk.get("elevation_reason_text")
+                else ""
+            )
             detail = (
                 f"Reason: {reason}. "
                 f"Score: {old_score}→{new_score}, Level: {old_level}→{new_level}"
+                f"{floor_detail}"
             )
             try:
                 log_audit_fn(user, "Risk Recomputed", app.get("ref", app_id), detail,
@@ -1205,13 +1381,12 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
                     ).fetchone()
                 except Exception:
                     _app_post = app
-                _risk_dict = {
-                    "score": new_score,
-                    "level": new_level,
-                    "final_risk_level": new_level,
-                    "base_risk_level": new_level,
-                    "sector_label": (dict(_app_post or {})).get("sector"),
-                }
+                _risk_dict = dict(new_risk)
+                _risk_dict.setdefault("score", new_score)
+                _risk_dict.setdefault("level", new_level)
+                _risk_dict.setdefault("final_risk_level", new_level)
+                _risk_dict.setdefault("base_risk_level", new_risk.get("base_risk_level", new_level))
+                _risk_dict.setdefault("sector_label", (dict(_app_post or {})).get("sector"))
                 apply_routing_decision(
                     db=db,
                     app_row=(dict(_app_post) if _app_post else app),

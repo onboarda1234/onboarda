@@ -104,6 +104,30 @@ def _sanctioned_country_app(**overrides):
     return data
 
 
+def _clean_low_app(**overrides):
+    """Build a clean score-based LOW application with no floor triggers."""
+    data = {
+        "entity_type": "Listed Company",
+        "ownership_structure": "Simple",
+        "country": "United Kingdom",
+        "sector": "Government",
+        "directors": [{"full_name": "Jane Clean", "nationality": "British", "is_pep": "No"}],
+        "ubos": [{"full_name": "Jane Clean", "nationality": "British", "ownership_pct": "100", "is_pep": "No"}],
+        "intermediary_shareholders": [],
+        "operating_countries": ["United Kingdom"],
+        "target_markets": ["United Kingdom"],
+        "primary_service": "domestic payments only (single currency)",
+        "monthly_volume": "under usd 50,000",
+        "transaction_complexity": "simple",
+        "source_of_wealth": "business revenue",
+        "source_of_funds": "company bank",
+        "introduction_method": "direct",
+        "customer_interaction": "face-to-face",
+    }
+    data.update(overrides)
+    return data
+
+
 # ═══════════════════════════════════════════════════════════════
 # TEST: Return shape includes new fields
 # ═══════════════════════════════════════════════════════════════
@@ -114,6 +138,7 @@ class TestReturnShape:
     def test_return_has_base_and_final_risk_level(self):
         result = compute_risk_score(_base_medium_app())
         assert "base_risk_level" in result
+        assert "base_risk_score" in result
         assert "final_risk_level" in result
         assert "elevation_reason_text" in result
         assert result["level"] == result["final_risk_level"]
@@ -122,6 +147,64 @@ class TestReturnShape:
         """When no elevation occurs, base_risk_level == final_risk_level."""
         result = compute_risk_score(_base_medium_app())
         assert result["base_risk_level"] == result["final_risk_level"]
+        assert result["elevation_reason_text"] == ""
+
+
+# ═══════════════════════════════════════════════════════════════
+# TEST: Final risk truth floors
+# ═══════════════════════════════════════════════════════════════
+
+class TestFinalRiskTruthFloors:
+    """Regulator-facing final risk must not show LOW when EDD/pre-approval facts exist."""
+
+    def test_crypto_vasp_cannot_persist_final_low(self):
+        result = compute_risk_score(_clean_low_app(sector="Crypto VASP exchange"))
+
+        assert result["base_risk_level"] == "LOW"
+        assert result["base_risk_score"] < 40
+        assert result["final_risk_level"] != "LOW"
+        assert result["level"] == result["final_risk_level"]
+        assert result["score"] == result["base_risk_score"]
+        assert "floor_rule_high_risk_sector" in result["escalations"]
+        assert "High-risk sector floor" in result["elevation_reason_text"]
+
+    def test_declared_pep_cannot_persist_final_low(self):
+        result = compute_risk_score(_clean_low_app(
+            directors=[{
+                "full_name": "Jane PEP",
+                "nationality": "British",
+                "is_pep": "Yes",
+                "pep_type": "domestic",
+            }],
+        ))
+
+        assert result["base_risk_level"] == "LOW"
+        assert result["final_risk_level"] != "LOW"
+        assert result["score"] == result["base_risk_score"]
+        assert "floor_rule_declared_pep" in result["escalations"]
+        assert "Declared PEP floor" in result["elevation_reason_text"]
+
+    def test_edd_policy_jurisdiction_trigger_cannot_persist_final_low(self):
+        result = compute_risk_score(_clean_low_app(
+            country="Nigeria",
+            operating_countries=["Nigeria"],
+            target_markets=["Nigeria"],
+        ))
+
+        assert result["base_risk_level"] == "LOW"
+        assert result["final_risk_level"] != "LOW"
+        assert result["jurisdiction_risk_tier"] in ("elevated", "very_high")
+        assert "floor_rule_elevated_jurisdiction" in result["escalations"]
+        assert "Elevated jurisdiction floor" in result["elevation_reason_text"]
+
+    def test_clean_low_risk_remains_low(self):
+        result = compute_risk_score(_clean_low_app())
+
+        assert result["base_risk_level"] == "LOW"
+        assert result["final_risk_level"] == "LOW"
+        assert result["level"] == "LOW"
+        assert result["score"] < 40
+        assert result["escalations"] == []
         assert result["elevation_reason_text"] == ""
 
 
