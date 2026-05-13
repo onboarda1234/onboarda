@@ -223,7 +223,7 @@ def test_upload_201_response_document_row_and_audit_shape(
         "after_state",
     } <= set(audit.keys())
     assert audit["user_id"] == CLIENT_ID
-    assert audit["user_name"] == "Upload Contract Client"
+    assert audit["user_name"] == "Upload Contract Ltd"
     assert audit["user_role"] == "client"
     assert audit["action"] == "Upload"
     assert audit["target"] == APPLICATION_REF

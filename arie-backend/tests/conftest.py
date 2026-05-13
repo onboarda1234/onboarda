@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["ENVIRONMENT"] = "testing"
 os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only"
 
+_OFFICER_ROLES = {"admin", "sco", "co", "analyst"}
+
 
 _db_initialized = False
 
@@ -33,6 +35,104 @@ def _sync_test_db_path(path):
             setattr(module, "DB_PATH", path)
         if module_name == "server" and module is not None and hasattr(module, "_CFG_DB_PATH"):
             setattr(module, "_CFG_DB_PATH", path)
+
+
+def _candidate_test_db_paths():
+    paths = []
+    env_path = os.environ.get("DB_PATH")
+    if env_path:
+        paths.append(env_path)
+
+    for module_name in ("config", "db", "server"):
+        module = sys.modules.get(module_name)
+        module_path = getattr(module, "DB_PATH", None) if module is not None else None
+        if module_path:
+            paths.append(module_path)
+
+    deduped = []
+    for path in paths:
+        if path and path not in deduped:
+            deduped.append(path)
+    return deduped
+
+
+def _ensure_active_actor_in_path(path, user_id, role, name, actor_type):
+    conn = sqlite3.connect(path)
+    try:
+        if actor_type == "client":
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO clients
+                    (id, email, password_hash, company_name, status)
+                VALUES (?, ?, ?, ?, 'active')
+                """,
+                (
+                    user_id,
+                    f"{user_id}@test.local",
+                    "test-token-only",
+                    name or user_id,
+                ),
+            )
+        else:
+            db_role = role if role in _OFFICER_ROLES else "analyst"
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO users
+                    (id, email, password_hash, full_name, role, status)
+                VALUES (?, ?, ?, ?, ?, 'active')
+                """,
+                (
+                    user_id,
+                    f"{user_id}@test.local",
+                    "test-token-only",
+                    name or user_id,
+                    db_role,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _ensure_active_actor_for_token(user_id, role, name, token_type):
+    """Backfill a real active DB actor for tests that mint JWTs directly.
+
+    Production auth now revalidates every token against current DB actor state.
+    This helper keeps old tests honest by creating the actor they claim to
+    authenticate as; it intentionally does not alter existing rows, so tests can
+    still model stale roles or inactive users explicitly.
+    """
+    paths = _candidate_test_db_paths()
+    if not paths:
+        return
+
+    actor_type = "client" if token_type == "client" or role == "client" else "officer"
+    for path in paths:
+        try:
+            _ensure_active_actor_in_path(path, user_id, role, name, actor_type)
+        except sqlite3.Error:
+            # Some narrow unit tests mint tokens without an initialized app DB.
+            # The protected endpoints still enforce DB-backed identity.
+            continue
+
+
+def pytest_configure(config):
+    """Patch test token creation so direct JWTs map to active DB actors."""
+    try:
+        import auth
+    except Exception:
+        return
+
+    original_create_token = getattr(auth, "_original_create_token_for_tests", None)
+    if original_create_token is None:
+        original_create_token = auth.create_token
+        auth._original_create_token_for_tests = original_create_token
+
+    def create_token_with_actor(user_id, role, name, token_type="officer"):
+        _ensure_active_actor_for_token(user_id, role, name, token_type)
+        return original_create_token(user_id, role, name, token_type)
+
+    auth.create_token = create_token_with_actor
 
 
 @pytest.fixture
