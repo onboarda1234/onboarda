@@ -31,6 +31,9 @@ ENVIRONMENT = _CFG_ENVIRONMENT
 # Module-level rate limiter instance — shared across all handlers
 rate_limiter = RateLimiter()
 
+_ACTIVE_STATUS = "active"
+_OFFICER_ROLES = {"admin", "sco", "co", "analyst"}
+
 
 def _is_deployed_environment() -> bool:
     """Return True when cookies should require HTTPS transport."""
@@ -331,20 +334,155 @@ class BaseHandler(tornado.web.RequestHandler):
         except Exception:
             return {}
 
+    def _cache_current_user_token(self, user):
+        self._auth_user_checked = True
+        self._auth_user = user
+        return user
+
+    def _is_active_status(self, status):
+        return str(status or "").strip().lower() == _ACTIVE_STATUS
+
+    def _actor_type_from_claims(self, user):
+        token_type = str(user.get("type") or "").strip().lower()
+        role = str(user.get("role") or "").strip().lower()
+        if token_type == "client" or role == "client":
+            return "client"
+        if token_type == "officer" or role in _OFFICER_ROLES:
+            return "officer"
+        return None
+
+    def _log_inactive_token_denial(self, token_user, actor_type, reason, status=None):
+        """Audit a decoded but no-longer-authorized token access attempt."""
+        user = token_user or {}
+        actor_id = user.get("sub", "")
+        target = f"{actor_type or 'unknown'}:{actor_id or 'unknown'}"
+        payload = {
+            "event": "auth_denied_inactive_token",
+            "actor_type": actor_type or "",
+            "actor_id": actor_id,
+            "token_role": user.get("role", ""),
+            "token_type": user.get("type", ""),
+            "denial_reason": reason,
+            "current_status": status,
+            "path": self.request.path if hasattr(self, "request") else "",
+            "method": self.request.method if hasattr(self, "request") else "",
+            "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        }
+        detail = json.dumps(payload, default=str)
+
+        try:
+            audit_db = get_db()
+            try:
+                audit_db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, "
+                    "action, target, detail, ip_address) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (
+                        actor_id,
+                        user.get("name", ""),
+                        user.get("role", ""),
+                        "auth_denied_inactive_token",
+                        target,
+                        detail,
+                        self.get_client_ip() if hasattr(self, "request") else "",
+                    ),
+                )
+                audit_db.commit()
+            finally:
+                audit_db.close()
+        except Exception:
+            logger.exception("Primary audit write failed for inactive token denial")
+            try:
+                print(json.dumps({"AUDIT_FALLBACK": True, **payload}, default=str),
+                      file=sys.stderr, flush=True)
+            except Exception:
+                logger.exception("Inactive token audit fallback stderr write also failed")
+
+    def _validate_current_actor(self, token_user):
+        """Fail closed unless the decoded token subject is active in the database."""
+        if not token_user or not token_user.get("sub"):
+            return None
+
+        actor_type = self._actor_type_from_claims(token_user)
+        actor_id = token_user.get("sub")
+        if not actor_type:
+            self._log_inactive_token_denial(token_user, None, "unsupported_actor_type")
+            return None
+
+        db = None
+        try:
+            db = get_db()
+            if actor_type == "client":
+                row = db.execute(
+                    "SELECT id, email, company_name, status FROM clients WHERE id = ?",
+                    (actor_id,),
+                ).fetchone()
+            else:
+                row = db.execute(
+                    "SELECT id, email, full_name, role, status FROM users WHERE id = ?",
+                    (actor_id,),
+                ).fetchone()
+        except Exception:
+            logger.exception("Authenticated actor status lookup failed")
+            self._log_inactive_token_denial(token_user, actor_type, "status_lookup_failed")
+            return None
+        finally:
+            if db is not None:
+                db.close()
+
+        if not row:
+            self._log_inactive_token_denial(token_user, actor_type, "actor_not_found")
+            return None
+
+        status = row.get("status")
+        if not self._is_active_status(status):
+            self._log_inactive_token_denial(token_user, actor_type, "actor_inactive", status)
+            return None
+
+        current_user = dict(token_user)
+        if actor_type == "client":
+            current_user.update({
+                "sub": row.get("id"),
+                "role": "client",
+                "type": "client",
+                "name": row.get("company_name") or row.get("email") or token_user.get("name", ""),
+                "email": row.get("email", ""),
+            })
+        else:
+            role = str(row.get("role") or "").strip().lower()
+            if role not in _OFFICER_ROLES:
+                self._log_inactive_token_denial(token_user, actor_type, "invalid_current_role", status)
+                return None
+            current_user.update({
+                "sub": row.get("id"),
+                "role": role,
+                "type": "officer",
+                "name": row.get("full_name") or token_user.get("name", ""),
+                "email": row.get("email", ""),
+            })
+        return current_user
+
     def get_current_user_token(self):
         """
         Sprint 3.5: Dual auth — check Bearer header first, then httpOnly cookie.
         Bearer tokens take precedence (API clients). Cookie auth is for browser sessions.
         """
+        if getattr(self, "_auth_user_checked", False):
+            return getattr(self, "_auth_user", None)
+
         # 1. Bearer token (API clients, mobile apps)
         auth = self.request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
-            return decode_token(auth[7:])
+            return self._cache_current_user_token(
+                self._validate_current_actor(decode_token(auth[7:]))
+            )
         # 2. httpOnly cookie (browser sessions — Sprint 3.5)
         session_token = self.get_cookie("arie_session", None)
         if session_token:
-            return decode_token(session_token)
-        return None
+            return self._cache_current_user_token(
+                self._validate_current_actor(decode_token(session_token))
+            )
+        return self._cache_current_user_token(None)
 
     def require_auth(self, roles=None):
         user = self.get_current_user_token()
