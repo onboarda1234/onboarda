@@ -1635,6 +1635,111 @@ class TestAuthenticatedAccess:
         assert stored["valid_until"] == "2031-02-01"
 
 
+class TestMemoSupervisorAuditSchema:
+    def test_supervisor_run_writes_severity_and_verify_endpoint_works(self, api_server):
+        """POST /memo/supervisor/run must persist the modern hash-chain row shape."""
+        from auth import create_token
+        from db import get_db
+        from tests.conftest import make_base_memo
+
+        app_id = f"app_supervisor_schema_{uuid.uuid4().hex[:8]}"
+        app_ref = f"ARF-SUP-SCHEMA-{uuid.uuid4().hex[:6]}"
+        memo_data = make_base_memo({
+            "metadata": {
+                "risk_rating": "LOW",
+                "risk_score": 12,
+                "approval_recommendation": "REVIEW",
+                "agent5_input_contract": {
+                    "final_risk_level": "LOW",
+                    "composite_score": 12,
+                    "declared_pep_present": False,
+                    "sector": "Software",
+                    "sector_label": "Software",
+                    "sector_risk_tier": "low",
+                    "country": "Mauritius",
+                    "jurisdiction_risk_tier": "low",
+                    "ownership_transparency_status": "clear",
+                    "screening_terminality_summary": {
+                        "terminal": True,
+                        "has_terminal_match": False,
+                        "has_non_terminal": False,
+                    },
+                    "edd_trigger_flags": [],
+                },
+            }
+        })
+
+        conn = get_db()
+        conn.execute("DELETE FROM supervisor_audit_log")
+        conn.execute("""
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, risk_level, risk_score, assigned_to
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            app_ref,
+            "testclient001",
+            "Supervisor Schema Ltd",
+            "Mauritius",
+            "Software",
+            "SME",
+            "compliance_review",
+            "LOW",
+            12,
+            "admin001",
+        ))
+        conn.execute("""
+            INSERT INTO compliance_memos (application_id, memo_data, review_status)
+            VALUES (?, ?, ?)
+        """, (app_id, json.dumps(memo_data), "draft"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        headers = {"Authorization": f"Bearer {token}"}
+        run_resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/memo/supervisor/run",
+            headers=headers,
+            timeout=10,
+        )
+        assert run_resp.status_code == 200, run_resp.text
+
+        conn = get_db()
+        row = conn.execute(
+            """
+            SELECT event_type, severity, application_id, entry_hash
+            FROM supervisor_audit_log
+            WHERE application_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (app_id,),
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        assert row["event_type"] == "supervisor_verdict"
+        assert row["severity"] == "info"
+        assert row["entry_hash"]
+
+        # Production startup initializes the supervisor singleton before
+        # routes are served; this module-level HTTP fixture calls make_app()
+        # directly, so initialize the same singleton before exercising verify.
+        from supervisor.api import setup_supervisor
+        setup_supervisor(os.environ["DB_PATH"])
+
+        verify_resp = http_requests.get(
+            f"{api_server}/api/supervisor/audit/verify?limit=10",
+            headers=headers,
+            timeout=3,
+        )
+        assert verify_resp.status_code == 200, verify_resp.text
+        verify_body = verify_resp.json()
+        assert verify_body["verified"] is True
+        assert verify_body["entries_checked"] >= 1
+
+
 # ═══════════════════════════════════════════════════════════
 # 4. Security Headers — must be present on every response
 # ═══════════════════════════════════════════════════════════

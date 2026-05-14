@@ -119,16 +119,24 @@ CREATE TABLE IF NOT EXISTS supervisor_overrides (
 );
 
 CREATE TABLE IF NOT EXISTS supervisor_audit_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT DEFAULT (datetime('now')),
+    id TEXT PRIMARY KEY,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
     event_type TEXT NOT NULL,
-    application_id TEXT,
+    severity TEXT DEFAULT 'info',
     pipeline_id TEXT,
+    application_id TEXT,
+    run_id TEXT,
     agent_type TEXT,
-    actor TEXT,
+    actor_type TEXT,
+    actor_id TEXT,
+    actor_name TEXT,
+    actor_role TEXT,
     action TEXT NOT NULL,
-    details TEXT DEFAULT '{}',
-    prev_hash TEXT,
+    detail TEXT,
+    data_json TEXT DEFAULT '{}',
+    ip_address TEXT,
+    session_id TEXT,
+    previous_hash TEXT,
     entry_hash TEXT
 );
 
@@ -158,6 +166,10 @@ CREATE INDEX IF NOT EXISTS idx_supervisor_contradictions_run ON supervisor_contr
 CREATE INDEX IF NOT EXISTS idx_supervisor_escalations_app ON supervisor_escalations(application_id);
 CREATE INDEX IF NOT EXISTS idx_supervisor_reviews_pipeline ON supervisor_human_reviews(pipeline_id);
 CREATE INDEX IF NOT EXISTS idx_supervisor_audit_app ON supervisor_audit_log(application_id);
+CREATE INDEX IF NOT EXISTS idx_supervisor_audit_timestamp ON supervisor_audit_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_supervisor_audit_event_type ON supervisor_audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_supervisor_audit_pipeline ON supervisor_audit_log(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_supervisor_audit_actor ON supervisor_audit_log(actor_id);
 
 -- Seed default compliance rules
 INSERT OR IGNORE INTO supervisor_rules_config (rule_id, rule_name, rule_category, description, condition_field, condition_operator, condition_value, action, severity, overrides_ai, priority)

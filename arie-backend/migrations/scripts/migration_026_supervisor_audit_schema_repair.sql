@@ -1,0 +1,11 @@
+-- Migration 026: supervisor audit schema repair
+--
+-- The cross-dialect repair is performed by db.py:_ensure_supervisor_audit_log_schema
+-- during startup because the legacy table may need a safe rebuild:
+--   * id INTEGER -> id TEXT for UUID hash-chain entries
+--   * details/prev_hash -> detail/previous_hash
+--   * severity, actor, data_json, ip/session columns added and backfilled
+--
+-- Keep this file as the schema_version marker for long-lived databases. Fresh
+-- installs are already current from init_db and pre-mark this migration.
+SELECT 1;

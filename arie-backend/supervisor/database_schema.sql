@@ -449,6 +449,7 @@ CREATE TABLE IF NOT EXISTS supervisor_audit_log (
         'config_changed',
         'agent_version_changed',
         'prompt_version_changed',
+        'supervisor_verdict',
         'system_error'
     )),
     severity        TEXT DEFAULT 'info' CHECK(severity IN (

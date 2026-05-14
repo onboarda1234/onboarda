@@ -154,6 +154,15 @@ def append_verdict_chain_entry(
 logger = logging.getLogger("arie.supervisor.audit")
 
 
+def _timestamp_for_hash(value: Any) -> str:
+    """Normalize DB timestamp values to the string used when hashes are made."""
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return str(value or "")
+
+
 def _get_db():
     """Import get_db lazily to avoid circular imports at module load time."""
     import sys
@@ -506,7 +515,7 @@ class AuditLogger:
                 # v2 hash covers all material fields
                 entry_data = {
                     "audit_id": row["id"],
-                    "timestamp": row["timestamp"],
+                    "timestamp": _timestamp_for_hash(row["timestamp"]),
                     "event_type": row["event_type"],
                     "severity": row["severity"] or "info",
                     "pipeline_id": row["pipeline_id"] or "",
