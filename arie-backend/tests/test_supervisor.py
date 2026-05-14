@@ -401,6 +401,7 @@ class TestAuditChainEntry:
         row = rows[0]
         assert row["event_type"] == "supervisor_verdict"
         assert row["application_id"] == "app-ce-001"
+        assert row["severity"] == "info"
         assert row["entry_hash"] == entry_hash
         assert row["entry_hash"] is not None
         assert len(row["entry_hash"]) == 64  # SHA-256 hex

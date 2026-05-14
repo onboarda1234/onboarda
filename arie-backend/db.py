@@ -7,6 +7,7 @@ import os
 import json
 import sqlite3
 import logging
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any, Optional, Dict, List, Tuple
 import secrets
@@ -2237,6 +2238,11 @@ def init_db():
         db.commit()
         logger.info("startup: completed _run_migrations (inline)")
 
+        logger.info("startup: entering _ensure_supervisor_audit_log_schema")
+        _ensure_supervisor_audit_log_schema(db)
+        db.commit()
+        logger.info("startup: completed _ensure_supervisor_audit_log_schema")
+
         # Ensure built-in resources exist for the back-office reference library.
         logger.info("startup: entering _ensure_default_compliance_resources")
         _ensure_default_compliance_resources(db)
@@ -2656,6 +2662,252 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+SUPERVISOR_AUDIT_LOG_COLUMNS = (
+    "id",
+    "timestamp",
+    "event_type",
+    "severity",
+    "pipeline_id",
+    "application_id",
+    "run_id",
+    "agent_type",
+    "actor_type",
+    "actor_id",
+    "actor_name",
+    "actor_role",
+    "action",
+    "detail",
+    "data_json",
+    "ip_address",
+    "session_id",
+    "previous_hash",
+    "entry_hash",
+)
+
+
+def _table_column_info(db: DBConnection, table: str) -> Dict[str, Dict[str, str]]:
+    """Return lowercase column metadata for SQLite or PostgreSQL."""
+    if db.is_postgres:
+        rows = db.execute(
+            """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_name = ?
+            """,
+            (table,),
+        ).fetchall()
+        return {
+            str(row["column_name"]).lower(): {"type": str(row["data_type"] or "")}
+            for row in rows
+        }
+
+    rows = db.execute(f"PRAGMA table_info({table})").fetchall()
+    return {
+        str(row["name"]).lower(): {"type": str(row["type"] or "")}
+        for row in rows
+    }
+
+
+def _supervisor_audit_timestamp(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+    text = "" if value is None else str(value).strip()
+    if text:
+        return text
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _safe_json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except (TypeError, ValueError):
+            return {}
+    return {}
+
+
+def _supervisor_audit_hash_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "audit_id": row["id"],
+        "timestamp": row["timestamp"],
+        "event_type": row["event_type"],
+        "severity": row["severity"] or "info",
+        "pipeline_id": row["pipeline_id"] or "",
+        "application_id": row["application_id"] or "",
+        "run_id": row["run_id"] or "",
+        "agent_type": row["agent_type"] or "",
+        "actor_type": row["actor_type"] or "system",
+        "actor_id": row["actor_id"] or "",
+        "actor_name": row["actor_name"] or "",
+        "actor_role": row["actor_role"] or "",
+        "action": row["action"],
+        "detail": row["detail"] or "",
+        "data": _safe_json_object(row["data_json"]),
+        "previous_hash": row["previous_hash"] or "",
+        "hash_version": 2,
+    }
+
+
+def _compute_supervisor_audit_entry_hash(row: Dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(_supervisor_audit_hash_payload(row), sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _create_supervisor_audit_log_table(db: DBConnection, table_name: str = "supervisor_audit_log") -> None:
+    timestamp_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+    timestamp_default = "CURRENT_TIMESTAMP" if db.is_postgres else "(datetime('now'))"
+    db.executescript(f"""
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        id TEXT PRIMARY KEY,
+        timestamp {timestamp_type} NOT NULL DEFAULT {timestamp_default},
+        event_type TEXT NOT NULL,
+        severity TEXT DEFAULT 'info',
+        pipeline_id TEXT,
+        application_id TEXT,
+        run_id TEXT,
+        agent_type TEXT,
+        actor_type TEXT,
+        actor_id TEXT,
+        actor_name TEXT,
+        actor_role TEXT,
+        action TEXT NOT NULL,
+        detail TEXT,
+        data_json TEXT DEFAULT '{{}}',
+        ip_address TEXT,
+        session_id TEXT,
+        previous_hash TEXT,
+        entry_hash TEXT
+    );
+    """)
+
+
+def _create_supervisor_audit_log_indexes(db: DBConnection) -> None:
+    db.executescript("""
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_ts ON supervisor_audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_event ON supervisor_audit_log(event_type);
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_app ON supervisor_audit_log(application_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_pipeline ON supervisor_audit_log(pipeline_id);
+    CREATE INDEX IF NOT EXISTS idx_sup_audit_actor ON supervisor_audit_log(actor_id);
+    """)
+
+
+def _modern_supervisor_audit_row(raw: Dict[str, Any], previous_hash: Optional[str]) -> Dict[str, Any]:
+    detail = raw.get("detail")
+    if detail in (None, ""):
+        detail = raw.get("details") or ""
+
+    data = _safe_json_object(raw.get("data_json"))
+    if not data:
+        data = _safe_json_object(raw.get("details"))
+    legacy_hash = raw.get("entry_hash")
+    legacy_previous = raw.get("previous_hash") or raw.get("prev_hash")
+    if legacy_hash:
+        data.setdefault("_legacy_entry_hash", legacy_hash)
+    if legacy_previous:
+        data.setdefault("_legacy_previous_hash", legacy_previous)
+
+    actor = raw.get("actor")
+    actor_id = raw.get("actor_id") or actor or ""
+
+    row = {
+        "id": str(raw.get("id") or secrets.token_hex(8)),
+        "timestamp": _supervisor_audit_timestamp(raw.get("timestamp")),
+        "event_type": raw.get("event_type") or "system_error",
+        "severity": raw.get("severity") or "info",
+        "pipeline_id": raw.get("pipeline_id") or None,
+        "application_id": raw.get("application_id") or None,
+        "run_id": raw.get("run_id") or None,
+        "agent_type": raw.get("agent_type") or None,
+        "actor_type": raw.get("actor_type") or ("system" if not actor else "agent"),
+        "actor_id": actor_id or None,
+        "actor_name": raw.get("actor_name") or None,
+        "actor_role": raw.get("actor_role") or None,
+        "action": raw.get("action") or str(raw.get("event_type") or "Supervisor audit event"),
+        "detail": detail,
+        "data_json": json.dumps(data, default=str, sort_keys=True),
+        "ip_address": raw.get("ip_address") or None,
+        "session_id": raw.get("session_id") or None,
+        "previous_hash": previous_hash,
+        "entry_hash": None,
+    }
+    row["entry_hash"] = _compute_supervisor_audit_entry_hash(row)
+    return row
+
+
+def _insert_supervisor_audit_row(db: DBConnection, table_name: str, row: Dict[str, Any]) -> None:
+    columns = ", ".join(SUPERVISOR_AUDIT_LOG_COLUMNS)
+    placeholders = ", ".join("?" for _ in SUPERVISOR_AUDIT_LOG_COLUMNS)
+    db.execute(
+        f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})",
+        tuple(row.get(column) for column in SUPERVISOR_AUDIT_LOG_COLUMNS),
+    )
+
+
+def _supervisor_audit_log_schema_is_current(db: DBConnection) -> bool:
+    if not _safe_table_exists(db, "supervisor_audit_log"):
+        return False
+    columns = _table_column_info(db, "supervisor_audit_log")
+    if any(column not in columns for column in SUPERVISOR_AUDIT_LOG_COLUMNS):
+        return False
+    id_type = columns.get("id", {}).get("type", "").lower()
+    return "text" in id_type or "char" in id_type
+
+
+def _ensure_supervisor_audit_log_schema(db: DBConnection) -> None:
+    """Repair legacy supervisor audit tables to the current hash-chain schema.
+
+    Early migration_002 builds created ``supervisor_audit_log`` with an
+    integer id and legacy column names (``details`` / ``prev_hash``) and no
+    ``severity``. Current supervisor verdict writes are fail-closed and need
+    the modern schema, so repair the table before any request can run.
+    """
+    if _supervisor_audit_log_schema_is_current(db):
+        _create_supervisor_audit_log_indexes(db)
+        db.execute(
+            "UPDATE supervisor_audit_log SET severity = 'info' "
+            "WHERE severity IS NULL OR TRIM(severity) = ''"
+        )
+        return
+
+    legacy_rows = []
+    if _safe_table_exists(db, "supervisor_audit_log"):
+        legacy_rows = [
+            dict(row)
+            for row in db.execute(
+                "SELECT * FROM supervisor_audit_log ORDER BY timestamp ASC"
+            ).fetchall()
+        ]
+        db.execute("DROP TABLE IF EXISTS supervisor_audit_log_repair")
+        _create_supervisor_audit_log_table(db, "supervisor_audit_log_repair")
+        previous_hash = None
+        for raw in legacy_rows:
+            repaired = _modern_supervisor_audit_row(raw, previous_hash)
+            _insert_supervisor_audit_row(db, "supervisor_audit_log_repair", repaired)
+            previous_hash = repaired["entry_hash"]
+        db.execute("DROP TABLE supervisor_audit_log")
+        db.execute("ALTER TABLE supervisor_audit_log_repair RENAME TO supervisor_audit_log")
+    else:
+        _create_supervisor_audit_log_table(db)
+
+    _create_supervisor_audit_log_indexes(db)
+    db.execute(
+        "UPDATE supervisor_audit_log SET severity = 'info' "
+        "WHERE severity IS NULL OR TRIM(severity) = ''"
+    )
+    if legacy_rows:
+        logger.info(
+            "Supervisor audit schema repaired and backfilled (%d legacy rows)",
+            len(legacy_rows),
+        )
+    else:
+        logger.info("Supervisor audit schema ensured")
 
 
 def _pg_quote_identifier(identifier: str) -> str:
