@@ -2937,6 +2937,8 @@ def _memo_final_status(memo_row):
     """Return a canonical final memo status for UI and API consumers."""
     if not memo_row:
         return "not_generated"
+    if _memo_stale_bool(memo_row.get("is_stale")):
+        return "stale"
     review_status = (memo_row.get("review_status") or "draft").lower()
     validation_status = (memo_row.get("validation_status") or "pending").lower()
     if memo_row.get("blocked"):
@@ -3452,7 +3454,8 @@ class ApplicationDetailHandler(BaseHandler):
         _decorate_application_risk_integrity(result)
         latest_memo = db.execute("""
             SELECT id, version, memo_data, review_status, validation_status, blocked, block_reason,
-                   quality_score, memo_version, approved_by, approved_at, created_at
+                   quality_score, memo_version, approved_by, approved_at, created_at,
+                   is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
             FROM compliance_memos
             WHERE application_id = ?
             ORDER BY version DESC, id DESC
@@ -3460,7 +3463,8 @@ class ApplicationDetailHandler(BaseHandler):
         """, (result["id"],)).fetchone()
         if latest_memo:
             latest_memo_dict = dict(latest_memo)
-            latest_memo_final_status = _memo_final_status(latest_memo_dict)
+            stale_view = _memo_staleness_view(result, latest_memo_dict)
+            latest_memo_final_status = "stale" if stale_view["is_stale"] else _memo_final_status(latest_memo_dict)
             latest_memo_data = parse_json_field(latest_memo_dict.get("memo_data"), {})
             latest_memo_data.setdefault("metadata", {})
             latest_memo_data["review_status"] = latest_memo_dict.get("review_status")
@@ -3468,30 +3472,38 @@ class ApplicationDetailHandler(BaseHandler):
             latest_memo_data["final_status"] = latest_memo_final_status
             latest_memo_data["approved_by"] = latest_memo_dict.get("approved_by")
             latest_memo_data["approved_at"] = latest_memo_dict.get("approved_at")
+            latest_memo_data["is_stale"] = stale_view["is_stale"]
+            latest_memo_data["stale_reason"] = stale_view["reason"]
+            latest_memo_data["stale_trigger"] = stale_view["trigger"]
             latest_memo_data["memo_version"] = latest_memo_dict.get("memo_version") or latest_memo_dict.get("version")
             latest_memo_data["memo_generated"] = latest_memo_dict.get("created_at")
             latest_memo_data["application_ref"] = result.get("ref")
             latest_memo_data["metadata"]["blocked"] = bool(latest_memo_dict.get("blocked"))
             latest_memo_data["metadata"]["block_reason"] = latest_memo_dict.get("block_reason")
             latest_memo_data["metadata"]["quality_score"] = latest_memo_dict.get("quality_score")
+            latest_memo_data["metadata"]["is_stale"] = stale_view["is_stale"]
+            latest_memo_data["metadata"]["stale_reason"] = stale_view["reason"]
+            latest_memo_data["metadata"]["stale_trigger"] = stale_view["trigger"]
 
             latest_memo_dict.pop("memo_data", None)
             latest_memo_dict["final_status"] = latest_memo_final_status
+            latest_memo_dict["is_stale"] = stale_view["is_stale"]
+            latest_memo_dict["stale_reason"] = stale_view["reason"]
+            latest_memo_dict["stale_trigger"] = stale_view["trigger"]
+            latest_memo_dict["stale_reasons"] = stale_view["reasons"]
             result["latest_memo"] = latest_memo_dict
             result["latest_memo_data"] = latest_memo_data
-            # Memo staleness detection: compare memo creation vs application input update
-            # Use inputs_updated_at (substantive changes only) to avoid false
-            # staleness from operational writes (e.g. first-approval recording).
-            memo_created = latest_memo_dict.get("created_at", "")
-            app_input_updated = result.get("inputs_updated_at") or result.get("updated_at", "")
-            if memo_created and app_input_updated:
-                result["memo_is_stale"] = str(app_input_updated) > str(memo_created)
-            else:
-                result["memo_is_stale"] = False
+            result["memo_is_stale"] = stale_view["is_stale"]
+            result["memo_stale_reason"] = stale_view["reason"]
+            result["memo_stale_trigger"] = stale_view["trigger"]
+            result["memo_stale_reasons"] = stale_view["reasons"]
         else:
             result["latest_memo"] = None
             result["latest_memo_data"] = None
             result["memo_is_stale"] = False
+            result["memo_stale_reason"] = ""
+            result["memo_stale_trigger"] = ""
+            result["memo_stale_reasons"] = []
         result["memo_requires_regeneration"] = bool(result.get("memo_is_stale"))
         result["supervisor_requires_rerun"] = bool(result.get("memo_is_stale") and result.get("latest_memo"))
         if user["type"] != "client":
@@ -3627,6 +3639,19 @@ class ApplicationDetailHandler(BaseHandler):
             rr = recompute_risk(db, real_id, "application_edit", user=user,
                                 log_audit_fn=self.log_audit)
             risk_recomputed = rr.get("recomputed", False)
+        if risk_changed:
+            refreshed_after_edit = db.execute("SELECT * FROM applications WHERE id=?", (real_id,)).fetchone()
+            _mark_latest_memo_stale(
+                db,
+                real_id,
+                trigger="application_material_edit",
+                reason="Application, ownership, party, or risk input data changed after memo generation.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state=snapshot_app_state(app),
+                after_state=snapshot_app_state(refreshed_after_edit),
+            )
 
         db.commit()
         db.close()
@@ -3732,10 +3757,26 @@ class ApplicationDetailHandler(BaseHandler):
                     return self.error("Cannot approve: screening used simulated data in production.", 400)
 
                 # Require compliance memo before approval decision
-                memo = db.execute("SELECT id FROM compliance_memos WHERE application_id = ?", (real_id,)).fetchone()
+                memo = db.execute("SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1", (real_id,)).fetchone()
                 if not memo:
                     db.close()
                     return self.error("Cannot approve: compliance memo must be generated before decision.", 400)
+                stale = _ensure_memo_fresh_or_mark_stale(
+                    db,
+                    app,
+                    memo,
+                    actor=user,
+                    ip_address=self.get_client_ip(),
+                    context="application_status_approval",
+                )
+                if stale.get("is_stale"):
+                    db.commit()
+                    db.close()
+                    return self.error(
+                        "Approval gate failed: Compliance memo is stale: "
+                        + stale.get("reason", "Regenerate the memo before approving."),
+                        400,
+                    )
 
                 # Run full approval gate validation
                 app_dict = dict(app)
@@ -3942,6 +3983,23 @@ class ApplicationCorrectionHandler(BaseHandler):
                 user,
                 self.get_client_ip(),
             )
+            stale_result = {"marked": False}
+            if substantive_change:
+                stale_result = _mark_latest_memo_stale(
+                    db,
+                    app_dict["id"],
+                    trigger=f"backoffice_correction:{target_type}",
+                    reason=(
+                        "Back-office correction changed material memo inputs "
+                        f"({','.join(sorted(field_changes.keys()))})."
+                    ),
+                    actor=user,
+                    app_ref=app_dict["ref"],
+                    ip_address=self.get_client_ip(),
+                    before_state=before_state,
+                    after_state=after_state,
+                )
+                downstream_state["memo_stale"] = stale_result
 
             db.execute(
                 """
@@ -3999,7 +4057,7 @@ class ApplicationCorrectionHandler(BaseHandler):
             )
             latest_memo = db.execute(
                 """
-                SELECT id, created_at
+                SELECT id, created_at, is_stale
                 FROM compliance_memos
                 WHERE application_id = ?
                 ORDER BY created_at DESC, id DESC
@@ -4007,7 +4065,10 @@ class ApplicationCorrectionHandler(BaseHandler):
                 """,
                 (app_dict["id"],),
             ).fetchone()
-            memo_requires_regeneration = bool(latest_memo and substantive_change)
+            latest_memo_dict = dict(latest_memo) if latest_memo else {}
+            memo_requires_regeneration = bool(
+                latest_memo and (substantive_change or _memo_stale_bool(latest_memo_dict.get("is_stale")))
+            )
             self.success({
                 "status": "corrected",
                 "application_id": app_dict["id"],
@@ -5103,6 +5164,18 @@ class KYCSubmitHandler(BaseHandler):
         rr = recompute_risk(db, real_id, "kyc_submission", user=user,
                             log_audit_fn=self.log_audit)
         refreshed_app = db.execute("SELECT * FROM applications WHERE id=?", (real_id,)).fetchone()
+        if rr.get("recomputed"):
+            _mark_latest_memo_stale(
+                db,
+                real_id,
+                trigger="risk_recomputed",
+                reason="Risk recomputation changed memo-relevant risk facts after memo generation.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state=snapshot_app_state(app),
+                after_state=snapshot_app_state(refreshed_app),
+            )
         reason_code, prerequisite_error = _kyc_prerequisite_error(refreshed_app or app, action="submission")
         if prerequisite_error:
             _audit_blocked_kyc_transition(
@@ -5721,6 +5794,21 @@ class DocumentUploadHandler(BaseHandler):
                     before_state={"documents": previous_documents},
                     after_state={"document_id": doc_id, "version": replacement["version"], "is_current": True},
                 )
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="document_replaced" if previous_documents else "document_uploaded",
+                reason=(
+                    "Document replacement changed memo evidence."
+                    if previous_documents
+                    else "Document upload changed memo evidence."
+                ),
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state={"documents": previous_documents} if previous_documents else None,
+                after_state={"document_id": doc_id, "doc_type": doc_type, "version": replacement["version"]},
+            )
             db.commit()
         except Exception as db_err:
             try:
@@ -6165,6 +6253,9 @@ class DocumentVerifyHandler(BaseHandler):
             else doc.get("valid_until")
         )
 
+        # EX-05: New audit event — log document verification with before/after state
+        _doc_after = {"verification_status": status, "checks_count": len(checks),
+                      "doc_name": doc.get("doc_name"), "doc_type": doc.get("doc_type")}
         db.execute(
             "UPDATE documents SET verification_status=?, verification_results=?, "
             "verified_at=datetime('now'), expiry_date=?, valid_until=? WHERE id=?",
@@ -6176,15 +6267,30 @@ class DocumentVerifyHandler(BaseHandler):
                 doc_id,
             ),
         )
+        self.log_audit(
+            user,
+            "Document Verified",
+            app["ref"],
+            f"Document '{doc.get('doc_name', doc_id)}' verification: {status} ({len(checks)} checks)",
+            before_state=_doc_before,
+            after_state=_doc_after,
+            db=db,
+            commit=False,
+        )
+        if (_doc_before.get("verification_status") or "") != status:
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="document_verification_status_changed",
+                reason="Document verification status changed after memo generation.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state=_doc_before,
+                after_state=_doc_after,
+            )
         db.commit()
         db.close()
-
-        # EX-05: New audit event — log document verification with before/after state
-        _doc_after = {"verification_status": status, "checks_count": len(checks),
-                      "doc_name": doc.get("doc_name"), "doc_type": doc.get("doc_type")}
-        self.log_audit(user, "Document Verified", app["ref"],
-                       f"Document '{doc.get('doc_name', doc_id)}' verification: {status} ({len(checks)} checks)",
-                       before_state=_doc_before, after_state=_doc_after)
 
         # Improvement 8: Log agent execution for traceability
         try:
@@ -7893,6 +7999,21 @@ class ApplicationEnhancedRequirementDetailHandler(BaseHandler):
                 except Exception:
                     pass
                 return self.error(error, status_code)
+            app = db.execute(
+                "SELECT id, ref FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if app:
+                _mark_latest_memo_stale(
+                    db,
+                    app["id"],
+                    trigger="enhanced_requirement_status_changed",
+                    reason="Enhanced requirement status or review metadata changed after memo generation.",
+                    actor=user,
+                    app_ref=app["ref"],
+                    ip_address=self.get_client_ip(),
+                    after_state=result,
+                )
             db.commit()
             self.success(result)
         except Exception as exc:
@@ -7934,6 +8055,21 @@ class ApplicationEnhancedRequirementRequestHandler(BaseHandler):
                 except Exception:
                     pass
                 return self.error(error, status_code)
+            app = db.execute(
+                "SELECT id, ref FROM applications WHERE id = ? OR ref = ?",
+                (app_id, app_id),
+            ).fetchone()
+            if app:
+                _mark_latest_memo_stale(
+                    db,
+                    app["id"],
+                    trigger="enhanced_requirement_requested",
+                    reason="Enhanced requirement request state changed after memo generation.",
+                    actor=user,
+                    app_ref=app["ref"],
+                    ip_address=self.get_client_ip(),
+                    after_state=result,
+                )
             db.commit()
             self.success(result)
         except Exception as exc:
@@ -7980,6 +8116,17 @@ class ApplicationEnhancedRequirementsGenerateHandler(BaseHandler):
                 actor=user,
                 generation_source=generation_source,
             )
+            if int(result.get("generated_count") or 0) > 0:
+                _mark_latest_memo_stale(
+                    db,
+                    app["id"],
+                    trigger="enhanced_requirements_generated",
+                    reason="Enhanced requirement generation changed memo requirements.",
+                    actor=user,
+                    app_ref=app["ref"],
+                    ip_address=self.get_client_ip(),
+                    after_state=result,
+                )
             db.commit()
             self.success(result)
         except Exception as exc:
@@ -11238,6 +11385,17 @@ class ScreeningReviewHandler(BaseHandler):
             """,
             (app["id"], subject_type, subject_name),
         ).fetchone())
+        _mark_latest_memo_stale(
+            db,
+            app["id"],
+            trigger="screening_disposition_changed",
+            reason="Screening review disposition changed after memo generation.",
+            actor=user,
+            app_ref=app["ref"],
+            ip_address=self.get_client_ip(),
+            before_state=dict(existing_review) if existing_review else None,
+            after_state=review,
+        )
         db.commit()
         db.close()
         review.update(_screening_review_payload_fields(review))
@@ -11318,6 +11476,17 @@ class ScreeningHandler(BaseHandler):
 
         db.execute("UPDATE applications SET prescreening_data=?, updated_at=datetime('now'), inputs_updated_at=datetime('now') WHERE id=?",
                    (json.dumps(prescreening, default=str), real_id))
+        _mark_latest_memo_stale(
+            db,
+            real_id,
+            trigger="screening_result_changed",
+            reason="Screening result changed after memo generation.",
+            actor=user,
+            app_ref=app["ref"],
+            ip_address=self.get_client_ip(),
+            before_state={"prescreening_data": safe_json_loads(app.get("prescreening_data"))},
+            after_state={"screening_report": report, "screening_freshness": screening_freshness},
+        )
 
         # SCR-010: Dual-write normalized screening report (non-authoritative)
         try:
@@ -12323,11 +12492,368 @@ def _memo_generation_fingerprint(app, directors, ubos, documents, enhanced_revie
     return "memo-input-v1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _memo_stale_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value or "").strip().lower() in ("1", "true", "yes", "y", "stale")
+
+
+def _memo_now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_memo_timestamp(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    text = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        parsed = None
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                continue
+        if parsed is None:
+            return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _memo_timestamp_stale(app_row, memo_row):
+    if not app_row or not memo_row:
+        return False
+    app_updated = (app_row.get("inputs_updated_at") if hasattr(app_row, "get") else app_row["inputs_updated_at"]) or (
+        app_row.get("updated_at") if hasattr(app_row, "get") else app_row["updated_at"]
+    )
+    memo_created = memo_row.get("created_at") if hasattr(memo_row, "get") else memo_row["created_at"]
+    app_ts = _parse_memo_timestamp(app_updated)
+    memo_ts = _parse_memo_timestamp(memo_created)
+    return bool(app_ts and memo_ts and app_ts > memo_ts)
+
+
+def _memo_stale_entries(value):
+    entries = safe_json_loads(value or "[]")
+    return entries if isinstance(entries, list) else []
+
+
+def _memo_staleness_view(app_row, memo_row):
+    if not memo_row:
+        return {
+            "is_stale": False,
+            "reason": "",
+            "trigger": "",
+            "marked_at": None,
+            "reasons": [],
+        }
+    row = dict(memo_row)
+    reasons = _memo_stale_entries(row.get("stale_reasons"))
+    if _memo_stale_bool(row.get("is_stale")):
+        return {
+            "is_stale": True,
+            "reason": row.get("stale_reason") or "Material facts changed after the memo was generated.",
+            "trigger": row.get("stale_trigger") or "memo_marked_stale",
+            "marked_at": row.get("stale_marked_at"),
+            "reasons": reasons,
+        }
+    if _memo_timestamp_stale(app_row, row):
+        reason = "Application input data changed after the latest memo was generated."
+        return {
+            "is_stale": True,
+            "reason": reason,
+            "trigger": "application_inputs_changed_after_memo",
+            "marked_at": None,
+            "reasons": reasons or [{"trigger": "application_inputs_changed_after_memo", "reason": reason}],
+        }
+    return {
+        "is_stale": False,
+        "reason": "",
+        "trigger": "",
+        "marked_at": None,
+        "reasons": reasons,
+    }
+
+
+def _memo_fingerprint_source(db, app_row):
+    app = dict(app_row or {})
+    app_id = app.get("id")
+    directors = [
+        decrypt_pii_fields(dict(d), PII_FIELDS_DIRECTORS)
+        for d in db.execute("SELECT * FROM directors WHERE application_id=?", (app_id,)).fetchall()
+    ]
+    ubos = [
+        decrypt_pii_fields(dict(u), PII_FIELDS_UBOS)
+        for u in db.execute("SELECT * FROM ubos WHERE application_id=?", (app_id,)).fetchall()
+    ]
+    documents = [
+        dict(d)
+        for d in db.execute(
+            f"SELECT * FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
+            (app_id,),
+        ).fetchall()
+    ]
+    screening_reviews = [
+        dict(r)
+        for r in db.execute(
+            "SELECT * FROM screening_reviews WHERE application_id=? ORDER BY updated_at DESC",
+            (app_id,),
+        ).fetchall()
+    ]
+    ps = parse_json_field(app.get("prescreening_data"), {})
+    ps = merge_prescreening_sources(ps, load_saved_session_prescreening(db, app))
+    app["prescreening_data"] = ps
+    app["screening_reviews"] = screening_reviews
+    app["source_of_funds"] = ps.get("source_of_funds", "")
+    if not app["source_of_funds"]:
+        sof_parts = []
+        if ps.get("source_of_funds_initial_type"):
+            sof_parts.append("Initial: " + ps["source_of_funds_initial_type"])
+        if ps.get("source_of_funds_initial_detail"):
+            sof_parts.append(ps["source_of_funds_initial_detail"])
+        if ps.get("source_of_funds_ongoing_type"):
+            sof_parts.append("Ongoing: " + ps["source_of_funds_ongoing_type"])
+        if ps.get("source_of_funds_ongoing_detail"):
+            sof_parts.append(ps["source_of_funds_ongoing_detail"])
+        app["source_of_funds"] = "; ".join(sof_parts)
+    app["expected_volume"] = ps.get("expected_volume") or ps.get("monthly_volume", "")
+    app["operating_countries"] = (
+        ps.get("operating_countries")
+        or ps.get("countries_of_operation")
+        or ps.get("target_markets")
+        or ""
+    )
+    app["incorporation_date"] = ps.get("incorporation_date") or ""
+    app["business_activity"] = ps.get("business_activity") or ps.get("business_description") or ""
+    try:
+        app["enhanced_review_summary"] = build_enhanced_review_memo_summary(db, app_id)
+    except Exception as exc:
+        logger.error("Failed to build enhanced review memo summary for staleness check %s: %s", app_id, exc, exc_info=True)
+        app["enhanced_review_summary"] = {}
+    return app, directors, ubos, documents, app.get("enhanced_review_summary")
+
+
+def _current_memo_input_hash(db, app_row):
+    app, directors, ubos, documents, enhanced_summary = _memo_fingerprint_source(db, app_row)
+    return _memo_generation_fingerprint(app, directors, ubos, documents, enhanced_summary)
+
+
+def _memo_status_snapshot(memo_row):
+    row = dict(memo_row or {})
+    return {
+        "memo_id": row.get("id"),
+        "review_status": row.get("review_status"),
+        "validation_status": row.get("validation_status"),
+        "supervisor_status": row.get("supervisor_status"),
+        "approved_by": row.get("approved_by"),
+        "approved_at": row.get("approved_at"),
+        "is_stale": _memo_stale_bool(row.get("is_stale")),
+        "stale_reason": row.get("stale_reason"),
+        "stale_trigger": row.get("stale_trigger"),
+    }
+
+
+def _mark_latest_memo_stale(
+    db,
+    application_id,
+    *,
+    trigger,
+    reason,
+    actor=None,
+    app_ref=None,
+    ip_address="",
+    before_state=None,
+    after_state=None,
+):
+    latest = db.execute(
+        "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY version DESC, id DESC LIMIT 1",
+        (application_id,),
+    ).fetchone()
+    if not latest:
+        return {"marked": False, "reason": reason, "trigger": trigger}
+    row = dict(latest)
+    marked_at = _memo_now_iso()
+    reason_text = str(reason or "Material facts changed after the memo was generated.").strip()
+    trigger_key = str(trigger or "material_fact_changed").strip()
+    reasons = _memo_stale_entries(row.get("stale_reasons"))
+    reason_entry = {
+        "trigger": trigger_key,
+        "reason": reason_text,
+        "marked_at": marked_at,
+    }
+    if before_state is not None:
+        reason_entry["before_state"] = before_state
+    if after_state is not None:
+        reason_entry["after_state"] = after_state
+    if not any(
+        item.get("trigger") == trigger_key and item.get("reason") == reason_text
+        for item in reasons
+        if isinstance(item, dict)
+    ):
+        reasons.append(reason_entry)
+
+    before_memo = _memo_status_snapshot(row)
+    after_memo = {
+        **before_memo,
+        "review_status": "draft",
+        "validation_status": "pending",
+        "supervisor_status": "pending",
+        "approved_by": None,
+        "approved_at": None,
+        "is_stale": True,
+        "stale_reason": reason_text,
+        "stale_trigger": trigger_key,
+    }
+    db.execute(
+        """
+        UPDATE compliance_memos
+        SET is_stale = ?,
+            stale_reason = ?,
+            stale_reasons = ?,
+            stale_trigger = ?,
+            stale_marked_at = ?,
+            review_status = 'draft',
+            reviewed_by = NULL,
+            review_notes = NULL,
+            validation_status = 'pending',
+            validation_issues = '[]',
+            validation_run_at = NULL,
+            supervisor_status = 'pending',
+            supervisor_summary = NULL,
+            supervisor_contradictions = '[]',
+            approved_by = NULL,
+            approved_at = NULL,
+            approval_reason = NULL
+        WHERE id = ?
+        """,
+        (
+            True if getattr(db, "is_postgres", False) else 1,
+            reason_text,
+            json.dumps(reasons, default=str, sort_keys=True),
+            trigger_key,
+            marked_at,
+            row["id"],
+        ),
+    )
+    try:
+        audit_actor = actor or {}
+        detail = json.dumps({
+            "event": "compliance_memo.marked_stale",
+            "application_id": application_id,
+            "application_ref": app_ref,
+            "memo_id": row.get("id"),
+            "trigger": trigger_key,
+            "reason": reason_text,
+            "marked_at": marked_at,
+            "requires": [
+                "regenerate_memo",
+                "rerun_validation",
+                "rerun_supervisor",
+                "officer_reapproval",
+            ],
+        }, default=str, sort_keys=True)
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                audit_actor.get("sub", ""),
+                audit_actor.get("name", ""),
+                audit_actor.get("role", ""),
+                "Memo Marked Stale",
+                app_ref or application_id,
+                detail,
+                ip_address or "",
+                _safe_json(before_state if before_state is not None else before_memo),
+                _safe_json(after_state if after_state is not None else after_memo),
+            ),
+        )
+    except Exception as audit_exc:
+        logger.error(
+            "memo_staleness_audit_failed=true app_id=%s memo_id=%s trigger=%s error=%s",
+            application_id,
+            row.get("id"),
+            trigger_key,
+            audit_exc,
+            exc_info=True,
+        )
+    return {
+        "marked": True,
+        "memo_id": row.get("id"),
+        "reason": reason_text,
+        "trigger": trigger_key,
+        "marked_at": marked_at,
+    }
+
+
+def _ensure_memo_fresh_or_mark_stale(db, app_row, memo_row, *, actor=None, ip_address="", context="memo_control"):
+    if not app_row or not memo_row:
+        return {"is_stale": False, "reason": "", "trigger": ""}
+    app = dict(app_row)
+    memo = dict(memo_row)
+    view = _memo_staleness_view(app, memo)
+    if view["is_stale"]:
+        if _memo_stale_bool(memo.get("is_stale")):
+            return view
+        _mark_latest_memo_stale(
+            db,
+            app["id"],
+            trigger=view.get("trigger") or context,
+            reason=view.get("reason") or "Material facts changed after the memo was generated.",
+            actor=actor,
+            app_ref=app.get("ref"),
+            ip_address=ip_address,
+        )
+        return view
+
+    stored_hash = memo.get("raw_output_hash")
+    if stored_hash:
+        try:
+            current_hash = _current_memo_input_hash(db, app)
+        except Exception as exc:
+            logger.error("Failed to compute current memo input hash for %s: %s", app.get("id"), exc, exc_info=True)
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="memo_freshness_unverified",
+                reason="Could not verify memo freshness. Regenerate the memo before approval.",
+                actor=actor,
+                app_ref=app.get("ref"),
+                ip_address=ip_address,
+            )
+            return {
+                "is_stale": True,
+                "reason": "Could not verify memo freshness. Regenerate the memo before approval.",
+                "trigger": "memo_freshness_unverified",
+            }
+        if current_hash != stored_hash:
+            reason = "Material facts changed after the memo was generated."
+            result = _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="memo_input_hash_changed",
+                reason=reason,
+                actor=actor,
+                app_ref=app.get("ref"),
+                ip_address=ip_address,
+                before_state={"raw_output_hash": stored_hash},
+                after_state={"raw_output_hash": current_hash},
+            )
+            return {"is_stale": True, **result}
+
+    return {"is_stale": False, "reason": "", "trigger": ""}
+
+
 def _latest_compliance_memo_row(db, application_id):
     return db.execute(
         """
         SELECT id, version, memo_data, review_status, validation_status, blocked,
-               block_reason, quality_score, memo_version, raw_output_hash, created_at
+               block_reason, quality_score, memo_version, raw_output_hash, created_at,
+               is_stale, stale_reason, stale_reasons, stale_trigger, stale_marked_at
         FROM compliance_memos
         WHERE application_id = ?
         ORDER BY version DESC, id DESC
@@ -12341,6 +12867,8 @@ def _memo_payload_if_fingerprint_unchanged(latest_row, fingerprint):
     if not latest_row or not fingerprint:
         return None
     row = dict(latest_row)
+    if _memo_stale_bool(row.get("is_stale")):
+        return None
     if row.get("raw_output_hash") != fingerprint:
         return None
     try:
@@ -12363,6 +12891,8 @@ def _memo_payload_if_fingerprint_unchanged(latest_row, fingerprint):
     memo["metadata"]["quality_score"] = row.get("quality_score")
     memo["metadata"]["blocked"] = bool(row.get("blocked"))
     memo["metadata"]["block_reason"] = row.get("block_reason")
+    memo["metadata"]["is_stale"] = _memo_stale_bool(row.get("is_stale"))
+    memo["metadata"]["stale_reason"] = row.get("stale_reason")
     return memo
 
 
@@ -12768,6 +13298,26 @@ class MemoValidateHandler(BaseHandler):
         if not memo_row:
             db.close()
             return self.error("No compliance memo found for this application. Generate a memo first.", 404)
+        app_row = db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ?",
+            (app_id, app_id),
+        ).fetchone()
+        stale = _ensure_memo_fresh_or_mark_stale(
+            db,
+            app_row,
+            memo_row,
+            actor=user,
+            ip_address=self.get_client_ip(),
+            context="memo_validation",
+        )
+        if stale.get("is_stale"):
+            db.commit()
+            db.close()
+            return self.error(
+                "Compliance memo is stale: "
+                + stale.get("reason", "regenerate the memo before validation."),
+                409,
+            )
 
         try:
             memo_data = safe_json_loads(memo_row["memo_data"])
@@ -13496,6 +14046,28 @@ class MemoApproveHandler(BaseHandler):
         if risk_error:
             return reject_memo_approval(risk_error, 400)
 
+        stale = _ensure_memo_fresh_or_mark_stale(
+            db,
+            app_row,
+            memo_row,
+            actor=user,
+            ip_address=self.get_client_ip(),
+            context="memo_approval",
+        )
+        if stale.get("is_stale"):
+            reason = (
+                "Cannot approve stale memo. "
+                + stale.get("reason", "Regenerate the memo, rerun validation and supervisor, then re-approve.")
+            )
+            self.log_governance_attempt(
+                user, "memo.approve", attempt_target, "rejected", 409,
+                reason, attempt_summary, db=db, commit=False)
+            db.commit()
+            db.close()
+            return self.error(reason, 409)
+
+        # The supervisor_verdict gate below remains mandatory; stale memo
+        # enforcement runs first because stale facts invalidate that verdict.
         # ── EX-11: Backend enforcement of officer sign-off for memo approval ──
         signoff_error = _validate_officer_signoff(body.get("officer_signoff"), "memo")
         if signoff_error:
@@ -13706,7 +14278,11 @@ class MemoValidationResultsHandler(BaseHandler):
 
         db = get_db()
         memo_row = db.execute(
-            "SELECT quality_score, validation_status, validation_issues, validation_run_at, review_status, approved_by, approved_at, memo_version FROM compliance_memos WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) ORDER BY created_at DESC LIMIT 1",
+            "SELECT quality_score, validation_status, validation_issues, validation_run_at, "
+            "review_status, approved_by, approved_at, memo_version, is_stale, stale_reason, "
+            "stale_reasons, stale_trigger, stale_marked_at FROM compliance_memos "
+            "WHERE application_id = ? OR application_id = (SELECT id FROM applications WHERE ref = ?) "
+            "ORDER BY created_at DESC LIMIT 1",
             (app_id, app_id)
         ).fetchone()
         db.close()
@@ -13718,6 +14294,7 @@ class MemoValidationResultsHandler(BaseHandler):
             issues = safe_json_loads(memo_row["validation_issues"])
         except (json.JSONDecodeError, TypeError):
             issues = []
+        memo_dict = dict(memo_row)
 
         self.success({
             "quality_score": memo_row["quality_score"],
@@ -13727,7 +14304,12 @@ class MemoValidationResultsHandler(BaseHandler):
             "review_status": memo_row["review_status"],
             "approved_by": memo_row["approved_by"],
             "approved_at": memo_row["approved_at"],
-            "memo_version": memo_row["memo_version"]
+            "memo_version": memo_row["memo_version"],
+            "is_stale": _memo_stale_bool(memo_dict.get("is_stale")),
+            "stale_reason": memo_dict.get("stale_reason") or "",
+            "stale_trigger": memo_dict.get("stale_trigger") or "",
+            "stale_reasons": _memo_stale_entries(memo_dict.get("stale_reasons")),
+            "stale_marked_at": memo_dict.get("stale_marked_at"),
         })
 
 
@@ -13878,6 +14460,26 @@ class MemoSupervisorHandler(BaseHandler):
         if not memo_row:
             db.close()
             return self.error("No compliance memo found for this application.", 404)
+        app_row = db.execute(
+            "SELECT * FROM applications WHERE id = ? OR ref = ?",
+            (app_id, app_id),
+        ).fetchone()
+        stale = _ensure_memo_fresh_or_mark_stale(
+            db,
+            app_row,
+            memo_row,
+            actor=user,
+            ip_address=self.get_client_ip(),
+            context="memo_supervisor",
+        )
+        if stale.get("is_stale"):
+            db.commit()
+            db.close()
+            return self.error(
+                "Compliance memo is stale: "
+                + stale.get("reason", "regenerate the memo before running supervisor."),
+                409,
+            )
 
         try:
             memo_data = safe_json_loads(memo_row["memo_data"])
@@ -14169,7 +14771,7 @@ class ApplicationDecisionHandler(BaseHandler):
 
             # ── C-05 FIX: Enforce compliance memo existence via DB lookup on ALL approval paths ──
             memo_exists = db.execute(
-                "SELECT id FROM compliance_memos WHERE application_id = ?", (real_id,)
+                "SELECT * FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1", (real_id,)
             ).fetchone()
             if not memo_exists:
                 reason = (
@@ -14179,6 +14781,25 @@ class ApplicationDecisionHandler(BaseHandler):
                 self.log_governance_attempt(
                     user, "application.decision", attempt_target, "rejected", 400,
                     reason, attempt_summary, db=db)
+                db.close()
+                return self.error(reason, 400)
+            stale = _ensure_memo_fresh_or_mark_stale(
+                db,
+                app,
+                memo_exists,
+                actor=user,
+                ip_address=self.get_client_ip(),
+                context="application_decision_approval",
+            )
+            if stale.get("is_stale"):
+                reason = (
+                    "Approval blocked: Compliance memo is stale: "
+                    + stale.get("reason", "Regenerate the memo before approval.")
+                )
+                self.log_governance_attempt(
+                    user, "application.decision", attempt_target, "rejected", 400,
+                    reason, attempt_summary, db=db, commit=False)
+                db.commit()
                 db.close()
                 return self.error(reason, 400)
 
@@ -16355,6 +16976,18 @@ class EDDDetailHandler(BaseHandler):
             self.log_governance_attempt(
                 user, "edd.case_update", attempt_target, "accepted", 200,
                 "", attempt_summary, db=db, commit=False)
+            updated_case = db.execute("SELECT * FROM edd_cases WHERE id = ?", (case_id,)).fetchone()
+            _mark_latest_memo_stale(
+                db,
+                case_dict.get("application_id"),
+                trigger="edd_status_or_requirements_changed",
+                reason="EDD case status, notes, SLA, priority, reviewer, or decision changed after memo generation.",
+                actor=user,
+                app_ref=app_ref,
+                ip_address=self.get_client_ip(),
+                before_state=case_dict,
+                after_state=dict(updated_case) if updated_case else None,
+            )
 
             db.commit()
             db.close()
@@ -16431,6 +17064,17 @@ class EDDFindingsHandler(BaseHandler):
                 findings=findings,
                 user=user,
                 audit_writer=_audit_writer,
+            )
+            _mark_latest_memo_stale(
+                db,
+                case_dict.get("application_id"),
+                trigger="edd_findings_changed",
+                reason="EDD findings changed after memo generation.",
+                actor=user,
+                app_ref=app_ref,
+                ip_address=self.get_client_ip(),
+                before_state=None,
+                after_state=updated,
             )
             db.commit()
         except EDDCaseNotFound:
@@ -17519,6 +18163,17 @@ class PortalApplicationEnhancedRequirementUploadHandler(BaseHandler):
                     before_state={"documents": previous_documents},
                     after_state={"document_id": document_id, "version": replacement["version"], "is_current": True},
                 )
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="enhanced_requirement_document_submitted",
+                reason="Enhanced requirement document submission changed memo evidence.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state={"documents": previous_documents} if previous_documents else safe_req,
+                after_state={"requirement": safe_after, "document_id": document_id},
+            )
             db.commit()
             self.success({
                 "status": "submitted",
@@ -17606,6 +18261,17 @@ class PortalApplicationEnhancedRequirementResponseHandler(BaseHandler):
                     if str(item.get("id")) == str(requirement_id)
                 ),
                 None,
+            )
+            _mark_latest_memo_stale(
+                db,
+                app["id"],
+                trigger="enhanced_requirement_response_submitted",
+                reason="Enhanced requirement text response changed memo evidence.",
+                actor=user,
+                app_ref=app["ref"],
+                ip_address=self.get_client_ip(),
+                before_state=safe_req,
+                after_state=safe_after,
             )
             db.commit()
             self.success({

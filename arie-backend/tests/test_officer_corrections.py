@@ -342,10 +342,32 @@ def test_pep_correction_preserves_declared_pep_and_marks_workflow_stale(officer_
     assert _boolish(ubo["is_pep"]) is True
     assert detail["memo_requires_regeneration"] is True
     assert detail["supervisor_requires_rerun"] is True
+    assert detail["memo_is_stale"] is True
+    assert "Back-office correction" in detail["memo_stale_reason"]
 
     corrections = _corrections(base_url, case["app_id"])
     assert corrections[0]["before_state"]["declared_pep"] is False
     assert corrections[0]["after_state"]["verified_pep"] is True
+
+    conn = _db_conn(db_path)
+    memo = conn.execute(
+        "SELECT is_stale, stale_reason, stale_trigger, review_status, validation_status, supervisor_status, approved_by "
+        "FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+        (case["app_id"],),
+    ).fetchone()
+    audit = conn.execute(
+        "SELECT action, detail FROM audit_log WHERE target = ? AND action = 'Memo Marked Stale' ORDER BY id DESC LIMIT 1",
+        (case["ref"],),
+    ).fetchone()
+    conn.close()
+    assert memo["is_stale"] in (1, True)
+    assert memo["stale_trigger"] == "backoffice_correction:pep_status"
+    assert memo["review_status"] == "draft"
+    assert memo["validation_status"] == "pending"
+    assert memo["supervisor_status"] == "pending"
+    assert memo["approved_by"] is None
+    assert audit is not None
+    assert "officer_reapproval" in audit["detail"]
 
 
 def test_pep_correction_requested_tier3_still_forces_tier1(officer_correction_api_server):

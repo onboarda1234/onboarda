@@ -983,6 +983,11 @@ def _get_postgres_schema() -> str:
         rule_engine_status TEXT DEFAULT 'pending',
         blocked BOOLEAN DEFAULT FALSE,
         block_reason TEXT,
+        is_stale BOOLEAN DEFAULT FALSE,
+        stale_reason TEXT,
+        stale_reasons TEXT DEFAULT '[]',
+        stale_trigger TEXT,
+        stale_marked_at TIMESTAMP,
         pdf_generated_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -1893,6 +1898,11 @@ def _get_sqlite_schema() -> str:
         rule_engine_status TEXT DEFAULT 'pending',
         blocked INTEGER DEFAULT 0,
         block_reason TEXT,
+        is_stale INTEGER DEFAULT 0,
+        stale_reason TEXT,
+        stale_reasons TEXT DEFAULT '[]',
+        stale_trigger TEXT,
+        stale_marked_at TEXT,
         pdf_generated_at TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     );
@@ -5141,6 +5151,11 @@ def _run_migrations(db: DBConnection):
             ("rule_engine_status", "TEXT DEFAULT 'pending'"),
             ("blocked", "BOOLEAN DEFAULT FALSE" if db.is_postgres else "INTEGER DEFAULT 0"),
             ("block_reason", "TEXT"),
+            ("is_stale", "BOOLEAN DEFAULT FALSE" if db.is_postgres else "INTEGER DEFAULT 0"),
+            ("stale_reason", "TEXT"),
+            ("stale_reasons", "TEXT DEFAULT '[]'"),
+            ("stale_trigger", "TEXT"),
+            ("stale_marked_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
             ("pdf_generated_at", "TIMESTAMP" if db.is_postgres else "TEXT"),
         ]
         for column, definition in memo_columns:
