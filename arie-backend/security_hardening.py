@@ -33,6 +33,16 @@ from typing import Tuple, Dict, List, Optional, Any
 from pathlib import Path
 
 from environment import ENV, is_production, get_screening_validity_days
+from screening_state import (
+    LIVE_PROVIDER,
+    SANDBOX_PROVIDER,
+    SIMULATED_FALLBACK,
+    NOT_CONFIGURED as SCREENING_NOT_CONFIGURED,
+    PENDING as SCREENING_PENDING,
+    FAILED as SCREENING_FAILED,
+    build_screening_truth_summary,
+    derive_screening_truth,
+)
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -195,6 +205,31 @@ class ApprovalGateValidator:
                     False,
                     f"Screening must be in 'live' mode, not '{screening_mode}'. "
                     "Simulated screening is not permitted for approval in production."
+                )
+
+            screening_truth = build_screening_truth_summary(screening_report, prescreening_data)
+            if screening_truth.get("approval_blocking"):
+                reason = "; ".join(screening_truth.get("blocking_reasons") or ["screening_not_terminal"])
+                logger.warning(
+                    "Approval blocked by screening truth gate for application %s: "
+                    "state=%s mode=%s availability=%s result=%s terminal=%s reasons=%s",
+                    app_id,
+                    screening_truth.get("canonical_state"),
+                    screening_truth.get("provider_mode"),
+                    screening_truth.get("provider_availability"),
+                    screening_truth.get("screening_result"),
+                    screening_truth.get("terminal"),
+                    reason,
+                )
+                return (
+                    False,
+                    "Screening truth gate failed: "
+                    f"state={screening_truth.get('canonical_state')}, "
+                    f"provider_mode={screening_truth.get('provider_mode')}, "
+                    f"availability={screening_truth.get('provider_availability')}, "
+                    f"result={screening_truth.get('screening_result')}, "
+                    f"terminal={screening_truth.get('terminal')}. "
+                    f"Reason: {reason}. Live terminal screening is required before approval."
                 )
 
             # 3. Check compliance memo exists and meets quality gates
@@ -780,26 +815,59 @@ def determine_screening_mode(screening_report: Dict) -> str:
         provider_evidence = _collect_screening_provider_evidence(screening_report)
         if provider_evidence:
             saw_live = False
+            saw_required = False
+            required_modes = []
+            required_items = []
             for item in provider_evidence:
                 # Skip enrichment sources for mode determination
                 if not item.get("is_required", True):
                     continue
+                saw_required = True
+                truth = derive_screening_truth(item, name=item.get("name"), required=True)
+                provider_mode = truth.get("provider_mode")
+                required_modes.append(provider_mode)
+                required_items.append(item)
                 api_status = (item.get("api_status") or "").lower()
                 source_name = (item.get("source") or "").lower()
-                # not_configured company_watchlist is acceptable — skip it
-                if api_status == "not_configured":
-                    continue
-                if api_status in ("simulated", "mocked") or any(tag in source_name for tag in ("simulated", "mock", "demo")):
-                    logger.warning(f"Screening contains simulated source: {item}")
-                    return 'simulated'
-                if api_status in ("error", "blocked", "pending"):
-                    logger.warning(f"Screening contains non-live provider state: {item}")
-                    return 'unknown'
-                if api_status == "live" or source_name in ("sumsub", "complyadvantage", "opencorporates", "ipapi", "local"):
+                if provider_mode == LIVE_PROVIDER or api_status == "live" or source_name in ("sumsub", "complyadvantage", "opencorporates", "ipapi", "local"):
                     saw_live = True
-            return 'live' if saw_live else 'unknown'
+            if saw_required:
+                if SIMULATED_FALLBACK in required_modes:
+                    logger.warning(f"Screening contains simulated source: {required_items}")
+                    return 'simulated'
+                if SANDBOX_PROVIDER in required_modes:
+                    logger.warning(f"Screening contains sandbox provider state: {required_items}")
+                    return 'sandbox'
+                if any(mode in (SCREENING_FAILED, SCREENING_PENDING) for mode in required_modes):
+                    logger.warning(f"Screening contains non-live provider state: {required_items}")
+                    return 'unknown'
+                if SCREENING_NOT_CONFIGURED in required_modes:
+                    logger.warning(f"Screening contains not-configured provider state: {required_items}")
+                    return 'not_configured'
+                return 'live' if saw_live else 'unknown'
 
         # Legacy fallback for older report shapes
+        legacy_required = [
+            screening_report.get("sanctions"),
+            screening_report.get("kyc"),
+        ]
+        legacy_required = [item for item in legacy_required if isinstance(item, dict)]
+        if legacy_required:
+            legacy_modes = [
+                derive_screening_truth(item, name="legacy_screening", required=True).get("provider_mode")
+                for item in legacy_required
+            ]
+            if SIMULATED_FALLBACK in legacy_modes:
+                return "simulated"
+            if SANDBOX_PROVIDER in legacy_modes:
+                return "sandbox"
+            if SCREENING_NOT_CONFIGURED in legacy_modes:
+                return "not_configured"
+            if any(mode in (SCREENING_FAILED, SCREENING_PENDING) for mode in legacy_modes):
+                return "unknown"
+            if legacy_modes and all(mode == LIVE_PROVIDER for mode in legacy_modes):
+                return "live"
+
         sources = screening_report.get('sources', [])
         rules_results = screening_report.get('rules_results', [])
 
@@ -838,7 +906,7 @@ def store_screening_mode(db, app_id: str, mode: str) -> bool:
         True if successful, False otherwise
     """
     try:
-        if mode not in ['live', 'simulated', 'unknown']:
+        if mode not in ['live', 'simulated', 'sandbox', 'not_configured', 'failed', 'pending', 'unknown']:
             logger.error(f"Invalid screening mode: {mode}")
             return False
 

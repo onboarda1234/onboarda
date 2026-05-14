@@ -288,7 +288,7 @@ def test_gate5_blocks_pending_person_aml_409(db, temp_db):
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report(
-        company_sanctions_status="not_configured",
+        company_sanctions_status="live",
         director_status="pending",
     )
     app = _insert_app_for_gate5(db, report)
@@ -305,7 +305,7 @@ def test_gate5_blocks_error_person_aml_409(db, temp_db):
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report(
-        company_sanctions_status="not_configured",
+        company_sanctions_status="live",
         director_status="error",
     )
     app = _insert_app_for_gate5(db, report)
@@ -321,7 +321,7 @@ def test_gate5_allows_live_green_person_aml_409(db, temp_db):
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report(
-        company_sanctions_status="not_configured",
+        company_sanctions_status="live",
         director_status="live",
     )
     app = _insert_app_for_gate5(db, report)
@@ -329,11 +329,11 @@ def test_gate5_allows_live_green_person_aml_409(db, temp_db):
     assert can_approve is True, f"Expected approval, got: {message}"
 
 
-# ── 9. Company KYB not_configured remains allowed ──
+# ── 9. Company KYB not_configured blocks approval ──
 
 
-def test_company_kyb_not_configured_remains_allowed_409(db, temp_db):
-    """company_watchlist with not_configured must still be allowed through Gate 5."""
+def test_company_kyb_not_configured_blocks_approval_409(db, temp_db):
+    """company_watchlist with not_configured is explicit and fail-closed."""
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report(
@@ -342,7 +342,9 @@ def test_company_kyb_not_configured_remains_allowed_409(db, temp_db):
     )
     app = _insert_app_for_gate5(db, report)
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
-    assert can_approve is True, f"Expected approval, got: {message}"
+    assert can_approve is False
+    assert "not_configured" in message
+    assert "company_watchlist" in message
 
 
 # ── 10. End-to-end: 409 in screening flow → correct final result ──

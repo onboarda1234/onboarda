@@ -244,3 +244,23 @@ def test_backoffice_person_review_prefers_screening_declared_pep_truth():
     assert "screeningBadge(personDeclaredPep ? 'declared' : 'not_declared')" in region
     assert "Declared PEP:</strong> ' + escapeHtml(personDeclaredPep ? 'Yes' : 'No')" in region
     assert "Declared PEP:</strong> ' + escapeHtml(person.pep === 'Yes' ? 'Yes' : 'No')" not in region
+
+
+def test_backoffice_screening_truth_fallbacks_do_not_flatten_non_terminal_to_clear():
+    html = BACKOFFICE_HTML.read_text()
+
+    assert "function deriveScreeningTruth" in html
+    assert "function deriveScreeningTruthSummary" in html
+    assert "sandbox_provider" in html
+    assert "simulated_fallback" in html
+    assert "screening_truth_summary" in html
+
+    person_region = _function_region(html, "getPersonScreeningResult", "screeningBadge")
+    assert "truth.canonical_state === 'completed_clear'" in person_region
+    assert "sanctions: sanctionsStatus" in person_region
+    assert "pep: pepStatus" in person_region
+    assert "hasMatchedRecord ? (hasSanctionsHit ? 'match' : (hasOtherHit ? 'review' : 'clear')) : 'clear'" not in person_region
+
+    approval_region = _function_region(html, "getApplicationApprovalBlockers", "renderDecisionReadiness")
+    assert "screening.screening_truth_summary" in approval_region
+    assert "!screeningTruth.approval_ready" in approval_region

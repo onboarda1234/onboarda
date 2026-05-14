@@ -1836,6 +1836,8 @@ def _persist_normalized_screening_report_if_enabled(db, client_id, application_i
 # never rendered as "Clear" or "No Provider Match".
 from screening_state import (
     derive_screening_state,
+    derive_screening_truth,
+    build_screening_truth_summary,
     derive_subject_state,
     state_label as screening_state_label,
     legacy_status_value as _screening_legacy_status,
@@ -2764,6 +2766,12 @@ class ApplicationsHandler(BaseHandler):
             app["rmi_requests"] = rmi_by_app.get(app["id"], [])
             if user["type"] != "client":
                 app["enhanced_review_summary"] = enhanced_summaries.get(app["id"])
+            prescreening_for_truth = safe_json_loads(app.get("prescreening_data"))
+            screening_report_for_truth = prescreening_for_truth.get("screening_report") if isinstance(prescreening_for_truth, dict) else None
+            app["screening_truth_summary"] = build_screening_truth_summary(
+                screening_report_for_truth if isinstance(screening_report_for_truth, dict) else {},
+                prescreening_for_truth if isinstance(prescreening_for_truth, dict) else {},
+            )
             # Bug #4: Parse risk_dimensions from JSON string for API consumers
             if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
                 app["risk_dimensions"] = safe_json_loads(app["risk_dimensions"])
@@ -3448,6 +3456,11 @@ class ApplicationDetailHandler(BaseHandler):
         stored_prescreening = parse_json_field(result.get("prescreening_data"), {})
         saved_session_prescreening = load_saved_session_prescreening(db, result)
         result["prescreening_data"] = merge_prescreening_sources(stored_prescreening, saved_session_prescreening)
+        screening_report = result["prescreening_data"].get("screening_report") if isinstance(result["prescreening_data"], dict) else None
+        result["screening_truth_summary"] = build_screening_truth_summary(
+            screening_report if isinstance(screening_report, dict) else {},
+            result["prescreening_data"] if isinstance(result["prescreening_data"], dict) else {},
+        )
         # Bug #4: Parse risk_dimensions from JSON string for API consumers
         if result.get("risk_dimensions") and isinstance(result["risk_dimensions"], str):
             result["risk_dimensions"] = safe_json_loads(result["risk_dimensions"])
@@ -10136,6 +10149,18 @@ def _screening_queue_row_mode(report_mode, state, status_key, entity_context=Non
     """Return truthful row-level screening provenance for queue display."""
     context_text = " ".join(str(x or "") for x in (entity_context or [])).lower()
     provider_record = provider_record if isinstance(provider_record, dict) else {}
+    truth = derive_screening_truth(provider_record, required=True) if provider_record else {}
+    provider_mode = truth.get("provider_mode")
+    if provider_mode == "sandbox_provider":
+        return "sandbox"
+    if provider_mode == "simulated_fallback":
+        return "simulated"
+    if provider_mode == "not_configured":
+        return "not_configured"
+    if provider_mode == "failed":
+        return "unavailable"
+    if provider_mode == "pending":
+        return "pending"
     source_text = " ".join(
         str(provider_record.get(k) or "")
         for k in ("source", "provider", "api_status")
@@ -10957,6 +10982,9 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             elif company_sanctions_state == _SCR_FAILED:
                 entity_status_key = "screening_unavailable"
                 entity_status_label = "Screening Unavailable"
+            elif company_has_provider_match:
+                entity_status_key = "review_required"
+                entity_status_label = "Review Required"
             elif company_sanctions_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
                 entity_status_key = "screening_pending"
                 entity_status_label = "Screening Pending Provider"
@@ -10990,6 +11018,11 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                     company_context,
                 company_provider_record,
             )
+            company_screening_truth = derive_screening_truth(
+                company_sanctions or company_provider_record,
+                name="company_watchlist",
+                required=True,
+            )
             company_results = []
             for record in (company_screening, company_sanctions, company_adverse):
                 company_results.extend((record or {}).get("results") or [])
@@ -11006,6 +11039,13 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 "pep_declared_status": "not_applicable",
                 "pep_screening_status": "not_applicable",
                 "screening_state": company_state,
+                "screening_truth_state": company_screening_truth.get("canonical_state"),
+                "provider_mode": company_screening_truth.get("provider_mode"),
+                "provider_availability": company_screening_truth.get("provider_availability"),
+                "screening_result": company_screening_truth.get("screening_result"),
+                "terminal": company_screening_truth.get("terminal"),
+                "defensible_clear": company_screening_truth.get("defensible_clear"),
+                "screening_truth_reason": company_screening_truth.get("reason"),
                 "entity_context": company_context,
                 "status_key": entity_status_key,
                 "status_label": entity_status_label,
@@ -11043,6 +11083,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             subject_envelope = derive_subject_state(screening, declared_pep=declared_pep)
             has_pep_hit = subject_envelope["has_provider_pep_hit"]
             has_sanctions_hit = subject_envelope["has_provider_sanctions_hit"]
+            provider_sanctions = facts.get("sanctions_hits", 0) > 0
+            provider_pep = facts.get("pep_hits", 0) > 0
             # ``undeclared_pep`` is computed by run_full_screening and only
             # set when results contain a PEP hit — i.e. terminal. It is
             # therefore safe to treat it as a provider PEP hit.
@@ -11071,7 +11113,15 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             elif not item:
                 status_key = "incomplete_record"
                 status_label = "Incomplete Screening Record"
-            elif person_state == _SCR_COMPLETED_MATCH or has_sanctions_hit or has_pep_hit or provider_other or provider_adverse:
+            elif (
+                person_state == _SCR_COMPLETED_MATCH
+                or has_sanctions_hit
+                or has_pep_hit
+                or provider_sanctions
+                or provider_pep
+                or provider_other
+                or provider_adverse
+            ):
                 status_key = "review_required"
                 status_label = "Review Required"
             elif person_state == _SCR_NOT_CONFIGURED:
@@ -11135,6 +11185,11 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 entity_context,
                 screening,
             )
+            person_screening_truth = derive_screening_truth(
+                screening,
+                name=f"{subject_type}_screening",
+                required=True,
+            )
 
             rows.append({
                 "application_id": app["id"],
@@ -11146,6 +11201,13 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 "pep_declared_status": "declared" if declared_pep else "not_declared",
                 "pep_screening_status": pep_screening_status,
                 "screening_state": person_state,
+                "screening_truth_state": person_screening_truth.get("canonical_state"),
+                "provider_mode": person_screening_truth.get("provider_mode"),
+                "provider_availability": person_screening_truth.get("provider_availability"),
+                "screening_result": person_screening_truth.get("screening_result"),
+                "terminal": person_screening_truth.get("terminal"),
+                "defensible_clear": person_screening_truth.get("defensible_clear"),
+                "screening_truth_reason": person_screening_truth.get("reason"),
                 "entity_context": entity_context,
                 "status_key": status_key,
                 "status_label": status_label,

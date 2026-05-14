@@ -561,6 +561,21 @@ def test_approval_gate_excludes_superseded_flagged_documents(tmp_path):
         "screening_report": {
             "screening_mode": "live",
             "screened_at": now.isoformat(),
+            "company_screening": {
+                "found": True,
+                "source": "opencorporates",
+                "sanctions": {"matched": False, "results": [], "source": "sumsub", "api_status": "live"},
+            },
+            "director_screenings": [
+                {
+                    "person_name": "Approval Director",
+                    "screening": {"matched": False, "results": [], "source": "sumsub", "api_status": "live"},
+                }
+            ],
+            "ubo_screenings": [],
+            "kyc_applicants": [
+                {"person_name": "Approval Director", "source": "sumsub", "api_status": "live", "review_answer": "GREEN"}
+            ],
         },
         "screening_valid_until": (now + timedelta(days=30)).isoformat(),
     }

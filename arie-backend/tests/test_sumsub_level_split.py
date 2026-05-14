@@ -6,12 +6,11 @@ Covers:
   2. SUMSUB_LEVEL_NAME remains backward-compatible fallback for individual screening
   3. Company screening with no SUMSUB_COMPANY_LEVEL_NAME returns not_configured
   4. Company screening with configured company level sends company payload
-  5. Gate 5 allows company_watchlist not_configured
+  5. Gate 5 blocks company_watchlist not_configured
   6. Gate 5 blocks company_watchlist error when company level is configured and fails
   7. Gate 5 blocks director/UBO individual screening error
-  8. EX-06-style case: approval-gate reachable when individual screening is
-     live and company KYB is not_configured
-  9. determine_screening_mode treats not_configured as acceptable
+  8. EX-06-style case: company KYB not_configured is explicit and fail-closed
+  9. determine_screening_mode returns not_configured for missing required coverage
 """
 import json
 import os
@@ -233,13 +232,15 @@ def _insert_app_for_gate5(db, screening_report):
     return dict(app)
 
 
-def test_gate5_allows_not_configured_company_watchlist(db, temp_db):
+def test_gate5_blocks_not_configured_company_watchlist(db, temp_db):
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report(company_sanctions_status="not_configured")
     app = _insert_app_for_gate5(db, report)
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
-    assert can_approve is True, f"Expected approval, got: {message}"
+    assert can_approve is False
+    assert "company_watchlist" in message
+    assert "not_configured" in message
 
 
 def test_gate5_blocks_error_company_watchlist(db, temp_db):
@@ -305,9 +306,8 @@ def test_gate5_blocks_kyc_applicant_error(db, temp_db):
 # -- 4. EX-06-style end-to-end scenario --
 
 
-def test_ex06_approval_gate_reachable(db, temp_db):
-    """The exact scenario that was blocked: individual screening works,
-    company KYB level doesn't exist -> approval should be reachable."""
+def test_ex06_approval_gate_blocks_not_configured_company_watchlist(db, temp_db):
+    """A missing company watchlist provider is not defensible live coverage."""
     from security_hardening import ApprovalGateValidator
 
     report = _make_screening_report(
@@ -317,17 +317,19 @@ def test_ex06_approval_gate_reachable(db, temp_db):
     )
     app = _insert_app_for_gate5(db, report)
     can_approve, message = ApprovalGateValidator.validate_approval(app, db)
-    assert can_approve is True, f"EX-06 scenario should be approvable, got: {message}"
+    assert can_approve is False
+    assert "not_configured" in message
+    assert "company_watchlist" in message
 
 
 # -- 5. determine_screening_mode with not_configured --
 
 
-def test_screening_mode_live_when_company_not_configured(temp_db):
+def test_screening_mode_not_configured_when_company_not_configured(temp_db):
     from security_hardening import determine_screening_mode
 
     report = _make_screening_report(company_sanctions_status="not_configured")
-    assert determine_screening_mode(report) == "live"
+    assert determine_screening_mode(report) == "not_configured"
 
 
 def test_screening_mode_simulated_when_director_simulated(temp_db):

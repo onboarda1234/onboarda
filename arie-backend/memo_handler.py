@@ -213,6 +213,11 @@ def _risk_display_context(app):
 def _screening_source_summary(screening_report):
     if not isinstance(screening_report, dict) or not screening_report:
         return {"providers": [], "provider": "not_configured", "api_statuses": [], "mode": "not_configured"}
+    try:
+        from screening_state import build_screening_truth_summary as _build_screening_truth_summary
+        truth_summary = _build_screening_truth_summary(screening_report)
+    except Exception:  # pragma: no cover - source attribution must not break memo generation
+        truth_summary = {}
     providers = set()
     statuses = set()
 
@@ -257,6 +262,14 @@ def _screening_source_summary(screening_report):
         "provider": providers_list[0] if providers_list else "not_configured",
         "api_statuses": sorted(statuses),
         "mode": mode,
+        "canonical_state": truth_summary.get("canonical_state"),
+        "provider_availability": truth_summary.get("provider_availability"),
+        "provider_mode": truth_summary.get("provider_mode"),
+        "screening_result": truth_summary.get("screening_result"),
+        "terminal": truth_summary.get("terminal"),
+        "defensible_clear": truth_summary.get("defensible_clear"),
+        "approval_ready": truth_summary.get("approval_ready"),
+        "blocking_reasons": truth_summary.get("blocking_reasons") or [],
     }
 
 
@@ -584,6 +597,15 @@ def build_compliance_memo(app, directors, ubos, documents):
             "has_non_terminal": True,
             "has_failed": False,
             "has_not_configured": False,
+            "has_sandbox": False,
+            "has_simulated": False,
+            "provider_mode": None,
+            "provider_availability": None,
+            "canonical_state": None,
+            "screening_result": None,
+            "defensible_clear": False,
+            "approval_blocking": True,
+            "blocking_reasons": [],
             "has_terminal_match": False,
             "company_screening_configured": False,
             "person_states": [],
@@ -617,6 +639,10 @@ def build_compliance_memo(app, directors, ubos, documents):
             _bits.append("provider not configured for at least one subject")
         if screening_has_failed:
             _bits.append("provider unavailable for at least one subject")
+        if _screening_terminality.get("has_sandbox"):
+            _bits.append("sandbox provider result for at least one subject")
+        if _screening_terminality.get("has_simulated"):
+            _bits.append("simulated fallback result for at least one subject")
         if not _bits:
             _bits.append("provider has not yet returned a terminal result for at least one subject")
         _qual = "; ".join(_bits)
@@ -1417,6 +1443,15 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "has_non_terminal": screening_has_non_terminal,
                 "has_failed": screening_has_failed,
                 "has_not_configured": screening_has_not_configured,
+                "has_sandbox": bool(_screening_terminality.get("has_sandbox")),
+                "has_simulated": bool(_screening_terminality.get("has_simulated")),
+                "canonical_state": _screening_terminality.get("canonical_state"),
+                "provider_availability": _screening_terminality.get("provider_availability"),
+                "provider_mode": _screening_terminality.get("provider_mode"),
+                "screening_result": _screening_terminality.get("screening_result"),
+                "defensible_clear": bool(_screening_terminality.get("defensible_clear")),
+                "approval_ready": bool(_screening_terminality.get("approval_ready")),
+                "blocking_reasons": _screening_terminality.get("blocking_reasons") or [],
                 "company_state": _company_state,
                 "person_states": _person_states,
                 "declared_pep_count": len(all_peps),
@@ -1771,6 +1806,15 @@ def build_compliance_memo(app, directors, ubos, documents):
             "has_non_terminal": screening_has_non_terminal,
             "has_failed": screening_has_failed,
             "has_not_configured": screening_has_not_configured,
+            "has_sandbox": bool(_screening_terminality.get("has_sandbox")),
+            "has_simulated": bool(_screening_terminality.get("has_simulated")),
+            "canonical_state": _screening_terminality.get("canonical_state"),
+            "provider_availability": _screening_terminality.get("provider_availability"),
+            "provider_mode": _screening_terminality.get("provider_mode"),
+            "screening_result": _screening_terminality.get("screening_result"),
+            "defensible_clear": bool(_screening_terminality.get("defensible_clear")),
+            "approval_ready": bool(_screening_terminality.get("approval_ready")),
+            "blocking_reasons": _screening_terminality.get("blocking_reasons") or [],
             "has_terminal_match": _has_terminal_match,
             "company_screening_configured": bool(_screening_terminality.get("company_screening_configured")),
         },
