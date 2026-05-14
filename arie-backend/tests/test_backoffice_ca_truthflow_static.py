@@ -264,3 +264,11 @@ def test_backoffice_screening_truth_fallbacks_do_not_flatten_non_terminal_to_cle
     approval_region = _function_region(html, "getApplicationApprovalBlockers", "renderDecisionReadiness")
     assert "screening.screening_truth_summary" in approval_region
     assert "!screeningTruth.approval_ready" in approval_region
+
+
+def test_backoffice_legacy_match_without_api_status_remains_terminal_match_fallback():
+    html = BACKOFFICE_HTML.read_text()
+    mode_region = _function_region(html, "screeningProviderModeFromRecord", "deriveScreeningTruth")
+
+    assert "record.matched && Array.isArray(record.results) && record.results.length" in mode_region
+    assert "return 'live_provider'" in mode_region

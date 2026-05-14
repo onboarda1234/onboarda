@@ -6937,6 +6937,7 @@ function screeningProviderModeFromRecord(record) {
   if (['simulated', 'mock', 'mocked', 'stubbed', 'demo'].indexOf(api) >= 0 || text.indexOf('simulated') >= 0 || text.indexOf('mock') >= 0 || text.indexOf('stubbed') >= 0 || text.indexOf('demo') >= 0 || text.indexOf('smoke') >= 0) return 'simulated_fallback';
   if (['pending', 'init', 'created', 'queued', 'onhold', 'processing', 'in_progress'].indexOf(api) >= 0) return 'pending';
   if (api === 'live') return 'live_provider';
+  if (!api && record.matched && Array.isArray(record.results) && record.results.length && text.indexOf('sandbox') < 0) return 'live_provider';
   return api ? 'pending' : 'pending';
 }
 
