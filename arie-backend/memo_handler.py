@@ -1940,6 +1940,9 @@ def build_compliance_memo(app, directors, ubos, documents):
         routing_facts["supervisor_mandatory_escalation"] = bool(
             supervisor_result.get("mandatory_escalation", False)
         )
+        routing_facts["supervisor_mandatory_escalation_reasons"] = list(
+            supervisor_result.get("mandatory_escalation_reasons") or []
+        )
         edd_routing = _evaluate_edd_routing(routing_facts)
     except Exception as _routing_err:  # pragma: no cover — defensive
         logger.error("EDD routing evaluation failed: %s", _routing_err)
@@ -1953,16 +1956,16 @@ def build_compliance_memo(app, directors, ubos, documents):
     memo["metadata"]["edd_routing"] = edd_routing
 
     # ── Priority B.2 / Workstream C: Bind memo recommendation to route ──
-    # Deterministic guarantee: when the routing policy says EDD, OR
-    # the supervisor has flagged mandatory_escalation, the memo's
+    # Deterministic guarantee: when the routing policy says EDD, the memo's
     # approval_recommendation MUST NOT be APPROVE / APPROVE_WITH_CONDITIONS.
     # We override to the canonical escalation value ESCALATE_TO_EDD
     # and re-record the original value for auditability. This closes
     # the gap where memo could recommend approval while routing said
-    # EDD and supervisor said mandatory_escalation.
+    # EDD. Non-EDD supervisor mandatory escalations still block approval
+    # through the supervisor/approval gate, but do not create false EDD.
     _route_is_edd = (edd_routing or {}).get("route") == "edd"
     _is_mandatory_escalation = bool(supervisor_result.get("mandatory_escalation", False))
-    if _route_is_edd or _is_mandatory_escalation:
+    if _route_is_edd:
         _original_decision = memo["metadata"].get("approval_recommendation")
         _approval_like = ("APPROVE", "APPROVE_WITH_CONDITIONS")
         if _original_decision in _approval_like:
@@ -2035,12 +2038,11 @@ def build_compliance_memo(app, directors, ubos, documents):
 
     # ── Priority B.2 / Workstream C: Contradiction guard (fail-closed) ──
     # Defensive cross-check: if for any reason the recommendation
-    # ended up as an approval value while the route is EDD or
-    # mandatory_escalation is set, block the memo. This is belt-and-
-    # braces — the binding above should already prevent this — and
+    # ended up as an approval value while the route is EDD, block the
+    # memo. This is belt-and-braces — the binding above should already prevent this — and
     # ensures persistence cannot silently store a contradicting memo.
     _final_decision = memo["metadata"].get("approval_recommendation")
-    if (_route_is_edd or _is_mandatory_escalation) and _final_decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
+    if _route_is_edd and _final_decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
         memo["metadata"]["validation_status"] = "fail"
         memo["metadata"]["blocked"] = True
         memo["metadata"]["block_reason"] = (

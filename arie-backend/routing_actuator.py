@@ -163,6 +163,7 @@ def build_routing_facts(
     risk_dict: Optional[Mapping[str, Any]] = None,
     screening_summary: Optional[Mapping[str, Any]] = None,
     supervisor_mandatory_escalation: Optional[bool] = None,
+    supervisor_mandatory_escalation_reasons: Optional[list] = None,
     edd_trigger_flags: Optional[list] = None,
 ) -> Dict[str, Any]:
     """Compose the canonical facts dict consumed by
@@ -232,6 +233,9 @@ def build_routing_facts(
         )
         if supervisor_mandatory_escalation is not None
         else False,
+        "supervisor_mandatory_escalation_reasons": list(
+            supervisor_mandatory_escalation_reasons or []
+        ),
         "edd_trigger_flags": list(edd_trigger_flags or []),
         # Required-fact-keys contract from the pure policy: presence is
         # what matters; values may be None / empty strings.
@@ -258,6 +262,7 @@ def apply_routing_decision(
     risk_dict: Optional[Mapping[str, Any]] = None,
     screening_summary: Optional[Mapping[str, Any]] = None,
     supervisor_mandatory_escalation: Optional[bool] = None,
+    supervisor_mandatory_escalation_reasons: Optional[list] = None,
     edd_trigger_flags: Optional[list] = None,
     user: Optional[Mapping[str, Any]] = None,
     client_ip: str = "",
@@ -321,6 +326,7 @@ def apply_routing_decision(
         risk_dict=risk_dict,
         screening_summary=screening_summary,
         supervisor_mandatory_escalation=supervisor_mandatory_escalation,
+        supervisor_mandatory_escalation_reasons=supervisor_mandatory_escalation_reasons,
         edd_trigger_flags=edd_trigger_flags,
     )
     app_dict = dict(app_row)
@@ -394,7 +400,7 @@ def apply_routing_decision(
                         supervisor_mandatory_escalation
                     ),
                     "mandatory_escalation_reasons": list(
-                        edd_trigger_flags or []
+                        supervisor_mandatory_escalation_reasons or []
                     ),
                 },
                 user,

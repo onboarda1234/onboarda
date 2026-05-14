@@ -43,7 +43,7 @@ from edd_routing_policy import (
 
 def _make_app(*, country="Mauritius", sector="Technology", risk_level="LOW",
               risk_score=25, api_status="live", company_name="ACME Co",
-              risk_escalations=None):
+              risk_escalations=None, expected_volume="USD 100,000"):
     return {
         "id": "app_dpi_" + country.lower().replace(" ", "_") + "_" + sector.lower().replace(" ", "_"),
         "ref": "ARF-DPI-" + country[:3].upper() + "-" + sector[:3].upper(),
@@ -57,7 +57,7 @@ def _make_app(*, country="Mauritius", sector="Technology", risk_level="LOW",
         "incorporation_date": "2020-01-01",
         "business_activity": "Software services",
         "source_of_funds": "Trading revenue",
-        "expected_volume": "USD 100,000",
+        "expected_volume": expected_volume,
         "risk_level": risk_level,
         "risk_score": risk_score,
         "risk_escalations": json.dumps(risk_escalations or []),
@@ -572,7 +572,7 @@ class TestEddRoutingPolicy:
         assert d["route"] == ROUTE_EDD
         assert TRIGGER_OPAQUE_OWNERSHIP in d["triggers"]
 
-    def test_supervisor_mandatory_escalation_routes_to_edd(self):
+    def test_supervisor_mandatory_escalation_without_edd_reason_stays_standard(self):
         facts = {
             "final_risk_level": "LOW",
             "declared_pep_present": False,
@@ -583,10 +583,31 @@ class TestEddRoutingPolicy:
             "screening_terminality_summary": {},
             "edd_trigger_flags": [],
             "supervisor_mandatory_escalation": True,
+            "supervisor_mandatory_escalation_reasons": ["supervisor_verdict=INCONSISTENT"],
+        }
+        d = evaluate_edd_routing(facts)
+        assert d["route"] == ROUTE_STANDARD
+        assert TRIGGER_MANDATORY_ESCALATION not in d["triggers"]
+        assert d["inputs"]["supervisor_mandatory_escalation_edd_relevant"] is False
+
+    def test_supervisor_mandatory_escalation_with_edd_reason_routes_to_edd(self):
+        facts = {
+            "final_risk_level": "LOW",
+            "declared_pep_present": True,
+            "sector_risk_tier": "LOW",
+            "sector_label": "Technology",
+            "jurisdiction_risk_tier": "LOW",
+            "ownership_transparency_status": "transparent",
+            "screening_terminality_summary": {},
+            "edd_trigger_flags": [],
+            "supervisor_mandatory_escalation": True,
+            "supervisor_mandatory_escalation_reasons": ["declared_pep_present"],
         }
         d = evaluate_edd_routing(facts)
         assert d["route"] == ROUTE_EDD
+        assert TRIGGER_DECLARED_PEP in d["triggers"]
         assert TRIGGER_MANDATORY_ESCALATION in d["triggers"]
+        assert d["inputs"]["supervisor_mandatory_escalation_edd_relevant"] is True
 
     def test_material_screening_match_routes_to_edd(self):
         facts = {
@@ -684,6 +705,23 @@ class TestEndToEndRoutingFromMemo:
         )
         assert routing["policy_version"] == POLICY_VERSION
 
+    def test_clean_low_risk_with_low_expected_volume_does_not_escalate_to_edd(self):
+        app = _make_app(country="United Kingdom", expected_volume="0-50000")
+        directors = [{"full_name": "Clean Director", "nationality": "British",
+                      "is_pep": "No", "ownership_pct": 0,
+                      "date_of_birth": "1980-01-01"}]
+        ubos = [{"full_name": "Clean UBO", "nationality": "British",
+                 "is_pep": "No", "ownership_pct": 100,
+                 "date_of_birth": "1980-01-01"}]
+        memo, _, supervisor, _ = build_compliance_memo(app, directors, ubos, _clean_documents())
+        routing = memo["metadata"].get("edd_routing")
+        assert supervisor["mandatory_escalation"] is False
+        assert supervisor["mandatory_escalation_reasons"] == []
+        assert routing["route"] == ROUTE_STANDARD, (
+            "triggers leaked: " + str(routing.get("triggers"))
+        )
+        assert memo["metadata"].get("approval_recommendation") != "ESCALATE_TO_EDD"
+
     def test_high_risk_crypto_pep_memo_routes_edd(self):
         app = _make_app(country="Iran", sector="Cryptocurrency",
                         risk_level="VERY_HIGH", risk_score=95)
@@ -720,5 +758,8 @@ class TestEndToEndRoutingFromMemo:
         contract = memo["metadata"]["agent5_input_contract"]
         contract = dict(contract)
         contract["supervisor_mandatory_escalation"] = supervisor.get("mandatory_escalation", False)
+        contract["supervisor_mandatory_escalation_reasons"] = supervisor.get(
+            "mandatory_escalation_reasons", []
+        )
         routing = memo["metadata"]["edd_routing"]
         assert assert_routing_invariant(contract, routing) is None

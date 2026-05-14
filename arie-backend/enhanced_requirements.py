@@ -1963,35 +1963,196 @@ def _sector_risk_tier(app):
     return "standard"
 
 
-def _declared_high_volume(app):
+HIGH_VOLUME_THRESHOLD = 500000
+
+
+def _expected_volume_values(app):
+    app = app or {}
     prescreening = _prescreening_dict(app)
-    values = []
+    values = [
+        app.get("monthly_volume"),
+        app.get("expected_volume"),
+    ]
     if isinstance(prescreening, dict):
         values.extend([
             prescreening.get("monthly_volume"),
             prescreening.get("expected_volume"),
+            prescreening.get("expected_volumes"),
         ])
         transaction = _loads_json(prescreening.get("transaction"), {})
         if isinstance(transaction, dict):
             expected = _loads_json(transaction.get("expected_monthly_volume"), {})
             if isinstance(expected, dict):
-                values.append(expected.get("band_legacy"))
-    text = " ".join(str(v or "") for v in values).lower()
-    compact = re.sub(r"[^0-9a-z<>]+", "", text)
-    if not text.strip():
-        return False
-    if "under" in text or "below" in text or "<50000" in compact:
-        return False
-    return (
-        "over" in text
-        or "above" in text
-        or "500,000" in text
-        or "5,000,000" in text
-        or "500000" in compact
-        or "5000000" in compact
-        or ">500000" in compact
-        or ">5m" in compact
+                values.extend([
+                    expected.get("band_legacy"),
+                    expected.get("label"),
+                    expected.get("value"),
+                ])
+            elif expected:
+                values.append(expected)
+    return [str(value).strip() for value in values if str(value or "").strip()]
+
+
+def _parse_volume_amount(token):
+    token = str(token or "").strip().lower().replace(",", "")
+    suffix = ""
+    if token.endswith(("k", "m")):
+        suffix = token[-1]
+        token = token[:-1]
+    try:
+        amount = float(token)
+    except (TypeError, ValueError):
+        return None
+    if suffix == "k":
+        amount *= 1000
+    elif suffix == "m":
+        amount *= 1000000
+    return int(amount)
+
+
+def _expected_volume_assessment(raw_value, threshold=HIGH_VOLUME_THRESHOLD):
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return {
+            "raw": raw,
+            "parsed": False,
+            "is_high_volume": False,
+            "reason": "expected_volume_missing",
+            "threshold": threshold,
+        }
+
+    text = raw.lower()
+    text = (
+        text.replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace("\u2212", "-")
+        .replace("per month", "")
+        .replace("monthly", "")
     )
+    compact = re.sub(r"\s+", "", text)
+    amount_matches = re.findall(
+        r"(?<![a-z])(\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(\s*[km])?",
+        text,
+    )
+    amounts = [
+        _parse_volume_amount((number or "") + (suffix or "").strip())
+        for number, suffix in amount_matches
+    ]
+    amounts = [amount for amount in amounts if amount is not None]
+    if not amounts:
+        return {
+            "raw": raw,
+            "parsed": False,
+            "is_high_volume": False,
+            "reason": "expected_volume_unparsed",
+            "threshold": threshold,
+        }
+
+    has_range = bool(re.search(r"\d\s*-\s*\d", compact) or re.search(r"\bto\b", text))
+    is_upper_bound = bool(
+        re.search(r"\b(under|below|less\s+than|up\s+to|upto|not\s+more\s+than)\b", text)
+        or "<" in text
+    )
+    is_lower_bound = bool(
+        re.search(r"\b(over|above|more\s+than|greater\s+than|at\s+least|minimum)\b", text)
+        or ">" in text
+        or re.search(r"\d\s*[km]?\s*\+", text)
+    )
+    normalized = max(amounts) if has_range else amounts[0]
+
+    if is_upper_bound:
+        return {
+            "raw": raw,
+            "parsed": True,
+            "is_high_volume": False,
+            "normalized_amount": normalized,
+            "threshold": threshold,
+            "reason": (
+                "expected_volume_upper_bound_below_threshold"
+                if normalized < threshold
+                else "expected_volume_upper_bound_not_definite_high"
+            ),
+        }
+
+    if has_range:
+        is_high = normalized >= threshold
+        return {
+            "raw": raw,
+            "parsed": True,
+            "is_high_volume": is_high,
+            "normalized_amount": normalized,
+            "threshold": threshold,
+            "reason": (
+                "expected_volume_range_max_gte_threshold"
+                if is_high
+                else "expected_volume_range_max_below_threshold"
+            ),
+        }
+
+    is_high = normalized >= threshold
+    if is_lower_bound:
+        reason = (
+            "expected_volume_lower_bound_gte_threshold"
+            if is_high
+            else "expected_volume_lower_bound_below_threshold"
+        )
+    else:
+        reason = (
+            "expected_volume_value_gte_threshold"
+            if is_high
+            else "expected_volume_value_below_threshold"
+        )
+    return {
+        "raw": raw,
+        "parsed": True,
+        "is_high_volume": is_high,
+        "normalized_amount": normalized,
+        "threshold": threshold,
+        "reason": reason,
+    }
+
+
+def _declared_high_volume_context(app):
+    assessments = [_expected_volume_assessment(value) for value in _expected_volume_values(app)]
+    high = next((item for item in assessments if item.get("is_high_volume")), None)
+    if high:
+        return {
+            "is_high_volume": True,
+            "reason": high.get("reason"),
+            "normalized_amount": high.get("normalized_amount"),
+            "threshold": high.get("threshold"),
+            "raw": high.get("raw"),
+            "assessments": assessments,
+        }
+    parsed = next((item for item in assessments if item.get("parsed")), None)
+    return {
+        "is_high_volume": False,
+        "reason": (parsed or {}).get("reason") or "expected_volume_missing",
+        "normalized_amount": (parsed or {}).get("normalized_amount"),
+        "threshold": HIGH_VOLUME_THRESHOLD,
+        "raw": (parsed or {}).get("raw"),
+        "assessments": assessments,
+    }
+
+
+def _declared_high_volume(app):
+    return bool(_declared_high_volume_context(app).get("is_high_volume"))
+
+
+def _declared_high_volume_reason(app):
+    context = _declared_high_volume_context(app)
+    if not context.get("is_high_volume"):
+        return ""
+    parts = [
+        "declared_high_volume",
+        "reason=" + str(context.get("reason") or "expected_volume_high"),
+    ]
+    if context.get("normalized_amount") is not None:
+        parts.append("normalized_amount=" + str(context.get("normalized_amount")))
+    parts.append("threshold=" + str(context.get("threshold") or HIGH_VOLUME_THRESHOLD))
+    if context.get("raw"):
+        parts.append("raw=" + str(context.get("raw")))
+    return ";".join(parts)
 
 
 def _routing_for_application(db, app):
@@ -2097,8 +2258,9 @@ def _resolve_requirement_triggers(app, routing):
             continue
         warnings.append("Unmapped EDD routing trigger: " + str(source_trigger))
 
-    if _declared_high_volume(app):
-        mapped.setdefault("high_volume", []).append("declared_high_volume")
+    high_volume_reason = _declared_high_volume_reason(app)
+    if high_volume_reason:
+        mapped.setdefault("high_volume", []).append(high_volume_reason)
 
     ordered = [key for key in EXPECTED_DEFAULT_TRIGGER_KEYS if key in mapped]
     for key in sorted(k for k in mapped if k not in ordered):
@@ -2953,6 +3115,7 @@ def generate_application_enhanced_requirements(
         "ran": False,
         "config_ok": False,
         "triggers": [],
+        "trigger_sources": {},
         "generated_count": 0,
         "existing_count": 0,
         "skipped_count": 0,
@@ -3022,6 +3185,7 @@ def generate_application_enhanced_requirements(
     routing_decision = _routing_for_generation(db, app, routing)
     triggers, trigger_sources, trigger_warnings = _resolve_requirement_triggers(app, routing_decision)
     result["triggers"] = triggers
+    result["trigger_sources"] = trigger_sources
     result["warnings"].extend(trigger_warnings)
     result["ran"] = True
 
@@ -3034,6 +3198,7 @@ def generate_application_enhanced_requirements(
                 **audit_base,
                 "config_ok": True,
                 "triggers": [],
+                "trigger_sources": trigger_sources,
                 "generated_requirement_keys": [],
                 "existing_requirement_keys": [],
                 "warnings": result["warnings"],
@@ -3137,6 +3302,7 @@ def generate_application_enhanced_requirements(
                 "requirement_id": created.get("id") if created else req_id,
                 "trigger_key": rule["trigger_key"],
                 "requirement_key": rule["requirement_key"],
+                "trigger_sources": trigger_sources.get(rule["trigger_key"], []),
             },
             actor=actor,
             after_state=created,
@@ -3150,6 +3316,7 @@ def generate_application_enhanced_requirements(
             **audit_base,
             "config_ok": True,
             "triggers": triggers,
+            "trigger_sources": trigger_sources,
             "generated_requirement_keys": generated_keys,
             "existing_requirement_keys": existing_keys,
             "generated_count": result["generated_count"],
