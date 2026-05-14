@@ -12797,6 +12797,8 @@ def _ensure_memo_fresh_or_mark_stale(db, app_row, memo_row, *, actor=None, ip_ad
     memo = dict(memo_row)
     view = _memo_staleness_view(app, memo)
     if view["is_stale"]:
+        if _memo_stale_bool(memo.get("is_stale")):
+            return view
         _mark_latest_memo_stale(
             db,
             app["id"],

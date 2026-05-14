@@ -222,6 +222,13 @@ class ApprovalGateValidator:
             # on a regenerated memo before final approval can proceed.
             if _memo_is_stale(memo_row.get('is_stale')):
                 reason = memo_row.get('stale_reason') or 'Material facts changed after memo generation.'
+                logger.warning(
+                    "Approval blocked for application %s: compliance memo is stale "
+                    "(trigger=%s, marked_at=%s)",
+                    app_id,
+                    memo_row.get('stale_trigger'),
+                    memo_row.get('stale_marked_at'),
+                )
                 return (
                     False,
                     f"Compliance memo is stale: {reason} "
