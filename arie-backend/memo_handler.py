@@ -1940,6 +1940,9 @@ def build_compliance_memo(app, directors, ubos, documents):
         routing_facts["supervisor_mandatory_escalation"] = bool(
             supervisor_result.get("mandatory_escalation", False)
         )
+        routing_facts["supervisor_mandatory_escalation_reasons"] = list(
+            supervisor_result.get("mandatory_escalation_reasons") or []
+        )
         edd_routing = _evaluate_edd_routing(routing_facts)
     except Exception as _routing_err:  # pragma: no cover — defensive
         logger.error("EDD routing evaluation failed: %s", _routing_err)
@@ -1953,16 +1956,17 @@ def build_compliance_memo(app, directors, ubos, documents):
     memo["metadata"]["edd_routing"] = edd_routing
 
     # ── Priority B.2 / Workstream C: Bind memo recommendation to route ──
-    # Deterministic guarantee: when the routing policy says EDD, OR
-    # the supervisor has flagged mandatory_escalation, the memo's
+    # Deterministic guarantee: when the routing policy says EDD, the memo's
     # approval_recommendation MUST NOT be APPROVE / APPROVE_WITH_CONDITIONS.
     # We override to the canonical escalation value ESCALATE_TO_EDD
     # and re-record the original value for auditability. This closes
     # the gap where memo could recommend approval while routing said
-    # EDD and supervisor said mandatory_escalation.
+    # EDD. Non-EDD supervisor mandatory escalations still block approval
+    # through the supervisor/approval gate, but do not create false EDD.
     _route_is_edd = (edd_routing or {}).get("route") == "edd"
     _is_mandatory_escalation = bool(supervisor_result.get("mandatory_escalation", False))
-    if _route_is_edd or _is_mandatory_escalation:
+    _supervisor_can_approve = bool(supervisor_result.get("can_approve", False))
+    if _route_is_edd:
         _original_decision = memo["metadata"].get("approval_recommendation")
         _approval_like = ("APPROVE", "APPROVE_WITH_CONDITIONS")
         if _original_decision in _approval_like:
@@ -2029,18 +2033,71 @@ def build_compliance_memo(app, directors, ubos, documents):
             _checklist = list(memo["metadata"].get("review_checklist") or [])
             if _checklist:
                 _checklist[-1] = "Compliance decision aligned to ESCALATE TO EDD; approval is unavailable until EDD is complete"
-                memo["metadata"]["review_checklist"] = _checklist
+            memo["metadata"]["review_checklist"] = _checklist
         except Exception:
             pass
+    elif _is_mandatory_escalation or not _supervisor_can_approve:
+        _original_decision = memo["metadata"].get("approval_recommendation")
+        _approval_like = ("APPROVE", "APPROVE_WITH_CONDITIONS")
+        if _original_decision in _approval_like:
+            _supervisor_reasons = list(supervisor_result.get("mandatory_escalation_reasons") or [])
+            rule_enforcements.append({
+                "rule": "RECOMMENDATION_BOUND_TO_SUPERVISOR_VETO",
+                "original_decision": _original_decision,
+                "enforced_decision": "REVIEW",
+                "reason": (
+                    "Supervisor veto prevents approval-like memo recommendation "
+                    "(can_approve=" + str(_supervisor_can_approve)
+                    + ", mandatory_escalation=" + str(_is_mandatory_escalation)
+                    + (", reasons: " + ", ".join(_supervisor_reasons[:6]) if _supervisor_reasons else "")
+                    + "). Memo remains on standard route and requires review."
+                ),
+            })
+            rule_engine_result["enforcements"] = rule_enforcements
+            memo["metadata"]["rule_engine"] = rule_engine_result
+            memo["metadata"]["approval_recommendation_original"] = _original_decision
+            memo["metadata"]["approval_recommendation"] = "REVIEW"
+            memo["metadata"]["decision_label"] = "SUPERVISOR REVIEW REQUIRED"
+            try:
+                agent5_input_contract["decision_recommendation"] = "REVIEW"
+                memo["metadata"]["agent5_input_contract"] = agent5_input_contract
+            except Exception:
+                pass
+            try:
+                _reason_text = (
+                    ", ".join(_supervisor_reasons[:6])
+                    if _supervisor_reasons
+                    else "supervisor.can_approve=false"
+                )
+                _review_statement = (
+                    "Recommendation: SUPERVISOR REVIEW REQUIRED (REVIEW) — "
+                    "the memo supervisor vetoes approval-like recommendations "
+                    + "(" + _reason_text + ")."
+                )
+                _decision_sec = (memo.get("sections") or {}).get("compliance_decision") or {}
+                if isinstance(_decision_sec, dict):
+                    _decision_sec["decision"] = "REVIEW"
+                    _decision_sec["decision_label"] = "SUPERVISOR REVIEW REQUIRED"
+                    _decision_sec["content"] = (
+                        _review_statement
+                        + " This is not an EDD escalation unless the deterministic routing policy separately routes the case to EDD."
+                    )
+                    memo["sections"]["compliance_decision"] = _decision_sec
+                _conditions = list(memo["metadata"].get("conditions") or [])
+                _conditions.append(
+                    "Supervisor review/sign-off is required before any approval decision can be relied upon."
+                )
+                memo["metadata"]["conditions"] = _conditions
+            except Exception:
+                pass
 
     # ── Priority B.2 / Workstream C: Contradiction guard (fail-closed) ──
     # Defensive cross-check: if for any reason the recommendation
-    # ended up as an approval value while the route is EDD or
-    # mandatory_escalation is set, block the memo. This is belt-and-
-    # braces — the binding above should already prevent this — and
+    # ended up as an approval value while the route is EDD, block the
+    # memo. This is belt-and-braces — the binding above should already prevent this — and
     # ensures persistence cannot silently store a contradicting memo.
     _final_decision = memo["metadata"].get("approval_recommendation")
-    if (_route_is_edd or _is_mandatory_escalation) and _final_decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
+    if _route_is_edd and _final_decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
         memo["metadata"]["validation_status"] = "fail"
         memo["metadata"]["blocked"] = True
         memo["metadata"]["block_reason"] = (
@@ -2049,6 +2106,16 @@ def build_compliance_memo(app, directors, ubos, documents):
             + str((edd_routing or {}).get("route"))
             + ", mandatory_escalation=" + str(_is_mandatory_escalation)
             + "). Recommendation must be ESCALATE_TO_EDD."
+        )
+    if (not _route_is_edd) and (_is_mandatory_escalation or not _supervisor_can_approve) and _final_decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
+        memo["metadata"]["validation_status"] = "fail"
+        memo["metadata"]["blocked"] = True
+        memo["metadata"]["block_reason"] = (
+            "Memo blocked: recommendation '" + str(_final_decision)
+            + "' contradicts supervisor veto "
+            + "(can_approve=" + str(_supervisor_can_approve)
+            + ", mandatory_escalation=" + str(_is_mandatory_escalation)
+            + "). Recommendation must be REVIEW or another non-approval value."
         )
 
     # Run validation engine — now with rule engine awareness

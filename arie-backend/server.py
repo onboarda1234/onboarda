@@ -13903,6 +13903,9 @@ class MemoSupervisorHandler(BaseHandler):
                 _facts["supervisor_mandatory_escalation"] = bool(
                     supervisor_result.get("mandatory_escalation", False)
                 )
+                _facts["supervisor_mandatory_escalation_reasons"] = list(
+                    supervisor_result.get("mandatory_escalation_reasons") or []
+                )
                 _routing = _evaluate_edd_routing(_facts)
                 memo_data["metadata"]["edd_routing"] = _routing
                 _emit_edd_routing_audit(db, user, app_id, _routing, self.get_client_ip())

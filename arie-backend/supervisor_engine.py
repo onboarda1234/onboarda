@@ -410,7 +410,31 @@ def run_memo_supervisor(memo_data):
     if screening_summary.get("has_terminal_match"):
         mandatory_reasons.append("material_screening_concern")
     if verdict == "INCONSISTENT":
-        mandatory_reasons.append("supervisor_verdict=INCONSISTENT")
+        contradiction_reasons = []
+        for item in critical_contradictions or contradictions:
+            if not isinstance(item, dict):
+                continue
+            label = (
+                item.get("category")
+                or item.get("rule")
+                or item.get("section")
+                or item.get("severity")
+            )
+            if label:
+                contradiction_reasons.append(str(label))
+        contradiction_reasons = sorted(set(contradiction_reasons))
+        if contradiction_reasons:
+            mandatory_reasons.append(
+                "supervisor_verdict=INCONSISTENT;reasons="
+                + ",".join(contradiction_reasons[:5])
+            )
+        else:
+            mandatory_reasons.append(
+                "supervisor_verdict=INCONSISTENT;critical_contradictions="
+                + str(len(critical_contradictions))
+                + ";contradictions="
+                + str(len(contradictions))
+            )
     mandatory_escalation = len(mandatory_reasons) > 0
 
     if mandatory_escalation:

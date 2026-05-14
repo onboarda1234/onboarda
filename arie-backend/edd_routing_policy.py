@@ -84,6 +84,41 @@ def _norm(v: Any) -> str:
     return str(v).strip().lower()
 
 
+def _norm_reason_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        items = [value]
+    return [str(item).strip() for item in items if str(item or "").strip()]
+
+
+def _mandatory_escalation_reason_is_edd_relevant(reason: str) -> bool:
+    normalized = _norm(reason)
+    if not normalized:
+        return False
+    if normalized.startswith("final_risk_level=high"):
+        return True
+    if normalized.startswith("final_risk_level=very_high"):
+        return True
+    if normalized == "declared_pep_present":
+        return True
+    if normalized.startswith("jurisdiction_risk_tier=high"):
+        return True
+    if normalized.startswith("jurisdiction_risk_tier=very_high"):
+        return True
+    if normalized == "sector_risk_tier=high":
+        return True
+    if normalized.startswith("ownership_transparency=opaque"):
+        return True
+    if normalized.startswith("ownership_transparency=incomplete"):
+        return True
+    if normalized == "material_screening_concern":
+        return True
+    return False
+
+
 def evaluate_edd_routing(facts: Dict[str, Any]) -> Dict[str, Any]:
     """
     Evaluate the deterministic EDD routing policy.
@@ -122,6 +157,16 @@ def evaluate_edd_routing(facts: Dict[str, Any]) -> Dict[str, Any]:
     screening = facts.get("screening_terminality_summary") or {}
     edd_flags = facts.get("edd_trigger_flags") or []
     mandatory_escalation = bool(facts.get("supervisor_mandatory_escalation"))
+    mandatory_escalation_reasons = _norm_reason_list(
+        facts.get("supervisor_mandatory_escalation_reasons")
+    )
+    mandatory_escalation_edd_relevant = bool(
+        mandatory_escalation
+        and any(
+            _mandatory_escalation_reason_is_edd_relevant(reason)
+            for reason in mandatory_escalation_reasons
+        )
+    )
 
     contract_incomplete = False
     for key in REQUIRED_FACT_KEYS:
@@ -152,7 +197,7 @@ def evaluate_edd_routing(facts: Dict[str, Any]) -> Dict[str, Any]:
     if ownership in ("opaque", "incomplete", "unknown", "high"):
         triggers.append(TRIGGER_OPAQUE_OWNERSHIP)
 
-    if mandatory_escalation:
+    if mandatory_escalation_edd_relevant:
         triggers.append(TRIGGER_MANDATORY_ESCALATION)
 
     # Material screening concern: any subject with a terminal *match*
@@ -200,6 +245,8 @@ def evaluate_edd_routing(facts: Dict[str, Any]) -> Dict[str, Any]:
             "jurisdiction_risk_tier": jurisdiction_tier or None,
             "ownership_transparency_status": ownership or None,
             "supervisor_mandatory_escalation": mandatory_escalation,
+            "supervisor_mandatory_escalation_reasons": mandatory_escalation_reasons,
+            "supervisor_mandatory_escalation_edd_relevant": mandatory_escalation_edd_relevant,
             "screening_terminality_summary": (
                 {
                     "terminal": bool(screening.get("terminal")) if isinstance(screening, dict) else None,

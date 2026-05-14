@@ -745,6 +745,70 @@ def test_terminal_material_screening_match_generates_screening_concern(enhanced_
 
 
 @pytest.mark.parametrize(
+    "volume_value",
+    [
+        "0-50000",
+        "0 - 50,000",
+        "below 50000",
+        "less than 50000",
+        "50k",
+        "50000+",
+    ],
+)
+def test_low_expected_volume_formats_do_not_generate_high_volume_requirements(
+    enhanced_app_db,
+    volume_value,
+):
+    db = enhanced_app_db
+    app_id = _insert_application(
+        db,
+        risk_level="LOW",
+        country="United Kingdom",
+        sector="Technology",
+        prescreening={"expected_volume": volume_value},
+    )
+
+    result = _generate(db, app_id)
+
+    assert "high_volume" not in result["triggers"]
+    assert _count_app_reqs(db, app_id, "high_volume") == 0
+    audit = _last_generation_audit(db, app_id)
+    assert audit.get("triggers") == []
+    assert audit.get("trigger_sources") == {}
+
+
+def test_one_million_plus_expected_volume_generates_high_volume_with_audit_reason(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(
+        db,
+        risk_level="LOW",
+        prescreening={"expected_volume": "1m+"},
+    )
+
+    result = _generate(db, app_id)
+
+    assert "high_volume" in result["triggers"]
+    assert _count_app_reqs(db, app_id, "high_volume") == _count_rules(db, "high_volume")
+    high_volume_sources = result["trigger_sources"]["high_volume"]
+    assert len(high_volume_sources) == 1
+    assert "expected_volume_lower_bound_gte_threshold" in high_volume_sources[0]
+    assert "normalized_amount=1000000" in high_volume_sources[0]
+    audit = _last_generation_audit(db, app_id)
+    assert audit["trigger_sources"]["high_volume"] == high_volume_sources
+    row = db.execute(
+        """
+        SELECT trigger_reason
+        FROM application_enhanced_requirements
+        WHERE application_id=? AND trigger_key='high_volume'
+        ORDER BY id
+        LIMIT 1
+        """,
+        (app_id,),
+    ).fetchone()
+    assert "normalized_amount=1000000" in row["trigger_reason"]
+
+
+@pytest.mark.parametrize(
     "app_kwargs,setup,trigger_key",
     [
         ({"risk_level": "HIGH"}, None, "high_or_very_high_risk"),

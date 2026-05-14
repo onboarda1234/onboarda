@@ -16,11 +16,11 @@ Workstreams covered by this file:
   cannot be ``transparent`` for opaque / multi-jurisdiction /
   partial-disclosure cases.
 * **C. Memo recommendation binding** — when
-  ``edd_routing.route == "edd"`` OR
-  ``supervisor.mandatory_escalation == True``, the memo's
-  ``approval_recommendation`` MUST NOT be ``APPROVE`` /
-  ``APPROVE_WITH_CONDITIONS``; it is bound to ``ESCALATE_TO_EDD`` and
-  a contradiction guard fail-closes if the binding ever leaks.
+  ``edd_routing.route == "edd"``, the memo's
+  ``approval_recommendation`` is bound to ``ESCALATE_TO_EDD``. When
+  the supervisor vetoes approval on a standard route, the memo is
+  bound to a non-approval ``REVIEW`` recommendation. In both cases,
+  approval-like recommendations MUST NOT leak.
 
 The actuation tests use the real ``_actuate_edd_routing`` server
 helper against a live in-memory SQLite DB so the effects are
@@ -306,6 +306,28 @@ class TestRecommendationBinding:
         assert routing["route"] == ROUTE_STANDARD
         rec = memo["metadata"]["approval_recommendation"]
         assert rec in ("APPROVE", "APPROVE_WITH_CONDITIONS")
+
+    def test_standard_route_supervisor_veto_binds_recommendation_to_review(self):
+        """Standard-route supervisor veto must not display approval or false EDD."""
+        app = _make_app(country="United Kingdom",
+                        sector="Technology", risk_level="LOW", risk_score=20)
+        directors = [{"full_name": "D", "nationality": "British",
+                      "is_pep": "No", "ownership_pct": 0,
+                      "date_of_birth": "1980-01-01"}]
+        ubos = [{"full_name": "U", "nationality": "British",
+                 "is_pep": "No", "ownership_pct": 100,
+                 "date_of_birth": "1980-01-01"}]
+        memo, _, supervisor, _ = build_compliance_memo(app, directors, ubos, [])
+        routing = memo["metadata"]["edd_routing"]
+        assert routing["route"] == ROUTE_STANDARD
+        assert supervisor["can_approve"] is False
+        assert memo["metadata"]["approval_recommendation"] == "REVIEW"
+        assert memo["metadata"]["approval_recommendation"] not in (
+            "APPROVE", "APPROVE_WITH_CONDITIONS", "ESCALATE_TO_EDD",
+        )
+        decision_sec = memo["sections"].get("compliance_decision") or {}
+        assert decision_sec.get("decision") == "REVIEW"
+        assert "SUPERVISOR REVIEW REQUIRED" in (decision_sec.get("content") or "")
 
     def test_original_recommendation_preserved_for_audit(self):
         """When binding overrides the recommendation, the original must be
