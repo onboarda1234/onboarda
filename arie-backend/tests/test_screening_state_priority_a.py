@@ -86,6 +86,49 @@ class TestCanonicalStateModel:
         assert state != "completed_clear"
         assert not is_reassuring(state)
 
+    def test_truth_states_distinguish_provider_modes_from_clear(self):
+        from screening_state import derive_screening_truth
+
+        cases = [
+            ("simulated", "simulated_fallback"),
+            ("sandbox", "sandbox_provider"),
+            ("pending", "pending"),
+            ("not_configured", "not_configured"),
+            ("failed", "failed"),
+        ]
+        for api_status, expected_state in cases:
+            truth = derive_screening_truth(
+                {"matched": False, "results": [], "source": api_status, "api_status": api_status},
+                name=f"case_{api_status}",
+                required=True,
+            )
+            assert truth["canonical_state"] == expected_state
+            assert truth["provider_mode"] == expected_state
+            assert truth["terminal"] is False
+            assert truth["defensible_clear"] is False
+            assert truth["legacy_status"] != "clear"
+
+        clear = derive_screening_truth(
+            {"matched": False, "results": [], "source": "sumsub", "api_status": "live"},
+            required=True,
+        )
+        assert clear["canonical_state"] == "completed_clear"
+        assert clear["provider_mode"] == "live_provider"
+        assert clear["terminal"] is True
+        assert clear["defensible_clear"] is True
+
+        match = derive_screening_truth(
+            {
+                "matched": True,
+                "results": [{"name": "Watchlist Hit", "is_sanctioned": True}],
+                "source": "sumsub",
+                "api_status": "live",
+            },
+            required=True,
+        )
+        assert match["canonical_state"] == "completed_match"
+        assert match["screening_result"] == "match"
+
     def test_legacy_status_value_never_clear_for_pending(self):
         from screening_state import legacy_status_value
         assert legacy_status_value("pending_provider", False) == "pending"
@@ -217,6 +260,33 @@ class TestScreeningTerminalitySummary:
         assert summary["terminal"] is False
         assert summary["has_terminal_match"] is False
         assert summary["has_non_terminal"] is True
+
+    def test_truth_summary_blocks_sandbox_and_simulated_from_defensible_clear(self):
+        from screening_state import build_screening_truth_summary
+
+        for api_status, expected_state in (("sandbox", "sandbox_provider"), ("simulated", "simulated_fallback")):
+            report = {
+                "screened_at": "2026-05-10T10:00:00Z",
+                "company_screening": {
+                    "found": True,
+                    "source": "opencorporates",
+                    "sanctions": {
+                        "matched": False,
+                        "results": [],
+                        "source": api_status,
+                        "api_status": api_status,
+                    },
+                },
+                "director_screenings": [],
+                "ubo_screenings": [],
+                "kyc_applicants": [],
+            }
+            summary = build_screening_truth_summary(report)
+            assert summary["canonical_state"] == expected_state
+            assert summary["provider_mode"] == expected_state
+            assert summary["terminal"] is False
+            assert summary["defensible_clear"] is False
+            assert summary["approval_blocking"] is True
 
     def test_pending_possible_match_metadata_is_not_terminal_match(self):
         from screening_state import build_screening_terminality_summary

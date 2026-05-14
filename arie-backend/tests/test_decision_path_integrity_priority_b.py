@@ -185,6 +185,24 @@ class TestAgent5InputContract:
         memo, _, _, _ = build_compliance_memo(app, directors, ubos, [])
         screening = memo["metadata"]["agent5_input_contract"]["screening_terminality_summary"]
         assert screening["terminal"] is False
+        assert screening["provider_mode"] == "simulated_fallback"
+        assert screening["defensible_clear"] is False
+
+    def test_memo_does_not_label_sandbox_screening_as_clear(self):
+        app = _make_app(api_status="sandbox")
+        directors = [{"full_name": "D", "nationality": "Mauritius",
+                      "is_pep": "No", "ownership_pct": 0}]
+        ubos = [{"full_name": "U", "nationality": "Mauritius",
+                 "is_pep": "No", "ownership_pct": 100}]
+        memo, _, _, _ = build_compliance_memo(app, directors, ubos, [])
+        screening = memo["metadata"]["agent5_input_contract"]["screening_terminality_summary"]
+        flat = _flatten(memo)
+
+        assert screening["terminal"] is False
+        assert screening["provider_mode"] == "sandbox_provider"
+        assert screening["defensible_clear"] is False
+        assert "screening is not complete" in flat or "screening not complete" in flat
+        assert "sanctions screening completed — no matches" not in flat
 
     def test_clean_clear_screening_does_not_set_material_escalation(self):
         app = _make_app(country="United Kingdom", api_status="live", risk_level="LOW", risk_score=22)

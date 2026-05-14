@@ -67,6 +67,35 @@ COMPLETED_MATCH = "completed_match"
 NOT_CONFIGURED = "not_configured"
 FAILED = "failed"
 
+# Provider-mode / defensibility states used by API, memo, UI, and approval
+# gates. These are deliberately separate from the legacy subject terminality
+# states above: a live provider can produce completed_clear/completed_match,
+# while sandbox/simulated/not_configured/pending/failed are not defensible
+# terminal outcomes and must never render as "clear".
+LIVE_PROVIDER = "live_provider"
+SANDBOX_PROVIDER = "sandbox_provider"
+SIMULATED_FALLBACK = "simulated_fallback"
+PENDING = "pending"
+
+SCREENING_TRUTH_STATES = (
+    LIVE_PROVIDER,
+    SANDBOX_PROVIDER,
+    SIMULATED_FALLBACK,
+    NOT_CONFIGURED,
+    PENDING,
+    FAILED,
+    COMPLETED_CLEAR,
+    COMPLETED_MATCH,
+)
+
+UNSAFE_PROVIDER_STATES = frozenset({
+    SANDBOX_PROVIDER,
+    SIMULATED_FALLBACK,
+    NOT_CONFIGURED,
+    PENDING,
+    FAILED,
+})
+
 ALL_STATES = (
     NOT_STARTED,
     PENDING_PROVIDER,
@@ -85,13 +114,94 @@ TERMINAL_STATES = frozenset({COMPLETED_CLEAR, COMPLETED_MATCH})
 TERMINAL_API_STATUSES = frozenset({"live"})
 
 # Provider api_status values that mean "no terminal answer yet".
-PENDING_API_STATUSES = frozenset({"pending", "init", "created", "queued", "onHold"})
+PENDING_API_STATUSES = frozenset({
+    "pending",
+    "init",
+    "created",
+    "queued",
+    "onhold",
+    "onHold",
+    "processing",
+    "in_progress",
+})
 
 # Provider api_status values that mean "provider is not configured for this scope".
 NOT_CONFIGURED_API_STATUSES = frozenset({"not_configured"})
 
 # Provider api_status values that mean "we tried and failed".
-FAILED_API_STATUSES = frozenset({"error", "unavailable", "blocked"})
+FAILED_API_STATUSES = frozenset({"error", "unavailable", "blocked", "failed", "failure"})
+
+SIMULATED_API_STATUSES = frozenset({"simulated", "mock", "mocked", "stubbed", "demo"})
+SANDBOX_API_STATUSES = frozenset({"sandbox", "test", "test_mode"})
+
+
+def _normalise_token(value) -> str:
+    return str(value or "").strip().lower()
+
+
+def _record_text(record: Optional[dict]) -> str:
+    if not isinstance(record, dict):
+        return ""
+    values = []
+    for key in (
+        "api_status",
+        "source",
+        "provider",
+        "provider_mode",
+        "mode",
+        "environment",
+        "screening_mode",
+    ):
+        value = record.get(key)
+        if value not in (None, "", [], {}):
+            values.append(str(value))
+    if record.get("is_simulated") or record.get("testMode") or record.get("test_mode"):
+        values.append("simulated")
+    return " ".join(values).lower()
+
+
+def _contains_any_token(text: str, tokens) -> bool:
+    if not text:
+        return False
+    return any(token in text for token in tokens)
+
+
+def provider_mode_from_record(screening: Optional[dict]) -> str:
+    """Return the provider mode/availability truth for a screening record."""
+    if not screening or not isinstance(screening, dict):
+        return PENDING
+
+    api_status = _normalise_token(screening.get("api_status"))
+    source = _normalise_token(screening.get("source"))
+    text = _record_text(screening)
+
+    if api_status in NOT_CONFIGURED_API_STATUSES or "not_configured" in text:
+        return NOT_CONFIGURED
+    if api_status in FAILED_API_STATUSES or source in ("unavailable", "blocked", "failed"):
+        return FAILED
+    if api_status in SANDBOX_API_STATUSES or _contains_any_token(text, ("sandbox", "test-mode", "test_mode")):
+        return SANDBOX_PROVIDER
+    if api_status in SIMULATED_API_STATUSES or _contains_any_token(
+        text,
+        ("simulated", "mock", "stubbed", "demo", "codex-smoke", "smoke"),
+    ):
+        return SIMULATED_FALLBACK
+    if api_status in PENDING_API_STATUSES:
+        return PENDING
+    if api_status in TERMINAL_API_STATUSES:
+        return LIVE_PROVIDER
+    if (
+        not api_status
+        and screening.get("matched")
+        and screening.get("results")
+        and not _contains_any_token(text, ("simulated", "mock", "stubbed", "demo", "codex-smoke", "smoke", "sandbox"))
+    ):
+        return LIVE_PROVIDER
+
+    # Unknown non-empty provider statuses are not defensible terminal answers.
+    if api_status:
+        return PENDING
+    return PENDING
 
 
 def is_terminal(state: str) -> bool:
@@ -116,23 +226,18 @@ def derive_screening_state(screening: Optional[dict]) -> str:
     Returns ``not_started`` when the record is missing/empty, never
     ``completed_clear``.
 
-    Positive-evidence override: when the record explicitly carries
-    ``matched=True`` with non-empty results, it is treated as
-    ``completed_match`` regardless of api_status. This preserves any
-    discovered hit as actionable. The reverse is **not** symmetric:
-    ``matched=False`` without a terminal api_status is **never** treated as
-    ``completed_clear`` — that is the dangerous false-reassurance case
-    Priority A is closing.
+    Positive evidence is actionable only when it comes from a live terminal
+    provider response. Sandbox, simulated, pending, failed, and not_configured
+    records remain non-terminal even if they carry possible-match metadata.
+    The reverse is **not** symmetric: ``matched=False`` without a terminal
+    api_status is **never** treated as ``completed_clear`` — that is the
+    dangerous false-reassurance case Priority A is closing.
     """
     if not screening or not isinstance(screening, dict):
         return NOT_STARTED
 
-    api_status = (screening.get("api_status") or "").strip()
+    api_status = _normalise_token(screening.get("api_status"))
     source = (screening.get("source") or "").strip().lower()
-
-    # Positive-evidence override: a recorded hit is always actionable.
-    if screening.get("matched") and screening.get("results"):
-        return COMPLETED_MATCH
 
     # Explicit not_configured short-circuit (e.g. Sumsub company KYB level missing)
     if api_status in NOT_CONFIGURED_API_STATUSES:
@@ -142,12 +247,13 @@ def derive_screening_state(screening: Optional[dict]) -> str:
     if api_status in FAILED_API_STATUSES or source in ("unavailable", "blocked"):
         return FAILED
 
-    # Pending / not-yet-terminal provider state
-    if api_status in PENDING_API_STATUSES:
+    # Sandbox/simulated/pending provider states are non-terminal.
+    provider_mode = provider_mode_from_record(screening)
+    if provider_mode in (SANDBOX_PROVIDER, SIMULATED_FALLBACK, PENDING):
         return PENDING_PROVIDER
 
     # Terminal answer from a real provider
-    if api_status in TERMINAL_API_STATUSES:
+    if provider_mode == LIVE_PROVIDER:
         if screening.get("matched"):
             return COMPLETED_MATCH
         # ``matched`` may be False or absent — both are terminal-clear
@@ -365,6 +471,218 @@ def _state_from_company(report: dict) -> Optional[str]:
     return derive_screening_state(company)
 
 
+def derive_screening_truth(screening: Optional[dict], *, name: Optional[str] = None, required: bool = True) -> dict:
+    """
+    Derive the regulator-facing screening truth envelope for one required
+    provider record.
+
+    ``completed_clear`` is emitted only when the provider mode is
+    ``live_provider`` and the provider has returned a terminal no-match
+    answer. Sandbox, simulated, not_configured, pending, and failed states
+    remain explicit and approval-blocking for required checks.
+    """
+    screening = screening if isinstance(screening, dict) else {}
+    mode = provider_mode_from_record(screening)
+    results = screening.get("results") if isinstance(screening.get("results"), list) else []
+    has_match = bool(screening.get("matched") or results)
+    has_material_hit = _results_have_material_hit(results) or bool(screening.get("matched") and results)
+
+    if mode == LIVE_PROVIDER:
+        canonical_state = COMPLETED_MATCH if has_match else COMPLETED_CLEAR
+        terminal = True
+        provider_availability = "available"
+        screening_result = "match" if has_match else "clear"
+    else:
+        canonical_state = mode
+        terminal = False
+        screening_result = "match" if has_match else "unknown"
+        if mode == NOT_CONFIGURED:
+            provider_availability = "not_configured"
+        elif mode == FAILED:
+            provider_availability = "failed"
+        elif mode == PENDING:
+            provider_availability = "pending"
+        elif mode == SANDBOX_PROVIDER:
+            provider_availability = "sandbox"
+        elif mode == SIMULATED_FALLBACK:
+            provider_availability = "simulated"
+        else:
+            provider_availability = "unknown"
+
+    defensible_clear = canonical_state == COMPLETED_CLEAR and mode == LIVE_PROVIDER and terminal
+    approval_blocking = bool(required and canonical_state in UNSAFE_PROVIDER_STATES)
+    if canonical_state == COMPLETED_CLEAR:
+        legacy_status = "clear"
+    elif canonical_state == COMPLETED_MATCH:
+        legacy_status = "match" if has_material_hit or has_match else "review"
+    elif canonical_state == NOT_CONFIGURED:
+        legacy_status = "not_configured"
+    elif canonical_state == FAILED:
+        legacy_status = "unavailable"
+    else:
+        legacy_status = "pending"
+
+    reason_map = {
+        COMPLETED_CLEAR: "live_terminal_clear",
+        COMPLETED_MATCH: "live_terminal_match",
+        SANDBOX_PROVIDER: "provider_mode_sandbox",
+        SIMULATED_FALLBACK: "provider_mode_simulated",
+        NOT_CONFIGURED: "provider_not_configured",
+        PENDING: "provider_pending_not_terminal",
+        FAILED: "provider_failed",
+    }
+    reason = reason_map.get(canonical_state, "provider_not_terminal")
+
+    return {
+        "name": name,
+        "required": bool(required),
+        "canonical_state": canonical_state,
+        "provider_mode": mode,
+        "provider_availability": provider_availability,
+        "screening_result": screening_result,
+        "terminal": terminal,
+        "defensible_clear": defensible_clear,
+        "approval_blocking": approval_blocking,
+        "reason": reason,
+        "api_status": screening.get("api_status"),
+        "source": screening.get("source"),
+        "provider": screening.get("provider"),
+        "freshness": {
+            "screened_at": screening.get("screened_at"),
+            "screening_valid_until": screening.get("screening_valid_until"),
+        },
+        "legacy_status": legacy_status,
+    }
+
+
+def _collect_required_screening_records(report: dict) -> list:
+    records = []
+    if not isinstance(report, dict):
+        return records
+
+    company = report.get("company_screening") if isinstance(report.get("company_screening"), dict) else {}
+    company_provider = _normalise_token(
+        company.get("provider")
+        or company.get("source")
+        or report.get("provider")
+    )
+    if company_provider == "complyadvantage":
+        if company:
+            records.append(("company_screening", company, True))
+    else:
+        sanctions = company.get("sanctions") if isinstance(company.get("sanctions"), dict) else None
+        if sanctions:
+            records.append(("company_watchlist", sanctions, True))
+
+    for idx, person in enumerate(report.get("director_screenings") or []):
+        if isinstance(person, dict) and isinstance(person.get("screening"), dict):
+            records.append((f"director_screening_{idx}", person.get("screening"), True))
+    for idx, person in enumerate(report.get("ubo_screenings") or []):
+        if isinstance(person, dict) and isinstance(person.get("screening"), dict):
+            records.append((f"ubo_screening_{idx}", person.get("screening"), True))
+    for idx, applicant in enumerate(report.get("kyc_applicants") or []):
+        if isinstance(applicant, dict):
+            records.append((f"kyc_applicant_{idx}", applicant, True))
+    for key in ("sanctions", "kyc"):
+        legacy = report.get(key)
+        if isinstance(legacy, dict):
+            records.append((key, legacy, True))
+    return records
+
+
+def _aggregate_truth_state(evidence: list) -> str:
+    states = [item.get("canonical_state") for item in evidence if item.get("canonical_state")]
+    if not states:
+        return PENDING
+    for state in (FAILED, NOT_CONFIGURED, SANDBOX_PROVIDER, SIMULATED_FALLBACK, PENDING):
+        if state in states:
+            return state
+    if COMPLETED_MATCH in states:
+        return COMPLETED_MATCH
+    if states and all(state == COMPLETED_CLEAR for state in states):
+        return COMPLETED_CLEAR
+    return PENDING
+
+
+def build_screening_truth_summary(report: Optional[dict], prescreening: Optional[dict] = None) -> dict:
+    """
+    Build the API/memo/approval truth summary for required screening checks.
+
+    Enrichment-only sources are intentionally excluded. The summary separates
+    provider availability, provider mode, screening result, terminality, and
+    freshness so consumers do not infer "clear" from a non-terminal no-match.
+    """
+    report = report if isinstance(report, dict) else {}
+    prescreening = prescreening if isinstance(prescreening, dict) else {}
+    evidence = [
+        derive_screening_truth(record, name=name, required=required)
+        for name, record, required in _collect_required_screening_records(report)
+    ]
+
+    canonical_state = _aggregate_truth_state(evidence)
+    terminal = bool(evidence) and all(item.get("terminal") for item in evidence)
+    has_match = any(item.get("screening_result") == "match" for item in evidence)
+    has_failed = any(item.get("canonical_state") == FAILED for item in evidence)
+    has_not_configured = any(item.get("canonical_state") == NOT_CONFIGURED for item in evidence)
+    has_pending = any(item.get("canonical_state") == PENDING for item in evidence)
+    has_sandbox = any(item.get("canonical_state") == SANDBOX_PROVIDER for item in evidence)
+    has_simulated = any(item.get("canonical_state") == SIMULATED_FALLBACK for item in evidence)
+    blocking_reasons = [
+        f"{item.get('name') or 'screening'}:{item.get('reason')}"
+        for item in evidence
+        if item.get("approval_blocking")
+    ]
+
+    provider_mode = LIVE_PROVIDER if terminal else canonical_state
+    if canonical_state == COMPLETED_MATCH:
+        screening_result = "match"
+    elif canonical_state == COMPLETED_CLEAR and terminal and not has_match:
+        screening_result = "clear"
+    elif has_match:
+        screening_result = "match"
+    else:
+        screening_result = "unknown"
+
+    provider_availability = "available"
+    if has_failed:
+        provider_availability = "failed"
+    elif has_not_configured:
+        provider_availability = "not_configured"
+    elif has_sandbox:
+        provider_availability = "sandbox"
+    elif has_simulated:
+        provider_availability = "simulated"
+    elif has_pending or not terminal:
+        provider_availability = "pending"
+
+    freshness = {
+        "screened_at": report.get("screened_at") or prescreening.get("last_screened_at"),
+        "screening_valid_until": prescreening.get("screening_valid_until"),
+        "screening_validity_days": prescreening.get("screening_validity_days"),
+    }
+
+    return {
+        "canonical_state": canonical_state,
+        "provider_availability": provider_availability,
+        "provider_mode": provider_mode,
+        "screening_result": screening_result,
+        "terminal": terminal,
+        "defensible_clear": terminal and canonical_state == COMPLETED_CLEAR and provider_mode == LIVE_PROVIDER,
+        "approval_ready": terminal and canonical_state in (COMPLETED_CLEAR, COMPLETED_MATCH),
+        "approval_blocking": bool(blocking_reasons) or not terminal,
+        "blocking_reasons": blocking_reasons or ([] if terminal else ["screening:not_terminal"]),
+        "has_non_terminal": not terminal,
+        "has_failed": has_failed,
+        "has_not_configured": has_not_configured,
+        "has_sandbox": has_sandbox,
+        "has_simulated": has_simulated,
+        "has_pending": has_pending,
+        "has_completed_match": canonical_state == COMPLETED_MATCH or has_match,
+        "required_evidence": evidence,
+        "freshness": freshness,
+    }
+
+
 def build_screening_terminality_summary(report: Optional[dict], prescreening: Optional[dict] = None) -> dict:
     """
     Build the canonical screening terminality summary used by memo,
@@ -378,6 +696,7 @@ def build_screening_terminality_summary(report: Optional[dict], prescreening: Op
     """
     report = report if isinstance(report, dict) else {}
     prescreening = prescreening if isinstance(prescreening, dict) else {}
+    truth_summary = build_screening_truth_summary(report, prescreening)
 
     person_entries = list(report.get("director_screenings") or []) + list(report.get("ubo_screenings") or [])
     person_states = [_state_from_entry(entry) for entry in person_entries if isinstance(entry, dict)]
@@ -393,6 +712,11 @@ def build_screening_terminality_summary(report: Optional[dict], prescreening: Op
     has_not_configured = any(state == NOT_CONFIGURED for state in states)
 
     terminal = bool(states) and all(state in TERMINAL_STATES for state in states) and not has_non_terminal
+    if truth_summary.get("required_evidence"):
+        terminal = bool(truth_summary.get("terminal"))
+        has_non_terminal = bool(truth_summary.get("has_non_terminal"))
+        has_failed = bool(truth_summary.get("has_failed"))
+        has_not_configured = bool(truth_summary.get("has_not_configured"))
 
     terminal_person_hit = any(
         state in TERMINAL_STATES and _entry_has_material_hit(entry)
@@ -438,6 +762,13 @@ def build_screening_terminality_summary(report: Optional[dict], prescreening: Op
         # Legacy total_hits-only report: keep it as terminal material evidence.
         terminal = True
 
+    if truth_summary.get("required_evidence") and not terminal:
+        # Possible-match metadata from non-terminal/sandbox/simulated providers
+        # is handled by screening completeness controls, not by material-match
+        # EDD routing. Do not let unsafe provider modes masquerade as terminal
+        # material screening concerns.
+        material_hit = False
+
     return {
         "terminal": terminal,
         "has_non_terminal": bool(has_non_terminal),
@@ -447,6 +778,16 @@ def build_screening_terminality_summary(report: Optional[dict], prescreening: Op
         "company_screening_configured": bool(report.get("company_screening")),
         "company_state": company_state,
         "person_states": person_states,
+        "canonical_state": truth_summary.get("canonical_state"),
+        "provider_availability": truth_summary.get("provider_availability"),
+        "provider_mode": truth_summary.get("provider_mode"),
+        "screening_result": truth_summary.get("screening_result"),
+        "defensible_clear": truth_summary.get("defensible_clear"),
+        "approval_ready": truth_summary.get("approval_ready"),
+        "approval_blocking": truth_summary.get("approval_blocking"),
+        "blocking_reasons": truth_summary.get("blocking_reasons") or [],
+        "required_evidence": truth_summary.get("required_evidence") or [],
+        "freshness": truth_summary.get("freshness") or {},
     }
 
 
@@ -511,6 +852,10 @@ STATE_LABELS = {
     COMPLETED_MATCH: "Provider Match",
     NOT_CONFIGURED: "Screening Not Configured",
     FAILED: "Screening Unavailable",
+    LIVE_PROVIDER: "Live Provider",
+    SANDBOX_PROVIDER: "Sandbox Provider",
+    SIMULATED_FALLBACK: "Simulated Screening",
+    PENDING: "Screening Pending Provider",
 }
 
 

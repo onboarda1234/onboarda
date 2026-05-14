@@ -284,8 +284,7 @@ def _make_screening_report_for_gate5(*, director_status="live"):
                 "matched": False,
                 "results": [],
                 "source": "sumsub",
-                "api_status": "not_configured",
-                "reason": "Sumsub company KYB level not configured",
+                "api_status": "live",
             },
         },
         "director_screenings": [

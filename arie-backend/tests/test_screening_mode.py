@@ -40,6 +40,16 @@ def test_determine_screening_mode_simulated_when_nested_provider_is_simulated(te
     assert determine_screening_mode(report) == "simulated"
 
 
+def test_determine_screening_mode_sandbox_when_required_provider_is_sandbox(temp_db):
+    from security_hardening import determine_screening_mode
+
+    report = _live_report()
+    report["director_screenings"][0]["screening"]["api_status"] = "sandbox"
+    report["director_screenings"][0]["screening"]["source"] = "sumsub_sandbox"
+
+    assert determine_screening_mode(report) == "sandbox"
+
+
 def test_determine_screening_mode_live_for_complyadvantage_report():
     from security_hardening import determine_screening_mode
 
@@ -256,6 +266,50 @@ def test_gate5_blocks_simulated_company_watchlist(db, temp_db):
     assert can_approve is False
     assert "company_watchlist" in message
     assert "simulated" in message.lower()
+
+
+def test_gate5_blocks_sandbox_company_watchlist(db, temp_db):
+    """Sandbox screening is not production-live coverage and must block approval."""
+    from security_hardening import ApprovalGateValidator
+
+    report = _live_report()
+    report["company_screening"]["sanctions"]["source"] = "sumsub_sandbox"
+    report["company_screening"]["sanctions"]["api_status"] = "sandbox"
+
+    app = _insert_gate5_app(db, "app_g5_wl_sandbox", report)
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+    assert can_approve is False
+    assert "sandbox" in message.lower()
+    assert "live terminal screening" in message.lower()
+
+
+def test_gate5_blocks_not_configured_company_watchlist(db, temp_db):
+    """Required not_configured screening is explicit and fail-closed."""
+    from security_hardening import ApprovalGateValidator
+
+    report = _live_report()
+    report["company_screening"]["sanctions"]["source"] = "sumsub"
+    report["company_screening"]["sanctions"]["api_status"] = "not_configured"
+
+    app = _insert_gate5_app(db, "app_g5_wl_nc", report)
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+    assert can_approve is False
+    assert "not_configured" in message
+    assert "company_watchlist" in message
+
+
+def test_gate5_blocks_pending_and_failed_required_screening(db, temp_db):
+    from security_hardening import ApprovalGateValidator
+
+    for status in ("pending", "failed"):
+        report = _live_report()
+        report["director_screenings"][0]["screening"]["source"] = "sumsub"
+        report["director_screenings"][0]["screening"]["api_status"] = status
+
+        app = _insert_gate5_app(db, f"app_g5_dir_{status}", report)
+        can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+        assert can_approve is False
+        assert status in message.lower()
 
 
 def test_gate5_blocks_simulated_director_screening(db, temp_db):

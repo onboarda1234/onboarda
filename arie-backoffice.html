@@ -6918,9 +6918,100 @@ function classifyScreeningHits(results) {
   return facts;
 }
 
+function screeningProviderModeFromRecord(record) {
+  record = record || {};
+  var api = String(record.api_status || '').trim().toLowerCase();
+  var text = [
+    record.api_status,
+    record.source,
+    record.provider,
+    record.provider_mode,
+    record.mode,
+    record.environment,
+    record.screening_mode
+  ].map(function(v) { return String(v || '').toLowerCase(); }).join(' ');
+  if (record.is_simulated || record.testMode || record.test_mode) text += ' simulated';
+  if (api === 'not_configured' || text.indexOf('not_configured') >= 0) return 'not_configured';
+  if (['error', 'unavailable', 'blocked', 'failed', 'failure'].indexOf(api) >= 0 || ['unavailable', 'blocked', 'failed'].indexOf(String(record.source || '').toLowerCase()) >= 0) return 'failed';
+  if (['sandbox', 'test', 'test_mode'].indexOf(api) >= 0 || text.indexOf('sandbox') >= 0 || text.indexOf('test-mode') >= 0 || text.indexOf('test_mode') >= 0) return 'sandbox_provider';
+  if (['simulated', 'mock', 'mocked', 'stubbed', 'demo'].indexOf(api) >= 0 || text.indexOf('simulated') >= 0 || text.indexOf('mock') >= 0 || text.indexOf('stubbed') >= 0 || text.indexOf('demo') >= 0 || text.indexOf('smoke') >= 0) return 'simulated_fallback';
+  if (['pending', 'init', 'created', 'queued', 'onhold', 'processing', 'in_progress'].indexOf(api) >= 0) return 'pending';
+  if (api === 'live') return 'live_provider';
+  if (!api && record.matched && Array.isArray(record.results) && record.results.length && text.indexOf('sandbox') < 0) return 'live_provider';
+  return api ? 'pending' : 'pending';
+}
+
+function deriveScreeningTruth(record) {
+  record = record || {};
+  var providerMode = screeningProviderModeFromRecord(record);
+  var results = Array.isArray(record.results) ? record.results : [];
+  var hasMatch = !!record.matched || results.length > 0;
+  var canonicalState = providerMode;
+  var terminal = false;
+  var screeningResult = hasMatch ? 'match' : 'unknown';
+  var availability = 'pending';
+  if (providerMode === 'live_provider') {
+    canonicalState = hasMatch ? 'completed_match' : 'completed_clear';
+    terminal = true;
+    screeningResult = hasMatch ? 'match' : 'clear';
+    availability = 'available';
+  } else if (providerMode === 'not_configured') {
+    availability = 'not_configured';
+  } else if (providerMode === 'failed') {
+    availability = 'failed';
+  } else if (providerMode === 'sandbox_provider') {
+    availability = 'sandbox';
+  } else if (providerMode === 'simulated_fallback') {
+    availability = 'simulated';
+  }
+  return {
+    canonical_state: canonicalState,
+    provider_mode: providerMode,
+    provider_availability: availability,
+    screening_result: screeningResult,
+    terminal: terminal,
+    defensible_clear: canonicalState === 'completed_clear' && providerMode === 'live_provider',
+    legacy_status: canonicalState === 'completed_clear' ? 'clear' : (canonicalState === 'completed_match' ? 'match' : (canonicalState === 'not_configured' ? 'not_configured' : (canonicalState === 'failed' ? 'unavailable' : 'pending')))
+  };
+}
+
+function deriveScreeningTruthSummary(report) {
+  report = report || {};
+  var company = report.company_screening || {};
+  var records = [];
+  if (company.sanctions) records.push(company.sanctions);
+  (report.director_screenings || []).forEach(function(item) { if (item && item.screening) records.push(item.screening); });
+  (report.ubo_screenings || []).forEach(function(item) { if (item && item.screening) records.push(item.screening); });
+  (report.kyc_applicants || []).forEach(function(item) { if (item) records.push(item); });
+  var evidence = records.map(deriveScreeningTruth);
+  var terminal = evidence.length > 0 && evidence.every(function(item) { return item.terminal; });
+  var priority = ['failed', 'not_configured', 'sandbox_provider', 'simulated_fallback', 'pending', 'completed_match', 'completed_clear'];
+  var canonicalState = 'pending';
+  priority.some(function(state) {
+    if (evidence.some(function(item) { return item.canonical_state === state; })) {
+      canonicalState = state;
+      return true;
+    }
+    return false;
+  });
+  var hasMatch = evidence.some(function(item) { return item.screening_result === 'match'; });
+  var providerMode = terminal ? 'live_provider' : canonicalState;
+  return {
+    canonical_state: canonicalState,
+    provider_mode: providerMode,
+    provider_availability: evidence.some(function(item) { return item.provider_availability === 'failed'; }) ? 'failed' : (evidence.some(function(item) { return item.provider_availability === 'not_configured'; }) ? 'not_configured' : (evidence.some(function(item) { return item.provider_availability === 'sandbox'; }) ? 'sandbox' : (evidence.some(function(item) { return item.provider_availability === 'simulated'; }) ? 'simulated' : (terminal ? 'available' : 'pending')))),
+    screening_result: canonicalState === 'completed_clear' && !hasMatch ? 'clear' : (hasMatch ? 'match' : 'unknown'),
+    terminal: terminal,
+    defensible_clear: terminal && canonicalState === 'completed_clear' && providerMode === 'live_provider',
+    approval_ready: terminal && (canonicalState === 'completed_clear' || canonicalState === 'completed_match'),
+    blocking_reasons: terminal ? [] : ['screening:not_terminal']
+  };
+}
+
 function getApplicationScreeningSummary(app) {
   var screeningData = getApplicationScreeningReport(app);
   var report = screeningData.report;
+  var suppliedTruth = app && app.screening_truth_summary;
   if (!report) {
     return {
       screening_run_recorded: false,
@@ -6936,7 +7027,8 @@ function getApplicationScreeningSummary(app) {
       last_screened_at: screeningData.meta.last_screened_at || null,
       screening_valid_until: screeningData.meta.screening_valid_until || null,
       screening_validity_days: screeningData.meta.screening_validity_days || null,
-      screening_freshness: null
+      screening_freshness: null,
+      screening_truth_summary: suppliedTruth || null
     };
   }
 
@@ -6982,7 +7074,8 @@ function getApplicationScreeningSummary(app) {
     last_screened_at: screeningData.meta.last_screened_at || report.screened_at || null,
     screening_valid_until: screeningData.meta.screening_valid_until || null,
     screening_validity_days: screeningData.meta.screening_validity_days || null,
-    screening_freshness: freshness
+    screening_freshness: freshness,
+    screening_truth_summary: suppliedTruth || report.screening_truth_summary || deriveScreeningTruthSummary(report)
   };
 }
 
@@ -7001,10 +7094,21 @@ function getPersonScreeningResult(app, personName) {
   var hasSanctionsHit = hitFacts.sanctions_hits > 0;
   var hasPepHit = hitFacts.pep_hits > 0 || !!match.undeclared_pep;
   var hasOtherHit = hitFacts.other_hits > 0;
+  var truth = deriveScreeningTruth(screening);
+  var nonTerminalStatus = truth.legacy_status || 'pending';
+  var sanctionsStatus = nonTerminalStatus;
+  var pepStatus = nonTerminalStatus;
+  if (truth.canonical_state === 'completed_clear') {
+    sanctionsStatus = 'clear';
+    pepStatus = 'clear';
+  } else if (truth.canonical_state === 'completed_match') {
+    sanctionsStatus = hasSanctionsHit ? 'match' : (hasOtherHit ? 'review' : 'review');
+    pepStatus = hasPepHit ? 'match' : (hasOtherHit ? 'review' : 'review');
+  }
 
   return {
-    sanctions: hasMatchedRecord ? (hasSanctionsHit ? 'match' : (hasOtherHit ? 'review' : 'clear')) : 'clear',
-    pep: hasMatchedRecord ? (hasPepHit ? 'match' : (hasOtherHit ? 'review' : 'clear')) : 'clear',
+    sanctions: sanctionsStatus,
+    pep: pepStatus,
     adverse_media: 'not_available',
     adverse_media_available: false,
     raw_match_count: hitFacts.total,
@@ -7014,8 +7118,11 @@ function getPersonScreeningResult(app, personName) {
     undeclared_pep: !!match.undeclared_pep,
     screening_source: screening.source || null,
     screening_api_status: screening.api_status || null,
+    screening_truth_state: truth.canonical_state,
+    provider_mode: truth.provider_mode,
+    defensible_clear: truth.defensible_clear,
     screened_at: screening.screened_at || screeningSummary.screened_at || null,
-    requires_review: hasMatchedRecord || !!match.undeclared_pep,
+    requires_review: truth.canonical_state !== 'completed_clear' || hasMatchedRecord || !!match.undeclared_pep,
     raw_screening: screening
   };
 }
@@ -7025,10 +7132,18 @@ function screeningBadge(status) {
   var s = String(status).toLowerCase();
   if (s === 'not_available' || s === 'unavailable') return '<span class="badge draft">Not Available</span>';
   if (s === 'not_applicable' || s === 'n/a') return '<span class="badge draft">N/A</span>';
+  if (s === 'not_configured') return '<span class="badge draft">Not Configured</span>';
+  if (s === 'sandbox_provider' || s === 'sandbox') return '<span class="badge pending">Sandbox</span>';
+  if (s === 'simulated_fallback' || s === 'simulated') return '<span class="badge pending">Simulated</span>';
+  if (s === 'pending' || s === 'pending_provider') return '<span class="badge pending">Pending</span>';
+  if (s === 'failed' || s === 'screening_unavailable') return '<span class="badge high">Unavailable</span>';
+  if (s === 'completed_clear') return '<span class="badge approved">Clear</span>';
+  if (s === 'completed_match') return '<span class="badge high">Match</span>';
+  if (s === 'live_provider') return '<span class="badge approved">Live</span>';
   if (s === 'declared') return '<span class="badge pending">Declared</span>';
   if (s === 'not_declared') return '<span class="badge approved">Not Declared</span>';
   if (s === 'clear' || s === 'no_match' || s === 'passed') return '<span class="badge approved">Clear</span>';
-  if (s === 'match' || s === 'hit' || s === 'failed') return '<span class="badge high">Match</span>';
+  if (s === 'match' || s === 'hit') return '<span class="badge high">Match</span>';
   if (s === 'possible_match' || s === 'review') return '<span class="badge pending">Review</span>';
   return '<span class="badge pending">' + escapeHtml(status) + '</span>';
 }
@@ -7122,8 +7237,9 @@ function screeningReviewHistory(row) {
 
 function screeningModeBadge(mode) {
   if (!mode || mode === 'unknown') return '<span class="badge high" title="Screening provenance could not be verified. This will block approval in production.">⚠ Unverified — Blocks Approval</span>';
-  if (mode === 'live') return '<span class="badge approved">✓ Live Screening</span>';
-  if (mode === 'simulated') return '<span class="badge high" title="Simulated screening data cannot be used for production approval. This is not from a live screening provider.">🧪 Simulated — Not From Live Screening — Blocks Approval</span>';
+  if (mode === 'live' || mode === 'live_provider') return '<span class="badge approved">✓ Live Screening</span>';
+  if (mode === 'simulated' || mode === 'simulated_fallback') return '<span class="badge high" title="Simulated screening data cannot be used for production approval. This is not from a live screening provider.">🧪 Simulated — Not From Live Screening — Blocks Approval</span>';
+  if (mode === 'sandbox' || mode === 'sandbox_provider') return '<span class="badge high" title="Sandbox provider data cannot be used as production-live screening.">Sandbox — Not Production Live — Blocks Approval</span>';
   if (mode === 'not_configured') return '<span class="badge high" title="Required screening provider is not configured for this subject.">Screening Not Configured — Blocks Approval</span>';
   if (mode === 'pending') return '<span class="badge pending" title="Provider screening is not terminal yet.">Screening Pending — Blocks Approval</span>';
   if (mode === 'unavailable') return '<span class="badge high" title="Provider screening was unavailable or failed.">Screening Unavailable — Blocks Approval</span>';
@@ -7763,10 +7879,29 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
     .concat((reviewRow && reviewRow.provider_evidence) || []);
   companyResults = dedupScreeningResults(companyResults);
   if (!companyResults.length && Array.isArray(company.results)) companyResults = company.results;
+  var companyTruth = deriveScreeningTruth(companySanctions && Object.keys(companySanctions).length ? companySanctions : company);
+  var companyFallbackStatusKey = screeningSummary.screening_run_recorded
+    ? (companyTruth.canonical_state === 'completed_clear'
+        ? (companyHits.matched ? 'review_required' : 'screened_no_match')
+        : (companyTruth.canonical_state === 'completed_match'
+            ? 'review_required'
+            : (companyTruth.canonical_state === 'not_configured'
+                ? 'screening_not_configured'
+                : (companyTruth.canonical_state === 'failed' ? 'screening_unavailable' : 'screening_pending'))))
+    : 'awaiting_screening';
+  var companyFallbackStatusLabel = screeningSummary.screening_run_recorded
+    ? (companyFallbackStatusKey === 'screened_no_match'
+        ? 'No Provider Match'
+        : (companyFallbackStatusKey === 'review_required'
+            ? 'Review Required'
+            : (companyFallbackStatusKey === 'screening_not_configured'
+                ? 'Screening Not Configured'
+                : (companyFallbackStatusKey === 'screening_unavailable' ? 'Screening Unavailable' : 'Screening Pending Provider'))))
+    : 'Awaiting Screening';
   var badges = [
-    screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : (screeningSummary.screening_run_recorded ? (companyHits.matched ? 'review_required' : 'screened_no_match') : 'awaiting_screening'), reviewRow ? reviewRow.status_label : (screeningSummary.screening_run_recorded ? (companyHits.matched ? 'Review Required' : 'No Provider Match') : 'Awaiting Screening')),
-    screeningBadge(reviewRow ? reviewRow.watchlist_status : (companyHits.matched ? 'match' : (screeningSummary.screening_run_recorded ? 'clear' : 'pending'))),
-    screeningModeBadge(screeningSummary.screening_mode)
+    screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : companyFallbackStatusKey, reviewRow ? reviewRow.status_label : companyFallbackStatusLabel),
+    screeningBadge(reviewRow ? reviewRow.watchlist_status : (screeningSummary.screening_run_recorded ? companyTruth.legacy_status : 'pending')),
+    screeningModeBadge((reviewRow && reviewRow.provider_mode) || (screeningSummary.screening_truth_summary && screeningSummary.screening_truth_summary.provider_mode) || screeningSummary.screening_mode)
   ];
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow));
 
@@ -7809,14 +7944,37 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
   var personDeclaredPep = declaredPepFromScreeningRecord(screeningRecord, person.pep);
   var providerPep = facts.pep_hits > 0 || !!(screeningRecord || {}).provider_detected_pep || !!(screeningRecord || {}).has_pep_hit;
   var undeclaredPep = !!(screeningRecord || {}).undeclared_pep;
+  var personTruth = deriveScreeningTruth(screening || {});
+  var personFallbackStatusKey = screening
+    ? (personTruth.canonical_state === 'completed_clear'
+        ? (personDeclaredPep ? 'declared_pep_review' : 'screened_no_match')
+        : (personTruth.canonical_state === 'completed_match'
+            ? 'review_required'
+            : (personTruth.canonical_state === 'not_configured'
+                ? 'screening_not_configured'
+                : (personTruth.canonical_state === 'failed' ? 'screening_unavailable' : 'screening_pending'))))
+    : 'awaiting_screening';
+  var personFallbackStatusLabel = screening
+    ? (personFallbackStatusKey === 'screened_no_match'
+        ? 'No Provider Match'
+        : (personFallbackStatusKey === 'declared_pep_review'
+            ? 'Declared PEP Review'
+            : (personFallbackStatusKey === 'review_required'
+                ? 'Review Required'
+                : (personFallbackStatusKey === 'screening_not_configured'
+                    ? (personDeclaredPep ? 'Declared PEP — Screening Not Configured' : 'Screening Not Configured')
+                    : (personFallbackStatusKey === 'screening_unavailable'
+                        ? (personDeclaredPep ? 'Declared PEP — Screening Unavailable' : 'Screening Unavailable')
+                        : (personDeclaredPep ? 'Declared PEP — Screening Pending Provider' : 'Screening Pending Provider'))))))
+    : 'Awaiting Screening';
   var badges = [
-    screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : (screening ? (facts.matched ? 'review_required' : 'screened_no_match') : 'awaiting_screening'), reviewRow ? reviewRow.status_label : (screening ? (facts.matched ? 'Review Required' : 'No Provider Match') : 'Awaiting Screening')),
-    screeningBadge(reviewRow ? reviewRow.watchlist_status : (screening ? (facts.sanctions_hits > 0 ? 'match' : (facts.other_hits > 0 ? 'review' : 'clear')) : 'pending')),
+    screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : personFallbackStatusKey, reviewRow ? reviewRow.status_label : personFallbackStatusLabel),
+    screeningBadge(reviewRow ? reviewRow.watchlist_status : (screening ? (personTruth.canonical_state === 'completed_match' ? (facts.sanctions_hits > 0 ? 'match' : 'review') : personTruth.legacy_status) : 'pending')),
     // Priority A.2: declared PEP from source data wins over the queue
     // serializer's pep_declared_status. The chip must never render
     // "Not Declared" while the body text below states "Declared PEP: Yes".
     screeningBadge(personDeclaredPep ? 'declared' : 'not_declared'),
-    screeningBadge(reviewRow ? reviewRow.pep_screening_status : (screening ? (providerPep || undeclaredPep ? 'match' : (facts.other_hits > 0 || facts.adverse_media_hits > 0 ? 'review' : 'clear')) : 'pending'))
+    screeningBadge(reviewRow ? reviewRow.pep_screening_status : (screening ? (personTruth.canonical_state === 'completed_match' ? (providerPep || undeclaredPep ? 'match' : 'review') : personTruth.legacy_status) : 'pending'))
   ];
   if (reviewRow && reviewRow.review_disposition) badges.push(screeningReviewBadge(reviewRow));
 
@@ -10957,7 +11115,12 @@ function getApplicationApprovalBlockers(app) {
   if (app.memoIsStale) blockers.push('Compliance memo is stale after application changes.');
   var screening = getApplicationScreeningSummary(app);
   if (!screening.screening_run_recorded) blockers.push('Screening has not been run.');
-  if (screening.screening_mode && screening.screening_mode !== 'live') blockers.push('Screening is not recorded as live.');
+  var screeningTruth = screening.screening_truth_summary || null;
+  if (screeningTruth && !screeningTruth.approval_ready) {
+    blockers.push('Screening is not live and terminal: ' + (screeningTruth.canonical_state || 'unknown') + ' / ' + (screeningTruth.provider_mode || 'unknown') + '.');
+  } else if (screening.screening_mode && screening.screening_mode !== 'live') {
+    blockers.push('Screening is not recorded as live.');
+  }
   if (screening.screening_freshness) {
     if (screening.screening_freshness.status === 'expired') blockers.push('Screening results are expired.');
     if (screening.screening_freshness.status === 'parse_error') blockers.push('Screening freshness could not be verified.');
