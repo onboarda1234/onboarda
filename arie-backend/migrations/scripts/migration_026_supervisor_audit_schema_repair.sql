@@ -3,7 +3,8 @@
 -- The cross-dialect repair is performed by db.py:_ensure_supervisor_audit_log_schema
 -- during startup because the legacy table may need a safe rebuild:
 --   * id INTEGER -> id TEXT for UUID hash-chain entries
---   * details/prev_hash -> detail/previous_hash
+--   * details -> detail
+--   * legacy prev_hash/entry_hash retained in data_json while v2 hashes are recomputed
 --   * severity, actor, data_json, ip/session columns added and backfilled
 --
 -- Keep this file as the schema_version marker for long-lived databases. Fresh

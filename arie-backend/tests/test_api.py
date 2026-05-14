@@ -1670,7 +1670,7 @@ class TestMemoSupervisorAuditSchema:
         })
 
         conn = get_db()
-        conn.execute("DELETE FROM supervisor_audit_log")
+        conn.execute("DELETE FROM supervisor_audit_log WHERE application_id = ?", (app_id,))
         conn.execute("""
             INSERT INTO applications (
                 id, ref, client_id, company_name, country, sector, entity_type,

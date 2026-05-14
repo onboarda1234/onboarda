@@ -7,6 +7,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from supervisor.audit import append_verdict_chain_entry, AuditLogger
+
 
 @contextlib.contextmanager
 def _isolated_db(tmp_path, monkeypatch):
@@ -111,8 +113,6 @@ def test_supervisor_audit_schema_repair_backfills_legacy_rows(tmp_path, monkeypa
             assert legacy["detail"] == '{"legacy": true}'
             assert legacy["actor_id"] == "legacy-agent"
             assert legacy["entry_hash"] != "legacyhash"
-
-            from supervisor.audit import append_verdict_chain_entry, AuditLogger
 
             append_verdict_chain_entry(
                 db=db,

@@ -2713,7 +2713,7 @@ def _table_column_info(db: DBConnection, table: str) -> Dict[str, Dict[str, str]
 def _supervisor_audit_timestamp(value: Any) -> str:
     if isinstance(value, datetime):
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
-    text = str(value or "").strip()
+    text = "" if value is None else str(value).strip()
     if text:
         return text
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")

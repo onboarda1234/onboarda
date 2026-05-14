@@ -160,7 +160,7 @@ def _timestamp_for_hash(value: Any) -> str:
         if value.tzinfo is not None:
             value = value.astimezone(timezone.utc).replace(tzinfo=None)
         return value.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return str(value or "")
+    return "" if value is None else str(value)
 
 
 def _get_db():
