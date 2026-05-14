@@ -199,7 +199,8 @@ class ApprovalGateValidator:
 
             # 3. Check compliance memo exists and meets quality gates
             memo_row = db.execute(
-                "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, created_at, approval_reason "
+                "SELECT id, memo_data, review_status, validation_status, supervisor_status, blocked, block_reason, "
+                "created_at, approval_reason, is_stale, stale_reason, stale_trigger, stale_marked_at "
                 "FROM compliance_memos WHERE application_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
                 (app_id,)
             ).fetchone()
@@ -208,6 +209,24 @@ class ApprovalGateValidator:
                         "Generate via POST /api/applications/{id}/memo first.")
             if not isinstance(memo_row, dict):
                 memo_row = dict(memo_row)
+
+            def _memo_is_stale(value):
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, (int, float)):
+                    return value != 0
+                return str(value or '').strip().lower() in ('1', 'true', 'yes', 'y', 'stale')
+
+            # 3aa. Persisted stale memos are fail-closed. Material facts moved
+            # after generation, so validation/supervisor/sign-off must be rerun
+            # on a regenerated memo before final approval can proceed.
+            if _memo_is_stale(memo_row.get('is_stale')):
+                reason = memo_row.get('stale_reason') or 'Material facts changed after memo generation.'
+                return (
+                    False,
+                    f"Compliance memo is stale: {reason} "
+                    "Regenerate the memo, rerun validation and supervisor, and re-approve before application approval."
+                )
 
             # 3a. Memo must not be blocked
             if memo_row.get('blocked'):

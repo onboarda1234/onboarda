@@ -154,6 +154,28 @@ def _set_verification(doc_id, label):
     conn.close()
 
 
+def _insert_approved_memo(app_id):
+    from db import get_db
+
+    memo_data = {
+        "ai_source": "deterministic",
+        "metadata": {"ai_source": "deterministic"},
+        "supervisor": {"verdict": "CONSISTENT", "can_approve": True},
+    }
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO compliance_memos
+        (application_id, memo_data, review_status, validation_status,
+         supervisor_status, quality_score, approved_by, approved_at)
+        VALUES (?, ?, 'approved', 'pass', 'CONSISTENT', 9.2, 'admin001', datetime('now'))
+        """,
+        (app_id, json.dumps(memo_data)),
+    )
+    conn.commit()
+    conn.close()
+
+
 def _document_rows(app_id):
     from db import get_db
 
@@ -473,6 +495,56 @@ def test_completeness_check_excludes_superseded_documents(document_versioning_se
     )
     assert submit.status_code == 400, submit.text
     assert "Please upload at least one document" in submit.text
+
+
+def test_document_replacement_marks_memo_stale_and_blocks_memo_approval(document_versioning_server):
+    app_id = "docver_app_memo_stale"
+    client_id = "docver_client_memo_stale"
+    _seed_application(app_id, client_id)
+    first_doc = _upload_document(document_versioning_server, app_id, client_id, "first.pdf")
+    _insert_approved_memo(app_id)
+
+    second_doc = _upload_document(document_versioning_server, app_id, client_id, "replacement.pdf")
+    rows = {row["id"]: row for row in _document_rows(app_id)}
+    assert rows[first_doc["id"]]["is_current"] in (0, False)
+    assert rows[second_doc["id"]]["is_current"] in (1, True)
+
+    from db import get_db
+
+    conn = get_db()
+    memo = conn.execute(
+        "SELECT is_stale, stale_trigger, review_status, validation_status, supervisor_status, approved_by "
+        "FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+        (app_id,),
+    ).fetchone()
+    audit = conn.execute(
+        "SELECT detail FROM audit_log WHERE target = ? AND action = 'Memo Marked Stale' ORDER BY id DESC LIMIT 1",
+        (f"ARF-{app_id}",),
+    ).fetchone()
+    conn.close()
+    assert memo["is_stale"] in (1, True)
+    assert memo["stale_trigger"] == "document_replaced"
+    assert memo["review_status"] == "draft"
+    assert memo["validation_status"] == "pending"
+    assert memo["supervisor_status"] == "pending"
+    assert memo["approved_by"] is None
+    assert audit is not None
+    assert "Document replacement changed memo evidence" in audit["detail"]
+
+    approve = requests.post(
+        f"{document_versioning_server}/api/applications/{app_id}/memo/approve",
+        headers=_officer_headers(),
+        json={
+            "officer_signoff": {
+                "acknowledged": True,
+                "scope": "memo",
+                "source_context": "ai_advisory",
+            }
+        },
+        timeout=5,
+    )
+    assert approve.status_code == 409, approve.text
+    assert "stale memo" in approve.text.lower()
 
 
 def test_approval_gate_excludes_superseded_flagged_documents(tmp_path):
