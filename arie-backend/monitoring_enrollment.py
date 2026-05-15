@@ -279,6 +279,9 @@ def enroll_approved_application(
     The function does not commit. Callers own the surrounding transaction so
     approval and enrollment cannot diverge.
     """
+    if audit_writer is None:
+        raise RuntimeError("Monitoring enrollment requires an audit writer")
+
     app = _row_dict(app)
     app_id = app.get("id")
     app_ref = app.get("ref") or app_id

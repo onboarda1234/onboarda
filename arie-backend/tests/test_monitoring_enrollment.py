@@ -2,6 +2,8 @@ import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+
 
 def _audit_writer(user, action, target, detail, db=None,
                   before_state=None, after_state=None, commit=False):
@@ -210,6 +212,24 @@ def test_approval_retry_updates_existing_schedule_without_duplicate(db):
     assert second["status"] == "updated"
     assert second["periodic_review_id"] == first["periodic_review_id"]
     assert rows[0]["risk_level"] == "MEDIUM"
+
+
+def test_missing_audit_writer_fails_before_periodic_review_mutation(db):
+    from monitoring_enrollment import enroll_approved_application
+
+    app = _insert_app(db, risk_level="LOW")
+
+    with pytest.raises(RuntimeError, match="audit writer"):
+        enroll_approved_application(
+            db,
+            app,
+            user={"sub": "admin001", "name": "Admin", "role": "admin"},
+            audit_writer=None,
+            approved_at=app["decided_at"],
+            previous_status="compliance_review",
+        )
+
+    assert _review_rows(db, app["id"]) == []
 
 
 def test_rejected_withdrawn_and_fixtures_are_not_enrolled(db):
