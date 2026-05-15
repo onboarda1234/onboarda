@@ -640,6 +640,14 @@ def build_compliance_memo(app, directors, ubos, documents):
         or screening_canonical_state == "completed_match"
         or screening_result == "match"
     )
+    screening_has_formally_cleared_match = bool(_screening_terminality.get("has_formally_cleared_match"))
+    screening_has_uncleared_completed_match = bool(_screening_terminality.get("has_uncleared_completed_match"))
+    screening_formally_cleared_match = bool(
+        screening_terminal
+        and screening_canonical_state == "completed_match"
+        and screening_has_formally_cleared_match
+        and not screening_has_uncleared_completed_match
+    )
     screening_defensible_clear = bool(_screening_terminality.get("defensible_clear"))
     screening_is_defensible_clear = (
         screening_terminal
@@ -647,7 +655,11 @@ def build_compliance_memo(app, directors, ubos, documents):
         and screening_canonical_state == "completed_clear"
         and not screening_has_terminal_match
     )
-    screening_is_terminal_match = screening_terminal and screening_has_terminal_match
+    screening_is_terminal_match = (
+        screening_terminal
+        and screening_has_terminal_match
+        and not screening_formally_cleared_match
+    )
     screening_approval_ready = bool(_screening_terminality.get("approval_ready"))
     screening_truth_blocks_approval = bool(
         _screening_terminality.get("approval_blocking")
@@ -680,6 +692,35 @@ def build_compliance_memo(app, directors, ubos, documents):
         _screening_key_finding = "Sanctions screening clear"
         _screening_review_check = "Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists"
         _screening_decision_descriptor = "clean"
+    elif screening_formally_cleared_match:
+        _screening_qualifier = (
+            " Live provider screening returned match(es) that have been formally cleared "
+            "through officer disposition evidence; no unresolved screening escalation remains. "
+            "This is not a no-match result."
+        )
+        _screening_completion_phrase = (
+            "Sanctions / PEP / watchlist screening completed with match(es) formally cleared by officer disposition"
+        )
+        _screening_fincrime_phrase = (
+            "Sanctions / PEP / watchlist screening returned live terminal match(es) that were formally cleared "
+            "with documented officer disposition evidence. This is a cleared-match result, not a no-match result."
+        )
+        _screening_results_phrase = (
+            "Sanctions Screening: live provider screening returned match(es) that were formally cleared "
+            "by officer disposition evidence. This is not a clear no-match result."
+        )
+        _screening_mitigation_phrase = (
+            "Live screening match(es) formally cleared through documented officer disposition evidence"
+        )
+        _screening_ai_factor_phrase = (
+            "Screening completed with formally cleared provider match(es); no unresolved screening escalation remains"
+        )
+        _screening_content_factor_phrase = (
+            "Screening completed with formally cleared provider match(es)."
+        )
+        _screening_key_finding = "Sanctions / PEP / watchlist screening match(es) formally cleared"
+        _screening_review_check = "Sanctions screening match(es) formally cleared through officer disposition evidence"
+        _screening_decision_descriptor = "formally cleared match"
     elif screening_is_terminal_match:
         _screening_qualifier = (
             " Terminal provider screening returned match(es); clean or no-match screening cannot be asserted. "
@@ -1181,6 +1222,81 @@ def build_compliance_memo(app, directors, ubos, documents):
             f"this application is recommended for {decision_label}. "
         )
 
+    if risk_display["available"]:
+        if screening_is_defensible_clear:
+            _executive_risk_profile = (
+                "a balanced risk profile" if aggregated_risk == "MEDIUM"
+                else "a low-risk profile with no material concerns" if aggregated_risk == "LOW"
+                else "an elevated risk profile requiring enhanced scrutiny"
+            )
+        elif screening_formally_cleared_match:
+            _executive_risk_profile = (
+                "the numeric/base risk factors plus live provider match(es) "
+                "formally cleared through documented officer disposition evidence; "
+                "no unresolved screening escalation remains"
+            )
+        elif screening_is_terminal_match:
+            _executive_risk_profile = (
+                "the numeric/base risk factors only; live provider screening returned "
+                "match(es) or a material screening concern requiring officer review, "
+                "formal disposition, and escalation before approval reliance"
+            )
+        elif screening_has_simulated:
+            _executive_risk_profile = (
+                "the numeric/base risk factors only; screening used simulated fallback "
+                "data and is not production-reliance-grade"
+            )
+        elif screening_has_sandbox:
+            _executive_risk_profile = (
+                "the numeric/base risk factors only; screening used sandbox provider "
+                "data and is not production-live"
+            )
+        elif screening_has_not_configured:
+            _executive_risk_profile = (
+                "the numeric/base risk factors only; required screening provider "
+                "coverage is not configured"
+            )
+        elif screening_has_failed:
+            _executive_risk_profile = (
+                "the numeric/base risk factors only; required screening provider "
+                "coverage failed or was unavailable"
+            )
+        else:
+            _executive_risk_profile = (
+                "the numeric/base risk factors only; required screening has not yet "
+                "returned a terminal provider result"
+            )
+        _executive_risk_sentence = (
+            f"The composite risk score of {risk_score}/100 (aggregated: {aggregated_risk}) "
+            f"reflects {_executive_risk_profile}. "
+        )
+    else:
+        _executive_risk_sentence = (
+            risk_display["summary"]
+            + " Internal factor analysis is used only to route unresolved gaps and is not presented as a final risk rating. "
+        )
+    _has_principal_risk_driver = (
+        bool(all_peps)
+        or (own_rating in ("HIGH", "MEDIUM") and bool(own_risk_reasons))
+        or is_high_risk_country
+        or is_offshore
+    )
+    _ownership_driver_phrase = (
+        "no PEP exposure and a clean ownership structure"
+        if screening_is_defensible_clear
+        else "no PEP exposure and a transparent ownership structure"
+    )
+    if _has_principal_risk_driver:
+        _executive_offset_phrase = (
+            "These risk factors are materially offset by "
+            if aggregated_risk in ("LOW", "MEDIUM")
+            else "These risk factors are insufficiently offset by "
+        )
+    elif screening_is_defensible_clear:
+        _executive_offset_phrase = "The low-risk profile is supported by "
+    else:
+        _executive_offset_phrase = "The base risk score is supported by "
+
     # ── Compile Rule Engine summary ───────────────────────────────────
     rule_engine_result = {
         "rules_checked": ["FACTOR_CLASSIFICATION", "OWNERSHIP_FLOOR", "BUSINESS_RISK_FLOOR", "MULTI_GAP_ESCALATION", "CONFIDENCE_FLOOR"],
@@ -1227,22 +1343,16 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "content": (
                     f"This memo presents the compliance assessment of {app['company_name']} (BRN: {app['brn']}), "
                     f"a {entity_type} incorporated in {country}, operating in the {sector} sector. "
-                    + (
-                        f"The composite risk score of {risk_score}/100 (aggregated: {aggregated_risk}) reflects "
-                        f"{'a balanced risk profile' if aggregated_risk == 'MEDIUM' else 'a low-risk profile with no material concerns' if aggregated_risk == 'LOW' else 'an elevated risk profile requiring enhanced scrutiny'}. "
-                        if risk_display["available"] else
-                        risk_display["summary"] + " Internal factor analysis is used only to route unresolved gaps and is not presented as a final risk rating. "
-                    )
+                    + _executive_risk_sentence
                     + f"Model confidence: {model_confidence}%"
                     + (f" — reduced due to {'no uploaded documentation and ' if not has_documents else 'outstanding documentation and ' if pending_docs else ''}{'limited historical transaction data' if True else ''}. " if model_confidence < 80 else ". ")
-                    + f"The principal risk drivers are "
+                    + "The principal risk drivers are "
                     + (f"the presence of {len(all_peps)} Politically Exposed Person(s) ({', '.join([p['full_name'] for p in all_peps])})" if all_peps else "")
                     + (f"{',' if all_peps else ''} ownership risk rated {own_rating} ({own_rating_justification})" if own_rating in ("HIGH", "MEDIUM") and own_risk_reasons else "")
                     + (f"{',' if all_peps or own_rating in ('HIGH', 'MEDIUM') else ''} the {'high-risk' if is_high_risk_country else 'offshore'} jurisdictional classification of {country}" if is_high_risk_country or is_offshore else "")
-                    + (f"no PEP exposure and a clean ownership structure" if not all_peps and own_rating == "LOW" and not is_high_risk_country and not is_offshore else "")
+                    + (_ownership_driver_phrase if not all_peps and own_rating == "LOW" and not is_high_risk_country and not is_offshore else "")
                     + ". "
-                    + ("These risk factors are " if (all_peps or own_rating in ("HIGH", "MEDIUM") or is_high_risk_country or is_offshore) else "The low-risk profile is supported by ")
-                    + ("materially offset by " if aggregated_risk in ("LOW", "MEDIUM") else "insufficiently offset by ")
+                    + _executive_offset_phrase
                     + ((_screening_clean_phrase + ", ") if (not all_peps and screening_is_defensible_clear) else "")
                     + (f"a fully traceable beneficial ownership chain ({control_name} at {control_pct}%)" if primary_ubo and control_pct not in ("N/A", None, "", "0") else "beneficial ownership assessment")
                     + (f", and {len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence. " if has_documents else ", and no uploaded documents are currently available to substantiate entity verification. ")
@@ -1593,7 +1703,11 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "screening_result": _screening_terminality.get("screening_result"),
                 "defensible_clear": bool(_screening_terminality.get("defensible_clear")),
                 "approval_ready": bool(_screening_terminality.get("approval_ready")),
+                "approval_blocking": bool(_screening_terminality.get("approval_blocking")),
                 "blocking_reasons": _screening_terminality.get("blocking_reasons") or [],
+                "has_formally_cleared_match": bool(_screening_terminality.get("has_formally_cleared_match")),
+                "has_uncleared_completed_match": bool(_screening_terminality.get("has_uncleared_completed_match")),
+                "completed_match_blocking": bool(_screening_terminality.get("completed_match_blocking")),
                 "company_state": _company_state,
                 "person_states": _person_states,
                 "declared_pep_count": len(all_peps),
@@ -1993,8 +2107,12 @@ def build_compliance_memo(app, directors, ubos, documents):
             "screening_result": _screening_terminality.get("screening_result"),
             "defensible_clear": bool(_screening_terminality.get("defensible_clear")),
             "approval_ready": bool(_screening_terminality.get("approval_ready")),
+            "approval_blocking": bool(_screening_terminality.get("approval_blocking")),
             "blocking_reasons": _screening_terminality.get("blocking_reasons") or [],
             "has_terminal_match": _has_terminal_match,
+            "has_formally_cleared_match": bool(_screening_terminality.get("has_formally_cleared_match")),
+            "has_uncleared_completed_match": bool(_screening_terminality.get("has_uncleared_completed_match")),
+            "completed_match_blocking": bool(_screening_terminality.get("completed_match_blocking")),
             "company_screening_configured": bool(_screening_terminality.get("company_screening_configured")),
         },
         "company_screening_configured": bool(_screening_terminality.get("company_screening_configured")),
