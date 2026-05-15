@@ -160,6 +160,11 @@ from enhanced_requirements import (
     validate_enhanced_requirements_for_approval,
     validate_rule_payload as validate_enhanced_requirement_rule_payload,
 )
+from monitoring_enrollment import (
+    backfill_approved_applications as _backfill_monitoring_enrollment,
+    enroll_approved_application as _enroll_approved_application_for_monitoring,
+    latest_active_review_summary as _latest_monitoring_review_summary,
+)
 
 # GDPR retention and purge engine (optional import — continues if unavailable)
 try:
@@ -12297,7 +12302,7 @@ class MonitoringDashboardHandler(BaseHandler):
         if not user:
             return
 
-        from fixture_filter import fixture_app_exclude_clause
+        from fixture_filter import fixture_app_exclude_clause, fixture_app_id_exclude_clause
 
         db = get_db()
         stats = {
@@ -12333,6 +12338,21 @@ class MonitoringDashboardHandler(BaseHandler):
         """, fx_params).fetchall()
         stats["high_risk_alerts"] = [dict(a) for a in recent_alerts]
 
+        review_fx_excl, review_fx_params = fixture_app_id_exclude_clause("pr.application_id")
+        due_count = db.execute(
+            f"""
+            SELECT COUNT(*) as c
+            FROM periodic_reviews pr
+            WHERE COALESCE(pr.status, 'pending') IN
+                  ('pending','in_progress','awaiting_information','pending_senior_review')
+              AND pr.due_date IS NOT NULL
+              AND pr.due_date <= ?
+              AND {review_fx_excl}
+            """,
+            [datetime.utcnow().date().isoformat(), *review_fx_params],
+        ).fetchone()["c"]
+        stats["periodic_review_due"] = due_count
+
         db.close()
         self.success(stats)
 
@@ -12361,10 +12381,13 @@ class MonitoringClientsHandler(BaseHandler):
 
         clients = {}
         for app in applications:
+            app_dict = dict(app)
+            app_dict["periodic_review"] = _latest_monitoring_review_summary(db, app_dict["id"])
+            app_dict["monitoring_enrolled"] = bool(app_dict["periodic_review"])
             status = app["status"]
             if status not in clients:
                 clients[status] = []
-            clients[status].append(dict(app))
+            clients[status].append(app_dict)
 
         db.close()
         self.success({"clients_by_status": clients})
@@ -15023,6 +15046,46 @@ class ApplicationDecisionHandler(BaseHandler):
             WHERE id=?
         """, (new_status, user["sub"], json.dumps(detail_info), real_id))
 
+        monitoring_enrollment = None
+        if decision == "approve":
+            try:
+                approved_app_row = db.execute(
+                    "SELECT * FROM applications WHERE id = ?",
+                    (real_id,),
+                ).fetchone()
+                approved_app = dict(approved_app_row) if approved_app_row else {}
+                if not approved_app:
+                    raise RuntimeError("Approved application row was not found")
+                monitoring_enrollment = _enroll_approved_application_for_monitoring(
+                    db,
+                    approved_app,
+                    user=user,
+                    audit_writer=self.log_audit,
+                    approved_at=approved_app.get("decided_at"),
+                    previous_status=app.get("status"),
+                )
+                if monitoring_enrollment.get("status") not in ("created", "updated", "skipped"):
+                    raise RuntimeError(
+                        "Unexpected monitoring enrollment result: "
+                        + str(monitoring_enrollment.get("status"))
+                    )
+            except Exception as enrollment_error:
+                logger.error(
+                    "Failed to enroll approved application %s into monitoring: %s",
+                    app.get("ref"),
+                    enrollment_error,
+                    exc_info=True,
+                )
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                db.close()
+                return self.error(
+                    "Approval failed: could not enroll approved client into ongoing monitoring.",
+                    500,
+                )
+
         # Log audit trail with full detail
         audit_detail = f"Decision: {decision} | Reason: {decision_reason}"
         if override_ai:
@@ -15037,7 +15100,8 @@ class ApplicationDecisionHandler(BaseHandler):
                   "edd_trigger_flags": edd_trigger_flags if decision == "escalate_edd" else None,
                   "risk_integrity_warnings": _unique_list(risk_integrity_warnings) if decision == "escalate_edd" else None,
                   "decision_by": user.get("sub"),
-                  "first_approver_id": app.get("first_approver_id") if app.get("risk_level") in ("HIGH", "VERY_HIGH") else None}
+                  "first_approver_id": app.get("first_approver_id") if app.get("risk_level") in ("HIGH", "VERY_HIGH") else None,
+                  "monitoring_enrollment": monitoring_enrollment if decision == "approve" else None}
         db.execute("INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address, before_state, after_state) VALUES (?,?,?,?,?,?,?,?,?)",
                    (user.get("sub",""), user.get("name",""), user.get("role",""), "Decision", app["ref"], audit_detail, self.get_client_ip(),
                     _safe_json(_before), _safe_json(_after)))
@@ -15088,6 +15152,7 @@ class ApplicationDecisionHandler(BaseHandler):
             "decision": decision,
             "application_status": new_status,
             "rmi_request_id": rmi_request_id,
+            "monitoring_enrollment": monitoring_enrollment if decision == "approve" else None,
         }, 201)
 
 
@@ -15747,52 +15812,37 @@ class PeriodicReviewDecisionHandler(BaseHandler):
 
 
 class PeriodicReviewScheduleHandler(BaseHandler):
-    """POST /api/monitoring/reviews/schedule — Check and create due reviews"""
+    """POST /api/monitoring/reviews/schedule — Backfill approved-client schedules"""
     def post(self):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
             return
 
         db = get_db()
-
-        # Find applications due for periodic review based on risk level
-        # LOW: every 2 years, MEDIUM: annual, HIGH: semi-annual, VERY_HIGH: quarterly
-        now = datetime.now()
-        today = now.date().isoformat()
-
-        risk_intervals = {
-            "LOW": 1095,       # 36 months (3 years)
-            "MEDIUM": 730,     # 24 months (2 years)
-            "HIGH": 365,       # 12 months (1 year)
-            "VERY_HIGH": 180   # 6 months
-        }
-
-        created_count = 0
-        for risk_level, days in risk_intervals.items():
-            # Find applications with this risk level that haven't been reviewed recently
-            cutoff_date = (now - timedelta(days=days)).isoformat()
-            apps = db.execute("""
-                SELECT a.id, a.ref, a.company_name, a.risk_level
-                FROM applications a
-                WHERE a.risk_level = ? AND a.status IN ('approved', 'rmi_sent')
-                AND NOT EXISTS (
-                    SELECT 1 FROM periodic_reviews pr
-                    WHERE pr.application_id = a.id AND pr.created_at > ?
-                )
-            """, (risk_level, cutoff_date)).fetchall()
-
-            for app in apps:
-                due_date = (now + timedelta(days=7)).date().isoformat()
-                db.execute("""
-                    INSERT INTO periodic_reviews (application_id, client_name, risk_level, trigger_type, trigger_reason, status, due_date, created_at)
-                    VALUES (?, ?, ?, 'time_based', ?, 'pending', ?, datetime('now'))
-                """, (app["id"], app["company_name"], app["risk_level"], f"Periodic review due for {risk_level} risk client", due_date))
-                created_count += 1
-
-        db.commit()
+        try:
+            result = _backfill_monitoring_enrollment(
+                db,
+                user=user,
+                audit_writer=self.log_audit,
+            )
+            db.commit()
+        except Exception as exc:
+            logger.error("Failed to backfill monitoring enrollment: %s", exc, exc_info=True)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            db.close()
+            return self.error("Failed to backfill monitoring enrollment", 500)
         db.close()
 
-        self.success({"status": "schedule_check_complete", "reviews_created": created_count})
+        self.success({
+            "status": "schedule_check_complete",
+            "reviews_created": result["created"],
+            "reviews_updated": result["updated"],
+            "reviews_skipped": result["skipped"],
+            "enrollments": result["items"],
+        })
 
 
 # ──────────────────────────────────────────────────────────
