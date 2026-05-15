@@ -625,33 +625,151 @@ def build_compliance_memo(app, directors, ubos, documents):
     screening_has_non_terminal = bool(_screening_terminality.get("has_non_terminal"))
     screening_has_failed = bool(_screening_terminality.get("has_failed"))
     screening_has_not_configured = bool(_screening_terminality.get("has_not_configured"))
+    screening_canonical_state = str(_screening_terminality.get("canonical_state") or "").strip()
+    screening_provider_mode = str(_screening_terminality.get("provider_mode") or "").strip()
+    screening_provider_availability = str(_screening_terminality.get("provider_availability") or "").strip()
+    screening_result = str(_screening_terminality.get("screening_result") or "").strip()
+    screening_has_sandbox = bool(
+        _screening_terminality.get("has_sandbox") or screening_provider_mode == "sandbox_provider"
+    )
+    screening_has_simulated = bool(
+        _screening_terminality.get("has_simulated") or screening_provider_mode == "simulated_fallback"
+    )
+    screening_has_terminal_match = bool(
+        _screening_terminality.get("has_terminal_match")
+        or screening_canonical_state == "completed_match"
+        or screening_result == "match"
+    )
+    screening_defensible_clear = bool(_screening_terminality.get("defensible_clear"))
+    screening_is_defensible_clear = (
+        screening_terminal
+        and screening_defensible_clear
+        and screening_canonical_state == "completed_clear"
+        and not screening_has_terminal_match
+    )
+    screening_is_terminal_match = screening_terminal and screening_has_terminal_match
+    screening_approval_ready = bool(_screening_terminality.get("approval_ready"))
+    screening_truth_blocks_approval = bool(
+        _screening_terminality.get("approval_blocking")
+        or not screening_approval_ready
+    )
     # Coverage of self-declared PEP exposure is independent of provider
     # state and remains a first-class signal.
     has_declared_pep = bool(pep_directors or pep_ubos)
     # Phrasing helpers used throughout the memo body to avoid asserting
     # "clean screening" when the underlying state does not support it.
-    if screening_terminal:
+    _screening_clean_phrase = "clean sanctions screening across all major consolidated lists"
+    _screening_clear_phrase = (
+        "Sanctions screening completed across all major consolidated lists (UN, EU, OFAC, HMT) with no matches"
+    )
+    if screening_is_defensible_clear:
         _screening_qualifier = ""  # safe to make assertive claims
         _screening_completion_phrase = "Sanctions screening completed across all major consolidated lists (UN, EU, OFAC, HMT)"
+        _screening_fincrime_phrase = (
+            "Sanctions screening was completed across UN Security Council, EU, OFAC SDN, "
+            "and HMT consolidated lists. No matches were returned for any director, UBO, or the entity itself."
+        )
+        _screening_results_phrase = (
+            "Sanctions Screening: Conducted against UN Security Council Consolidated List, "
+            "EU Consolidated Financial Sanctions List, OFAC SDN List, and HMT Consolidated List. "
+            "No matches returned for any associated individual or the entity itself."
+        )
+        _screening_mitigation_phrase = "Clean sanctions screening across all major consolidated lists (UN, EU, OFAC, HMT)"
+        _screening_ai_factor_phrase = "Clean sanctions screening across all major consolidated lists (UN, EU, OFAC, HMT)"
+        _screening_content_factor_phrase = "Clean sanctions screening across all major consolidated lists."
+        _screening_key_finding = "Sanctions screening clear"
+        _screening_review_check = "Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists"
+        _screening_decision_descriptor = "clean"
+    elif screening_is_terminal_match:
+        _screening_qualifier = (
+            " Terminal provider screening returned match(es); clean or no-match screening cannot be asserted. "
+            "Officer disposition, escalation, and enhanced review are required before approval reliance."
+        )
+        _screening_completion_phrase = (
+            "Sanctions / PEP / watchlist screening completed with provider match(es) requiring officer review and escalation"
+        )
+        _screening_fincrime_phrase = (
+            "Sanctions / PEP / watchlist screening returned live terminal match(es) requiring officer review, "
+            "false-positive disposition, and escalation where material. Clean screening cannot be asserted."
+        )
+        _screening_results_phrase = (
+            "Sanctions Screening: live provider screening returned match(es) requiring officer review and escalation. "
+            "This is not a clear or no-match result."
+        )
+        _screening_mitigation_phrase = (
+            "Live screening returned match(es); no clean-screening mitigant is available until disposition and escalation are completed"
+        )
+        _screening_ai_factor_phrase = (
+            "Screening completed with provider match(es) requiring disposition; this is not clean screening"
+        )
+        _screening_content_factor_phrase = (
+            "Screening completed with match/escalation requirements across provider watchlists."
+        )
+        _screening_key_finding = "Sanctions / PEP / watchlist screening completed with match(es) requiring escalation"
+        _screening_review_check = "Sanctions screening completed with match(es) — officer disposition/escalation required"
+        _screening_decision_descriptor = "matched/escalation"
     else:
         _bits = []
         if screening_has_not_configured:
             _bits.append("provider not configured for at least one subject")
         if screening_has_failed:
             _bits.append("provider unavailable for at least one subject")
-        if _screening_terminality.get("has_sandbox"):
+        if screening_has_sandbox:
             _bits.append("sandbox provider result for at least one subject")
-        if _screening_terminality.get("has_simulated"):
+        if screening_has_simulated:
             _bits.append("simulated fallback result for at least one subject")
         if not _bits:
             _bits.append("provider has not yet returned a terminal result for at least one subject")
         _qual = "; ".join(_bits)
+        if screening_provider_mode == "simulated_fallback" or screening_canonical_state == "simulated_fallback":
+            _state_label = "SIMULATED FALLBACK"
+            _state_sentence = "screening used simulated fallback data and is not production-live"
+            _screening_decision_descriptor = "simulated / non-reliance-grade"
+        elif screening_provider_mode == "sandbox_provider" or screening_canonical_state == "sandbox_provider":
+            _state_label = "SANDBOX PROVIDER"
+            _state_sentence = "screening used sandbox provider data and is not production-live"
+            _screening_decision_descriptor = "sandbox / not production-live"
+        elif screening_has_not_configured or screening_canonical_state == "not_configured":
+            _state_label = "NOT CONFIGURED"
+            _state_sentence = "required screening provider coverage is not configured"
+            _screening_decision_descriptor = "not configured"
+        elif screening_has_failed or screening_canonical_state == "failed":
+            _state_label = "FAILED / UNAVAILABLE"
+            _state_sentence = "required screening provider coverage failed or was unavailable"
+            _screening_decision_descriptor = "failed / unavailable"
+        else:
+            _state_label = "PENDING"
+            _state_sentence = "required screening has not yet returned a terminal provider result"
+            _screening_decision_descriptor = "pending"
         _screening_qualifier = (
-            " Screening is NOT complete: " + _qual + ". "
+            " Screening is " + _state_label + ": " + _qual + ". "
             "No reliance can be placed on the absence of matches at this time."
         )
         _screening_completion_phrase = (
-            "Sanctions screening status: NOT COMPLETE — " + _qual
+            "Sanctions screening status: " + _state_label + " — " + _state_sentence
+        )
+        _screening_fincrime_phrase = (
+            _screening_completion_phrase + ". No clean or no-match conclusion can be drawn until live terminal screening is completed."
+        )
+        _screening_results_phrase = (
+            _screening_completion_phrase
+            + ". Provider-backed sanctions / PEP / watchlist screening is not reliance-grade; "
+            "no clean or no-match conclusion can be drawn at this time."
+        )
+        _screening_mitigation_phrase = (
+            _screening_completion_phrase + "; no reliance on absence of provider matches"
+        )
+        _screening_ai_factor_phrase = (
+            _screening_completion_phrase + "; no clean-screening mitigant is available"
+        )
+        _screening_content_factor_phrase = (
+            _screening_completion_phrase + "."
+        )
+        _screening_key_finding = (
+            _screening_completion_phrase + " — no reliance on absence of provider matches"
+        )
+        _screening_review_check = (
+            _screening_completion_phrase + " — live terminal screening required before approval reliance"
         )
     adverse_media_context = _screening_adverse_media_context(screening_report, prescreening_data)
     has_documents = len(documents) > 0
@@ -1027,6 +1145,41 @@ def build_compliance_memo(app, directors, ubos, documents):
     mon_tier = "Enhanced" if aggregated_risk in ("HIGH", "VERY_HIGH") or all_peps else "Standard"
     enhanced_review_summary = _enhanced_review_summary(app)
     enhanced_review_section = _build_enhanced_review_memo_section(enhanced_review_summary)
+    _approval_like_decisions = ("APPROVE", "APPROVE_WITH_CONDITIONS")
+    _screening_decision_is_approval_like = decision in _approval_like_decisions
+    _screening_recommendation_bound_to_review = False
+    if screening_truth_blocks_approval and _screening_decision_is_approval_like:
+        _screening_recommendation_statement = (
+            "Recommendation: SCREENING RESOLUTION REQUIRED (REVIEW) — "
+            + _screening_completion_phrase
+            + ". This memo is not an approval recommendation; approval reliance is blocked until "
+            "live terminal production screening is completed and the memo is regenerated/revalidated."
+        )
+        _screening_compliance_decision_statement = (
+            "this application is not recommended for approval at this stage. "
+            + _screening_completion_phrase
+            + "; approval is blocked until screening is live, terminal, production-grade, "
+            "and reflected in a regenerated memo. "
+        )
+    elif screening_truth_blocks_approval:
+        _screening_recommendation_statement = (
+            f"Recommendation: {decision_label}. "
+            + _screening_completion_phrase
+            + "; screening is not approval-ready and cannot support any future approval reliance."
+        )
+        _screening_compliance_decision_statement = (
+            f"this application remains subject to {decision_label}. "
+            + _screening_completion_phrase
+            + "; screening is not approval-ready and cannot support approval reliance. "
+        )
+    else:
+        _screening_recommendation_statement = (
+            f"Recommendation: {decision_label}"
+            + (f" — subject to {'PEP declaration and enhanced monitoring' if all_peps else 'standard conditions including enhanced monitoring due to reduced confidence' if low_confidence else 'standard conditions'}." if aggregated_risk in ("MEDIUM", "HIGH") else ".")
+        )
+        _screening_compliance_decision_statement = (
+            f"this application is recommended for {decision_label}. "
+        )
 
     # ── Compile Rule Engine summary ───────────────────────────────────
     rule_engine_result = {
@@ -1090,13 +1243,12 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + ". "
                     + ("These risk factors are " if (all_peps or own_rating in ("HIGH", "MEDIUM") or is_high_risk_country or is_offshore) else "The low-risk profile is supported by ")
                     + ("materially offset by " if aggregated_risk in ("LOW", "MEDIUM") else "insufficiently offset by ")
-                    + (f"clean sanctions screening across all major consolidated lists, " if (not all_peps and screening_terminal) else "")
+                    + ((_screening_clean_phrase + ", ") if (not all_peps and screening_is_defensible_clear) else "")
                     + (f"a fully traceable beneficial ownership chain ({control_name} at {control_pct}%)" if primary_ubo and control_pct not in ("N/A", None, "", "0") else "beneficial ownership assessment")
                     + (f", and {len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence. " if has_documents else ", and no uploaded documents are currently available to substantiate entity verification. ")
                     + ("No documents have been uploaded, so entity verification remains incomplete and cannot be treated as a mitigant. " if not has_documents else f"{len(pending_docs)} document(s) remain outstanding, representing a documentation gap that must be remedied within 14 business days. " if pending_docs else "")
                     + (f"Note: model confidence of {model_confidence}% is below threshold — this is reflected in the conditional nature of the recommendation. " if low_confidence else "")
-                    + f"Recommendation: {decision_label}"
-                    + (f" — subject to {'PEP declaration and enhanced monitoring' if all_peps else 'standard conditions including enhanced monitoring due to reduced confidence' if low_confidence else 'standard conditions'}." if aggregated_risk in ("MEDIUM", "HIGH") else ".")
+                    + _screening_recommendation_statement
                 )
             },
             "client_overview": {
@@ -1204,12 +1356,8 @@ def build_compliance_memo(app, directors, ubos, documents):
                         "content": (
                             financial_crime_evidence["prose"] + " "
                             + (
-                                f"Sanctions screening was conducted across UN Security Council, EU, OFAC SDN, and HMT consolidated lists. "
-                                + ("No matches were returned for any director, UBO, or the entity itself. " if not all_peps else f"{len(all_peps)} PEP match(es) identified requiring enhanced assessment. ")
-                                if screening_terminal else
-                                _screening_completion_phrase + ". "
-                                + ("Self-declared PEP exposure remains: " + ", ".join([p["full_name"] for p in all_peps]) + ". " if all_peps else "")
-                                + "No reliance can be placed on the absence of provider matches at this time. "
+                                _screening_fincrime_phrase + " "
+                                + (f"{len(all_peps)} PEP match(es) identified requiring enhanced assessment. " if all_peps else "")
                             )
                             + adverse_media_context["phrase"] + " "
                             + f"The entity's business model {'does not exhibit' if fc_rating in ('LOW', 'MEDIUM') else 'may exhibit'} typology indicators associated with money laundering, terrorist financing, or proliferation financing. "
@@ -1222,13 +1370,8 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "title": "Screening Results",
                 "content": (
                     (
-                        f"Sanctions Screening: Conducted against UN Security Council Consolidated List, EU Consolidated Financial Sanctions List, OFAC SDN List, and HMT Consolidated List. "
-                        + ("No matches returned for any associated individual or the entity itself. " if not all_peps
-                           else f"PEP matches identified — assessed as confirmed true positives based on verified identity data. ")
-                        if screening_terminal else
-                        _screening_completion_phrase + ". "
-                        + "Provider-backed sanctions / PEP / watchlist screening is NOT yet complete for at least one subject; "
-                        + "no reliance may be placed on the absence of matches at this time. "
+                        _screening_results_phrase + " "
+                        + ("PEP matches identified — assessed as confirmed true positives based on verified identity data. " if all_peps else "")
                     )
                     + f"PEP Screening: {len(all_peps)} self-declared / detected match(es)"
                     + (" — " + ". ".join([p["full_name"] + " identified as PEP. PEP declaration form and enhanced due diligence documentation requested." for p in all_peps]) if all_peps else " — no declared or detected matches.")
@@ -1279,9 +1422,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     ("No PEP exposure among directors or UBOs — no contribution to ownership risk" if not all_peps else None),
                     (f"Low jurisdictional risk — {country} maintains adequate AML/CFT frameworks" if not is_high_risk_country and not is_offshore else None),
                     (f"Low sector risk — {sector} does not exhibit elevated ML/TF typology indicators" if not is_high_risk_sector and not is_medium_risk_sector else None),
-                    ("Clean sanctions screening across all major consolidated lists (UN, EU, OFAC, HMT)" if (not all_peps and screening_terminal)
-                     else ("Provider sanctions screening NOT complete — no reliance on absence of matches" if not screening_terminal
-                           else "Screening completed — PEP(s) identified and flagged for enhanced measures")),
+                    (_screening_mitigation_phrase if not all_peps else "Screening completed — PEP(s) identified and flagged for enhanced measures"),
                     (f"Verified beneficial ownership traced to natural person level — {control_name} ({control_pct}%) exercises effective control" if primary_ubo and control_pct not in ("N/A", None, "", "0") else None),
                     (f"Full documentation received and verified at {doc_confidence}% confidence" if documentation_complete and doc_confidence >= 80 else None),
                 ] if f is not None],
@@ -1306,7 +1447,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + f"Risk-decreasing factors: "
                     + (f"(1) No PEP exposure — no contribution to ownership risk. " if not all_peps else "(1) PEP(s) identified and flagged for enhanced monitoring. ")
                     + (f"(2) Low jurisdictional risk — {country} maintains adequate AML/CFT frameworks. " if not is_high_risk_country and not is_offshore else "")
-                    + (f"{'(3) ' if not is_high_risk_country and not is_offshore else '(2) '}{'Clean' if (not all_peps and screening_terminal) else 'Pending' if not screening_terminal else 'Completed'} sanctions screening across all major consolidated lists. " if True else "")
+                    + (f"{'(3) ' if not is_high_risk_country and not is_offshore else '(2) '}{_screening_content_factor_phrase} " if True else "")
                     + (f"{'(4) ' if not is_high_risk_country and not is_offshore else '(3) '}Verified beneficial ownership to natural person level. " if primary_ubo and control_pct not in ("N/A", None, "", "0") else "")
                     + (f"Full documentation at {doc_confidence}% confidence. " if documentation_complete and doc_confidence >= 80 else "")
                     + f"Decision pathway: Agent 1 (Identity & Document Integrity) -> Agent 2 (External Database Cross-Verification) -> Agent 3 (FinCrime Screening Interpretation) -> Agent 4 (Corporate Structure & UBO Mapping) -> Agent 5 (Compliance Memo & Risk Recommendation). "
@@ -1329,9 +1470,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     [f"PEP ({p['full_name']}) {'holds no direct ownership stake, reducing control risk. PEP declaration and enhanced monitoring will be applied as conditions of approval.' if p in pep_directors else 'has been identified and PEP declaration, source of wealth verification, and enhanced monitoring are required as conditions.'}" for p in all_peps]
                     + (["Document collection has been initiated, but no uploaded documents are yet available to support entity verification. Approval must remain conditional on document receipt and review."] if not has_documents else [f"Outstanding documents have been formally requested with a 14-business-day deadline. Failure to provide will trigger automatic escalation to Senior Compliance Officer. The {len(verified_docs)} documents already verified are internally consistent."] if pending_docs else [f"All required documents received and verified at {doc_confidence}% confidence, providing strong assurance of entity legitimacy."])
                     + ([f"{country} is currently compliant with FATF standards following completion of its action plan. The entity's business activity is consistent with the jurisdiction's commercial profile."] if is_offshore else [])
-                    + ([f"Sanctions screening completed across all major consolidated lists (UN, EU, OFAC, HMT) with {'no matches' if not all_peps else 'PEP identification and appropriate enhanced measures'}."] if screening_terminal else [
-                        "Sanctions / PEP screening NOT yet complete for at least one subject. No reliance on absence of provider matches at this time."
-                    ])
+                    + ([_screening_clear_phrase + "."] if screening_is_defensible_clear else [_screening_mitigation_phrase + "."])
                     + ([f"Beneficial ownership fully traced to natural person level via {struct_complexity.lower()} structure. {control_name} ({control_pct}%) confirmed as exercising effective control."] if primary_ubo else [])
                     + ["Transaction monitoring will be applied on a quarterly basis for the first 12 months, with automated alerts for anomalous volumes, compensating for the absence of historical benchmarking data."]
                 )
@@ -1341,12 +1480,16 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "decision": decision,
                 "content": (
                     f"On the basis of the composite risk assessment ({risk_display['assessment']}), "
-                    f"{'clean' if (not all_peps and screening_terminal) else 'pending' if not screening_terminal else 'flagged'} screening results, "
+                    f"{_screening_decision_descriptor} screening results, "
                     f"{'unavailable' if not has_documents else 'verified' if not pending_docs else 'partially verified'} documentation ({doc_confidence}% confidence), "
                     f"and {'confirmed' if ubos else 'unverified'} beneficial ownership, "
-                    f"this application is recommended for {decision_label}. "
-                    + (f"The {'conditions' if risk_level in ('MEDIUM', 'HIGH') else 'recommendation'} reflect{'s' if risk_level == 'LOW' else ''} the residual risks identified — "
-                       f"{'principally the PEP exposure and ' if all_peps else ''}{'absence of uploaded documents' if not has_documents else 'documentation gap' if pending_docs else 'limited trading history'}. " if risk_level != "LOW" else "The low-risk profile supports standard onboarding with no additional conditions. ")
+                    + _screening_compliance_decision_statement
+                    + (
+                        "The risk profile cannot override the screening truth control; screening resolution is a prerequisite to any approval reliance. "
+                        if screening_truth_blocks_approval else
+                        (f"The {'conditions' if risk_level in ('MEDIUM', 'HIGH') else 'recommendation'} reflect{'s' if risk_level == 'LOW' else ''} the residual risks identified — "
+                         f"{'principally the PEP exposure and ' if all_peps else ''}{'absence of uploaded documents' if not has_documents else 'documentation gap' if pending_docs else 'limited trading history'}. " if risk_level != "LOW" else "The low-risk profile supports standard onboarding with no additional conditions. ")
+                    )
                     + ("Conditions of approval: " if risk_level in ("MEDIUM", "HIGH") else "")
                     + (f"(1) {'PEP declaration form(s) must be completed and signed by ' + ', '.join([p['full_name'] for p in all_peps]) + ' within 14 business days. ' if all_peps else ''}" if risk_level != "LOW" else "")
                     + (f"{'(2) ' if all_peps else '(1) '}All required corporate and identity documents must be uploaded and reviewed within 14 business days before the onboarding decision can be treated as fully supported. " if not has_documents and risk_level != "LOW" else "")
@@ -1412,7 +1555,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "key_findings": [
                 f"Beneficial ownership {'traced to natural persons via ' + struct_complexity.lower() + ' structure — ' + control_name + ' (' + str(control_pct) + '%) exercises effective control' if primary_ubo else 'could not be verified — critical data gap'}",
                 f"{'PEP identified: ' + ', '.join([p['full_name'] + ' (' + ('Director' if p in pep_directors else 'UBO') + ')' for p in all_peps]) + '. Enhanced due diligence required.' if all_peps else 'No PEP exposure identified among directors or UBOs'}",
-                f"Sanctions screening {'clear' if (not all_peps and screening_terminal) else ('NOT complete — provider result pending or unavailable for at least one subject' if not screening_terminal else 'completed with PEP identification')}; adverse media {'clear' if adverse_media_context['terminal'] and not adverse_media_context['has_hit'] else ('hit(s) require disposition' if adverse_media_context['has_hit'] else 'NOT complete — clean reliance unavailable')}",
+                f"{_screening_key_finding}; adverse media {'clear' if adverse_media_context['terminal'] and not adverse_media_context['has_hit'] else ('hit(s) require disposition' if adverse_media_context['has_hit'] else 'NOT complete — clean reliance unavailable')}",
                 ("No documents uploaded — entity verification remains incomplete" if not has_documents else f"{len(verified_docs)} of {len(documents)} documents verified at {doc_confidence}% confidence" + (f"; {len(pending_docs)} outstanding" if pending_docs else " — full documentation")),
                 f"{'Business model assessed as plausible and consistent with regulatory authorisations' if sector != 'Information not provided' else 'Business model assessment limited by insufficient sector data'}",
                 f"{country} jurisdiction presents {'severe' if is_high_risk_country else 'moderate' if is_offshore else 'low'} risk — {'sanctions/FATF blacklist' if is_high_risk_country else 'offshore IFC classification' if is_offshore else 'adequate AML/CFT framework'}"
@@ -1428,8 +1571,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                 f"Company identity verified against registry — {'confirmed active' if verified_docs else 'not yet evidenced by uploaded documents' if not has_documents else 'pending verification'}",
                 f"UBO chain mapped to natural persons: {control_name + ' (' + str(control_pct) + '%)' if primary_ubo else 'Not verified — data gap'}",
                 f"PEP screening {'completed' if screening_terminal else 'NOT complete'} — {len(all_peps)} declared/detected match(es)" + (f": {', '.join([p['full_name'] for p in all_peps])}" if all_peps else ""),
-                ("Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists" if screening_terminal
-                 else "Sanctions screening NOT complete — provider result pending or unavailable for at least one subject"),
+                _screening_review_check,
                 adverse_media_context["checklist"],
                 f"Source of funds {'reviewed and assessed as consistent' if sof != 'Information not provided' else 'not provided — data gap flagged'}",
                 f"Business model plausibility {'confirmed' if sector != 'Information not provided' else 'assessment limited by data gap'}",
@@ -1443,8 +1585,8 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "has_non_terminal": screening_has_non_terminal,
                 "has_failed": screening_has_failed,
                 "has_not_configured": screening_has_not_configured,
-                "has_sandbox": bool(_screening_terminality.get("has_sandbox")),
-                "has_simulated": bool(_screening_terminality.get("has_simulated")),
+                "has_sandbox": screening_has_sandbox,
+                "has_simulated": screening_has_simulated,
                 "canonical_state": _screening_terminality.get("canonical_state"),
                 "provider_availability": _screening_terminality.get("provider_availability"),
                 "provider_mode": _screening_terminality.get("provider_mode"),
@@ -1528,6 +1670,43 @@ def build_compliance_memo(app, directors, ubos, documents):
             "Critical profile fields are missing: " + ", ".join(missing_profile_fields) + ".",
             "Complete the missing profile fields or document why the data gap is acceptable.",
         ))
+
+    if screening_truth_blocks_approval:
+        _original_screening_decision = memo["metadata"].get("approval_recommendation")
+        if _original_screening_decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
+            rule_enforcements.append({
+                "rule": "RECOMMENDATION_BOUND_TO_SCREENING_TRUTH",
+                "original_decision": _original_screening_decision,
+                "enforced_decision": "REVIEW",
+                "reason": (
+                    "Screening truth is not approval-ready "
+                    f"(state={screening_canonical_state or 'unknown'}, "
+                    f"provider_mode={screening_provider_mode or 'unknown'}, "
+                    f"availability={screening_provider_availability or 'unknown'}). "
+                    "Memo recommendation cannot be an approval value until live terminal screening is available."
+                ),
+            })
+            memo["metadata"]["approval_recommendation_original"] = _original_screening_decision
+            memo["metadata"]["approval_recommendation"] = "REVIEW"
+            memo["metadata"]["decision_label"] = "SCREENING RESOLUTION REQUIRED"
+            _screening_recommendation_bound_to_review = True
+            _screening_conditions = list(memo["metadata"].get("conditions") or [])
+            _screening_conditions.append(
+                _screening_completion_phrase
+                + "; complete live terminal production screening and regenerate/revalidate this memo before approval reliance."
+            )
+            memo["metadata"]["conditions"] = _screening_conditions
+            _checklist = list(memo["metadata"].get("review_checklist") or [])
+            if _checklist:
+                _checklist[-1] = (
+                    "Compliance decision blocked by screening truth; approval is unavailable until live terminal screening is complete"
+                )
+            memo["metadata"]["review_checklist"] = _checklist
+        rule_engine_result["enforcements"] = rule_enforcements
+        rule_engine_result["total_enforcements"] = len(rule_enforcements)
+        if rule_enforcements and rule_engine_result.get("engine_status") == "CLEAN":
+            rule_engine_result["engine_status"] = "ENFORCED"
+        memo["metadata"]["rule_engine"] = rule_engine_result
 
     memo["metadata"]["memo_integrity_version"] = "phase3_v1"
     memo["metadata"]["adverse_media_state_summary"] = {
@@ -1806,8 +1985,8 @@ def build_compliance_memo(app, directors, ubos, documents):
             "has_non_terminal": screening_has_non_terminal,
             "has_failed": screening_has_failed,
             "has_not_configured": screening_has_not_configured,
-            "has_sandbox": bool(_screening_terminality.get("has_sandbox")),
-            "has_simulated": bool(_screening_terminality.get("has_simulated")),
+            "has_sandbox": screening_has_sandbox,
+            "has_simulated": screening_has_simulated,
             "canonical_state": _screening_terminality.get("canonical_state"),
             "provider_availability": _screening_terminality.get("provider_availability"),
             "provider_mode": _screening_terminality.get("provider_mode"),
@@ -1823,6 +2002,8 @@ def build_compliance_memo(app, directors, ubos, documents):
         "decision_recommendation": decision,
         "monitoring_tier": mon_tier,
     }
+    if _screening_recommendation_bound_to_review:
+        agent5_input_contract["decision_recommendation"] = "REVIEW"
     memo["metadata"]["agent5_input_contract"] = agent5_input_contract
 
     # ── Priority B / Workstream A: Narrative contradiction guard ──────

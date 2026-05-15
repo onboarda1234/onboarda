@@ -526,6 +526,46 @@ class TestScreeningQueueSerializer:
         assert entity["status_label"] == "Screening Not Configured"
         assert entity["review_required"] is True
 
+    @pytest.mark.parametrize(
+        "api_status,expected_key,expected_label,expected_mode",
+        [
+            ("simulated", "screening_simulated", "Simulated Screening — Not Live", "simulated_fallback"),
+            ("sandbox", "screening_sandbox", "Sandbox Screening — Not Production Live", "sandbox_provider"),
+        ],
+    )
+    def test_simulated_and_sandbox_company_labels_are_explicit(
+        self, db, temp_db, api_status, expected_key, expected_label, expected_mode
+    ):
+        from server import _build_screening_queue_payload
+        _seed_app(db, f"app_{api_status}", f"ARF-{api_status.upper()}-1", {
+            "screening_report": {
+                "screened_at": "2026-04-22T00:00:00",
+                "screening_mode": api_status,
+                "company_screening": {
+                    "found": True, "source": "opencorporates",
+                    "sanctions": {"matched": False, "results": [],
+                                  "source": "sumsub", "api_status": api_status},
+                },
+                "director_screenings": [],
+                "ubo_screenings": [],
+                "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
+                "kyc_applicants": [],
+                "overall_flags": [],
+                "total_hits": 0,
+            }
+        })
+        db.commit()
+
+        payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+        entity = next(r for r in payload["rows"]
+                      if r["application_ref"] == f"ARF-{api_status.upper()}-1"
+                      and r["subject_type"] == "entity")
+        assert entity["status_key"] == expected_key
+        assert entity["status_label"] == expected_label
+        assert entity["provider_mode"] == expected_mode
+        assert entity["defensible_clear"] is False
+        assert entity["review_required"] is True
+
     def test_failed_provider_for_person_is_rendered_as_unavailable(self, db, temp_db):
         from server import _build_screening_queue_payload
         _seed_app(db, "app_failed", "ARF-FAIL-1", {
@@ -665,8 +705,15 @@ class TestScreeningQueueSerializer:
 # ── Memo handler: must not overclaim screening completion ─────────────
 
 
-def _build_memo_inputs(api_status, declared_pep="No"):
+def _build_memo_inputs(api_status, declared_pep="No", matched=False):
     """Construct minimal app/directors/ubos/documents for memo build."""
+    results = []
+    if matched:
+        results = [{
+            "name": "Watchlist Hit",
+            "is_sanctioned": True,
+            "match_categories": ["sanctions"],
+        }]
     app = {
         "id": "app_memo",
         "ref": "ARF-MEMO",
@@ -691,7 +738,7 @@ def _build_memo_inputs(api_status, declared_pep="No"):
                 "screening_mode": "live",
                 "company_screening": {
                     "found": True, "source": "opencorporates",
-                    "sanctions": {"matched": False, "results": [],
+                    "sanctions": {"matched": matched, "results": results,
                                   "source": "sumsub", "api_status": api_status},
                 },
                 "director_screenings": [
@@ -707,7 +754,9 @@ def _build_memo_inputs(api_status, declared_pep="No"):
                 "ip_geolocation": {"risk_level": "LOW", "source": "ipapi"},
                 "kyc_applicants": [],
                 "overall_flags": [],
-                "total_hits": 0,
+                "total_hits": 1 if matched else 0,
+                "any_sanctions_hits": matched,
+                "has_company_screening_hit": matched,
             }
         }),
     }
@@ -741,7 +790,33 @@ def _flatten_text(memo):
     return "\n".join(chunks).lower()
 
 
+def _flatten_sections_text(memo):
+    return _flatten_text(memo.get("sections", {}))
+
+
 class TestMemoTruthfulness:
+    def test_completed_match_memo_renders_match_not_clean(self):
+        from memo_handler import build_compliance_memo
+        app, directors, ubos, docs = _build_memo_inputs("live", matched=True)
+        memo, _, _, _ = build_compliance_memo(app, directors, ubos, docs)
+
+        summary = memo["metadata"]["screening_state_summary"]
+        assert summary["canonical_state"] == "completed_match"
+        assert summary["screening_result"] == "match"
+        assert summary["defensible_clear"] is False
+
+        text = _flatten_sections_text(memo)
+        assert "match" in text
+        assert "escalation" in text or "officer review" in text
+        for forbidden in (
+            "no matches were returned",
+            "no matches returned",
+            "clean sanctions screening",
+            "clean screening results",
+            "screening results, verified documentation",
+        ):
+            assert forbidden not in text
+
     def test_memo_does_not_claim_completed_screening_when_pending(self):
         from memo_handler import build_compliance_memo
         app, directors, ubos, docs = _build_memo_inputs("pending")
@@ -758,6 +833,70 @@ class TestMemoTruthfulness:
         assert "not complete" in text or "not yet complete" in text
         # Must NOT make a "clean sanctions screening" claim while pending.
         assert "clean sanctions screening" not in text
+
+    def test_simulated_memo_is_non_reliance_and_not_approval_recommendation(self):
+        from memo_handler import build_compliance_memo
+        app, directors, ubos, docs = _build_memo_inputs("simulated")
+        memo, _, _, _ = build_compliance_memo(app, directors, ubos, docs)
+
+        summary = memo["metadata"]["screening_state_summary"]
+        assert summary["canonical_state"] == "simulated_fallback"
+        assert summary["defensible_clear"] is False
+        assert memo["metadata"]["approval_recommendation"] == "REVIEW"
+        assert memo["metadata"]["decision_label"] == "SCREENING RESOLUTION REQUIRED"
+
+        text = _flatten_sections_text(memo)
+        assert "simulated" in text
+        assert "not production-live" in text or "not approval recommendation" in text
+        assert "not recommended for approval" in text
+        assert "this application is recommended for approval" not in text
+        assert "clean sanctions screening" not in text
+
+    def test_screening_truth_block_does_not_soften_reject_or_edd_escalation(self):
+        from memo_handler import build_compliance_memo
+        app, directors, ubos, docs = _build_memo_inputs("simulated")
+        app["risk_level"] = "VERY_HIGH"
+        app["risk_score"] = 95
+
+        memo, _, _, _ = build_compliance_memo(app, directors, ubos, docs)
+
+        assert memo["metadata"]["approval_recommendation"] in {"REJECT", "ESCALATE_TO_EDD"}
+        assert memo["metadata"]["approval_recommendation"] != "REVIEW"
+        assert memo["metadata"]["decision_label"] != "SCREENING RESOLUTION REQUIRED"
+        text = _flatten_sections_text(memo)
+        assert "simulated" in text
+        assert "this application is recommended for approval" not in text
+
+    def test_sandbox_memo_is_not_production_live(self):
+        from memo_handler import build_compliance_memo
+        app, directors, ubos, docs = _build_memo_inputs("sandbox")
+        memo, _, _, _ = build_compliance_memo(app, directors, ubos, docs)
+
+        summary = memo["metadata"]["screening_state_summary"]
+        assert summary["canonical_state"] == "sandbox_provider"
+        assert summary["defensible_clear"] is False
+        text = _flatten_sections_text(memo)
+        assert "sandbox" in text
+        assert "not production-live" in text
+        assert "clean sanctions screening" not in text
+
+    @pytest.mark.parametrize(
+        "api_status,expected_phrase",
+        [
+            ("pending", "pending"),
+            ("not_configured", "not configured"),
+            ("failed", "failed"),
+        ],
+    )
+    def test_non_terminal_memo_wording_matches_canonical_state(self, api_status, expected_phrase):
+        from memo_handler import build_compliance_memo
+        app, directors, ubos, docs = _build_memo_inputs(api_status)
+        memo, _, _, _ = build_compliance_memo(app, directors, ubos, docs)
+
+        text = _flatten_sections_text(memo)
+        assert expected_phrase in text
+        assert "clean sanctions screening" not in text
+        assert "this application is recommended for approval" not in text
 
     def test_memo_does_not_claim_completed_screening_when_not_configured(self):
         from memo_handler import build_compliance_memo
@@ -779,6 +918,7 @@ class TestMemoTruthfulness:
         summary = memo["metadata"]["screening_state_summary"]
         assert summary["terminal"] is True
         assert summary["has_non_terminal"] is False
+        assert summary["defensible_clear"] is True
         text = _flatten_text(memo)
         # Standard clean-claim phrasing remains for true terminal-clear.
         assert "clean sanctions screening" in text

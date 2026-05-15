@@ -10933,14 +10933,42 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 company_context.append("KYC RED: " + ", ".join(rejected_kyc))
             if company_facts["adverse_media_hit"] or company_adverse.get("matched") or company_media_alerts["matched"]:
                 company_context.append("Company adverse media match")
+            company_provider_record = {
+                "source": " ".join(str(x or "") for x in (
+                    company_screening.get("source"),
+                    company_sanctions.get("source"),
+                )),
+                "provider": " ".join(str(x or "") for x in (
+                    company_screening.get("provider"),
+                    company_sanctions.get("provider"),
+                )),
+                "api_status": " ".join(str(x or "") for x in (
+                    company_screening.get("api_status"),
+                    company_sanctions.get("api_status"),
+                )),
+            }
+            company_screening_truth = derive_screening_truth(
+                company_sanctions or company_provider_record,
+                name="company_watchlist",
+                required=True,
+            )
+            company_provider_mode = company_screening_truth.get("provider_mode")
             # Surface explicit non-terminal sanctions state so officers cannot
             # mistake "we did not get a real answer" for "clear".
-            if company_sanctions_state == _SCR_NOT_CONFIGURED:
+            if company_provider_mode == "simulated_fallback":
+                company_context.append("Company sanctions screening simulated fallback")
+            elif company_provider_mode == "sandbox_provider":
+                company_context.append("Company sanctions screening sandbox provider")
+            elif company_sanctions_state == _SCR_NOT_CONFIGURED:
                 company_context.append("Company sanctions screening not configured")
             elif company_sanctions_state == _SCR_FAILED:
                 company_context.append("Company sanctions screening unavailable")
             elif company_sanctions_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED):
                 company_context.append("Company sanctions screening pending")
+        else:
+            company_provider_record = {}
+            company_screening_truth = {}
+            company_provider_mode = None
 
         # Fail-closed: any non-terminal company sanctions state requires
         # officer review. Previously only ``matched`` triggered review,
@@ -10976,6 +11004,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             elif company_state == _SCR_COMPLETED_MATCH:
                 entity_status_key = "review_required"
                 entity_status_label = "Review Required"
+            elif company_provider_mode == "simulated_fallback":
+                entity_status_key = "screening_simulated"
+                entity_status_label = "Simulated Screening — Not Live"
+            elif company_provider_mode == "sandbox_provider":
+                entity_status_key = "screening_sandbox"
+                entity_status_label = "Sandbox Screening — Not Production Live"
             elif company_sanctions_state == _SCR_NOT_CONFIGURED:
                 entity_status_key = "screening_not_configured"
                 entity_status_label = "Screening Not Configured"
@@ -10997,31 +11031,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 entity_status_key = "screened_no_match"
                 entity_status_label = "No Provider Match"
 
-            company_provider_record = {
-                "source": " ".join(str(x or "") for x in (
-                    company_screening.get("source"),
-                    company_sanctions.get("source"),
-                )),
-                "provider": " ".join(str(x or "") for x in (
-                    company_screening.get("provider"),
-                    company_sanctions.get("provider"),
-                )),
-                "api_status": " ".join(str(x or "") for x in (
-                    company_screening.get("api_status"),
-                    company_sanctions.get("api_status"),
-                )),
-            }
             entity_screening_mode = _screening_queue_row_mode(
                 screening_mode,
                     company_state,
                     entity_status_key,
                     company_context,
                 company_provider_record,
-            )
-            company_screening_truth = derive_screening_truth(
-                company_sanctions or company_provider_record,
-                name="company_watchlist",
-                required=True,
             )
             company_results = []
             for record in (company_screening, company_sanctions, company_adverse):
@@ -11090,6 +11105,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             # therefore safe to treat it as a provider PEP hit.
             if (item or {}).get("undeclared_pep"):
                 has_pep_hit = True
+            person_screening_truth = derive_screening_truth(
+                screening,
+                name=f"{subject_type}_screening",
+                required=True,
+            )
+            person_provider_mode = person_screening_truth.get("provider_mode")
 
             if not report:
                 person_state = _SCR_NOT_STARTED
@@ -11124,6 +11145,12 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             ):
                 status_key = "review_required"
                 status_label = "Review Required"
+            elif person_provider_mode == "simulated_fallback":
+                status_key = "screening_simulated"
+                status_label = "Declared PEP — Simulated Screening" if declared_pep else "Simulated Screening — Not Live"
+            elif person_provider_mode == "sandbox_provider":
+                status_key = "screening_sandbox"
+                status_label = "Declared PEP — Sandbox Screening" if declared_pep else "Sandbox Screening — Not Production Live"
             elif person_state == _SCR_NOT_CONFIGURED:
                 status_key = "screening_not_configured"
                 status_label = "Declared PEP — Screening Not Configured" if declared_pep else "Screening Not Configured"
@@ -11148,7 +11175,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 status_key in (
                     "review_required", "declared_pep_review", "incomplete_record",
                     "screening_pending", "screening_not_configured",
-                    "screening_unavailable", "awaiting_screening",
+                    "screening_unavailable", "screening_simulated",
+                    "screening_sandbox", "awaiting_screening",
                 )
             )
             person_review = review_map.get((subject_type, person_name))
@@ -11175,6 +11203,10 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 entity_context.append("Provider not configured")
             elif person_state == _SCR_FAILED:
                 entity_context.append("Provider unavailable")
+            elif person_provider_mode == "simulated_fallback":
+                entity_context.append("Simulated fallback screening")
+            elif person_provider_mode == "sandbox_provider":
+                entity_context.append("Sandbox provider screening")
             elif person_state in (_SCR_PENDING, _SCR_PARTIAL, _SCR_NOT_STARTED) and report and item:
                 entity_context.append("Provider result pending")
 
@@ -11185,12 +11217,6 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 entity_context,
                 screening,
             )
-            person_screening_truth = derive_screening_truth(
-                screening,
-                name=f"{subject_type}_screening",
-                required=True,
-            )
-
             rows.append({
                 "application_id": app["id"],
                 "application_ref": app["ref"],
