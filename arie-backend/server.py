@@ -5097,6 +5097,26 @@ def _kyc_prerequisite_error(app, *, action):
     return None, None
 
 
+def _pre_approval_decision_state_error(app):
+    """Return an error when an officer cannot record pre-approval now.
+
+    EDD route actuation can move a still-pre-approval-required case to
+    edd_required before an officer records the pre-approval decision. That
+    state must remain recoverable: KYC is still locked by
+    _kyc_prerequisite_error until PRE_APPROVE is recorded.
+    """
+    status = str((app or {}).get("status") or "").strip().lower()
+    if status == "pre_approval_review":
+        return None
+    if status == "edd_required" and _kyc_requires_pre_approval(app):
+        return None
+    return (
+        f"Pre-approval decision not allowed: application is in '{status or 'unknown'}' status. "
+        "Only applications in 'pre_approval_review' or pre-approval-required "
+        "'edd_required' can receive pre-approval decisions."
+    )
+
+
 def _audit_blocked_kyc_transition(handler, db, user, app, *, attempted_action,
                                   reason_code, message, status_code):
     detail = {
@@ -5304,12 +5324,11 @@ class PreApprovalDecisionHandler(BaseHandler):
         # EX-05: Capture before-state for audit trail
         _before = snapshot_app_state(app)
 
-        # Enforce: only allowed when status = pre_approval_review
-        if app["status"] != "pre_approval_review":
-            reason = (
-                f"Pre-approval decision not allowed: application is in '{app['status']}' status. "
-                "Only applications in 'pre_approval_review' can receive pre-approval decisions."
-            )
+        # Enforce: allow normal pre_approval_review and recoverable EDD-routed
+        # cases that still need a pre-KYC approval decision.
+        state_error = _pre_approval_decision_state_error(app)
+        if state_error:
+            reason = state_error
             self.log_governance_attempt(
                 user, "application.pre_approval_decision", attempt_target, "rejected", 400,
                 reason, attempt_summary, db=db)

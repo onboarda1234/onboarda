@@ -90,6 +90,12 @@ def _portal_client_token(client_id="portalclient001"):
     return create_token(client_id, "client", "Portal Client", "client")
 
 
+def _officer_token():
+    from auth import create_token
+
+    return create_token("admin001", "admin", "Test Admin", "officer")
+
+
 def _seed_kyc_application(
     db,
     *,
@@ -146,6 +152,46 @@ def _seed_kyc_application(
             "1985-01-01",
         ),
     )
+
+
+def _mark_edd_preapproval_required(
+    db,
+    app_id,
+    *,
+    final_risk_level="MEDIUM",
+    triggers=None,
+    reason="EDD routing requires pre-approval before KYC.",
+):
+    db.execute(
+        """
+        UPDATE applications
+        SET final_risk_level=?,
+            onboarding_lane='EDD',
+            risk_escalations=?,
+            elevation_reason_text=?
+        WHERE id=?
+        """,
+        (
+            final_risk_level,
+            json.dumps(triggers or ["declared_pep_present"]),
+            reason,
+            app_id,
+        ),
+    )
+
+
+def _cleanup_application(db, app_id, ref):
+    for table, column in (
+        ("documents", "application_id"),
+        ("application_enhanced_requirements", "application_id"),
+        ("compliance_memos", "application_id"),
+        ("edd_cases", "application_id"),
+        ("directors", "application_id"),
+        ("ubos", "application_id"),
+        ("applications", "id"),
+    ):
+        db.execute(f"DELETE FROM {table} WHERE {column}=?", (app_id,))
+    db.execute("DELETE FROM audit_log WHERE target=?", (ref,))
 
 
 def _insert_uploaded_document(db, app_id, *, doc_id=None):
@@ -578,6 +624,213 @@ def test_high_risk_kyc_submit_without_preapproval_is_blocked(api_server):
     assert status == "kyc_documents"
     assert audit["action"] == "KYC Transition Blocked: pre_approval_required"
     assert json.loads(audit["detail"])["pre_approval_decision"] is None
+
+
+def test_declared_pep_edd_required_still_allows_preapproval_decision(api_server):
+    from db import get_db
+
+    app_id = "preapprove_edd_pep"
+    ref = "ARF-PREAPPROVE-EDD-PEP"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(
+        conn,
+        app_id=app_id,
+        ref=ref,
+        status="edd_required",
+        risk_level="MEDIUM",
+        risk_score=55,
+        onboarding_lane="EDD",
+        pre_approval_decision=None,
+    )
+    _mark_edd_preapproval_required(
+        conn,
+        app_id,
+        final_risk_level="MEDIUM",
+        triggers=["declared_pep_present"],
+        reason="Declared PEP routes to EDD and requires pre-approval before KYC.",
+    )
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/{ref}/pre-approval-decision",
+        headers={"Authorization": f"Bearer {_officer_token()}"},
+        json={"decision": "PRE_APPROVE", "notes": "Declared PEP reviewed for KYC collection."},
+        timeout=3,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["application_status"] == "kyc_documents"
+
+    conn = get_db()
+    app = conn.execute(
+        "SELECT status, pre_approval_decision FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone()
+    audit = conn.execute(
+        """
+        SELECT action, before_state, after_state
+        FROM audit_log
+        WHERE target=? AND action='Pre-Approval: PRE_APPROVE'
+        ORDER BY timestamp DESC, id DESC LIMIT 1
+        """,
+        (ref,),
+    ).fetchone()
+
+    assert app["status"] == "kyc_documents"
+    assert app["pre_approval_decision"] == "PRE_APPROVE"
+    assert audit is not None
+    assert json.loads(audit["before_state"])["status"] == "edd_required"
+    assert json.loads(audit["after_state"]) == {
+        "status": "kyc_documents",
+        "pre_approval_decision": "PRE_APPROVE",
+    }
+    _cleanup_application(conn, app_id, ref)
+    conn.commit()
+    conn.close()
+
+
+def test_crypto_edd_required_after_preapproval_can_upload_and_submit_kyc(api_server):
+    from db import get_db
+
+    app_id = "preapprove_edd_crypto"
+    ref = "ARF-PREAPPROVE-EDD-CRYPTO"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(
+        conn,
+        app_id=app_id,
+        ref=ref,
+        status="edd_required",
+        risk_level="HIGH",
+        risk_score=82,
+        onboarding_lane="EDD",
+        pre_approval_decision=None,
+    )
+    _mark_edd_preapproval_required(
+        conn,
+        app_id,
+        final_risk_level="HIGH",
+        triggers=["crypto_or_virtual_asset_sector", "high_risk_sector"],
+        reason="Crypto/VASP routes to EDD and requires pre-approval before KYC.",
+    )
+    conn.commit()
+    conn.close()
+
+    preapprove = http_requests.post(
+        f"{api_server}/api/applications/{ref}/pre-approval-decision",
+        headers={"Authorization": f"Bearer {_officer_token()}"},
+        json={"decision": "PRE_APPROVE", "notes": "Crypto/VASP EDD pre-approved for KYC collection."},
+        timeout=3,
+    )
+    assert preapprove.status_code == 201, preapprove.text
+
+    upload = http_requests.post(
+        f"{api_server}/api/applications/{ref}/documents?doc_type=cert_inc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        files={"file": ("crypto-coi.pdf", b"%PDF-1.4\n%EOF\n", "application/pdf")},
+        timeout=3,
+    )
+    assert upload.status_code == 201, upload.text
+
+    submit = http_requests.post(
+        f"{api_server}/api/applications/{ref}/submit-kyc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        timeout=3,
+    )
+    assert submit.status_code == 200, submit.text
+    assert submit.json()["status"] == "kyc_submitted"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    conn.commit()
+    conn.close()
+
+
+def test_edd_required_without_preapproval_cannot_upload_or_submit_kyc(api_server):
+    from db import get_db
+
+    app_id = "edd_no_preapproval"
+    ref = "ARF-EDD-NO-PREAPPROVAL"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(
+        conn,
+        app_id=app_id,
+        ref=ref,
+        status="edd_required",
+        risk_level="MEDIUM",
+        risk_score=58,
+        onboarding_lane="EDD",
+        pre_approval_decision=None,
+    )
+    _mark_edd_preapproval_required(
+        conn,
+        app_id,
+        final_risk_level="MEDIUM",
+        triggers=["declared_pep_present"],
+    )
+    _insert_uploaded_document(conn, app_id)
+    conn.commit()
+    conn.close()
+
+    upload = http_requests.post(
+        f"{api_server}/api/applications/{ref}/documents?doc_type=cert_inc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        files={"file": ("blocked.pdf", b"%PDF-1.4\n%EOF\n", "application/pdf")},
+        timeout=3,
+    )
+    assert upload.status_code == 409
+
+    submit = http_requests.post(
+        f"{api_server}/api/applications/{ref}/submit-kyc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        timeout=3,
+    )
+    assert submit.status_code == 409
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    conn.commit()
+    conn.close()
+
+
+def test_invalid_preapproval_state_still_rejects(api_server):
+    from db import get_db
+
+    app_id = "preapproval_invalid_state"
+    ref = "ARF-PREAPPROVAL-INVALID-STATE"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(
+        conn,
+        app_id=app_id,
+        ref=ref,
+        status="draft",
+        risk_level="HIGH",
+        risk_score=80,
+        onboarding_lane="EDD",
+        pre_approval_decision=None,
+    )
+    _mark_edd_preapproval_required(
+        conn,
+        app_id,
+        final_risk_level="HIGH",
+        triggers=["high_risk_sector"],
+    )
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/{ref}/pre-approval-decision",
+        headers={"Authorization": f"Bearer {_officer_token()}"},
+        json={"decision": "PRE_APPROVE", "notes": "Should not be allowed from draft."},
+        timeout=3,
+    )
+    assert resp.status_code == 400
+    assert "pre-approval decision not allowed" in resp.json()["error"].lower()
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    conn.commit()
+    conn.close()
 
 
 def test_valid_kyc_documents_case_can_upload(api_server):
