@@ -11,6 +11,7 @@ import socket
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -2982,3 +2983,181 @@ class TestGovernanceAttemptAudit:
         detail = json.loads(row["detail"])
         assert detail["action"] == "application.decision"
         assert detail["response_code"] == 404
+
+
+class TestMonitoringEnrollmentActuation:
+    def _live_clear_prescreening(self):
+        now = datetime.now(timezone.utc)
+        return json.dumps({
+            "screening_report": {
+                "screening_mode": "live",
+                "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
+                "sanctions": {"api_status": "live", "matched": False, "results": []},
+                "company_registry": {"api_status": "live"},
+                "ip_geolocation": {"api_status": "live"},
+                "kyc": {"api_status": "live", "matched": False, "results": []},
+            },
+            "screening_valid_until": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+            "screening_validity_days": 90,
+        })
+
+    def _insert_approvable_application(self, risk_level="LOW"):
+        from db import get_db
+
+        suffix = uuid.uuid4().hex[:8]
+        app_id = f"monitoring_approval_{suffix}"
+        app_ref = f"ARF-MONITORING-{suffix}"
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        conn = get_db()
+        conn.execute(
+            """
+            INSERT INTO applications
+                (id, ref, client_id, company_name, country, sector, entity_type,
+                 status, risk_level, final_risk_level, risk_score,
+                 prescreening_data, screening_mode, submitted_at, created_at,
+                 updated_at, inputs_updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                app_ref,
+                f"client_{suffix}",
+                f"Monitoring Approval {suffix} Ltd",
+                "Mauritius",
+                "Technology",
+                "SME",
+                "compliance_review",
+                risk_level,
+                risk_level,
+                25 if risk_level == "LOW" else 55,
+                self._live_clear_prescreening(),
+                "live",
+                now,
+                now,
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO compliance_memos
+                (application_id, memo_data, generated_by, ai_recommendation,
+                 review_status, quality_score, validation_status, supervisor_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                json.dumps({
+                    "ai_source": "deterministic",
+                    "metadata": {
+                        "ai_source": "deterministic",
+                        "edd_routing": {"route": "standard", "triggers": []},
+                    },
+                    "supervisor": {
+                        "verdict": "CONSISTENT",
+                        "can_approve": True,
+                        "mandatory_escalation": False,
+                    },
+                }),
+                "system",
+                "APPROVE",
+                "approved",
+                9.0,
+                "pass",
+                "CONSISTENT",
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return app_id, app_ref
+
+    def test_application_approval_enrolls_monitoring_and_periodic_review(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id, app_ref = self._insert_approvable_application("LOW")
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/decision",
+            json={
+                "decision": "approve",
+                "decision_reason": "Approve and enroll monitoring.",
+                "officer_signoff": {
+                    "acknowledged": True,
+                    "scope": "decision",
+                    "source_context": "ai_advisory",
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        enrollment = body["monitoring_enrollment"]
+        assert enrollment["status"] == "created"
+        assert enrollment["risk_level"] == "LOW"
+        assert enrollment["interval_days"] == 1095
+
+        conn = get_db()
+        review_rows = conn.execute(
+            "SELECT * FROM periodic_reviews WHERE application_id = ?",
+            (app_id,),
+        ).fetchall()
+        audit = conn.execute(
+            "SELECT detail FROM audit_log WHERE action='Monitoring Enrollment' AND target=?",
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+        assert len(review_rows) == 1
+        assert review_rows[0]["due_date"] == enrollment["due_date"]
+        assert audit is not None
+        assert json.loads(audit["detail"])["periodic_review_id"] == enrollment["periodic_review_id"]
+
+        clients_resp = http_requests.get(
+            f"{api_server}/api/monitoring/clients",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+        assert clients_resp.status_code == 200
+        approved = clients_resp.json()["clients_by_status"]["approved"]
+        row = next(item for item in approved if item["id"] == app_id)
+        assert row["monitoring_enrolled"] is True
+        assert row["periodic_review"]["id"] == enrollment["periodic_review_id"]
+
+    def test_schedule_endpoint_backfills_existing_approved_application(self, api_server):
+        from auth import create_token
+        from db import get_db
+
+        app_id, app_ref = self._insert_approvable_application("MEDIUM")
+        conn = get_db()
+        conn.execute(
+            "UPDATE applications SET status='approved', decided_at=datetime('now') WHERE id=?",
+            (app_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/monitoring/reviews/schedule",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+            timeout=5,
+        )
+        assert resp.status_code == 200, resp.text
+
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT risk_level, priority FROM periodic_reviews WHERE application_id=?",
+            (app_id,),
+        ).fetchall()
+        audit = conn.execute(
+            "SELECT detail FROM audit_log WHERE action='Monitoring Enrollment' AND target=?",
+            (app_ref,),
+        ).fetchone()
+        conn.close()
+
+        assert len(rows) == 1
+        assert rows[0]["risk_level"] == "MEDIUM"
+        assert rows[0]["priority"] == "normal"
+        assert audit is not None
