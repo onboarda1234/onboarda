@@ -510,7 +510,32 @@ def derive_screening_truth(screening: Optional[dict], *, name: Optional[str] = N
             provider_availability = "unknown"
 
     defensible_clear = canonical_state == COMPLETED_CLEAR and mode == LIVE_PROVIDER and terminal
-    approval_blocking = bool(required and canonical_state in UNSAFE_PROVIDER_STATES)
+    review_disposition = _normalise_token(
+        screening.get("review_disposition")
+        or screening.get("disposition")
+        or screening.get("screening_review_disposition")
+    )
+    review_evidence_present = bool(
+        screening.get("reviewed_at")
+        or screening.get("review_updated_at")
+        or screening.get("audit_log_id")
+        or screening.get("review_audit_id")
+        or screening.get("review_rationale")
+        or screening.get("rationale")
+        or screening.get("notes")
+    )
+    formally_cleared_match = (
+        canonical_state == COMPLETED_MATCH
+        and review_disposition == "cleared"
+        and review_evidence_present
+    )
+    approval_blocking = bool(
+        required
+        and (
+            canonical_state in UNSAFE_PROVIDER_STATES
+            or (canonical_state == COMPLETED_MATCH and not formally_cleared_match)
+        )
+    )
     if canonical_state == COMPLETED_CLEAR:
         legacy_status = "clear"
     elif canonical_state == COMPLETED_MATCH:
@@ -543,6 +568,7 @@ def derive_screening_truth(screening: Optional[dict], *, name: Optional[str] = N
         "terminal": terminal,
         "defensible_clear": defensible_clear,
         "approval_blocking": approval_blocking,
+        "formally_cleared_match": formally_cleared_match,
         "reason": reason,
         "api_status": screening.get("api_status"),
         "source": screening.get("source"),
@@ -632,6 +658,7 @@ def build_screening_truth_summary(report: Optional[dict], prescreening: Optional
         for item in evidence
         if item.get("approval_blocking")
     ]
+    completed_match_blocking = canonical_state == COMPLETED_MATCH and bool(blocking_reasons)
 
     provider_mode = LIVE_PROVIDER if terminal else canonical_state
     if canonical_state == COMPLETED_MATCH:
@@ -678,6 +705,7 @@ def build_screening_truth_summary(report: Optional[dict], prescreening: Optional
         "has_simulated": has_simulated,
         "has_pending": has_pending,
         "has_completed_match": canonical_state == COMPLETED_MATCH or has_match,
+        "completed_match_blocking": completed_match_blocking,
         "required_evidence": evidence,
         "freshness": freshness,
     }
