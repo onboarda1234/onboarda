@@ -653,6 +653,16 @@ def build_screening_truth_summary(report: Optional[dict], prescreening: Optional
     has_pending = any(item.get("canonical_state") == PENDING for item in evidence)
     has_sandbox = any(item.get("canonical_state") == SANDBOX_PROVIDER for item in evidence)
     has_simulated = any(item.get("canonical_state") == SIMULATED_FALLBACK for item in evidence)
+    has_formally_cleared_match = any(
+        item.get("canonical_state") == COMPLETED_MATCH
+        and item.get("formally_cleared_match")
+        for item in evidence
+    )
+    has_uncleared_completed_match = any(
+        item.get("canonical_state") == COMPLETED_MATCH
+        and not item.get("formally_cleared_match")
+        for item in evidence
+    )
     blocking_reasons = [
         f"{item.get('name') or 'screening'}:{item.get('reason')}"
         for item in evidence
@@ -705,6 +715,8 @@ def build_screening_truth_summary(report: Optional[dict], prescreening: Optional
         "has_simulated": has_simulated,
         "has_pending": has_pending,
         "has_completed_match": canonical_state == COMPLETED_MATCH or has_match,
+        "has_formally_cleared_match": has_formally_cleared_match,
+        "has_uncleared_completed_match": has_uncleared_completed_match,
         "completed_match_blocking": completed_match_blocking,
         "required_evidence": evidence,
         "freshness": freshness,
@@ -796,6 +808,14 @@ def build_screening_terminality_summary(report: Optional[dict], prescreening: Op
         # EDD routing. Do not let unsafe provider modes masquerade as terminal
         # material screening concerns.
         material_hit = False
+    elif (
+        truth_summary.get("has_formally_cleared_match")
+        and not truth_summary.get("has_uncleared_completed_match")
+    ):
+        # A live terminal match with documented false-positive clearance remains
+        # visible as completed_match, but no longer acts as an unresolved
+        # material screening concern for memo routing.
+        material_hit = False
 
     return {
         "terminal": terminal,
@@ -814,6 +834,9 @@ def build_screening_terminality_summary(report: Optional[dict], prescreening: Op
         "approval_ready": truth_summary.get("approval_ready"),
         "approval_blocking": truth_summary.get("approval_blocking"),
         "blocking_reasons": truth_summary.get("blocking_reasons") or [],
+        "has_formally_cleared_match": truth_summary.get("has_formally_cleared_match"),
+        "has_uncleared_completed_match": truth_summary.get("has_uncleared_completed_match"),
+        "completed_match_blocking": truth_summary.get("completed_match_blocking"),
         "required_evidence": truth_summary.get("required_evidence") or [],
         "freshness": truth_summary.get("freshness") or {},
     }

@@ -723,7 +723,7 @@ class TestScreeningQueueSerializer:
 # ── Memo handler: must not overclaim screening completion ─────────────
 
 
-def _build_memo_inputs(api_status, declared_pep="No", matched=False):
+def _build_memo_inputs(api_status, declared_pep="No", matched=False, match_cleared=False):
     """Construct minimal app/directors/ubos/documents for memo build."""
     results = []
     if matched:
@@ -732,6 +732,18 @@ def _build_memo_inputs(api_status, declared_pep="No", matched=False):
             "is_sanctioned": True,
             "match_categories": ["sanctions"],
         }]
+    sanctions_record = {
+        "matched": matched,
+        "results": results,
+        "source": "sumsub",
+        "api_status": api_status,
+    }
+    if match_cleared:
+        sanctions_record.update({
+            "review_disposition": "cleared",
+            "review_rationale": "Officer confirmed identity mismatch against provider evidence.",
+            "reviewed_at": "2026-04-22T10:00:00Z",
+        })
     app = {
         "id": "app_memo",
         "ref": "ARF-MEMO",
@@ -756,8 +768,7 @@ def _build_memo_inputs(api_status, declared_pep="No", matched=False):
                 "screening_mode": "live",
                 "company_screening": {
                     "found": True, "source": "opencorporates",
-                    "sanctions": {"matched": matched, "results": results,
-                                  "source": "sumsub", "api_status": api_status},
+                    "sanctions": sanctions_record,
                 },
                 "director_screenings": [
                     {
@@ -880,6 +891,24 @@ class TestMemoTruthfulness:
         executive = _executive_summary_text(memo)
         assert "low-risk profile" in executive
         assert "clean sanctions screening" in executive
+
+    def test_formally_cleared_completed_match_executive_summary_is_not_unresolved_escalation(self):
+        from memo_handler import build_compliance_memo
+        app, directors, ubos, docs = _build_memo_inputs("live", matched=True, match_cleared=True)
+        memo, _, _, _ = build_compliance_memo(app, directors, ubos, docs)
+
+        summary = memo["metadata"]["screening_state_summary"]
+        assert summary["canonical_state"] == "completed_match"
+        assert summary["has_formally_cleared_match"] is True
+        assert summary["has_uncleared_completed_match"] is False
+        assert summary["approval_blocking"] is False
+        executive = _executive_summary_text(memo)
+        assert "formally cleared" in executive
+        assert "unresolved screening escalation" in executive
+        assert "requiring officer review" not in executive
+        assert "escalation before approval reliance" not in executive
+        assert "no material concerns" not in executive
+        assert "low-risk profile" not in executive
 
     def test_memo_does_not_claim_completed_screening_when_pending(self):
         from memo_handler import build_compliance_memo

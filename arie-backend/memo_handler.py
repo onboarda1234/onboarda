@@ -640,6 +640,14 @@ def build_compliance_memo(app, directors, ubos, documents):
         or screening_canonical_state == "completed_match"
         or screening_result == "match"
     )
+    screening_has_formally_cleared_match = bool(_screening_terminality.get("has_formally_cleared_match"))
+    screening_has_uncleared_completed_match = bool(_screening_terminality.get("has_uncleared_completed_match"))
+    screening_formally_cleared_match = bool(
+        screening_terminal
+        and screening_canonical_state == "completed_match"
+        and screening_has_formally_cleared_match
+        and not screening_has_uncleared_completed_match
+    )
     screening_defensible_clear = bool(_screening_terminality.get("defensible_clear"))
     screening_is_defensible_clear = (
         screening_terminal
@@ -647,7 +655,11 @@ def build_compliance_memo(app, directors, ubos, documents):
         and screening_canonical_state == "completed_clear"
         and not screening_has_terminal_match
     )
-    screening_is_terminal_match = screening_terminal and screening_has_terminal_match
+    screening_is_terminal_match = (
+        screening_terminal
+        and screening_has_terminal_match
+        and not screening_formally_cleared_match
+    )
     screening_approval_ready = bool(_screening_terminality.get("approval_ready"))
     screening_truth_blocks_approval = bool(
         _screening_terminality.get("approval_blocking")
@@ -680,6 +692,35 @@ def build_compliance_memo(app, directors, ubos, documents):
         _screening_key_finding = "Sanctions screening clear"
         _screening_review_check = "Sanctions screening completed — no matches across UN, EU, OFAC, HMT lists"
         _screening_decision_descriptor = "clean"
+    elif screening_formally_cleared_match:
+        _screening_qualifier = (
+            " Live provider screening returned match(es) that have been formally cleared "
+            "through officer disposition evidence; no unresolved screening escalation remains. "
+            "This is not a no-match result."
+        )
+        _screening_completion_phrase = (
+            "Sanctions / PEP / watchlist screening completed with match(es) formally cleared by officer disposition"
+        )
+        _screening_fincrime_phrase = (
+            "Sanctions / PEP / watchlist screening returned live terminal match(es) that were formally cleared "
+            "with documented officer disposition evidence. This is a cleared-match result, not a no-match result."
+        )
+        _screening_results_phrase = (
+            "Sanctions Screening: live provider screening returned match(es) that were formally cleared "
+            "by officer disposition evidence. This is not a clear no-match result."
+        )
+        _screening_mitigation_phrase = (
+            "Live screening match(es) formally cleared through documented officer disposition evidence"
+        )
+        _screening_ai_factor_phrase = (
+            "Screening completed with formally cleared provider match(es); no unresolved screening escalation remains"
+        )
+        _screening_content_factor_phrase = (
+            "Screening completed with formally cleared provider match(es)."
+        )
+        _screening_key_finding = "Sanctions / PEP / watchlist screening match(es) formally cleared"
+        _screening_review_check = "Sanctions screening match(es) formally cleared through officer disposition evidence"
+        _screening_decision_descriptor = "formally cleared match"
     elif screening_is_terminal_match:
         _screening_qualifier = (
             " Terminal provider screening returned match(es); clean or no-match screening cannot be asserted. "
@@ -1188,6 +1229,12 @@ def build_compliance_memo(app, directors, ubos, documents):
                 else "a low-risk profile with no material concerns" if aggregated_risk == "LOW"
                 else "an elevated risk profile requiring enhanced scrutiny"
             )
+        elif screening_formally_cleared_match:
+            _executive_risk_profile = (
+                "the numeric/base risk factors plus live provider match(es) "
+                "formally cleared through documented officer disposition evidence; "
+                "no unresolved screening escalation remains"
+            )
         elif screening_is_terminal_match:
             _executive_risk_profile = (
                 "the numeric/base risk factors only; live provider screening returned "
@@ -1299,7 +1346,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                     + _executive_risk_sentence
                     + f"Model confidence: {model_confidence}%"
                     + (f" — reduced due to {'no uploaded documentation and ' if not has_documents else 'outstanding documentation and ' if pending_docs else ''}{'limited historical transaction data' if True else ''}. " if model_confidence < 80 else ". ")
-                    + f"The principal risk drivers are "
+                    + "The principal risk drivers are "
                     + (f"the presence of {len(all_peps)} Politically Exposed Person(s) ({', '.join([p['full_name'] for p in all_peps])})" if all_peps else "")
                     + (f"{',' if all_peps else ''} ownership risk rated {own_rating} ({own_rating_justification})" if own_rating in ("HIGH", "MEDIUM") and own_risk_reasons else "")
                     + (f"{',' if all_peps or own_rating in ('HIGH', 'MEDIUM') else ''} the {'high-risk' if is_high_risk_country else 'offshore'} jurisdictional classification of {country}" if is_high_risk_country or is_offshore else "")
@@ -1658,6 +1705,9 @@ def build_compliance_memo(app, directors, ubos, documents):
                 "approval_ready": bool(_screening_terminality.get("approval_ready")),
                 "approval_blocking": bool(_screening_terminality.get("approval_blocking")),
                 "blocking_reasons": _screening_terminality.get("blocking_reasons") or [],
+                "has_formally_cleared_match": bool(_screening_terminality.get("has_formally_cleared_match")),
+                "has_uncleared_completed_match": bool(_screening_terminality.get("has_uncleared_completed_match")),
+                "completed_match_blocking": bool(_screening_terminality.get("completed_match_blocking")),
                 "company_state": _company_state,
                 "person_states": _person_states,
                 "declared_pep_count": len(all_peps),
@@ -2060,6 +2110,9 @@ def build_compliance_memo(app, directors, ubos, documents):
             "approval_blocking": bool(_screening_terminality.get("approval_blocking")),
             "blocking_reasons": _screening_terminality.get("blocking_reasons") or [],
             "has_terminal_match": _has_terminal_match,
+            "has_formally_cleared_match": bool(_screening_terminality.get("has_formally_cleared_match")),
+            "has_uncleared_completed_match": bool(_screening_terminality.get("has_uncleared_completed_match")),
+            "completed_match_blocking": bool(_screening_terminality.get("completed_match_blocking")),
             "company_screening_configured": bool(_screening_terminality.get("company_screening_configured")),
         },
         "company_screening_configured": bool(_screening_terminality.get("company_screening_configured")),
