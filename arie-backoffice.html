@@ -7173,6 +7173,7 @@ function screeningQueueStatusBadge(statusKey, statusLabel) {
   var cls = 'pending';
   if (statusKey === 'screened_no_match') cls = 'approved';
   else if (statusKey === 'awaiting_screening' || statusKey === 'incomplete_record' || statusKey === 'declared_pep_review') cls = 'pending';
+  else if (statusKey === 'screening_simulated' || statusKey === 'screening_sandbox' || statusKey === 'screening_not_configured' || statusKey === 'screening_unavailable') cls = 'high';
   else if (statusKey === 'review_required') cls = 'high';
   return '<span class="badge ' + cls + '">' + escapeHtml(statusLabel || statusKey || 'Pending') + '</span>';
 }
@@ -7885,18 +7886,26 @@ function buildEntityScreeningReviewCard(app, reviewRow, screeningSummary, focus)
         ? (companyHits.matched ? 'review_required' : 'screened_no_match')
         : (companyTruth.canonical_state === 'completed_match'
             ? 'review_required'
-            : (companyTruth.canonical_state === 'not_configured'
-                ? 'screening_not_configured'
-                : (companyTruth.canonical_state === 'failed' ? 'screening_unavailable' : 'screening_pending'))))
+            : (companyTruth.canonical_state === 'simulated_fallback'
+                ? 'screening_simulated'
+                : (companyTruth.canonical_state === 'sandbox_provider'
+                    ? 'screening_sandbox'
+                    : (companyTruth.canonical_state === 'not_configured'
+                        ? 'screening_not_configured'
+                        : (companyTruth.canonical_state === 'failed' ? 'screening_unavailable' : 'screening_pending'))))))
     : 'awaiting_screening';
   var companyFallbackStatusLabel = screeningSummary.screening_run_recorded
     ? (companyFallbackStatusKey === 'screened_no_match'
         ? 'No Provider Match'
         : (companyFallbackStatusKey === 'review_required'
             ? 'Review Required'
-            : (companyFallbackStatusKey === 'screening_not_configured'
-                ? 'Screening Not Configured'
-                : (companyFallbackStatusKey === 'screening_unavailable' ? 'Screening Unavailable' : 'Screening Pending Provider'))))
+            : (companyFallbackStatusKey === 'screening_simulated'
+                ? 'Simulated Screening — Not Live'
+                : (companyFallbackStatusKey === 'screening_sandbox'
+                    ? 'Sandbox Screening — Not Production Live'
+                    : (companyFallbackStatusKey === 'screening_not_configured'
+                        ? 'Screening Not Configured'
+                        : (companyFallbackStatusKey === 'screening_unavailable' ? 'Screening Unavailable' : 'Screening Pending Provider'))))))
     : 'Awaiting Screening';
   var badges = [
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : companyFallbackStatusKey, reviewRow ? reviewRow.status_label : companyFallbackStatusLabel),
@@ -7950,9 +7959,13 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
         ? (personDeclaredPep ? 'declared_pep_review' : 'screened_no_match')
         : (personTruth.canonical_state === 'completed_match'
             ? 'review_required'
-            : (personTruth.canonical_state === 'not_configured'
-                ? 'screening_not_configured'
-                : (personTruth.canonical_state === 'failed' ? 'screening_unavailable' : 'screening_pending'))))
+            : (personTruth.canonical_state === 'simulated_fallback'
+                ? 'screening_simulated'
+                : (personTruth.canonical_state === 'sandbox_provider'
+                    ? 'screening_sandbox'
+                    : (personTruth.canonical_state === 'not_configured'
+                        ? 'screening_not_configured'
+                        : (personTruth.canonical_state === 'failed' ? 'screening_unavailable' : 'screening_pending'))))))
     : 'awaiting_screening';
   var personFallbackStatusLabel = screening
     ? (personFallbackStatusKey === 'screened_no_match'
@@ -7961,11 +7974,15 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
             ? 'Declared PEP Review'
             : (personFallbackStatusKey === 'review_required'
                 ? 'Review Required'
-                : (personFallbackStatusKey === 'screening_not_configured'
-                    ? (personDeclaredPep ? 'Declared PEP — Screening Not Configured' : 'Screening Not Configured')
-                    : (personFallbackStatusKey === 'screening_unavailable'
-                        ? (personDeclaredPep ? 'Declared PEP — Screening Unavailable' : 'Screening Unavailable')
-                        : (personDeclaredPep ? 'Declared PEP — Screening Pending Provider' : 'Screening Pending Provider'))))))
+                : (personFallbackStatusKey === 'screening_simulated'
+                    ? (personDeclaredPep ? 'Declared PEP — Simulated Screening' : 'Simulated Screening — Not Live')
+                    : (personFallbackStatusKey === 'screening_sandbox'
+                        ? (personDeclaredPep ? 'Declared PEP — Sandbox Screening' : 'Sandbox Screening — Not Production Live')
+                        : (personFallbackStatusKey === 'screening_not_configured'
+                            ? (personDeclaredPep ? 'Declared PEP — Screening Not Configured' : 'Screening Not Configured')
+                            : (personFallbackStatusKey === 'screening_unavailable'
+                                ? (personDeclaredPep ? 'Declared PEP — Screening Unavailable' : 'Screening Unavailable')
+                                : (personDeclaredPep ? 'Declared PEP — Screening Pending Provider' : 'Screening Pending Provider')))))))
     : 'Awaiting Screening';
   var badges = [
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : personFallbackStatusKey, reviewRow ? reviewRow.status_label : personFallbackStatusLabel),
