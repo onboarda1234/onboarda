@@ -592,7 +592,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             build_screening_terminality_summary as _build_screening_terminality_summary,
         )
     except ImportError:  # pragma: no cover — defensive: never break memo build
-        _build_screening_terminality_summary = lambda _report, _prescreening=None: {
+        _build_screening_terminality_summary = lambda _report, _prescreening=None, _reviews=None: {
             "terminal": False,
             "has_non_terminal": True,
             "has_failed": False,
@@ -612,7 +612,11 @@ def build_compliance_memo(app, directors, ubos, documents):
             "company_state": None,
         }
 
-    _screening_terminality = _build_screening_terminality_summary(screening_report, prescreening_data)
+    _screening_terminality = _build_screening_terminality_summary(
+        screening_report,
+        prescreening_data,
+        app.get("screening_reviews") or [],
+    )
     _person_states = list(_screening_terminality.get("person_states") or [])
     _company_state = _screening_terminality.get("company_state")
 

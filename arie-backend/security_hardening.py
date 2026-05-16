@@ -207,7 +207,25 @@ class ApprovalGateValidator:
                     "Simulated screening is not permitted for approval in production."
                 )
 
-            screening_truth = build_screening_truth_summary(screening_report, prescreening_data)
+            screening_reviews = []
+            try:
+                review_rows = db.execute(
+                    "SELECT * FROM screening_reviews WHERE application_id = ?",
+                    (app_id,),
+                ).fetchall()
+                screening_reviews = [dict(row) for row in review_rows]
+            except Exception as exc:
+                logger.warning(
+                    "Approval screening review lookup failed for application %s: %s",
+                    app_id,
+                    exc,
+                )
+
+            screening_truth = build_screening_truth_summary(
+                screening_report,
+                prescreening_data,
+                screening_reviews,
+            )
             if screening_truth.get("approval_blocking"):
                 reason = "; ".join(screening_truth.get("blocking_reasons") or ["screening_not_terminal"])
                 logger.warning(
