@@ -2357,6 +2357,7 @@ class TestGovernanceAttemptAudit:
                 "disposition_code": "provider_no_relevant_match",
                 "rationale": "Testing accepted screening audit with a recorded rationale.",
                 "notes": "Testing accepted screening audit.",
+                "evidence_reference": "Provider case CA-AUDIT-001 reviewed against registry evidence.",
             },
             headers={"Authorization": f"Bearer {token}"},
             timeout=3,
@@ -2490,6 +2491,99 @@ class TestGovernanceAttemptAudit:
         assert detail["outcome"] == "rejected"
         assert detail["response_code"] == 400
 
+    def test_false_positive_clearance_requires_evidence_reference(self, api_server):
+        """Canonical false-positive clearance must cite evidence/reference, not just a conclusion."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_screening_fp_needs_evidence"
+        app_ref = "ARF-2026-SCREEN-FP-EVIDENCE"
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status)
+            VALUES (?, ?, ?, ?, ?)
+        """, (app_id, app_ref, "screening_fp_client", "Screening FP Evidence Ltd", "in_review"))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "entity",
+                "subject_name": "Screening FP Evidence Ltd",
+                "disposition": "false_positive_cleared",
+                "rationale": "Officer confirmed this provider hit relates to a different entity after detailed review.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 400
+        assert "evidence_reference" in resp.json()["error"]
+
+    def test_analyst_cannot_clear_screening_match(self, api_server):
+        """Analyst role may not formally clear a completed_match false positive."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_screening_analyst_clear_forbidden"
+        app_ref = "ARF-2026-SCREEN-ANALYST-FORBIDDEN"
+        prescreening = {
+            "screening_report": {
+                "screening_mode": "live",
+                "company_screening": {
+                    "found": True,
+                    "sanctions": {
+                        "matched": True,
+                        "results": [{"name": "Screening FP Evidence Ltd", "is_sanctioned": True}],
+                        "source": "sumsub",
+                        "api_status": "live",
+                    },
+                },
+                "director_screenings": [],
+                "ubo_screenings": [],
+            }
+        }
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications (id, ref, client_id, company_name, status, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            app_ref,
+            "screening_analyst_client",
+            "Analyst Forbidden Ltd",
+            "in_review",
+            json.dumps(prescreening),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("analyst_screening_fp", "analyst", "Screening Analyst", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "entity",
+                "subject_name": "Analyst Forbidden Ltd",
+                "disposition": "false_positive_cleared",
+                "rationale": "Officer confirmed this provider hit relates to a different entity after detailed review.",
+                "evidence_reference": "Provider case CA-ANALYST-FORBIDDEN-001.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=3,
+        )
+
+        assert resp.status_code == 403
+
     def test_sensitive_screening_clear_requires_second_reviewer(self, api_server):
         """Director/UBO sensitive clears require two distinct officer sign-offs."""
         from auth import create_token
@@ -2552,6 +2646,7 @@ class TestGovernanceAttemptAudit:
             "disposition": "cleared",
             "disposition_code": "false_positive",
             "rationale": "Provider hit reviewed against identity documents and assessed as false positive.",
+            "evidence_reference": "Director passport and provider case CA-SENSITIVE-001.",
         }
         resp = http_requests.post(
             f"{api_server}/api/screening/review",
@@ -2601,6 +2696,7 @@ class TestGovernanceAttemptAudit:
         second_payload = dict(first_payload)
         second_payload["disposition_code"] = "identity_mismatch"
         second_payload["rationale"] = "Independent review confirms the provider hit is not the same individual."
+        second_payload["evidence_reference"] = "Second-review identity pack and CA-SENSITIVE-001."
         second = http_requests.post(
             f"{api_server}/api/screening/review",
             json=second_payload,
@@ -2721,6 +2817,100 @@ class TestGovernanceAttemptAudit:
         assert body["requires_four_eyes"] is False
         assert body["sensitivity_flags"] == []
 
+    def test_screening_escalated_to_edd_routes_application(self, api_server):
+        """Canonical escalated_to_edd disposition must actuate/preserve EDD workflow."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_screening_escalated_to_edd"
+        app_ref = "ARF-2026-SCREEN-ESCALATE-EDD"
+        prescreening = {
+            "screening_report": {
+                "screening_mode": "live",
+                "company_screening": {
+                    "found": True,
+                    "sanctions": {
+                        "matched": True,
+                        "results": [{"name": "Material Match Ltd", "is_sanctioned": True}],
+                        "source": "sumsub",
+                        "api_status": "live",
+                    },
+                },
+                "director_screenings": [],
+                "ubo_screenings": [],
+                "total_hits": 1,
+            }
+        }
+        conn = get_db()
+        conn.execute("DELETE FROM audit_log WHERE target IN (?, ?)", (app_ref, f"application:{app_ref}"))
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute("""
+            INSERT INTO applications
+            (id, ref, client_id, company_name, country, sector, entity_type,
+             status, risk_level, risk_score, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            app_id,
+            app_ref,
+            "screening_edd_client",
+            "Screening EDD Ltd",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "compliance_review",
+            "MEDIUM",
+            45,
+            json.dumps(prescreening),
+        ))
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "entity",
+                "subject_name": "Screening EDD Ltd",
+                "disposition": "escalated_to_edd",
+                "rationale": "Officer escalated this material provider match to EDD for enhanced review.",
+                "evidence_reference": "Provider case CA-ESC-EDD-001.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["review"]["canonical_disposition"] == "escalated_to_edd"
+        assert body["routing_outcome"]["route"] == "edd"
+
+        conn = get_db()
+        app = conn.execute(
+            "SELECT status, onboarding_lane FROM applications WHERE id = ?",
+            (app_id,),
+        ).fetchone()
+        edd = conn.execute(
+            "SELECT id, stage FROM edd_cases WHERE application_id = ?",
+            (app_id,),
+        ).fetchone()
+        audit = conn.execute(
+            """
+            SELECT id FROM audit_log
+            WHERE target = ? AND action = 'edd_routing.actuated'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (f"application:{app_ref}",),
+        ).fetchone()
+        conn.close()
+
+        assert app["onboarding_lane"] == "EDD"
+        assert app["status"] == "edd_required"
+        assert edd is not None
+        assert audit is not None
+
     def test_screening_review_context_error_fails_closed(self, api_server, monkeypatch):
         """A context derivation error should require four-eyes rather than single-officer clear."""
         import server as server_module
@@ -2758,6 +2948,7 @@ class TestGovernanceAttemptAudit:
                 "disposition": "cleared",
                 "disposition_code": "provider_no_relevant_match",
                 "rationale": "Clear decision should fail closed when sensitivity context is unavailable.",
+                "evidence_reference": "Provider case CA-CONTEXT-ERR-001.",
             },
             headers={"Authorization": f"Bearer {token}"},
             timeout=3,

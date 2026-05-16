@@ -54,6 +54,8 @@ This module is purely additive: it computes derived fields from existing
 records and never mutates them.
 """
 
+import json
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -94,6 +96,18 @@ UNSAFE_PROVIDER_STATES = frozenset({
     NOT_CONFIGURED,
     PENDING,
     FAILED,
+})
+
+FALSE_POSITIVE_CLEARANCE_DISPOSITIONS = frozenset({
+    "false_positive_cleared",
+    # Legacy structured clearance codes. These remain accepted so existing
+    # reviewed rows do not regress, but new API submissions should use the
+    # canonical false_positive_cleared disposition.
+    "false_positive",
+    "identity_mismatch",
+    "provider_no_relevant_match",
+    "duplicate_or_irrelevant",
+    "low_risk_context_accepted",
 })
 
 ALL_STATES = (
@@ -137,6 +151,152 @@ SANDBOX_API_STATUSES = frozenset({"sandbox", "test", "test_mode"})
 
 def _normalise_token(value) -> str:
     return str(value or "").strip().lower()
+
+
+def _normalise_subject_type(value) -> str:
+    token = _normalise_token(value)
+    if token == "company":
+        return "entity"
+    return token
+
+
+def _normalise_subject_name(value) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _truthy_review_flag(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
+def _review_identity_present(screening: dict) -> bool:
+    return bool(
+        screening.get("reviewer_id")
+        or screening.get("reviewer_name")
+        or screening.get("reviewed_by")
+    )
+
+
+def _review_reason_present(screening: dict) -> bool:
+    return bool(
+        screening.get("review_rationale")
+        or screening.get("rationale")
+        or screening.get("review_reason")
+    )
+
+
+def _review_evidence_present(screening: dict) -> bool:
+    return bool(
+        screening.get("review_evidence_reference")
+        or screening.get("evidence_reference")
+        or screening.get("evidence")
+        or screening.get("reference")
+        or screening.get("source_reference")
+    )
+
+
+def _review_timestamp_present(screening: dict) -> bool:
+    return bool(
+        screening.get("reviewed_at")
+        or screening.get("review_updated_at")
+        or screening.get("created_at")
+        or screening.get("updated_at")
+    )
+
+
+def _review_audit_present(screening: dict) -> bool:
+    return bool(
+        _truthy_review_flag(screening.get("audit_confirmed"))
+        or screening.get("audit_log_id")
+        or screening.get("review_audit_id")
+    )
+
+
+def _review_second_signoff_satisfied(screening: dict) -> bool:
+    if not _truthy_review_flag(screening.get("requires_four_eyes")):
+        return True
+    return bool(
+        screening.get("second_reviewer_id")
+        or screening.get("second_reviewed_by")
+        or screening.get("second_reviewer_name")
+    )
+
+
+def _review_disposition_code(screening: dict) -> str:
+    return _normalise_token(
+        screening.get("review_disposition_code")
+        or screening.get("canonical_disposition")
+        or screening.get("disposition_code")
+        or screening.get("review_disposition")
+        or screening.get("disposition")
+        or screening.get("screening_review_disposition")
+    )
+
+
+def _is_false_positive_clearance(screening: dict) -> bool:
+    code = _review_disposition_code(screening)
+    storage_disposition = _normalise_token(
+        screening.get("review_storage_disposition")
+        or screening.get("disposition")
+        or screening.get("review_disposition")
+    )
+    if code not in FALSE_POSITIVE_CLEARANCE_DISPOSITIONS:
+        return False
+    if storage_disposition and storage_disposition not in FALSE_POSITIVE_CLEARANCE_DISPOSITIONS | {"cleared"}:
+        return False
+    return (
+        _review_identity_present(screening)
+        and _review_reason_present(screening)
+        and _review_evidence_present(screening)
+        and _review_timestamp_present(screening)
+        and _review_audit_present(screening)
+        and _review_second_signoff_satisfied(screening)
+    )
+
+
+def _parse_review_timestamp(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _review_sort_key(review: dict):
+    timestamp = (
+        _parse_review_timestamp(review.get("updated_at"))
+        or _parse_review_timestamp(review.get("created_at"))
+        or _parse_review_timestamp(review.get("review_updated_at"))
+        or _parse_review_timestamp(review.get("reviewed_at"))
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
+    try:
+        review_id = int(review.get("id") or 0)
+    except Exception:
+        review_id = 0
+    stable_payload = json.dumps(review, default=str, sort_keys=True)
+    return (timestamp, review_id, stable_payload)
+
+
+def _latest_review(existing, candidate):
+    if not existing:
+        return candidate
+    return candidate if _review_sort_key(candidate) >= _review_sort_key(existing) else existing
 
 
 def _record_text(record: Optional[dict]) -> str:
@@ -510,24 +670,9 @@ def derive_screening_truth(screening: Optional[dict], *, name: Optional[str] = N
             provider_availability = "unknown"
 
     defensible_clear = canonical_state == COMPLETED_CLEAR and mode == LIVE_PROVIDER and terminal
-    review_disposition = _normalise_token(
-        screening.get("review_disposition")
-        or screening.get("disposition")
-        or screening.get("screening_review_disposition")
-    )
-    review_evidence_present = bool(
-        screening.get("reviewed_at")
-        or screening.get("review_updated_at")
-        or screening.get("audit_log_id")
-        or screening.get("review_audit_id")
-        or screening.get("review_rationale")
-        or screening.get("rationale")
-        or screening.get("notes")
-    )
     formally_cleared_match = (
         canonical_state == COMPLETED_MATCH
-        and review_disposition == "cleared"
-        and review_evidence_present
+        and _is_false_positive_clearance(screening)
     )
     approval_blocking = bool(
         required
@@ -569,6 +714,12 @@ def derive_screening_truth(screening: Optional[dict], *, name: Optional[str] = N
         "defensible_clear": defensible_clear,
         "approval_blocking": approval_blocking,
         "formally_cleared_match": formally_cleared_match,
+        "review_disposition": _normalise_token(
+            screening.get("review_disposition")
+            or screening.get("disposition")
+            or screening.get("screening_review_disposition")
+        ) or None,
+        "review_disposition_code": _review_disposition_code(screening) or None,
         "reason": reason,
         "api_status": screening.get("api_status"),
         "source": screening.get("source"),
@@ -581,12 +732,104 @@ def derive_screening_truth(screening: Optional[dict], *, name: Optional[str] = N
     }
 
 
-def _collect_required_screening_records(report: dict) -> list:
+def _screening_review_index(screening_reviews) -> dict:
+    index = {"exact": {}, "by_type": {}}
+    for review in screening_reviews or []:
+        if not isinstance(review, dict):
+            continue
+        subject_type = _normalise_subject_type(review.get("subject_type"))
+        subject_name = _normalise_subject_name(review.get("subject_name"))
+        if not subject_type:
+            continue
+        if subject_name:
+            key = (subject_type, subject_name)
+            index["exact"][key] = _latest_review(index["exact"].get(key), review)
+        index["by_type"].setdefault(subject_type, []).append(review)
+    for subject_type, reviews in list(index["by_type"].items()):
+        index["by_type"][subject_type] = sorted(reviews, key=_review_sort_key, reverse=True)
+    return index
+
+
+def _review_for_subject(index: dict, subject_type: str, subject_name: str):
+    subject_type = _normalise_subject_type(subject_type)
+    subject_name = _normalise_subject_name(subject_name)
+    if subject_name:
+        exact = index.get("exact", {}).get((subject_type, subject_name))
+        if exact:
+            return exact
+    typed = index.get("by_type", {}).get(subject_type) or []
+    if subject_type == "entity" and typed:
+        return typed[0]
+    return None
+
+
+def _company_subject_name(report: dict, prescreening: dict) -> str:
+    company = report.get("company_screening") if isinstance(report.get("company_screening"), dict) else {}
+    candidates = (
+        prescreening.get("company_name"),
+        prescreening.get("registered_name"),
+        prescreening.get("legal_name"),
+        (prescreening.get("company") or {}).get("name") if isinstance(prescreening.get("company"), dict) else None,
+        company.get("company_name"),
+        company.get("name"),
+        company.get("legal_name"),
+    )
+    for candidate in candidates:
+        if candidate not in (None, "", [], {}):
+            return str(candidate)
+    return ""
+
+
+def _screening_record_with_review(record: dict, review: Optional[dict]) -> dict:
+    if not isinstance(record, dict):
+        record = {}
+    if not review:
+        return record
+    enriched = dict(record)
+    code = _normalise_token(
+        review.get("canonical_disposition")
+        or review.get("disposition_code")
+        or review.get("review_disposition_code")
+    )
+    disposition = _normalise_token(review.get("disposition") or review.get("review_disposition"))
+    enriched.update({
+        "review_storage_disposition": disposition,
+        "review_disposition": code or disposition,
+        "review_disposition_code": code or None,
+        "review_rationale": review.get("rationale") or review.get("review_rationale"),
+        "review_reason": review.get("rationale") or review.get("review_reason"),
+        "review_notes": review.get("notes") or review.get("review_notes"),
+        "review_evidence_reference": (
+            review.get("evidence_reference")
+            or review.get("review_evidence_reference")
+            or review.get("source_reference")
+        ),
+        "evidence_reference": review.get("evidence_reference"),
+        "reviewer_id": review.get("reviewer_id"),
+        "reviewer_name": review.get("reviewer_name") or review.get("reviewed_by"),
+        "reviewed_at": review.get("reviewed_at") or review.get("created_at") or review.get("updated_at"),
+        "review_updated_at": review.get("review_updated_at") or review.get("updated_at") or review.get("created_at"),
+        "audit_confirmed": review.get("audit_confirmed"),
+        "review_audit_id": review.get("review_audit_id"),
+        "audit_log_id": review.get("audit_log_id"),
+        "requires_four_eyes": review.get("requires_four_eyes"),
+        "second_reviewer_id": review.get("second_reviewer_id"),
+        "second_reviewer_name": review.get("second_reviewer_name") or review.get("second_reviewed_by"),
+        "second_reviewed_at": review.get("second_reviewed_at"),
+    })
+    return enriched
+
+
+def _collect_required_screening_records(report: dict, prescreening: Optional[dict] = None, screening_reviews=None) -> list:
     records = []
     if not isinstance(report, dict):
         return records
+    prescreening = prescreening if isinstance(prescreening, dict) else {}
+    review_index = _screening_review_index(screening_reviews)
 
     company = report.get("company_screening") if isinstance(report.get("company_screening"), dict) else {}
+    company_name = _company_subject_name(report, prescreening)
+    company_review = _review_for_subject(review_index, "entity", company_name)
     company_provider = _normalise_token(
         company.get("provider")
         or company.get("source")
@@ -594,25 +837,40 @@ def _collect_required_screening_records(report: dict) -> list:
     )
     if company_provider == "complyadvantage":
         if company:
-            records.append(("company_screening", company, True))
+            records.append(("company_screening", _screening_record_with_review(company, company_review), True))
     else:
         sanctions = company.get("sanctions") if isinstance(company.get("sanctions"), dict) else None
         if sanctions:
-            records.append(("company_watchlist", sanctions, True))
+            records.append(("company_watchlist", _screening_record_with_review(sanctions, company_review), True))
 
     for idx, person in enumerate(report.get("director_screenings") or []):
         if isinstance(person, dict) and isinstance(person.get("screening"), dict):
-            records.append((f"director_screening_{idx}", person.get("screening"), True))
+            review = _review_for_subject(
+                review_index,
+                "director",
+                person.get("person_name") or person.get("name") or "",
+            )
+            records.append((f"director_screening_{idx}", _screening_record_with_review(person.get("screening"), review), True))
     for idx, person in enumerate(report.get("ubo_screenings") or []):
         if isinstance(person, dict) and isinstance(person.get("screening"), dict):
-            records.append((f"ubo_screening_{idx}", person.get("screening"), True))
+            review = _review_for_subject(
+                review_index,
+                "ubo",
+                person.get("person_name") or person.get("name") or "",
+            )
+            records.append((f"ubo_screening_{idx}", _screening_record_with_review(person.get("screening"), review), True))
     for idx, applicant in enumerate(report.get("kyc_applicants") or []):
         if isinstance(applicant, dict):
-            records.append((f"kyc_applicant_{idx}", applicant, True))
+            review = _review_for_subject(
+                review_index,
+                "applicant",
+                applicant.get("person_name") or applicant.get("name") or "",
+            )
+            records.append((f"kyc_applicant_{idx}", _screening_record_with_review(applicant, review), True))
     for key in ("sanctions", "kyc"):
         legacy = report.get(key)
         if isinstance(legacy, dict):
-            records.append((key, legacy, True))
+            records.append((key, _screening_record_with_review(legacy, company_review), True))
     return records
 
 
@@ -630,7 +888,11 @@ def _aggregate_truth_state(evidence: list) -> str:
     return PENDING
 
 
-def build_screening_truth_summary(report: Optional[dict], prescreening: Optional[dict] = None) -> dict:
+def build_screening_truth_summary(
+    report: Optional[dict],
+    prescreening: Optional[dict] = None,
+    screening_reviews=None,
+) -> dict:
     """
     Build the API/memo/approval truth summary for required screening checks.
 
@@ -642,7 +904,11 @@ def build_screening_truth_summary(report: Optional[dict], prescreening: Optional
     prescreening = prescreening if isinstance(prescreening, dict) else {}
     evidence = [
         derive_screening_truth(record, name=name, required=required)
-        for name, record, required in _collect_required_screening_records(report)
+        for name, record, required in _collect_required_screening_records(
+            report,
+            prescreening,
+            screening_reviews,
+        )
     ]
 
     canonical_state = _aggregate_truth_state(evidence)
@@ -723,7 +989,11 @@ def build_screening_truth_summary(report: Optional[dict], prescreening: Optional
     }
 
 
-def build_screening_terminality_summary(report: Optional[dict], prescreening: Optional[dict] = None) -> dict:
+def build_screening_terminality_summary(
+    report: Optional[dict],
+    prescreening: Optional[dict] = None,
+    screening_reviews=None,
+) -> dict:
     """
     Build the canonical screening terminality summary used by memo,
     supervisor, EDD routing, and enhanced-requirement generation.
@@ -736,7 +1006,7 @@ def build_screening_terminality_summary(report: Optional[dict], prescreening: Op
     """
     report = report if isinstance(report, dict) else {}
     prescreening = prescreening if isinstance(prescreening, dict) else {}
-    truth_summary = build_screening_truth_summary(report, prescreening)
+    truth_summary = build_screening_truth_summary(report, prescreening, screening_reviews)
 
     person_entries = list(report.get("director_screenings") or []) + list(report.get("ubo_screenings") or [])
     person_states = [_state_from_entry(entry) for entry in person_entries if isinstance(entry, dict)]

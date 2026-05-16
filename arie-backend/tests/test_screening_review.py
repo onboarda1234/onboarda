@@ -121,6 +121,92 @@ def test_screening_review_rationale_flows_into_memo():
     assert "Officer confirmed no relevant provider match" in content
 
 
+def test_false_positive_clearance_queue_label_is_reviewed_not_raw_clear(db, temp_db):
+    from server import _build_screening_queue_payload, upsert_screening_review
+
+    db.execute(
+        """
+        INSERT INTO applications
+        (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "app_reviewed_fp_label",
+            "ARF-REVIEWED-FP-LABEL",
+            "client_reviewed_fp",
+            "Reviewed FP Co",
+            "Mauritius",
+            "Technology",
+            "SME",
+            "pricing_review",
+            json.dumps({
+                "screening_report": {
+                    "screened_at": "2026-01-03T00:00:00",
+                    "screening_mode": "live",
+                    "company_screening": {
+                        "found": True,
+                        "sanctions": {
+                            "matched": True,
+                            "results": [{"name": "Reviewed FP Co", "is_sanctioned": True}],
+                            "source": "sumsub",
+                            "api_status": "live",
+                        },
+                    },
+                    "director_screenings": [],
+                    "ubo_screenings": [],
+                }
+            }),
+        ),
+    )
+    db.commit()
+
+    upsert_screening_review(
+        db,
+        "app_reviewed_fp_label",
+        "entity",
+        "Reviewed FP Co",
+        "cleared",
+        "Provider case CA-FP-LABEL-001 and registry evidence retained.",
+        "co001",
+        "Compliance Officer",
+        disposition_code="false_positive_cleared",
+        rationale="Officer confirmed the provider hit belongs to a different entity after registry comparison.",
+        requires_four_eyes=False,
+    )
+    db.execute(
+        """
+        INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "co001",
+            "Compliance Officer",
+            "co",
+            "Screening Review",
+            "ARF-REVIEWED-FP-LABEL",
+            json.dumps({
+                "subject_type": "entity",
+                "subject_name": "Reviewed FP Co",
+                "disposition": "cleared",
+                "disposition_code": "false_positive_cleared",
+                "evidence_reference": "Provider case CA-FP-LABEL-001 and registry evidence retained.",
+            }, sort_keys=True),
+            "127.0.0.1",
+        ),
+    )
+    db.commit()
+
+    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    row = next(r for r in payload["rows"] if r["application_ref"] == "ARF-REVIEWED-FP-LABEL")
+
+    assert row["screening_state"] == "completed_match"
+    assert row["status_key"] == "reviewed_false_positive_cleared"
+    assert row["status_label"] == "Reviewed - False Positive Cleared"
+    assert row["review_resolved"] is True
+    assert row["canonical_disposition"] == "false_positive_cleared"
+    assert row["defensible_clear"] is False
+
+
 def test_company_media_monitoring_alert_drives_screening_review_summary(db, temp_db):
     from server import _build_screening_queue_payload, _load_application_monitoring_alerts
 

@@ -210,12 +210,12 @@ def _risk_display_context(app):
     }
 
 
-def _screening_source_summary(screening_report):
+def _screening_source_summary(screening_report, screening_reviews=None):
     if not isinstance(screening_report, dict) or not screening_report:
         return {"providers": [], "provider": "not_configured", "api_statuses": [], "mode": "not_configured"}
     try:
         from screening_state import build_screening_truth_summary as _build_screening_truth_summary
-        truth_summary = _build_screening_truth_summary(screening_report)
+        truth_summary = _build_screening_truth_summary(screening_report, {}, screening_reviews or [])
     except Exception:  # pragma: no cover - source attribution must not break memo generation
         truth_summary = {}
     providers = set()
@@ -592,27 +592,32 @@ def build_compliance_memo(app, directors, ubos, documents):
             build_screening_terminality_summary as _build_screening_terminality_summary,
         )
     except ImportError:  # pragma: no cover — defensive: never break memo build
-        _build_screening_terminality_summary = lambda _report, _prescreening=None: {
-            "terminal": False,
-            "has_non_terminal": True,
-            "has_failed": False,
-            "has_not_configured": False,
-            "has_sandbox": False,
-            "has_simulated": False,
-            "provider_mode": None,
-            "provider_availability": None,
-            "canonical_state": None,
-            "screening_result": None,
-            "defensible_clear": False,
-            "approval_blocking": True,
-            "blocking_reasons": [],
-            "has_terminal_match": False,
-            "company_screening_configured": False,
-            "person_states": [],
-            "company_state": None,
-        }
+        def _build_screening_terminality_summary(_report, _prescreening=None, _reviews=None):
+            return {
+                "terminal": False,
+                "has_non_terminal": True,
+                "has_failed": False,
+                "has_not_configured": False,
+                "has_sandbox": False,
+                "has_simulated": False,
+                "provider_mode": None,
+                "provider_availability": None,
+                "canonical_state": None,
+                "screening_result": None,
+                "defensible_clear": False,
+                "approval_blocking": True,
+                "blocking_reasons": [],
+                "has_terminal_match": False,
+                "company_screening_configured": False,
+                "person_states": [],
+                "company_state": None,
+            }
 
-    _screening_terminality = _build_screening_terminality_summary(screening_report, prescreening_data)
+    _screening_terminality = _build_screening_terminality_summary(
+        screening_report,
+        prescreening_data,
+        app.get("screening_reviews") or [],
+    )
     _person_states = list(_screening_terminality.get("person_states") or [])
     _company_state = _screening_terminality.get("company_state")
 
@@ -1844,7 +1849,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "company_screened": bool(screening_report.get("company_screening")),
             "persons_screened": len(_person_states),
             "screening_terminal": screening_terminal,
-            **_screening_source_summary(screening_report),
+            **_screening_source_summary(screening_report, app.get("screening_reviews") or []),
         },
         "document_sources": {
             "total": len(documents),

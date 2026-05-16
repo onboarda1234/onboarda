@@ -2766,6 +2766,25 @@ class ApplicationsHandler(BaseHandler):
         enhanced_summaries = {}
         if user["type"] != "client" and app_ids:
             enhanced_summaries = build_enhanced_requirement_operational_summaries(db, apps)
+        screening_reviews_by_app = {}
+        if app_ids:
+            review_placeholders = ",".join("?" for _ in app_ids)
+            review_rows = db.execute(
+                f"SELECT * FROM screening_reviews WHERE application_id IN ({review_placeholders}) "
+                "ORDER BY application_id, updated_at DESC, created_at DESC, id DESC",
+                app_ids,
+            ).fetchall()
+            app_ref_by_id = {app["id"]: app.get("ref") for app in apps}
+            review_dicts = [dict(row) for row in review_rows]
+            audit_lookup = _load_screening_review_audit_lookup(db, review_dicts, app_ref_by_id)
+            for review_row in review_dicts:
+                review = _annotate_screening_review_for_truth(
+                    db,
+                    app_ref_by_id.get(review_row["application_id"]),
+                    review_row,
+                    audit_rows_by_target=audit_lookup,
+                )
+                screening_reviews_by_app.setdefault(review["application_id"], []).append(review)
 
         # Stitch results back into each application
         for app in apps:
@@ -2784,11 +2803,16 @@ class ApplicationsHandler(BaseHandler):
             app["rmi_requests"] = rmi_by_app.get(app["id"], [])
             if user["type"] != "client":
                 app["enhanced_review_summary"] = enhanced_summaries.get(app["id"])
+                app["screening_reviews"] = [
+                    dict(review, **_screening_review_payload_fields(review))
+                    for review in screening_reviews_by_app.get(app["id"], [])
+                ]
             prescreening_for_truth = safe_json_loads(app.get("prescreening_data"))
             screening_report_for_truth = prescreening_for_truth.get("screening_report") if isinstance(prescreening_for_truth, dict) else None
             app["screening_truth_summary"] = build_screening_truth_summary(
                 screening_report_for_truth if isinstance(screening_report_for_truth, dict) else {},
                 prescreening_for_truth if isinstance(prescreening_for_truth, dict) else {},
+                screening_reviews_by_app.get(app["id"], []),
             )
             # Bug #4: Parse risk_dimensions from JSON string for API consumers
             if app.get("risk_dimensions") and isinstance(app["risk_dimensions"], str):
@@ -3475,9 +3499,16 @@ class ApplicationDetailHandler(BaseHandler):
         saved_session_prescreening = load_saved_session_prescreening(db, result)
         result["prescreening_data"] = merge_prescreening_sources(stored_prescreening, saved_session_prescreening)
         screening_report = result["prescreening_data"].get("screening_report") if isinstance(result["prescreening_data"], dict) else None
+        screening_reviews = _load_screening_reviews_for_truth(db, result["id"], result.get("ref"))
+        if user["type"] != "client":
+            result["screening_reviews"] = [
+                dict(review, **_screening_review_payload_fields(review))
+                for review in screening_reviews
+            ]
         result["screening_truth_summary"] = build_screening_truth_summary(
             screening_report if isinstance(screening_report, dict) else {},
             result["prescreening_data"] if isinstance(result["prescreening_data"], dict) else {},
+            screening_reviews,
         )
         # Bug #4: Parse risk_dimensions from JSON string for API consumers
         if result.get("risk_dimensions") and isinstance(result["risk_dimensions"], str):
@@ -10224,6 +10255,7 @@ def _screening_queue_row_mode(report_mode, state, status_key, entity_context=Non
 
 _SCREENING_DISPOSITION_CODES = {
     "cleared": {
+        "false_positive_cleared",
         "false_positive",
         "identity_mismatch",
         "provider_no_relevant_match",
@@ -10231,6 +10263,9 @@ _SCREENING_DISPOSITION_CODES = {
         "low_risk_context_accepted",
     },
     "escalated": {
+        "true_match",
+        "material_concern",
+        "escalated_to_edd",
         "potential_sanctions_match",
         "potential_pep_match",
         "adverse_media_match",
@@ -10239,11 +10274,38 @@ _SCREENING_DISPOSITION_CODES = {
         "provider_unresolved",
     },
     "follow_up_required": {
+        "needs_more_information",
         "client_clarification_required",
         "missing_identity_data",
         "provider_pending_or_unavailable",
         "documentation_required",
     },
+}
+
+_SCREENING_CANONICAL_DISPOSITION_STORAGE = {
+    "false_positive_cleared": "cleared",
+    "true_match": "escalated",
+    "material_concern": "escalated",
+    "needs_more_information": "follow_up_required",
+    "escalated_to_edd": "escalated",
+}
+
+_SCREENING_LEGACY_CODE_TO_CANONICAL = {
+    "false_positive": "false_positive_cleared",
+    "identity_mismatch": "false_positive_cleared",
+    "provider_no_relevant_match": "false_positive_cleared",
+    "duplicate_or_irrelevant": "false_positive_cleared",
+    "low_risk_context_accepted": "false_positive_cleared",
+    "potential_sanctions_match": "true_match",
+    "potential_pep_match": "true_match",
+    "adverse_media_match": "material_concern",
+    "director_ubo_sensitive_hit": "material_concern",
+    "high_risk_jurisdiction": "material_concern",
+    "provider_unresolved": "material_concern",
+    "client_clarification_required": "needs_more_information",
+    "missing_identity_data": "needs_more_information",
+    "provider_pending_or_unavailable": "needs_more_information",
+    "documentation_required": "needs_more_information",
 }
 
 _SCREENING_REVIEW_RATIONALE_MIN_CHARS = 12
@@ -10275,6 +10337,206 @@ def _screening_review_rationale_error(disposition, rationale):
     return None
 
 
+def _normalise_screening_review_disposition(disposition, disposition_code):
+    disposition = (disposition or "").strip().lower()
+    disposition_code = (disposition_code or "").strip().lower()
+    if disposition in _SCREENING_CANONICAL_DISPOSITION_STORAGE:
+        canonical = disposition
+        storage = _SCREENING_CANONICAL_DISPOSITION_STORAGE[canonical]
+        return storage, canonical, canonical
+    if disposition in _SCREENING_DISPOSITION_CODES:
+        canonical = (
+            disposition_code
+            if disposition_code in _SCREENING_CANONICAL_DISPOSITION_STORAGE
+            else _SCREENING_LEGACY_CODE_TO_CANONICAL.get(disposition_code)
+        )
+        return disposition, disposition_code, canonical
+    return disposition, disposition_code, None
+
+
+def _screening_review_canonical_disposition(review):
+    if not review:
+        return None
+    code = (review.get("disposition_code") or "").strip().lower()
+    disposition = (review.get("disposition") or "").strip().lower()
+    if code in _SCREENING_CANONICAL_DISPOSITION_STORAGE:
+        return code
+    if disposition in _SCREENING_CANONICAL_DISPOSITION_STORAGE:
+        return disposition
+    return _SCREENING_LEGACY_CODE_TO_CANONICAL.get(code)
+
+
+def _screening_review_artifact_present(review, *keys):
+    return any(review.get(key) not in (None, "", [], {}) for key in keys)
+
+
+def _escape_like_literal(value):
+    text = str(value or "")
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _screening_review_false_positive_clearance_contract(review):
+    if not review:
+        return False
+    requires_four_eyes = _truthy_review_flag(review.get("requires_four_eyes"))
+    second_reviewer = review.get("second_reviewer_id")
+    return bool(
+        _screening_review_canonical_disposition(review) == "false_positive_cleared"
+        and review.get("disposition") == "cleared"
+        and _screening_review_artifact_present(review, "reviewer_id", "reviewer_name")
+        and _screening_review_artifact_present(review, "created_at", "updated_at", "reviewed_at", "review_updated_at")
+        and _screening_review_artifact_present(review, "rationale")
+        and _screening_review_artifact_present(review, "evidence_reference", "review_evidence_reference")
+        and _truthy_review_flag(review.get("audit_confirmed"))
+        and (not requires_four_eyes or bool(second_reviewer))
+    )
+
+
+def _screening_review_audit_targets(app_ref, review):
+    targets = []
+    for value in (app_ref, review.get("application_ref"), review.get("application_id")):
+        if value not in (None, "", [], {}) and str(value) not in targets:
+            targets.append(str(value))
+    return targets
+
+
+def _screening_review_audit_detail_payload(detail):
+    parsed = safe_json_loads(detail)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _screening_review_audit_detail_matches(review, detail):
+    detail = str(detail or "")
+    payload = _screening_review_audit_detail_payload(detail)
+    subject_name = str(review.get("subject_name") or "")
+    disposition_code = str(review.get("disposition_code") or "")
+    if payload:
+        payload_subject = str(payload.get("subject_name") or "")
+        payload_code = str(payload.get("disposition_code") or payload.get("canonical_disposition") or "")
+        return bool(
+            (not subject_name or payload_subject == subject_name)
+            and (not disposition_code or payload_code == disposition_code)
+        )
+    return bool(
+        detail
+        and (not subject_name or subject_name in detail)
+        and (not disposition_code or disposition_code in detail)
+    )
+
+
+def _screening_review_evidence_from_audit_detail(detail):
+    payload = _screening_review_audit_detail_payload(detail)
+    if not payload:
+        return None
+    for key in ("evidence_reference", "review_evidence_reference", "evidence", "reference", "source_reference"):
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _load_screening_review_audit_lookup(db, reviews, app_ref_by_id=None):
+    targets = []
+    app_ref_by_id = app_ref_by_id or {}
+    for review in reviews or []:
+        app_ref = app_ref_by_id.get(review.get("application_id")) or review.get("application_ref")
+        for target in _screening_review_audit_targets(app_ref, review):
+            if target not in targets:
+                targets.append(target)
+    if not db or not targets:
+        return {}
+    try:
+        placeholders = ",".join("?" for _ in targets)
+        rows = db.execute(
+            f"""
+            SELECT target, detail
+            FROM audit_log
+            WHERE action = 'Screening Review'
+              AND target IN ({placeholders})
+            ORDER BY id DESC
+            """,
+            targets,
+        ).fetchall()
+    except Exception:
+        logger.warning("Could not preload screening review audit rows", exc_info=True)
+        return {}
+    lookup = {}
+    for row in rows:
+        lookup.setdefault(str(row["target"]), []).append(dict(row))
+    return lookup
+
+
+def _screening_review_audit_row(db, app_ref, review, audit_rows_by_target=None):
+    if not db or not review:
+        return None
+    targets = _screening_review_audit_targets(app_ref, review)
+    if audit_rows_by_target is not None:
+        for target in targets:
+            for row in audit_rows_by_target.get(str(target), []):
+                if _screening_review_audit_detail_matches(review, row.get("detail")):
+                    return row
+        return None
+    target = targets[0] if targets else None
+    subject_name = review.get("subject_name") or ""
+    disposition_code = review.get("disposition_code") or ""
+    try:
+        row = db.execute(
+            """
+            SELECT id, detail FROM audit_log
+            WHERE target = ? AND action = 'Screening Review'
+              AND detail LIKE ? ESCAPE '\\'
+              AND detail LIKE ? ESCAPE '\\'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (target, f"%{_escape_like_literal(subject_name)}%", f"%{_escape_like_literal(disposition_code)}%"),
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        logger.warning("Could not confirm screening review audit for %s/%s", target, subject_name, exc_info=True)
+        return None
+
+
+def _screening_review_audit_confirmed(db, app_ref, review, audit_rows_by_target=None):
+    if _truthy_review_flag(review.get("audit_confirmed")):
+        return True
+    return bool(_screening_review_audit_row(db, app_ref, review, audit_rows_by_target=audit_rows_by_target))
+
+
+def _screening_review_audit_evidence_reference(db, app_ref, review, audit_rows_by_target=None):
+    row = _screening_review_audit_row(db, app_ref, review, audit_rows_by_target=audit_rows_by_target)
+    if not row:
+        return None
+    return _screening_review_evidence_from_audit_detail(row.get("detail"))
+
+
+def _annotate_screening_review_for_truth(db, app_ref, review, audit_rows_by_target=None):
+    review = dict(review or {})
+    audit_row = _screening_review_audit_row(db, app_ref, review, audit_rows_by_target=audit_rows_by_target)
+    review["audit_confirmed"] = _truthy_review_flag(review.get("audit_confirmed")) or bool(audit_row)
+    if not review.get("review_evidence_reference") and not review.get("evidence_reference") and audit_row:
+        evidence_reference = _screening_review_evidence_from_audit_detail(audit_row.get("detail"))
+        if evidence_reference:
+            review["review_evidence_reference"] = evidence_reference
+    return review
+
+
+def _load_screening_reviews_for_truth(db, application_id, app_ref=None):
+    rows = db.execute(
+        """
+        SELECT * FROM screening_reviews
+        WHERE application_id = ?
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+        """,
+        (application_id,),
+    ).fetchall()
+    reviews = [dict(row) for row in rows]
+    audit_lookup = _load_screening_review_audit_lookup(db, reviews, {application_id: app_ref})
+    return [
+        _annotate_screening_review_for_truth(db, app_ref, review, audit_rows_by_target=audit_lookup)
+        for review in reviews
+    ]
+
+
 def _truthy_review_flag(value):
     if isinstance(value, bool):
         return value
@@ -10290,6 +10552,7 @@ def _screening_review_payload_fields(review):
         return {
             "review_disposition": None,
             "review_disposition_code": None,
+            "canonical_disposition": None,
             "review_rationale": None,
             "review_notes": None,
             "reviewed_by": None,
@@ -10298,6 +10561,7 @@ def _screening_review_payload_fields(review):
             "requires_four_eyes": False,
             "review_four_eyes_status": "not_required",
             "review_resolved": False,
+            "audit_confirmed": False,
             "sensitivity_flags": [],
             "second_reviewed_by": None,
             "second_reviewed_at": None,
@@ -10311,13 +10575,15 @@ def _screening_review_payload_fields(review):
     if requires_four_eyes:
         four_eyes_status = "complete" if second_reviewer else "pending_second_review"
     disposition = review.get("disposition")
-    review_resolved = disposition == "cleared" and (not requires_four_eyes or bool(second_reviewer))
+    canonical_disposition = _screening_review_canonical_disposition(review)
+    review_resolved = _screening_review_false_positive_clearance_contract(review)
     sensitivity_flags = safe_json_loads(review.get("sensitivity_flags")) or []
     if not isinstance(sensitivity_flags, list):
         sensitivity_flags = []
     return {
         "review_disposition": disposition,
         "review_disposition_code": review.get("disposition_code"),
+        "canonical_disposition": canonical_disposition,
         "review_rationale": review.get("rationale") or review.get("notes"),
         "review_notes": review.get("notes"),
         "reviewed_by": review.get("reviewer_name"),
@@ -10326,6 +10592,7 @@ def _screening_review_payload_fields(review):
         "requires_four_eyes": requires_four_eyes,
         "review_four_eyes_status": four_eyes_status,
         "review_resolved": review_resolved,
+        "audit_confirmed": _truthy_review_flag(review.get("audit_confirmed")),
         "sensitivity_flags": sensitivity_flags,
         "second_reviewed_by": review.get("second_reviewer_name"),
         "second_reviewed_at": review.get("second_reviewed_at"),
@@ -10706,6 +10973,9 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             "screening_state": company_state,
             "total_hits": max(int(facts["total_hits"] or 0), int(monitoring_media["total_hits"] or 0)) or (report or {}).get("total_hits", 0),
             "entity_context": context,
+            "provider": company_sanctions.get("provider") or company_screening.get("provider"),
+            "source": company_sanctions.get("source") or company_screening.get("source"),
+            "api_status": company_sanctions.get("api_status") or company_screening.get("api_status"),
             "adverse_media_hit": bool(
                 facts["adverse_media_hit"]
                 or monitoring_media["matched"]
@@ -10746,6 +11016,9 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
             "screening_state": person_state,
             "total_hits": facts["total_hits"],
             "entity_context": context,
+            "provider": screening.get("provider"),
+            "source": screening.get("source"),
+            "api_status": screening.get("api_status"),
             "adverse_media_hit": _screening_structured_adverse_media_hit(item) or _screening_structured_adverse_media_hit(screening),
         }
 
@@ -10756,6 +11029,9 @@ def _screening_review_subject_context(db, app, subject_type, subject_name):
         "screening_state": None,
         "total_hits": 0,
         "entity_context": [],
+        "provider": None,
+        "source": None,
+        "api_status": None,
         "adverse_media_hit": False,
     }
 
@@ -10904,11 +11180,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
         ubos = [decrypt_pii_fields(dict(u), PII_FIELDS_UBOS) for u in db.execute(
             "SELECT * FROM ubos WHERE application_id = ?", (app["id"],)).fetchall()]
         review_map = {}
-        for review in db.execute(
-            "SELECT * FROM screening_reviews WHERE application_id = ?",
-            (app["id"],),
-        ).fetchall():
-            review = dict(review)
+        for review in _load_screening_reviews_for_truth(db, app["id"], app.get("ref")):
             review_map[(review.get("subject_type"), review.get("subject_name"))] = review
         monitoring_alerts = _load_application_monitoring_alerts(db, app["id"])
         company_media_alerts = _monitoring_company_media_facts(monitoring_alerts)
@@ -11038,6 +11310,9 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             if not report:
                 entity_status_key = "awaiting_screening"
                 entity_status_label = "Awaiting Screening"
+            elif company_review_fields.get("review_resolved"):
+                entity_status_key = "reviewed_false_positive_cleared"
+                entity_status_label = "Reviewed - False Positive Cleared"
             elif company_state == _SCR_COMPLETED_MATCH:
                 entity_status_key = "review_required"
                 entity_status_label = "Review Required"
@@ -11110,7 +11385,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                     int(company_media_alerts["total_hits"] or 0),
                 ) or (report or {}).get("total_hits", 0),
                 "provider_evidence": _screening_provider_evidence(company_results),
-                "review_required": company_requires_review,
+                "review_required": company_requires_review and not company_review_fields.get("review_resolved"),
                 **company_review_fields,
             })
 
@@ -11148,6 +11423,8 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 required=True,
             )
             person_provider_mode = person_screening_truth.get("provider_mode")
+            person_review = review_map.get((subject_type, person_name))
+            person_review_fields = _screening_review_payload_fields(person_review)
 
             if not report:
                 person_state = _SCR_NOT_STARTED
@@ -11171,6 +11448,9 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
             elif not item:
                 status_key = "incomplete_record"
                 status_label = "Incomplete Screening Record"
+            elif person_review_fields.get("review_resolved"):
+                status_key = "reviewed_false_positive_cleared"
+                status_label = "Reviewed - False Positive Cleared"
             elif (
                 person_state == _SCR_COMPLETED_MATCH
                 or has_sanctions_hit
@@ -11216,8 +11496,6 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                     "screening_sandbox", "awaiting_screening",
                 )
             )
-            person_review = review_map.get((subject_type, person_name))
-            person_review_fields = _screening_review_payload_fields(person_review)
             review_disposition = person_review_fields["review_disposition"]
             review_resolved = person_review_fields["review_resolved"]
             if requires_review and not review_resolved:
@@ -11280,7 +11558,7 @@ def _build_screening_queue_payload(db, user, *, show_fixtures=False):
                 "flag_count": len(overall_flags),
                 "total_hits": facts["total_hits"],
                 "provider_evidence": _screening_provider_evidence(screening.get("results") or []),
-                "review_required": requires_review,
+                "review_required": requires_review and not review_resolved,
                 **person_review_fields,
             })
 
@@ -11332,10 +11610,22 @@ class ScreeningReviewHandler(BaseHandler):
         if raw_subject_type and raw_subject_type != subject_type:
             logger.debug("Normalized screening review subject_type %s -> %s", raw_subject_type, subject_type)
         subject_name = (data.get("subject_name") or "").strip()
-        disposition = (data.get("disposition") or "").strip().lower()
+        raw_disposition = (data.get("disposition") or "").strip().lower()
         notes = (data.get("notes") or "").strip()
-        disposition_code = (data.get("disposition_code") or "").strip().lower()
+        raw_disposition_code = (data.get("disposition_code") or "").strip().lower()
+        disposition, disposition_code, canonical_disposition = _normalise_screening_review_disposition(
+            raw_disposition,
+            raw_disposition_code,
+        )
         rationale = (data.get("rationale") or "").strip()
+        evidence_reference = (
+            data.get("evidence_reference")
+            or data.get("evidence")
+            or data.get("reference")
+            or data.get("source_reference")
+            or ""
+        )
+        evidence_reference = str(evidence_reference or "").strip()
         if not notes and rationale:
             notes = rationale
         attempt_summary = _governance_summary(
@@ -11343,15 +11633,21 @@ class ScreeningReviewHandler(BaseHandler):
                 "application_id": app_id,
                 "subject_type": subject_type,
                 "subject_name": subject_name,
-                "disposition": disposition,
+                "disposition": raw_disposition,
                 "disposition_code": disposition_code,
+                "canonical_disposition": canonical_disposition,
                 "rationale": rationale,
                 "notes": notes,
+                "evidence_reference": evidence_reference,
             },
-            ("application_id", "subject_type", "subject_name", "disposition", "disposition_code", "rationale", "notes"),
+            (
+                "application_id", "subject_type", "subject_name", "disposition",
+                "disposition_code", "canonical_disposition", "rationale", "notes",
+                "evidence_reference",
+            ),
         )
 
-        if not app_id or not subject_type or not subject_name or not disposition:
+        if not app_id or not subject_type or not subject_name or not raw_disposition:
             self.log_governance_attempt(
                 user, "screening.review_disposition", app_id or "screening-review",
                 "rejected", 400,
@@ -11384,6 +11680,15 @@ class ScreeningReviewHandler(BaseHandler):
                 user, "screening.review_disposition", app_id, "rejected", 400,
                 rationale_error, attempt_summary)
             return self.error(rationale_error, 400)
+
+        if canonical_disposition == "false_positive_cleared" and not evidence_reference:
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app_id, "rejected", 400,
+                "False-positive clearance requires evidence_reference", attempt_summary)
+            return self.error("False-positive clearance requires evidence_reference", 400)
+
+        if evidence_reference and evidence_reference not in notes:
+            notes = (notes + "\n\nEvidence/reference: " + evidence_reference).strip()
 
         db = get_db()
         app = db.execute(
@@ -11448,6 +11753,14 @@ class ScreeningReviewHandler(BaseHandler):
             db.close()
             return self.error("Second screening reviewer must be distinct from first reviewer", 409)
 
+        if canonical_disposition == "false_positive_cleared" and user.get("role") not in ("admin", "sco", "co"):
+            self.log_governance_attempt(
+                user, "screening.review_disposition", app["ref"], "rejected", 403,
+                "False-positive screening clearance requires CO, SCO, or admin role",
+                attempt_summary, db=db)
+            db.close()
+            return self.error("False-positive screening clearance requires CO, SCO, or admin role", 403)
+
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         reviewer_name = user.get("name") or user.get("full_name") or user["sub"]
         upsert_screening_review(
@@ -11476,29 +11789,55 @@ class ScreeningReviewHandler(BaseHandler):
 
         # EX-09: Recompute risk when screening review indicates escalation
         risk_recomputed = False
+        routing_outcome = None
         if disposition == "escalated":
             rr = recompute_risk(db, app["id"], "screening_review_escalated",
                                 user=user, log_audit_fn=_screening_audit_in_tx)
             risk_recomputed = rr.get("recomputed", False)
+            if canonical_disposition == "escalated_to_edd":
+                try:
+                    from routing_actuator import apply_routing_decision, SOURCE_SCREENING_UPDATE
+
+                    routing_app = db.execute("SELECT * FROM applications WHERE id = ?", (app["id"],)).fetchone()
+                    routing_outcome = apply_routing_decision(
+                        db=db,
+                        app_row=dict(routing_app) if routing_app else app,
+                        risk_dict=rr.get("risk") if isinstance(rr, dict) else {},
+                        screening_summary={
+                            "terminal": True,
+                            "has_terminal_match": True,
+                            "has_non_terminal": False,
+                            "has_failed": False,
+                            "has_not_configured": False,
+                        },
+                        edd_trigger_flags=["material_screening_concern"],
+                        user=user,
+                        client_ip=self.get_client_ip(),
+                        source=SOURCE_SCREENING_UPDATE,
+                    )
+                except Exception as exc:
+                    routing_outcome = {"ran": False, "route": None, "errors": [str(exc)]}
+                    logger.warning("Screening EDD escalation routing failed for %s: %s", app["ref"], exc)
+                if (
+                    not isinstance(routing_outcome, dict)
+                    or routing_outcome.get("route") != "edd"
+                    or routing_outcome.get("errors")
+                ):
+                    reason = "EDD escalation routing failed for screening disposition"
+                    db.rollback()
+                    self.log_governance_attempt(
+                        user,
+                        "screening.review_disposition",
+                        app["ref"],
+                        "rejected",
+                        500,
+                        reason,
+                        attempt_summary,
+                    )
+                    db.close()
+                    return self.error(reason, 500)
 
         review_status = "second_review_complete" if is_second_review else "second_review_required" if requires_four_eyes else "complete"
-        audit_detail = json.dumps({
-            "subject_type": subject_type,
-            "subject_name": subject_name,
-            "disposition": disposition,
-            "disposition_code": disposition_code,
-            "rationale": rationale[:1000],
-            "requires_four_eyes": requires_four_eyes,
-            "four_eyes_status": review_status,
-            "sensitivity_flags": sensitivity_flags,
-        }, sort_keys=True)
-        self.log_audit(
-            user, "Screening Review", app["ref"],
-            audit_detail, db=db, commit=False)
-        status_code = 202 if (requires_four_eyes and not is_second_review) else 200
-        self.log_governance_attempt(
-            user, "screening.review_disposition", app["ref"], "accepted", status_code,
-            "", attempt_summary, db=db, commit=False)
         review = dict(db.execute(
             """
             SELECT application_id, subject_type, subject_name, disposition, notes,
@@ -11510,6 +11849,35 @@ class ScreeningReviewHandler(BaseHandler):
             """,
             (app["id"], subject_type, subject_name),
         ).fetchone())
+        audit_detail = json.dumps({
+            "subject_type": subject_type,
+            "subject_name": subject_name,
+            "disposition": disposition,
+            "disposition_code": disposition_code,
+            "canonical_disposition": canonical_disposition,
+            "rationale": rationale[:1000],
+            "evidence_reference": evidence_reference,
+            "provider": (row_context or {}).get("provider"),
+            "source": (row_context or {}).get("source"),
+            "api_status": (row_context or {}).get("api_status"),
+            "screening_state": (row_context or {}).get("screening_state"),
+            "requires_four_eyes": requires_four_eyes,
+            "four_eyes_status": review_status,
+            "sensitivity_flags": sensitivity_flags,
+            "routing_outcome": routing_outcome,
+        }, sort_keys=True)
+        self.log_audit(
+            user, "Screening Review", app["ref"],
+            audit_detail, db=db, commit=False,
+            before_state=dict(existing_review) if existing_review else None,
+            after_state=review)
+        review["audit_confirmed"] = True
+        if evidence_reference:
+            review["review_evidence_reference"] = evidence_reference
+        status_code = 202 if (requires_four_eyes and not is_second_review) else 200
+        self.log_governance_attempt(
+            user, "screening.review_disposition", app["ref"], "accepted", status_code,
+            "", attempt_summary, db=db, commit=False)
         _mark_latest_memo_stale(
             db,
             app["id"],
@@ -11532,6 +11900,8 @@ class ScreeningReviewHandler(BaseHandler):
         }
         if risk_recomputed:
             response["risk_recomputed"] = True
+        if routing_outcome is not None:
+            response["routing_outcome"] = routing_outcome
         self.success(response, status=status_code)
 
 
@@ -12741,13 +13111,7 @@ def _memo_fingerprint_source(db, app_row):
             (app_id,),
         ).fetchall()
     ]
-    screening_reviews = [
-        dict(r)
-        for r in db.execute(
-            "SELECT * FROM screening_reviews WHERE application_id=? ORDER BY updated_at DESC",
-            (app_id,),
-        ).fetchall()
-    ]
+    screening_reviews = _load_screening_reviews_for_truth(db, app_id, app.get("ref"))
     ps = parse_json_field(app.get("prescreening_data"), {})
     ps = merge_prescreening_sources(ps, load_saved_session_prescreening(db, app))
     app["prescreening_data"] = ps
@@ -13108,10 +13472,7 @@ class ComplianceMemoHandler(BaseHandler):
             f"SELECT * FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
             (real_id,),
         ).fetchall()]
-        screening_reviews = [dict(r) for r in db.execute(
-            "SELECT * FROM screening_reviews WHERE application_id=? ORDER BY updated_at DESC",
-            (real_id,),
-        ).fetchall()]
+        screening_reviews = _load_screening_reviews_for_truth(db, real_id, app["ref"])
 
         # Enrich app with prescreening fields for memo_handler
         # prescreening_data is a JSON column; memo_handler expects source_of_funds and expected_volume as top-level keys

@@ -137,9 +137,13 @@ class TestCanonicalStateModel:
                 "results": [{"name": "False Positive", "is_sanctioned": True}],
                 "source": "sumsub",
                 "api_status": "live",
-                "review_disposition": "cleared",
+                "review_disposition": "false_positive_cleared",
+                "review_disposition_code": "false_positive_cleared",
                 "review_rationale": "Officer confirmed identity mismatch against provider evidence.",
+                "review_evidence_reference": "Provider case CA-FP-001 and passport copy.",
+                "reviewer_id": "co001",
                 "reviewed_at": "2026-04-22T10:00:00Z",
+                "audit_confirmed": True,
             },
             required=True,
         )
@@ -338,7 +342,97 @@ class TestScreeningTerminalitySummary:
         summary = build_screening_terminality_summary(report)
         assert summary["terminal"] is False
         assert summary["has_non_terminal"] is True
-        assert summary["has_terminal_match"] is False
+
+    def test_completed_match_review_false_positive_clearance_unblocks_truth_summary(self):
+        from screening_state import build_screening_truth_summary
+
+        report = {
+            "screened_at": "2026-05-10T10:00:00Z",
+            "company_screening": {
+                "found": True,
+                "sanctions": {
+                    "matched": True,
+                    "results": [{"name": "Watchlist Hit", "is_sanctioned": True}],
+                    "source": "sumsub",
+                    "api_status": "live",
+                },
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        }
+        reviews = [{
+            "subject_type": "entity",
+            "subject_name": "Reviewed Match Ltd",
+            "disposition": "cleared",
+            "disposition_code": "false_positive_cleared",
+            "rationale": "Officer compared provider details and confirmed this is a false positive.",
+            "notes": "Provider case CA-FP-TRUTH-001 and registry extract retained.",
+            "evidence_reference": "Provider case CA-FP-TRUTH-001 and registry extract retained.",
+            "reviewer_name": "Compliance Officer",
+            "created_at": "2026-05-10T11:00:00Z",
+            "audit_confirmed": True,
+            "requires_four_eyes": False,
+        }]
+
+        summary = build_screening_truth_summary(
+            report,
+            {"company_name": "Reviewed Match Ltd"},
+            reviews,
+        )
+
+        assert summary["canonical_state"] == "completed_match"
+        assert summary["has_formally_cleared_match"] is True
+        assert summary["has_uncleared_completed_match"] is False
+        assert summary["approval_blocking"] is False
+        assert summary["defensible_clear"] is False
+
+    @pytest.mark.parametrize(
+        "disposition,code",
+        [
+            ("escalated", "true_match"),
+            ("escalated", "material_concern"),
+            ("follow_up_required", "needs_more_information"),
+            ("escalated", "escalated_to_edd"),
+        ],
+    )
+    def test_completed_match_blocking_dispositions_remain_blocking(self, disposition, code):
+        from screening_state import build_screening_truth_summary
+
+        report = {
+            "screened_at": "2026-05-10T10:00:00Z",
+            "company_screening": {
+                "found": True,
+                "sanctions": {
+                    "matched": True,
+                    "results": [{"name": "Watchlist Hit", "is_sanctioned": True}],
+                    "source": "sumsub",
+                    "api_status": "live",
+                },
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        }
+        reviews = [{
+            "subject_type": "entity",
+            "subject_name": "Reviewed Match Ltd",
+            "disposition": disposition,
+            "disposition_code": code,
+            "rationale": "Officer disposition keeps this match unresolved for approval.",
+            "notes": "Provider case CA-BLOCK-001 retained.",
+            "reviewer_name": "Compliance Officer",
+            "created_at": "2026-05-10T11:00:00Z",
+            "requires_four_eyes": False,
+        }]
+
+        summary = build_screening_truth_summary(
+            report,
+            {"company_name": "Reviewed Match Ltd"},
+            reviews,
+        )
+
+        assert summary["canonical_state"] == "completed_match"
+        assert summary["approval_blocking"] is True
+        assert summary["has_uncleared_completed_match"] is True
 
     def test_terminal_material_match_is_preserved(self):
         from screening_state import build_screening_terminality_summary
@@ -740,9 +834,13 @@ def _build_memo_inputs(api_status, declared_pep="No", matched=False, match_clear
     }
     if match_cleared:
         sanctions_record.update({
-            "review_disposition": "cleared",
+            "review_disposition": "false_positive_cleared",
+            "review_disposition_code": "false_positive_cleared",
             "review_rationale": "Officer confirmed identity mismatch against provider evidence.",
+            "review_evidence_reference": "Provider case CA-MEMO-001 and registry evidence.",
+            "reviewer_id": "co001",
             "reviewed_at": "2026-04-22T10:00:00Z",
+            "audit_confirmed": True,
         })
     app = {
         "id": "app_memo",
@@ -909,6 +1007,34 @@ class TestMemoTruthfulness:
         assert "escalation before approval reliance" not in executive
         assert "no material concerns" not in executive
         assert "low-risk profile" not in executive
+
+    def test_db_screening_review_false_positive_clearance_flows_into_memo_truth(self):
+        from memo_handler import build_compliance_memo
+
+        app, directors, ubos, docs = _build_memo_inputs("live", matched=True)
+        app["screening_reviews"] = [{
+            "subject_type": "entity",
+            "subject_name": "Memo Test Co",
+            "disposition": "cleared",
+            "disposition_code": "false_positive_cleared",
+            "rationale": "Officer confirmed this provider hit belongs to a different entity after registry review.",
+            "notes": "Provider case CA-MEMO-REVIEW-001 and registry extract retained.",
+            "evidence_reference": "Provider case CA-MEMO-REVIEW-001 and registry extract retained.",
+            "reviewer_name": "Compliance Officer",
+            "created_at": "2026-05-10T11:00:00Z",
+            "audit_confirmed": True,
+            "requires_four_eyes": False,
+        }]
+
+        memo, _, _, _ = build_compliance_memo(app, directors, ubos, docs)
+
+        summary = memo["metadata"]["screening_state_summary"]
+        assert summary["canonical_state"] == "completed_match"
+        assert summary["has_formally_cleared_match"] is True
+        assert summary["approval_blocking"] is False
+        text = _flatten_sections_text(memo)
+        assert "formally cleared" in text
+        assert "not a no-match result" in text
 
     def test_memo_does_not_claim_completed_screening_when_pending(self):
         from memo_handler import build_compliance_memo

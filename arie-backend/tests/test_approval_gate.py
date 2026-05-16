@@ -11,6 +11,7 @@ def _insert_application_and_memo(
     review_status="approved",
     risk_level="MEDIUM",
     status="compliance_review",
+    prescreening_data=None,
 ):
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-approval-gate-{suffix}"
@@ -35,20 +36,18 @@ def _insert_application_and_memo(
             status,
             risk_level,
             80 if risk_level in ("HIGH", "VERY_HIGH") else 45,
-            json.dumps(
-                {
-                    "screening_report": {
-                        "screening_mode": "live",
-                        "screened_at": screened_at,
-                        "sanctions": {"api_status": "live"},
-                        "company_registry": {"api_status": "live"},
-                        "ip_geolocation": {"api_status": "live"},
-                        "kyc": {"api_status": "live"},
-                    },
-                    "screening_valid_until": valid_until,
-                    "screening_validity_days": 90,
-                }
-            ),
+            json.dumps(prescreening_data if prescreening_data is not None else {
+                "screening_report": {
+                    "screening_mode": "live",
+                    "screened_at": screened_at,
+                    "sanctions": {"api_status": "live"},
+                    "company_registry": {"api_status": "live"},
+                    "ip_geolocation": {"api_status": "live"},
+                    "kyc": {"api_status": "live"},
+                },
+                "screening_valid_until": valid_until,
+                "screening_validity_days": 90,
+            }),
         ),
     )
     db.execute(
@@ -266,3 +265,130 @@ def test_high_risk_missing_enhanced_requirements_blocks(db):
 
     assert can_approve is False
     assert "Enhanced review requirements are missing or not generated" in message
+
+
+def _completed_match_prescreening():
+    now = datetime.now(timezone.utc)
+    return {
+        "company_name": "Approval Gate Test Ltd",
+        "screening_report": {
+            "screening_mode": "live",
+            "screened_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
+            "company_screening": {
+                "found": True,
+                "sanctions": {
+                    "api_status": "live",
+                    "source": "sumsub",
+                    "matched": True,
+                    "results": [{"name": "Potential Watchlist Match", "is_sanctioned": True}],
+                },
+            },
+            "director_screenings": [],
+            "ubo_screenings": [],
+        },
+        "screening_valid_until": (now + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S"),
+        "screening_validity_days": 90,
+    }
+
+
+def _insert_screening_review(
+    db,
+    app_id,
+    *,
+    app_ref,
+    disposition,
+    disposition_code,
+    rationale="Officer reviewed provider profile and evidence before disposition.",
+    notes="Provider case CA-GATE-001 and registry evidence retained.",
+):
+    db.execute(
+        """
+        INSERT INTO screening_reviews (
+            application_id, subject_type, subject_name, disposition, notes,
+            disposition_code, rationale, requires_four_eyes, reviewer_name
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id,
+            "entity",
+            "Approval Gate Test Ltd",
+            disposition,
+            notes,
+            disposition_code,
+            rationale,
+            0,
+            "Compliance Officer",
+        ),
+    )
+    db.execute(
+        """
+        INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "co001",
+            "Compliance Officer",
+            "co",
+            "Screening Review",
+            app_ref,
+            json.dumps({
+                "subject_type": "entity",
+                "subject_name": "Approval Gate Test Ltd",
+                "disposition": disposition,
+                "disposition_code": disposition_code,
+                "evidence_reference": "Provider case CA-GATE-001 and registry evidence retained.",
+            }, sort_keys=True),
+            "127.0.0.1",
+        ),
+    )
+    db.commit()
+
+
+def test_completed_match_without_disposition_blocks_approval(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db, prescreening_data=_completed_match_prescreening())
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "Screening truth gate failed" in message
+    assert "completed_match" in message
+
+
+def test_completed_match_false_positive_clearance_allows_screening_gate(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db, prescreening_data=_completed_match_prescreening())
+    _insert_screening_review(
+        db,
+        app["id"],
+        app_ref=app["ref"],
+        disposition="cleared",
+        disposition_code="false_positive_cleared",
+        rationale="Officer confirmed the provider hit belongs to another legal entity after registry comparison.",
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is True, message
+
+
+def test_completed_match_true_match_disposition_remains_blocking(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(db, prescreening_data=_completed_match_prescreening())
+    _insert_screening_review(
+        db,
+        app["id"],
+        app_ref=app["ref"],
+        disposition="escalated",
+        disposition_code="true_match",
+        rationale="Officer confirmed the provider hit appears to match the entity and must remain blocked.",
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "Screening truth gate failed" in message

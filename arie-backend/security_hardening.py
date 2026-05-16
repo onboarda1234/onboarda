@@ -137,6 +137,123 @@ def _approval_risk_integrity_error(app: Dict, action_label: str = "approve appli
     return None
 
 
+def _truthy_screening_review_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
+def _escape_like_literal(value: Any) -> str:
+    text = str(value or "")
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _screening_review_audit_detail_payload(detail: Any) -> Dict:
+    if isinstance(detail, dict):
+        return detail
+    if isinstance(detail, str) and detail.strip():
+        try:
+            parsed = json.loads(detail)
+            return parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+    return {}
+
+
+def _screening_review_audit_detail_matches(review: Dict, detail: Any) -> bool:
+    detail_text = str(detail or "")
+    payload = _screening_review_audit_detail_payload(detail)
+    subject_name = str(review.get("subject_name") or "")
+    disposition_code = str(review.get("disposition_code") or "")
+    if payload:
+        payload_subject = str(payload.get("subject_name") or "")
+        payload_code = str(payload.get("disposition_code") or payload.get("canonical_disposition") or "")
+        return bool(
+            (not subject_name or payload_subject == subject_name)
+            and (not disposition_code or payload_code == disposition_code)
+        )
+    return bool(
+        detail_text
+        and (not subject_name or subject_name in detail_text)
+        and (not disposition_code or disposition_code in detail_text)
+    )
+
+
+def _screening_review_evidence_from_audit_detail(detail: Any) -> Optional[Any]:
+    payload = _screening_review_audit_detail_payload(detail)
+    for key in ("evidence_reference", "review_evidence_reference", "evidence", "reference", "source_reference"):
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _screening_review_audit_row(db, app_ref: str, review: Dict) -> Optional[Dict]:
+    if not db or not review:
+        return None
+    target = app_ref or review.get("application_ref") or review.get("application_id")
+    subject_name = review.get("subject_name") or ""
+    disposition_code = review.get("disposition_code") or ""
+    try:
+        row = db.execute(
+            """
+            SELECT id, detail FROM audit_log
+            WHERE target = ? AND action = 'Screening Review'
+              AND detail LIKE ? ESCAPE '\\'
+              AND detail LIKE ? ESCAPE '\\'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (
+                target,
+                f"%{_escape_like_literal(subject_name)}%",
+                f"%{_escape_like_literal(disposition_code)}%",
+            ),
+        ).fetchone()
+        if row and _screening_review_audit_detail_matches(review, row["detail"]):
+            return dict(row)
+        return None
+    except Exception as exc:
+        logger.warning(
+            "Approval screening review audit lookup failed for %s/%s: %s",
+            target,
+            subject_name,
+            exc,
+        )
+        return None
+
+
+def _screening_review_audit_confirmed(db, app_ref: str, review: Dict) -> bool:
+    if _truthy_screening_review_flag(review.get("audit_confirmed")):
+        return True
+    return bool(_screening_review_audit_row(db, app_ref, review))
+
+
+def _load_screening_reviews_for_truth(db, app_id: str, app_ref: str = "") -> List[Dict]:
+    rows = db.execute(
+        """
+        SELECT * FROM screening_reviews
+        WHERE application_id = ?
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+        """,
+        (app_id,),
+    ).fetchall()
+    reviews: List[Dict] = []
+    for row in rows:
+        review = dict(row)
+        audit_row = _screening_review_audit_row(db, app_ref, review)
+        review["audit_confirmed"] = _truthy_screening_review_flag(review.get("audit_confirmed")) or bool(audit_row)
+        if not review.get("review_evidence_reference") and not review.get("evidence_reference") and audit_row:
+            evidence_reference = _screening_review_evidence_from_audit_detail(audit_row.get("detail"))
+            if evidence_reference:
+                review["review_evidence_reference"] = evidence_reference
+        reviews.append(review)
+    return reviews
+
+
 class ApprovalGateValidator:
     """
     Validates all preconditions before an application can be approved.
@@ -207,7 +324,21 @@ class ApprovalGateValidator:
                     "Simulated screening is not permitted for approval in production."
                 )
 
-            screening_truth = build_screening_truth_summary(screening_report, prescreening_data)
+            screening_reviews = []
+            try:
+                screening_reviews = _load_screening_reviews_for_truth(db, app_id, app.get("ref", ""))
+            except Exception as exc:
+                logger.warning(
+                    "Approval screening review lookup failed for application %s: %s",
+                    app_id,
+                    exc,
+                )
+
+            screening_truth = build_screening_truth_summary(
+                screening_report,
+                prescreening_data,
+                screening_reviews,
+            )
             if screening_truth.get("approval_blocking"):
                 reason = "; ".join(screening_truth.get("blocking_reasons") or ["screening_not_terminal"])
                 logger.warning(
