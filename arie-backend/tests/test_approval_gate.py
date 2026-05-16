@@ -36,7 +36,7 @@ def _insert_application_and_memo(
             status,
             risk_level,
             80 if risk_level in ("HIGH", "VERY_HIGH") else 45,
-            json.dumps(prescreening_data or {
+            json.dumps(prescreening_data if prescreening_data is not None else {
                 "screening_report": {
                     "screening_mode": "live",
                     "screened_at": screened_at,
@@ -295,6 +295,7 @@ def _insert_screening_review(
     db,
     app_id,
     *,
+    app_ref,
     disposition,
     disposition_code,
     rationale="Officer reviewed provider profile and evidence before disposition.",
@@ -320,6 +321,26 @@ def _insert_screening_review(
             "Compliance Officer",
         ),
     )
+    db.execute(
+        """
+        INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "co001",
+            "Compliance Officer",
+            "co",
+            "Screening Review",
+            app_ref,
+            json.dumps({
+                "subject_type": "entity",
+                "subject_name": "Approval Gate Test Ltd",
+                "disposition": disposition,
+                "disposition_code": disposition_code,
+            }, sort_keys=True),
+            "127.0.0.1",
+        ),
+    )
     db.commit()
 
 
@@ -342,6 +363,7 @@ def test_completed_match_false_positive_clearance_allows_screening_gate(db):
     _insert_screening_review(
         db,
         app["id"],
+        app_ref=app["ref"],
         disposition="cleared",
         disposition_code="false_positive_cleared",
         rationale="Officer confirmed the provider hit belongs to another legal entity after registry comparison.",
@@ -359,6 +381,7 @@ def test_completed_match_true_match_disposition_remains_blocking(db):
     _insert_screening_review(
         db,
         app["id"],
+        app_ref=app["ref"],
         disposition="escalated",
         disposition_code="true_match",
         rationale="Officer confirmed the provider hit appears to match the entity and must remain blocked.",

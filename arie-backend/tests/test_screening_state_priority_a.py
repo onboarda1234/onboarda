@@ -143,6 +143,7 @@ class TestCanonicalStateModel:
                 "review_evidence_reference": "Provider case CA-FP-001 and passport copy.",
                 "reviewer_id": "co001",
                 "reviewed_at": "2026-04-22T10:00:00Z",
+                "audit_confirmed": True,
             },
             required=True,
         )
@@ -366,8 +367,10 @@ class TestScreeningTerminalitySummary:
             "disposition_code": "false_positive_cleared",
             "rationale": "Officer compared provider details and confirmed this is a false positive.",
             "notes": "Provider case CA-FP-TRUTH-001 and registry extract retained.",
+            "evidence_reference": "Provider case CA-FP-TRUTH-001 and registry extract retained.",
             "reviewer_name": "Compliance Officer",
             "created_at": "2026-05-10T11:00:00Z",
+            "audit_confirmed": True,
             "requires_four_eyes": False,
         }]
 
@@ -837,6 +840,7 @@ def _build_memo_inputs(api_status, declared_pep="No", matched=False, match_clear
             "review_evidence_reference": "Provider case CA-MEMO-001 and registry evidence.",
             "reviewer_id": "co001",
             "reviewed_at": "2026-04-22T10:00:00Z",
+            "audit_confirmed": True,
         })
     app = {
         "id": "app_memo",
@@ -1015,8 +1019,10 @@ class TestMemoTruthfulness:
             "disposition_code": "false_positive_cleared",
             "rationale": "Officer confirmed this provider hit belongs to a different entity after registry review.",
             "notes": "Provider case CA-MEMO-REVIEW-001 and registry extract retained.",
+            "evidence_reference": "Provider case CA-MEMO-REVIEW-001 and registry extract retained.",
             "reviewer_name": "Compliance Officer",
             "created_at": "2026-05-10T11:00:00Z",
+            "audit_confirmed": True,
             "requires_four_eyes": False,
         }]
 

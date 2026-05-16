@@ -173,6 +173,26 @@ def test_false_positive_clearance_queue_label_is_reviewed_not_raw_clear(db, temp
         rationale="Officer confirmed the provider hit belongs to a different entity after registry comparison.",
         requires_four_eyes=False,
     )
+    db.execute(
+        """
+        INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "co001",
+            "Compliance Officer",
+            "co",
+            "Screening Review",
+            "ARF-REVIEWED-FP-LABEL",
+            json.dumps({
+                "subject_type": "entity",
+                "subject_name": "Reviewed FP Co",
+                "disposition": "cleared",
+                "disposition_code": "false_positive_cleared",
+            }, sort_keys=True),
+            "127.0.0.1",
+        ),
+    )
     db.commit()
 
     payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})

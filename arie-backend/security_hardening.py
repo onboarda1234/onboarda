@@ -137,6 +137,62 @@ def _approval_risk_integrity_error(app: Dict, action_label: str = "approve appli
     return None
 
 
+def _truthy_screening_review_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
+def _screening_review_audit_confirmed(db, app_ref: str, review: Dict) -> bool:
+    if not db or not review:
+        return False
+    if _truthy_screening_review_flag(review.get("audit_confirmed")):
+        return True
+    target = app_ref or review.get("application_ref") or review.get("application_id")
+    subject_name = review.get("subject_name") or ""
+    disposition_code = review.get("disposition_code") or ""
+    try:
+        row = db.execute(
+            """
+            SELECT id FROM audit_log
+            WHERE target = ? AND action = 'Screening Review'
+              AND detail LIKE ? AND detail LIKE ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (target, f"%{subject_name}%", f"%{disposition_code}%"),
+        ).fetchone()
+        return bool(row)
+    except Exception as exc:
+        logger.warning(
+            "Approval screening review audit lookup failed for %s/%s: %s",
+            target,
+            subject_name,
+            exc,
+        )
+        return False
+
+
+def _load_screening_reviews_for_truth(db, app_id: str, app_ref: str = "") -> List[Dict]:
+    rows = db.execute(
+        """
+        SELECT * FROM screening_reviews
+        WHERE application_id = ?
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+        """,
+        (app_id,),
+    ).fetchall()
+    reviews: List[Dict] = []
+    for row in rows:
+        review = dict(row)
+        review["audit_confirmed"] = _screening_review_audit_confirmed(db, app_ref, review)
+        reviews.append(review)
+    return reviews
+
+
 class ApprovalGateValidator:
     """
     Validates all preconditions before an application can be approved.
@@ -209,11 +265,7 @@ class ApprovalGateValidator:
 
             screening_reviews = []
             try:
-                review_rows = db.execute(
-                    "SELECT * FROM screening_reviews WHERE application_id = ?",
-                    (app_id,),
-                ).fetchall()
-                screening_reviews = [dict(row) for row in review_rows]
+                screening_reviews = _load_screening_reviews_for_truth(db, app_id, app.get("ref", ""))
             except Exception as exc:
                 logger.warning(
                     "Approval screening review lookup failed for application %s: %s",

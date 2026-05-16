@@ -54,6 +54,8 @@ This module is purely additive: it computes derived fields from existing
 records and never mutates them.
 """
 
+import json
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -206,6 +208,12 @@ def _review_timestamp_present(screening: dict) -> bool:
         or screening.get("review_updated_at")
         or screening.get("created_at")
         or screening.get("updated_at")
+    )
+
+
+def _review_audit_present(screening: dict) -> bool:
+    return bool(
+        _truthy_review_flag(screening.get("audit_confirmed"))
         or screening.get("audit_log_id")
         or screening.get("review_audit_id")
     )
@@ -248,8 +256,49 @@ def _is_false_positive_clearance(screening: dict) -> bool:
         and _review_reason_present(screening)
         and _review_evidence_present(screening)
         and _review_timestamp_present(screening)
+        and _review_audit_present(screening)
         and _review_second_signoff_satisfied(screening)
     )
+
+
+def _parse_review_timestamp(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _review_sort_key(review: dict):
+    timestamp = (
+        _parse_review_timestamp(review.get("updated_at"))
+        or _parse_review_timestamp(review.get("created_at"))
+        or _parse_review_timestamp(review.get("review_updated_at"))
+        or _parse_review_timestamp(review.get("reviewed_at"))
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
+    try:
+        review_id = int(review.get("id") or 0)
+    except Exception:
+        review_id = 0
+    stable_payload = json.dumps(review, default=str, sort_keys=True)
+    return (timestamp, review_id, stable_payload)
+
+
+def _latest_review(existing, candidate):
+    if not existing:
+        return candidate
+    return candidate if _review_sort_key(candidate) >= _review_sort_key(existing) else existing
 
 
 def _record_text(record: Optional[dict]) -> str:
@@ -695,8 +744,11 @@ def _screening_review_index(screening_reviews) -> dict:
         if not subject_type:
             continue
         if subject_name:
-            index["exact"][(subject_type, subject_name)] = review
+            key = (subject_type, subject_name)
+            index["exact"][key] = _latest_review(index["exact"].get(key), review)
         index["by_type"].setdefault(subject_type, []).append(review)
+    for subject_type, reviews in list(index["by_type"].items()):
+        index["by_type"][subject_type] = sorted(reviews, key=_review_sort_key, reverse=True)
     return index
 
 
@@ -708,7 +760,7 @@ def _review_for_subject(index: dict, subject_type: str, subject_name: str):
         if exact:
             return exact
     typed = index.get("by_type", {}).get(subject_type) or []
-    if subject_type == "entity" and len(typed) == 1:
+    if subject_type == "entity" and typed:
         return typed[0]
     return None
 
@@ -755,10 +807,14 @@ def _screening_record_with_review(record: dict, review: Optional[dict]) -> dict:
             or review.get("source_reference")
             or review.get("notes")
         ),
+        "evidence_reference": review.get("evidence_reference"),
         "reviewer_id": review.get("reviewer_id"),
         "reviewer_name": review.get("reviewer_name") or review.get("reviewed_by"),
         "reviewed_at": review.get("reviewed_at") or review.get("created_at") or review.get("updated_at"),
         "review_updated_at": review.get("review_updated_at") or review.get("updated_at") or review.get("created_at"),
+        "audit_confirmed": review.get("audit_confirmed"),
+        "review_audit_id": review.get("review_audit_id"),
+        "audit_log_id": review.get("audit_log_id"),
         "requires_four_eyes": review.get("requires_four_eyes"),
         "second_reviewer_id": review.get("second_reviewer_id"),
         "second_reviewer_name": review.get("second_reviewer_name") or review.get("second_reviewed_by"),

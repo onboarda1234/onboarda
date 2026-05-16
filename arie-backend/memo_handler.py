@@ -210,12 +210,12 @@ def _risk_display_context(app):
     }
 
 
-def _screening_source_summary(screening_report):
+def _screening_source_summary(screening_report, screening_reviews=None):
     if not isinstance(screening_report, dict) or not screening_report:
         return {"providers": [], "provider": "not_configured", "api_statuses": [], "mode": "not_configured"}
     try:
         from screening_state import build_screening_truth_summary as _build_screening_truth_summary
-        truth_summary = _build_screening_truth_summary(screening_report)
+        truth_summary = _build_screening_truth_summary(screening_report, {}, screening_reviews or [])
     except Exception:  # pragma: no cover - source attribution must not break memo generation
         truth_summary = {}
     providers = set()
@@ -1848,7 +1848,7 @@ def build_compliance_memo(app, directors, ubos, documents):
             "company_screened": bool(screening_report.get("company_screening")),
             "persons_screened": len(_person_states),
             "screening_terminal": screening_terminal,
-            **_screening_source_summary(screening_report),
+            **_screening_source_summary(screening_report, app.get("screening_reviews") or []),
         },
         "document_sources": {
             "total": len(documents),
