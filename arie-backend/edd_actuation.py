@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 _CANONICAL_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
 _EDD_ACTUATION_TERMINAL_STAGES = ("edd_approved", "edd_rejected")
 _ASSIGNABLE_OFFICER_ROLES = {"admin", "sco", "co", "analyst"}
+_PREAPPROVED_KYC_STATUSES = {"kyc_documents", "kyc_submitted"}
 
 
 def _canonical_risk_level(value: Any) -> Optional[str]:
@@ -91,6 +92,26 @@ def resolve_valid_assigned_officer(db, user: Optional[Mapping[str, Any]]) -> Opt
         return officer_id
 
 
+def should_preserve_preapproved_kyc_status(app_row: Mapping[str, Any]) -> bool:
+    """Return True when EDD re-actuation must not rewind KYC workflow status.
+
+    Once an officer has explicitly PRE_APPROVED an EDD/pre-approval-required
+    case and the workflow has advanced to KYC collection/submission, repeated
+    deterministic EDD evaluations are confirmations of the same EDD lane. They
+    should keep the active EDD case linked and audited, but must not demote the
+    application back to ``edd_required`` during ordinary upload/submit flows.
+    """
+    if not app_row:
+        return False
+    try:
+        app = dict(app_row)
+    except Exception:
+        app = app_row
+    status = str(app.get("status") or "").strip().lower()
+    decision = str(app.get("pre_approval_decision") or "").strip().upper()
+    return decision == "PRE_APPROVE" and status in _PREAPPROVED_KYC_STATUSES
+
+
 def actuate_edd_routing(
     db,
     app_row: Mapping[str, Any],
@@ -106,7 +127,13 @@ def actuate_edd_routing(
     ``edd_required`` when safe, and emit ``edd_routing.actuated`` audit.
     The caller owns the transaction.
     """
-    result = {"case_id": None, "created": False, "status_changed": False, "skipped": False}
+    result = {
+        "case_id": None,
+        "created": False,
+        "status_changed": False,
+        "status_preserved": False,
+        "skipped": False,
+    }
     try:
         if not isinstance(edd_routing, Mapping) or edd_routing.get("route") != "edd":
             result["skipped"] = True
@@ -235,7 +262,10 @@ def actuate_edd_routing(
             result["created"] = True
 
         current_status = (app_dict.get("status") or "")
-        if current_status not in ("edd_required", "edd_approved", "approved", "rejected"):
+        preserve_preapproved_kyc_status = should_preserve_preapproved_kyc_status(app_dict)
+        if preserve_preapproved_kyc_status:
+            result["status_preserved"] = True
+        elif current_status not in ("edd_required", "edd_approved", "approved", "rejected"):
             db.execute(
                 "UPDATE applications SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 ("edd_required", application_id),
@@ -262,6 +292,7 @@ def actuate_edd_routing(
                             "edd_case_id": result["case_id"],
                             "edd_case_created": result["created"],
                             "status_changed": result["status_changed"],
+                            "status_preserved": result["status_preserved"],
                             "origin": "policy_routing",
                         },
                         default=str,

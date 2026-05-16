@@ -1215,6 +1215,55 @@ def _get_risk_config_version(db):
     return None
 
 
+def _apply_edd_routing_floor_for_recompute(db, app, risk):
+    """Apply the EDD routing floor before recomputed risk is persisted.
+
+    Prescreening submit already floors LOW cases when deterministic routing
+    sends them to EDD. Risk recomputation must do the same before writing DB
+    risk fields; otherwise a later KYC submit can persist final LOW while the
+    same facts still keep the application on the EDD lane.
+    """
+    if not isinstance(risk, dict):
+        return {}
+    try:
+        from edd_routing_policy import evaluate_edd_routing
+        from routing_actuator import (
+            _declared_pep_present_in_party_rows,
+            build_routing_facts,
+        )
+
+        facts = build_routing_facts(app_row=app, risk_dict=risk)
+        try:
+            app_id = dict(app or {}).get("id")
+        except Exception:
+            app_id = None
+        if (
+            not facts.get("declared_pep_present")
+            and _declared_pep_present_in_party_rows(db, app_id)
+        ):
+            facts["declared_pep_present"] = True
+
+        routing = dict(evaluate_edd_routing(facts) or {})
+        if str(routing.get("route") or "").lower() != "edd":
+            return routing
+
+        triggers = ", ".join(str(t) for t in (routing.get("triggers") or []) if t)
+        reason = "EDD routing floor: deterministic routing required EDD"
+        if triggers:
+            reason += f" ({triggers})"
+        apply_risk_floor(
+            risk,
+            "MEDIUM",
+            "floor_rule_edd_routing",
+            reason,
+        )
+        risk["lane"] = "EDD"
+        return routing
+    except Exception as exc:
+        logger.warning("EDD routing risk floor failed during recompute: %s", exc)
+        return {}
+
+
 def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routing_policy=True):
     """Recompute risk score for a single application and persist the result.
 
@@ -1286,6 +1335,7 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
             intermediaries=intermediaries,
         )
         new_risk = compute_risk_score(scoring_input)
+        routing_floor = _apply_edd_routing_floor_for_recompute(db, app, new_risk)
 
         new_score = new_risk["score"]
         new_level = new_risk["level"]
@@ -1296,6 +1346,8 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         result["final_risk_level"] = new_risk.get("final_risk_level", new_level)
         result["elevation_reason_text"] = new_risk.get("elevation_reason_text", "")
         result["risk_escalations"] = list(new_risk.get("escalations", []))
+        result["edd_routing_route"] = routing_floor.get("route")
+        result["edd_routing_triggers"] = list(routing_floor.get("triggers") or [])
         result["recomputed"] = True
         result["changed"] = (old_score != new_score or old_level != new_level)
 

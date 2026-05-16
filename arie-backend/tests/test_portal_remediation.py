@@ -106,14 +106,16 @@ def _seed_kyc_application(
     risk_score=45,
     onboarding_lane="STANDARD",
     pre_approval_decision=None,
+    sector="Technology Services",
+    director_is_pep="No",
 ):
     _ensure_client(db)
     db.execute(
         """
         INSERT INTO applications
-        (id, ref, client_id, company_name, country, status, risk_level, risk_score,
+        (id, ref, client_id, company_name, country, sector, status, risk_level, risk_score,
          onboarding_lane, pre_approval_decision, prescreening_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             app_id,
@@ -121,6 +123,7 @@ def _seed_kyc_application(
             "portalclient001",
             f"{ref} Ltd",
             "Mauritius",
+            sector,
             status,
             risk_level,
             risk_score,
@@ -129,6 +132,7 @@ def _seed_kyc_application(
             json.dumps({
                 "registered_entity_name": f"{ref} Ltd",
                 "country_of_incorporation": "Mauritius",
+                "sector": sector,
             }),
         ),
     )
@@ -147,7 +151,7 @@ def _seed_kyc_application(
             "Director",
             "Jane Director",
             "Mauritius",
-            "No",
+            director_is_pep,
             "{}",
             "1985-01-01",
         ),
@@ -192,6 +196,7 @@ def _cleanup_application(db, app_id, ref):
     ):
         db.execute(f"DELETE FROM {table} WHERE {column}=?", (app_id,))
     db.execute("DELETE FROM audit_log WHERE target=?", (ref,))
+    db.execute("DELETE FROM audit_log WHERE target=?", (f"application:{ref}",))
 
 
 def _insert_uploaded_document(db, app_id, *, doc_id=None):
@@ -642,6 +647,7 @@ def test_declared_pep_edd_required_still_allows_preapproval_decision(api_server)
         risk_score=55,
         onboarding_lane="EDD",
         pre_approval_decision=None,
+        director_is_pep="Yes",
     )
     _mark_edd_preapproval_required(
         conn,
@@ -685,6 +691,37 @@ def test_declared_pep_edd_required_still_allows_preapproval_decision(api_server)
         "status": "kyc_documents",
         "pre_approval_decision": "PRE_APPROVE",
     }
+    conn.close()
+
+    upload = http_requests.post(
+        f"{api_server}/api/applications/{ref}/documents?doc_type=cert_inc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        files={"file": ("pep-coi.pdf", b"%PDF-1.4\n%EOF\n", "application/pdf")},
+        timeout=3,
+    )
+    assert upload.status_code == 201, upload.text
+
+    submit = http_requests.post(
+        f"{api_server}/api/applications/{ref}/submit-kyc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        timeout=3,
+    )
+    assert submit.status_code == 200, submit.text
+    assert submit.json()["status"] == "kyc_submitted"
+
+    conn = get_db()
+    app = conn.execute(
+        "SELECT status, risk_level, final_risk_level, onboarding_lane "
+        "FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone()
+    assert app["status"] == "kyc_submitted"
+    assert app["final_risk_level"] != "LOW"
+    assert app["onboarding_lane"] == "EDD"
+    assert conn.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"] == 1
     _cleanup_application(conn, app_id, ref)
     conn.commit()
     conn.close()
@@ -706,6 +743,7 @@ def test_crypto_edd_required_after_preapproval_can_upload_and_submit_kyc(api_ser
         risk_score=82,
         onboarding_lane="EDD",
         pre_approval_decision=None,
+        sector="Crypto / Virtual Asset Service Provider",
     )
     _mark_edd_preapproval_required(
         conn,
@@ -741,6 +779,18 @@ def test_crypto_edd_required_after_preapproval_can_upload_and_submit_kyc(api_ser
     assert submit.status_code == 200, submit.text
     assert submit.json()["status"] == "kyc_submitted"
     conn = get_db()
+    app = conn.execute(
+        "SELECT status, risk_level, final_risk_level, onboarding_lane "
+        "FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone()
+    assert app["status"] == "kyc_submitted"
+    assert app["final_risk_level"] != "LOW"
+    assert app["onboarding_lane"] == "EDD"
+    assert conn.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"] == 1
     _cleanup_application(conn, app_id, ref)
     conn.commit()
     conn.close()

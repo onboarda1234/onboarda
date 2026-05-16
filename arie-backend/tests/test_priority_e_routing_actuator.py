@@ -137,6 +137,7 @@ def _make_db():
             base_risk_level TEXT,
             final_risk_level TEXT,
             onboarding_lane TEXT,
+            pre_approval_decision TEXT,
             status TEXT,
             is_fixture INTEGER DEFAULT 0,
             updated_at TEXT
@@ -374,6 +375,95 @@ def test_g_h_actuator_does_not_import_server_for_runtime_actuation(monkeypatch):
         assert not any("Duplicated timeseries" in err for err in out.get("errors") or [])
 
     assert conn.execute("SELECT COUNT(*) AS c FROM edd_cases").fetchone()["c"] == 1
+
+
+def test_risk_recompute_preserves_preapproved_kyc_status():
+    import routing_actuator as ra
+
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "final_risk_level, onboarding_lane, pre_approval_decision, status) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (
+            "ARF-T-PREAPPROVED-KYC",
+            "Preapproved Crypto Co",
+            "Mauritius",
+            "Crypto / Digital Assets Exchange",
+            "MEDIUM",
+            "EDD",
+            "PRE_APPROVE",
+            "kyc_documents",
+        ),
+    )
+    conn.commit()
+    app_row = dict(conn.execute(
+        "SELECT * FROM applications WHERE ref=?",
+        ("ARF-T-PREAPPROVED-KYC",),
+    ).fetchone())
+
+    out = ra.apply_routing_decision(
+        db=conn,
+        app_row=app_row,
+        risk_dict={"level": "MEDIUM", "final_risk_level": "MEDIUM"},
+        source=ra.SOURCE_RISK_RECOMPUTE,
+        user={"sub": "u", "name": "u", "role": "admin"},
+    )
+    conn.commit()
+
+    assert out["route"] == "edd"
+    assert out["actuation"]["status_changed"] is False
+    assert out["actuation"]["status_preserved"] is True
+    assert conn.execute(
+        "SELECT status FROM applications WHERE ref=?",
+        ("ARF-T-PREAPPROVED-KYC",),
+    ).fetchone()["status"] == "kyc_documents"
+    assert conn.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases",
+    ).fetchone()["c"] == 1
+
+
+def test_new_material_trigger_after_preapproval_can_still_route_review_case():
+    import routing_actuator as ra
+
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "final_risk_level, onboarding_lane, pre_approval_decision, status) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (
+            "ARF-T-PREAPPROVED-REVIEW",
+            "Preapproved Review Crypto Co",
+            "Mauritius",
+            "Crypto / Digital Assets Exchange",
+            "MEDIUM",
+            "Standard Review",
+            "PRE_APPROVE",
+            "compliance_review",
+        ),
+    )
+    conn.commit()
+    app_row = dict(conn.execute(
+        "SELECT * FROM applications WHERE ref=?",
+        ("ARF-T-PREAPPROVED-REVIEW",),
+    ).fetchone())
+
+    out = ra.apply_routing_decision(
+        db=conn,
+        app_row=app_row,
+        risk_dict={"level": "MEDIUM", "final_risk_level": "MEDIUM"},
+        source=ra.SOURCE_RISK_RECOMPUTE,
+        user={"sub": "u", "name": "u", "role": "admin"},
+    )
+    conn.commit()
+
+    assert out["route"] == "edd"
+    assert out["actuation"]["status_changed"] is True
+    assert out["actuation"]["status_preserved"] is False
+    assert conn.execute(
+        "SELECT status FROM applications WHERE ref=?",
+        ("ARF-T-PREAPPROVED-REVIEW",),
+    ).fetchone()["status"] == "edd_required"
 
 
 # ---------------------------------------------------------------- I

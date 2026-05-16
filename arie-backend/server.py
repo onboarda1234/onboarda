@@ -138,7 +138,10 @@ from edd_routing_policy import (
     evaluate_edd_routing as _evaluate_edd_routing,
     emit_routing_audit as _emit_edd_routing_audit,
 )
-from edd_actuation import resolve_valid_assigned_officer as _resolve_valid_edd_assigned_officer
+from edd_actuation import (
+    resolve_valid_assigned_officer as _resolve_valid_edd_assigned_officer,
+    should_preserve_preapproved_kyc_status as _should_preserve_preapproved_kyc_status,
+)
 from enhanced_requirements import (
     ALLOWED_AUDIENCES,
     ALLOWED_REQUIREMENT_TYPES,
@@ -414,7 +417,13 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
         ``status_changed`` (bool), and ``skipped`` (bool when route
         is not edd or app_row missing).
     """
-    result = {"case_id": None, "created": False, "status_changed": False, "skipped": False}
+    result = {
+        "case_id": None,
+        "created": False,
+        "status_changed": False,
+        "status_preserved": False,
+        "skipped": False,
+    }
     try:
         if not isinstance(edd_routing, dict) or edd_routing.get("route") != "edd":
             result["skipped"] = True
@@ -542,7 +551,10 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
         # Flip application status to edd_required if not already on
         # the EDD path. Preserve terminal/edd-approved states.
         current_status = (app_dict.get("status") or "")
-        if current_status not in ("edd_required", "edd_approved", "approved", "rejected"):
+        preserve_preapproved_kyc_status = _should_preserve_preapproved_kyc_status(app_dict)
+        if preserve_preapproved_kyc_status:
+            result["status_preserved"] = True
+        elif current_status not in ("edd_required", "edd_approved", "approved", "rejected"):
             db.execute(
                 "UPDATE applications SET status = ?, updated_at = CURRENT_TIMESTAMP "
                 "WHERE id = ?",
@@ -571,6 +583,7 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
                         "edd_case_id": result["case_id"],
                         "edd_case_created": result["created"],
                         "status_changed": result["status_changed"],
+                        "status_preserved": result["status_preserved"],
                         "origin": "policy_routing",
                     }, default=str, sort_keys=True),
                     client_ip or "",
