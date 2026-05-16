@@ -189,6 +189,7 @@ def test_false_positive_clearance_queue_label_is_reviewed_not_raw_clear(db, temp
                 "subject_name": "Reviewed FP Co",
                 "disposition": "cleared",
                 "disposition_code": "false_positive_cleared",
+                "evidence_reference": "Provider case CA-FP-LABEL-001 and registry evidence retained.",
             }, sort_keys=True),
             "127.0.0.1",
         ),

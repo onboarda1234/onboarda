@@ -197,8 +197,6 @@ def _review_evidence_present(screening: dict) -> bool:
         or screening.get("evidence")
         or screening.get("reference")
         or screening.get("source_reference")
-        or screening.get("notes")
-        or screening.get("review_notes")
     )
 
 
@@ -805,7 +803,6 @@ def _screening_record_with_review(record: dict, review: Optional[dict]) -> dict:
             review.get("evidence_reference")
             or review.get("review_evidence_reference")
             or review.get("source_reference")
-            or review.get("notes")
         ),
         "evidence_reference": review.get("evidence_reference"),
         "reviewer_id": review.get("reviewer_id"),

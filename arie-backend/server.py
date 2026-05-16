@@ -2775,11 +2775,14 @@ class ApplicationsHandler(BaseHandler):
                 app_ids,
             ).fetchall()
             app_ref_by_id = {app["id"]: app.get("ref") for app in apps}
-            for review_row in review_rows:
+            review_dicts = [dict(row) for row in review_rows]
+            audit_lookup = _load_screening_review_audit_lookup(db, review_dicts, app_ref_by_id)
+            for review_row in review_dicts:
                 review = _annotate_screening_review_for_truth(
                     db,
                     app_ref_by_id.get(review_row["application_id"]),
-                    dict(review_row),
+                    review_row,
+                    audit_rows_by_target=audit_lookup,
                 )
                 screening_reviews_by_app.setdefault(review["application_id"], []).append(review)
 
@@ -10367,6 +10370,11 @@ def _screening_review_artifact_present(review, *keys):
     return any(review.get(key) not in (None, "", [], {}) for key in keys)
 
 
+def _escape_like_literal(value):
+    text = str(value or "")
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _screening_review_false_positive_clearance_contract(review):
     if not review:
         return False
@@ -10378,39 +10386,137 @@ def _screening_review_false_positive_clearance_contract(review):
         and _screening_review_artifact_present(review, "reviewer_id", "reviewer_name")
         and _screening_review_artifact_present(review, "created_at", "updated_at", "reviewed_at", "review_updated_at")
         and _screening_review_artifact_present(review, "rationale")
-        and _screening_review_artifact_present(review, "evidence_reference", "review_evidence_reference", "notes")
+        and _screening_review_artifact_present(review, "evidence_reference", "review_evidence_reference")
         and _truthy_review_flag(review.get("audit_confirmed"))
         and (not requires_four_eyes or bool(second_reviewer))
     )
 
 
-def _screening_review_audit_confirmed(db, app_ref, review):
+def _screening_review_audit_targets(app_ref, review):
+    targets = []
+    for value in (app_ref, review.get("application_ref"), review.get("application_id")):
+        if value not in (None, "", [], {}) and str(value) not in targets:
+            targets.append(str(value))
+    return targets
+
+
+def _screening_review_audit_detail_payload(detail):
+    parsed = safe_json_loads(detail)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _screening_review_audit_detail_matches(review, detail):
+    detail = str(detail or "")
+    payload = _screening_review_audit_detail_payload(detail)
+    subject_name = str(review.get("subject_name") or "")
+    disposition_code = str(review.get("disposition_code") or "")
+    if payload:
+        payload_subject = str(payload.get("subject_name") or "")
+        payload_code = str(payload.get("disposition_code") or payload.get("canonical_disposition") or "")
+        return bool(
+            (not subject_name or payload_subject == subject_name)
+            and (not disposition_code or payload_code == disposition_code)
+        )
+    return bool(
+        detail
+        and (not subject_name or subject_name in detail)
+        and (not disposition_code or disposition_code in detail)
+    )
+
+
+def _screening_review_evidence_from_audit_detail(detail):
+    payload = _screening_review_audit_detail_payload(detail)
+    if not payload:
+        return None
+    for key in ("evidence_reference", "review_evidence_reference", "evidence", "reference", "source_reference"):
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _load_screening_review_audit_lookup(db, reviews, app_ref_by_id=None):
+    targets = []
+    app_ref_by_id = app_ref_by_id or {}
+    for review in reviews or []:
+        app_ref = app_ref_by_id.get(review.get("application_id")) or review.get("application_ref")
+        for target in _screening_review_audit_targets(app_ref, review):
+            if target not in targets:
+                targets.append(target)
+    if not db or not targets:
+        return {}
+    try:
+        placeholders = ",".join("?" for _ in targets)
+        rows = db.execute(
+            f"""
+            SELECT target, detail
+            FROM audit_log
+            WHERE action = 'Screening Review'
+              AND target IN ({placeholders})
+            ORDER BY id DESC
+            """,
+            targets,
+        ).fetchall()
+    except Exception:
+        logger.warning("Could not preload screening review audit rows", exc_info=True)
+        return {}
+    lookup = {}
+    for row in rows:
+        lookup.setdefault(str(row["target"]), []).append(dict(row))
+    return lookup
+
+
+def _screening_review_audit_row(db, app_ref, review, audit_rows_by_target=None):
     if not db or not review:
-        return False
-    if _truthy_review_flag(review.get("audit_confirmed")):
-        return True
-    target = app_ref or review.get("application_ref") or review.get("application_id")
+        return None
+    targets = _screening_review_audit_targets(app_ref, review)
+    if audit_rows_by_target is not None:
+        for target in targets:
+            for row in audit_rows_by_target.get(str(target), []):
+                if _screening_review_audit_detail_matches(review, row.get("detail")):
+                    return row
+        return None
+    target = targets[0] if targets else None
     subject_name = review.get("subject_name") or ""
     disposition_code = review.get("disposition_code") or ""
     try:
         row = db.execute(
             """
-            SELECT id FROM audit_log
+            SELECT id, detail FROM audit_log
             WHERE target = ? AND action = 'Screening Review'
-              AND detail LIKE ? AND detail LIKE ?
+              AND detail LIKE ? ESCAPE '\\'
+              AND detail LIKE ? ESCAPE '\\'
             ORDER BY id DESC LIMIT 1
             """,
-            (target, f"%{subject_name}%", f"%{disposition_code}%"),
+            (target, f"%{_escape_like_literal(subject_name)}%", f"%{_escape_like_literal(disposition_code)}%"),
         ).fetchone()
-        return bool(row)
+        return dict(row) if row else None
     except Exception:
         logger.warning("Could not confirm screening review audit for %s/%s", target, subject_name, exc_info=True)
-        return False
+        return None
 
 
-def _annotate_screening_review_for_truth(db, app_ref, review):
+def _screening_review_audit_confirmed(db, app_ref, review, audit_rows_by_target=None):
+    if _truthy_review_flag(review.get("audit_confirmed")):
+        return True
+    return bool(_screening_review_audit_row(db, app_ref, review, audit_rows_by_target=audit_rows_by_target))
+
+
+def _screening_review_audit_evidence_reference(db, app_ref, review, audit_rows_by_target=None):
+    row = _screening_review_audit_row(db, app_ref, review, audit_rows_by_target=audit_rows_by_target)
+    if not row:
+        return None
+    return _screening_review_evidence_from_audit_detail(row.get("detail"))
+
+
+def _annotate_screening_review_for_truth(db, app_ref, review, audit_rows_by_target=None):
     review = dict(review or {})
-    review["audit_confirmed"] = _screening_review_audit_confirmed(db, app_ref, review)
+    audit_row = _screening_review_audit_row(db, app_ref, review, audit_rows_by_target=audit_rows_by_target)
+    review["audit_confirmed"] = _truthy_review_flag(review.get("audit_confirmed")) or bool(audit_row)
+    if not review.get("review_evidence_reference") and not review.get("evidence_reference") and audit_row:
+        evidence_reference = _screening_review_evidence_from_audit_detail(audit_row.get("detail"))
+        if evidence_reference:
+            review["review_evidence_reference"] = evidence_reference
     return review
 
 
@@ -10423,7 +10529,12 @@ def _load_screening_reviews_for_truth(db, application_id, app_ref=None):
         """,
         (application_id,),
     ).fetchall()
-    return [_annotate_screening_review_for_truth(db, app_ref, dict(row)) for row in rows]
+    reviews = [dict(row) for row in rows]
+    audit_lookup = _load_screening_review_audit_lookup(db, reviews, {application_id: app_ref})
+    return [
+        _annotate_screening_review_for_truth(db, app_ref, review, audit_rows_by_target=audit_lookup)
+        for review in reviews
+    ]
 
 
 def _truthy_review_flag(value):
@@ -11761,6 +11872,8 @@ class ScreeningReviewHandler(BaseHandler):
             before_state=dict(existing_review) if existing_review else None,
             after_state=review)
         review["audit_confirmed"] = True
+        if evidence_reference:
+            review["review_evidence_reference"] = evidence_reference
         status_code = 202 if (requires_four_eyes and not is_second_review) else 200
         self.log_governance_attempt(
             user, "screening.review_disposition", app["ref"], "accepted", status_code,

@@ -337,6 +337,7 @@ def _insert_screening_review(
                 "subject_name": "Approval Gate Test Ltd",
                 "disposition": disposition,
                 "disposition_code": disposition_code,
+                "evidence_reference": "Provider case CA-GATE-001 and registry evidence retained.",
             }, sort_keys=True),
             "127.0.0.1",
         ),

@@ -592,25 +592,26 @@ def build_compliance_memo(app, directors, ubos, documents):
             build_screening_terminality_summary as _build_screening_terminality_summary,
         )
     except ImportError:  # pragma: no cover — defensive: never break memo build
-        _build_screening_terminality_summary = lambda _report, _prescreening=None, _reviews=None: {
-            "terminal": False,
-            "has_non_terminal": True,
-            "has_failed": False,
-            "has_not_configured": False,
-            "has_sandbox": False,
-            "has_simulated": False,
-            "provider_mode": None,
-            "provider_availability": None,
-            "canonical_state": None,
-            "screening_result": None,
-            "defensible_clear": False,
-            "approval_blocking": True,
-            "blocking_reasons": [],
-            "has_terminal_match": False,
-            "company_screening_configured": False,
-            "person_states": [],
-            "company_state": None,
-        }
+        def _build_screening_terminality_summary(_report, _prescreening=None, _reviews=None):
+            return {
+                "terminal": False,
+                "has_non_terminal": True,
+                "has_failed": False,
+                "has_not_configured": False,
+                "has_sandbox": False,
+                "has_simulated": False,
+                "provider_mode": None,
+                "provider_availability": None,
+                "canonical_state": None,
+                "screening_result": None,
+                "defensible_clear": False,
+                "approval_blocking": True,
+                "blocking_reasons": [],
+                "has_terminal_match": False,
+                "company_screening_configured": False,
+                "person_states": [],
+                "company_state": None,
+            }
 
     _screening_terminality = _build_screening_terminality_summary(
         screening_report,
