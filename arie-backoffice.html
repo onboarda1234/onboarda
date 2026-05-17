@@ -7982,7 +7982,7 @@ function buildPersonScreeningReviewCard(person, app, reviewRow, focus) {
                             ? (personDeclaredPep ? 'Declared PEP — Screening Not Configured' : 'Screening Not Configured')
                             : (personFallbackStatusKey === 'screening_unavailable'
                                 ? (personDeclaredPep ? 'Declared PEP — Screening Unavailable' : 'Screening Unavailable')
-                                : (personDeclaredPep ? 'Declared PEP — Screening Pending Provider' : 'Screening Pending Provider')))))))
+                                : (personDeclaredPep ? 'Declared PEP — Screening Pending Provider' : 'Screening Pending Provider'))))))))
     : 'Awaiting Screening';
   var badges = [
     screeningQueueStatusBadge(reviewRow ? reviewRow.status_key : personFallbackStatusKey, reviewRow ? reviewRow.status_label : personFallbackStatusLabel),
