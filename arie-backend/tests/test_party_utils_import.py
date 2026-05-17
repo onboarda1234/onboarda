@@ -11,6 +11,7 @@ neutral party_utils.py module which has no Prometheus dependency.
 
 import ast
 import importlib
+import logging
 import os
 import sys
 import types
@@ -209,6 +210,80 @@ class TestPartyUtilsFunctional:
         decrypted = decrypt_pii_fields(encrypted, ["nationality"])
         assert decrypted["nationality"] == "Mauritius"
         assert decrypted["name"] == "Test"
+
+    def test_plaintext_legacy_pii_is_left_unchanged(self, caplog):
+        """Legacy plaintext values remain readable and do not trigger decrypt errors."""
+        from party_utils import decrypt_pii_fields
+
+        caplog.set_level(logging.WARNING)
+        decrypted = decrypt_pii_fields(
+            {"id": "dir_plain", "application_id": "app_plain", "nationality": "Mauritius"},
+            ["nationality"],
+            source="directors",
+        )
+
+        assert decrypted["nationality"] == "Mauritius"
+        assert "PII decrypt rejected unreadable token" not in caplog.text
+        assert "Invalid encryption token" not in caplog.text
+
+    def test_invalid_pii_token_logs_safe_metadata_without_raw_pii(self, caplog):
+        """Unreadable tokens are nulled and logged with safe record metadata only."""
+        from cryptography.fernet import Fernet
+        from security_hardening import PIIEncryptor
+        from party_utils import decrypt_pii_fields
+
+        raw_pii = "NeverLogThisNationality"
+        unreadable_token = PIIEncryptor(Fernet.generate_key().decode()).encrypt(raw_pii)
+
+        caplog.set_level(logging.WARNING)
+        decrypted = decrypt_pii_fields(
+            {
+                "id": "dir_bad",
+                "application_id": "app_bad",
+                "person_key": "director-1",
+                "nationality": unreadable_token,
+            },
+            ["nationality"],
+            source="directors",
+        )
+
+        assert decrypted["nationality"] is None
+        assert "PII decrypt rejected unreadable token" in caplog.text
+        assert "source=directors" in caplog.text
+        assert "row_id=dir_bad" in caplog.text
+        assert "application_id=app_bad" in caplog.text
+        assert "field=nationality" in caplog.text
+        assert "value_sha256_16=" in caplog.text
+        assert raw_pii not in caplog.text
+        assert unreadable_token not in caplog.text
+        assert "Invalid encryption token" not in caplog.text
+
+    def test_get_application_parties_handles_invalid_pii_token_safely(self, caplog):
+        """Application party hydration should not emit generic invalid-token errors."""
+        from cryptography.fernet import Fernet
+        from security_hardening import PIIEncryptor
+        from party_utils import get_application_parties
+
+        db = self._make_db()
+        app_id = "app_invalid_party_pii"
+        unreadable_token = PIIEncryptor(Fernet.generate_key().decode()).encrypt("DoNotLog")
+        db.execute(
+            "INSERT INTO directors (id, application_id, person_key, full_name, nationality) "
+            "VALUES (?,?,?,?,?)",
+            (101, app_id, "d1", "Unreadable Director", unreadable_token),
+        )
+        db.commit()
+
+        caplog.set_level(logging.WARNING)
+        directors, ubos, intermediaries = get_application_parties(db, app_id)
+
+        assert directors[0]["nationality"] is None
+        assert ubos == []
+        assert intermediaries == []
+        assert "PII decrypt rejected unreadable token" in caplog.text
+        assert "source=directors" in caplog.text
+        assert "row_id=101" in caplog.text
+        assert "Invalid encryption token" not in caplog.text
 
     def test_empty_application_returns_empty_lists(self):
         """No rows → three empty lists."""

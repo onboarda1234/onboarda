@@ -8,6 +8,7 @@ rule_engine.py, supervisor/, or any other module.
 """
 
 import base64
+import hashlib
 import logging
 import os
 import secrets
@@ -106,6 +107,58 @@ def extract_fernet_token(value) -> str:
     return ""
 
 
+def classify_pii_value(value) -> str:
+    """Classify stored PII without returning or logging the sensitive value."""
+    if value in (None, ""):
+        return "empty"
+    token = extract_fernet_token(value)
+    if not token:
+        return "plaintext_legacy"
+    if not _pii_encryptor:
+        return "encrypted_unavailable"
+    try:
+        _pii_encryptor.decrypt(token)
+        return "valid_encrypted"
+    except Exception:
+        return "invalid_encrypted_token"
+
+
+def _fingerprint_value(value) -> str:
+    raw = value.decode("utf-8", "ignore") if isinstance(value, (bytes, bytearray)) else str(value)
+    return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:16]
+
+
+def _infer_pii_source(field_names) -> str:
+    fields = set(field_names or [])
+    if "id_number" in fields:
+        return "directors"
+    if fields == set(PII_FIELDS_UBOS):
+        return "ubos"
+    if fields == set(PII_FIELDS_APPLICATIONS):
+        return "applications"
+    return "pii_record"
+
+
+def _safe_pii_metadata(record: dict, field: str, value, source: str = None) -> str:
+    metadata = {
+        "source": source or "pii_record",
+        "field": field,
+        "value_sha256_16": _fingerprint_value(value),
+        "value_length": len(str(value)) if value is not None else 0,
+    }
+    for source_key, output_key in (
+        ("id", "row_id"),
+        ("application_id", "application_id"),
+        ("ref", "application_ref"),
+        ("application_ref", "application_ref"),
+        ("person_key", "person_key"),
+    ):
+        value_at_key = record.get(source_key) if isinstance(record, dict) else None
+        if value_at_key not in (None, ""):
+            metadata[output_key] = value_at_key
+    return " ".join(f"{key}={metadata[key]}" for key in sorted(metadata))
+
+
 def encrypt_pii_fields(record: dict, field_names: list) -> dict:
     """Encrypt specified PII fields in a record before database write."""
     if not _pii_encryptor:
@@ -119,11 +172,12 @@ def encrypt_pii_fields(record: dict, field_names: list) -> dict:
     return encrypted
 
 
-def decrypt_pii_fields(record: dict, field_names: list) -> dict:
+def decrypt_pii_fields(record: dict, field_names: list, *, source: str = None) -> dict:
     """Decrypt specified PII fields in a record after database read."""
     if not _pii_encryptor:
         return record
     decrypted = dict(record)
+    pii_source = source or _infer_pii_source(field_names)
     for field in field_names:
         if field in decrypted and decrypted[field]:
             val = str(decrypted[field])
@@ -132,7 +186,11 @@ def decrypt_pii_fields(record: dict, field_names: list) -> dict:
                 try:
                     decrypted[field] = _pii_encryptor.decrypt(token)
                 except Exception as e:
-                    logger.warning("PII decryption failed for field '%s': %s", field, e)
+                    logger.warning(
+                        "PII decrypt rejected unreadable token: %s error_type=%s",
+                        _safe_pii_metadata(decrypted, field, val, pii_source),
+                        type(e).__name__,
+                    )
                     decrypted[field] = None  # Clear encrypted blob — show as missing, not gibberish
     return decrypted
 
@@ -145,11 +203,11 @@ def parse_json_field(value, fallback):
     return parsed if isinstance(parsed, type(fallback)) else fallback
 
 
-def hydrate_party_record(record: dict, pii_fields=None, name_key="full_name") -> dict:
+def hydrate_party_record(record: dict, pii_fields=None, name_key="full_name", source=None) -> dict:
     """Hydrate a raw DB party record: decrypt PII, parse JSON fields, ensure full_name."""
     result = dict(record)
     if pii_fields:
-        result = decrypt_pii_fields(result, pii_fields)
+        result = decrypt_pii_fields(result, pii_fields, source=source)
     result["pep_declaration"] = parse_json_field(result.get("pep_declaration"), {})
     result["full_name"] = result.get(name_key) or result.get("full_name") or ""
     return result
@@ -163,11 +221,11 @@ def get_application_parties(db, application_id):
     JSON fields parsed.
     """
     directors = [
-        hydrate_party_record(d, PII_FIELDS_DIRECTORS)
+        hydrate_party_record(d, PII_FIELDS_DIRECTORS, source="directors")
         for d in db.execute("SELECT * FROM directors WHERE application_id = ?", (application_id,)).fetchall()
     ]
     ubos = [
-        hydrate_party_record(u, PII_FIELDS_UBOS)
+        hydrate_party_record(u, PII_FIELDS_UBOS, source="ubos")
         for u in db.execute("SELECT * FROM ubos WHERE application_id = ?", (application_id,)).fetchall()
     ]
     intermediaries = []
