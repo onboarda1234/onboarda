@@ -1264,6 +1264,174 @@ def _apply_edd_routing_floor_for_recompute(db, app, risk):
         return {}
 
 
+_SCREENING_DISPOSITION_FLOOR_CODES = {
+    "true_match",
+    "material_concern",
+    "escalated_to_edd",
+    "needs_more_information",
+}
+_SCREENING_DISPOSITION_EDD_CODES = {
+    "true_match",
+    "material_concern",
+    "escalated_to_edd",
+}
+
+
+def _row_get(row, key, default=None):
+    try:
+        if hasattr(row, "get"):
+            return row.get(key, default)
+        return row[key]
+    except Exception:
+        return default
+
+
+def _truthy_db_flag(value):
+    if value is True:
+        return True
+    if value in (False, None):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _screening_review_is_complete_clearance(review):
+    if not review:
+        return False
+    code = str(_row_get(review, "disposition_code") or "").strip().lower()
+    if code != "false_positive_cleared":
+        return False
+    if _truthy_db_flag(_row_get(review, "requires_four_eyes")):
+        return bool(_row_get(review, "second_reviewer_id"))
+    return True
+
+
+def _screening_report_has_raw_completed_match(app):
+    prescreening = safe_json_loads(_row_get(app, "prescreening_data"))
+    report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
+    if not isinstance(report, dict):
+        return False
+
+    company = report.get("company_screening") or {}
+    if isinstance(company, dict):
+        api_status = str(company.get("api_status") or company.get("status") or "").strip().lower()
+        matched = bool(company.get("matched") or company.get("has_match") or company.get("match_found"))
+        results = company.get("results")
+        has_results = isinstance(results, list) and bool(results)
+        terminalish = api_status in {"live", "completed", "completed_match", "complete", "success", ""}
+        if terminalish and (matched or has_results):
+            return True
+
+    for key in ("total_hits", "hit_count", "match_count"):
+        try:
+            if int(report.get(key) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+    return False
+
+
+def _latest_screening_reviews(db, app_id):
+    try:
+        return db.execute(
+            """
+            SELECT subject_type, subject_name, disposition, disposition_code,
+                   requires_four_eyes, second_reviewer_id, updated_at, created_at
+            FROM screening_reviews
+            WHERE application_id=?
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            """,
+            (app_id,),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning("Could not load screening reviews for risk recompute app_id=%s: %s", app_id, exc)
+        return []
+
+
+def _screening_disposition_floor_signal(db, app):
+    """Return the current screening-disposition floor signal for recompute.
+
+    Screening review rows are not part of the base prescreening score input.
+    This helper bridges that state so formal dispositions that create/preserve
+    EDD or unresolved match blocking cannot persist a final LOW classification.
+    """
+    app_id = _row_get(app, "id")
+    reviews = _latest_screening_reviews(db, app_id)
+
+    for review in reviews:
+        code = str(_row_get(review, "disposition_code") or "").strip().lower()
+        if code in _SCREENING_DISPOSITION_FLOOR_CODES:
+            if code == "needs_more_information":
+                return {
+                    "code": code,
+                    "minimum_level": "MEDIUM",
+                    "reason_code": "screening_needs_more_information_floor",
+                    "reason_text": (
+                        "Screening disposition floor: needs_more_information keeps the match unresolved "
+                        "and requires at least MEDIUM final risk until formally resolved"
+                    ),
+                    "sets_edd_lane": False,
+                }
+            return {
+                "code": code,
+                "minimum_level": "MEDIUM",
+                "reason_code": "material_screening_disposition_floor",
+                "reason_text": (
+                    "Screening disposition floor: "
+                    + code
+                    + " creates or preserves material screening/EDD controls and requires at least MEDIUM final risk"
+                ),
+                "sets_edd_lane": code in _SCREENING_DISPOSITION_EDD_CODES,
+            }
+
+    if _screening_report_has_raw_completed_match(app):
+        cleared_reviews = [r for r in reviews if _screening_review_is_complete_clearance(r)]
+        if not cleared_reviews:
+            return {
+                "code": "raw_completed_match",
+                "minimum_level": "MEDIUM",
+                "reason_code": "material_screening_disposition_floor",
+                "reason_text": (
+                    "Screening disposition floor: unresolved raw completed_match remains a material "
+                    "screening concern until formally cleared"
+                ),
+                "sets_edd_lane": True,
+            }
+
+    return {}
+
+
+def _append_floor_reason(risk, reason_code, reason_text):
+    escalations = risk.get("escalations")
+    if not isinstance(escalations, list):
+        escalations = []
+    _append_unique(escalations, reason_code)
+    risk["escalations"] = escalations
+
+    existing = str(risk.get("elevation_reason_text") or "").strip()
+    reason = str(reason_text or "").strip()
+    if reason and reason not in existing:
+        risk["elevation_reason_text"] = f"{existing}; {reason}" if existing else reason
+    elif existing:
+        risk["elevation_reason_text"] = existing
+
+
+def _apply_screening_disposition_floor_for_recompute(db, app, risk):
+    signal = _screening_disposition_floor_signal(db, app)
+    if not signal:
+        return {}
+    apply_risk_floor(
+        risk,
+        signal["minimum_level"],
+        signal["reason_code"],
+        signal["reason_text"],
+    )
+    _append_floor_reason(risk, signal["reason_code"], signal["reason_text"])
+    if signal.get("sets_edd_lane"):
+        risk["lane"] = "EDD"
+    return signal
+
+
 def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routing_policy=True):
     """Recompute risk score for a single application and persist the result.
 
@@ -1336,6 +1504,7 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         )
         new_risk = compute_risk_score(scoring_input)
         routing_floor = _apply_edd_routing_floor_for_recompute(db, app, new_risk)
+        screening_floor = _apply_screening_disposition_floor_for_recompute(db, app, new_risk)
 
         new_score = new_risk["score"]
         new_level = new_risk["level"]
@@ -1348,6 +1517,7 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
         result["risk_escalations"] = list(new_risk.get("escalations", []))
         result["edd_routing_route"] = routing_floor.get("route")
         result["edd_routing_triggers"] = list(routing_floor.get("triggers") or [])
+        result["screening_disposition_floor"] = screening_floor
         result["recomputed"] = True
         result["changed"] = (old_score != new_score or old_level != new_level)
 
