@@ -472,8 +472,8 @@ class TestRecomputeRiskAudit:
         assert "false_positive" not in (app["elevation_reason_text"] or "")
         db.close()
 
-    def test_needs_more_information_floor_is_explicit_and_blocking_without_edd_lane(self, temp_db):
-        """needs_more_information remains blocking and floors to MEDIUM without declaring a true match."""
+    def test_needs_more_information_floor_is_explicit_and_routes_edd_lane(self, temp_db):
+        """needs_more_information remains blocking and uses the explicit EDD follow-up policy."""
         from rule_engine import recompute_risk
         db = _get_db()
         _insert_risk_config(db)
@@ -501,7 +501,7 @@ class TestRecomputeRiskAudit:
         assert result["base_risk_level"] == "LOW"
         assert app["final_risk_level"] == "MEDIUM"
         assert app["base_risk_level"] == "LOW"
-        assert app["onboarding_lane"] != "EDD"
+        assert app["onboarding_lane"] == "EDD"
         assert "screening_needs_more_information_floor" in escalations
         assert "needs_more_information" in app["elevation_reason_text"]
         db.close()

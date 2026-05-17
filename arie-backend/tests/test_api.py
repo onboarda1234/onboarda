@@ -1969,6 +1969,69 @@ class TestGovernanceAttemptAudit:
             ),
         )
 
+    def _completed_match_prescreening(self, company_name="Screening Workflow Ltd"):
+        return {
+            "screening_report": {
+                "screening_mode": "live",
+                "screened_at": "2026-04-30T10:00:00Z",
+                "company_screening": {
+                    "found": True,
+                    "sanctions": {
+                        "matched": True,
+                        "results": [{"name": company_name, "is_sanctioned": True}],
+                        "source": "sumsub",
+                        "provider": "sumsub",
+                        "api_status": "live",
+                    },
+                },
+                "director_screenings": [],
+                "ubo_screenings": [],
+                "total_hits": 1,
+            }
+        }
+
+    def _insert_screening_workflow_app(
+        self,
+        conn,
+        app_id,
+        app_ref,
+        *,
+        company_name="Screening Workflow Ltd",
+        status="in_review",
+        lane="Standard Review",
+        risk_level="LOW",
+        final_risk_level="LOW",
+    ):
+        conn.execute("DELETE FROM audit_log WHERE target IN (?, ?)", (app_ref, f"application:{app_ref}"))
+        conn.execute("DELETE FROM edd_cases WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM screening_reviews WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        conn.execute(
+            """
+            INSERT INTO applications
+                (id, ref, client_id, company_name, country, sector, entity_type,
+                 status, onboarding_lane, risk_level, base_risk_level,
+                 final_risk_level, risk_score, prescreening_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                app_ref,
+                f"client_{app_id}",
+                company_name,
+                "United Kingdom",
+                "Technology",
+                "Listed Company",
+                status,
+                lane,
+                risk_level,
+                "LOW",
+                final_risk_level,
+                18,
+                json.dumps(self._completed_match_prescreening(company_name)),
+            ),
+        )
+
     def test_governance_attempt_audit_failure_is_best_effort(self, monkeypatch, caplog):
         """Audit insert failures must log the marker and not raise to the handler."""
         import logging
@@ -2925,6 +2988,177 @@ class TestGovernanceAttemptAudit:
         assert app["status"] == "edd_required"
         assert edd is not None
         assert audit is not None
+
+    @pytest.mark.parametrize(
+        "disposition_code",
+        ["true_match", "material_concern", "needs_more_information"],
+    )
+    def test_blocking_screening_dispositions_normalize_to_edd_status_and_lane(
+        self,
+        api_server,
+        disposition_code,
+    ):
+        """Blocking screening dispositions must not leave Standard Review + edd_required drift."""
+        from auth import create_token
+        from db import get_db
+
+        suffix = disposition_code.replace("_", "-")
+        app_id = f"app_screening_workflow_{disposition_code}"
+        app_ref = f"ARF-2026-SCREEN-WORKFLOW-{suffix}".upper()
+        company_name = f"Screening Workflow {suffix} Ltd"
+        conn = get_db()
+        self._insert_screening_workflow_app(
+            conn,
+            app_id,
+            app_ref,
+            company_name=company_name,
+            status="in_review",
+            lane="Standard Review",
+            risk_level="LOW",
+            final_risk_level="LOW",
+        )
+        conn.commit()
+        conn.close()
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json={
+                "application_id": app_ref,
+                "subject_type": "entity",
+                "subject_name": company_name,
+                "disposition": disposition_code,
+                "rationale": "Officer disposition keeps this live provider match unresolved for controlled workflow testing.",
+                "evidence_reference": f"Provider case CA-{suffix}-001.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["review"]["canonical_disposition"] == disposition_code
+        assert body["workflow_normalization"]["new_status"] == "edd_required"
+        assert body["workflow_normalization"]["new_lane"] == "EDD"
+
+        conn = get_db()
+        app = conn.execute(
+            "SELECT status, onboarding_lane, final_risk_level FROM applications WHERE id = ?",
+            (app_id,),
+        ).fetchone()
+        edd = conn.execute(
+            "SELECT id, stage FROM edd_cases WHERE application_id = ?",
+            (app_id,),
+        ).fetchone()
+        audit = conn.execute(
+            """
+            SELECT detail, before_state, after_state FROM audit_log
+            WHERE target = ? AND action = 'screening.status_lane_normalized'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (f"application:{app_ref}",),
+        ).fetchone()
+        conn.close()
+
+        assert app["status"] == "edd_required"
+        assert app["onboarding_lane"] == "EDD"
+        assert app["final_risk_level"] == "MEDIUM"
+        assert edd is not None
+        assert audit is not None
+        detail = json.loads(audit["detail"])
+        assert detail["disposition_code"] == disposition_code
+        assert detail["previous_status"] == "in_review"
+        assert detail["new_status"] == "edd_required"
+        assert json.loads(audit["after_state"])["onboarding_lane"] == "EDD"
+
+    def test_false_positive_clearance_normalizes_clean_case_out_of_edd_required(self, api_server):
+        """A complete evidenced false-positive clearance should clear stale EDD workflow state."""
+        from auth import create_token
+        from db import get_db
+
+        app_id = "app_screening_workflow_false_positive"
+        app_ref = "ARF-2026-SCREEN-WORKFLOW-FP"
+        company_name = "Screening Workflow False Positive Ltd"
+        conn = get_db()
+        self._insert_screening_workflow_app(
+            conn,
+            app_id,
+            app_ref,
+            company_name=company_name,
+            status="edd_required",
+            lane="EDD",
+            risk_level="MEDIUM",
+            final_risk_level="MEDIUM",
+        )
+        conn.commit()
+        conn.close()
+
+        first_token = create_token("admin001", "admin", "Test Admin", "officer")
+        first_payload = {
+            "application_id": app_ref,
+            "subject_type": "entity",
+            "subject_name": company_name,
+            "disposition": "false_positive_cleared",
+            "rationale": "Officer matched provider evidence against registry records and confirmed a different entity.",
+            "evidence_reference": "Registry extract and provider case CA-FP-001.",
+        }
+        first = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json=first_payload,
+            headers={"Authorization": f"Bearer {first_token}"},
+            timeout=5,
+        )
+        assert first.status_code == 202, first.text
+
+        second_token = create_token("sco_phase1c", "sco", "Second Officer", "officer")
+        second_payload = dict(first_payload)
+        second_payload["rationale"] = "Independent second review confirmed the provider hit belongs to another company."
+        second_payload["evidence_reference"] = "Second-review registry pack and provider case CA-FP-001."
+        second = http_requests.post(
+            f"{api_server}/api/screening/review",
+            json=second_payload,
+            headers={"Authorization": f"Bearer {second_token}"},
+            timeout=5,
+        )
+
+        assert second.status_code == 200, second.text
+        body = second.json()
+        assert body["review"]["canonical_disposition"] == "false_positive_cleared"
+        assert body["workflow_normalization"]["new_status"] == "in_review"
+        assert body["workflow_normalization"]["new_lane"] != "EDD"
+
+        conn = get_db()
+        app = conn.execute(
+            "SELECT status, onboarding_lane, final_risk_level FROM applications WHERE id = ?",
+            (app_id,),
+        ).fetchone()
+        review = conn.execute(
+            """
+            SELECT disposition_code, second_reviewer_id
+            FROM screening_reviews WHERE application_id = ?
+            """,
+            (app_id,),
+        ).fetchone()
+        audit = conn.execute(
+            """
+            SELECT detail, before_state, after_state FROM audit_log
+            WHERE target = ? AND action = 'screening.status_lane_normalized'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (f"application:{app_ref}",),
+        ).fetchone()
+        conn.close()
+
+        assert app["status"] == "in_review"
+        assert app["onboarding_lane"] != "EDD"
+        assert app["final_risk_level"] == "LOW"
+        assert review["disposition_code"] == "false_positive_cleared"
+        assert review["second_reviewer_id"] == "sco_phase1c"
+        assert audit is not None
+        detail = json.loads(audit["detail"])
+        assert detail["disposition_code"] == "false_positive_cleared"
+        assert detail["previous_status"] == "edd_required"
+        assert detail["new_status"] == "in_review"
 
     def test_screening_review_context_error_fails_closed(self, api_server, monkeypatch):
         """A context derivation error should require four-eyes rather than single-officer clear."""
