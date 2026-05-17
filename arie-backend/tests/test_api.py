@@ -2817,10 +2817,24 @@ class TestGovernanceAttemptAudit:
         assert body["requires_four_eyes"] is False
         assert body["sensitivity_flags"] == []
 
-    def test_screening_escalated_to_edd_routes_application(self, api_server):
+    def test_screening_escalated_to_edd_routes_application(self, api_server, monkeypatch):
         """Canonical escalated_to_edd disposition must actuate/preserve EDD workflow."""
         from auth import create_token
         from db import get_db
+        import routing_actuator
+
+        real_apply_routing_decision = routing_actuator.apply_routing_decision
+
+        def apply_routing_with_postgres_timestamp_payload(**kwargs):
+            result = real_apply_routing_decision(**kwargs)
+            result["postgres_timestamp_regression"] = datetime.now(timezone.utc)
+            return result
+
+        monkeypatch.setattr(
+            routing_actuator,
+            "apply_routing_decision",
+            apply_routing_with_postgres_timestamp_payload,
+        )
 
         app_id = "app_screening_escalated_to_edd"
         app_ref = "ARF-2026-SCREEN-ESCALATE-EDD"
@@ -2886,6 +2900,7 @@ class TestGovernanceAttemptAudit:
         body = resp.json()
         assert body["review"]["canonical_disposition"] == "escalated_to_edd"
         assert body["routing_outcome"]["route"] == "edd"
+        assert isinstance(body["routing_outcome"]["postgres_timestamp_regression"], str)
 
         conn = get_db()
         app = conn.execute(
