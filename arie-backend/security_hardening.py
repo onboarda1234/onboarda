@@ -1365,7 +1365,8 @@ class PIIEncryptor:
             return plaintext.decode('utf-8')
 
         except InvalidToken:
-            logger.error("Invalid encryption token (possibly wrong key)")
+            # Callers that know the table/row context log safe diagnostics. Avoid
+            # emitting generic PII-token errors without record metadata here.
             raise
         except Exception as e:
             logger.error(f"Decryption error: {e}")
