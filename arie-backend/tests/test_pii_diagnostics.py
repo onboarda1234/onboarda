@@ -1,6 +1,8 @@
 import json
 import sqlite3
 
+import pytest
+
 
 def _make_diag_db():
     conn = sqlite3.connect(":memory:")
@@ -110,3 +112,12 @@ def test_diagnostic_apply_nulls_invalid_tokens_and_writes_audit():
     assert "NeverExpose" not in audit["detail"]
     assert invalid not in audit["detail"]
     assert "value_sha256_16" in audit["detail"]
+
+
+def test_diagnostic_apply_requires_explicit_reason():
+    from scripts.diagnose_pii_tokens import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--apply-null-invalid"])
+
+    assert exc.value.code == 2

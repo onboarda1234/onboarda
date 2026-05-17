@@ -196,9 +196,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Diagnose unreadable party PII tokens without exposing PII.")
     parser.add_argument("--apply-null-invalid", action="store_true",
                         help="Set invalid encrypted-looking PII fields to NULL after dry-run review.")
-    parser.add_argument("--reason", default="manual PII token repair",
+    parser.add_argument("--reason",
                         help="Reason recorded in audit_log when --apply-null-invalid is used.")
     args = parser.parse_args(argv)
+    if args.apply_null_invalid and not (args.reason or "").strip():
+        parser.error("--apply-null-invalid requires an explicit --reason")
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     db = get_db()
