@@ -10,6 +10,75 @@ from datetime import datetime
 
 logger = logging.getLogger("arie")
 
+
+def _screening_summary(metadata):
+    summary = (metadata or {}).get("screening_state_summary") or {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def _has_formally_cleared_screening_match(metadata):
+    summary = _screening_summary(metadata)
+    return bool(
+        summary.get("canonical_state") == "completed_match"
+        and summary.get("has_formally_cleared_match")
+        and not summary.get("has_uncleared_completed_match")
+        and not summary.get("approval_blocking")
+    )
+
+
+def _has_valid_review_recommendation_reason(metadata, sections):
+    summary = _screening_summary(metadata)
+
+    def _positive_int(value):
+        try:
+            return int(value or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _join_values(value):
+        if isinstance(value, (list, tuple, set)):
+            return " ".join(str(item or "") for item in value)
+        return str(value or "")
+
+    if summary.get("approval_blocking") or summary.get("has_uncleared_completed_match"):
+        return True
+    if _has_formally_cleared_screening_match(metadata):
+        return True
+    if metadata.get("low_confidence_flag"):
+        return True
+    if _positive_int(metadata.get("pending_document_count")):
+        return True
+    if _positive_int(metadata.get("enhanced_review_outstanding_count")):
+        return True
+
+    decision_content = ((sections or {}).get("compliance_decision") or {}).get("content") or ""
+    narrative = " ".join(
+        str(item or "")
+        for item in (
+            decision_content,
+            metadata.get("decision_label"),
+            _join_values(metadata.get("conditions")),
+            _join_values(metadata.get("key_findings")),
+        )
+    ).lower()
+    review_reason_markers = (
+        "screening resolution",
+        "screening match",
+        "cleared as false positive",
+        "false positive",
+        "supervisor review",
+        "senior compliance officer review",
+        "manual review",
+        "low confidence",
+        "document",
+        "data gap",
+        "enhanced requirement",
+        "edd",
+        "pep",
+    )
+    return any(marker in narrative for marker in review_reason_markers)
+
+
 def run_memo_supervisor(memo_data):
     """
     Supervisor layer for compliance memos.
@@ -45,6 +114,8 @@ def run_memo_supervisor(memo_data):
     risk_rating = metadata.get("risk_rating") or ""
     decision = metadata.get("approval_recommendation") or ""
     RISK_RANK = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "VERY_HIGH": 4}
+    screening_state_summary = _screening_summary(metadata)
+    screening_match_formally_cleared = _has_formally_cleared_screening_match(metadata)
 
     if RISK_RANK.get(risk_rating, 2) >= 3 and decision == "APPROVE":
         contradictions.append({
@@ -53,6 +124,16 @@ def run_memo_supervisor(memo_data):
             "description": "Risk rating is " + risk_rating + " but decision is unconditional APPROVE. High-risk entities require conditions or review.",
             "section_a": "risk_assessment",
             "section_b": "compliance_decision"
+        })
+    elif (
+        RISK_RANK.get(risk_rating, 2) <= 1
+        and decision == "REVIEW"
+        and _has_valid_review_recommendation_reason(metadata, sections)
+    ):
+        warnings.append({
+            "category": "risk_vs_decision",
+            "severity": "info",
+            "description": "LOW risk paired with REVIEW has a disclosed non-risk-rating control reason and is not treated as a contradiction."
         })
     elif RISK_RANK.get(risk_rating, 2) <= 1 and decision in ("REJECT", "REVIEW"):
         contradictions.append({
@@ -94,9 +175,19 @@ def run_memo_supervisor(memo_data):
         "pep(s) identified and flagged", "enhanced due diligence applied",
         "enhanced measures applied", "appropriately flagged"
     ]
+    pep_assertion_phrases = (
+        "pep match",
+        "pep hit",
+        "pep confirmed",
+        "pep identified",
+        "pep exposure",
+        "confirmed pep",
+        "provider pep",
+        "politically exposed",
+    )
     has_pep_in_screening = (
-        "pep" in screening_content
-        and ("match" in screening_content or "identified" in screening_content or "confirmed" in screening_content)
+        not screening_match_formally_cleared
+        and any(phrase in screening_content for phrase in pep_assertion_phrases)
         and not any(neg in screening_content for neg in pep_negation_phrases)
     )
     # PEP properly handled (identified + flagged + enhanced measures) is NOT a contradiction
@@ -392,6 +483,8 @@ def run_memo_supervisor(memo_data):
     contract = metadata.get("agent5_input_contract") or {}
     risk_dims = contract.get("risk_dimensions") or {}
     screening_summary = contract.get("screening_terminality_summary") or {}
+    if not screening_summary and screening_state_summary:
+        screening_summary = screening_state_summary
     contract_final_risk = (contract.get("final_risk_level") or "").upper()
     contract_jur = (risk_dims.get("jurisdiction") or "").upper()
     contract_biz = (risk_dims.get("business") or "").upper()
@@ -407,7 +500,17 @@ def run_memo_supervisor(memo_data):
         mandatory_reasons.append("sector_risk_tier=HIGH")
     if contract_ownership in ("opaque", "incomplete"):
         mandatory_reasons.append("ownership_transparency=" + contract_ownership)
-    if screening_summary.get("has_terminal_match"):
+    unresolved_terminal_match = bool(
+        screening_summary.get("has_terminal_match")
+        or screening_summary.get("has_uncleared_completed_match")
+        or screening_summary.get("completed_match_blocking")
+    )
+    screening_summary_cleared = bool(
+        screening_summary.get("has_formally_cleared_match")
+        and not screening_summary.get("has_uncleared_completed_match")
+        and not screening_summary.get("approval_blocking")
+    )
+    if unresolved_terminal_match and not screening_summary_cleared:
         mandatory_reasons.append("material_screening_concern")
     if verdict == "INCONSISTENT":
         contradiction_reasons = []

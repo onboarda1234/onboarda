@@ -12,6 +12,78 @@ from datetime import datetime
 
 logger = logging.getLogger("arie")
 
+
+def _screening_summary(metadata):
+    summary = (metadata or {}).get("screening_state_summary") or {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def _has_formally_cleared_screening_match(metadata):
+    summary = _screening_summary(metadata)
+    return bool(
+        summary.get("canonical_state") == "completed_match"
+        and summary.get("has_formally_cleared_match")
+        and not summary.get("has_uncleared_completed_match")
+        and not summary.get("approval_blocking")
+    )
+
+
+def _has_valid_review_recommendation_reason(metadata, sections):
+    """Return True when REVIEW is justified by disclosed, non-risk-rating facts."""
+    summary = _screening_summary(metadata)
+
+    def _positive_int(value):
+        try:
+            return int(value or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _join_values(value):
+        if isinstance(value, (list, tuple, set)):
+            return " ".join(str(item or "") for item in value)
+        return str(value or "")
+
+    if summary.get("approval_blocking"):
+        return True
+    if _has_formally_cleared_screening_match(metadata):
+        return True
+    if metadata.get("low_confidence_flag"):
+        return True
+    if _positive_int(metadata.get("pending_document_count")):
+        return True
+    if _positive_int(metadata.get("enhanced_review_outstanding_count")):
+        return True
+    if summary.get("has_uncleared_completed_match"):
+        return True
+
+    decision_content = ((sections or {}).get("compliance_decision") or {}).get("content") or ""
+    narrative = " ".join(
+        str(item or "")
+        for item in (
+            decision_content,
+            metadata.get("decision_label"),
+            _join_values(metadata.get("conditions")),
+            _join_values(metadata.get("key_findings")),
+        )
+    ).lower()
+    review_reason_markers = (
+        "screening resolution",
+        "screening match",
+        "cleared as false positive",
+        "false positive",
+        "supervisor review",
+        "senior compliance officer review",
+        "manual review",
+        "low confidence",
+        "document",
+        "data gap",
+        "enhanced requirement",
+        "edd",
+        "pep",
+    )
+    return any(marker in narrative for marker in review_reason_markers)
+
+
 def generate_fallback_memo(application=None):
     """
     Return a safe, structured fallback memo when AI generation fails.
@@ -193,7 +265,19 @@ def validate_compliance_memo(memo_data):
     decision_section = sections.get("compliance_decision", {})
     decision = decision_section.get("decision", metadata.get("approval_recommendation", ""))
 
-    if overall_rating == "LOW" and decision in ("REVIEW", "REJECT"):
+    if (
+        overall_rating == "LOW"
+        and decision == "REVIEW"
+        and _has_valid_review_recommendation_reason(metadata, sections)
+    ):
+        issues.append({
+            "category": "decision_alignment",
+            "severity": "info",
+            "description": "LOW-risk memo recommends REVIEW with a disclosed non-risk-rating control reason. This is not a contradiction.",
+            "fix": "No action required — ensure the review reason remains visible in the memo.",
+        })
+        scores["decision"] = 2.0
+    elif overall_rating == "LOW" and decision in ("REVIEW", "REJECT"):
         issues.append({"category": "decision_alignment", "severity": "critical", "description": f"Low-risk entity ({overall_score}/100) has decision '{decision}'. This is contradictory.", "fix": "Align decision with risk assessment — LOW risk should lead to APPROVE or APPROVE_WITH_CONDITIONS."})
         scores["decision"] = 0
     elif overall_rating in ("HIGH", "VERY_HIGH") and decision == "APPROVE":
