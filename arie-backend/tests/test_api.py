@@ -2900,6 +2900,7 @@ class TestGovernanceAttemptAudit:
         body = resp.json()
         assert body["review"]["canonical_disposition"] == "escalated_to_edd"
         assert body["routing_outcome"]["route"] == "edd"
+        assert isinstance(body["routing_outcome"]["postgres_timestamp_regression"], str)
 
         conn = get_db()
         app = conn.execute(
