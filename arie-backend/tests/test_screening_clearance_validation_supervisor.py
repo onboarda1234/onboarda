@@ -1,4 +1,5 @@
 import copy
+import json
 
 from validation_engine import validate_compliance_memo
 from supervisor_engine import run_memo_supervisor
@@ -127,6 +128,111 @@ def _production_shaped_memo():
     }
 
 
+def _generated_memo_for_screening_disposition(*, disposition_code=None, raw_match=False):
+    from memo_handler import build_compliance_memo
+
+    matched = bool(raw_match or disposition_code)
+    sanctions_record = {
+        "matched": matched,
+        "results": [{
+            "name": "Potential Watchlist Entity",
+            "is_sanctioned": True,
+            "match_categories": ["sanctions"],
+        }] if matched else [],
+        "source": "complyadvantage",
+        "provider": "ComplyAdvantage",
+        "api_status": "live",
+    }
+    app = {
+        "id": "app-validation-severity",
+        "ref": "ARF-VALIDATION-SEVERITY",
+        "company_name": "Validation Severity Ltd",
+        "brn": "BRN-VAL-001",
+        "country": "United Kingdom",
+        "sector": "Technology",
+        "entity_type": "SME",
+        "ownership_structure": "Single-tier direct ownership",
+        "operating_countries": "United Kingdom",
+        "incorporation_date": "2024-01-01",
+        "business_activity": "Software consulting",
+        "source_of_funds": "Trading revenue",
+        "expected_volume": "0-50000",
+        "risk_level": "LOW",
+        "risk_score": 24,
+        "risk_escalations": "[]",
+        "assigned_to": "Compliance Officer",
+        "prescreening_data": json.dumps({
+            "screening_report": {
+                "screened_at": "2026-05-17T00:00:00Z",
+                "screening_mode": "live",
+                "adverse_media_coverage": "full",
+                "adverse_media": {"status": "clear", "has_hit": False},
+                "company_screening": {
+                    "found": True,
+                    "source": "opencorporates",
+                    "sanctions": sanctions_record,
+                },
+                "director_screenings": [{
+                    "person_name": "Alex Director",
+                    "person_type": "director",
+                    "declared_pep": "No",
+                    "screening": {
+                        "matched": False,
+                        "results": [],
+                        "source": "complyadvantage",
+                        "provider": "ComplyAdvantage",
+                        "api_status": "live",
+                    },
+                }],
+                "ubo_screenings": [],
+                "overall_flags": [],
+                "total_hits": 1 if matched else 0,
+                "any_sanctions_hits": matched,
+                "has_company_screening_hit": matched,
+            }
+        }),
+    }
+    if disposition_code:
+        app["screening_reviews"] = [{
+            "subject_type": "entity",
+            "subject_name": "Validation Severity Ltd",
+            "disposition": "cleared" if disposition_code == "false_positive_cleared" else disposition_code,
+            "disposition_code": disposition_code,
+            "rationale": "Officer reviewed provider hit against registry records and retained case evidence.",
+            "notes": "Provider case CA-VAL-001 and registry extract retained.",
+            "evidence_reference": "Provider case CA-VAL-001 and registry extract retained.",
+            "reviewer_id": "co001",
+            "reviewer_name": "Compliance Officer",
+            "created_at": "2026-05-17T10:00:00Z",
+            "audit_confirmed": True,
+            "requires_four_eyes": disposition_code == "false_positive_cleared",
+            "second_reviewer_id": "sco001" if disposition_code == "false_positive_cleared" else None,
+            "second_reviewer_name": "Senior Compliance Officer" if disposition_code == "false_positive_cleared" else None,
+            "second_reviewed_at": "2026-05-17T10:30:00Z" if disposition_code == "false_positive_cleared" else None,
+            "second_rationale": "Second reviewer confirmed the false-positive rationale and evidence." if disposition_code == "false_positive_cleared" else None,
+        }]
+
+    directors = [{
+        "full_name": "Alex Director",
+        "nationality": "United Kingdom",
+        "date_of_birth": "1980-01-01",
+        "is_pep": "No",
+        "ownership_pct": 0,
+    }]
+    ubos = [{
+        "full_name": "Jamie UBO",
+        "nationality": "United Kingdom",
+        "date_of_birth": "1985-02-02",
+        "is_pep": "No",
+        "ownership_pct": 100,
+    }]
+    documents = [
+        {"doc_type": "Certificate of Incorporation", "verification_status": "verified"},
+        {"doc_type": "UBO Identity Document", "verification_status": "verified"},
+    ]
+    return build_compliance_memo(app, directors, ubos, documents)
+
+
 def test_false_positive_cleared_with_evidence_passes_validation_and_supervisor():
     memo = _production_shaped_memo()
 
@@ -138,6 +244,66 @@ def test_false_positive_cleared_with_evidence_passes_validation_and_supervisor()
     assert supervisor["mandatory_escalation"] is False
     assert supervisor["can_approve"] is True
     assert not any(c["category"] == "pep_inconsistency" for c in supervisor["contradictions"])
+
+
+def test_generated_clean_low_completed_clear_validates_as_pass():
+    memo, _, supervisor, validation = _generated_memo_for_screening_disposition()
+
+    assert memo["metadata"]["screening_state_summary"]["canonical_state"] == "completed_clear"
+    assert memo["metadata"]["screening_state_summary"]["defensible_clear"] is True
+    assert validation["validation_status"] == "pass"
+    assert not any(
+        issue["category"] == "ownership_risk" and issue["severity"] == "critical"
+        for issue in validation["issues"]
+    )
+    assert not any(
+        issue["category"] == "screening" and issue["severity"] == "warning"
+        for issue in validation["issues"]
+    )
+    assert supervisor["can_approve"] is True
+    assert validation["warning_count"] == 0
+
+
+def test_generated_false_positive_cleared_validates_as_pass():
+    memo, _, supervisor, validation = _generated_memo_for_screening_disposition(
+        disposition_code="false_positive_cleared"
+    )
+
+    summary = memo["metadata"]["screening_state_summary"]
+    screening_text = memo["sections"]["screening_results"]["content"].lower()
+    assert summary["canonical_state"] == "completed_match"
+    assert summary["has_formally_cleared_match"] is True
+    assert summary["approval_blocking"] is False
+    assert "false positive" in screening_text
+    assert "not a clear no-match result" in screening_text
+    assert validation["validation_status"] == "pass"
+    assert supervisor["can_approve"] is True
+    assert validation["warning_count"] == 0
+
+
+def test_generated_raw_completed_match_does_not_clean_pass_validation():
+    memo, _, _, validation = _generated_memo_for_screening_disposition(raw_match=True)
+
+    assert memo["metadata"]["screening_state_summary"]["approval_blocking"] is True
+    assert validation["validation_status"] != "pass"
+    assert any(
+        issue["category"] == "screening" and issue["severity"] == "critical"
+        for issue in validation["issues"]
+    )
+
+
+def test_generated_blocking_screening_dispositions_do_not_clean_pass_validation():
+    for disposition_code in ("true_match", "material_concern", "needs_more_information", "escalated_to_edd"):
+        memo, _, _, validation = _generated_memo_for_screening_disposition(
+            disposition_code=disposition_code
+        )
+
+        assert memo["metadata"]["screening_state_summary"]["approval_blocking"] is True, disposition_code
+        assert validation["validation_status"] != "pass", disposition_code
+        assert any(
+            issue["category"] == "screening" and issue["severity"] == "critical"
+            for issue in validation["issues"]
+        ), disposition_code
 
 
 def test_raw_completed_match_remains_supervisor_blocking():
