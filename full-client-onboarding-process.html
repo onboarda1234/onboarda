@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Onboarda — Full Client Onboarding Process</title>
+  <meta name="description" content="Plain-English end-to-end guide for onboarding a new client through Onboarda and RegMind." />
+  <style>
+    :root {
+      --brand: #2B2F8F;
+      --brand-2: #4F46E5;
+      --gold: #B8955A;
+      --green: #16a34a;
+      --blue: #1A75CB;
+      --amber: #d97706;
+      --red: #dc2626;
+      --ink: #111827;
+      --muted: #5f6675;
+      --soft: #f5f7fb;
+      --line: #e5e7eb;
+      --card: #ffffff;
+      --shadow: 0 20px 60px rgba(17, 24, 39, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(circle at top left, rgba(43, 47, 143, 0.10), transparent 32%), var(--soft);
+      line-height: 1.65;
+    }
+    a { color: inherit; }
+    .page { max-width: 1180px; margin: 0 auto; padding: 32px 20px 80px; }
+    .hero {
+      background: linear-gradient(135deg, #101223, #252a7a 58%, #4f46e5);
+      color: #fff;
+      border-radius: 28px;
+      padding: 48px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -80px;
+      top: -80px;
+      width: 280px;
+      height: 280px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.10);
+    }
+    .logo { display: inline-flex; align-items: center; gap: 10px; font-weight: 800; letter-spacing: -0.02em; }
+    .logo-mark { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: #fff; color: var(--brand); }
+    .eyebrow { text-transform: uppercase; letter-spacing: 0.12em; font-size: 12px; font-weight: 800; opacity: 0.78; margin-top: 34px; }
+    h1 { font-size: clamp(36px, 6vw, 68px); line-height: 1.02; margin: 10px 0 18px; letter-spacing: -0.055em; max-width: 850px; }
+    .hero p { max-width: 760px; color: rgba(255, 255, 255, 0.82); font-size: 18px; margin: 0; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 18px; border-radius: 999px; text-decoration: none; font-weight: 800; border: 1px solid rgba(255, 255, 255, 0.18); }
+    .button.primary { background: #fff; color: var(--brand); }
+    .button.secondary { color: #fff; background: rgba(255, 255, 255, 0.10); }
+    .quick-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 20px; }
+    .quick-card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; box-shadow: 0 10px 30px rgba(17, 24, 39, 0.04); }
+    .quick-card b { display: block; font-size: 24px; margin-bottom: 3px; }
+    .quick-card span { color: var(--muted); font-size: 13px; }
+    section { margin-top: 30px; }
+    .section-card { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 30px; box-shadow: 0 12px 38px rgba(17, 24, 39, 0.05); }
+    .section-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+    h2 { font-size: clamp(26px, 3vw, 38px); line-height: 1.1; margin: 0; letter-spacing: -0.035em; }
+    h3 { font-size: 20px; margin: 0 0 8px; letter-spacing: -0.02em; }
+    .lead { margin: 6px 0 0; color: var(--muted); max-width: 720px; }
+    .tag { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px; background: rgba(43, 47, 143, 0.08); color: var(--brand); font-size: 12px; font-weight: 900; white-space: nowrap; }
+
+    .swimlane { display: grid; grid-template-columns: 160px 1fr; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+    .lane-label { padding: 18px; background: #f8fafc; border-right: 1px solid var(--line); font-weight: 900; color: var(--brand); }
+    .lane-flow { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; padding: 16px; align-items: stretch; }
+    .flow-box { border: 1px solid var(--line); background: #fff; border-radius: 16px; padding: 14px; min-height: 118px; position: relative; }
+    .flow-box::after { content: "→"; position: absolute; right: -12px; top: 42%; color: var(--brand); font-weight: 900; }
+    .flow-box:last-child::after { display: none; }
+    .flow-box .icon { font-size: 24px; display: block; }
+    .flow-box b { display: block; margin: 5px 0 3px; }
+    .flow-box small { color: var(--muted); }
+
+    .journey { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .step-card { display: grid; grid-template-columns: 54px 1fr; gap: 16px; padding: 18px; border: 1px solid var(--line); border-radius: 20px; background: #fff; }
+    .number { width: 54px; height: 54px; border-radius: 18px; display: grid; place-items: center; font-weight: 900; color: #fff; background: linear-gradient(135deg, var(--brand), var(--brand-2)); font-size: 20px; }
+    .step-card p { margin: 0; color: var(--muted); }
+    .do-list { display: grid; gap: 8px; margin-top: 12px; }
+    .do-list div { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+
+    .decision-map { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .decision { border-radius: 18px; padding: 18px; border: 1px solid var(--line); background: #fff; }
+    .decision.low { border-top: 5px solid var(--green); }
+    .decision.medium { border-top: 5px solid var(--blue); }
+    .decision.high { border-top: 5px solid var(--amber); }
+    .decision.very-high { border-top: 5px solid var(--red); }
+    .decision b { display: block; font-size: 18px; }
+    .decision p { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
+
+    .checklist-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .checklist { border: 1px solid var(--line); border-radius: 18px; background: #fff; padding: 18px; }
+    .checklist ul { margin: 10px 0 0; padding: 0; list-style: none; }
+    .checklist li { padding: 9px 0 9px 30px; border-top: 1px solid #f0f1f4; position: relative; }
+    .checklist li::before { content: "□"; position: absolute; left: 0; color: var(--brand); font-weight: 900; }
+    .optional { color: var(--muted); font-size: 13px; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .plain-card { border: 1px solid var(--line); border-radius: 18px; padding: 20px; background: #fff; }
+    .plain-card p, .plain-card li { color: var(--muted); }
+    .plain-card ul, .plain-card ol { margin: 10px 0 0; padding-left: 22px; }
+
+    .timeline { position: relative; display: grid; gap: 14px; }
+    .timeline::before { content: ""; position: absolute; left: 23px; top: 10px; bottom: 10px; width: 3px; background: #e7e9f3; border-radius: 999px; }
+    .time-row { display: grid; grid-template-columns: 48px 1fr; gap: 14px; position: relative; }
+    .dot { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: var(--brand); color: #fff; font-weight: 900; z-index: 1; }
+    .time-content { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 16px; }
+    .time-content p { margin: 0; color: var(--muted); }
+
+    .visual-note { display: flex; gap: 14px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 18px; padding: 16px; color: var(--muted); }
+    .visual-note strong { color: var(--ink); }
+    .glossary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .gloss { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 14px; }
+    .gloss b { color: var(--brand); }
+    .gloss p { margin: 5px 0 0; color: var(--muted); font-size: 14px; }
+    .footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 34px; }
+
+    @media (max-width: 900px) {
+      .hero { padding: 32px 24px; }
+      .quick-strip, .journey, .decision-map, .checklist-grid, .two-col, .glossary { grid-template-columns: 1fr; }
+      .swimlane { grid-template-columns: 1fr; }
+      .lane-label { border-right: 0; border-bottom: 1px solid var(--line); }
+      .lane-flow { grid-template-columns: 1fr; }
+      .flow-box::after { content: "↓"; right: 18px; top: auto; bottom: -16px; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { padding: 0; max-width: none; }
+      .hero, .section-card { box-shadow: none; border-radius: 0; }
+      .hero-actions { display: none; }
+      section { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div class="logo"><span class="logo-mark">O</span> Onboarda + RegMind</div>
+      <div class="eyebrow">Plain-English operating guide</div>
+      <h1>Full onboarding process for a new client</h1>
+      <p>This guide explains every step from first registration to final approval in simple language. It is written for someone new to compliance onboarding and can be followed without using any other tool.</p>
+      <div class="hero-actions">
+        <a class="button primary" href="#overview">Start with the map</a>
+        <a class="button secondary" href="#documents">Jump to document checklist</a>
+        <a class="button secondary" href="#officer">Officer review steps</a>
+      </div>
+    </header>
+
+    <div class="quick-strip" aria-label="Key facts">
+      <div class="quick-card"><b>2</b><span>Main work areas: Onboarda for clients, RegMind for officers.</span></div>
+      <div class="quick-card"><b>4</b><span>Document groups: company, people, business, other.</span></div>
+      <div class="quick-card"><b>5</b><span>Risk checks: who, where, what service, industry, channel.</span></div>
+      <div class="quick-card"><b>3</b><span>Possible final outcomes: approve, ask for more, or decline.</span></div>
+    </div>
+
+    <section id="overview" class="section-card">
+      <div class="section-title">
+        <div>
+          <h2>The whole process at a glance</h2>
+          <p class="lead">Think of onboarding like opening a secure gate. The client provides information and documents; the compliance team checks them; the business accepts only clients it can safely support.</p>
+        </div>
+        <span class="tag">Visual map</span>
+      </div>
+
+      <div class="swimlane" aria-label="Client and officer onboarding flow">
+        <div class="lane-label">Client in Onboarda</div>
+        <div class="lane-flow">
+          <div class="flow-box"><span class="icon">👋</span><b>Register</b><small>Create account and start an application.</small></div>
+          <div class="flow-box"><span class="icon">📝</span><b>Answer questions</b><small>Tell us who the company is and what it does.</small></div>
+          <div class="flow-box"><span class="icon">📎</span><b>Upload documents</b><small>Provide company and identity documents.</small></div>
+          <div class="flow-box"><span class="icon">📬</span><b>Receive outcome</b><small>Approved, more information needed, or declined.</small></div>
+        </div>
+        <div class="lane-label">Officer in RegMind</div>
+        <div class="lane-flow">
+          <div class="flow-box"><span class="icon">📥</span><b>Open case</b><small>Find the application in the work queue.</small></div>
+          <div class="flow-box"><span class="icon">📊</span><b>Review risk</b><small>Check risk score, screening, and warning signs.</small></div>
+          <div class="flow-box"><span class="icon">🛡️</span><b>Check evidence</b><small>Review documents, memo, and supervisor findings.</small></div>
+          <div class="flow-box"><span class="icon">✅</span><b>Decide</b><small>Approve, request more information, or decline.</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="client" class="section-card">
+      <div class="section-title">
+        <div>
+          <h2>Client journey: what the applicant does</h2>
+          <p class="lead">These are the steps the person applying on behalf of the company follows in the Onboarda client portal.</p>
+        </div>
+        <span class="tag">Client side</span>
+      </div>
+
+      <div class="journey">
+        <article class="step-card">
+          <div class="number">1</div>
+          <div>
+            <h3>Create an account</h3>
+            <p>The applicant enters their name, work email, mobile number, password, and agrees to the portal terms.</p>
+            <div class="do-list"><div>✅ Use a work email address.</div><div>✅ Save login details safely.</div></div>
+          </div>
+        </article>
+        <article class="step-card">
+          <div class="number">2</div>
+          <div>
+            <h3>Start the company application</h3>
+            <p>The applicant enters the company name, registration number, address, incorporation details, website, and licence information if relevant.</p>
+            <div class="do-list"><div>✅ Match names exactly to official documents.</div><div>✅ Include full country names and addresses.</div></div>
+          </div>
+        </article>
+        <article class="step-card">
+          <div class="number">3</div>
+          <div>
+            <h3>List the people behind the company</h3>
+            <p>The applicant adds directors, shareholders in the ownership chain, and beneficial owners with 20% or more ownership.</p>
+            <div class="do-list"><div>✅ Add date of birth and nationality.</div><div>✅ Mark anyone who is a politically exposed person.</div></div>
+          </div>
+        </article>
+        <article class="step-card">
+          <div class="number">4</div>
+          <div>
+            <h3>Explain the business</h3>
+            <p>The applicant describes the sector, countries of operation, target markets, account purpose, expected payments, currencies, source of funds, and management team.</p>
+            <div class="do-list"><div>✅ Be specific and consistent.</div><div>✅ Explain how money will enter and leave the account.</div></div>
+          </div>
+        </article>
+        <article class="step-card">
+          <div class="number">5</div>
+          <div>
+            <h3>Accept data and monitoring notices</h3>
+            <p>The applicant confirms the information is true and agrees that the business may be checked for compliance and monitored after approval.</p>
+            <div class="do-list"><div>✅ Only submit if authorised to represent the company.</div></div>
+          </div>
+        </article>
+        <article class="step-card">
+          <div class="number">6</div>
+          <div>
+            <h3>Review pricing and upload documents</h3>
+            <p>After the first risk check, the applicant accepts the pricing schedule and uploads the required documents.</p>
+            <div class="do-list"><div>✅ Upload clear files.</div><div>✅ Review the summary before final submission.</div></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="risk" class="section-card">
+      <div class="section-title">
+        <div>
+          <h2>What the first risk check means</h2>
+          <p class="lead">The system groups applications so the compliance team can spend more time on complex or higher-risk cases. This does not automatically mean approval or rejection.</p>
+        </div>
+        <span class="tag">Decision point</span>
+      </div>
+      <div class="decision-map">
+        <div class="decision low"><b>Low risk</b><p>Usually moves through standard review with fewer extra questions.</p></div>
+        <div class="decision medium"><b>Medium risk</b><p>Usually continues to pricing and document submission, with normal officer checks.</p></div>
+        <div class="decision high"><b>High risk</b><p>May need an initial officer review before the client can continue.</p></div>
+        <div class="decision very-high"><b>Very high risk</b><p>Requires senior attention and may need extra evidence before any approval.</p></div>
+      </div>
+      <div class="visual-note" style="margin-top:16px;"><span>💡</span><div><strong>Simple rule:</strong> Higher risk means “look closer,” not “reject automatically.” Officers must still review the facts and evidence.</div></div>
+    </section>
+
+    <section id="documents" class="section-card">
+      <div class="section-title">
+        <div>
+          <h2>Document checklist</h2>
+          <p class="lead">Documents are grouped so beginners can see what proves the company exists, who controls it, and whether the business activity makes sense.</p>
+        </div>
+        <span class="tag">Checklist</span>
+      </div>
+
+      <div class="checklist-grid">
+        <div class="checklist">
+          <h3>🏢 A — Company documents</h3>
+          <p class="optional">Purpose: prove the legal company exists and who is allowed to act for it.</p>
+          <ul>
+            <li>Certificate of Incorporation</li>
+            <li>Memorandum or constitution documents</li>
+            <li>Shareholder register</li>
+            <li>Register of directors</li>
+            <li>Latest financial statements or management accounts</li>
+            <li>Proof of registered address</li>
+            <li>Board resolution authorising the signatory</li>
+            <li>Company structure chart</li>
+            <li>Regulatory licence, if applicable</li>
+            <li>Bank reference letter for higher-risk cases, where requested</li>
+          </ul>
+        </div>
+        <div class="checklist">
+          <h3>👤 B — People documents</h3>
+          <p class="optional">Purpose: prove the identity and address of directors and key owners.</p>
+          <ul>
+            <li>Passport or government identity document for each director</li>
+            <li>Proof of address for each director</li>
+            <li>Passport or government identity document for each beneficial owner</li>
+            <li>Proof of address for each beneficial owner</li>
+            <li>CV or LinkedIn profile where requested</li>
+            <li>Politically exposed person declaration, if relevant</li>
+            <li>Bank reference letter for a politically exposed person, if requested</li>
+          </ul>
+        </div>
+        <div class="checklist">
+          <h3>📄 C — Business evidence</h3>
+          <p class="optional">Purpose: help the reviewer understand what the company does. These are usually optional but helpful.</p>
+          <ul>
+            <li>Sample customer or supplier contracts</li>
+            <li>Source of wealth evidence</li>
+            <li>Source of funds evidence</li>
+            <li>Recent bank statements</li>
+            <li>AML/CFT policy, if regulated or relevant</li>
+          </ul>
+        </div>
+        <div class="checklist">
+          <h3>📂 D — Other support</h3>
+          <p class="optional">Purpose: give extra proof when the normal list does not cover the situation.</p>
+          <ul>
+            <li>Legal opinions</li>
+            <li>Compliance certificates</li>
+            <li>Extra contracts or invoices</li>
+            <li>Explanatory letters</li>
+            <li>Any document requested by the compliance officer</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="officer" class="section-card">
+      <div class="section-title">
+        <div>
+          <h2>Officer journey: how the case is reviewed</h2>
+          <p class="lead">The officer uses RegMind to move from “application received” to a clear and recorded decision.</p>
+        </div>
+        <span class="tag">Back office</span>
+      </div>
+
+      <div class="timeline">
+        <div class="time-row"><div class="dot">1</div><div class="time-content"><h3>Open the application queue</h3><p>Filter by status, risk level, assigned officer, or enhanced review status. Open the client’s case.</p></div></div>
+        <div class="time-row"><div class="dot">2</div><div class="time-content"><h3>Read the overview</h3><p>Check company information, people involved, business profile, risk rating, and any previous officer corrections.</p></div></div>
+        <div class="time-row"><div class="dot">3</div><div class="time-content"><h3>Review screening results</h3><p>Look for sanctions, PEP, adverse-media signals included in screening data, and any alerts that need explanation.</p></div></div>
+        <div class="time-row"><div class="dot">4</div><div class="time-content"><h3>Check documents</h3><p>Confirm documents are clear, current, match the application, and support the ownership and business story.</p></div></div>
+        <div class="time-row"><div class="dot">5</div><div class="time-content"><h3>Generate and review the memo</h3><p>The memo summarises the case. The officer validates it, checks any warnings, and signs off that they have reviewed the advisory content.</p></div></div>
+        <div class="time-row"><div class="dot">6</div><div class="time-content"><h3>Run supervisor analysis</h3><p>The supervisor view highlights consistency issues or reasons to escalate. It supports the officer but does not replace human judgment.</p></div></div>
+        <div class="time-row"><div class="dot">7</div><div class="time-content"><h3>Record the final action</h3><p>Approve, decline, request more information, correct a case detail, override with justification, reassign, or escalate.</p></div></div>
+      </div>
+    </section>
+
+    <section id="outcomes" class="section-card">
+      <div class="section-title">
+        <div>
+          <h2>Possible outcomes and what to do next</h2>
+          <p class="lead">Every outcome should be easy for the client and the team to understand.</p>
+        </div>
+        <span class="tag">Final stage</span>
+      </div>
+      <div class="two-col">
+        <div class="plain-card">
+          <h3>✅ Approve</h3>
+          <p>Use when the information, risk level, documents, screening, memo, and officer review support accepting the client.</p>
+          <ul>
+            <li>Record the reason for approval.</li>
+            <li>Confirm any conditions or monitoring requirements.</li>
+            <li>Notify the client that onboarding is complete.</li>
+          </ul>
+        </div>
+        <div class="plain-card">
+          <h3>📋 Request more information</h3>
+          <p>Use when the case may be acceptable, but something is missing, unclear, expired, or inconsistent.</p>
+          <ul>
+            <li>Ask for specific items only.</li>
+            <li>Use plain language.</li>
+            <li>Review the response before making a final decision.</li>
+          </ul>
+        </div>
+        <div class="plain-card">
+          <h3>⬆️ Escalate</h3>
+          <p>Use when a senior officer should review the case, especially for higher-risk, complex, or unusual situations.</p>
+          <ul>
+            <li>Explain why escalation is needed.</li>
+            <li>Highlight the key evidence and concerns.</li>
+            <li>Do not approve until escalation is resolved.</li>
+          </ul>
+        </div>
+        <div class="plain-card">
+          <h3>❌ Decline</h3>
+          <p>Use when the risks, missing evidence, screening concerns, or business facts do not support onboarding.</p>
+          <ul>
+            <li>Record the reason clearly.</li>
+            <li>Keep the audit trail complete.</li>
+            <li>Notify the client using approved wording.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="common-mistakes" class="section-card">
+      <div class="section-title">
+        <div>
+          <h2>Common mistakes to avoid</h2>
+          <p class="lead">Most delays happen because information does not match or documents are incomplete.</p>
+        </div>
+        <span class="tag">Quality tips</span>
+      </div>
+      <div class="two-col">
+        <div class="plain-card">
+          <h3>For clients</h3>
+          <ul>
+            <li>Do not use shortened company names if the official document shows the full name.</li>
+            <li>Do not upload blurry or cut-off scans.</li>
+            <li>Do not leave ownership percentages unclear.</li>
+            <li>Do not describe the business differently in different fields.</li>
+            <li>Do not submit before checking the final review page.</li>
+          </ul>
+        </div>
+        <div class="plain-card">
+          <h3>For officers</h3>
+          <ul>
+            <li>Do not rely only on the score; read the case facts.</li>
+            <li>Do not approve while required documents are missing.</li>
+            <li>Do not ignore mismatches between names, ownership, countries, and documents.</li>
+            <li>Do not leave decision notes vague.</li>
+            <li>Do not treat AI advisory text as the final decision.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="glossary" class="section-card">
+      <div class="section-title">
+        <div>
+          <h2>Simple glossary</h2>
+          <p class="lead">Short explanations of words that often appear during onboarding.</p>
+        </div>
+        <span class="tag">No jargon</span>
+      </div>
+      <div class="glossary">
+        <div class="gloss"><b>KYC</b><p>“Know Your Customer” — checking who the client is.</p></div>
+        <div class="gloss"><b>AML</b><p>Anti-money laundering — checks to reduce financial crime risk.</p></div>
+        <div class="gloss"><b>PEP</b><p>A politically exposed person, their close family, or close associates.</p></div>
+        <div class="gloss"><b>UBO</b><p>The real person who ultimately owns or controls part of the company.</p></div>
+        <div class="gloss"><b>Risk score</b><p>A guide that helps decide how closely the application must be reviewed.</p></div>
+        <div class="gloss"><b>Enhanced review</b><p>A closer review for complex or higher-risk applications.</p></div>
+        <div class="gloss"><b>Source of funds</b><p>Where the money entering the account will come from.</p></div>
+        <div class="gloss"><b>Source of wealth</b><p>How the company or owner built up their overall wealth.</p></div>
+        <div class="gloss"><b>Memo</b><p>A written case summary that helps the officer make and record a decision.</p></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <div class="section-title">
+        <div>
+          <h2>Printable one-page checklist</h2>
+          <p class="lead">Use this when walking a new client or new team member through the process.</p>
+        </div>
+        <span class="tag">Quick use</span>
+      </div>
+      <div class="plain-card">
+        <ol>
+          <li>Client creates an Onboarda account.</li>
+          <li>Client enters company details, address, licence status, people, business activity, funds, and declarations.</li>
+          <li>System performs the first risk grouping.</li>
+          <li>Client accepts pricing if allowed to continue.</li>
+          <li>Client uploads company documents, identity documents, optional business evidence, and any extra requested files.</li>
+          <li>Client reviews the application summary and submits.</li>
+          <li>Officer opens the case in RegMind.</li>
+          <li>Officer reviews risk, screening, documents, memo, and supervisor findings.</li>
+          <li>Officer approves, requests more information, escalates, or declines.</li>
+          <li>If approved, the client is onboarded and moves into ongoing monitoring.</li>
+        </ol>
+      </div>
+    </section>
+
+    <div class="footer">
+      Created for Onboarda / RegMind onboarding operations. Last updated: 17 May 2026.
+    </div>
+  </main>
+</body>
+</html>
