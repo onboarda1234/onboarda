@@ -1273,6 +1273,7 @@ _SCREENING_DISPOSITION_FLOOR_CODES = {
 _SCREENING_DISPOSITION_EDD_CODES = {
     "true_match",
     "material_concern",
+    "needs_more_information",
     "escalated_to_edd",
 }
 
@@ -1368,9 +1369,9 @@ def _screening_disposition_floor_signal(db, app):
                     "reason_code": "screening_needs_more_information_floor",
                     "reason_text": (
                         "Screening disposition floor: needs_more_information keeps the match unresolved "
-                        "and requires at least MEDIUM final risk until formally resolved"
+                        "and routes the case to EDD until formally resolved"
                     ),
-                    "sets_edd_lane": False,
+                    "sets_edd_lane": True,
                 }
             return {
                 "code": code,
@@ -1430,6 +1431,15 @@ def _apply_screening_disposition_floor_for_recompute(db, app, risk):
     if signal.get("sets_edd_lane"):
         risk["lane"] = "EDD"
     return signal
+
+
+def _screening_floor_edd_trigger_flags(signal):
+    if not isinstance(signal, dict) or not signal.get("sets_edd_lane"):
+        return []
+    code = str(signal.get("code") or "").strip().lower()
+    if code == "needs_more_information":
+        return ["screening_needs_more_information"]
+    return ["material_screening_concern"]
 
 
 def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routing_policy=True):
@@ -1613,6 +1623,7 @@ def recompute_risk(db, app_id, reason, user=None, log_audit_fn=None, apply_routi
                     db=db,
                     app_row=(dict(_app_post) if _app_post else app),
                     risk_dict=_risk_dict,
+                    edd_trigger_flags=_screening_floor_edd_trigger_flags(screening_floor),
                     user=user,
                     client_ip="",
                     source=SOURCE_RISK_RECOMPUTE,

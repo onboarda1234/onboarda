@@ -10308,6 +10308,22 @@ _SCREENING_LEGACY_CODE_TO_CANONICAL = {
     "documentation_required": "needs_more_information",
 }
 
+_SCREENING_WORKFLOW_EDD_DISPOSITIONS = {
+    "true_match",
+    "material_concern",
+    "needs_more_information",
+    "escalated_to_edd",
+}
+_SCREENING_WORKFLOW_RISK_DISPOSITIONS = (
+    _SCREENING_WORKFLOW_EDD_DISPOSITIONS | {"false_positive_cleared"}
+)
+_SCREENING_WORKFLOW_TERMINAL_STATUSES = {
+    "approved",
+    "rejected",
+    "withdrawn",
+    "edd_approved",
+}
+
 _SCREENING_REVIEW_RATIONALE_MIN_CHARS = 12
 _SCREENING_CLEAR_RATIONALE_MIN_CHARS = 40
 _SCREENING_CLEAR_RATIONALE_MIN_WORDS = 8
@@ -10603,6 +10619,154 @@ def _screening_review_payload_fields(review):
 
 def _screening_review_is_resolved(review):
     return _screening_review_payload_fields(review)["review_resolved"]
+
+
+def _screening_disposition_edd_trigger_flags(canonical_disposition):
+    code = str(canonical_disposition or "").strip().lower()
+    if code == "needs_more_information":
+        return ["screening_needs_more_information"]
+    if code in _SCREENING_WORKFLOW_EDD_DISPOSITIONS:
+        return ["material_screening_concern"]
+    return []
+
+
+def _screening_workflow_snapshot(app):
+    app = dict(app or {})
+    return {
+        "status": app.get("status"),
+        "onboarding_lane": app.get("onboarding_lane"),
+        "risk_level": app.get("risk_level"),
+        "final_risk_level": app.get("final_risk_level"),
+        "base_risk_level": app.get("base_risk_level"),
+        "pre_approval_decision": app.get("pre_approval_decision"),
+    }
+
+
+def _normalise_screening_disposition_workflow_state(
+    db,
+    app_id,
+    app_ref,
+    canonical_disposition,
+    user,
+    ip_address,
+    *,
+    review_complete=True,
+    before_state=None,
+    routing_outcome=None,
+):
+    """Keep application.status/onboarding_lane aligned with screening review truth.
+
+    Policy:
+    * unresolved raw/material screening concerns route to EDD;
+    * needs_more_information is explicitly treated as unresolved and EDD-routed;
+    * a completed false_positive_cleared review may exit edd_required only when
+      recomputed lane/risk no longer require EDD.
+    """
+    code = str(canonical_disposition or "").strip().lower()
+    if code not in _SCREENING_WORKFLOW_RISK_DISPOSITIONS:
+        return {"changed": False, "reason": None}
+
+    row = db.execute(
+        """
+        SELECT id, ref, status, onboarding_lane, risk_level, final_risk_level,
+               base_risk_level, pre_approval_decision
+        FROM applications WHERE id = ?
+        """,
+        (app_id,),
+    ).fetchone()
+    if not row:
+        return {"changed": False, "reason": "application_not_found"}
+
+    current = dict(row)
+    previous = _screening_workflow_snapshot(before_state or current)
+    current_snapshot = _screening_workflow_snapshot(current)
+    target_status = current.get("status")
+    target_lane = current.get("onboarding_lane")
+    reason = None
+    terminal = str(target_status or "").strip().lower() in _SCREENING_WORKFLOW_TERMINAL_STATUSES
+
+    if code in _SCREENING_WORKFLOW_EDD_DISPOSITIONS:
+        target_lane = "EDD"
+        if not terminal:
+            target_status = "edd_required"
+        reason = f"screening_disposition_{code}_requires_edd_workflow"
+    elif code == "false_positive_cleared" and review_complete:
+        current_lane = str(current.get("onboarding_lane") or "").strip().upper()
+        current_status = str(current.get("status") or "").strip().lower()
+        if current_status == "edd_required" and current_lane != "EDD":
+            target_status = "in_review"
+            reason = "false_positive_clearance_removed_screening_edd_trigger"
+
+    update_needed = (
+        target_status != current.get("status")
+        or target_lane != current.get("onboarding_lane")
+    )
+    if update_needed:
+        db.execute(
+            "UPDATE applications SET status = ?, onboarding_lane = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (target_status, target_lane, app_id),
+        )
+
+    after_row = db.execute(
+        """
+        SELECT id, ref, status, onboarding_lane, risk_level, final_risk_level,
+               base_risk_level, pre_approval_decision
+        FROM applications WHERE id = ?
+        """,
+        (app_id,),
+    ).fetchone()
+    after = dict(after_row) if after_row else current
+    after_snapshot = _screening_workflow_snapshot(after)
+    changed = (
+        previous.get("status") != after_snapshot.get("status")
+        or previous.get("onboarding_lane") != after_snapshot.get("onboarding_lane")
+    )
+
+    result = {
+        "changed": changed,
+        "updated_by_normalizer": update_needed,
+        "disposition_code": code,
+        "reason": reason,
+        "previous_status": previous.get("status"),
+        "previous_lane": previous.get("onboarding_lane"),
+        "new_status": after_snapshot.get("status"),
+        "new_lane": after_snapshot.get("onboarding_lane"),
+    }
+    if changed:
+        try:
+            db.execute(
+                """
+                INSERT INTO audit_log
+                    (user_id, user_name, user_role, action, target, detail,
+                     ip_address, before_state, after_state)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    (user or {}).get("sub") or "system",
+                    (user or {}).get("name") or "system",
+                    (user or {}).get("role") or "system",
+                    "screening.status_lane_normalized",
+                    "application:" + str(app_ref or current.get("ref") or app_id),
+                    json.dumps({
+                        "disposition_code": code,
+                        "reason": reason,
+                        "previous_status": previous.get("status"),
+                        "previous_lane": previous.get("onboarding_lane"),
+                        "new_status": after_snapshot.get("status"),
+                        "new_lane": after_snapshot.get("onboarding_lane"),
+                        "actor": (user or {}).get("sub") or "system",
+                        "actor_role": (user or {}).get("role") or "system",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "routing_outcome": routing_outcome,
+                    }, default=str, sort_keys=True),
+                    ip_address or "",
+                    json.dumps(previous, default=str, sort_keys=True),
+                    json.dumps(after_snapshot, default=str, sort_keys=True),
+                ),
+            )
+        except Exception as exc:
+            logger.warning("Failed to audit screening status/lane normalization for %s: %s", app_ref, exc)
+    return result
 
 
 def _screening_structured_adverse_media_hit(value):
@@ -11692,7 +11856,7 @@ class ScreeningReviewHandler(BaseHandler):
 
         db = get_db()
         app = db.execute(
-            "SELECT id, ref, company_name, country, prescreening_data FROM applications WHERE id=? OR ref=?",
+            "SELECT * FROM applications WHERE id=? OR ref=?",
             (app_id, app_id),
         ).fetchone()
         if not app:
@@ -11703,6 +11867,7 @@ class ScreeningReviewHandler(BaseHandler):
             return self.error("Application not found", 404)
 
         app = dict(app)
+        workflow_before = dict(app)
         existing_review = db.execute(
             """
             SELECT * FROM screening_reviews
@@ -11787,22 +11952,40 @@ class ScreeningReviewHandler(BaseHandler):
             kwargs["commit"] = False
             self.log_audit(audit_user, action, target, detail, **kwargs)
 
-        # EX-09: Recompute risk when screening review indicates escalation
+        review_status = "second_review_complete" if is_second_review else "second_review_required" if requires_four_eyes else "complete"
+        review_complete = not (requires_four_eyes and not is_second_review)
+
+        # EX-09: Recompute risk when screening review changes canonical
+        # screening truth. Blocking dispositions explicitly route to EDD;
+        # valid false-positive clearance can remove a stale EDD workflow state.
         risk_recomputed = False
         routing_outcome = None
-        if disposition == "escalated":
-            rr = recompute_risk(db, app["id"], "screening_review_escalated",
-                                user=user, log_audit_fn=_screening_audit_in_tx)
+        if canonical_disposition in _SCREENING_WORKFLOW_RISK_DISPOSITIONS:
+            explicit_edd_routing = canonical_disposition in _SCREENING_WORKFLOW_EDD_DISPOSITIONS
+            rr = recompute_risk(
+                db,
+                app["id"],
+                "screening_review_disposition_changed",
+                user=user,
+                log_audit_fn=_screening_audit_in_tx,
+                apply_routing_policy=not explicit_edd_routing,
+            )
             risk_recomputed = rr.get("recomputed", False)
-            if canonical_disposition == "escalated_to_edd":
+            if explicit_edd_routing:
                 try:
                     from routing_actuator import apply_routing_decision, SOURCE_SCREENING_UPDATE
 
                     routing_app = db.execute("SELECT * FROM applications WHERE id = ?", (app["id"],)).fetchone()
+                    risk_dict = {
+                        "score": rr.get("new_score"),
+                        "level": rr.get("new_level"),
+                        "final_risk_level": rr.get("final_risk_level") or rr.get("new_level"),
+                        "base_risk_level": rr.get("base_risk_level") or rr.get("new_level"),
+                    }
                     routing_outcome = apply_routing_decision(
                         db=db,
                         app_row=dict(routing_app) if routing_app else app,
-                        risk_dict=rr.get("risk") if isinstance(rr, dict) else {},
+                        risk_dict=risk_dict,
                         screening_summary={
                             "terminal": True,
                             "has_terminal_match": True,
@@ -11810,7 +11993,7 @@ class ScreeningReviewHandler(BaseHandler):
                             "has_failed": False,
                             "has_not_configured": False,
                         },
-                        edd_trigger_flags=["material_screening_concern"],
+                        edd_trigger_flags=_screening_disposition_edd_trigger_flags(canonical_disposition),
                         user=user,
                         client_ip=self.get_client_ip(),
                         source=SOURCE_SCREENING_UPDATE,
@@ -11837,7 +12020,17 @@ class ScreeningReviewHandler(BaseHandler):
                     db.close()
                     return self.error(reason, 500)
 
-        review_status = "second_review_complete" if is_second_review else "second_review_required" if requires_four_eyes else "complete"
+        workflow_normalization = _normalise_screening_disposition_workflow_state(
+            db,
+            app["id"],
+            app["ref"],
+            canonical_disposition,
+            user,
+            self.get_client_ip(),
+            review_complete=review_complete,
+            before_state=workflow_before,
+            routing_outcome=routing_outcome,
+        )
         review = dict(db.execute(
             """
             SELECT application_id, subject_type, subject_name, disposition, notes,
@@ -11865,6 +12058,7 @@ class ScreeningReviewHandler(BaseHandler):
             "four_eyes_status": review_status,
             "sensitivity_flags": sensitivity_flags,
             "routing_outcome": routing_outcome,
+            "workflow_normalization": workflow_normalization,
         }, default=str, sort_keys=True)
         self.log_audit(
             user, "Screening Review", app["ref"],
@@ -11902,6 +12096,8 @@ class ScreeningReviewHandler(BaseHandler):
             response["risk_recomputed"] = True
         if routing_outcome is not None:
             response["routing_outcome"] = routing_outcome
+        if workflow_normalization.get("changed"):
+            response["workflow_normalization"] = workflow_normalization
         self.success(response, status=status_code)
 
 
