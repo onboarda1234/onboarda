@@ -11865,7 +11865,7 @@ class ScreeningReviewHandler(BaseHandler):
             "four_eyes_status": review_status,
             "sensitivity_flags": sensitivity_flags,
             "routing_outcome": routing_outcome,
-        }, sort_keys=True)
+        }, default=str, sort_keys=True)
         self.log_audit(
             user, "Screening Review", app["ref"],
             audit_detail, db=db, commit=False,
