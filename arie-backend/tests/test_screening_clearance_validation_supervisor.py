@@ -197,6 +197,9 @@ def test_declared_pep_denial_still_fails():
 def test_real_risk_decision_contradiction_still_fails():
     memo = _production_shaped_memo()
     memo["metadata"]["risk_rating"] = "HIGH"
+    memo["metadata"]["original_risk_level"] = "HIGH"
+    memo["metadata"]["aggregated_risk"] = "HIGH"
+    memo["metadata"]["agent5_input_contract"]["final_risk_level"] = "HIGH"
     memo["metadata"]["approval_recommendation"] = "APPROVE"
     memo["sections"]["compliance_decision"]["decision"] = "APPROVE"
     memo["sections"]["compliance_decision"]["content"] = "Unconditional approval."
