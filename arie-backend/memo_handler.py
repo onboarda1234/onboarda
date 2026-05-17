@@ -700,31 +700,31 @@ def build_compliance_memo(app, directors, ubos, documents):
     elif screening_formally_cleared_match:
         _screening_qualifier = (
             " Live provider screening returned match(es) that have been formally cleared "
-            "through officer disposition evidence; no unresolved screening escalation remains. "
+            "as false positives through officer disposition evidence; no unresolved screening escalation remains. "
             "This is not a no-match result."
         )
         _screening_completion_phrase = (
-            "Sanctions / PEP / watchlist screening completed with match(es) formally cleared by officer disposition"
+            "Sanctions / PEP / watchlist screening completed with match(es) formally cleared as false positives by officer disposition"
         )
         _screening_fincrime_phrase = (
-            "Sanctions / PEP / watchlist screening returned live terminal match(es) that were formally cleared "
+            "Sanctions / PEP / watchlist screening returned live terminal match(es) that were formally cleared as false positives "
             "with documented officer disposition evidence. This is a cleared-match result, not a no-match result."
         )
         _screening_results_phrase = (
-            "Sanctions Screening: live provider screening returned match(es) that were formally cleared "
+            "Sanctions Screening: live provider screening returned match(es) that were formally cleared as false positives "
             "by officer disposition evidence. This is not a clear no-match result."
         )
         _screening_mitigation_phrase = (
-            "Live screening match(es) formally cleared through documented officer disposition evidence"
+            "Live screening match(es) formally cleared as false positives through documented officer disposition evidence"
         )
         _screening_ai_factor_phrase = (
-            "Screening completed with formally cleared provider match(es); no unresolved screening escalation remains"
+            "Screening completed with provider match(es) formally cleared as false positives; no unresolved screening escalation remains"
         )
         _screening_content_factor_phrase = (
-            "Screening completed with formally cleared provider match(es)."
+            "Screening completed with provider match(es) formally cleared as false positives."
         )
-        _screening_key_finding = "Sanctions / PEP / watchlist screening match(es) formally cleared"
-        _screening_review_check = "Sanctions screening match(es) formally cleared through officer disposition evidence"
+        _screening_key_finding = "Sanctions / PEP / watchlist screening match(es) formally cleared as false positives"
+        _screening_review_check = "Sanctions screening match(es) formally cleared as false positives through officer disposition evidence"
         _screening_decision_descriptor = "formally cleared match"
     elif screening_is_terminal_match:
         _screening_qualifier = (

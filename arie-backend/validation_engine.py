@@ -8,6 +8,7 @@ Provides:
     - generate_fallback_memo() — Safe fallback when AI pipeline fails
 """
 import logging
+import re
 from datetime import datetime
 
 logger = logging.getLogger("arie")
@@ -25,6 +26,25 @@ def _has_formally_cleared_screening_match(metadata):
         and summary.get("has_formally_cleared_match")
         and not summary.get("has_uncleared_completed_match")
         and not summary.get("approval_blocking")
+    )
+
+
+def _has_defensible_clear_screening(metadata):
+    summary = _screening_summary(metadata)
+    return bool(
+        summary.get("canonical_state") == "completed_clear"
+        and summary.get("defensible_clear")
+        and summary.get("terminal")
+        and not summary.get("approval_blocking")
+    )
+
+
+def _screening_is_approval_blocking(metadata):
+    summary = _screening_summary(metadata)
+    return bool(
+        summary.get("approval_blocking")
+        or summary.get("has_uncleared_completed_match")
+        or summary.get("completed_match_blocking")
     )
 
 
@@ -314,20 +334,82 @@ def validate_compliance_memo(memo_data):
     # ── 5. SCREENING DEFENSIBILITY (weight: 1.0) ──
     screening = sections.get("screening_results", {})
     screen_content = screening.get("content", "")
+    screen_lower = screen_content.lower()
     screen_score = 0
+    screening_blocks_approval = _screening_is_approval_blocking(metadata)
+    screening_formally_cleared = _has_formally_cleared_screening_match(metadata)
+    screening_defensible_clear = _has_defensible_clear_screening(metadata)
 
-    if "simulated" in screen_content.lower():
+    if screening_blocks_approval:
+        summary = _screening_summary(metadata)
+        issues.append({
+            "category": "screening",
+            "severity": "critical",
+            "description": (
+                "Screening truth remains approval-blocking "
+                f"(state={summary.get('canonical_state') or 'unknown'}, "
+                f"disposition={summary.get('review_disposition_code') or 'unresolved'}). "
+                "The memo cannot receive a clean validation pass until screening is formally resolved."
+            ),
+            "fix": "Complete a valid screening disposition or EDD escalation and regenerate the memo before approval reliance.",
+        })
+    elif "simulated" in screen_lower:
         issues.append({"category": "screening", "severity": "critical", "description": "Screening results reference 'simulated' data. This is not defensible.", "fix": "Remove 'simulated' language. Reference actual screening provider or state 'screening pending'."})
     else:
         screen_score += 0.4
 
-    if "false positive" in screen_content.lower() or "true positive" in screen_content.lower():
+    screening_resolution_markers = (
+        "false positive",
+        "false-positive",
+        "formally cleared",
+        "reviewed and cleared",
+        "officer disposition",
+        "true positive",
+        "material concern",
+        "escalation",
+        "requires officer review",
+    )
+    if screening_defensible_clear or screening_formally_cleared:
+        screen_score += 0.3
+    elif any(marker in screen_lower for marker in screening_resolution_markers):
         screen_score += 0.3
     else:
-        if any(word in screen_content.lower() for word in ["match", "hit", "pep"]):
+        positive_match_language = (
+            re.search(r"\b(match|matches|matched|hit|hits)\b", screen_lower)
+            and not re.search(
+                r"\b(no|0|zero)\s+(sanctions\s+|pep\s+|watchlist\s+|declared\s+or\s+detected\s+)?"
+                r"(match|matches|hit|hits)\b",
+                screen_lower,
+            )
+        )
+        pep_language = (
+            "pep" in screen_lower
+            and not any(neg in screen_lower for neg in (
+                "no pep",
+                "0 self-declared / detected match",
+                "no declared or detected match",
+            ))
+        )
+        if positive_match_language or pep_language:
             issues.append({"category": "screening", "severity": "warning", "description": "Screening matches found but no false positive analysis included.", "fix": "Add false positive determination for each screening match."})
 
-    if any(provider in screen_content for provider in ["OpenSanctions", "Sumsub", "World-Check", "Dow Jones", "Refinitiv", "Onboarda screening engine"]):
+    provider_markers = (
+        "opensanctions",
+        "sumsub",
+        "world-check",
+        "dow jones",
+        "refinitiv",
+        "complyadvantage",
+        "comply advantage",
+        "onboarda screening engine",
+        "live provider",
+        "provider screening",
+        "un security council",
+        "ofac",
+        "hmt consolidated",
+        "consolidated list",
+    )
+    if any(provider in screen_lower for provider in provider_markers):
         screen_score += 0.3
     else:
         issues.append({"category": "screening", "severity": "info", "description": "Screening provider not explicitly named.", "fix": "Reference the screening data source for audit defensibility."})
@@ -357,7 +439,10 @@ def validate_compliance_memo(memo_data):
         rf_score += 0.4
     elif len(red_flags) == 1:
         rf_score += 0.2
-        issues.append({"category": "red_flags", "severity": "warning", "description": f"Only {len(red_flags)} red flag(s) identified. Minimum 2 expected for defensibility.", "fix": "Add additional contextual red flags (e.g., limited trading history, data gaps, sector exposure)."})
+        if overall_rating == "LOW" and (screening_defensible_clear or screening_formally_cleared):
+            issues.append({"category": "red_flags", "severity": "info", "description": "Clean LOW / formally cleared memo records one residual red flag. This is acceptable where no other material risk driver exists.", "fix": "No action required unless additional residual risk drivers are identified."})
+        else:
+            issues.append({"category": "red_flags", "severity": "warning", "description": f"Only {len(red_flags)} red flag(s) identified. Minimum 2 expected for defensibility.", "fix": "Add additional contextual red flags (e.g., limited trading history, data gaps, sector exposure)."})
     else:
         issues.append({"category": "red_flags", "severity": "critical", "description": "No red flags identified. Every onboarding must document at least residual risks.", "fix": "Add minimum 2 red flags. Even low-risk cases have risks (limited history, data gaps)."})
 
@@ -439,9 +524,10 @@ def validate_compliance_memo(memo_data):
 
     # Check if ownership risk is LOW but there are signs it shouldn't be
     if own_risk_rating == "LOW":
-        has_missing_pct = "not provided" in own_risk_content.lower() or "missing" in own_risk_content.lower() or "incomplete" in own_risk_content.lower()
-        has_no_ubo = "no ubo" in own_risk_content.lower() or "could not be verified" in own_risk_content.lower()
-        has_complex = "complex" in own_risk_content.lower()
+        own_risk_lower = own_risk_content.lower()
+        has_missing_pct = "not provided" in own_risk_lower or "missing" in own_risk_lower or "incomplete" in own_risk_lower
+        has_no_ubo = "no ubo" in own_risk_lower or "could not be verified" in own_risk_lower
+        has_complex = bool(re.search(r"\bcomplex\b", own_risk_lower))
         if has_missing_pct or has_no_ubo or has_complex:
             issues.append({"category": "ownership_risk", "severity": "critical", "description": f"Ownership risk rated LOW but content indicates data gaps or complexity: {'missing percentages' if has_missing_pct else ''}{'no UBO data' if has_no_ubo else ''}{'complex structure' if has_complex else ''}", "fix": "Ownership risk must not remain LOW when ownership percentages are missing, UBOs are unidentified, or structure is complex."})
         else:
@@ -479,8 +565,15 @@ def validate_compliance_memo(memo_data):
     # ── 12. DOCUMENT ADEQUACY IMPACT (weight: 0.5) ──
     doc_adequacy_score = 0
     doc_content_full = sections.get("document_verification", {}).get("content", "")
+    doc_content_lower = doc_content_full.lower()
 
-    if "professional judgement" in doc_content_full.lower() or "impact assessment" in doc_content_full.lower() or "assurance level" in doc_content_full.lower():
+    if (
+        "professional judgement" in doc_content_lower
+        or "impact assessment" in doc_content_lower
+        or "assurance level" in doc_content_lower
+        or "overall documentation adequacy" in doc_content_lower
+        or "high assurance" in doc_content_lower
+    ):
         doc_adequacy_score += 0.3
     else:
         issues.append({"category": "doc_adequacy", "severity": "info", "description": "Document verification lacks professional judgement statement on adequacy impact.", "fix": "Add professional judgement on how documentation gaps affect overall assurance level."})
