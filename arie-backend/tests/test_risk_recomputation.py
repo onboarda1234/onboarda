@@ -85,6 +85,75 @@ def _insert_risk_config(db):
         db.commit()
 
 
+def _set_live_completed_match(db, app_id, *, matched=True):
+    app = db.execute(
+        "SELECT company_name, prescreening_data FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone()
+    prescreening = json.loads(app["prescreening_data"] or "{}")
+    report = prescreening.setdefault("screening_report", {})
+    if matched:
+        report["company_screening"] = {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": True,
+            "results": [
+                {
+                    "id": "risk-screening-disposition-floor",
+                    "name": app["company_name"],
+                    "category": "sanctions_watchlist",
+                    "score": 0.97,
+                }
+            ],
+        }
+        report["total_hits"] = 1
+    else:
+        report["company_screening"] = {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "live",
+            "matched": False,
+            "results": [],
+        }
+        report["total_hits"] = 0
+    db.execute(
+        "UPDATE applications SET prescreening_data=? WHERE id=?",
+        (json.dumps(prescreening), app_id),
+    )
+    db.commit()
+
+
+def _insert_screening_review(db, app_id, disposition_code, *, requires_four_eyes=False, complete=True):
+    app = db.execute("SELECT company_name FROM applications WHERE id=?", (app_id,)).fetchone()
+    if disposition_code == "false_positive_cleared":
+        disposition = "cleared"
+    elif disposition_code == "needs_more_information":
+        disposition = "follow_up_required"
+    else:
+        disposition = "escalated"
+    db.execute(
+        """INSERT INTO screening_reviews
+           (application_id, subject_type, subject_name, disposition, notes,
+            disposition_code, rationale, requires_four_eyes, reviewer_id,
+            reviewer_name, second_reviewer_id, second_reviewer_name)
+           VALUES (?, 'entity', ?, ?, ?, ?, ?, ?, 'co-risk-floor',
+                   'CO Risk Floor', ?, ?)""",
+        (
+            app_id,
+            app["company_name"],
+            disposition,
+            "Risk floor regression disposition.",
+            disposition_code,
+            "Formal screening disposition for risk floor regression.",
+            1 if requires_four_eyes else 0,
+            "sco-risk-floor" if requires_four_eyes and complete else None,
+            "SCO Risk Floor" if requires_four_eyes and complete else None,
+        ),
+    )
+    db.commit()
+
+
 # ──────────────────────────────────────────────
 # Unit tests for recompute_risk helper
 # ──────────────────────────────────────────────
@@ -293,6 +362,190 @@ class TestRecomputeRiskAudit:
         assert "High-risk sector floor" in entry["after_state"]["elevation_reason_text"]
         assert entry["after_state"]["base_risk_level"] == "LOW"
         assert entry["after_state"]["final_risk_level"] != "LOW"
+        db.close()
+
+    @pytest.mark.parametrize("disposition_code", ["true_match", "material_concern", "escalated_to_edd"])
+    def test_material_screening_dispositions_cannot_persist_final_low(self, temp_db, disposition_code):
+        """Screening dispositions that create/preserve EDD controls must floor final LOW."""
+        from rule_engine import recompute_risk
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Technology",
+            entity_type="Listed Company",
+        )
+        _set_live_completed_match(db, app_id)
+        _insert_screening_review(db, app_id, disposition_code)
+
+        result = recompute_risk(db, app_id, "screening_review_escalated")
+        db.commit()
+
+        app = db.execute(
+            "SELECT risk_level, final_risk_level, base_risk_level, onboarding_lane, elevation_reason_text, risk_escalations "
+            "FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        escalations = json.loads(app["risk_escalations"] or "[]")
+
+        assert result["base_risk_level"] == "LOW"
+        assert result["final_risk_level"] != "LOW"
+        assert app["risk_level"] != "LOW"
+        assert app["final_risk_level"] != "LOW"
+        assert app["base_risk_level"] == "LOW"
+        assert app["onboarding_lane"] == "EDD"
+        assert "material_screening_disposition_floor" in escalations
+        assert disposition_code in app["elevation_reason_text"]
+        db.close()
+
+    def test_raw_unresolved_completed_match_cannot_persist_final_low(self, temp_db):
+        """Raw live completed_match without formal clearance is an unresolved material concern."""
+        from rule_engine import recompute_risk
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Technology",
+            entity_type="Listed Company",
+        )
+        _set_live_completed_match(db, app_id)
+
+        result = recompute_risk(db, app_id, "screening_match_detected")
+        db.commit()
+
+        app = db.execute(
+            "SELECT final_risk_level, base_risk_level, onboarding_lane, elevation_reason_text, risk_escalations "
+            "FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        escalations = json.loads(app["risk_escalations"] or "[]")
+
+        assert result["base_risk_level"] == "LOW"
+        assert app["final_risk_level"] != "LOW"
+        assert app["base_risk_level"] == "LOW"
+        assert app["onboarding_lane"] == "EDD"
+        assert "material_screening_disposition_floor" in escalations
+        assert "raw completed_match" in app["elevation_reason_text"]
+        db.close()
+
+    def test_false_positive_cleared_does_not_floor_otherwise_clean_low(self, temp_db):
+        """Valid false-positive clearance should not elevate solely because a raw match existed."""
+        from rule_engine import recompute_risk
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Technology",
+            entity_type="Listed Company",
+        )
+        _set_live_completed_match(db, app_id)
+        _insert_screening_review(
+            db,
+            app_id,
+            "false_positive_cleared",
+            requires_four_eyes=True,
+            complete=True,
+        )
+
+        result = recompute_risk(db, app_id, "false_positive_cleared")
+        db.commit()
+
+        app = db.execute(
+            "SELECT final_risk_level, onboarding_lane, elevation_reason_text, risk_escalations FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        escalations = json.loads(app["risk_escalations"] or "[]")
+
+        assert result["base_risk_level"] == "LOW"
+        assert app["final_risk_level"] == "LOW"
+        assert app["onboarding_lane"] != "EDD"
+        assert "material_screening_disposition_floor" not in escalations
+        assert "false_positive" not in (app["elevation_reason_text"] or "")
+        db.close()
+
+    def test_needs_more_information_floor_is_explicit_and_blocking_without_edd_lane(self, temp_db):
+        """needs_more_information remains blocking and floors to MEDIUM without declaring a true match."""
+        from rule_engine import recompute_risk
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Technology",
+            entity_type="Listed Company",
+        )
+        _set_live_completed_match(db, app_id)
+        _insert_screening_review(db, app_id, "needs_more_information")
+
+        result = recompute_risk(db, app_id, "screening_needs_more_information")
+        db.commit()
+
+        app = db.execute(
+            "SELECT final_risk_level, base_risk_level, onboarding_lane, elevation_reason_text, risk_escalations "
+            "FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        escalations = json.loads(app["risk_escalations"] or "[]")
+
+        assert result["base_risk_level"] == "LOW"
+        assert app["final_risk_level"] == "MEDIUM"
+        assert app["base_risk_level"] == "LOW"
+        assert app["onboarding_lane"] != "EDD"
+        assert "screening_needs_more_information_floor" in escalations
+        assert "needs_more_information" in app["elevation_reason_text"]
+        db.close()
+
+    def test_audit_records_screening_disposition_floor_reason(self, temp_db):
+        """Audit detail must show the material screening disposition floor reason."""
+        from rule_engine import recompute_risk
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, app_ref = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Technology",
+            entity_type="Listed Company",
+        )
+        _set_live_completed_match(db, app_id)
+        _insert_screening_review(db, app_id, "material_concern")
+
+        audit_calls = []
+
+        def mock_audit(user, action, target, detail, **kwargs):
+            audit_calls.append({
+                "action": action,
+                "target": target,
+                "detail": detail,
+                "after_state": kwargs.get("after_state"),
+            })
+
+        recompute_risk(
+            db,
+            app_id,
+            "screening_review_escalated",
+            user=_make_user(),
+            log_audit_fn=mock_audit,
+        )
+        db.commit()
+
+        entry = [a for a in audit_calls if a["action"] == "Risk Recomputed"][-1]
+        assert entry["target"] == app_ref
+        assert "Floor/elevation reason" in entry["detail"]
+        assert "material_screening_disposition_floor" in entry["after_state"]["risk_escalations"]
+        assert "material_concern" in entry["after_state"]["elevation_reason_text"]
         db.close()
 
     def test_no_audit_when_no_user(self, temp_db):

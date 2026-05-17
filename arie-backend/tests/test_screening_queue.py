@@ -4,7 +4,8 @@ import json
 def test_screening_queue_payload_uses_application_level_metrics(db, temp_db):
     from server import _build_screening_queue_payload
 
-    baseline = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    queue_user = {"type": "client", "sub": "screening_queue_metrics_client"}
+    baseline = _build_screening_queue_payload(db, queue_user)
 
     db.execute(
         """
@@ -12,7 +13,7 @@ def test_screening_queue_payload_uses_application_level_metrics(db, temp_db):
         (id, ref, client_id, company_name, country, sector, entity_type, status, prescreening_data)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        ("app_pending", "ARF-PENDING", "client_1", "Pending Co", "Mauritius", "Technology", "SME", "pricing_review", json.dumps({})),
+        ("app_pending", "ARF-PENDING", queue_user["sub"], "Pending Co", "Mauritius", "Technology", "SME", "pricing_review", json.dumps({})),
     )
 
     db.execute(
@@ -24,7 +25,7 @@ def test_screening_queue_payload_uses_application_level_metrics(db, temp_db):
         (
             "app_review",
             "ARF-REVIEW",
-            "client_2",
+            queue_user["sub"],
             "Review Co",
             "Mauritius",
             "Technology",
@@ -54,7 +55,7 @@ def test_screening_queue_payload_uses_application_level_metrics(db, temp_db):
 
     db.commit()
 
-    payload = _build_screening_queue_payload(db, {"type": "officer", "sub": "admin001"})
+    payload = _build_screening_queue_payload(db, queue_user)
 
     assert payload["metrics"]["applications_awaiting_screening"] == baseline["metrics"]["applications_awaiting_screening"] + 1
     assert payload["metrics"]["applications_screened"] == baseline["metrics"]["applications_screened"] + 1
