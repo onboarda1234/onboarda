@@ -184,6 +184,35 @@ def _insert_approved_edd(conn, app_id, *, triggers, stage="edd_approved", findin
     return case_id
 
 
+def _insert_active_edd(conn, app_id, *, triggers):
+    now = datetime.now(timezone.utc).isoformat()
+    notes = json.dumps(
+        [
+            {
+                "ts": now,
+                "source": "policy_routing",
+                "triggers": triggers,
+            }
+        ]
+    )
+    conn.execute(
+        """
+        INSERT INTO edd_cases
+            (application_id, client_name, risk_level, risk_score, stage,
+             trigger_source, trigger_notes, edd_notes)
+        VALUES (?, 'EDD Complete Ltd', 'HIGH', 72, 'triggered',
+                'policy_routing', ?, ?)
+        """,
+        (
+            app_id,
+            "Auto-routed to EDD by policy edd_routing_policy_v1 | triggers: "
+            + ", ".join(triggers),
+            notes,
+        ),
+    )
+    conn.commit()
+
+
 def _edd_routing(*triggers):
     return {
         "policy_version": "edd_routing_policy_v1",
@@ -233,6 +262,114 @@ def _supervisor_memo(*, trigger="declared_pep_present", completion=None):
             },
         }
     )
+
+
+def test_pep_completed_edd_covers_derived_floor_and_supervisor_triggers():
+    from edd_completion import collect_edd_completion_status
+
+    conn = _make_db()
+    app_id = _insert_app(conn, ref="ARF-PEP-DERIVED")
+    _insert_resolved_requirements(conn, app_id, count=12)
+    _insert_approved_edd(
+        conn,
+        app_id,
+        triggers=["declared_pep_present", "high_or_very_high_risk"],
+    )
+
+    completion = collect_edd_completion_status(
+        conn,
+        app_id,
+        routing=_edd_routing(
+            "declared_pep_present",
+            "high_or_very_high_risk",
+            "supervisor_mandatory_escalation",
+            "edd_flag:floor_rule_edd_routing",
+        ),
+    )
+
+    assert completion["satisfied"] is True
+    assert completion["covers_current_triggers"] is True
+    assert completion["missing_triggers"] == []
+    assert "supervisor_mandatory_escalation" in completion["ignored_derived_triggers"]
+    assert "edd_flag:floor_rule_edd_routing" in completion["ignored_derived_triggers"]
+    assert completion["current_trigger_categories"]["declared_pep_present"] == "pep"
+
+
+def test_crypto_completed_edd_covers_sector_floor_and_supervisor_triggers():
+    from edd_completion import collect_edd_completion_status
+
+    conn = _make_db()
+    app_id = _insert_app(conn, ref="ARF-CRYPTO-DERIVED")
+    _insert_resolved_requirements(conn, app_id, count=11)
+    _insert_approved_edd(
+        conn,
+        app_id,
+        triggers=[
+            "crypto_or_virtual_asset_sector",
+            "high_risk_sector",
+            "high_or_very_high_risk",
+        ],
+    )
+
+    completion = collect_edd_completion_status(
+        conn,
+        app_id,
+        routing=_edd_routing(
+            "crypto_or_virtual_asset_sector",
+            "high_or_very_high_risk",
+            "high_risk_sector",
+            "supervisor_mandatory_escalation",
+            "edd_flag:floor_rule_high_risk_sector",
+            "edd_flag:sub_factor_score_4",
+            "edd_flag:very_high_risk_sector",
+        ),
+    )
+
+    assert completion["satisfied"] is True
+    assert completion["missing_triggers"] == []
+    assert completion["current_trigger_categories"]["crypto_or_virtual_asset_sector"] == "sector"
+    assert completion["current_trigger_categories"]["edd_flag:floor_rule_high_risk_sector"] == "sector"
+
+
+def test_existing_duplicate_active_case_does_not_block_completed_edd_recognition():
+    from edd_actuation import actuate_edd_routing
+    from edd_completion import collect_edd_completion_status
+
+    conn = _make_db()
+    app_id = _insert_app(conn, ref="ARF-DUP-ACTIVE")
+    _insert_resolved_requirements(conn, app_id)
+    approved_case_id = _insert_approved_edd(conn, app_id, triggers=["declared_pep_present"])
+    _insert_active_edd(conn, app_id, triggers=["declared_pep_present"])
+    app = dict(conn.execute("SELECT * FROM applications WHERE id=?", (app_id,)).fetchone())
+    routing = _edd_routing(
+        "declared_pep_present",
+        "high_or_very_high_risk",
+        "supervisor_mandatory_escalation",
+    )
+
+    completion = collect_edd_completion_status(conn, app_id, routing=routing)
+    before_active = conn.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=? AND stage='triggered'",
+        (app_id,),
+    ).fetchone()["c"]
+    result = actuate_edd_routing(
+        conn,
+        app,
+        routing,
+        {"mandatory_escalation_reasons": ["declared_pep_present"]},
+        {"sub": "sco1", "name": "Senior Officer", "role": "sco"},
+    )
+    after_active = conn.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=? AND stage='triggered'",
+        (app_id,),
+    ).fetchone()["c"]
+
+    assert completion["satisfied"] is True
+    assert result["completion_recognized"] is True
+    assert result["case_id"] == approved_case_id
+    assert result["created"] is False
+    assert before_active == 1
+    assert after_active == 1
 
 
 def test_pep_completed_edd_resolves_supervisor_mandatory_escalation():
@@ -365,3 +502,88 @@ def test_new_material_trigger_after_edd_approval_requires_new_active_case():
         "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=? AND stage NOT IN ('edd_approved','edd_rejected')",
         (app_id,),
     ).fetchone()["c"] == 1
+
+
+def test_new_unrelated_trigger_after_edd_approval_requires_new_review():
+    from edd_completion import collect_edd_completion_status
+
+    conn = _make_db()
+    app_id = _insert_app(conn, ref="ARF-NEW-JURISDICTION")
+    _insert_resolved_requirements(conn, app_id)
+    _insert_approved_edd(conn, app_id, triggers=["declared_pep_present"])
+
+    completion = collect_edd_completion_status(
+        conn,
+        app_id,
+        routing=_edd_routing("declared_pep_present", "elevated_jurisdiction"),
+    )
+
+    assert completion["satisfied"] is False
+    assert "jurisdiction" in completion["missing_triggers"]
+    assert "trigger_coverage_missing" in completion["reason"]
+
+
+def test_new_pep_trigger_not_covered_by_crypto_edd_requires_new_review():
+    from edd_completion import collect_edd_completion_status
+
+    conn = _make_db()
+    app_id = _insert_app(conn, ref="ARF-NEW-PEP")
+    _insert_resolved_requirements(conn, app_id)
+    _insert_approved_edd(conn, app_id, triggers=["crypto_or_virtual_asset_sector"])
+
+    completion = collect_edd_completion_status(
+        conn,
+        app_id,
+        routing=_edd_routing("crypto_or_virtual_asset_sector", "declared_pep_present"),
+    )
+
+    assert completion["satisfied"] is False
+    assert "pep" in completion["missing_triggers"]
+    assert "trigger_coverage_missing" in completion["reason"]
+
+
+def test_incomplete_enhanced_requirements_still_fail_completion():
+    from edd_completion import collect_edd_completion_status
+
+    conn = _make_db()
+    app_id = _insert_app(conn, ref="ARF-INCOMPLETE-REQ")
+    _insert_resolved_requirements(conn, app_id)
+    conn.execute(
+        "UPDATE application_enhanced_requirements SET status='submitted' WHERE application_id=? AND id=(SELECT MIN(id) FROM application_enhanced_requirements WHERE application_id=?)",
+        (app_id, app_id),
+    )
+    conn.commit()
+    _insert_approved_edd(conn, app_id, triggers=["declared_pep_present"])
+
+    completion = collect_edd_completion_status(
+        conn,
+        app_id,
+        routing=_edd_routing("declared_pep_present", "supervisor_mandatory_escalation"),
+    )
+
+    assert completion["satisfied"] is False
+    assert completion["covers_current_triggers"] is True
+    assert "enhanced_requirements_unresolved" in completion["reason"]
+
+
+def test_rejected_edd_case_does_not_satisfy_completion():
+    from edd_completion import collect_edd_completion_status
+
+    conn = _make_db()
+    app_id = _insert_app(conn, ref="ARF-REJECTED-EDD")
+    _insert_resolved_requirements(conn, app_id)
+    _insert_approved_edd(
+        conn,
+        app_id,
+        triggers=["declared_pep_present"],
+        stage="edd_rejected",
+    )
+
+    completion = collect_edd_completion_status(
+        conn,
+        app_id,
+        routing=_edd_routing("declared_pep_present"),
+    )
+
+    assert completion["satisfied"] is False
+    assert completion["reason"] == "no_approved_edd_case"
