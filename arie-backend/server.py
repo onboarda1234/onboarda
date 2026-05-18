@@ -2932,10 +2932,8 @@ class ApplicationsHandler(BaseHandler):
         if user["type"] != "client" and app_ids:
             enhanced_summaries = build_enhanced_requirement_operational_summaries(db, apps)
             if app_ids:
-                for projection in _list_periodic_review_projections(db):
+                for projection in _list_periodic_review_projections(db, application_ids=app_ids):
                     app_id = projection.get("application_id")
-                    if app_id not in app_ids:
-                        continue
                     periodic_reviews_by_app.setdefault(app_id, []).append(projection)
         screening_reviews_by_app = {}
         if app_ids:

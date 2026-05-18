@@ -316,11 +316,12 @@ def enroll_approved_application(
         (app_id,),
     ).fetchone()
     existing_cycle = int(_row_dict(cycle_row).get("cycle_no") or 0)
+    next_cycle_number = existing_cycle if existing else existing_cycle + 1
     payload = _review_payload(
         app,
         previous_status=previous_status,
         approved_at=approved_at,
-        review_cycle_number=existing_cycle if existing else (existing_cycle + 1 or 1),
+        review_cycle_number=next_cycle_number or 1,
     )
     if existing:
         before = dict(existing)

@@ -51,6 +51,25 @@ def _decode_required_items(value: Any) -> List[Dict[str, Any]]:
     return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
 
 
+def _table_columns(db, table: str) -> set:
+    if table not in {"periodic_reviews"}:
+        return set()
+    try:
+        rows = db.execute(f"PRAGMA table_info({table})").fetchall()
+        if rows:
+            return {str(row["name"]) for row in rows}
+    except Exception:
+        pass
+    try:
+        rows = db.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+            (table,),
+        ).fetchall()
+        return {str(row["column_name"]) for row in rows}
+    except Exception:
+        return set()
+
+
 def _effective_risk_level(review) -> Optional[str]:
     return _row_get(review, "new_risk_level") or _row_get(review, "risk_level")
 
@@ -95,6 +114,13 @@ def _linked_edd_blocker(db, review_row) -> Optional[str]:
 
 
 def _blocking_summary(db, review_row, required_items: List[Dict[str, Any]], evidence_links: List[Dict[str, Any]]) -> List[str]:
+    """Return additive blocker labels derived from canonical review state.
+
+    Phase 1 surfaces must read one blocker view from ``periodic_reviews`` plus
+    linked evidence / EDD context. The summary covers imported-review
+    acknowledgement, stale or missing screening, required evidence links,
+    unresolved linked EDD work, missing officer rationale, and missing outcome.
+    """
     blockers: List[str] = []
     if _row_get(review_row, "import_requires_ack") and not _row_get(review_row, "legacy_sco_acknowledged_at"):
         blockers.append("SCO/admin acknowledgement required for imported high-risk review")
@@ -202,6 +228,8 @@ def list_review_projections(
     db,
     *,
     application_id: Optional[str] = None,
+    application_ids: Optional[Iterable[str]] = None,
+    review_ids: Optional[Iterable[int]] = None,
     statuses: Optional[Iterable[str]] = None,
 ) -> List[Dict[str, Any]]:
     sql = "SELECT * FROM periodic_reviews WHERE 1=1"
@@ -209,12 +237,29 @@ def list_review_projections(
     if application_id:
         sql += " AND application_id = ?"
         params.append(application_id)
+    if application_ids:
+        app_ids = [app_id for app_id in dict.fromkeys(application_ids) if app_id]
+        if app_ids:
+            sql += " AND application_id IN (" + ",".join("?" for _ in app_ids) + ")"
+            params.extend(app_ids)
+    if review_ids:
+        cleaned_review_ids = [int(review_id) for review_id in dict.fromkeys(review_ids)]
+        if cleaned_review_ids:
+            sql += " AND id IN (" + ",".join("?" for _ in cleaned_review_ids) + ")"
+            params.extend(cleaned_review_ids)
     if statuses:
         cleaned = [str(status).strip().lower() for status in statuses if str(status).strip()]
         if cleaned:
             sql += " AND LOWER(COALESCE(status, 'pending')) IN (" + ",".join("?" for _ in cleaned) + ")"
             params.extend(cleaned)
-    sql += " ORDER BY due_date ASC, created_at DESC, id DESC"
+    columns = _table_columns(db, "periodic_reviews")
+    order_parts = []
+    if "due_date" in columns:
+        order_parts.append("due_date ASC")
+    if "created_at" in columns:
+        order_parts.append("created_at DESC")
+    order_parts.append("id DESC")
+    sql += " ORDER BY " + ", ".join(order_parts)
     rows = db.execute(sql, tuple(params)).fetchall()
     review_ids = [row["id"] for row in rows]
     evidence_by_review: Dict[int, List[Dict[str, Any]]] = {rid: [] for rid in review_ids}
