@@ -1128,30 +1128,30 @@ def compute_risk_score(app_data, config_override=None):
     # those controls are required.
     if pep_scores:
         apply_local_floor(
-            "MEDIUM",
+            "HIGH",
             "floor_rule_declared_pep",
-            "Declared PEP floor: declared PEP exposure requires at least MEDIUM final risk",
+            "Declared PEP floor: declared PEP exposure requires at least HIGH final risk",
         )
 
     if _is_high_risk_sector(data.get("sector"), sector_scores_cfg):
         apply_local_floor(
-            "MEDIUM",
+            "HIGH",
             "floor_rule_high_risk_sector",
-            f"High-risk sector floor: {data.get('sector') or 'unspecified'} requires at least MEDIUM final risk",
+            f"High-risk sector floor: {data.get('sector') or 'unspecified'} requires at least HIGH final risk",
         )
 
     if _is_elevated_jurisdiction(data.get("country"), country_scores_cfg):
         apply_local_floor(
-            "MEDIUM",
+            "HIGH",
             "floor_rule_elevated_jurisdiction",
-            f"Elevated jurisdiction floor: {data.get('country') or 'unspecified'} requires at least MEDIUM final risk",
+            f"Elevated jurisdiction floor: {data.get('country') or 'unspecified'} requires at least HIGH final risk",
         )
 
     if _is_opaque_ownership(data.get("ownership_structure")):
         apply_local_floor(
-            "MEDIUM",
+            "HIGH",
             "floor_rule_opaque_ownership",
-            "Opaque ownership floor: opaque/complex ownership requires at least MEDIUM final risk",
+            "Opaque ownership floor: opaque/complex ownership requires at least HIGH final risk",
         )
 
     # ── ESCALATION RULE A: Any sub-factor scores 4 → mandatory compliance approval ──
@@ -1226,13 +1226,13 @@ def _apply_edd_routing_floor_for_recompute(db, app, risk):
     if not isinstance(risk, dict):
         return {}
     try:
-        from edd_routing_policy import evaluate_edd_routing
+        from edd_routing_policy import evaluate_edd_routing, minimum_risk_level_for_routing
         from routing_actuator import (
             _declared_pep_present_in_party_rows,
             build_routing_facts,
         )
 
-        facts = build_routing_facts(app_row=app, risk_dict=risk)
+        facts = build_routing_facts(db=db, app_row=app, risk_dict=risk)
         try:
             app_id = dict(app or {}).get("id")
         except Exception:
@@ -1247,13 +1247,14 @@ def _apply_edd_routing_floor_for_recompute(db, app, risk):
         if str(routing.get("route") or "").lower() != "edd":
             return routing
 
+        minimum_level = minimum_risk_level_for_routing(routing) or "MEDIUM"
         triggers = ", ".join(str(t) for t in (routing.get("triggers") or []) if t)
         reason = "EDD routing floor: deterministic routing required EDD"
         if triggers:
             reason += f" ({triggers})"
         apply_risk_floor(
             risk,
-            "MEDIUM",
+            minimum_level,
             "floor_rule_edd_routing",
             reason,
         )

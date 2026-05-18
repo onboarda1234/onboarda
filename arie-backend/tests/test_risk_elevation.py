@@ -162,9 +162,9 @@ class TestFinalRiskTruthFloors:
 
         assert result["base_risk_level"] == "LOW"
         assert result["base_risk_score"] < 40
-        assert result["final_risk_level"] != "LOW"
+        assert result["final_risk_level"] == "HIGH"
         assert result["level"] == result["final_risk_level"]
-        assert result["score"] == result["base_risk_score"]
+        assert result["score"] >= 55
         assert "floor_rule_high_risk_sector" in result["escalations"]
         assert "High-risk sector floor" in result["elevation_reason_text"]
 
@@ -179,8 +179,8 @@ class TestFinalRiskTruthFloors:
         ))
 
         assert result["base_risk_level"] == "LOW"
-        assert result["final_risk_level"] != "LOW"
-        assert result["score"] == result["base_risk_score"]
+        assert result["final_risk_level"] == "HIGH"
+        assert result["score"] >= 55
         assert "floor_rule_declared_pep" in result["escalations"]
         assert "Declared PEP floor" in result["elevation_reason_text"]
 
@@ -192,7 +192,8 @@ class TestFinalRiskTruthFloors:
         ))
 
         assert result["base_risk_level"] == "LOW"
-        assert result["final_risk_level"] != "LOW"
+        assert result["final_risk_level"] == "HIGH"
+        assert result["score"] >= 55
         assert result["jurisdiction_risk_tier"] in ("elevated", "very_high")
         assert "floor_rule_elevated_jurisdiction" in result["escalations"]
         assert "Elevated jurisdiction floor" in result["elevation_reason_text"]
@@ -206,6 +207,36 @@ class TestFinalRiskTruthFloors:
         assert result["score"] < 40
         assert result["escalations"] == []
         assert result["elevation_reason_text"] == ""
+
+    def test_regression_pep_routes_edd_and_final_high_minimum(self):
+        result = compute_risk_score(_clean_low_app(
+            directors=[{
+                "full_name": "Jane PEP",
+                "nationality": "British",
+                "is_pep": "Yes",
+                "pep_type": "domestic",
+            }],
+        ))
+
+        assert result["base_risk_level"] == "LOW"
+        assert result["final_risk_level"] == "HIGH"
+        assert result["score"] >= 55
+        assert "floor_rule_declared_pep" in result["escalations"]
+
+    def test_regression_crypto_vasp_routes_edd_and_final_high_minimum(self):
+        result = compute_risk_score(_clean_low_app(sector="Crypto VASP exchange"))
+
+        assert result["base_risk_level"] == "LOW"
+        assert result["final_risk_level"] == "HIGH"
+        assert result["score"] >= 55
+        assert "floor_rule_high_risk_sector" in result["escalations"]
+
+    def test_regression_sanctions_fatf_blacklist_floors_very_high(self):
+        result = compute_risk_score(_clean_low_app(country="Iran"))
+
+        assert result["final_risk_level"] == "VERY_HIGH"
+        assert result["score"] >= 70
+        assert any("sanctioned" in escalation for escalation in result["escalations"])
 
 
 # ═══════════════════════════════════════════════════════════════

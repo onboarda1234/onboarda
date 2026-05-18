@@ -77,6 +77,24 @@ ALL_TRIGGERS = (
 ROUTE_EDD = "edd"
 ROUTE_STANDARD = "standard"
 
+HIGH_MINIMUM_TRIGGERS = frozenset(
+    {
+        TRIGGER_HIGH_RISK,
+        TRIGGER_DECLARED_PEP,
+        TRIGGER_HIGH_SECTOR,
+        TRIGGER_CRYPTO_SECTOR,
+        TRIGGER_ELEVATED_JURISDICTION,
+        TRIGGER_OPAQUE_OWNERSHIP,
+        TRIGGER_SCREENING_MATCH,
+    }
+)
+
+MEDIUM_MINIMUM_EDD_FLAGS = frozenset(
+    {
+        "edd_flag:screening_needs_more_information",
+    }
+)
+
 
 def _norm(v: Any) -> str:
     if v is None:
@@ -180,7 +198,7 @@ def evaluate_edd_routing(facts: Dict[str, Any]) -> Dict[str, Any]:
     if declared_pep:
         triggers.append(TRIGGER_DECLARED_PEP)
 
-    if sector_tier in ("high", "very_high", "elevated"):
+    if sector_tier in ("high", "very_high"):
         triggers.append(TRIGGER_HIGH_SECTOR)
     # Crypto / virtual-asset is called out separately so officers can
     # see it explicitly in the trigger list, even though it is also a
@@ -259,6 +277,20 @@ def evaluate_edd_routing(facts: Dict[str, Any]) -> Dict[str, Any]:
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
     }
     return decision
+
+
+def minimum_risk_level_for_routing(routing: Dict[str, Any]) -> Optional[str]:
+    """Return the minimum final risk level implied by an EDD routing result."""
+    if not isinstance(routing, dict):
+        return None
+    if str(routing.get("route") or "").strip().lower() != ROUTE_EDD:
+        return None
+    triggers = {str(trigger or "").strip().lower() for trigger in (routing.get("triggers") or [])}
+    if triggers & {trigger.lower() for trigger in HIGH_MINIMUM_TRIGGERS}:
+        return "HIGH"
+    if triggers & MEDIUM_MINIMUM_EDD_FLAGS:
+        return "MEDIUM"
+    return "MEDIUM"
 
 
 def assert_routing_invariant(facts: Dict[str, Any], routing: Dict[str, Any]) -> Optional[str]:

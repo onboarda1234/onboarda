@@ -238,6 +238,255 @@ def test_apply_routing_decision_detects_declared_pep_from_party_rows():
     ).fetchone()["c"] == 1
 
 
+def test_prescreening_submit_terminal_material_match_routes_edd_via_screening_summary():
+    import routing_actuator as ra
+
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "risk_score, risk_level, final_risk_level, onboarding_lane, status) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "ARF-T-SCR-MATCH",
+            "Screening Match Co",
+            "Mauritius",
+            "Consulting",
+            18,
+            "LOW",
+            "LOW",
+            "Standard Review",
+            "pricing_review",
+        ),
+    )
+    conn.commit()
+    app_row = dict(conn.execute(
+        "SELECT * FROM applications WHERE ref=?",
+        ("ARF-T-SCR-MATCH",),
+    ).fetchone())
+
+    out = ra.apply_routing_decision(
+        db=conn,
+        app_row=app_row,
+        risk_dict={"score": 18, "level": "LOW", "final_risk_level": "LOW"},
+        screening_summary={"terminal": True, "has_terminal_match": True, "has_non_terminal": False},
+        source=ra.SOURCE_PRESCREENING_SUBMIT,
+    )
+    conn.commit()
+
+    assert out["route"] == "edd"
+    assert "material_screening_concern" in out["triggers"]
+    assert conn.execute(
+        "SELECT onboarding_lane, status FROM applications WHERE ref=?",
+        ("ARF-T-SCR-MATCH",),
+    ).fetchone()["onboarding_lane"] == "EDD"
+
+
+def test_prescreening_submit_non_terminal_possible_match_does_not_route_edd():
+    import routing_actuator as ra
+
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "risk_score, risk_level, final_risk_level, onboarding_lane, status) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "ARF-T-SCR-PENDING",
+            "Pending Screening Co",
+            "Mauritius",
+            "Consulting",
+            18,
+            "LOW",
+            "LOW",
+            "Standard Review",
+            "pricing_review",
+        ),
+    )
+    conn.commit()
+    app_row = dict(conn.execute(
+        "SELECT * FROM applications WHERE ref=?",
+        ("ARF-T-SCR-PENDING",),
+    ).fetchone())
+
+    out = ra.apply_routing_decision(
+        db=conn,
+        app_row=app_row,
+        risk_dict={"score": 18, "level": "LOW", "final_risk_level": "LOW"},
+        screening_summary={"terminal": False, "has_terminal_match": False, "has_non_terminal": True},
+        source=ra.SOURCE_PRESCREENING_SUBMIT,
+    )
+    conn.commit()
+
+    assert out["route"] == "standard"
+    assert "material_screening_concern" not in out["triggers"]
+    assert conn.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
+        (app_row["id"],),
+    ).fetchone()["c"] == 0
+
+
+def test_prescreening_submit_non_material_completed_match_does_not_route_edd():
+    import routing_actuator as ra
+
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "risk_score, risk_level, final_risk_level, onboarding_lane, status) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "ARF-T-SCR-NONMATERIAL",
+            "Non Material Match Co",
+            "Mauritius",
+            "Consulting",
+            18,
+            "LOW",
+            "LOW",
+            "Standard Review",
+            "pricing_review",
+        ),
+    )
+    conn.commit()
+    app_row = dict(conn.execute(
+        "SELECT * FROM applications WHERE ref=?",
+        ("ARF-T-SCR-NONMATERIAL",),
+    ).fetchone())
+
+    out = ra.apply_routing_decision(
+        db=conn,
+        app_row=app_row,
+        risk_dict={"score": 18, "level": "LOW", "final_risk_level": "LOW"},
+        screening_summary={"terminal": True, "has_terminal_match": False, "has_non_terminal": False},
+        source=ra.SOURCE_PRESCREENING_SUBMIT,
+    )
+    conn.commit()
+
+    assert out["route"] == "standard"
+    assert "material_screening_concern" not in out["triggers"]
+    assert conn.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
+        (app_row["id"],),
+    ).fetchone()["c"] == 0
+
+
+def test_runtime_routing_detects_partial_ubo_disclosure_incomplete_ownership_before_memo():
+    import json
+    import routing_actuator as ra
+
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "risk_score, risk_level, final_risk_level, onboarding_lane, status, ownership_structure) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            "ARF-T-OWN-INCOMPLETE",
+            "Ownership Incomplete Co",
+            "Mauritius",
+            "Consulting",
+            22,
+            "LOW",
+            "LOW",
+            "Standard Review",
+            "pricing_review",
+            "Two-tier corporate holding",
+        ),
+    )
+    app_id = conn.execute(
+        "SELECT id FROM applications WHERE ref=?",
+        ("ARF-T-OWN-INCOMPLETE",),
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO ubos (application_id, full_name, ownership_pct, is_pep) VALUES (?,?,?,?)",
+        (app_id, "UBO A", 25, "No"),
+    )
+    conn.execute(
+        "INSERT INTO ubos (application_id, full_name, ownership_pct, is_pep) VALUES (?,?,?,?)",
+        (app_id, "UBO B", 20, "No"),
+    )
+    conn.commit()
+    app_row = dict(conn.execute(
+        "SELECT * FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone())
+
+    out = ra.apply_routing_decision(
+        db=conn,
+        app_row=app_row,
+        risk_dict={"score": 22, "level": "LOW", "final_risk_level": "LOW"},
+        source=ra.SOURCE_PRESCREENING_SUBMIT,
+    )
+    conn.commit()
+
+    assert out["route"] == "edd"
+    assert "opaque_or_incomplete_ownership" in out["triggers"]
+    audit = conn.execute(
+        "SELECT detail FROM audit_log WHERE action='edd_routing.evaluated' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    detail = json.loads(audit["detail"])
+    assert detail["inputs"]["ownership_transparency_status"] == "incomplete"
+
+
+def test_elevated_noncrypto_sector_does_not_route_edd_without_explicit_policy():
+    from edd_routing_policy import evaluate_edd_routing, ROUTE_STANDARD
+
+    decision = evaluate_edd_routing(
+        _full(
+            final_risk_level="MEDIUM",
+            sector_risk_tier="elevated",
+            sector_label="Management Consulting",
+            sector="Management Consulting",
+        )
+    )
+    assert decision["route"] == ROUTE_STANDARD
+    assert "high_risk_sector" not in decision["triggers"]
+
+
+def test_screening_update_needs_more_information_does_not_claim_terminal_match():
+    import json
+    import routing_actuator as ra
+    import server
+
+    conn = _make_db()
+    conn.execute(
+        "INSERT INTO applications (ref, company_name, country, sector, "
+        "risk_score, risk_level, final_risk_level, onboarding_lane, status) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "ARF-T-SCR-NMI",
+            "Needs More Info Co",
+            "Mauritius",
+            "Consulting",
+            18,
+            "LOW",
+            "LOW",
+            "Standard Review",
+            "in_review",
+        ),
+    )
+    conn.commit()
+    app_row = dict(conn.execute(
+        "SELECT * FROM applications WHERE ref=?",
+        ("ARF-T-SCR-NMI",),
+    ).fetchone())
+
+    out = ra.apply_routing_decision(
+        db=conn,
+        app_row=app_row,
+        risk_dict={"score": 18, "level": "LOW", "final_risk_level": "LOW"},
+        screening_summary=server._screening_disposition_routing_summary("needs_more_information"),
+        edd_trigger_flags=server._screening_disposition_edd_trigger_flags("needs_more_information"),
+        source=ra.SOURCE_SCREENING_UPDATE,
+    )
+    conn.commit()
+
+    assert out["route"] == "edd"
+    audit = conn.execute(
+        "SELECT detail FROM audit_log WHERE action='edd_routing.evaluated' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    detail = json.loads(audit["detail"])
+    assert detail["inputs"]["screening_terminality_summary"]["terminal"] is False
+    assert detail["inputs"]["screening_terminality_summary"]["has_terminal_match"] is False
+    assert "edd_flag:screening_needs_more_information" in detail["triggers"]
+
+
 # ---------------------------------------------------------------- G & H
 def test_g_h_actuator_creates_then_idempotent_edd_case(monkeypatch):
     # Stub server._actuate_edd_routing + _emit_edd_routing_audit for

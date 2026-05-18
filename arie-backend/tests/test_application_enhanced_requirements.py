@@ -808,6 +808,60 @@ def test_one_million_plus_expected_volume_generates_high_volume_with_audit_reaso
     assert "normalized_amount=1000000" in row["trigger_reason"]
 
 
+def test_high_volume_alone_generates_documents_but_not_edd(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(
+        db,
+        risk_level="LOW",
+        status="pricing_review",
+        onboarding_lane="Standard Review",
+        prescreening={"expected_volume": "1m+"},
+    )
+
+    result = _apply_auto_generation(
+        db,
+        app_id,
+        user={"sub": "client001", "name": "Portal Client", "role": "client"},
+    )
+
+    assert result["route"] == "standard"
+    assert "high_volume" in result["enhanced_requirements_generation"]["triggers"]
+    assert _count_app_reqs(db, app_id, "high_volume") == _count_rules(db, "high_volume")
+    assert db.execute(
+        "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
+        (app_id,),
+    ).fetchone()["c"] == 0
+
+
+def test_high_volume_plus_pep_routes_edd_due_to_pep_not_volume(enhanced_app_db):
+    db = enhanced_app_db
+    app_id = _insert_application(
+        db,
+        risk_level="LOW",
+        status="pricing_review",
+        onboarding_lane="Standard Review",
+        prescreening={"expected_volume": "1m+"},
+    )
+    db.execute(
+        "INSERT INTO directors (application_id, full_name, is_pep) VALUES (?,?,?)",
+        (app_id, "Priya Declared PEP", "Yes"),
+    )
+    db.commit()
+
+    result = _apply_auto_generation(
+        db,
+        app_id,
+        user={"sub": "client001", "name": "Portal Client", "role": "client"},
+    )
+
+    assert result["route"] == "edd"
+    assert "declared_pep_present" in result["triggers"]
+    assert "high_volume" not in result["triggers"]
+    generation = result["enhanced_requirements_generation"]
+    assert "pep" in generation["triggers"]
+    assert "high_volume" in generation["triggers"]
+
+
 @pytest.mark.parametrize(
     "app_kwargs,setup,trigger_key",
     [

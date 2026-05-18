@@ -472,6 +472,39 @@ class TestRecomputeRiskAudit:
         assert "false_positive" not in (app["elevation_reason_text"] or "")
         db.close()
 
+    def test_regression_false_positive_cleared_can_return_to_low_fast_lane_if_otherwise_clean(self, temp_db):
+        from rule_engine import recompute_risk
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Technology",
+            entity_type="Listed Company",
+        )
+        _set_live_completed_match(db, app_id)
+        _insert_screening_review(
+            db,
+            app_id,
+            "false_positive_cleared",
+            requires_four_eyes=True,
+            complete=True,
+        )
+
+        recompute_risk(db, app_id, "false_positive_cleared_regression")
+        db.commit()
+
+        app = db.execute(
+            "SELECT final_risk_level, onboarding_lane FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+
+        assert app["final_risk_level"] == "LOW"
+        assert app["onboarding_lane"] != "EDD"
+        db.close()
+
     def test_needs_more_information_floor_is_explicit_and_routes_edd_lane(self, temp_db):
         """needs_more_information remains blocking and uses the explicit EDD follow-up policy."""
         from rule_engine import recompute_risk
