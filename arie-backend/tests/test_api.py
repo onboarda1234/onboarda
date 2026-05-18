@@ -2495,6 +2495,242 @@ class TestGovernanceAttemptAudit:
         assert detail["response_code"] == 400
         assert "compliance memo" in detail["rejection_reason"].lower()
 
+    def test_memo_json_serialization_normalizes_datetime_date_decimal_and_rows(self):
+        """Memo persistence must recursively preserve evidence while making it JSON-safe."""
+        from decimal import Decimal
+        from server import _json_dumps_strict, _json_ready_value
+
+        class RowLike:
+            def __init__(self):
+                self.data = {
+                    "created_at": datetime(2026, 5, 18, 10, 30, tzinfo=timezone.utc),
+                    "score": Decimal("12.50"),
+                }
+
+            def keys(self):
+                return self.data.keys()
+
+            def __getitem__(self, key):
+                return self.data[key]
+
+        payload = {
+            "edd_case": RowLike(),
+            "findings": [{"reviewed_on": datetime(2026, 5, 18, 11, 0, tzinfo=timezone.utc)}],
+            "effective_date": datetime(2026, 5, 18, tzinfo=timezone.utc).date(),
+            "amount": Decimal("42.75"),
+        }
+
+        normalized = _json_ready_value(payload)
+        encoded = _json_dumps_strict(payload, sort_keys=True)
+        decoded = json.loads(encoded)
+
+        assert normalized["edd_case"]["created_at"].startswith("2026-05-18T10:30:00")
+        assert decoded["findings"][0]["reviewed_on"].startswith("2026-05-18T11:00:00")
+        assert decoded["effective_date"] == "2026-05-18"
+        assert decoded["amount"] == 42.75
+        assert decoded["edd_case"]["score"] == 12.5
+
+    @pytest.mark.parametrize(
+        "scenario, sector, director_is_pep",
+        [
+            ("pep", "Consulting", True),
+            ("crypto", "Crypto / VASP", False),
+        ],
+    )
+    def test_edd_memo_generation_handles_datetime_enhanced_evidence(
+        self, api_server, monkeypatch, scenario, sector, director_is_pep
+    ):
+        """EDD/enhanced memo evidence with native datetimes must not 500 during memo persistence."""
+        from auth import create_token
+        from db import get_db
+        import server
+
+        app_id = f"app_edd_memo_datetime_{scenario}"
+        app_ref = f"ARF-2026-EDD-MEMO-DT-{scenario.upper()}"
+        conn = get_db()
+        conn.execute("DELETE FROM compliance_memos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM audit_log WHERE target = ?", (app_ref,))
+        conn.execute("DELETE FROM documents WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM directors WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM ubos WHERE application_id = ?", (app_id,))
+        conn.execute("DELETE FROM applications WHERE id = ?", (app_id,))
+        prescreening = {
+            "registered_entity_name": "EDD Memo Datetime Ltd",
+            "source_of_funds": "Operating revenue",
+            "expected_volume": "100000",
+            "operating_countries": "Mauritius",
+            "business_activity": "Consulting",
+            "screening_report": {
+                "screening_mode": "live",
+                "company_screening": {
+                    "sanctions": {
+                        "matched": False,
+                        "api_status": "live",
+                        "provider": "sumsub",
+                        "source": "sumsub",
+                    }
+                },
+                "director_screenings": [],
+                "ubo_screenings": [],
+                "total_hits": 0,
+            },
+        }
+        conn.execute(
+            """
+            INSERT INTO applications (
+                id, ref, client_id, company_name, country, sector, entity_type,
+                status, onboarding_lane, risk_level, base_risk_level, final_risk_level,
+                risk_score, prescreening_data
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                app_id,
+                app_ref,
+                f"client_edd_memo_datetime_{scenario}",
+                f"EDD Memo Datetime {scenario.title()} Ltd",
+                "Mauritius",
+                sector,
+                "SME",
+                "kyc_submitted",
+                "EDD",
+                "HIGH",
+                "LOW",
+                "HIGH",
+                70,
+                json.dumps(prescreening),
+            ),
+        )
+        if director_is_pep:
+            conn.execute(
+                """
+                INSERT INTO directors (application_id, first_name, last_name, full_name, nationality, is_pep)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (app_id, "Priya", "Raman", "Priya Raman", "Mauritius", "Yes"),
+            )
+        conn.commit()
+        conn.close()
+
+        def datetime_enhanced_summary(_db, _application_id):
+            ts = datetime(2026, 5, 18, 12, 15, tzinfo=timezone.utc)
+            item = {
+                "id": 9001,
+                "trigger_key": "declared_pep_present",
+                "trigger_label": "Declared PEP",
+                "trigger_category": "pep",
+                "requirement_key": "pep_senior_review",
+                "requirement_label": "PEP senior review",
+                "requirement_type": "review_task",
+                "subject_scope": "application",
+                "mandatory": True,
+                "blocking_approval": True,
+                "status": "accepted",
+                "reviewed_at": ts,
+                "reviewed_by": "admin001",
+            }
+            return {
+                "triggered": True,
+                "total_requirements": 1,
+                "by_trigger": [{"trigger_key": "declared_pep_present", "requirements": [item]}],
+                "accepted": [item],
+                "requested": [],
+                "submitted": [],
+                "rejected": [],
+                "waived": [],
+                "outstanding": [],
+                "mandatory_outstanding_count": 0,
+                "blocking_outstanding_count": 0,
+                "overall_status": "complete",
+                "warnings": [],
+                "closed_at": ts,
+            }
+
+        monkeypatch.setattr(server, "build_enhanced_review_memo_summary", datetime_enhanced_summary)
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/{app_id}/memo",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        accepted = body["metadata"]["enhanced_review_summary"]["accepted"][0]
+        assert accepted["reviewed_at"].startswith("2026-05-18T12:15:00")
+
+        conn = get_db()
+        row = conn.execute(
+            "SELECT memo_data FROM compliance_memos WHERE application_id = ? ORDER BY id DESC LIMIT 1",
+            (app_id,),
+        ).fetchone()
+        conn.close()
+        stored = json.loads(row["memo_data"])
+        assert stored["metadata"]["enhanced_review_summary"]["closed_at"].startswith("2026-05-18T12:15:00")
+
+    def test_decision_lock_timeout_returns_controlled_409_and_closes_db(self, api_server, monkeypatch):
+        """FOR UPDATE lock timeouts must not leak a transaction or surface as a 500."""
+        from auth import create_token
+        import server
+
+        class FakeLockTimeout(Exception):
+            pgcode = "55P03"
+
+        class LockingDb:
+            is_postgres = True
+
+            def __init__(self):
+                self.closed = False
+                self.rolled_back = False
+                self.committed = False
+                self.audit_written = False
+
+            def execute(self, sql, params=()):
+                if "FOR UPDATE" in sql:
+                    raise FakeLockTimeout("canceling statement due to lock timeout")
+                if "INSERT INTO audit_log" in sql:
+                    self.audit_written = True
+                    return self
+                return self
+
+            def fetchone(self):
+                return None
+
+            def rollback(self):
+                self.rolled_back = True
+
+            def commit(self):
+                self.committed = True
+
+            def close(self):
+                self.closed = True
+
+        fake_db = LockingDb()
+        monkeypatch.setattr(server, "get_db", lambda: fake_db)
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/applications/locked-app/decision",
+            json={
+                "decision": "approve",
+                "decision_reason": "Testing controlled lock timeout response.",
+                "officer_signoff": {
+                    "acknowledged": True,
+                    "scope": "decision",
+                    "source_context": "ai_advisory",
+                },
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+
+        assert resp.status_code == 409, resp.text
+        assert "temporarily locked" in resp.json().get("error", "")
+        assert fake_db.rolled_back is True
+        assert fake_db.audit_written is True
+        assert fake_db.committed is True
+        assert fake_db.closed is True
+
     def test_enhanced_requirement_approval_block_is_audited(self, api_server):
         """Enhanced requirement approval blockers must emit their focused audit event."""
         from auth import create_token

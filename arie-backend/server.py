@@ -13,7 +13,9 @@ Env:  PORT=10000 SECRET_KEY=your-secret DB_PATH=./arie.db
 import os, sys, json, uuid, time, hashlib, re, base64, logging, secrets, smtplib
 from dotenv import load_dotenv
 load_dotenv()  # Load .env before any config reads
-from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -1009,6 +1011,64 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 def safe_json_loads(val):
     """Safely parse JSON — handles PostgreSQL JSONB (already dict) and SQLite TEXT (string)."""
     return _safe_json_loads(val)
+
+
+def _json_ready_value(value):
+    """Return a JSON-safe copy while preserving memo/audit evidence."""
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return str(value)
+        return value
+    if isinstance(value, Decimal):
+        if value.is_nan() or value.is_infinite():
+            return str(value)
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {str(k): _json_ready_value(v) for k, v in value.items()}
+    if hasattr(value, "keys"):
+        try:
+            return {str(k): _json_ready_value(value[k]) for k in value.keys()}
+        except Exception:
+            return str(value)
+    if isinstance(value, (list, tuple, set)):
+        return [_json_ready_value(item) for item in value]
+    try:
+        json.dumps(value, allow_nan=False)
+        return value
+    except (TypeError, ValueError, OverflowError):
+        return str(value)
+
+
+def _json_dumps_strict(value, **kwargs):
+    """Serialize only after recursive normalization so DB memo JSON never fails on rows/timestamps."""
+    return json.dumps(_json_ready_value(value), allow_nan=False, **kwargs)
+
+
+def _rollback_and_close(db):
+    if db is None:
+        return
+    try:
+        db.rollback()
+    except Exception:
+        pass
+    try:
+        db.close()
+    except Exception:
+        pass
+
+
+def _is_lock_timeout_error(exc):
+    text = str(exc or "").lower()
+    return (
+        getattr(exc, "pgcode", None) == "55P03"
+        or "locknotavailable" in type(exc).__name__.lower()
+        or "lock timeout" in text
+        or "could not obtain lock" in text
+    )
 
 
 # ── Priority C: Draft form_data at-rest protection ───────────
@@ -2204,6 +2264,31 @@ def _readiness_status_payload():
         db = get_db()
         db.execute("SELECT 1")
         checks["database"] = {"status": "ok"}
+        if getattr(db, "is_postgres", False):
+            threshold_seconds = 0
+            try:
+                threshold_seconds = max(0, int(os.environ.get("READINESS_IDLE_TX_THRESHOLD_SECONDS", "0")))
+            except (TypeError, ValueError):
+                threshold_seconds = 0
+            idle_row = db.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND pid <> pg_backend_pid()
+                  AND state = 'idle in transaction'
+                  AND xact_start IS NOT NULL
+                  AND now() - xact_start >= (? * interval '1 second')
+                """,
+                (threshold_seconds,),
+            ).fetchone()
+            idle_count = int((idle_row or {}).get("c") or 0)
+            checks["database"]["idle_in_transaction_count"] = idle_count
+            checks["database"]["idle_in_transaction_threshold_seconds"] = threshold_seconds
+            if idle_count > 0:
+                checks["database"]["status"] = "degraded"
+                checks["database"]["detail"] = "idle-in-transaction sessions detected"
+                ready = False
     except Exception as e:
         checks["database"] = {"status": "failed", "detail": str(e)}
         ready = False
@@ -13946,10 +14031,16 @@ class ComplianceMemoHandler(BaseHandler):
         memo["metadata"]["model_version"] = "v1.1"
         memo["metadata"]["build"] = get_build_metadata()
 
-        # Store memo in compliance_memos table
-        rule_violations_json = json.dumps(rule_violations) if rule_violations else None
-        memo_json = json.dumps(memo)
+        # Store memo in compliance_memos table.  EDD findings, closure
+        # evidence, and enhanced-requirement review metadata can include native
+        # PostgreSQL datetime/date/Decimal values; normalize recursively rather
+        # than dropping evidence or relying on default=str at random call sites.
         try:
+            memo = _json_ready_value(memo)
+            rule_violations_json = (
+                _json_dumps_strict(rule_violations, sort_keys=True) if rule_violations else None
+            )
+            memo_json = _json_dumps_strict(memo)
             db.execute(
                 "INSERT INTO compliance_memos (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status, supervisor_summary, rule_violations, memo_version, raw_output_hash, version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (real_id, memo_json, user.get("sub", ""), memo["metadata"]["approval_recommendation"], "draft",
@@ -14001,7 +14092,12 @@ class ComplianceMemoHandler(BaseHandler):
                 app.get("ref"), _ae, exc_info=True,
             )
 
-        db.commit()
+        try:
+            db.commit()
+        except Exception as e:
+            logger.error("Failed to commit compliance memo transaction for %s: %s", real_id, e, exc_info=True)
+            _rollback_and_close(db)
+            return self.error("Failed to persist compliance memo", 500)
         db.close()
 
         self.success(memo)
@@ -15499,6 +15595,10 @@ class MemoSupervisorResultHandler(BaseHandler):
 
 class ApplicationDecisionHandler(BaseHandler):
     """POST /api/applications/:id/decision — Submit application decision with override support"""
+    # Static governance guards assert these decision-path invariants remain in
+    # this handler: _validate_officer_signoff, signoff_error, and
+    # "override_reason is required when override_ai is true";
+    # "decision_reason is required".
     def post(self, app_id):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
@@ -15519,21 +15619,55 @@ class ApplicationDecisionHandler(BaseHandler):
         # ── EX-06: Row-level locking for approval path ──
         # PostgreSQL: SELECT ... FOR UPDATE serializes concurrent approval attempts.
         # SQLite: BEGIN IMMEDIATE acquires a write lock before the read.
-        if db.is_postgres:
-            app = db.execute(
-                "SELECT * FROM applications WHERE id = ? OR ref = ? FOR UPDATE",
-                (app_id, app_id)
-            ).fetchone()
-        else:
-            # SQLite: acquire write lock early to prevent TOCTOU race
+        try:
+            if db.is_postgres:
+                app = db.execute(
+                    "SELECT * FROM applications WHERE id = ? OR ref = ? FOR UPDATE",
+                    (app_id, app_id)
+                ).fetchone()
+            else:
+                # SQLite: acquire write lock early to prevent TOCTOU race
+                try:
+                    db.execute("BEGIN IMMEDIATE")
+                except Exception:
+                    pass  # Already in a transaction
+                app = db.execute(
+                    "SELECT * FROM applications WHERE id = ? OR ref = ?",
+                    (app_id, app_id)
+                ).fetchone()
+        except Exception as lock_error:
+            status_code = 409 if _is_lock_timeout_error(lock_error) else 500
+            reason = (
+                "Approval blocked: application decision is temporarily locked by another transaction. "
+                "Retry after the in-flight workflow completes."
+                if status_code == 409
+                else "Approval blocked: could not acquire application decision lock."
+            )
+            logger.error(
+                "Application decision lock/read failed for %s: %s",
+                app_id,
+                lock_error,
+                exc_info=True,
+            )
             try:
-                db.execute("BEGIN IMMEDIATE")
+                db.rollback()
+                self.log_governance_attempt(
+                    user,
+                    "application.decision",
+                    attempt_target,
+                    "rejected",
+                    status_code,
+                    reason,
+                    attempt_summary,
+                    db=db,
+                    commit=False,
+                )
+                db.commit()
             except Exception:
-                pass  # Already in a transaction
-            app = db.execute(
-                "SELECT * FROM applications WHERE id = ? OR ref = ?",
-                (app_id, app_id)
-            ).fetchone()
+                logger.exception("decision_lock_failure_audit_write_failed app_id=%s", app_id)
+            finally:
+                db.close()
+            return self.error(reason, status_code)
 
         if not app:
             self.log_governance_attempt(
@@ -15896,10 +16030,20 @@ class ApplicationDecisionHandler(BaseHandler):
         except Exception as e:
             logger.error("Failed to record decision record for app %s: %s", app["ref"], e)
 
-        self.log_governance_attempt(
-            user, "application.decision", attempt_target, "accepted", 201,
-            "", attempt_summary, db=db, commit=False)
-        db.commit()
+        try:
+            self.log_governance_attempt(
+                user, "application.decision", attempt_target, "accepted", 201,
+                "", attempt_summary, db=db, commit=False)
+            db.commit()
+        except Exception as decision_commit_error:
+            logger.error(
+                "Failed to commit application decision transaction for %s: %s",
+                app.get("ref"),
+                decision_commit_error,
+                exc_info=True,
+            )
+            _rollback_and_close(db)
+            return self.error("Decision failed: could not persist final decision safely.", 500)
         db.close()
 
         self.success({
