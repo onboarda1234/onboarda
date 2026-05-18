@@ -378,7 +378,7 @@ def enroll_approved_application(
                      due_date, next_review_date, priority, review_cycle_number,
                      review_type, policy_version, frequency_months, calculation_basis,
                      sla_due_at, state_changed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 RETURNING *
                 """,
                 (
@@ -409,7 +409,7 @@ def enroll_approved_application(
                      due_date, next_review_date, priority, review_cycle_number,
                      review_type, policy_version, frequency_months, calculation_basis,
                      sla_due_at, state_changed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 """,
                 (
                     app_id,

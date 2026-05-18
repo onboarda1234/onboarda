@@ -1429,7 +1429,13 @@ def _blocking_items_for_completion(db, review, items, *, outcome: str,
             "label": "Imported high-risk review requires SCO/admin acknowledgement",
             "severity": "high",
         })
-    if not str(_row_get(review, "officer_rationale") or "").strip():
+    if (
+        _row_get(review, "assigned_officer")
+        or _row_get(review, "legacy_import")
+        or _row_get(review, "material_change_attestation")
+        or _row_get(review, "risk_change_attestation")
+        or _row_get(review, "review_type") == "legacy_import"
+    ) and not str(_row_get(review, "officer_rationale") or "").strip():
         blocking_items.append({
             "item_type": "officer_rationale_required",
             "label": "Officer rationale is required",
@@ -1440,7 +1446,11 @@ def _blocking_items_for_completion(db, review, items, *, outcome: str,
             "SELECT stage FROM edd_cases WHERE id = ?",
             (_row_get(review, "linked_edd_case_id"),),
         ).fetchone()
-        if linked_edd and str(_row_get(linked_edd, "stage") or "").strip().lower() not in TERMINAL_EDD_STAGES:
+        if (
+            linked_edd
+            and str(_row_get(linked_edd, "stage") or "").strip().lower() not in TERMINAL_EDD_STAGES
+            and outcome != OUTCOME_EDD_REQUIRED
+        ):
             blocking_items.append({
                 "item_type": "active_linked_edd",
                 "label": "Linked EDD case must be completed before review closure",
@@ -1459,6 +1469,7 @@ def _blocking_items_for_completion(db, review, items, *, outcome: str,
         status = item.get("status") or REQUIRED_ITEM_STATUS_OPEN
         if status in (REQUIRED_ITEM_STATUS_CLEARED, REQUIRED_ITEM_STATUS_NOT_APPLICABLE):
             continue
+        severity = str(item.get("severity") or "medium").lower()
         if item.get("id") and item.get("item_type") in {
             "kyc_refresh",
             "ubo_confirmation",
@@ -1469,7 +1480,7 @@ def _blocking_items_for_completion(db, review, items, *, outcome: str,
             "licensing_refresh",
             "source_of_funds_refresh",
             "source_of_wealth_refresh",
-        } and str(item.get("id")) not in linked_requirement_ids:
+        } and _severity_rank(severity) >= _severity_rank("high") and str(item.get("id")) not in linked_requirement_ids:
             blocking_items.append({
                 "item_type": "required_evidence_outstanding",
                 "label": item.get("label") or "Required evidence is not linked",
