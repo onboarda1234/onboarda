@@ -1307,30 +1307,23 @@ def _screening_review_is_complete_clearance(review):
     return True
 
 
-def _screening_report_has_raw_completed_match(app):
+def _screening_report_has_raw_completed_match(app, reviews=None):
     prescreening = safe_json_loads(_row_get(app, "prescreening_data"))
     report = prescreening.get("screening_report") if isinstance(prescreening, dict) else {}
     if not isinstance(report, dict):
         return False
+    try:
+        from screening_state import build_screening_terminality_summary
 
-    company = report.get("company_screening") or {}
-    if isinstance(company, dict):
-        api_status = str(company.get("api_status") or company.get("status") or "").strip().lower()
-        matched = bool(company.get("matched") or company.get("has_match") or company.get("match_found"))
-        results = company.get("results")
-        has_results = isinstance(results, list) and bool(results)
-        terminalish = api_status in {"live", "completed", "completed_match", "complete", "success", ""}
-        if terminalish and (matched or has_results):
-            return True
-
-    for key in ("total_hits", "hit_count", "match_count"):
-        try:
-            if int(report.get(key) or 0) > 0:
-                return True
-        except (TypeError, ValueError):
-            pass
-
-    return False
+        summary = build_screening_terminality_summary(
+            report,
+            prescreening,
+            screening_reviews=reviews or [],
+        )
+        return bool(summary.get("has_terminal_match"))
+    except Exception as exc:
+        logger.warning("Canonical screening terminality check failed during risk recompute: %s", exc)
+        return False
 
 
 def _latest_screening_reviews(db, app_id):
@@ -1376,26 +1369,26 @@ def _screening_disposition_floor_signal(db, app):
                 }
             return {
                 "code": code,
-                "minimum_level": "MEDIUM",
+                "minimum_level": "HIGH",
                 "reason_code": "material_screening_disposition_floor",
                 "reason_text": (
                     "Screening disposition floor: "
                     + code
-                    + " creates or preserves material screening/EDD controls and requires at least MEDIUM final risk"
+                    + " creates or preserves material screening/EDD controls and requires at least HIGH final risk"
                 ),
                 "sets_edd_lane": code in _SCREENING_DISPOSITION_EDD_CODES,
             }
 
-    if _screening_report_has_raw_completed_match(app):
+    if _screening_report_has_raw_completed_match(app, reviews=reviews):
         cleared_reviews = [r for r in reviews if _screening_review_is_complete_clearance(r)]
         if not cleared_reviews:
             return {
                 "code": "raw_completed_match",
-                "minimum_level": "MEDIUM",
+                "minimum_level": "HIGH",
                 "reason_code": "material_screening_disposition_floor",
                 "reason_text": (
                     "Screening disposition floor: unresolved raw completed_match remains a material "
-                    "screening concern until formally cleared"
+                    "screening concern requiring at least HIGH final risk until formally cleared"
                 ),
                 "sets_edd_lane": True,
             }

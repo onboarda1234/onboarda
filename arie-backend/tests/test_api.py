@@ -3062,7 +3062,8 @@ class TestGovernanceAttemptAudit:
 
         assert app["status"] == "edd_required"
         assert app["onboarding_lane"] == "EDD"
-        assert app["final_risk_level"] == "MEDIUM"
+        expected_final_risk = "MEDIUM" if disposition_code == "needs_more_information" else "HIGH"
+        assert app["final_risk_level"] == expected_final_risk
         assert edd is not None
         assert audit is not None
         detail = json.loads(audit["detail"])
