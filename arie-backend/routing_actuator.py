@@ -171,8 +171,6 @@ def _party_ownership_transparency_status(db, application_id: Any) -> str:
         return ""
 
     disclosed_total = sum(percentages)
-    if disclosed_total < 50:
-        return "opaque"
     if disclosed_total < 75:
         return "incomplete"
     return "clear"

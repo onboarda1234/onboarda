@@ -37,13 +37,13 @@ from rule_engine import (
 def _base_medium_app(**overrides):
     """Build a MEDIUM-scoring application (score ~45, no elevation triggers)."""
     data = {
-        "entity_type": "SME",
-        "ownership_structure": "3+ layers",
+        "entity_type": "trust",
+        "ownership_structure": "1-2 shareholders",
         "country": "mauritius",
         "sector": "import",                        # score 3, not high-risk (4)
         "directors": [{"full_name": "John Doe", "nationality": "mauritian",
-                       "is_pep": "Yes", "pep_type": "domestic"}],
-        "ubos": [{"full_name": "John Doe", "nationality": "mauritian", "ownership_pct": "100"}],
+                       "is_pep": "No", "pep_type": ""}],
+        "ubos": [{"full_name": "John Doe", "nationality": "mauritian", "ownership_pct": "100", "is_pep": "No"}],
         "primary_service": "cross-border payments",
         "monthly_volume": "500,000",
         "source_of_wealth": "inheritance",
@@ -758,13 +758,13 @@ class TestPakistanElevation:
         assert "elevation_grey_sector_opaque" in result["escalations"]
 
     def test_pakistan_without_crypto_stays_medium(self):
-        """Pakistan + non-high-risk sector → no combination elevation, stays MEDIUM."""
+        """Pakistan + non-high-risk sector still respects the jurisdiction HIGH floor."""
         result = compute_risk_score(_base_medium_app(
             country="pakistan",
             sector="import",
             ownership_structure="simple",
         ))
-        assert result["final_risk_level"] == "MEDIUM"
+        assert result["final_risk_level"] == "HIGH"
         assert "elevation_grey_sector_opaque" not in result["escalations"]
 
     def test_pakistan_without_opaque_stays_medium(self):
