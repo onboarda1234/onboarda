@@ -14,6 +14,11 @@ from datetime import datetime
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+try:
+    from edd_completion import collect_edd_completion_status, edd_completion_satisfies_route
+except Exception:  # pragma: no cover - defensive import guard
+    collect_edd_completion_status = None
+    edd_completion_satisfies_route = lambda _status: False
 
 _CANONICAL_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH", "VERY_HIGH"}
 _EDD_ACTUATION_TERMINAL_STAGES = ("edd_approved", "edd_rejected")
@@ -133,6 +138,8 @@ def actuate_edd_routing(
         "status_changed": False,
         "status_preserved": False,
         "skipped": False,
+        "edd_completion_satisfied": False,
+        "completion_recognized": False,
     }
     try:
         if not isinstance(edd_routing, Mapping) or edd_routing.get("route") != "edd":
@@ -150,6 +157,55 @@ def actuate_edd_routing(
         if not application_id:
             result["skipped"] = True
             return result
+
+        completion = {}
+        if collect_edd_completion_status is not None:
+            completion = collect_edd_completion_status(db, application_id, routing=edd_routing)
+            if edd_completion_satisfies_route(completion):
+                result["case_id"] = completion.get("case_id")
+                result["edd_completion_satisfied"] = True
+                result["completion_recognized"] = True
+                result["status_preserved"] = True
+                triggers = list(edd_routing.get("triggers") or [])
+                mandatory_reasons = list((supervisor_result or {}).get("mandatory_escalation_reasons") or [])
+                try:
+                    db.execute(
+                        "INSERT INTO audit_log (user_id, user_name, user_role, "
+                        "action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                        (
+                            (user or {}).get("sub") or "system",
+                            (user or {}).get("name") or "system",
+                            (user or {}).get("role") or "system",
+                            "edd_routing.actuated",
+                            "application:" + str(app_dict.get("ref") or application_id),
+                            json.dumps(
+                                {
+                                    "policy_version": edd_routing.get("policy_version", ""),
+                                    "route": edd_routing.get("route"),
+                                    "triggers": triggers,
+                                    "mandatory_escalation_reasons": mandatory_reasons,
+                                    "evaluated_at": edd_routing.get("evaluated_at", ""),
+                                    "edd_case_id": result["case_id"],
+                                    "edd_case_created": False,
+                                    "status_changed": False,
+                                    "status_preserved": True,
+                                    "edd_completion_satisfied": True,
+                                    "completion_recognized": True,
+                                    "completion_reason": completion.get("reason"),
+                                    "completion_case_id": completion.get("case_id"),
+                                    "completion_current_triggers": completion.get("current_triggers"),
+                                    "completion_covered_triggers": completion.get("covered_triggers"),
+                                    "origin": "policy_routing",
+                                },
+                                default=str,
+                                sort_keys=True,
+                            ),
+                            client_ip or "",
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to write completed EDD actuation audit row: %s", exc)
+                return result
 
         placeholders = ",".join(["?"] * len(_EDD_ACTUATION_TERMINAL_STAGES))
         existing = db.execute(

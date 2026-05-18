@@ -144,6 +144,10 @@ from edd_actuation import (
     resolve_valid_assigned_officer as _resolve_valid_edd_assigned_officer,
     should_preserve_preapproved_kyc_status as _should_preserve_preapproved_kyc_status,
 )
+from edd_completion import (
+    collect_edd_completion_status as _collect_edd_completion_status,
+    edd_completion_satisfies_route as _edd_completion_satisfies_route,
+)
 from enhanced_requirements import (
     ALLOWED_AUDIENCES,
     ALLOWED_REQUIREMENT_TYPES,
@@ -430,6 +434,8 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
         "status_changed": False,
         "status_preserved": False,
         "skipped": False,
+        "edd_completion_satisfied": False,
+        "completion_recognized": False,
     }
     try:
         if not isinstance(edd_routing, dict) or edd_routing.get("route") != "edd":
@@ -445,6 +451,51 @@ def _actuate_edd_routing(db, app_row, edd_routing, supervisor_result, user, clie
         application_id = app_dict.get("id")
         if not application_id:
             result["skipped"] = True
+            return result
+
+        completion = _collect_edd_completion_status(db, application_id, routing=edd_routing)
+        if _edd_completion_satisfies_route(completion):
+            result["case_id"] = completion.get("case_id")
+            result["edd_completion_satisfied"] = True
+            result["completion_recognized"] = True
+            result["status_preserved"] = True
+            triggers = list(edd_routing.get("triggers") or [])
+            policy_version = edd_routing.get("policy_version", "")
+            evaluated_at = edd_routing.get("evaluated_at", "")
+            mandatory_reasons = list((supervisor_result or {}).get("mandatory_escalation_reasons") or [])
+            try:
+                db.execute(
+                    "INSERT INTO audit_log (user_id, user_name, user_role, "
+                    "action, target, detail, ip_address) VALUES (?,?,?,?,?,?,?)",
+                    (
+                        (user or {}).get("sub") or "system",
+                        (user or {}).get("name") or "system",
+                        (user or {}).get("role") or "system",
+                        "edd_routing.actuated",
+                        "application:" + str(app_dict.get("ref") or application_id),
+                        json.dumps({
+                            "policy_version": policy_version,
+                            "route": edd_routing.get("route"),
+                            "triggers": triggers,
+                            "mandatory_escalation_reasons": mandatory_reasons,
+                            "evaluated_at": evaluated_at,
+                            "edd_case_id": result["case_id"],
+                            "edd_case_created": False,
+                            "status_changed": False,
+                            "status_preserved": True,
+                            "edd_completion_satisfied": True,
+                            "completion_recognized": True,
+                            "completion_reason": completion.get("reason"),
+                            "completion_case_id": completion.get("case_id"),
+                            "completion_current_triggers": completion.get("current_triggers"),
+                            "completion_covered_triggers": completion.get("covered_triggers"),
+                            "origin": "policy_routing",
+                        }, default=str, sort_keys=True),
+                        client_ip or "",
+                    ),
+                )
+            except Exception as _ae:
+                logger.warning("Failed to write completed EDD actuation audit row: %s", _ae)
             return result
 
         # Idempotency: at most one active EDD case per application.
@@ -14014,6 +14065,16 @@ class ComplianceMemoHandler(BaseHandler):
             memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(
                 app, directors, ubos, documents
             )
+            edd_completion = _collect_edd_completion_status(
+                db,
+                real_id,
+                routing=(memo.get("metadata", {}) or {}).get("edd_routing") or {},
+            )
+            if _edd_completion_satisfies_route(edd_completion):
+                app["edd_completion"] = edd_completion
+                memo, rule_engine_result, supervisor_result, validation_result = build_compliance_memo(
+                    app, directors, ubos, documents
+                )
         except Exception as e:
             logger.error("Failed to build compliance memo for %s: %s", real_id, e, exc_info=True)
             try:
@@ -15115,11 +15176,20 @@ class MemoApproveHandler(BaseHandler):
         edd_routing = metadata.get("edd_routing") or {}
         if edd_routing.get("route") == "edd":
             app_row = db.execute(
-                "SELECT status FROM applications WHERE id = ? OR ref = ?",
+                "SELECT id, status FROM applications WHERE id = ? OR ref = ?",
                 (app_id, app_id)
             ).fetchone()
             current_status = (app_row["status"] if app_row else "") or ""
-            if current_status not in ("edd_required", "edd_approved"):
+            edd_completion = metadata.get("edd_completion") or {}
+            if not _edd_completion_satisfies_route(edd_completion) and app_row:
+                edd_completion = _collect_edd_completion_status(
+                    db,
+                    app_row["id"],
+                    routing=edd_routing,
+                )
+            if _edd_completion_satisfies_route(edd_completion):
+                metadata["edd_completion"] = edd_completion
+            elif current_status not in ("edd_required", "edd_approved"):
                 return reject_memo_approval(
                     "Cannot approve memo: deterministic EDD routing policy ("
                     + str(edd_routing.get("policy_version", "")) + ") routes this "
