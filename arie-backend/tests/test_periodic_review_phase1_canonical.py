@@ -383,6 +383,16 @@ def test_new_flow_writes_outcome_and_not_legacy_decision(phase1_db, audit_sink):
     import periodic_review_engine as pre
     from periodic_review_management import save_officer_rationale
 
+    phase1_db.execute(
+        "UPDATE applications SET prescreening_data = ? WHERE id = ?",
+        (
+            json.dumps({
+                "screening_report": {"screened_at": "2026-01-01T00:00:00Z"},
+                "screening_valid_until": "2099-12-31T00:00:00Z",
+            }),
+            "app-phase1",
+        ),
+    )
     review_id = _insert_review(
         phase1_db,
         risk_level="LOW",

@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import monitoring_routing as mr
-from periodic_review_projection_service import build_review_projection
+from periodic_review_projection_service import list_review_projections
 
 # ── Active / historical vocabularies ─────────────────────────────────
 # These mirror the engines' terminal sets (kept in this module so the
@@ -316,7 +316,8 @@ def _materialise_alert(row, *, user_names: Dict[str, str],
     }
 
 
-def _materialise_review(db, row, *, user_names: Dict[str, str],
+def _materialise_review(row, *, user_names: Dict[str, str],
+                        projection: Dict[str, Any],
                         required_items_count: int,
                         now: datetime) -> Dict[str, Any]:
     payload = _parse_review_fixture_payload(_row_get(row, "trigger_reason"))
@@ -327,7 +328,6 @@ def _materialise_review(db, row, *, user_names: Dict[str, str],
     review_reason = _row_get(row, "review_reason") or _row_get(row, "trigger_reason")
     if payload and isinstance(review_reason, str) and "FIX_REVIEW_JSON:" in review_reason:
         review_reason = "Seeded fixture review trigger"
-    projection = build_review_projection(db, row)
     owner_id = _row_get(row, "assigned_officer")
     return {
         "type": "review",
@@ -711,10 +711,18 @@ def build_lifecycle_queue(
                                      include=include, exclude_fixtures=exclude_fixtures)
         owner_ids = [_row_get(r, "assigned_officer") for r in review_rows]
         names = _user_name_map(db, owner_ids)
+        projection_map = {
+            projection["review_id"]: projection
+            for projection in list_review_projections(
+                db,
+                review_ids=[_row_get(r, "id") for r in review_rows],
+            )
+        }
         for r in review_rows:
             items_count = len(_decode_required_items(_row_get(r, "required_items")))
             item = _materialise_review(
-                db, r, user_names=names,
+                r, user_names=names,
+                projection=projection_map.get(_row_get(r, "id"), {}),
                 required_items_count=items_count,
                 now=ref_now,
             )

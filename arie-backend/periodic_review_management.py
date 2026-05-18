@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -81,6 +82,8 @@ RISK_WRITE_GAP_MESSAGE = (
     "because the repository does not expose a safe manual canonical risk override path; "
     "the review records and audit trail are updated, but authoritative application risk remains unchanged."
 )
+
+logger = logging.getLogger("arie.periodic_review_management")
 
 
 def _require_audit_writer(audit_writer):
@@ -572,6 +575,11 @@ def record_risk_change(
         db,
         before_state=before,
         after_state=after,
+    )
+    logger.warning(
+        "periodic_review.risk_rerated review_id=%s application risk write skipped: %s",
+        review_id,
+        RISK_WRITE_GAP_MESSAGE,
     )
     return {
         "review_id": review_id,
