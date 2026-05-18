@@ -2192,6 +2192,7 @@ def log_agent_execution(
     Log an agent execution to the agent_executions traceability table.
     Safe to call — silently fails if table doesn't exist yet.
     """
+    db = None
     try:
         db = get_db()
         db.execute(
@@ -2205,8 +2206,8 @@ def log_agent_execution(
                 agent_name,
                 agent_number,
                 status,
-                json.dumps(checks) if checks else None,
-                json.dumps(flags) if flags else None,
+                json.dumps(checks, default=str) if checks else None,
+                json.dumps(flags, default=str) if flags else None,
                 1 if requires_review else 0,
                 source,
                 started_at or datetime.now().isoformat(),
@@ -2214,9 +2215,19 @@ def log_agent_execution(
             )
         )
         db.commit()
-        db.close()
     except Exception as e:
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         logger.debug(f"Could not log agent execution: {e}")
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 def init_db():

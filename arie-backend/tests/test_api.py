@@ -146,6 +146,41 @@ class TestHealthAPI:
         assert "checks" not in resp.text
         assert resp.headers.get("Server") == "RegMind"
 
+    def test_readiness_reports_degraded_when_db_pool_unavailable(self, monkeypatch):
+        """Readiness must fail closed when the DB/pool cannot provide a connection."""
+        import server
+
+        def exhausted_pool():
+            raise RuntimeError("connection pool exhausted")
+
+        monkeypatch.setattr(server, "get_db", exhausted_pool)
+
+        ready, payload = server._readiness_status_payload()
+
+        assert ready is False
+        assert payload["checks"]["database"]["status"] == "failed"
+        assert "connection pool exhausted" in payload["checks"]["database"]["detail"]
+
+    def test_health_liveness_process_ok_but_readiness_db_degraded(self, api_server, monkeypatch):
+        """Health must not report ok when DB-backed authenticated workflows are down."""
+        import server
+
+        def exhausted_pool():
+            raise RuntimeError("connection pool exhausted")
+
+        monkeypatch.setattr(server, "get_db", exhausted_pool)
+
+        health = http_requests.get(f"{api_server}/api/health", timeout=3)
+        assert health.status_code == 503
+        health_body = health.json()
+        assert health_body["status"] == "degraded"
+        assert health_body["readiness"] == "degraded"
+        assert "database" not in health_body
+
+        liveness = http_requests.get(f"{api_server}/api/liveness", timeout=3)
+        assert liveness.status_code == 200
+        assert liveness.json()["status"] == "ok"
+
     def test_metrics_requires_auth(self, api_server):
         """Prometheus exposition must not be available anonymously."""
         resp = http_requests.get(f"{api_server}/metrics", timeout=3)
@@ -1758,6 +1793,293 @@ class TestSecurityHeaders:
         resp = http_requests.get(f"{api_server}/api/health", timeout=3)
         csp = resp.headers.get("Content-Security-Policy", "")
         assert "default-src" in csp
+
+
+def _seed_document_verification_case(app_id, ref, doc_id, doc_type="cert_inc"):
+    from db import get_db
+
+    file_path = os.path.join(tempfile.gettempdir(), f"{doc_id}.pdf")
+    with open(file_path, "wb") as handle:
+        handle.write(
+            b"%PDF-1.4\n"
+            b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+            b"2 0 obj<</Type/Pages/Count 0>>endobj\n"
+            b"trailer<</Root 1 0 R>>\n%%EOF\n"
+        )
+
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO applications (
+            id, ref, client_id, company_name, country, sector, entity_type,
+            status, risk_level, risk_score, prescreening_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id,
+            ref,
+            "testclient001",
+            "Verification Reliability Corp",
+            "Mauritius",
+            "Technology",
+            "Private Company",
+            "kyc_documents",
+            "LOW",
+            25,
+            json.dumps({
+                "registered_entity_name": "Verification Reliability Corp",
+                "country_of_incorporation": "Mauritius",
+                "brn": "VR-001",
+                "ubos": [{"full_name": "Uma Owner", "ownership_pct": 100}],
+                "directors": [{"full_name": "John Director"}],
+            }),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO documents (
+            id, application_id, doc_type, doc_name, file_path, file_size,
+            mime_type, verification_status, is_current, version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            doc_id,
+            app_id,
+            doc_type,
+            f"{doc_type}.pdf",
+            file_path,
+            os.path.getsize(file_path),
+            "application/pdf",
+            "pending",
+            1,
+            1,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return file_path
+
+
+class TestDocumentVerificationRuntimeReliability:
+    def test_document_verification_string_payload_does_not_raise_attribute_error(self, api_server, monkeypatch):
+        """String verifier payloads are flagged for review instead of calling .get on str."""
+        import server
+        from auth import create_token
+
+        uid = uuid.uuid4().hex[:8]
+        app_id = f"verify_str_{uid}"
+        doc_id = f"doc_str_{uid}"
+        _seed_document_verification_case(app_id, f"ARF-VERIFY-STR-{uid}", doc_id)
+
+        monkeypatch.setattr(server, "HAS_DOC_VERIFICATION", True)
+        monkeypatch.setattr(server, "verify_document_layered", lambda **_: "unstructured verifier response")
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        resp = http_requests.post(
+            f"{api_server}/api/documents/{doc_id}/verify",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["verification_status"] == "flagged"
+        assert isinstance(body["checks"], list)
+        assert isinstance(body["checks"][0], dict)
+        assert "unstructured str check payload" in body["checks"][0]["message"]
+
+    def test_document_verification_failure_rolls_back_and_releases_db_connection(self, api_server, monkeypatch):
+        """Forced verifier exceptions must not poison the next DB-backed auth request."""
+        import bcrypt
+        import server
+        from auth import create_token
+        from db import get_db
+
+        uid = uuid.uuid4().hex[:8]
+        app_id = f"verify_fail_{uid}"
+        doc_id = f"doc_fail_{uid}"
+        _seed_document_verification_case(app_id, f"ARF-VERIFY-FAIL-{uid}", doc_id)
+
+        def verifier_failure(**_):
+            raise RuntimeError("synthetic verifier failure")
+
+        monkeypatch.setattr(server, "HAS_DOC_VERIFICATION", True)
+        monkeypatch.setattr(server, "verify_document_layered", verifier_failure)
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        verify = http_requests.post(
+            f"{api_server}/api/documents/{doc_id}/verify",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        assert verify.status_code == 200, verify.text
+        assert verify.json()["verification_status"] == "flagged"
+
+        login_email = f"verify-login-{uid}@example.test"
+        login_password = "StrongPass123!"
+        conn = get_db()
+        pw_hash = bcrypt.hashpw(login_password.encode(), bcrypt.gensalt()).decode()
+        conn.execute(
+            "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"user_{uid}", login_email, pw_hash, "Verification Login", "admin", "active"),
+        )
+        conn.commit()
+        conn.close()
+
+        login = http_requests.post(
+            f"{api_server}/api/auth/officer/login",
+            json={"email": login_email, "password": login_password},
+            timeout=5,
+        )
+        assert login.status_code == 200, login.text
+
+        me = http_requests.get(
+            f"{api_server}/api/auth/me",
+            headers={"Authorization": f"Bearer {login.json()['token']}"},
+            timeout=5,
+        )
+        assert me.status_code == 200, me.text
+
+    def test_officer_login_still_works_after_document_verification_exception(self, api_server, monkeypatch):
+        """Regression label: officer login remains DB-backed after verifier exceptions."""
+        import bcrypt
+        import server
+        from auth import create_token
+        from db import get_db
+
+        uid = uuid.uuid4().hex[:8]
+        app_id = f"verify_login_{uid}"
+        doc_id = f"doc_login_{uid}"
+        _seed_document_verification_case(app_id, f"ARF-VERIFY-LOGIN-{uid}", doc_id)
+        monkeypatch.setattr(server, "HAS_DOC_VERIFICATION", True)
+        monkeypatch.setattr(server, "verify_document_layered", lambda **_: (_ for _ in ()).throw(RuntimeError("boom")))
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        verify = http_requests.post(
+            f"{api_server}/api/documents/{doc_id}/verify",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        assert verify.status_code == 200, verify.text
+
+        email = f"verify-login-exact-{uid}@example.test"
+        password = "StrongPass123!"
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                f"login_user_{uid}",
+                email,
+                bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(),
+                "Verification Login Exact",
+                "admin",
+                "active",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        login = http_requests.post(
+            f"{api_server}/api/auth/officer/login",
+            json={"email": email, "password": password},
+            timeout=5,
+        )
+        assert login.status_code == 200, login.text
+
+    def test_auth_me_still_works_after_document_verification_exception(self, api_server, monkeypatch):
+        """Regression label: /api/auth/me remains available after verifier exceptions."""
+        import server
+        from auth import create_token
+
+        uid = uuid.uuid4().hex[:8]
+        app_id = f"verify_me_{uid}"
+        doc_id = f"doc_me_{uid}"
+        _seed_document_verification_case(app_id, f"ARF-VERIFY-ME-{uid}", doc_id)
+        monkeypatch.setattr(server, "HAS_DOC_VERIFICATION", True)
+        monkeypatch.setattr(server, "verify_document_layered", lambda **_: (_ for _ in ()).throw(RuntimeError("boom")))
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        verify = http_requests.post(
+            f"{api_server}/api/documents/{doc_id}/verify",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        assert verify.status_code == 200, verify.text
+
+        me = http_requests.get(
+            f"{api_server}/api/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        assert me.status_code == 200, me.text
+
+    def test_multi_document_verification_does_not_exhaust_pool(self, api_server, monkeypatch):
+        """Repeated malformed verifier payloads remain bounded and auth keeps working."""
+        import server
+        from auth import create_token
+
+        monkeypatch.setattr(server, "HAS_DOC_VERIFICATION", True)
+        monkeypatch.setattr(
+            server,
+            "verify_document_layered",
+            lambda **_: {"overall": "flagged", "checks": ["string warning", None]},
+        )
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        uid = uuid.uuid4().hex[:8]
+        for idx in range(8):
+            app_id = f"verify_multi_{uid}_{idx}"
+            doc_id = f"doc_multi_{uid}_{idx}"
+            _seed_document_verification_case(app_id, f"ARF-VERIFY-MULTI-{uid}-{idx}", doc_id)
+            resp = http_requests.post(
+                f"{api_server}/api/documents/{doc_id}/verify",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5,
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["verification_status"] == "flagged"
+
+        me = http_requests.get(
+            f"{api_server}/api/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        assert me.status_code == 200, me.text
+
+    def test_audit_write_failure_does_not_leak_transaction(self, monkeypatch):
+        """Agent execution audit failures must rollback/close instead of leaking connections."""
+        import db as db_module
+
+        class FailingDb:
+            def __init__(self):
+                self.rolled_back = False
+                self.closed = False
+
+            def execute(self, *_args, **_kwargs):
+                raise RuntimeError("insert failed")
+
+            def commit(self):
+                raise AssertionError("commit should not be reached")
+
+            def rollback(self):
+                self.rolled_back = True
+
+            def close(self):
+                self.closed = True
+
+        fake_db = FailingDb()
+        monkeypatch.setattr(db_module, "get_db", lambda: fake_db)
+
+        db_module.log_agent_execution(
+            application_id="app",
+            agent_name="verify_document",
+            agent_number=1,
+            status="flagged",
+            checks=[{"result": "warn", "message": "warning"}],
+        )
+
+        assert fake_db.rolled_back is True
+        assert fake_db.closed is True
 
 
 # ═══════════════════════════════════════════════════════════
