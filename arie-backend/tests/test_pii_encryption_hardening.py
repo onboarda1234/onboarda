@@ -336,6 +336,39 @@ class TestReadinessEndpoint:
         finally:
             server._pii_encryption_ok = original
 
+    def test_readiness_degrades_when_postgres_idle_transactions_exist(self, monkeypatch):
+        """Readiness must surface idle-in-transaction sessions as degraded."""
+        import server
+
+        class FakeDb:
+            is_postgres = True
+            closed = False
+
+            def execute(self, sql, params=()):
+                self.last_sql = sql
+                return self
+
+            def fetchone(self):
+                if "pg_stat_activity" in self.last_sql:
+                    return {"c": 2}
+                return {"ok": 1}
+
+            def close(self):
+                self.closed = True
+
+        fake_db = FakeDb()
+        monkeypatch.setattr(server, "get_db", lambda: fake_db)
+        monkeypatch.setenv("READINESS_IDLE_TX_THRESHOLD_SECONDS", "0")
+
+        ready, payload = server._readiness_status_payload()
+
+        assert ready is False
+        assert fake_db.closed is True
+        database = payload["checks"]["database"]
+        assert database["status"] == "degraded"
+        assert database["idle_in_transaction_count"] == 2
+        assert "idle-in-transaction" in database["detail"]
+
 
 # ═══════════════════════════════════════════════════════════════
 # Deployment workflow determinism
