@@ -2151,23 +2151,26 @@ class HealthHandler(BaseHandler):
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
+        db_status = "connected"
+        db = None
+        try:
+            db = get_db()
+            db.execute("SELECT 1")
+        except Exception as e:
+            logger.error("Health check database dependency error: %s", e)
+            db_status = "error"
+            health["status"] = "degraded"
+            health["readiness"] = "degraded"
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
         user = self.get_current_user_token()
         if user and user.get("role") == "admin":
-            db = None
-            try:
-                db = get_db()
-                db.execute("SELECT 1")
-                health["database"] = {"status": "connected", "type": "postgresql" if USE_POSTGRES else "sqlite"}
-            except Exception as e:
-                logger.error("Health check database error: %s", e)
-                health["database"] = {"status": "error"}
-                health["status"] = "degraded"
-            finally:
-                if db is not None:
-                    try:
-                        db.close()
-                    except Exception:
-                        pass
+            health["database"] = {"status": db_status, "type": "postgresql" if USE_POSTGRES else "sqlite"}
 
             health["integrations"] = {
                 "opensanctions": "configured" if OPENSANCTIONS_API_KEY else "simulated",
@@ -6027,6 +6030,80 @@ class DocumentDeleteHandler(BaseHandler):
         self.success({"deleted": True, "id": doc_id})
 
 
+def _normalize_verification_check_payload(raw_check, index=0):
+    """Return a safe verification-check dict for untrusted AI/check payloads."""
+    if isinstance(raw_check, dict):
+        check = dict(raw_check)
+        check.setdefault("label", f"Verification Check {index + 1}")
+        check.setdefault("type", "validity")
+        check.setdefault("result", "warn")
+        check.setdefault("source", "verification_engine")
+        message = check.get("message")
+        if message is None:
+            check["message"] = "Verification check returned no message; manual review required."
+        elif not isinstance(message, str):
+            check["message"] = str(message)[:500]
+        return check
+
+    # Do not echo raw AI strings back into logs: they can contain extracted
+    # document text. Preserve the operational meaning without leaking content.
+    return {
+        "label": f"Verification Check {index + 1}",
+        "type": "validity",
+        "result": "warn",
+        "source": "verification_engine",
+        "message": (
+            "Verification engine returned an unstructured "
+            f"{type(raw_check).__name__} check payload; manual review required."
+        ),
+    }
+
+
+def _normalize_verification_checks_payload(raw_checks):
+    if raw_checks is None:
+        return []
+    if isinstance(raw_checks, list):
+        return [_normalize_verification_check_payload(item, idx) for idx, item in enumerate(raw_checks)]
+    return [_normalize_verification_check_payload(raw_checks, 0)]
+
+
+def _normalize_verification_result_payload(raw_result):
+    """Normalize layered/AI verification results before any .get access."""
+    if isinstance(raw_result, dict):
+        result = dict(raw_result)
+        result["checks"] = _normalize_verification_checks_payload(result.get("checks"))
+        extracted = result.get("extracted_fields")
+        if extracted is not None and not isinstance(extracted, dict):
+            result["extracted_fields"] = {}
+        return result
+
+    if isinstance(raw_result, list):
+        return {
+            "overall": "flagged",
+            "checks": _normalize_verification_checks_payload(raw_result),
+            "_rejected": True,
+            "error": "verification returned list payload instead of result object",
+            "ai_source": "live",
+        }
+
+    return {
+        "overall": "flagged",
+        "checks": _normalize_verification_checks_payload(raw_result),
+        "_rejected": True,
+        "error": f"verification returned unsupported {type(raw_result).__name__} payload",
+        "ai_source": "live",
+    }
+
+
+def _verification_check_flags(checks):
+    flags = []
+    for check in _normalize_verification_checks_payload(checks):
+        result = str(check.get("result") or "").lower()
+        if result in ("fail", "warn"):
+            flags.append(str(check.get("message") or "")[:500])
+    return flags
+
+
 class DocumentVerifyHandler(BaseHandler):
     """POST /api/documents/:id/verify — trigger AI verification"""
     def post(self, doc_id):
@@ -6035,6 +6112,25 @@ class DocumentVerifyHandler(BaseHandler):
             return
 
         db = get_db()
+        try:
+            return self._post_with_db(doc_id, user, db)
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Document verification request failed for doc=%s", doc_id)
+            return self.error(
+                "Document verification failed. The document requires manual review.",
+                500,
+            )
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    def _post_with_db(self, doc_id, user, db):
 
         # P0-3: Check if Agent 1 (document verification) is enabled before executing
         agent1 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=1").fetchone()
@@ -6184,15 +6280,16 @@ class DocumentVerifyHandler(BaseHandler):
                     check_overrides=check_overrides,
                     file_name=doc.get("doc_name", ""),
                 )
+                ai_result = _normalize_verification_result_payload(ai_result)
 
                 # P0-2: Guard against rejected/invalid AI responses
                 if ai_result.get("_rejected") or ai_result.get("_validated") is False:
                     logger.warning(f"Layered verification rejected for doc {doc_id}: {ai_result.get('error', 'validation failed')}")
-                    checks = [{"label": "AI Verification", "type": "validity", "result": "fail",
+                    checks = ai_result.get("checks") or [{"label": "AI Verification", "type": "validity", "result": "fail",
                                "message": "Verification output failed validation — manual review required"}]
                     all_passed = False
                 else:
-                    checks = ai_result.get("checks", [])
+                    checks = _normalize_verification_checks_payload(ai_result.get("checks", []))
                     # P0-5: No pass without evidence
                     if not checks:
                         all_passed = False
@@ -6217,13 +6314,14 @@ class DocumentVerifyHandler(BaseHandler):
                     directors=directors_list,
                     ubos=ubos_list,
                 )
+                ai_result = _normalize_verification_result_payload(ai_result)
                 if ai_result.get("_rejected") or ai_result.get("_validated") is False:
                     logger.warning(f"AI verification rejected for doc {doc_id}: {ai_result.get('error', 'schema validation failed')}")
-                    checks = [{"label": "AI Verification", "type": "validity", "result": "fail",
+                    checks = ai_result.get("checks") or [{"label": "AI Verification", "type": "validity", "result": "fail",
                                "message": "AI output failed validation — manual review required"}]
                     all_passed = False
                 else:
-                    checks = ai_result.get("checks", [])
+                    checks = _normalize_verification_checks_payload(ai_result.get("checks", []))
                     if not checks:
                         all_passed = False
                     else:
@@ -6234,7 +6332,18 @@ class DocumentVerifyHandler(BaseHandler):
                            "message": "Verification engine unavailable — manual review required"}]
                 all_passed = False
         except Exception as e:
-            logger.error(f"Document verification failed: {e}")
+            logger.warning(
+                "Document verification engine failed for doc=%s error_type=%s",
+                doc_id,
+                type(e).__name__,
+            )
+            ai_result = _normalize_verification_result_payload({
+                "overall": "flagged",
+                "_rejected": True,
+                "error": str(e)[:200],
+                "checks": [{"label": "AI Verification", "type": "validity", "result": "warn",
+                           "message": f"Verification error: {str(e)[:100]}. Manual review required."}],
+            })
             checks = [{"label": "AI Verification", "type": "validity", "result": "warn",
                        "message": f"Verification error: {str(e)[:100]}. Manual review required."}]
             all_passed = False
@@ -6293,7 +6402,7 @@ class DocumentVerifyHandler(BaseHandler):
 
         # Finding 9: Propagate ai_source so mock/degraded results are explicit
         ai_source = "live"
-        if ai_result:
+        if isinstance(ai_result, dict):
             ai_source = ai_result.get("ai_source", "live")
         if not HAS_CLAUDE_CLIENT:
             ai_source = "unavailable"
@@ -6307,10 +6416,22 @@ class DocumentVerifyHandler(BaseHandler):
         elif not verify_name and doc_category == "company":
             system_warning = "entity_context_missing"
 
-        layered_results = to_legacy_result(ai_result or {"checks": checks, "overall": status}) if to_legacy_result else {
-            "checks": checks,
-            "overall": status,
-        }
+        normalized_ai_result = _normalize_verification_result_payload(ai_result or {"checks": checks, "overall": status})
+        try:
+            layered_results = to_legacy_result(normalized_ai_result) if to_legacy_result else {
+                "checks": checks,
+                "overall": status,
+            }
+            if not isinstance(layered_results, dict):
+                layered_results = {"checks": checks, "overall": status}
+        except Exception as exc:
+            logger.warning(
+                "Verification legacy-result normalization failed for doc=%s error_type=%s",
+                doc_id,
+                type(exc).__name__,
+            )
+            layered_results = {"checks": checks, "overall": status}
+        checks = _normalize_verification_checks_payload(checks)
         layered_results.update({
             "overall": status,
             "checks": checks,
@@ -6324,11 +6445,11 @@ class DocumentVerifyHandler(BaseHandler):
             "subject_type": verification_context["subject_type"],
         })
         results = json.dumps(layered_results, default=str)
-        extracted_fields = (
-            (ai_result or {}).get("extracted_fields")
-            or layered_results.get("extracted_fields")
-            or {}
-        )
+        extracted_fields = {}
+        if isinstance(normalized_ai_result, dict):
+            extracted_fields = normalized_ai_result.get("extracted_fields") or {}
+        if not extracted_fields and isinstance(layered_results.get("extracted_fields"), dict):
+            extracted_fields = layered_results.get("extracted_fields") or {}
         # Canonical extraction keys come from document_verification /
         # Claude field extraction. We accept the historical aliases here
         # so stored document metadata stays compatible across older
@@ -6398,7 +6519,7 @@ class DocumentVerifyHandler(BaseHandler):
                 agent_number=1,
                 status=status,
                 checks=checks,
-                flags=[c.get("message", "") for c in checks if (c.get("result") or "").lower() in ("fail", "warn")],
+                flags=_verification_check_flags(checks),
                 requires_review=not all_passed,
                 document_id=doc_id,
             )
