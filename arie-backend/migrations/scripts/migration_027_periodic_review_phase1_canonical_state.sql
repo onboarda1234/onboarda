@@ -1,0 +1,11 @@
+-- Migration 027: Periodic review Phase 1 canonical state marker
+-- ============================================================
+--
+-- The authoritative Phase 1 canonical periodic-review schema is ensured by
+-- db.py inline migration v2.37 because fresh installs pre-mark schema files as
+-- covered by init_db, while long-lived databases rely on startup-time additive
+-- column/table repair helpers for cross-dialect safety.
+--
+-- This file intentionally remains a no-op marker so the repository satisfies
+-- the dual requirement that every schema change ships with both an init_db
+-- update and a migration file under arie-backend/migrations/scripts/.

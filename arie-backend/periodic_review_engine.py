@@ -1423,6 +1423,58 @@ def _blocking_items_for_completion(db, review, items, *, outcome: str,
             "label": "Outcome reason is required",
             "severity": "high",
         })
+    if _row_get(review, "import_requires_ack") and not _row_get(review, "legacy_sco_acknowledged_at"):
+        blocking_items.append({
+            "item_type": "legacy_import_ack_required",
+            "label": "Imported high-risk review requires SCO/admin acknowledgement",
+            "severity": "high",
+        })
+    if not str(_row_get(review, "officer_rationale") or "").strip():
+        blocking_items.append({
+            "item_type": "officer_rationale_required",
+            "label": "Officer rationale is required",
+            "severity": "high",
+        })
+    if _row_get(review, "linked_edd_case_id"):
+        linked_edd = db.execute(
+            "SELECT stage FROM edd_cases WHERE id = ?",
+            (_row_get(review, "linked_edd_case_id"),),
+        ).fetchone()
+        if linked_edd and str(_row_get(linked_edd, "stage") or "").strip().lower() not in TERMINAL_EDD_STAGES:
+            blocking_items.append({
+                "item_type": "active_linked_edd",
+                "label": "Linked EDD case must be completed before review closure",
+                "severity": "high",
+            })
+    evidence_links = db.execute(
+        "SELECT requirement_id FROM periodic_review_evidence_links WHERE periodic_review_id = ?",
+        (_row_get(review, "id"),),
+    ).fetchall()
+    linked_requirement_ids = {
+        str(_row_get(link, "requirement_id"))
+        for link in evidence_links
+        if _row_get(link, "requirement_id") is not None and str(_row_get(link, "requirement_id")).strip()
+    }
+    for item in items or []:
+        status = item.get("status") or REQUIRED_ITEM_STATUS_OPEN
+        if status in (REQUIRED_ITEM_STATUS_CLEARED, REQUIRED_ITEM_STATUS_NOT_APPLICABLE):
+            continue
+        if item.get("id") and item.get("item_type") in {
+            "kyc_refresh",
+            "ubo_confirmation",
+            "document_expired",
+            "document_expiring_soon",
+            "document_stale",
+            "document_expiry_missing",
+            "licensing_refresh",
+            "source_of_funds_refresh",
+            "source_of_wealth_refresh",
+        } and str(item.get("id")) not in linked_requirement_ids:
+            blocking_items.append({
+                "item_type": "required_evidence_outstanding",
+                "label": item.get("label") or "Required evidence is not linked",
+                "severity": "high",
+            })
 
     deduped = []
     seen = set()

@@ -174,6 +174,25 @@ from monitoring_enrollment import (
     enroll_approved_application as _enroll_approved_application_for_monitoring,
     latest_active_review_summary as _latest_monitoring_review_summary,
 )
+from periodic_review_management import (
+    InvalidPeriodicReviewInput as _InvalidPeriodicReviewInput,
+    EvidenceLinkError as _PeriodicReviewEvidenceLinkError,
+    ImmutablePeriodicReviewFieldError as _ImmutablePeriodicReviewFieldError,
+    ReviewNotFound as _PeriodicReviewMgmtReviewNotFound,
+    UnauthorizedReviewOverride as _UnauthorizedPeriodicReviewOverride,
+    acknowledge_legacy_import as _acknowledge_periodic_review_import,
+    add_evidence_link as _add_periodic_review_evidence_link,
+    assign_review as _assign_periodic_review,
+    record_risk_change as _record_periodic_review_risk_change,
+    save_legacy_import_setup as _save_periodic_review_import_setup,
+    save_material_change_attestation as _save_periodic_review_material_change,
+    save_officer_rationale as _save_periodic_review_rationale,
+)
+from periodic_review_projection_service import (
+    get_review_projection as _get_periodic_review_projection,
+    latest_active_review_summary as _latest_periodic_review_projection,
+    list_review_projections as _list_periodic_review_projections,
+)
 
 # GDPR retention and purge engine (optional import — continues if unavailable)
 try:
@@ -2911,6 +2930,13 @@ class ApplicationsHandler(BaseHandler):
         enhanced_summaries = {}
         if user["type"] != "client" and app_ids:
             enhanced_summaries = build_enhanced_requirement_operational_summaries(db, apps)
+        periodic_reviews_by_app = {}
+        if app_ids:
+            for projection in _list_periodic_review_projections(db):
+                app_id = projection.get("application_id")
+                if app_id not in app_ids:
+                    continue
+                periodic_reviews_by_app.setdefault(app_id, []).append(projection)
         screening_reviews_by_app = {}
         if app_ids:
             review_placeholders = ",".join("?" for _ in app_ids)
@@ -2946,6 +2972,8 @@ class ApplicationsHandler(BaseHandler):
                 doc.pop("application_id", None)
             app["documents"] = app_docs
             app["rmi_requests"] = rmi_by_app.get(app["id"], [])
+            app["periodic_review"] = _latest_periodic_review_projection(db, app["id"])
+            app["periodic_reviews"] = periodic_reviews_by_app.get(app["id"], [])
             if user["type"] != "client":
                 app["enhanced_review_summary"] = enhanced_summaries.get(app["id"])
                 app["screening_reviews"] = [
@@ -3634,6 +3662,8 @@ class ApplicationDetailHandler(BaseHandler):
                 doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
         result["rmi_requests"] = _load_rmi_requests(db, result["id"])
         result["monitoring_alerts"] = _load_application_monitoring_alerts(db, result["id"])
+        result["periodic_review"] = _latest_periodic_review_projection(db, result["id"])
+        result["periodic_reviews"] = _list_periodic_review_projections(db, application_id=result["id"])
         if user["type"] != "client":
             result["enhanced_review_summary"] = build_enhanced_requirement_operational_summary(
                 db,
@@ -9584,6 +9614,20 @@ class ApplicationEvidencePackHandler(BaseHandler):
             ).fetchall(),
             json_fields=("key_flags", "extra_json"),
         )
+        periodic_reviews = _list_periodic_review_projections(db, application_id=app_dict["id"])
+        periodic_review_memos = self._dict_rows(
+            db.execute(
+                """
+                SELECT id, periodic_review_id, application_id, version, memo_data,
+                       memo_context, generated_at, generated_by, status
+                FROM periodic_review_memos
+                WHERE application_id = ?
+                ORDER BY periodic_review_id DESC, version DESC, id DESC
+                """,
+                (app_dict["id"],)
+            ).fetchall(),
+            json_fields=("memo_data", "memo_context"),
+        )
         edd_cases = [
             _materialise_edd_case(db, row)
             for row in db.execute(
@@ -9644,6 +9688,8 @@ class ApplicationEvidencePackHandler(BaseHandler):
             "rmi_requests": rmi_requests,
             "compliance_memos": memos,
             "decision_records": decisions,
+            "periodic_reviews": periodic_reviews,
+            "periodic_review_memos": periodic_review_memos,
             "edd_cases": edd_cases,
             "audit_log": {
                 "entries": audit_entries,
@@ -16702,7 +16748,15 @@ class PeriodicReviewsListHandler(BaseHandler):
         query += " ORDER BY due_date ASC"
         reviews = db.execute(query, params).fetchall()
 
-        result = [_serialize_periodic_review_row(db, r) for r in reviews]
+        projections = {
+            projection["review_id"]: projection
+            for projection in _list_periodic_review_projections(db)
+        }
+        result = []
+        for review in reviews:
+            payload = _serialize_periodic_review_row(db, review)
+            payload["projection"] = projections.get(payload["id"])
+            result.append(payload)
         db.close()
         self.success({"reviews": result})
 
@@ -16721,6 +16775,7 @@ class PeriodicReviewDetailHandler(BaseHandler):
             return self.error("Review not found", 404)
 
         result = _serialize_periodic_review_row(db, review)
+        result["projection"] = _get_periodic_review_projection(db, result["id"])
         if result["review_memo"]:
             result["review_memo"] = safe_json_loads(result["review_memo"])
 
@@ -16728,8 +16783,267 @@ class PeriodicReviewDetailHandler(BaseHandler):
         self.success(result)
 
 
+class PeriodicReviewAssignmentHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/assignment — assign or reassign review."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        assigned_officer = data.get("assigned_officer")
+        if not assigned_officer:
+            return self.error("assigned_officer is required", 400)
+        db = get_db()
+        try:
+            try:
+                result = _assign_periodic_review(
+                    db,
+                    review_id,
+                    assigned_officer=assigned_officer,
+                    priority=data.get("priority"),
+                    reassigned_reason=data.get("reassigned_reason"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError, _UnauthorizedPeriodicReviewOverride) as exc:
+                return self.error(str(exc), 400 if isinstance(exc, (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError)) else 403)
+            db.commit()
+            self.success({"status": "assignment_updated", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewImportSetupHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/import-setup — save imported legacy review metadata."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        if not data.get("last_review_date"):
+            return self.error("last_review_date is required", 400)
+        if not data.get("source_type"):
+            return self.error("source_type is required", 400)
+        if not data.get("confidence"):
+            return self.error("confidence is required", 400)
+        db = get_db()
+        try:
+            try:
+                result = _save_periodic_review_import_setup(
+                    db,
+                    review_id,
+                    last_review_date=data.get("last_review_date"),
+                    source_type=data.get("source_type"),
+                    source_note=data.get("source_note"),
+                    confidence=data.get("confidence"),
+                    assigned_officer=data.get("assigned_officer"),
+                    override_reason=data.get("override_reason"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _UnauthorizedPeriodicReviewOverride as exc:
+                return self.error(str(exc), 403)
+            except (_InvalidPeriodicReviewInput, _ImmutablePeriodicReviewFieldError) as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "import_setup_saved", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewImportAcknowledgementHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/import-acknowledgement."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        db = get_db()
+        try:
+            try:
+                result = _acknowledge_periodic_review_import(
+                    db,
+                    review_id,
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _InvalidPeriodicReviewInput as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "import_acknowledged", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewRationaleHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/officer-rationale."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            try:
+                result = _save_periodic_review_rationale(
+                    db,
+                    review_id,
+                    rationale=data.get("officer_rationale"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _InvalidPeriodicReviewInput as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "officer_rationale_saved", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewMaterialChangeHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/material-change-attestation."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        db = get_db()
+        try:
+            try:
+                result = _save_periodic_review_material_change(
+                    db,
+                    review_id,
+                    attestation=data.get("material_change_attestation"),
+                    categories=data.get("material_change_categories") or [],
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _InvalidPeriodicReviewInput as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "material_change_attested", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewRiskChangeHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/risk-change."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        if not data.get("new_risk_level"):
+            return self.error("new_risk_level is required", 400)
+        if not data.get("reason_code"):
+            return self.error("reason_code is required", 400)
+        db = get_db()
+        try:
+            try:
+                result = _record_periodic_review_risk_change(
+                    db,
+                    review_id,
+                    new_risk_level=data.get("new_risk_level"),
+                    reason_code=data.get("reason_code"),
+                    officer_note=data.get("officer_note"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _InvalidPeriodicReviewInput as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "risk_change_recorded", "result": result})
+        finally:
+            db.close()
+
+
+class PeriodicReviewEvidenceLinksHandler(BaseHandler):
+    """GET/POST /api/monitoring/reviews/:id/evidence-links."""
+    def get(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        db = get_db()
+        try:
+            projection = _get_periodic_review_projection(db, review_id)
+            if projection is None:
+                return self.error("Review not found", 404)
+            self.success({"review_id": review_id, "evidence_links": projection.get("evidence_links", [])})
+        finally:
+            db.close()
+
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        if not data.get("document_id"):
+            return self.error("document_id is required", 400)
+        db = get_db()
+        try:
+            try:
+                result = _add_periodic_review_evidence_link(
+                    db,
+                    review_id,
+                    requirement_id=data.get("requirement_id"),
+                    document_id=data.get("document_id"),
+                    link_type=data.get("link_type"),
+                    note=data.get("note"),
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except _PeriodicReviewMgmtReviewNotFound:
+                return self.error("Review not found", 404)
+            except _PeriodicReviewEvidenceLinkError as exc:
+                return self.error(str(exc), 400)
+            db.commit()
+            self.success({"status": "evidence_link_added", "result": result})
+        finally:
+            db.close()
+
+
 class PeriodicReviewDecisionHandler(BaseHandler):
-    """POST /api/monitoring/reviews/:id/decision — Submit review decision"""
+    """POST /api/monitoring/reviews/:id/decision — legacy decision writer.
+
+    Legacy compatibility only. New periodic-review flows must persist
+    ``periodic_reviews.outcome`` via ``PeriodicReviewCompleteHandler`` and must
+    not co-write the deprecated ``decision`` field.
+    """
     def post(self, review_id):
         user = self.require_auth(roles=["admin", "sco", "co"])
         if not user:
@@ -16777,7 +17091,7 @@ class PeriodicReviewDecisionHandler(BaseHandler):
         db.commit()
         db.close()
 
-        self.success({"status": "decision_recorded", "decision": decision})
+        self.success({"status": "decision_recorded", "decision": decision, "legacy": True})
 
 
 class PeriodicReviewScheduleHandler(BaseHandler):
@@ -16853,9 +17167,19 @@ def _serialize_periodic_review_row(db, review_row):
     import periodic_review_engine as pre
 
     result = dict(review_row)
+    projection = _get_periodic_review_projection(db, result["id"]) or {}
     items = pre.get_required_items(db, result["id"])
     result["required_items"] = items
     result["required_items_count"] = len(items)
+    result["assigned_officer"] = projection.get("assigned_officer")
+    result["status_label"] = projection.get("status_label")
+    result["blocker_count"] = projection.get("blocker_count", 0)
+    result["blocker_summary"] = projection.get("blocker_summary", [])
+    result["last_review_date"] = projection.get("last_review_date")
+    result["next_review_date"] = projection.get("next_review_date")
+    result["memo_status"] = projection.get("memo_status")
+    result["periodic_review_memo_id"] = result.get("periodic_review_memo_id")
+    result["evidence_links"] = projection.get("evidence_links", [])
     alert_rows = db.execute(
         "SELECT id, alert_type, status, resolved_at "
         "FROM monitoring_alerts WHERE application_id = ? ORDER BY id ASC",
@@ -16897,7 +17221,8 @@ def _serialize_periodic_review_row(db, review_row):
         ui_status = "escalated_to_edd"
         ui_status_label = "Escalated to EDD"
     result["ui_status"] = ui_status
-    result["ui_status_label"] = ui_status_label
+    result["ui_status_label"] = projection.get("status_label") or ui_status_label
+    result["legacy_decision"] = result.get("decision")
     return result
 
 
@@ -17727,6 +18052,10 @@ def _materialise_edd_case(db, case_row, include_findings=True):
     risk_level, risk_score = _edd_truthful_risk_snapshot(case_dict, app_row)
     case_dict["risk_level"] = risk_level
     case_dict["risk_score"] = risk_score
+    linked_review_id = case_dict.get("linked_periodic_review_id")
+    case_dict["linked_periodic_review"] = (
+        _get_periodic_review_projection(db, linked_review_id) if linked_review_id else None
+    )
     case_dict["edd_notes"] = safe_json_loads(case_dict.get("edd_notes", "[]"))
     findings = None
     if include_findings:
@@ -19674,6 +20003,15 @@ def make_app():
          PeriodicReviewRequiredItemsHandler),
         (r"/api/monitoring/reviews/([^/]+)/run-screening-refresh",
          PeriodicReviewScreeningRefreshHandler),
+        (r"/api/monitoring/reviews/([^/]+)/assignment", PeriodicReviewAssignmentHandler),
+        (r"/api/monitoring/reviews/([^/]+)/import-setup", PeriodicReviewImportSetupHandler),
+        (r"/api/monitoring/reviews/([^/]+)/import-acknowledgement",
+         PeriodicReviewImportAcknowledgementHandler),
+        (r"/api/monitoring/reviews/([^/]+)/officer-rationale", PeriodicReviewRationaleHandler),
+        (r"/api/monitoring/reviews/([^/]+)/material-change-attestation",
+         PeriodicReviewMaterialChangeHandler),
+        (r"/api/monitoring/reviews/([^/]+)/risk-change", PeriodicReviewRiskChangeHandler),
+        (r"/api/monitoring/reviews/([^/]+)/evidence-links", PeriodicReviewEvidenceLinksHandler),
         (r"/api/monitoring/reviews/([^/]+)/state", PeriodicReviewStateHandler),
         (r"/api/monitoring/reviews/([^/]+)/escalate", PeriodicReviewEscalateHandler),
         (r"/api/monitoring/reviews/([^/]+)/complete", PeriodicReviewCompleteHandler),

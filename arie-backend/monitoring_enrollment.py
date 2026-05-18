@@ -12,6 +12,9 @@ import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional
 
+from periodic_review_policy import policy_snapshot_for_risk
+from periodic_review_projection_service import latest_active_review_summary as _projection_latest_active_review_summary
+
 
 LOW_REVIEW_INTERVAL_DAYS = 1095      # 36 months
 MEDIUM_REVIEW_INTERVAL_DAYS = 730    # 24 months
@@ -194,17 +197,22 @@ def _latest_active_review(db, application_id: str) -> Optional[Dict[str, Any]]:
 
 
 def latest_active_review_summary(db, application_id: str) -> Optional[Dict[str, Any]]:
-    row = _latest_active_review(db, application_id)
-    if not row:
+    projection = _projection_latest_active_review_summary(db, application_id)
+    if not projection:
         return None
     return {
-        "id": row.get("id"),
-        "status": row.get("status"),
-        "risk_level": row.get("risk_level"),
-        "due_date": row.get("due_date"),
-        "priority": row.get("priority"),
-        "trigger_source": row.get("trigger_source"),
-        "trigger_reason": row.get("trigger_reason") or row.get("review_reason"),
+        "id": projection.get("review_id"),
+        "status": projection.get("status"),
+        "status_label": projection.get("status_label"),
+        "risk_level": projection.get("risk_level"),
+        "due_date": projection.get("due_date"),
+        "next_review_date": projection.get("next_review_date"),
+        "priority": projection.get("priority"),
+        "assigned_officer": projection.get("assigned_officer"),
+        "blocker_count": projection.get("blocker_count"),
+        "blocker_summary": projection.get("blocker_summary"),
+        "trigger_source": projection.get("trigger_source"),
+        "trigger_reason": projection.get("trigger_reason"),
     }
 
 
@@ -237,11 +245,14 @@ def _review_payload(
     *,
     previous_status: Optional[str],
     approved_at: Optional[Any],
+    review_cycle_number: int,
 ) -> Dict[str, Any]:
     risk_level = final_risk_level_for_review(app)
     interval_days = review_interval_days_for_application(app, previous_status=previous_status)
-    due_date = _parse_anchor_date(approved_at or app.get("decided_at") or app.get("updated_at")) + timedelta(days=interval_days)
+    anchor_date = _parse_anchor_date(approved_at or app.get("decided_at") or app.get("updated_at"))
+    due_date = anchor_date + timedelta(days=interval_days)
     priority = review_priority_for_application(app, previous_status=previous_status)
+    policy = policy_snapshot_for_risk(risk_level, anchor_date=anchor_date)
     trigger_reason = (
         "Initial periodic review scheduled after application approval "
         f"({risk_level} final risk, {interval_days}-day interval)."
@@ -262,6 +273,12 @@ def _review_payload(
         "trigger_source": "schedule",
         "trigger_reason": trigger_reason,
         "review_reason": trigger_reason,
+        "review_cycle_number": review_cycle_number,
+        "review_type": "scheduled",
+        "policy_version": policy["policy_version"],
+        "frequency_months": policy["frequency_months"],
+        "calculation_basis": policy["calculation_basis"],
+        "next_review_date": policy["next_review_date"],
     }
 
 
@@ -293,8 +310,18 @@ def enroll_approved_application(
     if _truthy(app.get("is_fixture")):
         return {"status": "skipped", "reason": "fixture_application"}
 
-    payload = _review_payload(app, previous_status=previous_status, approved_at=approved_at)
     existing = _latest_active_review(db, app_id)
+    cycle_row = db.execute(
+        "SELECT COALESCE(MAX(review_cycle_number), 0) AS cycle_no FROM periodic_reviews WHERE application_id = ?",
+        (app_id,),
+    ).fetchone()
+    existing_cycle = int(_row_dict(cycle_row).get("cycle_no") or 0)
+    payload = _review_payload(
+        app,
+        previous_status=previous_status,
+        approved_at=approved_at,
+        review_cycle_number=existing_cycle if existing else (existing_cycle + 1 or 1),
+    )
     if existing:
         before = dict(existing)
         review_id = existing["id"]
@@ -308,7 +335,13 @@ def enroll_approved_application(
                 trigger_reason = ?,
                 review_reason = ?,
                 due_date = ?,
+                next_review_date = ?,
                 priority = ?,
+                review_cycle_number = COALESCE(review_cycle_number, ?),
+                review_type = COALESCE(review_type, ?),
+                policy_version = ?,
+                frequency_months = ?,
+                calculation_basis = ?,
                 sla_due_at = ?,
                 state_changed_at = datetime('now')
             WHERE id = ?
@@ -321,7 +354,13 @@ def enroll_approved_application(
                 payload["trigger_reason"],
                 payload["review_reason"],
                 payload["due_date"],
+                payload["next_review_date"],
                 payload["priority"],
+                payload["review_cycle_number"],
+                payload["review_type"],
+                payload["policy_version"],
+                payload["frequency_months"],
+                payload["calculation_basis"],
                 payload["due_date"],
                 review_id,
             ),
@@ -336,8 +375,10 @@ def enroll_approved_application(
                 INSERT INTO periodic_reviews
                     (application_id, client_name, risk_level, trigger_type,
                      trigger_reason, trigger_source, review_reason, status,
-                     due_date, priority, sla_due_at, state_changed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, datetime('now'), datetime('now'))
+                     due_date, next_review_date, priority, review_cycle_number,
+                     review_type, policy_version, frequency_months, calculation_basis,
+                     sla_due_at, state_changed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 RETURNING *
                 """,
                 (
@@ -349,7 +390,13 @@ def enroll_approved_application(
                     payload["trigger_source"],
                     payload["review_reason"],
                     payload["due_date"],
+                    payload["next_review_date"],
                     payload["priority"],
+                    payload["review_cycle_number"],
+                    payload["review_type"],
+                    payload["policy_version"],
+                    payload["frequency_months"],
+                    payload["calculation_basis"],
                     payload["due_date"],
                 ),
             ).fetchone()
@@ -359,8 +406,10 @@ def enroll_approved_application(
                 INSERT INTO periodic_reviews
                     (application_id, client_name, risk_level, trigger_type,
                      trigger_reason, trigger_source, review_reason, status,
-                     due_date, priority, sla_due_at, state_changed_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, datetime('now'), datetime('now'))
+                     due_date, next_review_date, priority, review_cycle_number,
+                     review_type, policy_version, frequency_months, calculation_basis,
+                     sla_due_at, state_changed_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 """,
                 (
                     app_id,
@@ -371,7 +420,13 @@ def enroll_approved_application(
                     payload["trigger_source"],
                     payload["review_reason"],
                     payload["due_date"],
+                    payload["next_review_date"],
                     payload["priority"],
+                    payload["review_cycle_number"],
+                    payload["review_type"],
+                    payload["policy_version"],
+                    payload["frequency_months"],
+                    payload["calculation_basis"],
                     payload["due_date"],
                 ),
             )

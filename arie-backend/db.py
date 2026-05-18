@@ -774,6 +774,8 @@ def _get_postgres_schema() -> str:
         application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         client_name TEXT,
         risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
+        last_review_date TEXT,
+        next_review_date TEXT,
         trigger_type TEXT,
         trigger_reason TEXT,
         trigger_source TEXT,
@@ -787,7 +789,10 @@ def _get_postgres_schema() -> str:
         due_date TEXT,
         started_at TIMESTAMP,
         completed_at TIMESTAMP,
+        assigned_officer TEXT REFERENCES users(id),
+        assigned_by TEXT REFERENCES users(id),
         assigned_at TIMESTAMP,
+        reassigned_reason TEXT,
         closed_at TIMESTAMP,
         sla_due_at TIMESTAMP,
         priority TEXT,
@@ -796,6 +801,29 @@ def _get_postgres_schema() -> str:
         outcome TEXT,
         outcome_reason TEXT,
         outcome_recorded_at TIMESTAMP,
+        review_cycle_number INTEGER DEFAULT 1,
+        review_type TEXT,
+        policy_version TEXT,
+        frequency_months INTEGER,
+        calculation_basis TEXT,
+        legacy_import BOOLEAN DEFAULT FALSE,
+        legacy_source_type TEXT,
+        legacy_source_note TEXT,
+        legacy_confidence TEXT,
+        legacy_entered_by TEXT REFERENCES users(id),
+        legacy_entered_at TIMESTAMP,
+        legacy_sco_acknowledged_by TEXT REFERENCES users(id),
+        legacy_sco_acknowledged_at TIMESTAMP,
+        import_requires_ack BOOLEAN DEFAULT FALSE,
+        material_change_attestation TEXT,
+        material_change_categories JSONB DEFAULT '[]',
+        risk_change_attestation TEXT,
+        risk_rerate_reason TEXT,
+        risk_rerated_by TEXT REFERENCES users(id),
+        risk_rerated_at TIMESTAMP,
+        officer_rationale TEXT,
+        memo_status TEXT,
+        periodic_review_memo_id INTEGER,
         required_items TEXT,
         required_items_generated_at TIMESTAMP,
         state_changed_at TIMESTAMP,
@@ -817,6 +845,19 @@ def _get_postgres_schema() -> str:
     );
     CREATE INDEX IF NOT EXISTS idx_prm_review ON periodic_review_memos(periodic_review_id);
     CREATE INDEX IF NOT EXISTS idx_prm_app ON periodic_review_memos(application_id);
+
+    CREATE TABLE IF NOT EXISTS periodic_review_evidence_links (
+        id SERIAL PRIMARY KEY,
+        periodic_review_id INTEGER NOT NULL REFERENCES periodic_reviews(id) ON DELETE CASCADE,
+        requirement_id TEXT,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        link_type TEXT,
+        linked_by TEXT REFERENCES users(id),
+        linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        note TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_prev_links_review ON periodic_review_evidence_links(periodic_review_id);
+    CREATE INDEX IF NOT EXISTS idx_prev_links_document ON periodic_review_evidence_links(document_id);
 
     -- Monitoring Agent Status
     CREATE TABLE IF NOT EXISTS monitoring_agent_status (
@@ -1689,6 +1730,8 @@ def _get_sqlite_schema() -> str:
         application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
         client_name TEXT,
         risk_level TEXT CHECK(risk_level IS NULL OR risk_level IN ('LOW','MEDIUM','HIGH','VERY_HIGH')),
+        last_review_date TEXT,
+        next_review_date TEXT,
         trigger_type TEXT,
         trigger_reason TEXT,
         trigger_source TEXT,
@@ -1702,7 +1745,10 @@ def _get_sqlite_schema() -> str:
         due_date TEXT,
         started_at TEXT,
         completed_at TEXT,
+        assigned_officer TEXT REFERENCES users(id),
+        assigned_by TEXT REFERENCES users(id),
         assigned_at TEXT,
+        reassigned_reason TEXT,
         closed_at TEXT,
         sla_due_at TEXT,
         priority TEXT,
@@ -1711,6 +1757,29 @@ def _get_sqlite_schema() -> str:
         outcome TEXT,
         outcome_reason TEXT,
         outcome_recorded_at TEXT,
+        review_cycle_number INTEGER DEFAULT 1,
+        review_type TEXT,
+        policy_version TEXT,
+        frequency_months INTEGER,
+        calculation_basis TEXT,
+        legacy_import INTEGER DEFAULT 0,
+        legacy_source_type TEXT,
+        legacy_source_note TEXT,
+        legacy_confidence TEXT,
+        legacy_entered_by TEXT REFERENCES users(id),
+        legacy_entered_at TEXT,
+        legacy_sco_acknowledged_by TEXT REFERENCES users(id),
+        legacy_sco_acknowledged_at TEXT,
+        import_requires_ack INTEGER DEFAULT 0,
+        material_change_attestation TEXT,
+        material_change_categories TEXT DEFAULT '[]',
+        risk_change_attestation TEXT,
+        risk_rerate_reason TEXT,
+        risk_rerated_by TEXT REFERENCES users(id),
+        risk_rerated_at TEXT,
+        officer_rationale TEXT,
+        memo_status TEXT,
+        periodic_review_memo_id INTEGER,
         required_items TEXT,
         required_items_generated_at TEXT,
         state_changed_at TEXT,
@@ -1732,6 +1801,19 @@ def _get_sqlite_schema() -> str:
     );
     CREATE INDEX IF NOT EXISTS idx_prm_review ON periodic_review_memos(periodic_review_id);
     CREATE INDEX IF NOT EXISTS idx_prm_app ON periodic_review_memos(application_id);
+
+    CREATE TABLE IF NOT EXISTS periodic_review_evidence_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        periodic_review_id INTEGER NOT NULL REFERENCES periodic_reviews(id) ON DELETE CASCADE,
+        requirement_id TEXT,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        link_type TEXT,
+        linked_by TEXT REFERENCES users(id),
+        linked_at TEXT DEFAULT (datetime('now')),
+        note TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_prev_links_review ON periodic_review_evidence_links(periodic_review_id);
+    CREATE INDEX IF NOT EXISTS idx_prev_links_document ON periodic_review_evidence_links(document_id);
 
     -- Monitoring Agent Status
     CREATE TABLE IF NOT EXISTS monitoring_agent_status (
@@ -2683,6 +2765,96 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _ensure_periodic_review_phase1_schema(db: DBConnection):
+    """Add Phase 1 canonical periodic-review fields and evidence-link storage."""
+    if not _safe_table_exists(db, "periodic_reviews"):
+        return
+
+    ts_type = "TIMESTAMP" if db.is_postgres else "TEXT"
+    bool_default = "FALSE" if db.is_postgres else "0"
+    review_columns = {
+        "last_review_date": "TEXT",
+        "next_review_date": "TEXT",
+        "assigned_officer": "TEXT REFERENCES users(id)",
+        "assigned_by": "TEXT REFERENCES users(id)",
+        "reassigned_reason": "TEXT",
+        "review_cycle_number": "INTEGER DEFAULT 1",
+        "review_type": "TEXT",
+        "policy_version": "TEXT",
+        "frequency_months": "INTEGER",
+        "calculation_basis": "TEXT",
+        "legacy_import": f"{'BOOLEAN' if db.is_postgres else 'INTEGER'} DEFAULT {bool_default}",
+        "legacy_source_type": "TEXT",
+        "legacy_source_note": "TEXT",
+        "legacy_confidence": "TEXT",
+        "legacy_entered_by": "TEXT REFERENCES users(id)",
+        "legacy_entered_at": ts_type,
+        "legacy_sco_acknowledged_by": "TEXT REFERENCES users(id)",
+        "legacy_sco_acknowledged_at": ts_type,
+        "import_requires_ack": f"{'BOOLEAN' if db.is_postgres else 'INTEGER'} DEFAULT {bool_default}",
+        "material_change_attestation": "TEXT",
+        "material_change_categories": "JSONB DEFAULT '[]'" if db.is_postgres else "TEXT DEFAULT '[]'",
+        "risk_change_attestation": "TEXT",
+        "risk_rerate_reason": "TEXT",
+        "risk_rerated_by": "TEXT REFERENCES users(id)",
+        "risk_rerated_at": ts_type,
+        "officer_rationale": "TEXT",
+        "memo_status": "TEXT",
+        "periodic_review_memo_id": "INTEGER",
+    }
+    for column, definition in review_columns.items():
+        if not _safe_column_exists(db, "periodic_reviews", column):
+            db.execute(f"ALTER TABLE periodic_reviews ADD COLUMN {column} {definition}")
+
+    if not _safe_table_exists(db, "periodic_review_evidence_links"):
+        if db.is_postgres:
+            db.execute(
+                """
+                CREATE TABLE periodic_review_evidence_links (
+                    id BIGSERIAL PRIMARY KEY,
+                    periodic_review_id INTEGER NOT NULL REFERENCES periodic_reviews(id) ON DELETE CASCADE,
+                    requirement_id TEXT,
+                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    link_type TEXT,
+                    linked_by TEXT REFERENCES users(id),
+                    linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    note TEXT
+                )
+                """
+            )
+        else:
+            db.execute(
+                """
+                CREATE TABLE periodic_review_evidence_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    periodic_review_id INTEGER NOT NULL REFERENCES periodic_reviews(id) ON DELETE CASCADE,
+                    requirement_id TEXT,
+                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    link_type TEXT,
+                    linked_by TEXT REFERENCES users(id),
+                    linked_at TEXT DEFAULT (datetime('now')),
+                    note TEXT
+                )
+                """
+            )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prev_links_review "
+        "ON periodic_review_evidence_links(periodic_review_id)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prev_links_document "
+        "ON periodic_review_evidence_links(document_id)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_assigned_officer "
+        "ON periodic_reviews(assigned_officer)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_periodic_reviews_next_review_date "
+        "ON periodic_reviews(next_review_date)"
+    )
 
 
 SUPERVISOR_AUDIT_LOG_COLUMNS = (
@@ -5332,6 +5504,22 @@ def _run_migrations(db: DBConnection):
             logger.info("Migration v2.36: application_corrections table already exists")
     except Exception as e:
         logger.error("Migration v2.36 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    # Migration v2.37: Canonical periodic review Phase 1 ownership fields.
+    # Keeps periodic_reviews as the single review-state source of truth and
+    # adds evidence-link storage without creating a duplicate document store.
+    try:
+        _ensure_periodic_review_phase1_schema(db)
+        db.commit()
+        logger.info(
+            "Migration v2.37: Ensured canonical periodic review fields and evidence links"
+        )
+    except Exception as e:
+        logger.error("Migration v2.37 failed: %s", e, exc_info=True)
         try:
             db.rollback()
         except Exception:
