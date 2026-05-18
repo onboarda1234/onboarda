@@ -2928,15 +2928,15 @@ class ApplicationsHandler(BaseHandler):
 
         rmi_by_app = _load_rmi_requests_for_apps(db, app_ids) if app_ids else {}
         enhanced_summaries = {}
+        periodic_reviews_by_app = {}
         if user["type"] != "client" and app_ids:
             enhanced_summaries = build_enhanced_requirement_operational_summaries(db, apps)
-        periodic_reviews_by_app = {}
-        if app_ids:
-            for projection in _list_periodic_review_projections(db):
-                app_id = projection.get("application_id")
-                if app_id not in app_ids:
-                    continue
-                periodic_reviews_by_app.setdefault(app_id, []).append(projection)
+            if app_ids:
+                for projection in _list_periodic_review_projections(db):
+                    app_id = projection.get("application_id")
+                    if app_id not in app_ids:
+                        continue
+                    periodic_reviews_by_app.setdefault(app_id, []).append(projection)
         screening_reviews_by_app = {}
         if app_ids:
             review_placeholders = ",".join("?" for _ in app_ids)
