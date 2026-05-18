@@ -154,7 +154,7 @@ def _build_header(review, application) -> Dict[str, Any]:
         "generated_at": None,  # filled in at persist time
         "trigger_source": _row_get(review, "trigger_source")
                           or _row_get(review, "trigger_type"),
-        "reviewer": _row_get(review, "decided_by"),
+        "reviewer": _row_get(review, "assigned_officer") or _row_get(review, "decided_by"),
         "current_risk_level": _row_get(review, "new_risk_level")
                               or _row_get(review, "risk_level"),
     }
@@ -329,26 +329,49 @@ def _next_version(db, review_id: int) -> int:
 
 
 def _insert_memo_row(db, review_id: int, memo_data: Dict[str, Any],
-                     status: str, version: Optional[int] = None) -> int:
+                     status: str, version: Optional[int] = None) -> Dict[str, int]:
     review = _fetch_review(db, review_id)
     application_id = _row_get(review, "application_id") if review else None
     if version is None:
         version = _next_version(db, review_id)
+    if getattr(db, "is_postgres", False):
+        row = db.execute(
+            "INSERT INTO periodic_review_memos "
+            "(periodic_review_id, application_id, version, memo_data, "
+            " memo_context, generated_by, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (
+                review_id, application_id, version,
+                json.dumps(memo_data, sort_keys=True, default=str),
+                MEMO_CONTEXT_JSON,
+                SYSTEM_ACTOR,
+                status,
+            ),
+        ).fetchone()
+        memo_id = _row_get(row, "id")
+    else:
+        db.execute(
+            "INSERT INTO periodic_review_memos "
+            "(periodic_review_id, application_id, version, memo_data, "
+            " memo_context, generated_by, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                review_id, application_id, version,
+                json.dumps(memo_data, sort_keys=True, default=str),
+                MEMO_CONTEXT_JSON,
+                SYSTEM_ACTOR,
+                status,
+            ),
+        )
+        memo_id = db.execute(
+            "SELECT last_insert_rowid() AS id"
+        ).fetchone()["id"]
     db.execute(
-        "INSERT INTO periodic_review_memos "
-        "(periodic_review_id, application_id, version, memo_data, "
-        " memo_context, generated_by, status) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            review_id, application_id, version,
-            json.dumps(memo_data, sort_keys=True, default=str),
-            MEMO_CONTEXT_JSON,
-            SYSTEM_ACTOR,
-            status,
-        ),
+        "UPDATE periodic_reviews SET memo_status = ?, periodic_review_memo_id = ? WHERE id = ?",
+        (status, memo_id, review_id),
     )
     db.commit()
-    return version
+    return {"version": version, "id": memo_id}
 
 
 def generate_periodic_review_memo(db, review_id: int) -> Dict[str, Any]:
@@ -362,12 +385,13 @@ def generate_periodic_review_memo(db, review_id: int) -> Dict[str, Any]:
     """
     try:
         memo_data = build_memo_data(db, review_id)
-        version = _insert_memo_row(
+        persisted = _insert_memo_row(
             db, review_id, memo_data, STATUS_GENERATED,
         )
         return {
             "review_id": review_id,
-            "version": version,
+            "version": persisted["version"],
+            "memo_id": persisted["id"],
             "status": STATUS_GENERATED,
         }
     except Exception as exc:
