@@ -126,6 +126,58 @@ def _ownership_transparency_status(value: Any) -> str:
     return text
 
 
+def _ownership_pct_value(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        return float(str(value).strip().replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _party_ownership_transparency_status(db, application_id: Any) -> str:
+    if db is None or application_id in (None, ""):
+        return ""
+    try:
+        ubo_rows = db.execute(
+            """
+            SELECT ownership_pct
+            FROM ubos
+            WHERE application_id=?
+            """,
+            (application_id,),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            "Ownership routing fact lookup failed for app %s: %s",
+            application_id,
+            exc,
+        )
+        return ""
+
+    percentages = []
+    for row in ubo_rows or []:
+        if hasattr(row, "keys"):
+            raw = dict(row).get("ownership_pct")
+        elif isinstance(row, (tuple, list)) and row:
+            raw = row[0]
+        else:
+            raw = None
+        pct = _ownership_pct_value(raw)
+        if pct is not None:
+            percentages.append(max(0.0, pct))
+
+    if not percentages:
+        return ""
+
+    disclosed_total = sum(percentages)
+    # Memo/routing policy treats less than 75% disclosed beneficial ownership as
+    # incomplete transparency that must not remain on the standard path.
+    if disclosed_total < 75:
+        return "incomplete"
+    return "clear"
+
+
 def _declared_pep_present_in_party_rows(db, application_id: Any) -> bool:
     if db is None or application_id in (None, ""):
         return False
@@ -159,6 +211,7 @@ def _declared_pep_present_in_party_rows(db, application_id: Any) -> bool:
 
 def build_routing_facts(
     *,
+    db=None,
     app_row: Mapping[str, Any],
     risk_dict: Optional[Mapping[str, Any]] = None,
     screening_summary: Optional[Mapping[str, Any]] = None,
@@ -177,6 +230,7 @@ def build_routing_facts(
 
     rd = dict(risk_dict or {})
     ar = dict(app_row or {})
+    application_id = ar.get("id")
 
     # Final risk level: prefer in-memory recompute output, then DB
     # ``final_risk_level`` column, then ``base_risk_level``, then
@@ -211,6 +265,13 @@ def build_routing_facts(
         or ar.get("ownership_structure")
         or ""
     )
+    party_ownership_transparency = _party_ownership_transparency_status(db, application_id)
+    if party_ownership_transparency == "opaque":
+        ownership_transparency = "opaque"
+    elif party_ownership_transparency == "incomplete" and ownership_transparency not in {"opaque"}:
+        ownership_transparency = "incomplete"
+    elif party_ownership_transparency == "clear" and not ownership_transparency:
+        ownership_transparency = "clear"
 
     declared_pep = bool(
         rd.get("declared_pep_present")
@@ -322,6 +383,7 @@ def apply_routing_decision(
         return result
 
     facts = build_routing_facts(
+        db=db,
         app_row=app_row,
         risk_dict=risk_dict,
         screening_summary=screening_summary,

@@ -304,13 +304,18 @@ def _edd_trigger_flags_from_app(app):
 
 
 def _apply_edd_route_risk_floor(risk, routing_outcome):
-    """Keep final risk truthful when deterministic routing sends a LOW case to EDD."""
+    """Keep final risk truthful by applying the minimum level implied by EDD routing."""
     if not isinstance(risk, dict) or not isinstance(routing_outcome, dict):
         return risk
     if str(routing_outcome.get("route") or "").lower() != "edd":
         return risk
+    try:
+        from edd_routing_policy import minimum_risk_level_for_routing
+        minimum_level = minimum_risk_level_for_routing(routing_outcome) or "MEDIUM"
+    except Exception:
+        minimum_level = "MEDIUM"
     current = _canonical_risk_level(risk.get("final_risk_level") or risk.get("level"))
-    if current != "LOW":
+    if current and RISK_RANK.get(current, 0) >= RISK_RANK.get(minimum_level, 0):
         return risk
     triggers = ", ".join(str(t) for t in (routing_outcome.get("triggers") or []) if t)
     reason = "EDD routing floor: deterministic routing required EDD"
@@ -318,7 +323,7 @@ def _apply_edd_route_risk_floor(risk, routing_outcome):
         reason += f" ({triggers})"
     floored = apply_risk_floor(
         risk,
-        "MEDIUM",
+        minimum_level,
         "floor_rule_edd_routing",
         reason,
     )
@@ -1856,6 +1861,7 @@ from screening_state import (
     derive_screening_state,
     derive_screening_truth,
     build_screening_truth_summary,
+    build_screening_terminality_summary,
     derive_subject_state,
     state_label as screening_state_label,
     legacy_status_value as _screening_legacy_status,
@@ -3852,12 +3858,26 @@ class ApplicationDetailHandler(BaseHandler):
                     db.close()
                     return self.error(f"Approval gate failed: {gate_error}", 400)
 
-            db.execute("UPDATE applications SET status=?, updated_at=datetime('now') WHERE id=?", (new_status, real_id))
+            lane_synced = new_status == "edd_required" and str(app.get("onboarding_lane") or "").strip().upper() != "EDD"
+            if lane_synced:
+                db.execute(
+                    "UPDATE applications SET status=?, onboarding_lane='EDD', updated_at=datetime('now') WHERE id=?",
+                    (new_status, real_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE applications SET status=?, updated_at=datetime('now') WHERE id=?",
+                    (new_status, real_id),
+                )
             if new_status in ("approved", "rejected"):
                 db.execute("UPDATE applications SET decided_at=datetime('now'), decision_by=?, decision_notes=? WHERE id=?",
                            (user["sub"], data.get("notes",""), real_id))
-            self.log_audit(user, "Status Change", app["ref"],
-                           f"Status: {current_status} → {new_status}", db=db)
+            audit_detail = f"Status: {current_status} → {new_status}"
+            if lane_synced:
+                audit_detail += (
+                    f" | onboarding_lane: {app.get('onboarding_lane') or ''} → EDD"
+                )
+            self.log_audit(user, "Status Change", app["ref"], audit_detail, db=db)
 
         # Handle assignment — only admin, sco, co can reassign
         if "assigned_to" in data:
@@ -4676,6 +4696,10 @@ class SubmitApplicationHandler(BaseHandler):
             screening_report,
             screened_by=user.get("sub"),
         )
+        screening_summary = build_screening_terminality_summary(
+            screening_report,
+            prescreening,
+        )
 
         # Compute risk score
         risk = compute_risk_score(scoring_input)
@@ -4687,14 +4711,6 @@ class SubmitApplicationHandler(BaseHandler):
         except Exception:
             risk["_config_version"] = ""
 
-        # Elevate risk if screening found hits
-        if screening_report["total_hits"] > 0:
-            risk_bump = min(screening_report["total_hits"] * 8, 25)  # Up to +25 points
-            risk["score"] = min(100, risk["score"] + risk_bump)
-            # Re-classify level using CANONICAL thresholds (single source of truth)
-            risk["level"] = classify_risk_level(risk["score"])
-            risk["final_risk_level"] = risk["level"]
-            risk["lane"] = {"LOW": "Fast Lane", "MEDIUM": "Standard Review", "HIGH": "EDD", "VERY_HIGH": "EDD"}[risk["level"]]
         # Priority E: policy-driven EDD routing on prescreening submit.
         # Even when level=MEDIUM, sector/jurisdiction/PEP/ownership can
         # mandate EDD. Run the deterministic v1 policy now so the case
@@ -4710,7 +4726,7 @@ class SubmitApplicationHandler(BaseHandler):
                 db=db,
                 app_row=app,
                 risk_dict=risk,
-                screening_summary=None,
+                screening_summary=screening_summary,
                 user=user,
                 client_ip=self.get_client_ip() if hasattr(self, 'get_client_ip') else '',
                 source=SOURCE_PRESCREENING_SUBMIT,
@@ -10630,6 +10646,39 @@ def _screening_disposition_edd_trigger_flags(canonical_disposition):
     return []
 
 
+def _screening_disposition_routing_summary(canonical_disposition):
+    code = str(canonical_disposition or "").strip().lower()
+    if code == "needs_more_information":
+        return {
+            "terminal": False,
+            "has_terminal_match": False,
+            "has_non_terminal": True,
+            "has_failed": False,
+            "has_not_configured": False,
+            "approval_blocking": True,
+            "blocking_reasons": ["screening:needs_more_information"],
+        }
+    if code in _SCREENING_WORKFLOW_EDD_DISPOSITIONS:
+        return {
+            "terminal": True,
+            "has_terminal_match": True,
+            "has_non_terminal": False,
+            "has_failed": False,
+            "has_not_configured": False,
+            "approval_blocking": True,
+            "blocking_reasons": [f"screening:{code}"],
+        }
+    return {
+        "terminal": False,
+        "has_terminal_match": False,
+        "has_non_terminal": False,
+        "has_failed": False,
+        "has_not_configured": False,
+        "approval_blocking": False,
+        "blocking_reasons": [],
+    }
+
+
 def _screening_workflow_snapshot(app):
     app = dict(app or {})
     return {
@@ -11986,13 +12035,9 @@ class ScreeningReviewHandler(BaseHandler):
                         db=db,
                         app_row=dict(routing_app) if routing_app else app,
                         risk_dict=risk_dict,
-                        screening_summary={
-                            "terminal": True,
-                            "has_terminal_match": True,
-                            "has_non_terminal": False,
-                            "has_failed": False,
-                            "has_not_configured": False,
-                        },
+                        screening_summary=_screening_disposition_routing_summary(
+                            canonical_disposition
+                        ),
                         edd_trigger_flags=_screening_disposition_edd_trigger_flags(canonical_disposition),
                         user=user,
                         client_ip=self.get_client_ip(),

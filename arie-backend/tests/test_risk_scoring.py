@@ -707,10 +707,10 @@ class TestConfigDrivenScoring:
         # Baseline with default weights
         data = {
             "entity_type": "Shell Company",
-            "ownership_structure": "Complex nominee",
+            "ownership_structure": "Transparent",
             "country": "United Kingdom",
-            "sector": "Government",
-            "directors": [{"is_pep": "Yes"}],
+            "sector": "Technology",
+            "directors": [{"is_pep": "No"}],
             "ubos": [],
             "introduction_method": "Direct",
         }

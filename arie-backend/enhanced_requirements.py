@@ -2174,6 +2174,7 @@ def _routing_for_application(db, app):
         from edd_routing_policy import evaluate_edd_routing
 
         facts = build_routing_facts(
+            db=db,
             app_row=app,
             risk_dict=risk_dict,
             screening_summary=screening_summary,

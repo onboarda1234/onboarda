@@ -366,7 +366,7 @@ class TestRecomputeRiskAudit:
 
     @pytest.mark.parametrize("disposition_code", ["true_match", "material_concern", "escalated_to_edd"])
     def test_material_screening_dispositions_cannot_persist_final_low(self, temp_db, disposition_code):
-        """Screening dispositions that create/preserve EDD controls must floor final LOW."""
+        """Screening dispositions that create/preserve EDD controls must floor final risk to HIGH."""
         from rule_engine import recompute_risk
         db = _get_db()
         _insert_risk_config(db)
@@ -392,13 +392,14 @@ class TestRecomputeRiskAudit:
         escalations = json.loads(app["risk_escalations"] or "[]")
 
         assert result["base_risk_level"] == "LOW"
-        assert result["final_risk_level"] != "LOW"
-        assert app["risk_level"] != "LOW"
-        assert app["final_risk_level"] != "LOW"
+        assert result["final_risk_level"] == "HIGH"
+        assert app["risk_level"] == "HIGH"
+        assert app["final_risk_level"] == "HIGH"
         assert app["base_risk_level"] == "LOW"
         assert app["onboarding_lane"] == "EDD"
         assert "material_screening_disposition_floor" in escalations
         assert disposition_code in app["elevation_reason_text"]
+        assert "at least HIGH final risk" in app["elevation_reason_text"]
         db.close()
 
     def test_raw_unresolved_completed_match_cannot_persist_final_low(self, temp_db):
@@ -427,11 +428,61 @@ class TestRecomputeRiskAudit:
         escalations = json.loads(app["risk_escalations"] or "[]")
 
         assert result["base_risk_level"] == "LOW"
-        assert app["final_risk_level"] != "LOW"
+        assert app["final_risk_level"] == "HIGH"
         assert app["base_risk_level"] == "LOW"
         assert app["onboarding_lane"] == "EDD"
         assert "material_screening_disposition_floor" in escalations
         assert "raw completed_match" in app["elevation_reason_text"]
+        db.close()
+
+    def test_non_terminal_possible_match_total_hits_does_not_floor_or_route_edd(self, temp_db):
+        """total_hits alone must not act as a blunt material-match proxy for non-terminal screening."""
+        from rule_engine import recompute_risk
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Technology",
+            entity_type="Listed Company",
+        )
+        app = db.execute(
+            "SELECT prescreening_data FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        prescreening = json.loads(app["prescreening_data"] or "{}")
+        report = prescreening.setdefault("screening_report", {})
+        report["total_hits"] = 1
+        report["any_non_terminal_subject"] = True
+        report["company_screening"] = {
+            "provider": "complyadvantage",
+            "source": "complyadvantage",
+            "api_status": "pending",
+            "matched": True,
+            "results": [{"id": "possible-match-not-terminal"}],
+        }
+        db.execute(
+            "UPDATE applications SET prescreening_data=? WHERE id=?",
+            (json.dumps(prescreening), app_id),
+        )
+        db.commit()
+
+        result = recompute_risk(db, app_id, "non_terminal_possible_match")
+        db.commit()
+
+        app = db.execute(
+            "SELECT final_risk_level, base_risk_level, onboarding_lane, risk_escalations FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+        escalations = json.loads(app["risk_escalations"] or "[]")
+
+        assert result["base_risk_level"] == "LOW"
+        assert app["final_risk_level"] == "LOW"
+        assert app["base_risk_level"] == "LOW"
+        assert app["onboarding_lane"] != "EDD"
+        assert "material_screening_disposition_floor" not in escalations
         db.close()
 
     def test_false_positive_cleared_does_not_floor_otherwise_clean_low(self, temp_db):
@@ -470,6 +521,39 @@ class TestRecomputeRiskAudit:
         assert app["onboarding_lane"] != "EDD"
         assert "material_screening_disposition_floor" not in escalations
         assert "false_positive" not in (app["elevation_reason_text"] or "")
+        db.close()
+
+    def test_regression_false_positive_cleared_can_return_to_low_fast_lane_if_otherwise_clean(self, temp_db):
+        from rule_engine import recompute_risk
+        db = _get_db()
+        _insert_risk_config(db)
+        app_id, _ = _insert_scored_app(
+            db,
+            risk_score=18.0,
+            risk_level="LOW",
+            country="United Kingdom",
+            sector="Technology",
+            entity_type="Listed Company",
+        )
+        _set_live_completed_match(db, app_id)
+        _insert_screening_review(
+            db,
+            app_id,
+            "false_positive_cleared",
+            requires_four_eyes=True,
+            complete=True,
+        )
+
+        recompute_risk(db, app_id, "false_positive_cleared_regression")
+        db.commit()
+
+        app = db.execute(
+            "SELECT final_risk_level, onboarding_lane FROM applications WHERE id=?",
+            (app_id,),
+        ).fetchone()
+
+        assert app["final_risk_level"] == "LOW"
+        assert app["onboarding_lane"] != "EDD"
         db.close()
 
     def test_needs_more_information_floor_is_explicit_and_routes_edd_lane(self, temp_db):

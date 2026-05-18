@@ -69,7 +69,7 @@ def _scan(db, ref: Optional[str] = None) -> List[Dict[str, Any]]:
     findings: List[Dict[str, Any]] = []
     for row in rows:
         ar = dict(row)
-        facts = build_routing_facts(app_row=ar)
+        facts = build_routing_facts(db=db, app_row=ar)
         try:
             decision = evaluate_edd_routing(facts)
         except Exception as e:

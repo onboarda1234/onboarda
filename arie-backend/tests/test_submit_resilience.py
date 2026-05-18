@@ -405,7 +405,7 @@ class TestHappyPathSubmit:
         assert app["risk_level"] != "LOW"
         assert app["final_risk_level"] == app["risk_level"]
         assert app["base_risk_level"] == "LOW"
-        assert app["risk_score"] == 28
+        assert app["risk_score"] >= 55
         assert "EDD routing floor" in app["elevation_reason_text"]
         audit_after = handler.log_audit.call_args.kwargs["after_state"]
         assert audit_after["final_risk_level"] == data["risk_level"]

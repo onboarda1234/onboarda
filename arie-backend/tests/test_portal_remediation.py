@@ -883,6 +883,55 @@ def test_invalid_preapproval_state_still_rejects(api_server):
     conn.close()
 
 
+def test_manual_status_change_to_edd_required_syncs_lane_to_edd_or_rejects(api_server):
+    from db import get_db
+
+    app_id = "manual_edd_lane_sync"
+    ref = "ARF-MANUAL-EDD-LANE-SYNC"
+    conn = get_db()
+    _cleanup_application(conn, app_id, ref)
+    _seed_kyc_application(
+        conn,
+        app_id=app_id,
+        ref=ref,
+        status="compliance_review",
+        risk_level="MEDIUM",
+        risk_score=52,
+        onboarding_lane="Standard Review",
+    )
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.patch(
+        f"{api_server}/api/applications/{ref}",
+        headers={"Authorization": f"Bearer {_officer_token()}"},
+        json={"status": "edd_required"},
+        timeout=3,
+    )
+    assert resp.status_code == 200, resp.text
+
+    conn = get_db()
+    app = conn.execute(
+        "SELECT status, onboarding_lane FROM applications WHERE id=?",
+        (app_id,),
+    ).fetchone()
+    audit = conn.execute(
+        """
+        SELECT detail FROM audit_log
+        WHERE target=? AND action='Status Change'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (ref,),
+    ).fetchone()
+    assert app["status"] == "edd_required"
+    assert app["onboarding_lane"] == "EDD"
+    assert audit is not None
+    assert "onboarding_lane: Standard Review → EDD" in audit["detail"]
+    _cleanup_application(conn, app_id, ref)
+    conn.commit()
+    conn.close()
+
+
 def test_valid_kyc_documents_case_can_upload(api_server):
     from db import get_db
 
