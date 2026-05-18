@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, Iterable, Mapping, Optional, Set
@@ -29,6 +30,99 @@ SPECIFIC_EDD_TRIGGERS = {
     "edd_flag:screening_needs_more_information",
     "confirmed_sanctions_or_fatf_blacklist",
     "sanctions_fatf_blacklist",
+}
+
+TRIGGER_CATEGORY_ALIASES = {
+    "pep": {
+        "pep",
+        "declared_pep",
+        "declared_pep_present",
+        "verified_pep",
+        "verified_pep_present",
+        "is_pep",
+        "pep_status",
+        "edd_trigger_floor_pep",
+        "edd_flag:pep",
+        "edd_flag:declared_pep_present",
+    },
+    "sector": {
+        "crypto",
+        "vasp",
+        "crypto_vasp",
+        "crypto_or_virtual_asset_sector",
+        "virtual_asset_service_provider",
+        "high_risk_sector",
+        "sector_risk_tier=high",
+        "sector_risk_tier_high",
+        "edd_trigger_floor_crypto_vasp",
+        "edd_flag:crypto_or_virtual_asset_sector",
+        "edd_flag:floor_rule_high_risk_sector",
+        "edd_flag:sub_factor_score_4",
+        "edd_flag:very_high_risk_sector",
+    },
+    "jurisdiction": {
+        "elevated_jurisdiction",
+        "high_risk_jurisdiction",
+        "jurisdiction_risk_tier=high",
+        "jurisdiction_risk_tier_high",
+        "jurisdiction_floor",
+        "edd_trigger_floor_jurisdiction",
+        "edd_flag:elevated_jurisdiction",
+        "edd_flag:high_risk_jurisdiction",
+    },
+    "ownership": {
+        "opaque_or_incomplete_ownership",
+        "opaque_ownership",
+        "incomplete_ownership",
+        "ownership_transparency_incomplete",
+        "ownership_floor",
+        "edd_trigger_floor_ownership",
+        "edd_flag:opaque_or_incomplete_ownership",
+    },
+    "material_screening": {
+        "material_screening_concern",
+        "raw_completed_match",
+        "completed_match",
+        "screening_completed_match",
+        "true_match",
+        "screening_true_match",
+        "material_concern",
+        "screening_material_concern",
+        "escalated_to_edd",
+        "edd_flag:material_screening_concern",
+    },
+    "screening_needs_more_information": {
+        "screening_needs_more_information",
+        "needs_more_information",
+        "edd_flag:screening_needs_more_information",
+    },
+    "sanctions_fatf": {
+        "confirmed_sanctions",
+        "confirmed_sanctions_or_fatf_blacklist",
+        "sanctions_fatf_blacklist",
+        "sanctioned_jurisdiction",
+        "fatf_blacklist",
+        "edd_flag:confirmed_sanctions_or_fatf_blacklist",
+        "edd_flag:sanctions_fatf_blacklist",
+    },
+}
+
+TRIGGER_CATEGORY_BY_ALIAS = {
+    alias: category
+    for category, aliases in TRIGGER_CATEGORY_ALIASES.items()
+    for alias in aliases
+}
+
+CONDITIONAL_DERIVED_TRIGGERS = {
+    "high_or_very_high_risk",
+    "supervisor_mandatory_escalation",
+    "final_risk_level=high",
+    "final_risk_level=very_high",
+    "risk_floor",
+    "risk_floor_reason",
+    "edd_flag:floor_rule_edd_routing",
+    "edd_flag:floor_rule_high_risk",
+    "edd_trigger_floor",
 }
 
 
@@ -71,7 +165,10 @@ def _text(value: Any) -> str:
 
 
 def _trigger_key(value: Any) -> str:
-    key = _text(value).lower().replace(" ", "_")
+    key = _text(value).lower()
+    key = key.replace("/", "_").replace("-", "_").replace(" ", "_")
+    key = re.sub(r"[^a-z0-9_:=]+", "_", key)
+    key = re.sub(r"_+", "_", key).strip("_")
     if key.startswith("edd_flag:"):
         return key
     return key
@@ -111,11 +208,64 @@ def _case_triggers(case: Mapping[str, Any]) -> Set[str]:
     return found
 
 
-def _coverage_required(current: Set[str], covered: Set[str]) -> Set[str]:
-    required = set(current)
-    if required & DERIVED_TRIGGER_ALIASES and covered & SPECIFIC_EDD_TRIGGERS:
-        required -= DERIVED_TRIGGER_ALIASES
-    return required
+def _trigger_category(key: str) -> Optional[str]:
+    if key in TRIGGER_CATEGORY_BY_ALIAS:
+        return TRIGGER_CATEGORY_BY_ALIAS[key]
+    if key.startswith("edd_flag:"):
+        suffix = key.split(":", 1)[1]
+        return TRIGGER_CATEGORY_BY_ALIAS.get(suffix)
+    return None
+
+
+def _is_conditional_derived_trigger(key: str) -> bool:
+    if key in CONDITIONAL_DERIVED_TRIGGERS or key in DERIVED_TRIGGER_ALIASES:
+        return True
+    return (
+        key.startswith("supervisor_")
+        or key.startswith("final_risk_level")
+        or key.startswith("edd_flag:floor_rule")
+        or key.startswith("edd_trigger_floor")
+        or key.startswith("risk_floor")
+    )
+
+
+def _coverage_units(keys: Set[str]) -> Set[str]:
+    units: Set[str] = set()
+    for key in keys:
+        category = _trigger_category(key)
+        units.add(category or key)
+    return units
+
+
+def _coverage_analysis(current: Set[str], covered: Set[str]) -> Dict[str, Any]:
+    covered_units = _coverage_units(covered)
+    has_specific_context = any(_trigger_category(key) for key in current | covered)
+    required_units: Set[str] = set()
+    ignored_derived: Set[str] = set()
+
+    for key in current:
+        category = _trigger_category(key)
+        if category:
+            required_units.add(category)
+        elif _is_conditional_derived_trigger(key) and has_specific_context:
+            ignored_derived.add(key)
+        else:
+            required_units.add(key)
+
+    missing_units = required_units - covered_units
+    return {
+        "required_units": sorted(required_units),
+        "covered_units": sorted(covered_units),
+        "missing_units": sorted(missing_units),
+        "ignored_derived_triggers": sorted(ignored_derived),
+        "current_trigger_categories": {
+            key: _trigger_category(key) for key in sorted(current) if _trigger_category(key)
+        },
+        "covered_trigger_categories": {
+            key: _trigger_category(key) for key in sorted(covered) if _trigger_category(key)
+        },
+        "covers": not missing_units,
+    }
 
 
 def _list_has_content(value: Any) -> bool:
@@ -264,8 +414,8 @@ def collect_edd_completion_status(
         case_stage = _text(case.get("stage")).lower()
         case_decision = _text(case.get("decision")).lower()
         covered = _case_triggers(case)
-        required = _coverage_required(current, covered)
-        covers = not required or required.issubset(covered)
+        coverage = _coverage_analysis(current, covered)
+        covers = bool(coverage.get("covers"))
         findings = _findings_complete(db, case_id)
         senior_approval = bool(
             _text(case.get("senior_reviewer"))
@@ -285,6 +435,12 @@ def collect_edd_completion_status(
             "case_stage": case_stage,
             "case_decision": case_decision,
             "covered_triggers": sorted(covered),
+            "normalized_current_triggers": coverage["required_units"],
+            "normalized_covered_triggers": coverage["covered_units"],
+            "missing_triggers": coverage["missing_units"],
+            "ignored_derived_triggers": coverage["ignored_derived_triggers"],
+            "current_trigger_categories": coverage["current_trigger_categories"],
+            "covered_trigger_categories": coverage["covered_trigger_categories"],
             "covers_current_triggers": covers,
             "findings_complete": bool(findings.get("complete")),
             "findings": _json_ready(findings),
