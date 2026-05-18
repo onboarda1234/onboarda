@@ -2125,6 +2125,14 @@ def build_compliance_memo(app, directors, ubos, documents):
         "decision_recommendation": decision,
         "monitoring_tier": mon_tier,
     }
+    edd_completion = app.get("edd_completion") if isinstance(app.get("edd_completion"), dict) else {}
+    if edd_completion:
+        agent5_input_contract["edd_completion"] = edd_completion
+        memo["metadata"]["edd_completion"] = edd_completion
+        if edd_completion.get("satisfied"):
+            memo["metadata"].setdefault("key_findings", []).append(
+                "Enhanced Due Diligence was completed and approved for the current trigger set; approval relies on that documented EDD evidence."
+            )
     if _screening_recommendation_bound_to_review:
         agent5_input_contract["decision_recommendation"] = "REVIEW"
     memo["metadata"]["agent5_input_contract"] = agent5_input_contract
@@ -2312,9 +2320,41 @@ def build_compliance_memo(app, directors, ubos, documents):
     # EDD. Non-EDD supervisor mandatory escalations still block approval
     # through the supervisor/approval gate, but do not create false EDD.
     _route_is_edd = (edd_routing or {}).get("route") == "edd"
+    _edd_completion_satisfied = bool(
+        edd_completion.get("satisfied")
+        and edd_completion.get("covers_current_triggers")
+    )
     _is_mandatory_escalation = bool(supervisor_result.get("mandatory_escalation", False))
     _supervisor_can_approve = bool(supervisor_result.get("can_approve", False))
-    if _route_is_edd:
+    if _route_is_edd and _edd_completion_satisfied:
+        memo["metadata"]["edd_route_satisfied_by_completed_case"] = True
+        try:
+            _route_triggers = ", ".join((edd_routing or {}).get("triggers", [])[:6])
+            _completion_statement = (
+                "EDD was required"
+                + (" for " + _route_triggers if _route_triggers else "")
+                + " and has been completed/approved. This recommendation relies on the approved EDD case "
+                + str(edd_completion.get("case_id") or "")
+                + " and accepted enhanced requirement evidence; residual risk remains "
+                + str(aggregated_risk)
+                + "."
+            )
+            _decision_sec = (memo.get("sections") or {}).get("compliance_decision") or {}
+            if isinstance(_decision_sec, dict):
+                _existing = _decision_sec.get("content") or ""
+                if _completion_statement not in _existing:
+                    _decision_sec["content"] = (_existing.rstrip() + " " + _completion_statement).strip()
+                memo["sections"]["compliance_decision"] = _decision_sec
+            _conditions = list(memo["metadata"].get("conditions") or [])
+            _conditions.append(
+                "Approval relies on completed EDD case "
+                + str(edd_completion.get("case_id") or "")
+                + " and accepted enhanced requirements; this does not lower the residual risk classification."
+            )
+            memo["metadata"]["conditions"] = _conditions
+        except Exception:
+            pass
+    elif _route_is_edd:
         _original_decision = memo["metadata"].get("approval_recommendation")
         _approval_like = ("APPROVE", "APPROVE_WITH_CONDITIONS")
         if _original_decision in _approval_like:
@@ -2445,7 +2485,7 @@ def build_compliance_memo(app, directors, ubos, documents):
     # memo. This is belt-and-braces — the binding above should already prevent this — and
     # ensures persistence cannot silently store a contradicting memo.
     _final_decision = memo["metadata"].get("approval_recommendation")
-    if _route_is_edd and _final_decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
+    if _route_is_edd and not _edd_completion_satisfied and _final_decision in ("APPROVE", "APPROVE_WITH_CONDITIONS"):
         memo["metadata"]["validation_status"] = "fail"
         memo["metadata"]["blocked"] = True
         memo["metadata"]["block_reason"] = (

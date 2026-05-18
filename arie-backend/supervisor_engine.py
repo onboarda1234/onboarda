@@ -489,17 +489,32 @@ def run_memo_supervisor(memo_data):
     contract_jur = (risk_dims.get("jurisdiction") or "").upper()
     contract_biz = (risk_dims.get("business") or "").upper()
     contract_ownership = (contract.get("ownership_transparency_status") or "").lower()
+    edd_completion = contract.get("edd_completion") or metadata.get("edd_completion") or {}
+    if not isinstance(edd_completion, dict):
+        edd_completion = {}
+    edd_completion_satisfied = bool(
+        edd_completion.get("satisfied")
+        and edd_completion.get("covers_current_triggers")
+    )
+    resolved_by_edd_completion = []
     mandatory_reasons = []
+
+    def _append_mandatory(reason):
+        if edd_completion_satisfied:
+            resolved_by_edd_completion.append(reason)
+            return
+        mandatory_reasons.append(reason)
+
     if contract_final_risk in ("HIGH", "VERY_HIGH"):
-        mandatory_reasons.append("final_risk_level=" + contract_final_risk)
+        _append_mandatory("final_risk_level=" + contract_final_risk)
     if contract.get("declared_pep_present"):
-        mandatory_reasons.append("declared_pep_present")
+        _append_mandatory("declared_pep_present")
     if contract_jur in ("HIGH", "VERY_HIGH"):
-        mandatory_reasons.append("jurisdiction_risk_tier=" + contract_jur)
+        _append_mandatory("jurisdiction_risk_tier=" + contract_jur)
     if contract_biz == "HIGH":
-        mandatory_reasons.append("sector_risk_tier=HIGH")
+        _append_mandatory("sector_risk_tier=HIGH")
     if contract_ownership in ("opaque", "incomplete"):
-        mandatory_reasons.append("ownership_transparency=" + contract_ownership)
+        _append_mandatory("ownership_transparency=" + contract_ownership)
     unresolved_terminal_match = bool(
         screening_summary.get("has_terminal_match")
         or screening_summary.get("has_uncleared_completed_match")
@@ -511,7 +526,7 @@ def run_memo_supervisor(memo_data):
         and not screening_summary.get("approval_blocking")
     )
     if unresolved_terminal_match and not screening_summary_cleared:
-        mandatory_reasons.append("material_screening_concern")
+        _append_mandatory("material_screening_concern")
     if verdict == "INCONSISTENT":
         contradiction_reasons = []
         for item in critical_contradictions or contradictions:
@@ -563,5 +578,8 @@ def run_memo_supervisor(memo_data):
         "requires_sco_review": requires_sco_review,
         "mandatory_escalation": mandatory_escalation,
         "mandatory_escalation_reasons": mandatory_reasons,
+        "mandatory_escalation_resolved_by_edd": resolved_by_edd_completion,
+        "edd_completion_satisfied": edd_completion_satisfied,
+        "edd_completion_case_id": edd_completion.get("case_id"),
         "checked_at": datetime.now().isoformat()
     }
