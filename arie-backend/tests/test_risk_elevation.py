@@ -757,7 +757,7 @@ class TestPakistanElevation:
         assert result["final_risk_level"] in ("HIGH", "VERY_HIGH")
         assert "elevation_grey_sector_opaque" in result["escalations"]
 
-    def test_pakistan_without_crypto_stays_medium(self):
+    def test_pakistan_without_crypto_respects_jurisdiction_high_floor(self):
         """Pakistan + non-high-risk sector still respects the jurisdiction HIGH floor."""
         result = compute_risk_score(_base_medium_app(
             country="pakistan",

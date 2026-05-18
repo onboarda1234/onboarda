@@ -304,7 +304,7 @@ def _edd_trigger_flags_from_app(app):
 
 
 def _apply_edd_route_risk_floor(risk, routing_outcome):
-    """Keep final risk truthful when deterministic routing implies a minimum floor."""
+    """Keep final risk truthful by applying the minimum level implied by EDD routing."""
     if not isinstance(risk, dict) or not isinstance(routing_outcome, dict):
         return risk
     if str(routing_outcome.get("route") or "").lower() != "edd":

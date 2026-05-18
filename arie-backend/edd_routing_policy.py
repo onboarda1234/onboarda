@@ -198,6 +198,9 @@ def evaluate_edd_routing(facts: Dict[str, Any]) -> Dict[str, Any]:
     if declared_pep:
         triggers.append(TRIGGER_DECLARED_PEP)
 
+    # Option A policy: only true high-risk sectors force EDD on sector grounds.
+    # Generic "elevated" sectors stay on the standard path unless another EDD
+    # trigger also applies.
     if sector_tier in ("high", "very_high"):
         triggers.append(TRIGGER_HIGH_SECTOR)
     # Crypto / virtual-asset is called out separately so officers can
