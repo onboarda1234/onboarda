@@ -152,3 +152,28 @@ def test_lifecycle_edge_chips_are_clickable_owner_workflow_deep_links():
     assert "lifecycleOpenItemAction(obj)" in section
     assert "event.stopPropagation();" in section
     assert "btn btn-outline btn-sm" in section
+
+
+def test_lifecycle_memo_gate_adds_officer_rationale_outcome_and_completion_action():
+    html = _read_backoffice()
+    helper_start = html.index("window._lifecycleMemoDrafts = window._lifecycleMemoDrafts || {};")
+    helper_end = html.index("async function saveLifecycleMaterialChange(reviewId)", helper_start)
+    helper_section = html[helper_start:helper_end]
+    memo_start = html.index("var memoBody = activeReview")
+    memo_end = html.index("var historyItems = historical.filter", memo_start)
+    memo_section = html[memo_start:memo_end]
+    assert "window._lifecycleMemoDrafts = window._lifecycleMemoDrafts || {};" in helper_section
+    assert "async function saveLifecycleOfficerRationale(reviewId)" in helper_section
+    assert "async function completeLifecycleReviewAndGenerateMemo(reviewId)" in helper_section
+    assert "Officer rationale" in memo_section
+    assert "Save rationale" in memo_section
+    assert "Continue — No Change" in memo_section
+    assert "Continue — Enhanced Monitoring" in memo_section
+    assert "Escalate to EDD" in memo_section
+    assert "Complete review & generate memo" in memo_section
+    assert "Complete review & regenerate memo" in memo_section
+    assert "Periodic review memo generation remains deterministic" in memo_section
+    assert "/officer-rationale" in helper_section
+    assert "/complete" in helper_section
+    assert "Recommend Exit" not in memo_section
+    assert "Exit Recommended" not in memo_section

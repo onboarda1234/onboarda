@@ -10142,6 +10142,175 @@ async function refreshLifecycleWorkspaceTab() {
   await loadLifecycleDetailTab(true);
 }
 
+window._lifecycleMemoDrafts = window._lifecycleMemoDrafts || {};
+
+function lifecycleMemoDraft(reviewDetail) {
+  if (!reviewDetail || reviewDetail.id == null) return { rationale: '', outcome: '' };
+  var key = String(reviewDetail.id);
+  if (!window._lifecycleMemoDrafts[key]) {
+    window._lifecycleMemoDrafts[key] = {
+      rationale: String(reviewDetail.officer_rationale || '').trim(),
+      outcome: String(reviewDetail.outcome || '').trim()
+    };
+  }
+  return window._lifecycleMemoDrafts[key];
+}
+
+function lifecycleCaptureMemoDraft(reviewId) {
+  var key = String(reviewId);
+  var rationaleEl = document.getElementById('lifecycle-review-rationale-' + reviewId);
+  var outcomeEl = document.getElementById('lifecycle-review-outcome-' + reviewId);
+  window._lifecycleMemoDrafts[key] = {
+    rationale: rationaleEl ? rationaleEl.value.trim() : '',
+    outcome: outcomeEl ? outcomeEl.value : ''
+  };
+  return window._lifecycleMemoDrafts[key];
+}
+
+function lifecycleCompletionSummary(reviewDetail, projection) {
+  if (reviewDetail && Array.isArray(reviewDetail.completion_blocker_summary) && reviewDetail.completion_blocker_summary.length) {
+    return reviewDetail.completion_blocker_summary.slice();
+  }
+  if (projection && Array.isArray(projection.completion_blocker_summary) && projection.completion_blocker_summary.length) {
+    return projection.completion_blocker_summary.slice();
+  }
+  return [];
+}
+
+function lifecycleOperationalSummary(reviewDetail, projection) {
+  if (reviewDetail && Array.isArray(reviewDetail.blocker_summary) && reviewDetail.blocker_summary.length) {
+    return reviewDetail.blocker_summary.slice();
+  }
+  if (projection && Array.isArray(projection.blocker_summary) && projection.blocker_summary.length) {
+    return projection.blocker_summary.slice();
+  }
+  return [];
+}
+
+function lifecycleMemoGateState(reviewDetail, projection, draft) {
+  var completionSummary = lifecycleCompletionSummary(reviewDetail, projection);
+  var operationalSummary = lifecycleOperationalSummary(reviewDetail, projection);
+  var adjustedCompletion = completionSummary.filter(function(label) {
+    if (label === 'Officer rationale is required' && draft && draft.rationale) return false;
+    if (label === 'Review outcome is required before completion' && draft && draft.outcome) return false;
+    return true;
+  });
+  var unresolved = operationalSummary.concat(adjustedCompletion);
+  return {
+    operationalSummary: operationalSummary,
+    adjustedCompletionSummary: adjustedCompletion,
+    unresolvedSummary: unresolved,
+    rationaleReady: !!(draft && draft.rationale),
+    outcomeReady: !!(draft && draft.outcome),
+    ready: !!(draft && draft.rationale && draft.outcome && !unresolved.length)
+  };
+}
+
+function refreshLifecycleMemoActions(reviewId) {
+  var context = window._detailLifecycleTabCache && window._detailLifecycleTabCache.data;
+  var reviewDetail = context && context.reviewDetail;
+  if (!reviewDetail || String(reviewDetail.id) !== String(reviewId)) return;
+  var projection = reviewDetail && reviewDetail.projection ? reviewDetail.projection : null;
+  var draft = lifecycleCaptureMemoDraft(reviewId);
+  var state = lifecycleMemoGateState(reviewDetail, projection, draft);
+  var summaryEl = document.getElementById('lifecycle-memo-readiness-' + reviewId);
+  var btn = document.getElementById('lifecycle-review-complete-btn-' + reviewId);
+  if (summaryEl) {
+    var rows = [
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Officer rationale</span><strong style="color:' + (state.rationaleReady ? 'var(--green)' : 'var(--amber)') + ';">' + (state.rationaleReady ? 'Ready' : 'Required') + '</strong></div>',
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Outcome selection</span><strong style="color:' + (state.outcomeReady ? 'var(--green)' : 'var(--amber)') + ';">' + (state.outcomeReady ? 'Ready' : 'Required') + '</strong></div>',
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Operational blockers</span><strong style="color:' + (!state.operationalSummary.length ? 'var(--green)' : 'var(--red)') + ';">' + (!state.operationalSummary.length ? 'Clear' : (state.operationalSummary.length + ' open')) + '</strong></div>',
+      '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Completion blockers</span><strong style="color:' + (!state.adjustedCompletionSummary.length ? 'var(--green)' : 'var(--amber)') + ';">' + (!state.adjustedCompletionSummary.length ? 'Clear' : (state.adjustedCompletionSummary.length + ' open')) + '</strong></div>'
+    ];
+    if (state.unresolvedSummary.length) {
+      rows.push('<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Still blocking: ' + state.unresolvedSummary.map(escapeHtml).join(' • ') + '</div>');
+    } else {
+      rows.push('<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Ready to write the canonical review outcome and trigger deterministic periodic-review memo generation.</div>');
+    }
+    summaryEl.innerHTML = rows.join('');
+  }
+  if (btn) {
+    btn.disabled = !state.ready;
+    btn.textContent = (reviewDetail && reviewDetail.memo_status === 'generated')
+      ? 'Complete review & regenerate memo'
+      : 'Complete review & generate memo';
+  }
+}
+
+async function saveLifecycleOfficerRationale(reviewId) {
+  var draft = lifecycleCaptureMemoDraft(reviewId);
+  if (!draft.rationale) {
+    showToast('Officer rationale is required before saving.', 'error');
+    refreshLifecycleMemoActions(reviewId);
+    return;
+  }
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/officer-rationale', {
+      officer_rationale: draft.rationale
+    });
+    showToast('Officer rationale saved');
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    showToast('Failed to save officer rationale: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+async function completeLifecycleReviewAndGenerateMemo(reviewId) {
+  var btn = document.getElementById('lifecycle-review-complete-btn-' + reviewId);
+  var context = window._detailLifecycleTabCache && window._detailLifecycleTabCache.data;
+  var reviewDetail = context && context.reviewDetail;
+  if (!reviewDetail || String(reviewDetail.id) !== String(reviewId)) return;
+  var projection = reviewDetail && reviewDetail.projection ? reviewDetail.projection : null;
+  var draft = lifecycleCaptureMemoDraft(reviewId);
+  var state = lifecycleMemoGateState(reviewDetail, projection, draft);
+  if (!state.rationaleReady) {
+    showToast('Officer rationale is required before completion.', 'error');
+    refreshLifecycleMemoActions(reviewId);
+    return;
+  }
+  if (!state.outcomeReady) {
+    showToast('Select an outcome before completion.', 'error');
+    refreshLifecycleMemoActions(reviewId);
+    return;
+  }
+  if (!state.ready) {
+    showToast('Resolve remaining blockers before generating the periodic review memo.', 'error');
+    refreshLifecycleMemoActions(reviewId);
+    return;
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Completing…';
+  }
+  try {
+    if (String(reviewDetail.officer_rationale || '').trim() !== draft.rationale) {
+      await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/officer-rationale', {
+        officer_rationale: draft.rationale
+      });
+    }
+    var resp = await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/complete', {
+      outcome: draft.outcome,
+      outcome_reason: draft.rationale
+    });
+    delete window._lifecycleMemoDrafts[String(reviewId)];
+    var memoState = resp && resp.memo && resp.memo.status ? resp.memo.status : 'generated';
+    showToast('Review completed and periodic review memo ' + String(memoState).replace(/_/g, ' '));
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    var parsed = null;
+    try {
+      parsed = JSON.parse(err.message || '{}');
+    } catch (e) {}
+    if (parsed && parsed.blocking_items) {
+      showToast('Completion blocked: ' + parsed.blocking_items.map(function(item) { return item.label; }).join('; '), 'error');
+    } else {
+      showToast('Failed to complete periodic review: ' + (err.message || 'unknown error'), 'error');
+    }
+    if (btn) btn.textContent = 'Complete review & generate memo';
+    refreshLifecycleMemoActions(reviewId);
+  }
+}
+
 async function saveLifecycleMaterialChange(reviewId) {
   var attestation = document.querySelector('input[name="lifecycle-material-attestation-' + reviewId + '"]:checked');
   if (!attestation || !attestation.value) {
@@ -10300,12 +10469,53 @@ function renderLifecycleDetailTab(context) {
       '<div style="font-size:12px;color:var(--text2);">Lifecycle consumes these linked owner-workflow objects without duplicating Screening, EDD, Change Management, or KYC repository state.</div>'
     : '<div style="font-size:12px;color:var(--text2);">No lifecycle linkage edges are currently projected for this client.</div>';
 
+  var memoDraft = activeReview ? lifecycleMemoDraft(activeReview) : { rationale: '', outcome: '' };
+  var memoGate = activeReview ? lifecycleMemoGateState(activeReview, activeReviewProjection, memoDraft) : null;
   var memoBody = activeReview
     ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
         lifecycleDetailBadge(activeReview.memo_status || 'Not started', activeReview.memo_status === 'generated' ? 'green' : 'amber') +
         lifecycleDetailBadge(activeReview.periodic_review_memo_id ? ('Memo #' + String(activeReview.periodic_review_memo_id)) : 'No memo ID yet', 'slate') +
+        lifecycleDetailBadge('Onboarding memo unchanged', 'blue') +
       '</div>' +
-      '<div style="font-size:12px;color:var(--text2);">This section is read-only in PR 3. PR 7 adds officer rationale, outcome, and memo gating controls without allowing AI-authored conclusions.</div>'
+      '<div style="display:grid;grid-template-columns:1fr;gap:12px;">' +
+        '<div>' +
+          '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Officer rationale</label>' +
+          '<textarea id="lifecycle-review-rationale-' + activeReview.id + '" rows="4" oninput="refreshLifecycleMemoActions(\'' + activeReview.id + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;resize:vertical;" placeholder="Officer judgment only. Explain the review conclusion in regulator-defensible terms.">' + escapeHtml(memoDraft.rationale || '') + '</textarea>' +
+          '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:8px;flex-wrap:wrap;">' +
+            '<div style="font-size:11px;color:var(--text3);">Saved to canonical periodic review state via <code>periodic_reviews.officer_rationale</code>. No AI-authored conclusion is inserted here.</div>' +
+            '<button class="btn btn-outline btn-sm" onclick="saveLifecycleOfficerRationale(\'' + activeReview.id + '\')">Save rationale</button>' +
+          '</div>' +
+        '</div>' +
+        '<div>' +
+          '<label style="font-size:12px;font-weight:700;display:block;margin-bottom:6px;">Outcome</label>' +
+          '<select id="lifecycle-review-outcome-' + activeReview.id + '" onchange="refreshLifecycleMemoActions(\'' + activeReview.id + '\')" style="width:100%;padding:10px 12px;border:1px solid var(--border1);border-radius:12px;background:var(--bg1);font-size:13px;">' +
+            '<option value="">Select outcome…</option>' +
+            '<option value="no_change"' + (memoDraft.outcome === 'no_change' ? ' selected' : '') + '>Continue — No Change</option>' +
+            '<option value="enhanced_monitoring"' + (memoDraft.outcome === 'enhanced_monitoring' ? ' selected' : '') + '>Continue — Enhanced Monitoring</option>' +
+            '<option value="edd_required"' + (memoDraft.outcome === 'edd_required' ? ' selected' : '') + '>Escalate to EDD</option>' +
+          '</select>' +
+          '<div style="font-size:11px;color:var(--text3);margin-top:8px;">Outcome writes the canonical periodic review <code>outcome</code> field only. It does not write the legacy <code>decision</code> field and does not mutate the onboarding memo.</div>' +
+        '</div>' +
+        '<div style="padding:12px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);">' +
+          '<div style="font-size:12px;font-weight:700;color:var(--text1);margin-bottom:8px;">Memo readiness</div>' +
+          '<div id="lifecycle-memo-readiness-' + activeReview.id + '" style="display:grid;grid-template-columns:1fr;gap:8px;font-size:12px;color:var(--text2);">' +
+            (memoGate ? [
+              '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Officer rationale</span><strong style="color:' + (memoGate.rationaleReady ? 'var(--green)' : 'var(--amber)') + ';">' + (memoGate.rationaleReady ? 'Ready' : 'Required') + '</strong></div>',
+              '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Outcome selection</span><strong style="color:' + (memoGate.outcomeReady ? 'var(--green)' : 'var(--amber)') + ';">' + (memoGate.outcomeReady ? 'Ready' : 'Required') + '</strong></div>',
+              '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Operational blockers</span><strong style="color:' + (!memoGate.operationalSummary.length ? 'var(--green)' : 'var(--red)') + ';">' + (!memoGate.operationalSummary.length ? 'Clear' : (memoGate.operationalSummary.length + ' open')) + '</strong></div>',
+              '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><span>Completion blockers</span><strong style="color:' + (!memoGate.adjustedCompletionSummary.length ? 'var(--green)' : 'var(--amber)') + ';">' + (!memoGate.adjustedCompletionSummary.length ? 'Clear' : (memoGate.adjustedCompletionSummary.length + ' open')) + '</strong></div>',
+              (memoGate.unresolvedSummary.length
+                ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Still blocking: ' + memoGate.unresolvedSummary.map(escapeHtml).join(' • ') + '</div>'
+                : '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border1);font-size:11px;color:var(--text3);">Ready to write the canonical review outcome and trigger deterministic periodic-review memo generation.</div>')
+            ].join('')
+            : '') +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">' +
+          '<div style="font-size:11px;color:var(--text3);max-width:520px;">Periodic review memo generation remains deterministic and separate from onboarding memo generation. The completion action below writes the canonical review outcome and triggers the periodic-review memo path only when the readiness gate is clear.</div>' +
+          '<button class="btn btn-primary btn-sm" id="lifecycle-review-complete-btn-' + activeReview.id + '" onclick="completeLifecycleReviewAndGenerateMemo(\'' + activeReview.id + '\')"' + ((memoGate && memoGate.ready) ? '' : ' disabled') + '>' + (activeReview.memo_status === 'generated' ? 'Complete review & regenerate memo' : 'Complete review & generate memo') + '</button>' +
+        '</div>' +
+      '</div>'
     : '<div style="font-size:12px;color:var(--text2);">Memo status will appear once a current review is active. Onboarding memo behaviour remains unchanged.</div>';
 
   var historyItems = historical.filter(function(item) { return item.type === 'review'; });
@@ -10376,6 +10586,9 @@ async function loadLifecycleDetailTab(force) {
       data: data
     };
     renderLifecycleDetailTab(data);
+    if (activeReviewItem && reviewDetail) {
+      try { refreshLifecycleMemoActions(reviewDetail.id); } catch (e) {}
+    }
   } catch (err) {
     console.warn('Lifecycle detail tab load failed:', err);
     container.innerHTML = '<div style="padding:16px;border:1px solid rgba(239,68,68,0.25);border-radius:10px;background:rgba(239,68,68,0.05);font-size:12px;color:#991b1b;">Failed to load lifecycle workspace: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
