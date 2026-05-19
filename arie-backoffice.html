@@ -1460,15 +1460,31 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
 <!-- ═══════════════ CASE MANAGEMENT VIEW ═══════════════ -->
 <div class="view" id="view-cases">
   <div class="tab-bar">
-    <div class="tab active" onclick="switchCaseTab('my-cases',this)">My Cases</div>
-    <div class="tab" onclick="switchCaseTab('pre-approval',this)" style="position:relative;">Pre-Approval Queue <span id="pre-approval-badge" class="tab-badge" style="display:none;background:#d97706;color:#fff;padding:1px 6px;border-radius:10px;font-size:10px;position:absolute;top:-4px;right:-8px;">0</span></div>
-    <div class="tab" onclick="switchCaseTab('unassigned',this)">Unassigned</div>
-    <div class="tab" onclick="switchCaseTab('all-cases',this)">All Cases</div>
+    <div class="tab active" onclick="switchCaseTab('my-assigned',this)">My Assigned Work</div>
+  </div>
+  <div class="card" style="margin-bottom:14px;padding:14px 16px;">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+      <div>
+        <div class="card-title" style="margin-bottom:4px;">My Assigned Work</div>
+        <p style="font-size:12px;color:var(--text3);margin:0;max-width:760px;line-height:1.5;">
+          Case Management is an officer worklist only. Application and periodic-review rows are projected from their owner workflows; periodic review state remains canonical on <code>periodic_reviews</code>.
+        </p>
+      </div>
+      <div id="case-work-count" class="badge draft">0 assigned</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+      <button class="btn btn-outline btn-sm case-work-filter active" data-case-filter="all" onclick="setCaseWorkFilter('all',this)">All assigned</button>
+      <button class="btn btn-outline btn-sm case-work-filter" data-case-filter="applications" onclick="setCaseWorkFilter('applications',this)">Applications</button>
+      <button class="btn btn-outline btn-sm case-work-filter" data-case-filter="periodic_reviews" onclick="setCaseWorkFilter('periodic_reviews',this)">Periodic Reviews</button>
+      <button class="btn btn-outline btn-sm case-work-filter" data-case-filter="pre_approval" onclick="setCaseWorkFilter('pre_approval',this)">Pre-Approval</button>
+      <button class="btn btn-outline btn-sm case-work-filter" data-case-filter="overdue" onclick="setCaseWorkFilter('overdue',this)">Overdue</button>
+      <button class="btn btn-outline btn-sm case-work-filter" data-case-filter="due_soon" onclick="setCaseWorkFilter('due_soon',this)">Due Soon</button>
+    </div>
   </div>
   <div class="card" style="padding:0;overflow:hidden;">
     <table class="data-table">
       <thead>
-        <tr><th>Reference</th><th>Company</th><th>Risk</th><th>Status</th><th>Assigned</th><th>Last Activity</th><th>Actions</th></tr>
+        <tr><th>Type</th><th>Reference</th><th>Client</th><th>Risk</th><th>Status</th><th>Assigned</th><th>Due / Activity</th><th>Actions</th></tr>
       </thead>
       <tbody id="cases-body"></tbody>
     </table>
@@ -3561,7 +3577,9 @@ function normalizePeriodicReview(raw) {
     client: raw.client_name || '',
     risk: normalizeRiskLevel(raw.risk_level),
     lastReview: raw.completed_at ? raw.completed_at.split('T')[0].split(' ')[0] : '—',
-    nextDue: raw.due_date || '—',
+    nextDue: raw.next_review_date || raw.due_date || '—',
+    assignedOfficerId: raw.assigned_officer || raw.assigned_to || '',
+    assignedOfficerName: raw.assigned_officer_name || raw.assigned_name || raw.assigned_officer || raw.assigned_to || 'Unassigned',
     trigger: reviewTriggerText(raw || {}, status.payload),
     status: status.label,
     raw_status: status.raw,
@@ -9064,7 +9082,8 @@ function loadCMStats() {
   }).catch(function(e) { showToast('Failed to load stats: ' + e.message, 'error'); });
 }
 
-var activeCaseTab = 'my-cases';
+var activeCaseTab = 'my-assigned';
+var activeCaseWorkFilter = 'all';
 
 function currentUserId() {
   return currentUser ? String(currentUser.id || currentUser.sub || '') : '';
@@ -9079,30 +9098,123 @@ function isAssignedToCurrentUser(app) {
   return !!userId && String(app.assignedId || '') === userId;
 }
 
+function isWorkAssignedToCurrentUser(assignedId, assignedName) {
+  var userId = currentUserId();
+  var userEmail = currentUser ? String(currentUser.email || '').toLowerCase() : '';
+  var userName = currentUser ? String(currentUser.name || '').toLowerCase() : '';
+  var id = String(assignedId || '');
+  var name = String(assignedName || '').toLowerCase();
+  return !!((userId && id === userId) || (userEmail && id.toLowerCase() === userEmail) || (userName && name === userName));
+}
+
+function caseWorkDueState(dateValue, statusValue) {
+  var status = String(statusValue || '').toLowerCase();
+  if (status.indexOf('overdue') >= 0) return 'overdue';
+  if (status.indexOf('due soon') >= 0) return 'due_soon';
+  if (!dateValue || dateValue === '—') return '';
+  var due = new Date(String(dateValue) + 'T00:00:00Z');
+  if (isNaN(due.getTime())) return '';
+  var today = new Date();
+  var todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  var diffDays = Math.floor((due.getTime() - todayUtc) / 86400000);
+  if (diffDays < 0) return 'overdue';
+  if (diffDays <= 30) return 'due_soon';
+  return '';
+}
+
+function caseWorkTypeChip(type) {
+  var label = type === 'periodic_review' ? 'Periodic Review' : 'Application';
+  var cls = type === 'periodic_review' ? 'in-review' : 'draft';
+  return '<span class="badge ' + cls + '">' + escapeHtml(label) + '</span>';
+}
+
+function caseWorkStatusBadge(item) {
+  return item.type === 'periodic_review'
+    ? '<span class="badge pending">' + escapeHtml(item.status || 'Due') + '</span>'
+    : statusBadge(item.status);
+}
+
+function buildCaseWorkItems() {
+  var items = [];
+  APPLICATIONS.forEach(function(app) {
+    if (!isAssignedToCurrentUser(app)) return;
+    items.push({
+      type: 'application',
+      filterType: 'applications',
+      ref: app.ref,
+      client: app.company,
+      riskHtml: riskBadgeForRecord(app),
+      status: app.status,
+      assigned: app.assigned || 'Unassigned',
+      due: app.date || '—',
+      dueState: isPreApprovalCase(app) ? 'pre_approval' : '',
+      action: "openAppDetail(" + JSON.stringify(app.ref) + ")"
+    });
+  });
+  PERIODIC_REVIEWS.forEach(function(review) {
+    if (!isWorkAssignedToCurrentUser(review.assignedOfficerId, review.assignedOfficerName)) return;
+    var dueState = caseWorkDueState(review.nextDue, review.status);
+    items.push({
+      type: 'periodic_review',
+      filterType: 'periodic_reviews',
+      ref: review.ref || ('Review #' + review.id),
+      reviewId: review.id,
+      client: review.client || 'Periodic review',
+      riskHtml: riskBadge(review.risk),
+      status: review.status || 'Due',
+      assigned: review.assignedOfficerName || review.assignedOfficerId || 'Unassigned',
+      due: review.nextDue || '—',
+      dueState: dueState,
+      action: "openCasePeriodicReview(" + JSON.stringify(review.ref || "") + ")"
+    });
+  });
+  return items;
+}
+
+function caseWorkItemMatchesFilter(item) {
+  if (activeCaseWorkFilter === 'all') return true;
+  if (activeCaseWorkFilter === 'overdue') return item.dueState === 'overdue';
+  if (activeCaseWorkFilter === 'due_soon') return item.dueState === 'due_soon';
+  if (activeCaseWorkFilter === 'pre_approval') return item.dueState === 'pre_approval';
+  return item.filterType === activeCaseWorkFilter;
+}
+
+function openCasePeriodicReview(ref) {
+  if (!ref) {
+    showToast('Periodic review is missing an application reference', 'error');
+    return;
+  }
+  openAppDetail(ref);
+  setTimeout(function() { switchDetailTab('lifecycle'); }, 0);
+}
+
 function renderCases() {
   var tbody = document.getElementById('cases-body');
   tbody.innerHTML = '';
-  APPLICATIONS.forEach(function(app) {
-    // Filter by active tab
-    if (activeCaseTab === 'my-cases' && !isAssignedToCurrentUser(app)) return;
-    if (activeCaseTab === 'unassigned' && app.assignedId) return;
-    if (activeCaseTab === 'pre-approval' && !isPreApprovalCase(app)) return;
+  var items = buildCaseWorkItems();
+  var visibleItems = items.filter(caseWorkItemMatchesFilter);
+  var countEl = document.getElementById('case-work-count');
+  if (countEl) countEl.textContent = visibleItems.length + ' assigned';
+  if (!visibleItems.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:18px;">No assigned work matches this filter.</td></tr>';
+    return;
+  }
+  visibleItems.forEach(function(item) {
     var tr = document.createElement('tr');
-    // Highlight pre-approval cases
-    if (isPreApprovalCase(app)) {
+    if (item.dueState === 'pre_approval') {
       tr.style.background = 'rgba(217,119,6,0.06)';
     }
-    tr.innerHTML = '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(app.ref) + '</td><td>' + escapeHtml(app.company) + '</td><td>' + riskBadgeForRecord(app) + '</td><td>' + statusBadge(app.status) + '</td><td style="font-size:12px;">' + escapeHtml(app.assigned) + '</td><td style="font-size:12px;color:var(--text3);">' + escapeHtml(app.date) + '</td><td><button class="btn btn-outline btn-sm" onclick="openAppDetail(\'' + escapeHtml(app.ref) + '\')">Open</button></td>';
+    tr.innerHTML =
+      '<td>' + caseWorkTypeChip(item.type) + '</td>' +
+      '<td style="font-family:monospace;font-size:12px;">' + escapeHtml(item.ref) + '</td>' +
+      '<td>' + escapeHtml(item.client) + '</td>' +
+      '<td>' + item.riskHtml + '</td>' +
+      '<td>' + caseWorkStatusBadge(item) + '</td>' +
+      '<td style="font-size:12px;">' + escapeHtml(item.assigned) + '</td>' +
+      '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(item.due) + '</td>' +
+      '<td><button class="btn btn-outline btn-sm" onclick="' + item.action + '">Open</button></td>';
     tbody.appendChild(tr);
   });
-
-  // Update pre-approval badge count
-  var preApprovalCount = APPLICATIONS.filter(isPreApprovalCase).length;
-  var badge = document.getElementById('pre-approval-badge');
-  if (badge) {
-    badge.textContent = preApprovalCount;
-    badge.style.display = preApprovalCount > 0 ? '' : 'none';
-  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -12140,6 +12252,13 @@ function switchCaseTab(tab, btn) {
   document.querySelectorAll('#view-cases .tab').forEach(function(t) { t.classList.remove('active'); });
   btn.classList.add('active');
   activeCaseTab = tab;
+  renderCases();
+}
+
+function setCaseWorkFilter(filter, btn) {
+  activeCaseWorkFilter = filter || 'all';
+  document.querySelectorAll('#view-cases .case-work-filter').forEach(function(t) { t.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
   renderCases();
 }
 
