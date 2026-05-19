@@ -64,3 +64,35 @@ def test_switch_detail_tab_supports_lifecycle_without_regressing_activity_loads(
     assert "loadDecisionRecords()" in section
     assert "loadActivityLog()" in section
     assert "loadNotes()" in section
+
+
+def test_lifecycle_workspace_adds_attestation_controls_and_system_panels():
+    html = _read_backoffice()
+    assert "Material Change Attestation" in html
+    assert "Risk Rating Change Attestation" in html
+    assert "Save material change attestation" in html
+    assert "Record review-level risk change" in html
+    assert "KYC Documents" in html
+    assert "Screening" in html
+    assert "Alerts / EDD / Changes" in html
+    assert "/material-change-attestation" in html
+    assert "/risk-change" in html
+
+
+def test_lifecycle_workspace_enforces_active_work_current_review_exclusivity():
+    html = _read_backoffice()
+    start = html.index("function renderLifecycleDetailTab(context)")
+    end = html.index("async function loadLifecycleDetailTab(force)", start)
+    section = html[start:end]
+    assert "var currentReviewActive = !!activeReview;" in section
+    assert "var activeWorkItems = currentReviewActive ?" in section
+    assert "(currentReviewActive ? lifecycleDetailCard('Current Review Workspace'" in section
+    assert ": lifecycleDetailCard('Active Work'" in section
+
+
+def test_lifecycle_workspace_save_helpers_refresh_canonical_projection():
+    html = _read_backoffice()
+    assert "async function saveLifecycleMaterialChange(reviewId)" in html
+    assert "async function saveLifecycleRiskChange(reviewId)" in html
+    assert "await refreshLifecycleWorkspaceTab();" in html
+    assert "window._detailLifecycleTabCache = null;" in html
