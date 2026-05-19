@@ -527,12 +527,18 @@ def test_shared_projection_returns_canonical_state_across_surfaces(phase1_db):
     projection = get_review_projection(phase1_db, review_id)
     monitoring_summary = me.latest_active_review_summary(phase1_db, "app-phase1")
     queue = lq.build_lifecycle_queue(phase1_db, types=["review"], application_id="app-phase1")
+    summary = lq.build_application_lifecycle_summary(phase1_db, "app-phase1")
     edd_case = server._materialise_edd_case(phase1_db, phase1_db.execute("SELECT * FROM edd_cases WHERE id = ?", (edd_id,)).fetchone())
+    summary_review = next(item for item in summary["active"]["items"] if item["type"] == "review" and item["id"] == review_id)
 
     assert projection["status"] == "pending"
     assert projection["status_label"] == "Blocked"
+    assert projection["linked_edd_case_id"] == edd_id
     assert monitoring_summary["status_label"] == "Blocked"
+    assert monitoring_summary["linked_edd_case_id"] == edd_id
     assert queue["items"][0]["status_label"] == "Blocked"
+    assert queue["items"][0]["linked_edd_case_id"] == edd_id
+    assert summary_review["linked_edd_case_id"] == edd_id
     assert edd_case["linked_periodic_review"]["status_label"] == "Blocked"
 
 
@@ -613,6 +619,35 @@ def test_new_flow_writes_outcome_and_not_legacy_decision(phase1_db, audit_sink):
     assert result["outcome"] == pre.OUTCOME_NO_CHANGE
     assert row["outcome"] == pre.OUTCOME_NO_CHANGE
     assert row["decision"] is None
+
+
+def test_legacy_completed_reviews_do_not_surface_modern_completion_blockers(phase1_db):
+    from periodic_review_projection_service import get_review_projection
+
+    review_id = _insert_review(
+        phase1_db,
+        status="pending",
+        risk_level="LOW",
+        officer_rationale=None,
+        required_items=json.dumps([
+            {"id": "outcome", "item_type": "review_outcome_recorded", "label": "Record outcome", "severity": "medium", "status": "open"}
+        ]),
+    )
+    phase1_db.execute(
+        "UPDATE periodic_reviews "
+        "SET status='completed', decision='continue', decision_reason='Legacy back-compat path' "
+        "WHERE id = ?",
+        (review_id,),
+    )
+    phase1_db.commit()
+
+    projection = get_review_projection(phase1_db, review_id)
+    assert projection["status"] == "completed"
+    assert projection["status_label"] == "Completed"
+    assert projection["completion_readiness_applicable"] is False
+    assert projection["completion_blocker_count"] == 0
+    assert projection["completion_blocker_summary"] == []
+    assert projection["completion_ready"] is None
 
 
 def test_completion_attempt_fails_when_rationale_missing(phase1_db, audit_sink):

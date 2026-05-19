@@ -90,6 +90,28 @@ class TestPhase1PeriodicReviewHandlers(_PRReviewHandlerBase):
         self.assertEqual(body["projection"]["blocker_count"], 0)
         self.assertGreaterEqual(body["projection"]["completion_blocker_count"], 1)
 
+    def test_review_detail_projection_surfaces_linked_edd_case_id(self):
+        rid = self._create_review(status="in_progress", risk_level="HIGH")
+        self._conn.execute(
+            "INSERT INTO edd_cases (application_id, client_name, risk_level, stage, origin_context, linked_periodic_review_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (self._app_id, "PR03 Test Co", "HIGH", "analysis", "periodic_review", rid),
+        )
+        edd_id = self._conn.execute(
+            "SELECT id FROM edd_cases ORDER BY id DESC LIMIT 1"
+        ).fetchone()["id"]
+        self._conn.execute(
+            "UPDATE periodic_reviews SET linked_edd_case_id = ? WHERE id = ?",
+            (edd_id, rid),
+        )
+        self._conn.commit()
+
+        review_detail = self._get(f"/api/monitoring/reviews/{rid}")
+        self.assertEqual(review_detail.code, 200)
+        body = json.loads(review_detail.body)
+        self.assertEqual(body["linked_edd_case_id"], edd_id)
+        self.assertEqual(body["projection"]["linked_edd_case_id"], edd_id)
+
     def test_legacy_decision_endpoint_still_returns_legacy_flag(self):
         rid = self._create_review(status="pending")
         resp = self._post(
@@ -105,6 +127,25 @@ class TestPhase1PeriodicReviewHandlers(_PRReviewHandlerBase):
         ).fetchone()
         self.assertEqual(row["decision"], "continue")
         self.assertIsNone(row["outcome"])
+
+    def test_legacy_completed_review_detail_marks_modern_completion_readiness_not_applicable(self):
+        rid = self._create_review(status="pending", officer_rationale=None)
+        self._conn.execute(
+            "UPDATE periodic_reviews "
+            "SET status='completed', decision='continue', decision_reason='Legacy back-compat' "
+            "WHERE id = ?",
+            (rid,),
+        )
+        self._conn.commit()
+
+        review_detail = self._get(f"/api/monitoring/reviews/{rid}")
+        self.assertEqual(review_detail.code, 200)
+        body = json.loads(review_detail.body)
+        self.assertEqual(body["projection"]["status_label"], "Completed")
+        self.assertFalse(body["projection"]["completion_readiness_applicable"])
+        self.assertEqual(body["projection"]["completion_blocker_count"], 0)
+        self.assertEqual(body["projection"]["completion_blocker_summary"], [])
+        self.assertIsNone(body["projection"]["completion_ready"])
 
     def test_import_setup_endpoint_sets_ack_flag_for_high_risk(self):
         rid = self._create_review(status="pending", risk_level="HIGH")
