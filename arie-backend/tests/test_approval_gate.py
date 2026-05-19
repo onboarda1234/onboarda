@@ -12,6 +12,11 @@ def _insert_application_and_memo(
     risk_level="MEDIUM",
     status="compliance_review",
     prescreening_data=None,
+    onboarding_lane=None,
+    final_risk_level=None,
+    base_risk_level=None,
+    pre_approval_decision=None,
+    memo_data=None,
 ):
     suffix = uuid.uuid4().hex[:8]
     app_id = f"app-approval-gate-{suffix}"
@@ -52,13 +57,30 @@ def _insert_application_and_memo(
     )
     db.execute(
         """
+        UPDATE applications
+           SET onboarding_lane = COALESCE(?, onboarding_lane),
+               final_risk_level = COALESCE(?, final_risk_level),
+               base_risk_level = COALESCE(?, base_risk_level),
+               pre_approval_decision = COALESCE(?, pre_approval_decision)
+         WHERE id = ?
+        """,
+        (
+            onboarding_lane,
+            final_risk_level,
+            base_risk_level,
+            pre_approval_decision,
+            app_id,
+        ),
+    )
+    db.execute(
+        """
         INSERT INTO compliance_memos
         (application_id, memo_data, generated_by, ai_recommendation, review_status, quality_score, validation_status, supervisor_status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             app_id,
-            json.dumps({"ai_source": "deterministic", "metadata": {"ai_source": "deterministic"}}),
+            json.dumps(memo_data or {"ai_source": "deterministic", "metadata": {"ai_source": "deterministic"}}),
             "system",
             "APPROVE_WITH_CONDITIONS",
             review_status,
@@ -70,6 +92,120 @@ def _insert_application_and_memo(
     db.commit()
     app = db.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()
     return dict(app)
+
+
+def _edd_routing(*triggers):
+    return {
+        "policy_version": "edd_routing_policy_v1",
+        "route": "edd",
+        "triggers": list(triggers),
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _memo_with_edd_route(*triggers, mandatory_escalation=False):
+    return {
+        "ai_source": "deterministic",
+        "supervisor": {
+            "verdict": "CONSISTENT",
+            "can_approve": not mandatory_escalation,
+            "mandatory_escalation": mandatory_escalation,
+            "mandatory_escalation_reasons": list(triggers) if mandatory_escalation else [],
+        },
+        "metadata": {
+            "ai_source": "deterministic",
+            "edd_routing": _edd_routing(*triggers),
+            "supervisor": {
+                "verdict": "CONSISTENT",
+                "can_approve": not mandatory_escalation,
+                "mandatory_escalation": mandatory_escalation,
+                "mandatory_escalation_reasons": list(triggers) if mandatory_escalation else [],
+            },
+        },
+    }
+
+
+def _insert_edd_case(
+    db,
+    app,
+    *,
+    triggers,
+    stage="edd_approved",
+    decision="edd_approved",
+    findings=True,
+    audit=True,
+    senior_approval=True,
+):
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    notes = json.dumps([
+        {
+            "ts": now,
+            "source": "policy_routing",
+            "policy_version": "edd_routing_policy_v1",
+            "triggers": list(triggers),
+            "note": "EDD case created by routing policy actuation",
+        }
+    ])
+    db.execute(
+        """
+        INSERT INTO edd_cases (
+            application_id, client_name, risk_level, risk_score, stage,
+            assigned_officer, senior_reviewer, trigger_source, trigger_notes,
+            edd_notes, decision, decision_reason, decided_by, decided_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app["id"],
+            app["company_name"],
+            app.get("final_risk_level") or app.get("risk_level") or "HIGH",
+            app.get("risk_score") or 80,
+            stage,
+            "co001",
+            "sco001" if senior_approval else None,
+            "policy_routing",
+            "Auto-routed to EDD by policy edd_routing_policy_v1 | triggers: " + ", ".join(triggers),
+            notes,
+            decision,
+            "EDD approved after senior review" if senior_approval else None,
+            "sco001" if senior_approval else None,
+            now if senior_approval else None,
+        ),
+    )
+    case_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+    if findings:
+        db.execute(
+            """
+            INSERT INTO edd_findings (
+                edd_case_id, findings_summary, key_concerns,
+                mitigating_evidence, recommended_outcome
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                case_id,
+                "Structured EDD findings confirm residual risk is acceptable after senior review.",
+                json.dumps(["EDD-triggering factor reviewed"]),
+                json.dumps(["Enhanced evidence accepted and senior approval recorded"]),
+                "approve",
+            ),
+        )
+    if audit:
+        db.execute(
+            """
+            INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "sco001",
+                "Senior Officer",
+                "sco",
+                "EDD Closure (dual-control)",
+                app["ref"],
+                json.dumps({"edd_case_id": case_id, "decision": decision, "closed_by": "sco001"}),
+                "127.0.0.1",
+            ),
+        )
+    db.commit()
+    return case_id
 
 
 def _insert_enhanced_requirement(
@@ -265,6 +401,219 @@ def test_high_risk_missing_enhanced_requirements_blocks(db):
 
     assert can_approve is False
     assert "Enhanced review requirements are missing or not generated" in message
+
+
+def _insert_completed_edd_approval_app(db, *, triggers, sector="Financial Services"):
+    app = _insert_application_and_memo(
+        db,
+        risk_level="HIGH",
+        final_risk_level="HIGH",
+        base_risk_level="LOW",
+        status="kyc_submitted",
+        onboarding_lane="EDD",
+        pre_approval_decision="PRE_APPROVE",
+        memo_data=_memo_with_edd_route(*triggers),
+    )
+    db.execute("UPDATE applications SET sector = ? WHERE id = ?", (sector, app["id"]))
+    db.commit()
+    app = dict(db.execute("SELECT * FROM applications WHERE id = ?", (app["id"],)).fetchone())
+    _insert_enhanced_requirement(db, app["id"], status="accepted", requirement_key="edd_evidence_package")
+    _insert_edd_case(db, app, triggers=triggers)
+    return dict(db.execute("SELECT * FROM applications WHERE id = ?", (app["id"],)).fetchone())
+
+
+def test_final_approval_allows_completed_pep_edd_after_kyc_submitted(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_completed_edd_approval_app(
+        db,
+        triggers=[
+            "declared_pep_present",
+            "high_or_very_high_risk",
+            "edd_flag:floor_rule_edd_routing",
+        ],
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is True, message
+    audit = db.execute(
+        "SELECT detail FROM audit_log WHERE action = 'Approval Gate EDD Completion Satisfied' "
+        "AND target = ? ORDER BY id DESC LIMIT 1",
+        (app["ref"],),
+    ).fetchone()
+    assert audit is not None
+    detail = json.loads(audit["detail"])
+    assert detail["edd_completion_satisfied"] is True
+    assert detail["approved_application_status"] == "kyc_submitted"
+    assert detail["missing_triggers"] == []
+
+
+def test_final_approval_allows_completed_crypto_edd_after_kyc_submitted(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_completed_edd_approval_app(
+        db,
+        sector="Crypto / VASP",
+        triggers=[
+            "crypto_or_virtual_asset_sector",
+            "high_risk_sector",
+            "high_or_very_high_risk",
+            "edd_flag:floor_rule_high_risk_sector",
+        ],
+    )
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is True, message
+    audit = db.execute(
+        "SELECT detail FROM audit_log WHERE action = 'Approval Gate EDD Completion Satisfied' "
+        "AND target = ? ORDER BY id DESC LIMIT 1",
+        (app["ref"],),
+    ).fetchone()
+    assert audit is not None
+    assert json.loads(audit["detail"])["edd_completion_satisfied"] is True
+
+
+def test_final_approval_blocks_edd_route_when_edd_case_missing(db):
+    from security_hardening import ApprovalGateValidator
+
+    triggers = ["declared_pep_present", "high_or_very_high_risk"]
+    app = _insert_application_and_memo(
+        db,
+        risk_level="HIGH",
+        final_risk_level="HIGH",
+        base_risk_level="LOW",
+        status="kyc_submitted",
+        onboarding_lane="EDD",
+        pre_approval_decision="PRE_APPROVE",
+        memo_data=_memo_with_edd_route(*triggers),
+    )
+    _insert_enhanced_requirement(db, app["id"], status="accepted", requirement_key="edd_evidence_package")
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "EDD completion is not satisfied" in message
+    assert "no_approved_edd_case" in message
+
+
+def test_final_approval_blocks_edd_route_when_findings_incomplete(db):
+    from security_hardening import ApprovalGateValidator
+
+    triggers = ["declared_pep_present", "high_or_very_high_risk"]
+    app = _insert_application_and_memo(
+        db,
+        risk_level="HIGH",
+        final_risk_level="HIGH",
+        base_risk_level="LOW",
+        status="kyc_submitted",
+        onboarding_lane="EDD",
+        pre_approval_decision="PRE_APPROVE",
+        memo_data=_memo_with_edd_route(*triggers),
+    )
+    _insert_enhanced_requirement(db, app["id"], status="accepted", requirement_key="edd_evidence_package")
+    _insert_edd_case(db, app, triggers=triggers, findings=False)
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "findings_incomplete" in message
+
+
+def test_final_approval_blocks_edd_route_when_edd_rejected(db):
+    from security_hardening import ApprovalGateValidator
+
+    triggers = ["declared_pep_present", "high_or_very_high_risk"]
+    app = _insert_application_and_memo(
+        db,
+        risk_level="HIGH",
+        final_risk_level="HIGH",
+        base_risk_level="LOW",
+        status="kyc_submitted",
+        onboarding_lane="EDD",
+        pre_approval_decision="PRE_APPROVE",
+        memo_data=_memo_with_edd_route(*triggers),
+    )
+    _insert_enhanced_requirement(db, app["id"], status="accepted", requirement_key="edd_evidence_package")
+    _insert_edd_case(db, app, triggers=triggers, stage="edd_rejected", decision="edd_rejected")
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "no_approved_edd_case" in message
+
+
+def test_final_approval_blocks_edd_route_when_new_trigger_not_covered(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_application_and_memo(
+        db,
+        risk_level="HIGH",
+        final_risk_level="HIGH",
+        base_risk_level="LOW",
+        status="kyc_submitted",
+        onboarding_lane="EDD",
+        pre_approval_decision="PRE_APPROVE",
+        memo_data=_memo_with_edd_route("declared_pep_present", "material_screening_concern"),
+    )
+    _insert_enhanced_requirement(db, app["id"], status="accepted", requirement_key="edd_evidence_package")
+    _insert_edd_case(db, app, triggers=["declared_pep_present", "high_or_very_high_risk"])
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "trigger_coverage_missing" in message
+    assert "material_screening" in message
+
+
+def test_final_approval_blocks_edd_route_when_enhanced_requirements_incomplete(db):
+    from security_hardening import ApprovalGateValidator
+
+    triggers = ["declared_pep_present", "high_or_very_high_risk"]
+    app = _insert_application_and_memo(
+        db,
+        risk_level="HIGH",
+        final_risk_level="HIGH",
+        base_risk_level="LOW",
+        status="kyc_submitted",
+        onboarding_lane="EDD",
+        pre_approval_decision="PRE_APPROVE",
+        memo_data=_memo_with_edd_route(*triggers),
+    )
+    _insert_enhanced_requirement(db, app["id"], status="uploaded", requirement_key="edd_evidence_package")
+    _insert_edd_case(db, app, triggers=triggers)
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "enhanced_requirements_unresolved" in message
+
+
+def test_final_approval_blocks_stale_edd_memo_before_completion_gate(db):
+    from security_hardening import ApprovalGateValidator
+
+    app = _insert_completed_edd_approval_app(
+        db,
+        triggers=["declared_pep_present", "high_or_very_high_risk"],
+    )
+    db.execute(
+        """
+        UPDATE compliance_memos
+           SET is_stale = 1,
+               stale_reason = 'Screening disposition changed after memo approval.',
+               stale_trigger = 'screening_disposition_changed',
+               stale_marked_at = CURRENT_TIMESTAMP
+         WHERE application_id = ?
+        """,
+        (app["id"],),
+    )
+    db.commit()
+
+    can_approve, message = ApprovalGateValidator.validate_approval(app, db)
+
+    assert can_approve is False
+    assert "Compliance memo is stale" in message
 
 
 def _completed_match_prescreening():
