@@ -47,6 +47,50 @@ def test_canonical_export_field_contract_includes_risk_score():
     assert _REPORT_EXPORT_FILENAME_PREFIX == "regmind_applications_report"
 
 
+def test_periodic_review_stats_uses_native_date_coalesce_on_postgres():
+    from server import _periodic_review_canonical_stats
+
+    class _Result:
+        def __init__(self, one=None, many=None):
+            self._one = one
+            self._many = many or []
+
+        def fetchone(self):
+            return self._one
+
+        def fetchall(self):
+            return self._many
+
+    class _PostgresLikeDb:
+        is_postgres = True
+
+        def __init__(self):
+            self.statements = []
+
+        def execute(self, sql, params=()):
+            self.statements.append(sql)
+            if "GROUP BY" in sql:
+                return _Result(many=[{"status": "pending", "count": 1}])
+            return _Result(one={
+                "total": 1,
+                "pending": 1,
+                "active": 1,
+                "completed": 0,
+                "due": 1,
+                "overdue": 0,
+            })
+
+    db = _PostgresLikeDb()
+
+    stats = _periodic_review_canonical_stats(db, today="2026-05-19")
+
+    aggregate_sql = db.statements[0]
+    assert "COALESCE(pr.next_review_date, pr.due_date)" in aggregate_sql
+    assert "NULLIF(pr.next_review_date, '')" not in aggregate_sql
+    assert "NULLIF(pr.due_date, '')" not in aggregate_sql
+    assert stats["due"] == 1
+
+
 def test_pdf_download_handler_records_pdf_hash_metadata():
     import inspect
     from server import MemoPDFDownloadHandler

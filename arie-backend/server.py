@@ -8907,7 +8907,10 @@ def _periodic_review_canonical_stats(db, *, app_where="1=1", app_params=None, to
 
     active_ph = ",".join(["?"] * len(active_states))
     completed_ph = ",".join(["?"] * len(completed_states))
-    review_date_expr = "COALESCE(NULLIF(pr.next_review_date, ''), NULLIF(pr.due_date, ''))"
+    if getattr(db, "is_postgres", False):
+        review_date_expr = "COALESCE(pr.next_review_date, pr.due_date)"
+    else:
+        review_date_expr = "COALESCE(NULLIF(pr.next_review_date, ''), NULLIF(pr.due_date, ''))"
     state_expr = "COALESCE(NULLIF(pr.status, ''), 'pending')"
 
     row = db.execute(f"""
