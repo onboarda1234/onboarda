@@ -47,7 +47,7 @@ def test_canonical_export_field_contract_includes_risk_score():
     assert _REPORT_EXPORT_FILENAME_PREFIX == "regmind_applications_report"
 
 
-def test_periodic_review_stats_uses_native_date_coalesce_on_postgres():
+def test_periodic_review_stats_uses_postgres_safe_date_expression():
     from server import _periodic_review_canonical_stats
 
     class _Result:
@@ -85,7 +85,10 @@ def test_periodic_review_stats_uses_native_date_coalesce_on_postgres():
     stats = _periodic_review_canonical_stats(db, today="2026-05-19")
 
     aggregate_sql = db.statements[0]
-    assert "COALESCE(pr.next_review_date, pr.due_date)" in aggregate_sql
+    assert "pr.next_review_date::text" in aggregate_sql
+    assert "pr.due_date::text" in aggregate_sql
+    assert "::date" in aggregate_sql
+    assert "COALESCE(pr.next_review_date, pr.due_date)" not in aggregate_sql
     assert "NULLIF(pr.next_review_date, '')" not in aggregate_sql
     assert "NULLIF(pr.due_date, '')" not in aggregate_sql
     assert stats["due"] == 1
