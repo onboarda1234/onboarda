@@ -1566,14 +1566,14 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;">
     <div>
       <h3 style="font-size:16px;font-weight:700;margin-bottom:2px;">Ongoing Client Monitoring</h3>
-      <p style="font-size:13px;color:var(--text3);">Track periodic reviews, document expiry, risk drift, and regulatory impact.</p>
+      <p style="font-size:13px;color:var(--text3);">Track monitoring alerts, review due signals, document expiry, risk drift, and regulatory impact.</p>
     </div>
   </div>
 
   <!-- Tabs for monitoring sections -->
   <div class="tab-bar" style="margin-bottom:20px;">
     <div class="tab active" onclick="switchMonitoringTab('alerts',this)">Monitoring Alerts</div>
-    <div class="tab" onclick="switchMonitoringTab('reviews',this)">Periodic Reviews</div>
+    <div class="tab" onclick="switchMonitoringTab('reviews',this)">Review Signals</div>
     <div class="tab" onclick="switchMonitoringTab('agents',this)">Monitoring Agents</div>
   </div>
 
@@ -1630,15 +1630,33 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     </div>
   </div>
 
-  <!-- Reviews Tab -->
+  <!-- Review Signals Tab: signal-only launchpad. Lifecycle owns review work. -->
   <div id="monitoring-reviews-tab" style="display:none;">
-    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;">
+    <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px;flex-wrap:wrap;">
+      <div>
+        <div style="font-size:14px;font-weight:700;color:var(--text1);">Periodic Review Signals</div>
+        <div style="font-size:12px;color:var(--text3);line-height:1.6;margin-top:4px;max-width:760px;">
+          Signal-only portfolio view. Periodic review setup, attestations, evidence, memo, and completion are handled in the Application Lifecycle workspace.
+        </div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="openMonitoringLifecycleQueue()">Open Lifecycle Queue</button>
+    </div>
+
+    <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px;">
+      <div class="stat-card"><div class="stat-card-label">Due / Due Soon</div><div class="stat-card-value" style="color:var(--amber);" id="monitoring-review-due-count">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Overdue</div><div class="stat-card-value" style="color:var(--red);" id="monitoring-review-overdue-count">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Blocked</div><div class="stat-card-value" style="color:#7c3aed;" id="monitoring-review-blocked-count">0</div></div>
+      <div class="stat-card"><div class="stat-card-label">Active Review Signals</div><div class="stat-card-value" style="color:var(--blue);" id="monitoring-review-active-count">0</div></div>
+    </div>
+
+    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap;">
       <select class="form-select" style="width:auto;" id="review-status-filter" onchange="renderPeriodicReviews()">
-        <option value="">All Statuses</option>
-        <option value="Overdue">Overdue</option>
-        <option value="Due Soon">Due Soon</option>
-        <option value="Upcoming">Upcoming</option>
-        <option value="Completed">Completed</option>
+        <option value="">All Signals</option>
+        <option value="due">Due / Due Soon</option>
+        <option value="overdue">Overdue</option>
+        <option value="blocked">Blocked</option>
+        <option value="upcoming">Upcoming</option>
+        <option value="completed">Completed</option>
       </select>
       <select class="form-select" style="width:auto;" id="review-risk-filter" onchange="renderPeriodicReviews()">
         <option value="">All Risk Levels</option>
@@ -1647,13 +1665,12 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
         <option value="High">High</option>
         <option value="Very High">Very High</option>
       </select>
-      <div style="margin-left:auto;"><button class="btn btn-outline btn-sm" id="schedule-reviews-btn" onclick="schedulePeriodicReviews()" title="Manually trigger review scheduling — reviews are not scheduled automatically">Schedule Due Reviews</button></div>
     </div>
 
     <div class="card" style="padding:0;overflow:hidden;">
       <table class="data-table">
         <thead>
-          <tr><th>Client</th><th>Risk Level</th><th>Last Review</th><th>Next Review Due</th><th>Trigger</th><th>Status</th><th>Actions</th></tr>
+          <tr><th>Client</th><th>Risk Level</th><th>Next Review Due</th><th>Signal</th><th>Owner</th><th>Linked Workflow</th><th>Launchpad</th></tr>
         </thead>
         <tbody id="periodic-reviews-body"></tbody>
       </table>
@@ -3049,7 +3066,6 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <div class="modal-body" id="review-modal-body"></div>
     <div class="modal-footer" id="review-modal-footer">
       <button class="btn btn-outline" onclick="closeModal('modal-periodic-review')">Close</button>
-      <button class="btn btn-primary" id="review-modal-decide-btn" onclick="showReviewDecisionForm()">Record Decision</button>
     </div>
   </div>
 </div>
@@ -11065,7 +11081,7 @@ function renderPrcReviewDetailSection(detail) {
   if (linkedEDDId != null)   chips.push(prcChipHtml('→ EDD #' + linkedEDDId, 'edd', linkedEDDId));
   var chipsHtml = chips.length ? chips.join(' ') : '<span style="color:var(--text3);font-size:11px;">No linked lifecycle objects.</span>';
 
-  var canMutate = String(state || '').toLowerCase() !== 'completed';
+  var canMutate = false;
   var groupedItems = {};
   requiredItems.forEach(function(it) {
     var category = (it && it.category) || 'Checklist';
@@ -11162,6 +11178,9 @@ function renderPrcReviewDetailSection(detail) {
   requiredSection.style.marginTop = '16px';
   requiredSection.innerHTML =
     '<div class="detail-section-title" style="font-weight:700;font-size:14px;margin-bottom:10px;">Required items (' + requiredItems.length + ')</div>' +
+    '<div style="margin-bottom:12px;padding:10px 12px;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;color:var(--text3);line-height:1.6;">' +
+      'Read-only projection. Periodic review work is completed in the Application Lifecycle tab; Ongoing Monitoring only surfaces signals.' +
+    '</div>' +
     (canMutate ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' +
       '<button class="btn btn-outline btn-sm" onclick="generateReviewChecklist(' + JSON.stringify(detail.id) + ')">Generate Checklist</button>' +
       '<button class="btn btn-outline btn-sm" onclick="transitionPeriodicReviewState(' + JSON.stringify(detail.id) + ',\'in_progress\')">Start Review</button>' +
@@ -11366,8 +11385,11 @@ function renderMonitoring() {
   var openAlerts = MONITORING_ALERTS.filter(function(a) { return a.status === 'Open'; }).length;
   // Critical: count of Critical severity alerts that are Open
   var criticalAlerts = MONITORING_ALERTS.filter(function(a) { return a.severity === 'Critical' && a.status === 'Open'; }).length;
-  // Reviews Due: count of periodic reviews that are Overdue or Due Soon
-  var reviewsDue = PERIODIC_REVIEWS.filter(function(r) { return r.status === 'Overdue' || r.status === 'Due Soon'; }).length;
+  // Reviews Due: monitoring only surfaces signals; Lifecycle owns review work.
+  var reviewsDue = PERIODIC_REVIEWS.filter(function(r) {
+    var state = monitoringReviewDueState(r);
+    return state === 'due' || state === 'due_soon' || state === 'overdue' || state === 'blocked';
+  }).length;
 
   var el;
   el = document.getElementById('mon-stat-active'); if (el) el.textContent = activeMonitoring;
@@ -11383,6 +11405,79 @@ function renderMonitoring() {
   renderMonitoringAlerts();
   renderPeriodicReviews();
   renderMonitoringAgents();
+}
+
+function monitoringReviewDueState(review) {
+  var raw = String((review && (review.raw_status || review.status)) || '').toLowerCase();
+  var label = String((review && review.status) || '').toLowerCase();
+  if (raw === 'completed' || label === 'completed') return 'completed';
+  if (label.indexOf('blocked') >= 0 || raw.indexOf('blocked') >= 0) return 'blocked';
+  var due = review && review.nextDue && review.nextDue !== '—' ? Date.parse(String(review.nextDue).slice(0, 10)) : NaN;
+  if (!isNaN(due)) {
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    var diffDays = Math.ceil((due - today.getTime()) / 86400000);
+    if (diffDays < 0) return 'overdue';
+    if (diffDays <= 30) return 'due_soon';
+    return 'upcoming';
+  }
+  if (label === 'due') return 'due';
+  return raw || 'pending';
+}
+
+function monitoringReviewSignalLabel(review) {
+  var state = monitoringReviewDueState(review);
+  if (state === 'overdue') return 'Overdue';
+  if (state === 'blocked') return 'Blocked';
+  if (state === 'due' || state === 'due_soon') return 'Due';
+  if (state === 'completed') return 'Completed';
+  if (state === 'upcoming') return 'Upcoming';
+  return (review && review.status) || 'Pending';
+}
+
+function monitoringReviewSignalBadgeClass(review) {
+  var state = monitoringReviewDueState(review);
+  if (state === 'overdue') return 'very-high';
+  if (state === 'blocked') return 'high';
+  if (state === 'due' || state === 'due_soon') return 'pending';
+  if (state === 'completed') return 'approved';
+  return 'draft';
+}
+
+function monitoringReviewMatchesSignalFilter(review, filter) {
+  if (!filter) return true;
+  var state = monitoringReviewDueState(review);
+  if (filter === 'due') return state === 'due' || state === 'due_soon';
+  return state === filter;
+}
+
+function updateMonitoringReviewSignalStats() {
+  var counts = { due: 0, overdue: 0, blocked: 0, active: 0 };
+  PERIODIC_REVIEWS.forEach(function(review) {
+    var state = monitoringReviewDueState(review);
+    if (state === 'due' || state === 'due_soon') counts.due++;
+    if (state === 'overdue') counts.overdue++;
+    if (state === 'blocked') counts.blocked++;
+    if (state !== 'completed') counts.active++;
+  });
+  var el;
+  el = document.getElementById('monitoring-review-due-count'); if (el) el.textContent = String(counts.due);
+  el = document.getElementById('monitoring-review-overdue-count'); if (el) el.textContent = String(counts.overdue);
+  el = document.getElementById('monitoring-review-blocked-count'); if (el) el.textContent = String(counts.blocked);
+  el = document.getElementById('monitoring-review-active-count'); if (el) el.textContent = String(counts.active);
+}
+
+function openMonitoringLifecycleQueue() {
+  showView('lifecycle');
+  try { switchLifecycleTab('active'); } catch(e) { try { renderLifecycle(); } catch(inner) {} }
+}
+
+function openMonitoringReviewLifecycle(ref) {
+  if (!ref) {
+    showToast('Periodic review is missing an application reference', 'error');
+    return;
+  }
+  openAppDetail(ref, { initialTab: 'lifecycle' });
 }
 
 function switchMonitoringTab(tab, btn) {
@@ -11438,29 +11533,26 @@ function renderPeriodicReviews() {
   var statusFilter = document.getElementById('review-status-filter').value;
   var riskFilter = document.getElementById('review-risk-filter').value;
 
+  updateMonitoringReviewSignalStats();
   tbody.innerHTML = '';
   var rendered = 0;
   PERIODIC_REVIEWS.forEach(function(review) {
-    if (statusFilter && review.status !== statusFilter) return;
+    if (!monitoringReviewMatchesSignalFilter(review, statusFilter)) return;
     if (riskFilter && review.risk !== riskFilter) return;
 
     var tr = document.createElement('tr');
-    var statusBadge = (function() {
-      if (review.status === 'Overdue') return 'very-high';
-      if (review.status === 'Due Soon') return 'high';
-      if (review.status === 'Completed') return 'approved';
-      if (review.status === 'In Progress' || review.status === 'Awaiting Information' || review.status === 'Pending Senior Review') return 'in-review';
-      return 'low';
-    })();
+    var signalLabel = monitoringReviewSignalLabel(review);
+    var statusBadge = monitoringReviewSignalBadgeClass(review);
     var riskClass = review.risk.toLowerCase().replace(' ','-');
-    tr.onclick = function() { openPeriodicReview(review.ref); };
+    var owner = review.assignedOfficerName || review.assignedOfficerId || 'Unassigned';
+    tr.onclick = function() { openMonitoringReviewLifecycle(review.ref); };
     tr.innerHTML = '<td>' + escapeHtml(review.client) + '</td>' +
       '<td><span class="badge ' + riskClass + '" style="font-size:11px;">' + escapeHtml(review.risk) + '</span></td>' +
-      '<td style="font-size:12px;">' + escapeHtml(review.lastReview) + '</td>' +
       '<td style="font-size:12px;">' + escapeHtml(review.nextDue) + '</td>' +
-      '<td style="font-size:12px;">' + escapeHtml(review.trigger) + '</td>' +
-      '<td><span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(review.status) + '</span></td>' +
-      '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();openPeriodicReview(\'' + escapeHtml(review.ref) + '\')">Review</button></td>';
+      '<td><span class="badge ' + statusBadge + '" style="font-size:11px;">' + escapeHtml(signalLabel) + '</span></td>' +
+      '<td style="font-size:12px;">' + escapeHtml(owner) + '</td>' +
+      '<td style="font-size:12px;color:var(--text3);">' + escapeHtml(review.trigger || 'Lifecycle') + '</td>' +
+      '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();openMonitoringReviewLifecycle(\'' + escapeHtml(review.ref) + '\')">Open Lifecycle</button></td>';
     tbody.appendChild(tr);
     rendered++;
   });
@@ -11907,7 +11999,7 @@ function openPeriodicReview(ref) {
         '</div>';
 
       reviewHtml += '<div style="margin-top:16px;text-align:center;">' +
-        '<button class="btn btn-outline btn-sm" onclick="closeModal(\'modal-periodic-review\');openAppDetail(\'' + app.ref + '\');">View Full Application Detail</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="closeModal(\'modal-periodic-review\');openMonitoringReviewLifecycle(\'' + app.ref + '\');">Open Application Lifecycle</button>' +
         '</div>';
     }
 
@@ -11929,14 +12021,8 @@ function openPeriodicReview(ref) {
     //   Summary → Client Profile → banners → outcome → memo → required-items.
     // See renderPrcReviewDetailSection below.
     document.getElementById('review-modal-body').innerHTML = reviewHtml;
-    // Store current review for decision submission
+    // Store current review for read-only detail refreshes.
     currentReviewRef = review;
-    // Show/hide decision button based on status (completed reviews cannot be re-decided)
-    var decideBtn = document.getElementById('review-modal-decide-btn');
-    if (decideBtn) {
-      decideBtn.textContent = 'Complete Review';
-      decideBtn.style.display = (review.status === 'Completed' || review.raw_status === 'completed') ? 'none' : '';
-    }
     document.getElementById('modal-periodic-review').classList.add('open');
     // PR-C Scope B — additive authoritative detail section (read-only).
     prcEnhanceReviewDetail(review);
@@ -12163,89 +12249,6 @@ function renderMemoArtifactRefs(a) {
   rows += '<div class="detail-row"><span class="label">Onboarding memo</span><span class="value">' +
     (a.onboarding_memo_reference ? escapeHtml(String(a.onboarding_memo_reference)) : '—') + '</span></div>';
   return rows;
-}
-
-function showReviewDecisionForm() {
-  if (!currentReviewRef) return;
-  var body = document.getElementById('review-modal-body');
-  body.innerHTML += '<div id="review-decision-form" style="margin-top:20px;padding:16px;background:var(--bg2);border-radius:var(--radius-sm);border:1px solid var(--border);">' +
-    '<div style="font-weight:700;font-size:14px;margin-bottom:12px;">Complete Review</div>' +
-    '<div style="margin-bottom:12px;">' +
-      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Outcome <span style="color:var(--red);">*</span></label>' +
-      '<select id="review-decision-select" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);">' +
-        '<option value="">Select outcome...</option>' +
-        '<option value="no_change">No Change</option>' +
-        '<option value="enhanced_monitoring">Enhanced Monitoring</option>' +
-        '<option value="edd_required">EDD Required</option>' +
-        '<option value="exit_recommended">Exit Recommended</option>' +
-      '</select>' +
-    '</div>' +
-    '<div style="margin-bottom:12px;">' +
-      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;">Outcome reason <span style="color:var(--red);">*</span></label>' +
-      '<textarea id="review-decision-reason" rows="3" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg1);resize:vertical;" placeholder="Provide the rationale for this outcome..."></textarea>' +
-    '</div>' +
-    '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
-      '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'review-decision-form\').remove();">Cancel</button>' +
-      '<button class="btn btn-primary btn-sm" onclick="submitReviewDecision()">Complete Review</button>' +
-    '</div>' +
-  '</div>';
-  // Hide the footer decision button to avoid duplicate actions
-  var decideBtn = document.getElementById('review-modal-decide-btn');
-  if (decideBtn) decideBtn.style.display = 'none';
-}
-
-async function submitReviewDecision() {
-  if (!currentReviewRef || !currentReviewRef.id) return;
-  var decision = document.getElementById('review-decision-select').value;
-  var reason = document.getElementById('review-decision-reason').value.trim();
-  if (!decision) { showToast('Please select an outcome', 'error'); return; }
-  if (!reason) { showToast('Please provide a rationale', 'error'); return; }
-  try {
-    await boApiCall('POST', '/monitoring/reviews/' + currentReviewRef.id + '/complete', {
-      outcome: decision,
-      outcome_reason: reason
-    });
-    currentReviewRef.status = 'Completed';
-    // Update local PERIODIC_REVIEWS array
-    var idx = PERIODIC_REVIEWS.findIndex(function(r) { return r.id === currentReviewRef.id; });
-    if (idx >= 0) PERIODIC_REVIEWS[idx].status = 'Completed';
-    renderPeriodicReviews();
-    renderMonitoring();
-    closeModal('modal-periodic-review');
-    var decisionLabels = { no_change: 'No Change', enhanced_monitoring: 'Enhanced Monitoring', edd_required: 'EDD Required', exit_recommended: 'Exit Recommended' };
-    showToast('Review completed: ' + (decisionLabels[decision] || decision));
-  } catch(err) {
-    try {
-      var parsed = JSON.parse(err.message || '{}');
-      if (parsed && parsed.blocking_items) {
-        showToast('Completion blocked: ' + parsed.blocking_items.map(function(it) { return it.label; }).join('; '), 'error');
-        return;
-      }
-    } catch (e) {}
-    showToast('Failed to complete review: ' + (err.message || 'Unknown error'), 'error');
-  }
-}
-
-async function schedulePeriodicReviews() {
-  var btn = document.getElementById('schedule-reviews-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Scheduling...'; }
-  try {
-    var resp = await boApiCall('POST', '/monitoring/reviews/schedule', {});
-    var created = resp.created || 0;
-    showToast(created > 0 ? created + ' new review(s) scheduled based on risk levels' : 'No new reviews due — all clients are up to date');
-    // Reload reviews
-    try {
-      var reviewsResp = await boApiCall('GET', '/monitoring/reviews');
-      if (reviewsResp.reviews) {
-        PERIODIC_REVIEWS = reviewsResp.reviews.filter(function(r){ return !!r; }).map(normalizePeriodicReview);
-      }
-    } catch(e) {}
-    renderPeriodicReviews();
-    renderMonitoring();
-  } catch(err) {
-    showToast('Failed to schedule reviews: ' + (err.message || 'Unknown error'), 'error');
-  }
-  if (btn) { btn.disabled = false; btn.textContent = 'Schedule Due Reviews'; }
 }
 
 function switchCaseTab(tab, btn) {
