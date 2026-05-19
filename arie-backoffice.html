@@ -9379,15 +9379,16 @@ function lifecycleDetailCard(title, subtitle, body, accent) {
 
 function lifecycleDetailEdgeChip(edge) {
   function side(obj) {
-    var type = String((obj && obj.type) || '').toLowerCase();
-    var label = type === 'review' ? 'Review' : (type === 'edd' ? 'EDD' : 'Alert');
-    var id = obj && obj.id != null ? String(obj.id) : '?';
-    return label + ' #' + id.slice(0, 8);
+    if (!obj || obj.id == null) return '<span style="font-size:11px;color:var(--text3);">Unknown</span>';
+    var label = lifecycleObjectLabel(obj);
+    var action = lifecycleOpenItemAction(obj);
+    if (!action) return '<span>' + escapeHtml(label) + '</span>';
+    return '<button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:11px;" onclick="event.stopPropagation();' + action + '">' + escapeHtml(label) + '</button>';
   }
   return '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--border1);background:var(--surface);font-size:11px;color:var(--text2);">' +
-    '<span>' + escapeHtml(side(edge.from)) + '</span>' +
+    side(edge.from) +
     '<span style="color:var(--text3);">→</span>' +
-    '<span>' + escapeHtml(side(edge.to)) + '</span>' +
+    side(edge.to) +
   '</span>';
 }
 
@@ -9395,15 +9396,25 @@ function lifecycleDetailItemRow(item) {
   var state = item && (item.status_label || item.state || item.status) ? String(item.status_label || item.state || item.status).replace(/_/g, ' ') : 'Unknown';
   var owner = item && item.owner_name ? item.owner_name : (item && item.owner ? item.owner : 'Unassigned');
   var nextAction = item && item.next_action ? item.next_action : 'Open in owner workflow';
-  var label = (item && item.type ? String(item.type).toUpperCase() : 'ITEM') + ' #' + String((item && item.id) || '').slice(0, 8);
+  var label = lifecycleObjectLabel(item);
+  var sourceModule = lifecycleSourceModuleLabel(item);
+  var openAction = lifecycleOpenItemAction(item);
+  var openButton = openAction
+    ? '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();' + openAction + '">Open ' + escapeHtml(sourceModule) + '</button>'
+    : '';
   return '<div style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
     '<div style="min-width:220px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(label) + '</div>' +
-      '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(nextAction) + '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">' +
+        lifecycleDetailBadge(sourceModule, item && item.type === 'edd' ? 'blue' : (item && item.type === 'alert' ? 'amber' : 'purple')) +
+        lifecycleDetailBadge(state, item && item.type === 'review' ? 'purple' : (item && item.type === 'edd' ? 'blue' : 'amber')) +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:6px;">Linked object: ' + escapeHtml(label) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Next action: ' + escapeHtml(nextAction) + '</div>' +
     '</div>' +
     '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">' +
-      lifecycleDetailBadge(state, item && item.type === 'review' ? 'purple' : (item && item.type === 'edd' ? 'blue' : 'amber')) +
       '<span style="font-size:11px;color:var(--text3);">Owner: ' + escapeHtml(owner) + '</span>' +
+      openButton +
     '</div>' +
   '</div>';
 }
@@ -9485,6 +9496,104 @@ function lifecycleRiskReasonLabel(value) {
   return match ? match.label : String(value || '').replace(/_/g, ' ');
 }
 
+function lifecycleSourceModuleLabel(item) {
+  var type = String((item && item.type) || '').toLowerCase();
+  if (type === 'alert') return 'Ongoing Monitoring';
+  if (type === 'edd') return 'EDD';
+  if (type === 'review') return 'Lifecycle';
+  return 'Owner workflow';
+}
+
+function lifecycleObjectLabel(item) {
+  var type = String((item && item.type) || '').toLowerCase();
+  var label = type === 'review' ? 'Review'
+    : (type === 'edd' ? 'EDD'
+      : (type === 'alert' ? 'Alert' : 'Item'));
+  return label + ' #' + String((item && item.id) || '').slice(0, 8);
+}
+
+function lifecycleOpenItemAction(item) {
+  if (!item || item.id == null) return '';
+  var type = String(item.type || '').toLowerCase();
+  if (type === 'alert') return 'openAlertDetailById(' + JSON.stringify(item.id) + ')';
+  if (type === 'edd') return 'openEDDDetail(' + JSON.stringify(item.id) + ')';
+  if (type === 'review') return 'switchDetailTab(\'lifecycle\')';
+  return '';
+}
+
+function lifecycleOpenChangeManagementRequests() {
+  showView('change-mgmt');
+  showChangeMgmtTab('requests');
+}
+
+function lifecycleCurrentMaterialCategories(reviewId) {
+  var categories = [];
+  LIFECYCLE_MATERIAL_CHANGE_OPTIONS.forEach(function(option) {
+    var checkbox = document.getElementById('lifecycle-material-category-' + reviewId + '-' + option.value);
+    if (checkbox && checkbox.checked) categories.push(option.value);
+  });
+  return categories;
+}
+
+function lifecycleSuggestedChangeType(categories) {
+  if (!Array.isArray(categories) || !categories.length) return 'other';
+  if (categories.length === 1 && categories[0] === 'business_activity') return 'business_activity_change';
+  if (categories.indexOf('directors') >= 0) return 'director_change';
+  if (categories.indexOf('shareholders') >= 0 || categories.indexOf('beneficial_owners') >= 0) return 'ubo_change';
+  if (categories.indexOf('jurisdiction_exposure') >= 0) return 'address_change';
+  return 'other';
+}
+
+async function lifecycleOpenOrCreateChangeRequest(reviewId) {
+  if (!currentApp || !currentApp.id) {
+    showToast('Load an application before opening Change Management.', 'error');
+    return;
+  }
+  var selected = document.querySelector('input[name="lifecycle-material-attestation-' + reviewId + '"]:checked');
+  var savedDetail = window._detailLifecycleTabCache && window._detailLifecycleTabCache.data
+    ? window._detailLifecycleTabCache.data.reviewDetail
+    : null;
+  var attestation = selected && selected.value ? selected.value : (savedDetail && savedDetail.material_change_attestation);
+  if (attestation !== 'material_change_identified') {
+    showToast('Open a change request only when material change is identified.', 'error');
+    return;
+  }
+  var selectedCategories = lifecycleCurrentMaterialCategories(reviewId);
+  var savedCategories = savedDetail && Array.isArray(savedDetail.material_change_categories)
+    ? savedDetail.material_change_categories
+    : [];
+  var categories = selectedCategories.length ? selectedCategories : savedCategories;
+  try {
+    var existing = await boApiCall(
+      'GET',
+      '/change-management/requests?application_id=' + encodeURIComponent(currentApp.id) + '&limit=25'
+    );
+    var requests = Array.isArray(existing && existing.requests) ? existing.requests : [];
+    var openRequest = requests.find(function(req) {
+      var status = String((req && req.status) || '').toLowerCase();
+      return ['cancelled', 'rejected', 'implemented', 'superseded'].indexOf(status) < 0;
+    });
+    lifecycleOpenChangeManagementRequests();
+    if (openRequest && openRequest.id) {
+      viewRequestDetail(openRequest.id);
+      showToast('Opened existing change request ' + openRequest.id, 'success');
+      return;
+    }
+    document.getElementById('cm-req-app-id').value = currentApp.id;
+    document.getElementById('cm-req-change-type').value = lifecycleSuggestedChangeType(categories);
+    document.getElementById('cm-req-field').value = 'periodic_review.material_change_categories';
+    document.getElementById('cm-req-old-val').value = '';
+    document.getElementById('cm-req-new-val').value = categories.join(', ');
+    document.getElementById('cm-req-reason').value =
+      'Lifecycle periodic review #' + reviewId + ' identified material change categories: ' +
+      (categories.length ? categories.map(lifecycleMaterialCategoryLabel).join(', ') : 'unspecified categories') + '.';
+    showCreateRequestModal();
+    showToast('Prepared a canonical change request draft in Change Management.');
+  } catch (err) {
+    showToast('Failed to open Change Management: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
 function lifecycleWorkspaceSection(title, subtitle, bodyHtml, accent) {
   return '<div style="border:1px solid #dfe7f2;border-radius:14px;background:#ffffff;overflow:hidden;box-shadow:0 8px 16px rgba(16,24,40,0.04);">' +
     '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;padding:14px 16px;background:#f8fafc;border-bottom:1px solid #dfe7f2;">' +
@@ -9502,6 +9611,7 @@ function lifecycleMaterialChangeControls(reviewId, reviewDetail) {
   var attestation = String((reviewDetail && reviewDetail.material_change_attestation) || '');
   var categories = Array.isArray(reviewDetail && reviewDetail.material_change_categories) ? reviewDetail.material_change_categories : [];
   var showCategories = attestation === 'material_change_identified';
+  var showChangeRequestCta = showCategories;
   var selectedSummary = attestation
     ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
         lifecycleDetailBadge(attestation === 'no_material_change' ? 'No material change recorded' : 'Material change identified', attestation === 'no_material_change' ? 'green' : 'amber') +
@@ -9532,9 +9642,16 @@ function lifecycleMaterialChangeControls(reviewId, reviewDetail) {
       }).join('') +
     '</div>' +
   '</div>';
+  var changeRequestCta = '<div id="lifecycle-material-change-request-' + reviewId + '" style="margin-top:12px;' + (showChangeRequestCta ? '' : 'display:none;') + '">' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;padding:12px;border:1px solid rgba(124,58,237,0.2);border-radius:10px;background:rgba(124,58,237,0.05);">' +
+      '<div style="font-size:11px;color:var(--text3);max-width:420px;">Formal approval and implementation of material changes remain canonical in Change Management. Lifecycle only records the attestation and categories.</div>' +
+      '<button class="btn btn-outline btn-sm" onclick="lifecycleOpenOrCreateChangeRequest(\'' + reviewId + '\')">Open / create change request</button>' +
+    '</div>' +
+  '</div>';
   return selectedSummary +
     radios +
     categoriesHtml +
+    changeRequestCta +
     '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
       '<div style="font-size:11px;color:var(--text3);">Invalid combinations are rejected server-side and surfaced inline without touching client profile state.</div>' +
       '<button class="btn btn-primary btn-sm" onclick="saveLifecycleMaterialChange(\'' + reviewId + '\')">Save material change attestation</button>' +
@@ -9933,18 +10050,30 @@ function lifecycleSignalsPanel(summary, reviewDetail, activeReviewItem) {
   });
   var openAlerts = Number((reviewDetail && reviewDetail.open_alerts_count) || 0);
   var linkedEDD = (reviewDetail && reviewDetail.linked_edd_case_id) || null;
+  var firstAlert = relatedItems.find(function(item) { return item && item.type === 'alert'; }) || null;
   var changeEdges = (((summary && summary.linkage) || {}).edges || []).filter(function(edge) {
     return /change/i.test(String((edge && (edge.to_type || edge.type || edge.label)) || ''));
   });
   var relatedHtml = relatedItems.length
     ? relatedItems.slice(0, 4).map(lifecycleDetailItemRow).join('')
     : '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">No other active lifecycle owner-workflow items are linked to this client right now.</div>';
+  var workflowButtons = [];
+  if (firstAlert && firstAlert.id != null) {
+    workflowButtons.push('<button class="btn btn-outline btn-sm" onclick="openAlertDetailById(' + JSON.stringify(firstAlert.id) + ')">Open monitoring alert #' + String(firstAlert.id).slice(0, 8) + '</button>');
+  }
+  if (linkedEDD != null) {
+    workflowButtons.push('<button class="btn btn-outline btn-sm" onclick="openEDDDetail(' + JSON.stringify(linkedEDD) + ')">Open linked EDD #' + String(linkedEDD).slice(0, 8) + '</button>');
+  } else if (reviewId) {
+    workflowButtons.push('<button class="btn btn-outline btn-sm" onclick="escalatePeriodicReviewToEDD(' + JSON.stringify(reviewId) + ')">Create / link EDD case</button>');
+  }
+  workflowButtons.push('<button class="btn btn-outline btn-sm" onclick="lifecycleOpenChangeManagementRequests()">Open Change Management</button>');
   return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
       lifecycleDetailBadge('Monitoring alerts: ' + String(openAlerts), openAlerts ? 'amber' : 'green') +
       lifecycleDetailBadge(linkedEDD ? ('Linked EDD #' + String(linkedEDD)) : 'No linked EDD', linkedEDD ? 'blue' : 'slate') +
       lifecycleDetailBadge('Change links: ' + String(changeEdges.length), changeEdges.length ? 'amber' : 'slate') +
     '</div>' +
     relatedHtml +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">' + workflowButtons.join('') + '</div>' +
     '<div style="margin-top:12px;font-size:11px;color:var(--text3);">Owner-workflow actions stay in Monitoring, EDD, and Change Management. PR 6 adds explicit deep-link actions from this panel.</div>';
 }
 
@@ -9994,8 +10123,11 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
 function toggleLifecycleMaterialChangeCategories(reviewId) {
   var selected = document.querySelector('input[name="lifecycle-material-attestation-' + reviewId + '"]:checked');
   var holder = document.getElementById('lifecycle-material-categories-' + reviewId);
+  var changeRequestCta = document.getElementById('lifecycle-material-change-request-' + reviewId);
   if (!holder) return;
-  holder.style.display = selected && selected.value === 'material_change_identified' ? '' : 'none';
+  var show = selected && selected.value === 'material_change_identified';
+  holder.style.display = show ? '' : 'none';
+  if (changeRequestCta) changeRequestCta.style.display = show ? '' : 'none';
 }
 
 function toggleLifecycleRiskChangeControls(reviewId) {
