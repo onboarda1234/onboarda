@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from environment import get_screening_validity_days
 
@@ -72,7 +72,7 @@ def load_evidence_links(db, review_id: int) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _linked_requirement_ids(evidence_links: Iterable[Dict[str, Any]]) -> set[str]:
+def _linked_requirement_ids(evidence_links: Iterable[Dict[str, Any]]) -> Set[str]:
     return {
         str(link.get("requirement_id"))
         for link in evidence_links
@@ -310,6 +310,8 @@ def evaluate_completion_blockers(
     outcome_reason: Optional[str] = None,
     include_completion_fields: bool = True,
 ) -> List[Dict[str, Any]]:
+    # Signature mirrors evaluate_operational_blockers/evaluate_review_readiness
+    # so both call sites can pass the same prepared inputs without branching.
     del required_items, evidence_links
     review_id = _row_get(review, "id")
     blockers: List[Dict[str, Any]] = []

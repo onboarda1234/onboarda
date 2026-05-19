@@ -398,6 +398,9 @@ def test_postgres_import_setup_uses_boolean_params(monkeypatch, audit_sink):
         def fetchone(self):
             return None
 
+        def commit(self):
+            return None
+
     monkeypatch.setattr(prm, "_fetch_review", lambda db, review_id: {"id": review_id, "review_cycle_number": 1})
     monkeypatch.setattr(prm, "_validate_officer", lambda db, officer_id: officer_id)
     monkeypatch.setattr(prm, "_effective_risk_level", lambda db, review: "HIGH")
@@ -415,10 +418,12 @@ def test_postgres_import_setup_uses_boolean_params(monkeypatch, audit_sink):
     )
 
     _, params = next(call for call in db.calls if call[0].startswith("UPDATE periodic_reviews SET"))
-    assert isinstance(params[10], bool)
-    assert isinstance(params[16], bool)
-    assert params[10] is True
-    assert params[16] is True
+    legacy_import_param = params[10]
+    import_requires_ack_param = params[16]
+    assert isinstance(legacy_import_param, bool)
+    assert isinstance(import_requires_ack_param, bool)
+    assert legacy_import_param is True
+    assert import_requires_ack_param is True
 
 
 
