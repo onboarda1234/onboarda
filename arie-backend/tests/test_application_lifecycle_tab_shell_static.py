@@ -132,6 +132,19 @@ def test_lifecycle_workspace_adds_owner_workflow_deep_links_without_duplicate_wo
     assert "Owner-workflow actions stay in Monitoring, EDD, and Change Management" in html
 
 
+def test_lifecycle_workspace_surfaces_agent_signals_as_decision_support_only():
+    html = _read_backoffice()
+    assert "function lifecycleAgentSignalsPanel(summary)" in html
+    assert "function lifecycleAgentSignalRow(signal)" in html
+    assert "Agent 6/7/8/10 decision-support signals" in html
+    assert "Source:" in html
+    assert "Confidence " in html
+    assert "Linked object:" in html
+    assert "Destination:" in html
+    assert "recommended owner module" in html
+    assert "They do not write officer-owned review fields." in html
+
+
 def test_lifecycle_link_rows_surface_source_module_object_id_status_and_next_action():
     html = _read_backoffice()
     start = html.index("function lifecycleDetailItemRow(item)")

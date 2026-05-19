@@ -9477,6 +9477,7 @@ function renderLifecycleApplicationSummary(resp) {
   var linkage = (resp && resp.linkage) || { edges: [], count: 0 };
   var activeCount  = ((resp && resp.active  && resp.active.counts)  || {}).total || 0;
   var historicalCount = ((resp && resp.historical && resp.historical.counts) || {}).total || 0;
+  var agentSignalCount = ((resp && resp.agent_signals) || {}).count || 0;
 
   function edgeChip(edge) {
     function side(o) {
@@ -9504,7 +9505,7 @@ function renderLifecycleApplicationSummary(resp) {
         '<div class="card-icon" style="background:rgba(124,58,237,0.1);color:#7c3aed;">🔗</div>' +
         '<div>' +
           '<div class="card-title">Lifecycle Summary</div>' +
-          '<div style="font-size:11px;color:var(--text3);">Active: ' + activeCount + ' · Historical: ' + historicalCount + ' · Linked edges: ' + linkage.count + '</div>' +
+          '<div style="font-size:11px;color:var(--text3);">Active: ' + activeCount + ' · Historical: ' + historicalCount + ' · Linked edges: ' + linkage.count + ' · Agent signals: ' + agentSignalCount + '</div>' +
         '</div>' +
       '</div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">' + edgesHtml + '</div>' +
@@ -9541,6 +9542,58 @@ function lifecycleDetailMetric(label, value, tone) {
     '<div style="font-size:10px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;margin-bottom:8px;">' + escapeHtml(label) + '</div>' +
     '<div style="font-size:18px;font-weight:800;letter-spacing:-0.02em;color:' + accent.color + ';">' + escapeHtml(value || '—') + '</div>' +
   '</div>';
+}
+
+function lifecycleAgentSignalTone(signal) {
+  var destination = String((signal && signal.recommended_destination_module) || '').toLowerCase();
+  var agentNumber = Number((signal && signal.source_agent_number) || 0);
+  if (destination.indexOf('edd') >= 0) return 'red';
+  if (destination.indexOf('screening') >= 0) return 'amber';
+  if (destination.indexOf('kyc') >= 0 || destination.indexOf('document') >= 0) return 'green';
+  if (agentNumber === 6) return 'purple';
+  if (agentNumber === 8) return 'blue';
+  return 'slate';
+}
+
+function lifecycleAgentSignalRow(signal) {
+  var linked = (signal && signal.linked_object) || {};
+  var linkedLabel = (linked.type ? String(linked.type).toUpperCase() : 'OBJECT') + ' #' + (linked.id != null ? String(linked.id).slice(0, 8) : '—');
+  var confidence = signal && signal.confidence != null ? Math.round(Number(signal.confidence || 0) * 100) + '%' : '—';
+  var timestamp = lifecycleFormatDate(signal && signal.timestamp);
+  return '<div style="padding:12px;border:1px solid #dfe7f2;border-radius:14px;background:#fff;box-shadow:0 8px 16px rgba(16,24,40,0.04);">' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">' +
+      '<div style="min-width:220px;">' +
+        '<div style="font-size:13px;font-weight:800;color:var(--text1);">' + escapeHtml((signal && signal.signal_type ? String(signal.signal_type).replace(/_/g, ' ') : 'Agent signal')) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Source: ' + escapeHtml((signal && signal.source) || 'Monitoring agent') + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">' +
+        lifecycleDetailBadge('Confidence ' + confidence, lifecycleAgentSignalTone(signal)) +
+        lifecycleDetailBadge('Destination: ' + ((signal && signal.recommended_destination_module) || 'Owner workflow'), 'slate') +
+      '</div>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:10px;font-size:11px;color:var(--text3);">' +
+      '<div><strong style="color:var(--text2);">Linked object:</strong><br/>' + escapeHtml(linkedLabel) + '</div>' +
+      '<div><strong style="color:var(--text2);">Timestamp:</strong><br/>' + escapeHtml(timestamp) + '</div>' +
+      '<div><strong style="color:var(--text2);">Authority:</strong><br/>' + escapeHtml((signal && signal.authority) || 'decision_support') + '</div>' +
+    '</div>' +
+    (signal && signal.summary ? '<div style="font-size:12px;color:var(--text2);line-height:1.45;margin-top:10px;">' + escapeHtml(String(signal.summary)) + '</div>' : '') +
+  '</div>';
+}
+
+function lifecycleAgentSignalsPanel(summary) {
+  var bucket = (summary && summary.agent_signals) || {};
+  var signals = Array.isArray(bucket.items) ? bucket.items : [];
+  if (!signals.length) {
+    return '<div style="font-size:12px;color:var(--text2);">No active Agent 6/7/8/10 lifecycle signals are projected for this client right now.</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:8px;">Agents may surface signals only; officer attestations, rationale, outcome, completion state, and memo conclusion remain officer-owned.</div>';
+  }
+  var shown = signals.slice(0, 6).map(lifecycleAgentSignalRow).join('');
+  var extra = signals.length > 6
+    ? '<div style="font-size:11px;color:var(--text3);margin-top:10px;">Showing 6 of ' + signals.length + ' active signals. Open the Lifecycle Queue for the full launchpad view.</div>'
+    : '';
+  return '<div style="display:grid;gap:10px;">' + shown + '</div>' +
+    extra +
+    '<div style="font-size:11px;color:var(--text3);margin-top:10px;">Agent signals are decision-support projections with source, timestamp, confidence, linked object, and recommended owner module. They do not write officer-owned review fields.</div>';
 }
 
 function lifecycleWorkspaceStep(number, title, subtitle, tone) {
@@ -10254,6 +10307,7 @@ function lifecycleSignalsPanel(summary, reviewDetail, activeReviewItem) {
   var changeEdges = (((summary && summary.linkage) || {}).edges || []).filter(function(edge) {
     return /change/i.test(String((edge && (edge.to_type || edge.type || edge.label)) || ''));
   });
+  var agentSignalsHtml = lifecycleAgentSignalsPanel(summary);
   var relatedHtml = relatedItems.length
     ? relatedItems.slice(0, 4).map(lifecycleDetailItemRow).join('')
     : '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">No other active lifecycle owner-workflow items are linked to this client right now.</div>';
@@ -10271,6 +10325,10 @@ function lifecycleSignalsPanel(summary, reviewDetail, activeReviewItem) {
       lifecycleDetailBadge('Monitoring alerts: ' + String(openAlerts), openAlerts ? 'amber' : 'green') +
       lifecycleDetailBadge(linkedEDD ? ('Linked EDD #' + String(linkedEDD)) : 'No linked EDD', linkedEDD ? 'blue' : 'slate') +
       lifecycleDetailBadge('Change links: ' + String(changeEdges.length), changeEdges.length ? 'amber' : 'slate') +
+    '</div>' +
+    '<div style="margin-bottom:14px;">' +
+      '<div style="font-size:12px;font-weight:800;color:var(--text1);margin-bottom:8px;">Agent Signals</div>' +
+      agentSignalsHtml +
     '</div>' +
     relatedHtml +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">' + workflowButtons.join('') + '</div>' +
@@ -10588,6 +10646,7 @@ function renderLifecycleDetailTab(context) {
   var applicationDocuments = Array.isArray(currentApp && currentApp._documents) ? currentApp._documents : [];
   var activeReviewProjection = activeReview && activeReview.projection ? activeReview.projection : null;
   var activeReviewItem = context && context.activeReviewItem ? context.activeReviewItem : null;
+  var agentSignalCount = Number(((summary.agent_signals || {}).count) || 0);
   var currentReviewActive = !!activeReview;
   var activeWorkItems = currentReviewActive ? active.filter(function(item) {
     return !(item && item.type === 'review' && String(item.id) === String(activeReview && activeReview.id));
@@ -10608,6 +10667,7 @@ function renderLifecycleDetailTab(context) {
     lifecycleDetailMetric('Operational blockers', String(operationalBlockerCount), operationalBlockerCount ? 'amber' : 'green') +
     lifecycleDetailMetric('Completion blockers', String(completionBlockerCount), completionBlockerCount ? 'amber' : 'green') +
     lifecycleDetailMetric('Required evidence open', String(requiredOpenCount), requiredOpenCount ? 'amber' : 'green') +
+    lifecycleDetailMetric('Agent signals', String(agentSignalCount), agentSignalCount ? 'blue' : 'slate') +
     lifecycleDetailMetric('Memo status', String(memoStateLabel).replace(/_/g, ' '), activeReview && activeReview.memo_status === 'generated' ? 'green' : 'slate') +
   '</div>';
 
@@ -10615,6 +10675,7 @@ function renderLifecycleDetailTab(context) {
     lifecycleDetailMeta('Lifecycle items', String((((summary.active || {}).counts) || {}).total || 0)) +
     lifecycleDetailMeta('Historical items', String((((summary.historical || {}).counts) || {}).total || 0)) +
     lifecycleDetailMeta('Linked objects', String(((summary.linkage || {}).count) || 0)) +
+    lifecycleDetailMeta('Agent signals', String(agentSignalCount)) +
     lifecycleDetailMeta('Current review', activeReview ? ('Review #' + String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) : 'No active review') +
   '</div>';
   if (activeReview) {
@@ -10751,6 +10812,7 @@ function renderLifecycleDetailTab(context) {
       lifecycleDetailCard('Completion Gate', 'Operational and completion blockers from the canonical review projection.', completionBody, '#f59e0b') +
       lifecycleDetailCard('Required Evidence', 'Canonical evidence requirements linked to the existing KYC document repository.', requiredEvidenceBody, '#0f766e') +
       lifecycleDetailCard('Cross-module Links', 'Linked owner-workflow objects and typed lifecycle edges.', crossLinksBody, '#7c3aed') +
+      lifecycleDetailCard('Agent Signals', 'Agent 6/7/8/10 decision-support signals projected into Lifecycle without mutating officer-owned review state.', lifecycleAgentSignalsPanel(summary), '#2557d6') +
       lifecycleDetailCard('Memo Status', 'Periodic review memo state remains separate from onboarding memo state.', memoBody, '#6d28d9') +
       lifecycleDetailCard('History', 'Recent historical lifecycle review entries for this client.', historyBody, '#475569') +
     '</div>';

@@ -278,6 +278,176 @@ def _next_action_for_edd(stage: str) -> Optional[str]:
     }.get(stage)
 
 
+# ── Agent signal projection ─────────────────────────────────────────
+# PR11: monitoring agents are signal sources only. They may surface
+# source/timestamp/confidence/linkage metadata into Lifecycle, but they
+# must not write officer-owned periodic-review judgment fields.
+AGENT_SIGNAL_CATALOG: Dict[int, Dict[str, Any]] = {
+    6: {
+        "agent_name": "Periodic Review Preparation Agent",
+        "signal_source": "Agent 6 - Periodic Review Preparation",
+        "implementation": "deterministic",
+    },
+    7: {
+        "agent_name": "Adverse Media & PEP Monitoring Agent",
+        "signal_source": "Agent 7 - Adverse Media & PEP Monitoring",
+        "implementation": "hybrid",
+    },
+    8: {
+        "agent_name": "Behaviour & Risk Drift Agent",
+        "signal_source": "Agent 8 - Behaviour & Risk Drift",
+        "implementation": "deterministic",
+    },
+    10: {
+        "agent_name": "Ongoing Compliance Review Agent",
+        "signal_source": "Agent 10 - Ongoing Compliance Review",
+        "implementation": "hybrid",
+    },
+}
+
+
+def _normalise_signal_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _agent_for_alert_type(alert_type: Any, detected_by: Any = None) -> Tuple[int, str, str, float]:
+    token = _normalise_signal_text(alert_type)
+    detected = _normalise_signal_text(detected_by)
+    if token in {"document_expired", "document_expiring_soon", "document_expiry"} or "document_health" in detected:
+        return 10, "document_expiry", "KYC Documents", 0.92
+    if any(part in token for part in ("screening_stale", "stale_screening", "screening_refresh")):
+        return 10, "stale_screening", "Screening Queue", 0.88
+    if any(part in token for part in ("adverse", "media", "pep", "sanction", "watchlist")):
+        return 7, "adverse_media_pep_sanctions", "Screening Queue", 0.82
+    if any(part in token for part in ("risk_drift", "threshold", "velocity", "transaction", "behaviour", "behavior")):
+        return 8, "risk_drift", "Ongoing Monitoring", 0.78
+    if any(part in token for part in ("ownership", "ubo", "director", "shareholder", "beneficial_owner")):
+        return 6, "ownership_change_signal", "Change Management", 0.74
+    return 10, "monitoring_signal", "Ongoing Monitoring", 0.70
+
+
+def _agent_for_edd_item(item: Dict[str, Any]) -> Tuple[int, str, str, float]:
+    basis = " ".join(
+        str(item.get(k) or "")
+        for k in ("trigger_source", "trigger_notes", "origin_context", "risk_level")
+    )
+    token = _normalise_signal_text(basis)
+    if any(part in token for part in ("adverse", "media", "pep", "sanction", "screening")):
+        return 7, "adverse_media_pep_sanctions", "EDD", 0.80
+    if any(part in token for part in ("risk_drift", "threshold", "velocity", "behaviour", "behavior")):
+        return 8, "risk_drift", "EDD", 0.76
+    return 10, "ongoing_compliance_escalation", "EDD", 0.72
+
+
+def _agent_signal_payload(
+    *,
+    agent_number: int,
+    signal_type: str,
+    timestamp: Any,
+    confidence: float,
+    linked_object: Dict[str, Any],
+    recommended_destination_module: str,
+    summary: Any = None,
+    status: Any = None,
+) -> Dict[str, Any]:
+    agent = AGENT_SIGNAL_CATALOG[agent_number]
+    return {
+        "signal_type": signal_type,
+        "source": agent["signal_source"],
+        "source_agent_number": agent_number,
+        "source_agent_name": agent["agent_name"],
+        "source_agent_implementation": agent["implementation"],
+        "authority": "decision_support",
+        "timestamp": timestamp,
+        "confidence": confidence,
+        "linked_object": linked_object,
+        "recommended_destination_module": recommended_destination_module,
+        "summary": summary,
+        "status": status,
+    }
+
+
+def _agent_signals_for_lifecycle_item(item: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Build signal metadata for an already-materialised lifecycle item.
+
+    This is deliberately projection-only: the signal payload mirrors the
+    linked lifecycle object and contains no officer-owned fields such as
+    rationale, attestation, outcome, completion state or memo conclusion.
+    """
+    kind = item.get("type")
+    linked_object = {
+        "type": kind,
+        "id": item.get("id"),
+        "application_id": item.get("application_id"),
+    }
+    if kind == "alert":
+        agent_number, signal_type, destination, confidence = _agent_for_alert_type(
+            item.get("alert_type"),
+            item.get("detected_by"),
+        )
+        return [_agent_signal_payload(
+            agent_number=agent_number,
+            signal_type=signal_type,
+            timestamp=item.get("discovered_at") or item.get("created_at"),
+            confidence=confidence,
+            linked_object=linked_object,
+            recommended_destination_module=destination,
+            summary=item.get("summary"),
+            status=item.get("state"),
+        )]
+    if kind == "review":
+        return [_agent_signal_payload(
+            agent_number=6,
+            signal_type="periodic_review_preparation",
+            timestamp=item.get("created_at"),
+            confidence=0.86,
+            linked_object=linked_object,
+            recommended_destination_module="Application Lifecycle",
+            summary=item.get("review_reason") or item.get("trigger_source") or item.get("status_label"),
+            status=item.get("state"),
+        )]
+    if kind == "edd":
+        agent_number, signal_type, destination, confidence = _agent_for_edd_item(item)
+        return [_agent_signal_payload(
+            agent_number=agent_number,
+            signal_type=signal_type,
+            timestamp=item.get("created_at"),
+            confidence=confidence,
+            linked_object=linked_object,
+            recommended_destination_module=destination,
+            summary=item.get("trigger_notes") or item.get("origin_context") or item.get("trigger_source"),
+            status=item.get("state"),
+        )]
+    return []
+
+
+def _collect_agent_signals(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    signals: List[Dict[str, Any]] = []
+    seen = set()
+    for item in items:
+        for signal in item.get("agent_signals") or []:
+            linked = signal.get("linked_object") or {}
+            key = (
+                signal.get("source_agent_number"),
+                signal.get("signal_type"),
+                linked.get("type"),
+                linked.get("id"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            signals.append(signal)
+    by_source: Dict[str, int] = {}
+    for signal in signals:
+        src = signal.get("source") or "unknown"
+        by_source[src] = by_source.get(src, 0) + 1
+    return {
+        "items": signals,
+        "count": len(signals),
+        "by_source": by_source,
+    }
+
+
 # ── Per-row materialisation ──────────────────────────────────────────
 def _materialise_alert(row, *, user_names: Dict[str, str],
                        now: datetime) -> Dict[str, Any]:
@@ -285,7 +455,7 @@ def _materialise_alert(row, *, user_names: Dict[str, str],
     status = _normalise_alert_state(row)
     owner_id = _row_get(row, "reviewed_by")
     is_quarantined, quarantine_reasons = is_legacy_unmapped(row)
-    return {
+    item = {
         "type": "alert",
         "id": _row_get(row, "id"),
         "application_id": _row_get(row, "application_id"),
@@ -300,7 +470,10 @@ def _materialise_alert(row, *, user_names: Dict[str, str],
         "quarantine_reasons": quarantine_reasons,
         "severity": _row_get(row, "severity"),
         "alert_type": _row_get(row, "alert_type"),
+        "detected_by": _row_get(row, "detected_by"),
+        "discovered_at": _row_get(row, "discovered_at"),
         "summary": _row_get(row, "summary"),
+        "source_reference": _row_get(row, "source_reference"),
         "owner_id": owner_id,
         "owner_name": user_names.get(owner_id) if owner_id else None,
         "created_at": _row_get(row, "created_at"),
@@ -314,6 +487,8 @@ def _materialise_alert(row, *, user_names: Dict[str, str],
         "officer_action": _row_get(row, "officer_action"),
         "next_action": _next_action_for_alert(status),
     }
+    item["agent_signals"] = _agent_signals_for_lifecycle_item(item)
+    return item
 
 
 def _materialise_review(row, *, user_names: Dict[str, str],
@@ -329,7 +504,7 @@ def _materialise_review(row, *, user_names: Dict[str, str],
     if payload and isinstance(review_reason, str) and "FIX_REVIEW_JSON:" in review_reason:
         review_reason = "Seeded fixture review trigger"
     owner_id = _row_get(row, "assigned_officer")
-    return {
+    item = {
         "type": "review",
         "id": _row_get(row, "id"),
         "application_id": _row_get(row, "application_id"),
@@ -372,6 +547,8 @@ def _materialise_review(row, *, user_names: Dict[str, str],
         "required_items_generated_at": _row_get(row, "required_items_generated_at"),
         "next_action": _next_action_for_review(status),
     }
+    item["agent_signals"] = _agent_signals_for_lifecycle_item(item)
+    return item
 
 
 def _materialise_edd(row, *, user_names: Dict[str, str],
@@ -405,7 +582,7 @@ def _materialise_edd(row, *, user_names: Dict[str, str],
         }
     owner_id = _row_get(row, "assigned_officer")
     senior_id = _row_get(row, "senior_reviewer")
-    return {
+    item = {
         "type": "edd",
         "id": _row_get(row, "id"),
         "application_id": _row_get(row, "application_id"),
@@ -438,6 +615,8 @@ def _materialise_edd(row, *, user_names: Dict[str, str],
         "fixture_payload": payload,
         "next_action": _next_action_for_edd(stage),
     }
+    item["agent_signals"] = _agent_signals_for_lifecycle_item(item)
+    return item
 
 
 # ── EDD memo-context surfacing ───────────────────────────────────────
@@ -774,6 +953,7 @@ def build_lifecycle_queue(
         return (active_flag, age if age is not None else 10**12)
 
     items.sort(key=_sort_key)
+    agent_signals = _collect_agent_signals(items)
 
     return {
         "items": items,
@@ -788,6 +968,7 @@ def build_lifecycle_queue(
             "types": list(selected_types),
             "application_id": application_id,
         },
+        "agent_signals": agent_signals,
     }
 
 
@@ -866,11 +1047,21 @@ def build_application_lifecycle_summary(
                           ("edd", it["id"]),
                           ("review", it["linked_periodic_review_id"]))
 
+    active_signals = (active.get("agent_signals") or {}).get("items", [])
+    historical_signals = (historical.get("agent_signals") or {}).get("items", [])
+
     return {
         "application_id": application_id,
         "active": active,
         "historical": historical,
         "linkage": {"edges": edges, "count": len(edges)},
+        "agent_signals": {
+            "items": active_signals,
+            "historical_items": historical_signals,
+            "count": len(active_signals),
+            "historical_count": len(historical_signals),
+            "by_source": (active.get("agent_signals") or {}).get("by_source", {}),
+        },
     }
 
 
