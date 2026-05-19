@@ -29,7 +29,7 @@ import re
 import time
 import hashlib
 from datetime import datetime, timedelta, timezone
-from typing import Tuple, Dict, List, Optional, Any
+from typing import Tuple, Dict, List, Optional, Any, Mapping
 from pathlib import Path
 
 from environment import ENV, is_production, get_screening_validity_days
@@ -254,6 +254,120 @@ def _load_screening_reviews_for_truth(db, app_id: str, app_ref: str = "") -> Lis
     return reviews
 
 
+def _approval_edd_completion_status(db, app_id: str, routing: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return current DB-backed EDD completion status for the approval gate."""
+    try:
+        from edd_completion import collect_edd_completion_status
+
+        status = collect_edd_completion_status(db, app_id, routing=routing)
+        return status if isinstance(status, dict) else {
+            "satisfied": False,
+            "reason": "invalid_edd_completion_status",
+        }
+    except Exception as exc:
+        logger.error(
+            "Approval EDD completion lookup failed for application %s: %s",
+            app_id,
+            exc,
+            exc_info=True,
+        )
+        return {
+            "satisfied": False,
+            "reason": "edd_completion_lookup_failed",
+            "error": str(exc),
+        }
+
+
+def _approval_edd_completion_satisfied(status: Mapping[str, Any]) -> bool:
+    try:
+        from edd_completion import edd_completion_satisfies_route
+
+        return edd_completion_satisfies_route(status)
+    except Exception:
+        return bool(
+            isinstance(status, Mapping)
+            and status.get("satisfied")
+            and status.get("covers_current_triggers")
+        )
+
+
+def _format_approval_edd_completion_block_reason(routing: Mapping[str, Any], app_status: str, completion: Mapping[str, Any]) -> str:
+    triggers = ", ".join(str(item) for item in (routing.get("triggers") or [])[:6])
+    reason = completion.get("reason") or "edd_completion_not_satisfied"
+    missing = completion.get("missing_triggers") or []
+    missing_text = ""
+    if missing:
+        missing_text = " Missing trigger coverage: " + ", ".join(str(item) for item in missing[:6]) + "."
+    return (
+        "EDD routing policy " + str(routing.get("policy_version", ""))
+        + " requires completed EDD evidence before final approval "
+        + "(triggers: " + triggers + "). "
+        + "Application status is '" + app_status + "'. "
+        + "EDD completion is not satisfied: " + str(reason) + "."
+        + missing_text
+    )
+
+
+def _audit_approval_edd_completion_satisfied(
+    db,
+    app: Dict,
+    routing: Mapping[str, Any],
+    completion: Mapping[str, Any],
+) -> Tuple[bool, str]:
+    """Record audit evidence that final approval accepted completed EDD."""
+    try:
+        detail = {
+            "event": "approval_gate_edd_completion_satisfied",
+            "application_id": app.get("id"),
+            "application_ref": app.get("ref"),
+            "policy_version": routing.get("policy_version"),
+            "route": routing.get("route"),
+            "routing_triggers": routing.get("triggers") or [],
+            "edd_completion_satisfied": bool(completion.get("satisfied")),
+            "covers_current_triggers": bool(completion.get("covers_current_triggers")),
+            "edd_case_id": completion.get("case_id"),
+            "reason": completion.get("reason"),
+            "current_triggers": completion.get("current_triggers") or [],
+            "covered_triggers": completion.get("covered_triggers") or [],
+            "missing_triggers": completion.get("missing_triggers") or [],
+            "normalized_current_triggers": completion.get("normalized_current_triggers") or [],
+            "normalized_covered_triggers": completion.get("normalized_covered_triggers") or [],
+            "checked_at": completion.get("checked_at"),
+            "approved_application_status": app.get("status"),
+            "approved_application_lane": app.get("onboarding_lane"),
+        }
+        db.execute(
+            "INSERT INTO audit_log (user_id, user_name, user_role, action, target, detail, ip_address) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "system",
+                "Approval Gate",
+                "system",
+                "Approval Gate EDD Completion Satisfied",
+                app.get("ref") or str(app.get("id") or ""),
+                json.dumps(detail, default=str, sort_keys=True),
+                "",
+            ),
+        )
+        return True, ""
+    except Exception as exc:
+        logger.error(
+            "Approval EDD completion audit write failed for application %s: %s",
+            app.get("id"),
+            exc,
+            exc_info=True,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return (
+            False,
+            "Could not record EDD completion approval-gate audit evidence. "
+            "Approval is blocked until audit logging succeeds.",
+        )
+
+
 class ApprovalGateValidator:
     """
     Validates all preconditions before an application can be approved.
@@ -467,12 +581,11 @@ class ApprovalGateValidator:
             # 3e. ── Priority B / Workstream B & C: ──────────────────
             # mandatory_escalation and EDD-routing checks. The memo's
             # serialized supervisor block is the single authoritative
-            # source. If mandatory_escalation is set, the application
-            # cannot be approved through the standard pathway. If the
-            # deterministic EDD routing policy says the case must be
-            # routed to EDD, the application status must already be on
-            # the EDD pathway (edd_required / edd_approved) before
-            # approval can proceed.
+            # source for unresolved supervisor escalation. Deterministic
+            # EDD routing is then validated against current EDD completion
+            # evidence rather than using application.status as a proxy; valid
+            # EDD cases may have advanced to kyc_submitted after PRE_APPROVE,
+            # KYC, enhanced requirements, and approved EDD closure.
             try:
                 import json as _json2
                 _md_raw = memo_row.get('memo_data') or '{}'
@@ -491,14 +604,24 @@ class ApprovalGateValidator:
                 _routing = _md_meta.get('edd_routing') or {}
                 if _routing.get('route') == 'edd':
                     _app_status = (app.get('status') or '').lower()
-                    if _app_status not in ('edd_required', 'edd_approved'):
+                    _completion = _approval_edd_completion_status(db, app_id, _routing)
+                    if _approval_edd_completion_satisfied(_completion):
+                        _audit_ok, _audit_error = _audit_approval_edd_completion_satisfied(
+                            db,
+                            app,
+                            _routing,
+                            _completion,
+                        )
+                        if not _audit_ok:
+                            return (False, _audit_error)
+                    else:
                         return (
                             False,
-                            "EDD routing policy " + str(_routing.get('policy_version', ''))
-                            + " requires this case to be routed to EDD "
-                            "(triggers: " + ", ".join(_routing.get('triggers', [])[:6]) + "). "
-                            "Application status is '" + _app_status
-                            + "'. Complete the EDD pathway before approval."
+                            _format_approval_edd_completion_block_reason(
+                                _routing,
+                                _app_status,
+                                _completion,
+                            )
                         )
             except Exception as _ge:  # pragma: no cover — defensive
                 logger.error("Failed to evaluate mandatory_escalation/edd_routing gate: %s", _ge)
