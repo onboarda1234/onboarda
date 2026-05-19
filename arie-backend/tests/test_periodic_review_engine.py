@@ -137,14 +137,14 @@ def _insert_review(conn, *, application_id="test-app-100",
                    client_name="Test Co Ltd", risk_level="MEDIUM",
                    status="pending", trigger_source=None,
                    linked_monitoring_alert_id=None,
-                   review_reason=None):
+                   review_reason=None, officer_rationale="Fixture rationale"):
     conn.execute(
         "INSERT INTO periodic_reviews "
         "(application_id, client_name, risk_level, status, trigger_source, "
-        " linked_monitoring_alert_id, review_reason) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        " linked_monitoring_alert_id, review_reason, officer_rationale) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (application_id, client_name, risk_level, status,
-         trigger_source, linked_monitoring_alert_id, review_reason),
+         trigger_source, linked_monitoring_alert_id, review_reason, officer_rationale),
     )
     conn.commit()
     return conn.execute(

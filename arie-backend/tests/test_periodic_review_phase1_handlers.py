@@ -78,6 +78,33 @@ class TestPhase1PeriodicReviewHandlers(_PRReviewHandlerBase):
         self.assertEqual(review_detail.code, 200)
         review_body = json.loads(review_detail.body)
         self.assertEqual(review_body["projection"]["status_label"], "Blocked")
+        self.assertFalse(review_body["projection"]["completion_ready"])
+
+    def test_clean_pending_review_surfaces_as_due_not_blocked(self):
+        rid = self._create_review(status="pending", risk_level="LOW")
+
+        review_detail = self._get(f"/api/monitoring/reviews/{rid}")
+        self.assertEqual(review_detail.code, 200)
+        body = json.loads(review_detail.body)
+        self.assertEqual(body["projection"]["status_label"], "Due")
+        self.assertEqual(body["projection"]["blocker_count"], 0)
+        self.assertGreaterEqual(body["projection"]["completion_blocker_count"], 1)
+
+    def test_legacy_decision_endpoint_still_returns_legacy_flag(self):
+        rid = self._create_review(status="pending")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/decision",
+            {"decision": "continue", "decision_reason": "Legacy back-compat"},
+        )
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertTrue(body["legacy"])
+        row = self._conn.execute(
+            "SELECT decision, outcome FROM periodic_reviews WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        self.assertEqual(row["decision"], "continue")
+        self.assertIsNone(row["outcome"])
 
     def test_import_setup_endpoint_sets_ack_flag_for_high_risk(self):
         rid = self._create_review(status="pending", risk_level="HIGH")

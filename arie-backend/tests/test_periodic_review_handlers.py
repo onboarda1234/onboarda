@@ -147,15 +147,16 @@ class _PRReviewHandlerBase(AsyncHTTPTestCase):
     # ---- helpers ----
     def _create_review(self, *, status="pending", risk_level="MEDIUM",
                        trigger_source=None, linked_alert_id=None,
-                       review_reason=None, application_id=None):
+                       review_reason=None, application_id=None,
+                       officer_rationale="Fixture rationale"):
         application_id = application_id or self._app_id
         self._conn.execute(
             "INSERT INTO periodic_reviews "
             "(application_id, client_name, risk_level, status, "
-            " trigger_source, linked_monitoring_alert_id, review_reason) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " trigger_source, linked_monitoring_alert_id, review_reason, officer_rationale) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (application_id, "PR03 Test Co", risk_level, status,
-             trigger_source, linked_alert_id, review_reason),
+             trigger_source, linked_alert_id, review_reason, officer_rationale),
         )
         self._conn.commit()
         return self._conn.execute(

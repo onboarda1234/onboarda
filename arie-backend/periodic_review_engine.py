@@ -62,6 +62,7 @@ from lifecycle_linkage import (
     VALID_PRIORITIES,
     _row_get,  # internal but stable helper -- mirror PR-01 conventions
 )
+from periodic_review_blockers import evaluate_review_readiness
 
 logger = logging.getLogger("arie.periodic_review_engine")
 
@@ -1338,164 +1339,14 @@ def _auto_clear_outcome_item(items: List[Dict[str, Any]], *, outcome: str,
 
 def _blocking_items_for_completion(db, review, items, *, outcome: str,
                                    outcome_reason: str) -> List[Dict[str, Any]]:
-    blocking_items: List[Dict[str, Any]] = []
-    application_id = _row_get(review, "application_id")
-    if items:
-        application = _fetch_application(db, application_id)
-        screening_item = _screening_refresh_item(application)
-        if _severity_rank(screening_item.get("severity")) >= _severity_rank("high"):
-            blocking_items.append({
-                "item_type": screening_item["item_type"],
-                "label": screening_item["label"],
-                "severity": screening_item["severity"],
-            })
-
-        for alert in _fetch_open_monitoring_alerts(db, application_id, include_document_health=True):
-            alert_type = _row_get(alert, "alert_type")
-            severity = str(_row_get(alert, "severity") or "medium").lower()
-            if alert_type == "document_expired" and _severity_rank(severity) >= _severity_rank("high"):
-                blocking_items.append({
-                    "item_type": alert_type,
-                    "label": _row_get(alert, "summary") or "Expired document unresolved",
-                    "severity": severity,
-                })
-        for alert in _fetch_open_monitoring_alerts(db, application_id, include_document_health=False):
-            severity = str(_row_get(alert, "severity") or "medium").lower()
-            if _severity_rank(severity) >= _severity_rank("high"):
-                blocking_items.append({
-                    "item_type": "monitoring_alert_followup",
-                    "label": _row_get(alert, "summary") or "High-severity monitoring alert unresolved",
-                    "severity": severity,
-                })
-
-        for item in items:
-            status = item.get("status") or REQUIRED_ITEM_STATUS_OPEN
-            if status in (
-                REQUIRED_ITEM_STATUS_CLEARED,
-                REQUIRED_ITEM_STATUS_NOT_APPLICABLE,
-            ):
-                continue
-            item_type = item.get("item_type")
-            severity = str(item.get("severity") or "medium").lower()
-            if item_type == "document_expired" and _severity_rank(severity) >= _severity_rank("high"):
-                blocking_items.append({
-                    "item_type": item_type,
-                    "label": item.get("label"),
-                    "severity": severity,
-                })
-            elif item_type in ("screening_refresh", "edd_followup"):
-                if (
-                    _severity_rank(severity) >= _severity_rank("high")
-                    and not (item_type == "edd_followup" and outcome == OUTCOME_EDD_REQUIRED)
-                ):
-                    blocking_items.append({
-                        "item_type": item_type,
-                        "label": item.get("label"),
-                        "severity": severity,
-                    })
-            elif item_type == "monitoring_alert_followup" and _severity_rank(severity) >= _severity_rank("high"):
-                blocking_items.append({
-                    "item_type": item_type,
-                    "label": item.get("label"),
-                    "severity": severity,
-                })
-            elif _severity_rank(severity) >= _severity_rank("high"):
-                blocking_items.append({
-                    "item_type": item_type,
-                    "label": item.get("label"),
-                    "severity": severity,
-                })
-
-    if outcome == OUTCOME_EDD_REQUIRED:
-        linked_edd_case_id = _row_get(review, "linked_edd_case_id") or _find_active_edd_for_application(
-            db, application_id
-        )
-        if linked_edd_case_id is None:
-            blocking_items.append({
-                "item_type": "edd_case_required",
-                "label": "EDD outcome selected but no linked EDD case exists",
-                "severity": "high",
-            })
-
-    if not outcome_reason or not str(outcome_reason).strip():
-        blocking_items.append({
-            "item_type": "outcome_reason_required",
-            "label": "Outcome reason is required",
-            "severity": "high",
-        })
-    if _row_get(review, "import_requires_ack") and not _row_get(review, "legacy_sco_acknowledged_at"):
-        blocking_items.append({
-            "item_type": "legacy_import_ack_required",
-            "label": "Imported high-risk review requires SCO/admin acknowledgement",
-            "severity": "high",
-        })
-    if (
-        _row_get(review, "assigned_officer")
-        or _row_get(review, "legacy_import")
-        or _row_get(review, "material_change_attestation")
-        or _row_get(review, "risk_change_attestation")
-        or _row_get(review, "review_type") == "legacy_import"
-    ) and not str(_row_get(review, "officer_rationale") or "").strip():
-        blocking_items.append({
-            "item_type": "officer_rationale_required",
-            "label": "Officer rationale is required",
-            "severity": "high",
-        })
-    if _row_get(review, "linked_edd_case_id"):
-        linked_edd = db.execute(
-            "SELECT stage FROM edd_cases WHERE id = ?",
-            (_row_get(review, "linked_edd_case_id"),),
-        ).fetchone()
-        if (
-            linked_edd
-            and str(_row_get(linked_edd, "stage") or "").strip().lower() not in TERMINAL_EDD_STAGES
-            and outcome != OUTCOME_EDD_REQUIRED
-        ):
-            blocking_items.append({
-                "item_type": "active_linked_edd",
-                "label": "Linked EDD case must be completed before review closure",
-                "severity": "high",
-            })
-    evidence_links = db.execute(
-        "SELECT requirement_id FROM periodic_review_evidence_links WHERE periodic_review_id = ?",
-        (_row_get(review, "id"),),
-    ).fetchall()
-    linked_requirement_ids = {
-        str(_row_get(link, "requirement_id"))
-        for link in evidence_links
-        if _row_get(link, "requirement_id") is not None and str(_row_get(link, "requirement_id")).strip()
-    }
-    for item in items or []:
-        status = item.get("status") or REQUIRED_ITEM_STATUS_OPEN
-        if status in (REQUIRED_ITEM_STATUS_CLEARED, REQUIRED_ITEM_STATUS_NOT_APPLICABLE):
-            continue
-        severity = str(item.get("severity") or "medium").lower()
-        if item.get("id") and item.get("item_type") in {
-            "kyc_refresh",
-            "ubo_confirmation",
-            "document_expired",
-            "document_expiring_soon",
-            "document_stale",
-            "document_expiry_missing",
-            "licensing_refresh",
-            "source_of_funds_refresh",
-            "source_of_wealth_refresh",
-        } and _severity_rank(severity) >= _severity_rank("high") and str(item.get("id")) not in linked_requirement_ids:
-            blocking_items.append({
-                "item_type": "required_evidence_outstanding",
-                "label": item.get("label") or "Required evidence is not linked",
-                "severity": "high",
-            })
-
-    deduped = []
-    seen = set()
-    for item in blocking_items:
-        key = (item.get("item_type"), item.get("label"), item.get("severity"))
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
+    readiness = evaluate_review_readiness(
+        db,
+        review,
+        required_items=items,
+        outcome=outcome,
+        outcome_reason=outcome_reason,
+    )
+    return readiness["blocking_items_for_completion"]
 
 
 def record_review_outcome(db, review_id, *,
@@ -1540,9 +1391,6 @@ def record_review_outcome(db, review_id, *,
         raise InvalidReviewOutcome(
             f"outcome={outcome!r} is not one of {VALID_REVIEW_OUTCOMES}"
         )
-    if not outcome_reason or not str(outcome_reason).strip():
-        raise PeriodicReviewEngineError("outcome_reason is required")
-
     review = _fetch_review(db, review_id)
     current_state = _coerce_state(_row_get(review, "status"))
     if current_state == STATE_COMPLETED:

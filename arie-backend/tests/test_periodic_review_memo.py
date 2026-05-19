@@ -149,17 +149,17 @@ class _PRDBase(AsyncHTTPTestCase):
     def _create_review(self, *, status="in_progress", risk_level="MEDIUM",
                        trigger_source=None, linked_alert_id=None,
                        linked_edd_id=None, required_items=None,
-                       review_reason=None):
+                       review_reason=None, officer_rationale="Fixture rationale"):
         self._conn.execute(
             "INSERT INTO periodic_reviews "
             "(application_id, client_name, risk_level, status, "
             " trigger_source, linked_monitoring_alert_id, "
-            " linked_edd_case_id, required_items, review_reason) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " linked_edd_case_id, required_items, review_reason, officer_rationale) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (self._app_id, "PRD Test Co", risk_level, status,
              trigger_source, linked_alert_id, linked_edd_id,
              json.dumps(required_items) if required_items is not None else None,
-             review_reason),
+             review_reason, officer_rationale),
         )
         self._conn.commit()
         return self._conn.execute(
@@ -452,9 +452,9 @@ class TestCompleteHandlerHook(_PRDBase):
     def test_outcome_recorded_generates_memo_row(self):
         self._conn.execute(
             "INSERT INTO periodic_reviews "
-            "(application_id, client_name, risk_level, status) "
-            "VALUES (?, ?, ?, ?)",
-            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress"),
+            "(application_id, client_name, risk_level, status, officer_rationale) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress", "Fixture rationale"),
         )
         self._conn.commit()
         rid = self._conn.execute(
@@ -482,9 +482,9 @@ class TestCompleteHandlerHook(_PRDBase):
     def test_generator_failure_does_not_rollback_outcome(self):
         self._conn.execute(
             "INSERT INTO periodic_reviews "
-            "(application_id, client_name, risk_level, status) "
-            "VALUES (?, ?, ?, ?)",
-            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress"),
+            "(application_id, client_name, risk_level, status, officer_rationale) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress", "Fixture rationale"),
         )
         self._conn.commit()
         rid = self._conn.execute(
@@ -523,9 +523,9 @@ class TestMemoReadEndpoint(_PRDBase):
     def test_generates_on_demand_when_review_has_no_memo(self):
         self._conn.execute(
             "INSERT INTO periodic_reviews "
-            "(application_id, client_name, risk_level, status) "
-            "VALUES (?, ?, ?, ?)",
-            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress"),
+            "(application_id, client_name, risk_level, status, officer_rationale) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress", "Fixture rationale"),
         )
         self._conn.commit()
         rid = self._conn.execute(
@@ -551,9 +551,9 @@ class TestMemoReadEndpoint(_PRDBase):
     def test_200_with_generated_status(self):
         self._conn.execute(
             "INSERT INTO periodic_reviews "
-            "(application_id, client_name, risk_level, status) "
-            "VALUES (?, ?, ?, ?)",
-            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress"),
+            "(application_id, client_name, risk_level, status, officer_rationale) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (self._app_id, "PRD Test Co", "MEDIUM", "in_progress", "Fixture rationale"),
         )
         self._conn.commit()
         rid = self._conn.execute(

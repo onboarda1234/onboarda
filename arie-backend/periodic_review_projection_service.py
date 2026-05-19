@@ -3,6 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Iterable, List, Optional
 
+from periodic_review_blockers import (
+    decode_required_items,
+    evaluate_review_readiness,
+    load_evidence_links,
+)
+
 ACTIVE_REVIEW_STATES = (
     "pending",
     "in_progress",
@@ -10,20 +16,6 @@ ACTIVE_REVIEW_STATES = (
     "pending_senior_review",
 )
 COMPLETED_REVIEW_STATE = "completed"
-RESOLVED_ITEM_STATUSES = {"cleared", "not_applicable"}
-DOCUMENT_EVIDENCE_ITEM_TYPES = {
-    "kyc_refresh",
-    "ubo_confirmation",
-    "document_expired",
-    "document_expiring_soon",
-    "document_stale",
-    "document_expiry_missing",
-    "licensing_refresh",
-    "source_of_funds_refresh",
-    "source_of_wealth_refresh",
-}
-
-
 def _row_get(row, key, default=None):
     if row is None:
         return default
@@ -37,20 +29,6 @@ def _row_get(row, key, default=None):
         value = row.get(key, default)
         return default if value is None else value
     return default
-
-
-def _decode_required_items(value: Any) -> List[Dict[str, Any]]:
-    if not value:
-        return []
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, dict)]
-    try:
-        parsed = json.loads(value)
-    except Exception:
-        return []
-    return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
-
-
 def _table_columns(db, table: str) -> set:
     if table not in {"periodic_reviews"}:
         return set()
@@ -72,17 +50,6 @@ def _table_columns(db, table: str) -> set:
 
 def _effective_risk_level(review) -> Optional[str]:
     return _row_get(review, "new_risk_level") or _row_get(review, "risk_level")
-
-
-def _load_evidence_link_rows(db, review_id: int) -> List[Dict[str, Any]]:
-    rows = db.execute(
-        "SELECT id, requirement_id, document_id, link_type, linked_by, linked_at, note "
-        "FROM periodic_review_evidence_links WHERE periodic_review_id = ? ORDER BY id ASC",
-        (review_id,),
-    ).fetchall()
-    return [dict(row) for row in rows]
-
-
 def _load_memo_status(db, review_id: int, review_row) -> Optional[str]:
     status = _row_get(review_row, "memo_status")
     if status:
@@ -97,68 +64,6 @@ def _load_memo_status(db, review_id: int, review_row) -> Optional[str]:
     if _row_get(review_row, "outcome"):
         return "pending"
     return None
-
-
-def _linked_edd_blocker(db, review_row) -> Optional[str]:
-    linked_edd_case_id = _row_get(review_row, "linked_edd_case_id")
-    if not linked_edd_case_id:
-        return None
-    row = db.execute(
-        "SELECT stage FROM edd_cases WHERE id = ?",
-        (linked_edd_case_id,),
-    ).fetchone()
-    stage = str(_row_get(row, "stage") or "").strip().lower()
-    if stage and stage not in {"edd_approved", "edd_rejected"}:
-        return "Active linked EDD case is still open"
-    return None
-
-
-def _blocking_summary(db, review_row, required_items: List[Dict[str, Any]], evidence_links: List[Dict[str, Any]]) -> List[str]:
-    """Return additive blocker labels derived from canonical review state.
-
-    Phase 1 surfaces must read one blocker view from ``periodic_reviews`` plus
-    linked evidence / EDD context. The summary covers imported-review
-    acknowledgement, stale or missing screening, required evidence links,
-    unresolved linked EDD work, missing officer rationale, and missing outcome.
-    """
-    blockers: List[str] = []
-    if _row_get(review_row, "import_requires_ack") and not _row_get(review_row, "legacy_sco_acknowledged_at"):
-        blockers.append("SCO/admin acknowledgement required for imported high-risk review")
-
-    linked_requirements = {
-        str(link.get("requirement_id"))
-        for link in evidence_links
-        if link.get("requirement_id") is not None and str(link.get("requirement_id")).strip()
-    }
-    for item in required_items:
-        status = str(item.get("status") or "open").strip().lower()
-        if status in RESOLVED_ITEM_STATUSES:
-            continue
-        item_type = str(item.get("item_type") or item.get("code") or "").strip()
-        label = str(item.get("label") or item_type or "Required review item").strip()
-        if item_type == "screening_refresh":
-            blockers.append("Screening evidence is missing or stale")
-        elif item_type in DOCUMENT_EVIDENCE_ITEM_TYPES and str(item.get("id") or "") not in linked_requirements:
-            blockers.append(f"Evidence outstanding: {label}")
-
-    edd_blocker = _linked_edd_blocker(db, review_row)
-    if edd_blocker:
-        blockers.append(edd_blocker)
-    if not str(_row_get(review_row, "officer_rationale") or "").strip():
-        blockers.append("Officer rationale is required")
-    if not str(_row_get(review_row, "outcome") or "").strip():
-        blockers.append("Review outcome is required before completion")
-
-    deduped: List[str] = []
-    seen = set()
-    for blocker in blockers:
-        if blocker in seen:
-            continue
-        seen.add(blocker)
-        deduped.append(blocker)
-    return deduped
-
-
 def _status_label(raw_status: str, blocker_count: int, linked_edd_case_id: Any) -> str:
     if raw_status == COMPLETED_REVIEW_STATE:
         return "Completed"
@@ -185,9 +90,14 @@ def build_review_projection(db, review_row, *, evidence_links: Optional[List[Dic
             "SELECT id, ref, company_name, risk_level, final_risk_level FROM applications WHERE id = ?",
             (app_id,),
         ).fetchone()
-    required_items = _decode_required_items(_row_get(review, "required_items"))
-    evidence_links = evidence_links if evidence_links is not None else _load_evidence_link_rows(db, review_id)
-    blockers = _blocking_summary(db, review, required_items, evidence_links)
+    evidence_links = evidence_links if evidence_links is not None else load_evidence_links(db, review_id)
+    readiness = evaluate_review_readiness(
+        db,
+        review,
+        required_items=decode_required_items(_row_get(review, "required_items")),
+        evidence_links=evidence_links,
+    )
+    blockers = readiness["operational_blockers"]
     raw_status = str(_row_get(review, "status") or "pending").strip().lower() or "pending"
     return {
         "review_id": review_id,
@@ -204,7 +114,10 @@ def build_review_projection(db, review_row, *, evidence_links: Optional[List[Dic
         "next_review_date": _row_get(review, "next_review_date") or _row_get(review, "due_date"),
         "risk_level": _effective_risk_level(review) or _row_get(application, "final_risk_level") or _row_get(application, "risk_level"),
         "blocker_count": len(blockers),
-        "blocker_summary": blockers,
+        "blocker_summary": [blocker["label"] for blocker in blockers],
+        "completion_blocker_count": readiness["completion_blocker_count"],
+        "completion_blocker_summary": [blocker["label"] for blocker in readiness["completion_blockers"]],
+        "completion_ready": readiness["completion_ready"],
         "outcome": _row_get(review, "outcome"),
         "memo_status": _load_memo_status(db, review_id, review),
         "lifecycle_link": {
