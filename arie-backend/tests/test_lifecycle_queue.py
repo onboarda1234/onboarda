@@ -814,6 +814,82 @@ class TestLegacySchemaFallbacks(unittest.TestCase):
         self.assertEqual(len(review_sql), 1)
         self.assertNotIn("linked_periodic_review_id", review_sql[0])
         self.assertNotIn("linked_edd_case_id", review_sql[0])
+
+
+class TestAgentSignals(_LifecycleQueueBase):
+    def test_lifecycle_items_surface_agent_signal_metadata(self):
+        import lifecycle_queue as lq
+
+        self._alert(
+            alert_type="adverse_media",
+            severity="high",
+            summary="Adverse media signal for lifecycle",
+            status="open",
+        )
+        result = lq.build_lifecycle_queue(self._conn, include="active", types=("alert",))
+
+        signal = result["items"][0]["agent_signals"][0]
+        self.assertEqual(signal["signal_type"], "adverse_media_pep_sanctions")
+        self.assertEqual(signal["source_agent_number"], 7)
+        self.assertEqual(signal["recommended_destination_module"], "Screening Queue")
+        self.assertEqual(signal["linked_object"]["type"], "alert")
+        self.assertEqual(signal["linked_object"]["application_id"], self._app_id)
+        self.assertIn("timestamp", signal)
+        self.assertGreater(signal["confidence"], 0)
+        self.assertLessEqual(signal["confidence"], 1)
+        self.assertEqual(result["agent_signals"]["count"], 1)
+
+    def test_application_summary_collects_active_agent_signals(self):
+        import lifecycle_queue as lq
+
+        rid = self._review(status="in_progress", review_reason="Scheduled periodic review")
+        self._alert(
+            alert_type="threshold_breach",
+            severity="medium",
+            status="open",
+            linked_periodic_review_id=rid,
+            summary="Risk drift threshold signal",
+        )
+
+        summary = lq.build_application_lifecycle_summary(self._conn, self._app_id)
+        signals = summary["agent_signals"]["items"]
+        signal_types = {s["signal_type"] for s in signals}
+        sources = {s["source_agent_number"] for s in signals}
+
+        self.assertIn("periodic_review_preparation", signal_types)
+        self.assertIn("risk_drift", signal_types)
+        self.assertIn(6, sources)
+        self.assertIn(8, sources)
+        for signal in signals:
+            self.assertIn("source", signal)
+            self.assertIn("timestamp", signal)
+            self.assertIn("confidence", signal)
+            self.assertIn("linked_object", signal)
+            self.assertIn("recommended_destination_module", signal)
+
+    def test_agent_signals_do_not_expose_officer_owned_judgment_fields(self):
+        import lifecycle_queue as lq
+
+        self._review(
+            status="in_progress",
+            material_change_attestation="material_change_identified",
+            material_change_categories=json.dumps(["directors"]),
+            officer_rationale="Officer-owned rationale",
+            outcome="continue_no_change",
+            memo_status="generated",
+        )
+        summary = lq.build_application_lifecycle_summary(self._conn, self._app_id)
+
+        forbidden = {
+            "material_change_attestation",
+            "material_change_categories",
+            "officer_rationale",
+            "outcome",
+            "status_completed",
+            "memo_conclusion",
+        }
+        for signal in summary["agent_signals"]["items"]:
+            self.assertTrue(forbidden.isdisjoint(signal.keys()))
 class TestLegacySchemaFallback(unittest.TestCase):
     """Regression: lifecycle reads must not crash on legacy alert schema."""
 

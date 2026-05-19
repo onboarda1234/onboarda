@@ -816,6 +816,71 @@ class TestMonitoringAgentRunHandler(_PRReviewHandlerBase):
         self.assertEqual(alert["alert_type"], "document_expired")
         self.assertEqual(alert["discovered_via"], "document_health")
 
+    def test_monitoring_agent_run_does_not_mutate_periodic_review_judgment_fields(self):
+        agent_id = self._create_monitoring_agent(
+            name="Ongoing Compliance Review Agent",
+            agent_type="ongoing_compliance_review",
+            alerts_generated=0,
+        )
+        rid = self._create_review(status="in_progress")
+        self._conn.execute(
+            """
+            UPDATE periodic_reviews
+               SET material_change_attestation = ?,
+                   material_change_categories = ?,
+                   risk_change_attestation = ?,
+                   officer_rationale = ?,
+                   outcome = ?,
+                   status = ?,
+                   memo_status = ?
+             WHERE id = ?
+            """,
+            (
+                "no_material_change",
+                json.dumps([]),
+                "risk_retained",
+                "Officer-owned rationale",
+                "continue_no_change",
+                "in_progress",
+                "generated",
+                rid,
+            ),
+        )
+        self._conn.commit()
+        before = dict(self._conn.execute(
+            """
+            SELECT material_change_attestation,
+                   material_change_categories,
+                   risk_change_attestation,
+                   officer_rationale,
+                   outcome,
+                   status,
+                   memo_status
+              FROM periodic_reviews
+             WHERE id = ?
+            """,
+            (rid,),
+        ).fetchone())
+
+        resp = self._post(f"/api/monitoring/agents/{agent_id}/run", {})
+        self.assertEqual(resp.code, 200)
+
+        after = dict(self._conn.execute(
+            """
+            SELECT material_change_attestation,
+                   material_change_categories,
+                   risk_change_attestation,
+                   officer_rationale,
+                   outcome,
+                   status,
+                   memo_status
+              FROM periodic_reviews
+             WHERE id = ?
+            """,
+            (rid,),
+        ).fetchone())
+        self.assertEqual(after, before)
+
     def test_invalid_non_numeric_agent_key_returns_404_not_500(self):
         resp = self._post("/api/monitoring/agents/not-a-real-agent/run", {})
         self.assertEqual(resp.code, 404)
