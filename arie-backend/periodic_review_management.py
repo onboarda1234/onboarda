@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from lifecycle_linkage import MissingAuditWriter, _row_get
 from periodic_review_policy import normalize_risk_level, policy_snapshot_for_risk
@@ -96,7 +96,7 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _db_bool(db, value: Any):
+def _db_bool(db, value: Any) -> Union[bool, int]:
     return bool(value) if getattr(db, "is_postgres", False) else (1 if value else 0)
 
 

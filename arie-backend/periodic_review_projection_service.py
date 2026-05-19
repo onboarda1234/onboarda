@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from periodic_review_blockers import (
     decode_required_items,
@@ -29,7 +28,7 @@ def _row_get(row, key, default=None):
         value = row.get(key, default)
         return default if value is None else value
     return default
-def _table_columns(db, table: str) -> set:
+def _table_columns(db, table: str) -> Set[str]:
     if table not in {"periodic_reviews"}:
         return set()
     try:
