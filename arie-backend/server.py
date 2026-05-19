@@ -8782,6 +8782,8 @@ _REPORT_EXPORT_FILENAME_PREFIX = "regmind_applications_report"
 
 _CANONICAL_RISK_LEVELS = ("LOW", "MEDIUM", "HIGH", "VERY_HIGH")
 
+_PERIODIC_REVIEW_COMPLETED_STATES = ("completed",)
+
 _REPORT_APPLICATION_SELECT_COLUMNS = (
     "a.id AS id",
     "a.ref AS ref",
@@ -8877,6 +8879,97 @@ def _report_record(row):
         except Exception:
             record["risk_dimensions"] = {}
     return record
+
+
+def _periodic_review_active_states():
+    """Return the lifecycle active-review vocabulary used for reports."""
+    try:
+        from lifecycle_queue import ACTIVE_REVIEW_STATES
+        return tuple(ACTIVE_REVIEW_STATES)
+    except Exception:
+        return (
+            "pending", "in_progress", "awaiting_information",
+            "pending_senior_review",
+        )
+
+
+def _periodic_review_canonical_stats(db, *, app_where="1=1", app_params=None, today=None):
+    """Canonical periodic-review counts for reports/monitoring.
+
+    Counts are sourced from ``periodic_reviews`` only and join applications
+    solely for report-scope filters. This keeps each review counted once and
+    aligns reports with Lifecycle active/completed state semantics.
+    """
+    active_states = _periodic_review_active_states()
+    completed_states = _PERIODIC_REVIEW_COMPLETED_STATES
+    today_iso = today or datetime.utcnow().date().isoformat()
+    params = list(app_params or [])
+
+    active_ph = ",".join(["?"] * len(active_states))
+    completed_ph = ",".join(["?"] * len(completed_states))
+    review_date_expr = "COALESCE(NULLIF(pr.next_review_date, ''), NULLIF(pr.due_date, ''))"
+    state_expr = "COALESCE(NULLIF(pr.status, ''), 'pending')"
+
+    row = db.execute(f"""
+        SELECT
+            COUNT(DISTINCT pr.id) AS total,
+            SUM(CASE WHEN {state_expr} = 'pending' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN {state_expr} IN ({active_ph}) THEN 1 ELSE 0 END) AS active,
+            SUM(CASE WHEN {state_expr} IN ({completed_ph}) THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE
+                    WHEN {state_expr} IN ({active_ph})
+                     AND {review_date_expr} IS NOT NULL
+                     AND {review_date_expr} <= ?
+                    THEN 1 ELSE 0
+                END) AS due,
+            SUM(CASE
+                    WHEN {state_expr} IN ({active_ph})
+                     AND {review_date_expr} IS NOT NULL
+                     AND {review_date_expr} < ?
+                    THEN 1 ELSE 0
+                END) AS overdue
+        FROM periodic_reviews pr
+        JOIN applications a ON a.id = pr.application_id
+        WHERE {app_where}
+    """, [
+        *active_states,
+        *completed_states,
+        *active_states, today_iso,
+        *active_states, today_iso,
+        *params,
+    ]).fetchone()
+
+    by_status_rows = db.execute(f"""
+        SELECT {state_expr} AS status, COUNT(DISTINCT pr.id) AS count
+        FROM periodic_reviews pr
+        JOIN applications a ON a.id = pr.application_id
+        WHERE {app_where}
+        GROUP BY {state_expr}
+    """, params).fetchall()
+
+    values = dict(row) if row else {}
+    by_status = {
+        (r.get("status") if hasattr(r, "get") else r["status"]) or "pending":
+        (r.get("count") if hasattr(r, "get") else r["count"]) or 0
+        for r in by_status_rows
+    }
+    total = values.get("total") or 0
+    return {
+        "total": total,
+        # Backwards-compatible legacy bucket: exact pending state only.
+        "pending": values.get("pending") or 0,
+        "active": values.get("active") or 0,
+        "completed": values.get("completed") or 0,
+        "due": values.get("due") or 0,
+        "overdue": values.get("overdue") or 0,
+        "by_status": by_status,
+        "active_states": list(active_states),
+        "completed_states": list(completed_states),
+        "date_basis": "next_review_date_fallback_due_date",
+        "canonical_source": "periodic_reviews",
+        "counting_rule": "count_distinct_periodic_reviews_id",
+        "reconciles": sum(by_status.values()) == total,
+    }
 
 
 def _csv_safe_value(value):
@@ -9249,26 +9342,17 @@ class ReportAnalyticsHandler(BaseHandler):
                 pass
 
             # --- periodic_review_stats ---
-            periodic_review_stats = {"total": 0, "pending": 0, "completed": 0, "overdue": 0}
+            periodic_review_stats = {
+                "total": 0, "pending": 0, "active": 0, "completed": 0,
+                "due": 0, "overdue": 0, "by_status": {},
+                "canonical_source": "periodic_reviews",
+            }
             try:
-                row = db.execute(f"""
-                    SELECT
-                        COUNT(*) as total,
-                        SUM(CASE WHEN pr.status='pending' THEN 1 ELSE 0 END) as pending,
-                        SUM(CASE WHEN pr.status='completed' THEN 1 ELSE 0 END) as completed,
-                        SUM(CASE WHEN pr.status='pending' AND pr.due_date < date('now') THEN 1 ELSE 0 END) as overdue
-                    FROM periodic_reviews pr
-                    JOIN applications a ON a.id = pr.application_id
-                    WHERE {where}
-                """, params).fetchone()
-                if row:
-                    r = dict(row)
-                    periodic_review_stats = {
-                        "total": r.get("total") or 0,
-                        "pending": r.get("pending") or 0,
-                        "completed": r.get("completed") or 0,
-                        "overdue": r.get("overdue") or 0,
-                    }
+                periodic_review_stats = _periodic_review_canonical_stats(
+                    db,
+                    app_where=where,
+                    app_params=params,
+                )
             except Exception:
                 pass
 
@@ -13246,7 +13330,7 @@ class MonitoringDashboardHandler(BaseHandler):
         if not user:
             return
 
-        from fixture_filter import fixture_app_exclude_clause, fixture_app_id_exclude_clause
+        from fixture_filter import fixture_app_exclude_clause
 
         db = get_db()
         stats = {
@@ -13282,20 +13366,16 @@ class MonitoringDashboardHandler(BaseHandler):
         """, fx_params).fetchall()
         stats["high_risk_alerts"] = [dict(a) for a in recent_alerts]
 
-        review_fx_excl, review_fx_params = fixture_app_id_exclude_clause("pr.application_id")
-        due_count = db.execute(
-            f"""
-            SELECT COUNT(*) as c
-            FROM periodic_reviews pr
-            WHERE COALESCE(pr.status, 'pending') IN
-                  ('pending','in_progress','awaiting_information','pending_senior_review')
-              AND pr.due_date IS NOT NULL
-              AND pr.due_date <= ?
-              AND {review_fx_excl}
-            """,
-            [datetime.utcnow().date().isoformat(), *review_fx_params],
-        ).fetchone()["c"]
-        stats["periodic_review_due"] = due_count
+        review_fx_excl, review_fx_params = fixture_app_exclude_clause(table_alias="a")
+        review_stats = _periodic_review_canonical_stats(
+            db,
+            app_where=review_fx_excl,
+            app_params=review_fx_params,
+        )
+        stats["periodic_review_due"] = review_stats["due"]
+        stats["periodic_review_overdue"] = review_stats["overdue"]
+        stats["periodic_review_active"] = review_stats["active"]
+        stats["periodic_review_total"] = review_stats["total"]
 
         db.close()
         self.success(stats)

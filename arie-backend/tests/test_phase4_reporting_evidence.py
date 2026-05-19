@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import uuid
+from datetime import datetime, timedelta
 
 from tornado.testing import AsyncHTTPTestCase
 
@@ -108,6 +109,60 @@ class _Phase4ReportingHTTPBase(AsyncHTTPTestCase):
                 """,
                 (*row, json.dumps({"sensitive": "raw-report-json"})),
             )
+
+    def _seed_periodic_review_reconciliation_rows(self):
+        from db import get_db
+
+        today = datetime.utcnow().date()
+        country = f"PR14-Reconcile-{uuid.uuid4().hex[:8]}"
+        rows = [
+            ("pending", today - timedelta(days=2), today + timedelta(days=10)),
+            ("in_progress", today, None),
+            ("awaiting_information", today + timedelta(days=3), None),
+            ("pending_senior_review", None, today - timedelta(days=1)),
+            ("completed", today - timedelta(days=30), None),
+        ]
+        app_ids = []
+        db = get_db()
+        for index, (review_status, next_review_date, due_date) in enumerate(rows, start=1):
+            app_id = f"pr14-report-{uuid.uuid4().hex[:12]}"
+            app_ids.append(app_id)
+            db.execute(
+                """
+                INSERT INTO applications
+                (id, ref, company_name, status, risk_level, risk_score, country, entity_type, is_fixture)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    app_id,
+                    f"PR14-RPT-{uuid.uuid4().hex[:8]}",
+                    f"PR14 Reconcile {index} Ltd",
+                    "approved",
+                    "MEDIUM",
+                    42,
+                    country,
+                    "SME",
+                    0,
+                ),
+            )
+            db.execute(
+                """
+                INSERT INTO periodic_reviews
+                (application_id, client_name, status, next_review_date, due_date, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    app_id,
+                    f"PR14 Reconcile {index} Ltd",
+                    review_status,
+                    next_review_date.isoformat() if next_review_date else None,
+                    due_date.isoformat() if due_date else None,
+                    (today - timedelta(days=10 + index)).isoformat(),
+                ),
+            )
+        db.commit()
+        db.close()
+        return country, set(app_ids)
 
 
 class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
@@ -280,3 +335,68 @@ class TestPhase4ReportingHTTP(_Phase4ReportingHTTPBase):
         assert dashboard_body["pending_statuses"] == analytics_body["report"]["pending_statuses"]
         assert dashboard_body["edd_routed_statuses"] == analytics_body["report"]["edd_routed_statuses"]
         assert dashboard_body["canonical_view"] == "applications_report_v1"
+
+    def test_periodic_review_report_counts_reconcile_with_lifecycle_queue(self):
+        country, app_ids = self._seed_periodic_review_reconciliation_rows()
+
+        analytics = self.fetch(
+            f"/api/reports/analytics?jurisdiction={country}",
+            headers=self._admin_headers(),
+        )
+        active_queue = self.fetch(
+            "/api/lifecycle/queue?type=reviews&include=active",
+            headers=self._admin_headers(),
+        )
+        historical_queue = self.fetch(
+            "/api/lifecycle/queue?type=reviews&include=historical",
+            headers=self._admin_headers(),
+        )
+
+        assert analytics.code == 200
+        assert active_queue.code == 200
+        assert historical_queue.code == 200
+
+        stats = json.loads(analytics.body.decode())["periodic_review_stats"]
+        active_items = [
+            item for item in json.loads(active_queue.body.decode())["items"]
+            if item["application_id"] in app_ids
+        ]
+        historical_items = [
+            item for item in json.loads(historical_queue.body.decode())["items"]
+            if item["application_id"] in app_ids
+        ]
+
+        assert stats["canonical_source"] == "periodic_reviews"
+        assert stats["counting_rule"] == "count_distinct_periodic_reviews_id"
+        assert stats["date_basis"] == "next_review_date_fallback_due_date"
+        assert stats["reconciles"] is True
+        assert stats["total"] == 5
+        assert stats["active"] == len(active_items) == 4
+        assert stats["completed"] == len(historical_items) == 1
+        assert stats["pending"] == 1
+        assert stats["due"] == 3
+        assert stats["overdue"] == 2
+        assert sum(stats["by_status"].values()) == stats["total"]
+
+    def test_monitoring_dashboard_periodic_review_due_uses_same_canonical_count(self):
+        baseline = self.fetch("/api/monitoring/dashboard", headers=self._admin_headers())
+        assert baseline.code == 200
+        baseline_stats = json.loads(baseline.body.decode())
+
+        country, _ = self._seed_periodic_review_reconciliation_rows()
+        analytics = self.fetch(
+            f"/api/reports/analytics?jurisdiction={country}",
+            headers=self._admin_headers(),
+        )
+        dashboard = self.fetch("/api/monitoring/dashboard", headers=self._admin_headers())
+
+        assert analytics.code == 200
+        assert dashboard.code == 200
+        report_stats = json.loads(analytics.body.decode())["periodic_review_stats"]
+        dashboard_stats = json.loads(dashboard.body.decode())
+        assert dashboard_stats["periodic_review_due"] == (
+            baseline_stats["periodic_review_due"] + report_stats["due"]
+        )
+        assert dashboard_stats["periodic_review_overdue"] == (
+            baseline_stats.get("periodic_review_overdue", 0) + report_stats["overdue"]
+        )
