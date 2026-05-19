@@ -117,3 +117,38 @@ def test_lifecycle_workspace_save_helpers_refresh_canonical_projection():
     assert "async function saveLifecycleRiskChange(reviewId)" in html
     assert "await refreshLifecycleWorkspaceTab();" in html
     assert "window._detailLifecycleTabCache = null;" in html
+
+
+def test_lifecycle_workspace_adds_owner_workflow_deep_links_without_duplicate_workflows():
+    html = _read_backoffice()
+    assert "function lifecycleOpenChangeManagementRequests()" in html
+    assert "function lifecycleOpenOrCreateChangeRequest(reviewId)" in html
+    assert "Open monitoring alert #" in html
+    assert "Open linked EDD #" in html
+    assert "Create / link EDD case" in html
+    assert "Open Change Management" in html
+    assert "Open / create change request" in html
+    assert "Formal approval and implementation of material changes remain canonical in Change Management." in html
+    assert "Owner-workflow actions stay in Monitoring, EDD, and Change Management" in html
+
+
+def test_lifecycle_link_rows_surface_source_module_object_id_status_and_next_action():
+    html = _read_backoffice()
+    start = html.index("function lifecycleDetailItemRow(item)")
+    end = html.index("var LIFECYCLE_MATERIAL_CHANGE_OPTIONS", start)
+    section = html[start:end]
+    assert "lifecycleSourceModuleLabel(item)" in section
+    assert "Linked object:" in section
+    assert "Next action:" in section
+    assert "Open " in section
+    assert "Owner:" in section
+
+
+def test_lifecycle_edge_chips_are_clickable_owner_workflow_deep_links():
+    html = _read_backoffice()
+    start = html.index("function lifecycleDetailEdgeChip(edge)")
+    end = html.index("function lifecycleDetailItemRow(item)", start)
+    section = html[start:end]
+    assert "lifecycleOpenItemAction(obj)" in section
+    assert "event.stopPropagation();" in section
+    assert "btn btn-outline btn-sm" in section
