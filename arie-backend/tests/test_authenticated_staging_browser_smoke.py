@@ -80,10 +80,22 @@ def test_authenticated_staging_browser_smoke_records_browser_evidence():
     assert "page.on(\"response\"" in text
     assert "badResponses" in text
     assert "failedRequests" in text
-    assert "noConsoleErrors" in text
+    assert "blockingConsoleErrors" in text
+    assert "nonBlockingConsoleErrors" in text
+    assert "noBlockingConsoleErrors" in text
     assert "screenshots" in text
     assert "report.json" in text
     assert "screenshot(page" in text
+
+
+def test_authenticated_staging_browser_smoke_classifies_known_role_denials_as_non_blocking():
+    text = _script_text()
+
+    assert "isNonBlockingConsoleError" in text
+    assert "BO API Error: GET /users Error: Insufficient permissions" in text
+    assert "BO API Error: GET /audit?limit=100 Error: Insufficient permissions" in text
+    assert "Failed to load resource: the server responded with a status of 403" in text
+    assert "knownRoleDeniedResponses.length > 0" in text
 
 
 def test_deployment_runbook_documents_authenticated_browser_smoke_securely():

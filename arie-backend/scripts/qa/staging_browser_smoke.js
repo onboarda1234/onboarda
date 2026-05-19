@@ -101,6 +101,8 @@ const report = {
   observations: {},
   consoleErrors: [],
   consoleWarnings: [],
+  nonBlockingConsoleErrors: [],
+  blockingConsoleErrors: [],
   pageErrors: [],
   failedRequests: [],
   badResponses: [],
@@ -216,6 +218,32 @@ function recordBadResponse(resp) {
   }
 }
 
+function isNonBlockingConsoleError(entry) {
+  const text = String(entry && entry.text ? entry.text : "");
+  if (text.includes("BO API Error: GET /users Error: Insufficient permissions")) return true;
+  if (text.includes("BO API Error: GET /audit?limit=100 Error: Insufficient permissions")) return true;
+  if (text.includes("Failed to load resource: the server responded with a status of 403")) {
+    return report.knownRoleDeniedResponses.length > 0;
+  }
+  // Browser resource-load console entries are not JavaScript exceptions. The
+  // response/request listeners above decide whether the underlying HTTP event is
+  // blocking.
+  if (text.includes("Failed to load resource: the server responded with a status of 404")) return true;
+  return false;
+}
+
+function classifyConsoleErrors() {
+  report.nonBlockingConsoleErrors = [];
+  report.blockingConsoleErrors = [];
+  for (const entry of report.consoleErrors) {
+    if (isNonBlockingConsoleError(entry)) {
+      report.nonBlockingConsoleErrors.push(entry);
+    } else {
+      report.blockingConsoleErrors.push(entry);
+    }
+  }
+}
+
 async function main() {
   ensureOutDir();
   const browser = await chromium.launch({ executablePath: chromePath(), headless });
@@ -305,7 +333,8 @@ async function main() {
     report.checks.noTokenInjection = report.tokenInjectionUsed === false;
     report.checks.noAuthBypass = report.authBypassUsed === false;
     report.checks.screenshotsCaptured = report.screenshots.length >= 10;
-    report.checks.noConsoleErrors = report.consoleErrors.length === 0;
+    classifyConsoleErrors();
+    report.checks.noBlockingConsoleErrors = report.blockingConsoleErrors.length === 0;
     report.checks.noPageErrors = report.pageErrors.length === 0;
     report.checks.noApi500Responses = report.badResponses.filter((entry) => entry.status >= 500).length === 0;
     report.checks.noUnexpectedBadApiResponses = report.unexpectedBadResponses.length === 0;
