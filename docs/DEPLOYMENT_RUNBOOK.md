@@ -206,7 +206,7 @@ STAGING_SMOKE_OUT_DIR=/tmp/regmind-staging-browser-smoke \
 node arie-backend/scripts/qa/staging_browser_smoke.js
 ```
 
-Expected: exit code `0`, `report.json` written, screenshots captured, no page errors, no failed requests, and no unexpected API 4xx/5xx responses. Known officer-role `403` responses for admin-only APIs may be recorded as non-blocking role-denial evidence.
+Expected: exit code `0`, `report.json` written, screenshots captured, no page errors, no failed requests, no blocking JavaScript console errors, and no unexpected API 4xx/5xx responses. Known officer-role `403` responses for admin-only APIs may be recorded as non-blocking role-denial evidence.
 
 ### Manual validation
 
