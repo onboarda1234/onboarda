@@ -170,12 +170,43 @@ Expected: `"ready": true`, database `"status": "ok"`, encryption `"status": "ok"
 
 ### Automated validation
 
-The staging E2E test script exists at `arie-backend/tests/test_staging_e2e.py`:
+Run public/runtime API checks first:
+
 ```bash
-cd ~/Desktop/Onboarda/arie-backend
-python3.11 tests/test_staging_e2e.py
+curl -s https://staging.regmind.co/api/version | python3 -m json.tool
+curl -s https://staging.regmind.co/api/health | python3 -m json.tool
+curl -s https://staging.regmind.co/api/liveness | python3 -m json.tool
 ```
-Expected: 16/17+ checks pass. Covers: health, environment, auth, app creation, submit + risk scoring, page accessibility, save/resume.
+
+Expected: `/api/version` reports the deployed Git SHA and image tag, and health/liveness return safe public `ok` responses.
+
+### Authenticated staging browser smoke
+
+Use `arie-backend/scripts/qa/staging_browser_smoke.js` for authenticated back-office browser evidence. The harness uses the real back-office login form with an approved staging QA user, captures screenshots, and records console, page, request, and HTTP response evidence in `report.json`.
+
+Credential handling:
+
+- Store the approved staging QA email/password in a local password manager or GitHub environment secrets.
+- Pass credentials through `STAGING_QA_EMAIL` and `STAGING_QA_PASSWORD` only.
+- Do not paste credentials into commits, PRs, release notes, shell history, or screenshots.
+- Do not inject tokens, write browser storage manually, or bypass authentication.
+
+Example local run:
+
+```bash
+cd ~/Desktop/Onboarda
+mkdir -p /tmp/regmind-browser-smoke
+npm --prefix /tmp/regmind-browser-smoke install playwright-core
+
+STAGING_QA_EMAIL="$STAGING_QA_EMAIL" \
+STAGING_QA_PASSWORD="$STAGING_QA_PASSWORD" \
+PLAYWRIGHT_NODE_MODULES=/tmp/regmind-browser-smoke/node_modules \
+STAGING_BASE_URL=https://staging.regmind.co \
+STAGING_SMOKE_OUT_DIR=/tmp/regmind-staging-browser-smoke \
+node arie-backend/scripts/qa/staging_browser_smoke.js
+```
+
+Expected: exit code `0`, `report.json` written, screenshots captured, no page errors, no failed requests, and no unexpected API 4xx/5xx responses. Known officer-role `403` responses for admin-only APIs may be recorded as non-blocking role-denial evidence.
 
 ### Manual validation
 
@@ -249,6 +280,7 @@ Attach this ledger to every Day 6 staging deployment note before the deployment 
 | ECS service | `aws ecs describe-services --cluster regmind-staging --services regmind-backend --region af-south-1` | `deployments[0].rolloutState` is `COMPLETED`; task definition revision recorded |
 | Runtime logs | CloudWatch log group `/ecs/regmind-staging` | No new `ERROR`, `connection pool exhausted`, or `falling back to mock mode` entries after deploy |
 | Reporting smoke | `arie-backend/scripts/qa/day5_closing_smoke.py` | `ok: true`, `canonical_view: applications_report_v1`, and expected total/pending/EDD counts |
+| Authenticated browser smoke | `arie-backend/scripts/qa/staging_browser_smoke.js` | Real QA login succeeds; required back-office pages/tabs load; screenshots and `report.json` attached; no token injection or auth bypass |
 | Rollback handle | Previous ECS task definition | Previous `regmind-staging:<REVISION>` recorded before deployment |
 
 Recommended smoke command:
@@ -398,7 +430,7 @@ VERIFY
 [ ] /api/readiness unauthenticated → 401
 [ ] /metrics unauthenticated → 401
 [ ] random 404 → Server: RegMind, hardened headers
-[ ] python3.11 tests/test_staging_e2e.py → 16/17+ pass
+[ ] node arie-backend/scripts/qa/staging_browser_smoke.js → authenticated browser smoke pass with screenshots/report attached
 [ ] Browser: dashboard shows "—" not demo stats
 [ ] Logs: no "mock mode" or "connection pool exhausted"
 
