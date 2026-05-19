@@ -96,6 +96,10 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _db_bool(db, value: Any):
+    return bool(value) if getattr(db, "is_postgres", False) else (1 if value else 0)
+
+
 
 def _json_list(value: Any) -> List[str]:
     if isinstance(value, list):
@@ -327,13 +331,13 @@ def save_legacy_import_setup(
             policy["policy_version"],
             policy["frequency_months"],
             policy["calculation_basis"],
-            1,
+            _db_bool(db, True),
             source_type,
             source_note,
             confidence,
             (user or {}).get("sub"),
             ts,
-            1 if risk_level in {"HIGH", "VERY_HIGH"} else 0,
+            _db_bool(db, risk_level in {"HIGH", "VERY_HIGH"}),
             review_id,
         ),
     )
@@ -591,6 +595,7 @@ def record_risk_change(
         "frequency_months": policy["frequency_months"],
         "application_risk_write_status": "unsafe_gap",
         "application_risk_write_message": RISK_WRITE_GAP_MESSAGE,
+        "authoritative_application_risk_changed": False,
     }
 
 

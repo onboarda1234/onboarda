@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 from datetime import datetime, timezone
 
@@ -139,6 +140,39 @@ def test_phase1_schema_helper_is_idempotent(phase1_db):
     assert {"periodic_review_id", "requirement_id", "document_id", "link_type", "linked_by", "linked_at", "note"} <= link_cols
 
 
+def test_existing_sqlite_schema_is_upgraded_by_phase1_helper(monkeypatch):
+    import db as db_module
+
+    raw = sqlite3.connect(":memory:")
+    raw.row_factory = sqlite3.Row
+    conn = db_module.DBConnection(raw, is_postgres=False)
+    raw.execute("CREATE TABLE users (id TEXT PRIMARY KEY)")
+    raw.execute("CREATE TABLE documents (id TEXT PRIMARY KEY, application_id TEXT)")
+    raw.execute(
+        "CREATE TABLE periodic_reviews (id INTEGER PRIMARY KEY AUTOINCREMENT, application_id TEXT, client_name TEXT, risk_level TEXT)"
+    )
+    db_module._ensure_periodic_review_phase1_schema(conn)
+    db_module._ensure_periodic_review_phase1_schema(conn)
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(periodic_reviews)").fetchall()}
+    assert {"assigned_officer", "legacy_import", "import_requires_ack", "officer_rationale", "memo_status"} <= cols
+    idx_names = {
+        row["name"]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+    }
+    assert {"idx_prev_links_review", "idx_prev_links_document"} <= idx_names
+    raw.close()
+
+
+def test_postgres_schema_declares_phase1_boolean_and_jsonb_defaults():
+    import db as db_module
+
+    schema = db_module._get_postgres_schema()
+    assert "legacy_import BOOLEAN DEFAULT FALSE" in schema
+    assert "import_requires_ack BOOLEAN DEFAULT FALSE" in schema
+    assert "material_change_categories JSONB DEFAULT '[]'" in schema
+    assert "CREATE TABLE IF NOT EXISTS periodic_review_evidence_links" in schema
+
+
 
 def test_assignment_is_stored_and_not_inferred_from_decided_by(phase1_db, audit_sink):
     from periodic_review_management import assign_review
@@ -179,6 +213,32 @@ def test_reassignment_requires_reason_and_audits_before_after(phase1_db, audit_s
     assert result["assigned_officer"] == "sco001"
     assert audit_sink.events[-1]["before_state"]["assigned_officer"] == "co001"
     assert audit_sink.events[-1]["after_state"]["assigned_officer"] == "sco001"
+
+
+def test_projection_due_without_completion_fields_blocker(phase1_db):
+    from periodic_review_projection_service import get_review_projection
+
+    review_id = _insert_review(phase1_db, status="pending")
+    projection = get_review_projection(phase1_db, review_id)
+
+    assert projection["status"] == "pending"
+    assert projection["status_label"] == "Due"
+    assert projection["blocker_count"] == 0
+    assert projection["completion_blocker_count"] == 2
+    assert projection["completion_ready"] is False
+    assert "Officer rationale is required" in projection["completion_blocker_summary"]
+    assert "Review outcome is required before completion" in projection["completion_blocker_summary"]
+
+
+def test_in_progress_projection_not_blocked_by_completion_only_gaps(phase1_db):
+    from periodic_review_projection_service import get_review_projection
+
+    review_id = _insert_review(phase1_db, status="in_progress")
+    projection = get_review_projection(phase1_db, review_id)
+
+    assert projection["status_label"] == "In Review"
+    assert projection["blocker_count"] == 0
+    assert projection["completion_ready"] is False
 
 
 
@@ -317,8 +377,48 @@ def test_risk_change_records_audit_and_recalculates_next_review_date_without_app
     assert row["next_review_date"] == "2025-01-15"
     assert result["application_risk_write_status"] == "unsafe_gap"
     assert result["application_risk_write_message"] == RISK_WRITE_GAP_MESSAGE
+    assert result["authoritative_application_risk_changed"] is False
     assert app["risk_level"] == "MEDIUM"
     assert audit_sink.events[-1]["after_state"]["new_risk_level"] == "HIGH"
+
+
+def test_postgres_import_setup_uses_boolean_params(monkeypatch, audit_sink):
+    import periodic_review_management as prm
+
+    class RecordingDB:
+        is_postgres = True
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+            return self
+
+        def fetchone(self):
+            return None
+
+    monkeypatch.setattr(prm, "_fetch_review", lambda db, review_id: {"id": review_id, "review_cycle_number": 1})
+    monkeypatch.setattr(prm, "_validate_officer", lambda db, officer_id: officer_id)
+    monkeypatch.setattr(prm, "_effective_risk_level", lambda db, review: "HIGH")
+
+    db = RecordingDB()
+    prm.save_legacy_import_setup(
+        db,
+        7,
+        last_review_date="2025-01-01",
+        source_type="internal_register",
+        confidence="high",
+        assigned_officer="co001",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+
+    _, params = next(call for call in db.calls if call[0].startswith("UPDATE periodic_reviews SET"))
+    assert isinstance(params[10], bool)
+    assert isinstance(params[16], bool)
+    assert params[10] is True
+    assert params[16] is True
 
 
 
@@ -343,6 +443,59 @@ def test_evidence_links_reference_existing_documents_without_duplicate_document_
     link_row = phase1_db.execute("SELECT * FROM periodic_review_evidence_links WHERE id = ?", (result["id"],)).fetchone()
     assert after_count == before_count
     assert link_row["document_id"] == document_id
+    assert audit_sink.events[-1]["action"] == "periodic_review.evidence_link_added"
+
+
+def test_cross_application_evidence_link_fails_and_duplicate_link_is_idempotent(phase1_db, audit_sink):
+    from periodic_review_management import EvidenceLinkError, add_evidence_link
+
+    phase1_db.execute(
+        "INSERT OR IGNORE INTO applications (id, ref, company_name, risk_level, final_risk_level, status, risk_score) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("app-other", "APP-OTHER", "Other Co", "LOW", "LOW", "approved", 11),
+    )
+    phase1_db.execute(
+        "INSERT INTO documents (id, application_id, doc_type, doc_name, file_path, uploaded_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("doc-other", "app-other", "passport", "other.pdf", "/tmp/other.pdf", datetime.now(timezone.utc).isoformat()),
+    )
+    phase1_db.commit()
+
+    review_id = _insert_review(phase1_db)
+    document_id = _insert_document(phase1_db, document_id="doc-same")
+    first = add_evidence_link(
+        phase1_db,
+        review_id,
+        requirement_id="req-1",
+        document_id=document_id,
+        link_type="requirement_evidence",
+        note="first link",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+    second = add_evidence_link(
+        phase1_db,
+        review_id,
+        requirement_id="req-1",
+        document_id=document_id,
+        link_type="requirement_evidence",
+        note="second link should reuse",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+    with pytest.raises(EvidenceLinkError):
+        add_evidence_link(
+            phase1_db,
+            review_id,
+            requirement_id="req-x",
+            document_id="doc-other",
+            link_type="requirement_evidence",
+            note="cross app",
+            user=CO,
+            audit_writer=audit_sink,
+        )
+
+    count = phase1_db.execute("SELECT COUNT(*) AS c FROM periodic_review_evidence_links WHERE periodic_review_id = ?", (review_id,)).fetchone()["c"]
+    assert first["id"] == second["id"]
+    assert count == 1
 
 
 
@@ -376,6 +529,46 @@ def test_shared_projection_returns_canonical_state_across_surfaces(phase1_db):
     assert monitoring_summary["status_label"] == "Blocked"
     assert queue["items"][0]["status_label"] == "Blocked"
     assert edd_case["linked_periodic_review"]["status_label"] == "Blocked"
+
+
+def test_projection_and_completion_share_same_operational_blockers(phase1_db, audit_sink):
+    import periodic_review_engine as pre
+    from periodic_review_blockers import evaluate_review_readiness
+    from periodic_review_projection_service import get_review_projection
+    from periodic_review_management import save_officer_rationale
+
+    review_id = _insert_review(
+        phase1_db,
+        status="in_progress",
+        risk_level="HIGH",
+        linked_monitoring_alert_id=None,
+        required_items=json.dumps([
+            {"id": "req-screen", "item_type": "screening_refresh", "label": "Refresh screening", "severity": "high", "status": "open"},
+            {"id": "req-doc", "item_type": "document_expired", "label": "Provide updated passport", "severity": "high", "status": "open"},
+        ]),
+    )
+    edd_id = _insert_edd(phase1_db, linked_periodic_review_id=review_id, stage="analysis")
+    phase1_db.execute("UPDATE periodic_reviews SET linked_edd_case_id = ? WHERE id = ?", (edd_id, review_id))
+    save_officer_rationale(phase1_db, review_id, rationale="Officer reviewed blockers.", user=CO, audit_writer=audit_sink)
+    phase1_db.commit()
+
+    projection = get_review_projection(phase1_db, review_id)
+    readiness = evaluate_review_readiness(phase1_db, _review_row(phase1_db, review_id))
+    with pytest.raises(pre.ReviewCompletionBlocked) as exc:
+        pre.record_review_outcome(
+            phase1_db,
+            review_id,
+            outcome=pre.OUTCOME_NO_CHANGE,
+            outcome_reason="Attempted completion",
+            user=CO,
+            audit_writer=audit_sink,
+        )
+
+    completion_operational = [item for item in exc.value.blocking_items if not item.get("completion_only")]
+    assert [item["label"] for item in readiness["operational_blockers"]] == [item["label"] for item in completion_operational]
+    assert projection["blocker_summary"] == [item["label"] for item in readiness["operational_blockers"]]
+    assert projection["completion_blocker_count"] == 1
+    assert projection["completion_blocker_summary"] == ["Review outcome is required before completion"]
 
 
 
@@ -415,6 +608,86 @@ def test_new_flow_writes_outcome_and_not_legacy_decision(phase1_db, audit_sink):
     assert result["outcome"] == pre.OUTCOME_NO_CHANGE
     assert row["outcome"] == pre.OUTCOME_NO_CHANGE
     assert row["decision"] is None
+
+
+def test_completion_attempt_fails_when_rationale_missing(phase1_db, audit_sink):
+    import periodic_review_engine as pre
+
+    review_id = _insert_review(phase1_db, status="in_progress")
+    with pytest.raises(pre.ReviewCompletionBlocked) as exc:
+        pre.record_review_outcome(
+            phase1_db,
+            review_id,
+            outcome=pre.OUTCOME_NO_CHANGE,
+            outcome_reason="Complete without rationale",
+            user=CO,
+            audit_writer=audit_sink,
+        )
+    labels = [item["label"] for item in exc.value.blocking_items]
+    assert "Officer rationale is required" in labels
+
+
+def test_phase1_update_paths_do_not_mutate_legacy_decision(phase1_db, audit_sink):
+    from periodic_review_management import (
+        add_evidence_link,
+        assign_review,
+        record_risk_change,
+        save_legacy_import_setup,
+        save_material_change_attestation,
+        save_officer_rationale,
+    )
+
+    review_id = _insert_review(phase1_db, decision="continue")
+    document_id = _insert_document(phase1_db, document_id="doc-decision")
+    assign_review(phase1_db, review_id, assigned_officer="co001", user=ADMIN, audit_writer=audit_sink)
+    save_legacy_import_setup(
+        phase1_db,
+        review_id,
+        last_review_date="2025-01-01",
+        source_type="internal_register",
+        confidence="medium",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+    save_material_change_attestation(
+        phase1_db,
+        review_id,
+        attestation="material_change_identified",
+        categories=["directors"],
+        user=CO,
+        audit_writer=audit_sink,
+    )
+    save_officer_rationale(phase1_db, review_id, rationale="Decision remains legacy-only.", user=CO, audit_writer=audit_sink)
+    record_risk_change(
+        phase1_db,
+        review_id,
+        new_risk_level="HIGH",
+        reason_code="material_change",
+        officer_note="Re-rated in review only",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+    add_evidence_link(
+        phase1_db,
+        review_id,
+        requirement_id="req-decision",
+        document_id=document_id,
+        link_type="requirement_evidence",
+        note="link",
+        user=CO,
+        audit_writer=audit_sink,
+    )
+
+    assert _review_row(phase1_db, review_id)["decision"] == "continue"
+
+
+def test_blank_and_whitespace_rationale_are_rejected(phase1_db, audit_sink):
+    from periodic_review_management import InvalidPeriodicReviewInput, save_officer_rationale
+
+    review_id = _insert_review(phase1_db)
+    for rationale in ("", "   "):
+        with pytest.raises(InvalidPeriodicReviewInput):
+            save_officer_rationale(phase1_db, review_id, rationale=rationale, user=CO, audit_writer=audit_sink)
 
 
 
