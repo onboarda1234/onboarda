@@ -159,6 +159,7 @@ REQUIRED_ITEM_CODES = (
     "prior_outcome_followup",
     "edd_followup",
     "review_outcome_recorded",
+    "custom_evidence_requirement",
 )
 
 ITEM_CATEGORY_CLIENT_PROFILE = "Client Profile"
@@ -166,6 +167,7 @@ ITEM_CATEGORY_DOCUMENT_HEALTH = "Document Health"
 ITEM_CATEGORY_SCREENING_RISK = "Screening & Risk"
 ITEM_CATEGORY_MONITORING_ALERTS = "Monitoring Alerts"
 ITEM_CATEGORY_FINAL_OUTCOME = "Final Outcome"
+ITEM_CATEGORY_REQUIRED_EVIDENCE = "Required Evidence"
 
 REQUIRED_ITEM_STATUS_OPEN = "open"
 REQUIRED_ITEM_STATUS_CLEARED = "cleared"
@@ -179,6 +181,8 @@ VALID_REQUIRED_ITEM_STATUSES = (
     REQUIRED_ITEM_STATUS_ESCALATED,
     REQUIRED_ITEM_STATUS_NOT_APPLICABLE,
 )
+
+VALID_REQUIRED_ITEM_SEVERITIES = ("low", "medium", "high", "critical")
 
 # Terminal EDD stages -- mirrored from lifecycle_linkage so we never
 # create or attempt to reuse a closed EDD case from this module.
@@ -1003,6 +1007,81 @@ def update_required_item(db, review_id, item_id, *, status: str,
     return after_state
 
 
+def add_custom_required_item(db, review_id, *, label: str,
+                             rationale: str,
+                             severity: str = "high",
+                             user=None, audit_writer=None) -> Dict[str, Any]:
+    """Append a custom evidence requirement to ``required_items``.
+
+    This is intentionally narrow: it adds an officer-defined evidence
+    requirement onto the canonical periodic-review record without
+    creating a separate request workflow or storage surface. The item
+    participates in the same blocker/evidence-link model as the built-in
+    documentary requirements.
+    """
+    _require_audit_writer(audit_writer)
+    label = str(label or "").strip()
+    rationale = str(rationale or "").strip()
+    severity = str(severity or "high").strip().lower()
+    if not label:
+        raise PeriodicReviewEngineError("label is required")
+    if not rationale:
+        raise PeriodicReviewEngineError("rationale is required")
+    if severity not in VALID_REQUIRED_ITEM_SEVERITIES:
+        raise PeriodicReviewEngineError(
+            f"severity={severity!r} is not one of {VALID_REQUIRED_ITEM_SEVERITIES}"
+        )
+
+    review = _fetch_review(db, review_id)
+    if _coerce_state(_row_get(review, "status")) == STATE_COMPLETED:
+        raise ReviewClosedError(
+            f"periodic_review id={review_id} is already completed"
+        )
+
+    items = _load_required_items(_row_get(review, "required_items"))
+    existing_count = sum(
+        1 for item in items
+        if str(item.get("item_type") or item.get("code") or "").strip()
+        == "custom_evidence_requirement"
+    )
+    custom_item = _make_item(
+        category=ITEM_CATEGORY_REQUIRED_EVIDENCE,
+        item_type="custom_evidence_requirement",
+        label=label,
+        severity=severity,
+        source="review",
+        source_id=review_id,
+        rationale=rationale,
+        code="custom_evidence_requirement",
+    )
+    custom_item["id"] = f"custom_evidence_requirement:{review_id}:{existing_count + 1}"
+    items.append(custom_item)
+
+    before = {"required_items": _row_get(review, "required_items")}
+    db.execute(
+        "UPDATE periodic_reviews SET required_items = ? WHERE id = ?",
+        (json.dumps(items, default=str), review_id),
+    )
+    db.commit()
+    _emit_audit(
+        audit_writer,
+        user,
+        "periodic_review.required_item.added",
+        f"periodic_review:{review_id}",
+        {
+            "review_id": review_id,
+            "item_id": custom_item["id"],
+            "item_type": custom_item["item_type"],
+            "label": custom_item["label"],
+            "severity": custom_item["severity"],
+        },
+        db,
+        before_state=before,
+        after_state=custom_item,
+    )
+    return custom_item
+
+
 def resolve_screening_refresh_item_if_current(db, review_id, *,
                                               user=None,
                                               audit_writer=None) -> Dict[str, Any]:
@@ -1513,6 +1592,7 @@ __all__ = [
     "transition_review_state",
     "generate_required_items",
     "update_required_item",
+    "add_custom_required_item",
     "resolve_screening_refresh_item_if_current",
     "escalate_review_to_edd",
     "record_review_outcome",

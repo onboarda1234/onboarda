@@ -17305,6 +17305,44 @@ class PeriodicReviewRequiredItemsHandler(BaseHandler):
             db.close()
 
 
+class PeriodicReviewCustomRequiredItemHandler(BaseHandler):
+    """POST /api/monitoring/reviews/:id/required-items/custom."""
+    def post(self, review_id):
+        user = self.require_auth(roles=["admin", "sco", "co"])
+        if not user:
+            return
+        review_id = _parse_review_id(self, review_id)
+        if review_id is None:
+            return
+        data = self.get_json() or {}
+        import periodic_review_engine as pre
+        db = get_db()
+        try:
+            try:
+                item = pre.add_custom_required_item(
+                    db,
+                    review_id,
+                    label=data.get("label"),
+                    rationale=data.get("rationale"),
+                    severity=data.get("severity") or "high",
+                    user=user,
+                    audit_writer=self.log_audit,
+                )
+            except pre.ReviewNotFound:
+                return self.error("Review not found", 404)
+            except pre.ReviewClosedError as e:
+                return self.error(str(e), 409)
+            except pre.PeriodicReviewEngineError as e:
+                return self.error(str(e), 400)
+            self.success({
+                "status": "required_item_added",
+                "review_id": review_id,
+                "item": item,
+            })
+        finally:
+            db.close()
+
+
 class PeriodicReviewRequiredItemsGenerateHandler(BaseHandler):
     """POST /api/monitoring/reviews/:id/required-items/generate."""
     def post(self, review_id):
@@ -20000,6 +20038,8 @@ def make_app():
         (r"/api/monitoring/reviews/schedule", PeriodicReviewScheduleHandler),
         (r"/api/monitoring/reviews/([^/]+)/required-items/generate",
          PeriodicReviewRequiredItemsGenerateHandler),
+        (r"/api/monitoring/reviews/([^/]+)/required-items/custom",
+         PeriodicReviewCustomRequiredItemHandler),
         (r"/api/monitoring/reviews/([^/]+)/required-items/([^/]+)",
          PeriodicReviewRequiredItemDetailHandler),
         (r"/api/monitoring/reviews/([^/]+)/required-items",

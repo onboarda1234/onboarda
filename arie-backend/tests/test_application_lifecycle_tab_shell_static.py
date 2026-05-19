@@ -79,6 +79,27 @@ def test_lifecycle_workspace_adds_attestation_controls_and_system_panels():
     assert "/risk-change" in html
 
 
+def test_lifecycle_required_evidence_renders_single_canonical_surface():
+    html = _read_backoffice()
+    assert "renderLifecycleRequiredEvidenceCard" in html
+    assert "Canonical evidence requirements linked to the existing KYC document repository." in html
+    assert "Evidence linking and uploads arrive in PR 5." not in html
+    assert "Projected requirement snapshot only. PR 5 adds evidence-link controls." not in html
+    assert "Required Evidence Snapshot" not in html
+
+
+def test_lifecycle_required_evidence_wires_repository_link_upload_and_custom_requirement_controls():
+    html = _read_backoffice()
+    assert "async function linkLifecycleEvidenceDocument(reviewId, requirementId)" in html
+    assert "async function submitLifecycleEvidenceUpload(reviewId)" in html
+    assert "async function addLifecycleCustomEvidenceRequirement(reviewId)" in html
+    assert "/evidence-links" in html
+    assert "/required-items/custom" in html
+    assert "Upload and link evidence" in html
+    assert "Add custom requirement" in html
+    assert "does not create a separate periodic-review document store" in html
+
+
 def test_lifecycle_workspace_enforces_active_work_current_review_exclusivity():
     html = _read_backoffice()
     start = html.index("function renderLifecycleDetailTab(context)")
