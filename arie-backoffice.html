@@ -9243,6 +9243,7 @@ function renderCases() {
 // API returns (active oldest-first; historical newest-first). Legacy
 // rows are isolated from the default Active view by separate fetch.
 window._lifecycleInclude = 'active';
+window._lifecycleDeepLinkTarget = null;
 
 function lifecycleTypeChip(type) {
   var t = String(type || '').toLowerCase();
@@ -9278,19 +9279,77 @@ function lifecycleAgeLabel(item) {
   return '—';
 }
 
+function lifecycleQueueItemDomId(type, id) {
+  return 'lifecycle-detail-item-' + lifecycleDomKey(type || 'item') + '-' + lifecycleDomKey(id || '');
+}
+
+function lifecycleQueueTargetAttributes(item) {
+  return ' data-lifecycle-type="' + escapeHtml(String((item && item.type) || '')) + '"' +
+    ' data-lifecycle-id="' + escapeHtml(String((item && item.id) || '')) + '"' +
+    ' data-application-id="' + escapeHtml(String((item && item.application_id) || '')) + '"';
+}
+
+function lifecycleQueueTargetFromElement(el) {
+  if (!el) return null;
+  return {
+    type: el.getAttribute('data-lifecycle-type') || '',
+    id: el.getAttribute('data-lifecycle-id') || '',
+    application_id: el.getAttribute('data-application-id') || ''
+  };
+}
+
+async function openLifecycleQueueItemFromElement(el) {
+  var target = lifecycleQueueTargetFromElement(el);
+  if (!target || !target.application_id) {
+    showToast('This lifecycle queue item is not mapped to an application yet.', 'error');
+    return;
+  }
+  window._lifecycleDeepLinkTarget = { type: target.type, id: target.id };
+  await openAppDetail(target.application_id, { initialTab: 'lifecycle' });
+  setTimeout(focusLifecycleDeepLinkTarget, 250);
+}
+
+function focusLifecycleDeepLinkTarget() {
+  var target = window._lifecycleDeepLinkTarget;
+  if (!target || !target.type || !target.id) return;
+  var el = document.getElementById(lifecycleQueueItemDomId(target.type, target.id));
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.style.outline = '2px solid #7c3aed';
+  el.style.boxShadow = '0 0 0 4px rgba(124,58,237,0.16)';
+  el.style.borderRadius = el.style.borderRadius || '12px';
+  setTimeout(function() {
+    el.style.outline = '';
+    el.style.boxShadow = '';
+  }, 3200);
+  window._lifecycleDeepLinkTarget = null;
+}
+
+function lifecycleQueueChipHtml(item, label, kind, id) {
+  if (id == null) return '';
+  var cls = (kind === 'alert') ? 'edd-required'
+          : (kind === 'review') ? 'in-review'
+          : (kind === 'edd') ? 'very-high'
+          : 'draft';
+  if (!item || !item.application_id) {
+    return '<span class="badge ' + cls + '" style="font-family:monospace;">' + escapeHtml(label) + '</span>';
+  }
+  var attrs = ' data-lifecycle-type="' + escapeHtml(kind) + '"' +
+    ' data-lifecycle-id="' + escapeHtml(String(id)) + '"' +
+    ' data-application-id="' + escapeHtml(String(item.application_id)) + '"';
+  return '<span class="badge ' + cls + '" style="font-family:monospace;cursor:pointer;text-decoration:underline dotted;" title="Open Application Lifecycle item"' + attrs + ' onclick="event.stopPropagation();openLifecycleQueueItemFromElement(this)">' + escapeHtml(label) + '</span>';
+}
+
 function lifecycleLinkageChips(item) {
   var chips = [];
-  // PR-C chip click-through — reuses the shared prcChipHtml helper so
-  // chips route consistently from the queue, the app summary card, and
-  // both detail modals.
   if (item.linked_periodic_review_id) {
-    chips.push(prcChipHtml('→ review #' + String(item.linked_periodic_review_id).slice(0, 8), 'review', item.linked_periodic_review_id));
+    chips.push(lifecycleQueueChipHtml(item, '-> review #' + String(item.linked_periodic_review_id).slice(0, 8), 'review', item.linked_periodic_review_id));
   }
   if (item.linked_edd_case_id) {
-    chips.push(prcChipHtml('→ EDD #' + String(item.linked_edd_case_id).slice(0, 8), 'edd', item.linked_edd_case_id));
+    chips.push(lifecycleQueueChipHtml(item, '-> EDD #' + String(item.linked_edd_case_id).slice(0, 8), 'edd', item.linked_edd_case_id));
   }
   if (item.linked_monitoring_alert_id) {
-    chips.push(prcChipHtml('← alert #' + String(item.linked_monitoring_alert_id).slice(0, 8), 'alert', item.linked_monitoring_alert_id));
+    chips.push(lifecycleQueueChipHtml(item, '<- alert #' + String(item.linked_monitoring_alert_id).slice(0, 8), 'alert', item.linked_monitoring_alert_id));
   }
   return chips.length ? chips.join(' ') : '<span style="color:var(--text3);font-size:11px;">—</span>';
 }
@@ -9367,10 +9426,20 @@ function renderLifecycleRows(items, include) {
       || (it.application_id ? String(it.application_id).slice(0, 8) : '')
       || (include === 'legacy_unmapped' ? '(no application)' : '—');
     var owner = it.owner_name || (it.owner_id ? String(it.owner_id).slice(0, 8) : 'unassigned');
+    var targetAttrs = lifecycleQueueTargetAttributes(it);
+    var canOpen = !!it.application_id;
+    var rowOpen = canOpen ? ' onclick="openLifecycleQueueItemFromElement(this)"' : '';
+    var rowStyle = canOpen ? ' style="cursor:pointer;" title="Open Application Lifecycle item"' : '';
+    var openButton = canOpen
+      ? '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openLifecycleQueueItemFromElement(this.closest(\'tr\'))">Open Lifecycle</button>'
+      : '<span style="color:var(--text3);font-size:11px;">Unmapped</span>';
     var contextCell = (include === 'legacy_unmapped')
       ? lifecycleQuarantineChips(it.quarantine_reasons)
-      : (it.next_action ? '<span class="badge pending">' + escapeHtml(it.next_action) + '</span>' : '<span style="color:var(--text3);font-size:11px;">—</span>');
-    return '<tr>' +
+      : '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;">' +
+          (it.next_action ? '<span class="badge pending">' + escapeHtml(it.next_action) + '</span>' : '<span style="color:var(--text3);font-size:11px;">—</span>') +
+          openButton +
+        '</div>';
+    return '<tr class="lifecycle-queue-row"' + targetAttrs + rowStyle + rowOpen + '>' +
       '<td>' + lifecycleTypeChip(it.type) + '</td>' +
       '<td>' + lifecycleStateChip(it.state) + '</td>' +
       '<td><div style="font-weight:600;">' + escapeHtml(clientLabel) + '</div>' +
@@ -9527,10 +9596,13 @@ function lifecycleDetailItemRow(item) {
   var label = lifecycleObjectLabel(item);
   var sourceModule = lifecycleSourceModuleLabel(item);
   var openAction = lifecycleOpenItemAction(item);
+  var type = String((item && item.type) || 'item');
+  var itemId = String((item && item.id) || '');
+  var domId = lifecycleQueueItemDomId(type, itemId);
   var openButton = openAction
     ? '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();' + openAction + '">Open ' + escapeHtml(sourceModule) + '</button>'
     : '';
-  return '<div style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
+  return '<div id="' + escapeHtml(domId) + '" data-lifecycle-item-type="' + escapeHtml(type) + '" data-lifecycle-item-id="' + escapeHtml(itemId) + '" style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
     '<div style="min-width:220px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(label) + '</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">' +
@@ -10223,6 +10295,7 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
     return status && status !== 'cleared' && status !== 'satisfied' && status !== 'linked';
   });
   var completionBlockers = Number((reviewDetail && reviewDetail.completion_blocker_count) || (projection && projection.completion_blocker_count) || 0);
+  var workspaceDomId = lifecycleQueueItemDomId('review', reviewId);
   var workspaceSteps = [
     lifecycleWorkspaceStep(1, 'Material change attestation', materialDone ? 'Officer attestation is already recorded on the review.' : 'Officer attestation is still required for this review workspace.', materialDone ? 'done' : 'active'),
     lifecycleWorkspaceStep(2, 'Risk review decision', riskRecorded ? 'A review-level risk decision has been recorded in the canonical review state.' : 'Record a review-level risk change only if the officer determines one is required.', riskRecorded ? 'done' : 'idle'),
@@ -10230,7 +10303,8 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
     lifecycleWorkspaceStep(4, 'Linked owner workflows', linkedEDD || openAlerts ? 'Linked EDD or monitoring work remains active outside Lifecycle.' : 'No linked EDD or monitoring escalation is currently open.', linkedEDD || openAlerts ? 'warn' : 'idle'),
     lifecycleWorkspaceStep(5, 'Completion gate readiness', completionBlockers || evidenceOpen ? 'Completion blockers still remain before memo and outcome controls arrive in the next phase.' : 'Completion blockers are currently clear on the canonical projection.', completionBlockers || evidenceOpen ? 'warn' : 'done')
   ].join('');
-  return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">' +
+  return '<div id="' + escapeHtml(workspaceDomId) + '" data-lifecycle-item-type="review" data-lifecycle-item-id="' + escapeHtml(String(reviewId)) + '">' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">' +
       lifecycleDetailBadge((projection && projection.status_label) || reviewDetail.status_label || 'In Review', 'purple') +
       lifecycleDetailBadge('Review #' + String(reviewId).slice(0, 8), 'slate') +
       lifecycleDetailBadge('Review risk: ' + lifecycleReviewRiskLevel(reviewDetail, projection), 'slate') +
@@ -10245,7 +10319,8 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
         lifecycleWorkspaceSection('Screening', 'System-derived screening freshness and provider state from the canonical screening surfaces.', lifecycleScreeningPanel(currentApp || {}, reviewDetail), '#2563eb') +
         lifecycleWorkspaceSection('Alerts / EDD / Changes', 'Linked owner-workflow signals without duplicating those workflows inside Lifecycle.', lifecycleSignalsPanel(summary, reviewDetail, activeReviewItem), '#6d28d9') +
       '</div>' +
-    '</div>';
+    '</div>' +
+  '</div>';
 }
 
 function toggleLifecycleMaterialChangeCategories(reviewId) {
@@ -10649,7 +10724,8 @@ function renderLifecycleDetailTab(context) {
   var historyItems = historical.filter(function(item) { return item.type === 'review'; });
   var historyBody = historyItems.length
     ? historyItems.slice(0, 5).map(function(item) {
-        return '<div style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
+        var historyDomId = lifecycleQueueItemDomId(item.type || 'review', item.id || '');
+        return '<div id="' + escapeHtml(historyDomId) + '" data-lifecycle-item-type="' + escapeHtml(String(item.type || 'review')) + '" data-lifecycle-item-id="' + escapeHtml(String(item.id || '')) + '" style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
           '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">Review #' + escapeHtml(String(item.id || '').slice(0, 8)) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(item.state || item.status || 'historical') + '</div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
             lifecycleDetailBadge(item.status_label || item.state || 'Historical', 'slate') +
@@ -10690,6 +10766,7 @@ async function loadLifecycleDetailTab(force) {
   }
   if (!force && window._detailLifecycleTabCache && window._detailLifecycleTabCache.applicationId === app.id) {
     renderLifecycleDetailTab(window._detailLifecycleTabCache.data);
+    focusLifecycleDeepLinkTarget();
     return;
   }
   container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Loading lifecycle workspace…</div>';
@@ -10714,6 +10791,7 @@ async function loadLifecycleDetailTab(force) {
       data: data
     };
     renderLifecycleDetailTab(data);
+    focusLifecycleDeepLinkTarget();
     if (activeReviewItem && reviewDetail) {
       try { refreshLifecycleMemoActions(reviewDetail.id); } catch (e) {}
     }
