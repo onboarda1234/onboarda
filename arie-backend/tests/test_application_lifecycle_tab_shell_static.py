@@ -231,3 +231,64 @@ def test_legacy_periodic_review_modal_is_read_only_not_completion_surface():
     assert "var canMutate = false;" in section
     assert "Read-only projection" in section
     assert "Periodic review work is completed in the Application Lifecycle tab" in section
+
+
+def test_lifecycle_queue_rows_are_launchpad_deep_links_to_application_lifecycle():
+    html = _read_backoffice()
+    start = html.index("function renderLifecycleRows(items, include)")
+    end = html.index("// AC5: Application detail surface", start)
+    section = html[start:end]
+    helper_start = html.index("function lifecycleQueueTargetAttributes(item)")
+    helper_end = html.index("function lifecycleQueueTargetFromElement(el)", helper_start)
+    helper_section = html[helper_start:helper_end]
+    assert "class=\"lifecycle-queue-row\"" in section
+    assert "lifecycleQueueTargetAttributes(it)" in section
+    assert "data-application-id" in helper_section
+    assert "openLifecycleQueueItemFromElement(this)" in section
+    assert "Open Lifecycle" in section
+    assert "Complete review" not in section
+    assert "/complete" not in section
+
+
+def test_lifecycle_queue_chips_open_application_lifecycle_not_old_modals():
+    html = _read_backoffice()
+    start = html.index("function lifecycleQueueChipHtml(item, label, kind, id)")
+    end = html.index("function lifecycleQuarantineChips", start)
+    section = html[start:end]
+    assert "openLifecycleQueueItemFromElement(this)" in section
+    assert "Open Application Lifecycle item" in section
+    assert "prcChipHtml" not in section
+    assert "openReviewDetailById" not in section
+    assert "openEDDDetail" not in section
+
+
+def test_lifecycle_queue_deep_link_focuses_exact_lifecycle_item():
+    html = _read_backoffice()
+    helper_start = html.index("function lifecycleQueueItemDomId(type, id)")
+    helper_end = html.index("function lifecycleQuarantineChips", helper_start)
+    helper_section = html[helper_start:helper_end]
+    detail_start = html.index("function lifecycleDetailItemRow(item)")
+    detail_end = html.index("var LIFECYCLE_MATERIAL_CHANGE_OPTIONS", detail_start)
+    detail_section = html[detail_start:detail_end]
+    current_start = html.index("function lifecycleCurrentReviewWorkspaceBody")
+    current_end = html.index("function toggleLifecycleMaterialChangeCategories", current_start)
+    current_section = html[current_start:current_end]
+    assert "window._lifecycleDeepLinkTarget" in html
+    assert "focusLifecycleDeepLinkTarget" in helper_section
+    assert "scrollIntoView" in helper_section
+    assert "lifecycleQueueItemDomId(type, itemId)" in detail_section
+    assert "data-lifecycle-item-type" in detail_section
+    assert "lifecycleQueueItemDomId('review', reviewId)" in current_section
+    assert "data-lifecycle-item-type=\"review\"" in current_section
+
+
+def test_lifecycle_queue_preserves_active_historical_and_legacy_buckets():
+    html = _read_backoffice()
+    start = html.index("function switchLifecycleTab(include)")
+    end = html.index("async function loadLifecycleQueue", start)
+    section = html[start:end]
+    assert "active" in section
+    assert "historical" in section
+    assert "legacy_unmapped" in section
+    assert "include=active" in html
+    assert "Legacy (unmapped)" in html
