@@ -342,6 +342,47 @@ class TestRequiredItemsHandler(_PRReviewHandlerBase):
         item = next(it for it in body["items"] if it["source"] == "monitoring_alert")
         self.assertEqual(item["source_id"], alert_id)
 
+    def test_can_add_custom_required_evidence_item(self):
+        rid = self._create_review(status="in_progress")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/required-items/custom",
+            {
+                "label": "Provide signed organisational chart",
+                "rationale": "Officer requires current structure evidence.",
+                "severity": "high",
+            },
+        )
+        self.assertEqual(resp.code, 200)
+        body = json.loads(resp.body)
+        self.assertEqual(body["status"], "required_item_added")
+        self.assertEqual(body["item"]["item_type"], "custom_evidence_requirement")
+        row = self._conn.execute(
+            "SELECT required_items FROM periodic_reviews WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        items = json.loads(row["required_items"])
+        self.assertEqual(items[-1]["label"], "Provide signed organisational chart")
+
+    def test_custom_required_evidence_item_rejects_missing_rationale(self):
+        rid = self._create_review(status="in_progress")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/required-items/custom",
+            {"label": "Provide updated corporate structure chart"},
+        )
+        self.assertEqual(resp.code, 400)
+
+    def test_completed_review_rejects_custom_required_evidence_item(self):
+        rid = self._create_review(status="completed")
+        resp = self._post(
+            f"/api/monitoring/reviews/{rid}/required-items/custom",
+            {
+                "label": "Provide refreshed trust deed",
+                "rationale": "Backfill evidence",
+                "severity": "high",
+            },
+        )
+        self.assertEqual(resp.code, 409)
+
 
 class TestRequiredItemPatchHandler(_PRReviewHandlerBase):
     def test_officer_can_clear_item(self):
@@ -639,6 +680,14 @@ class TestNonNumericReviewIdHandling(_PRReviewHandlerBase):
             resp = self._post(
                 f"/api/monitoring/reviews/{bad}/required-items/generate",
                 {},
+            )
+            self._assert_clean_400(resp)
+
+    def test_required_items_custom_non_numeric_id(self):
+        for bad in self.BAD_IDS:
+            resp = self._post(
+                f"/api/monitoring/reviews/{bad}/required-items/custom",
+                {"label": "Provide updated chart", "rationale": "Need evidence"},
             )
             self._assert_clean_400(resp)
 

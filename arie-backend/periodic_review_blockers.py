@@ -19,6 +19,7 @@ DOCUMENT_EVIDENCE_ITEM_TYPES = {
     "licensing_refresh",
     "source_of_funds_refresh",
     "source_of_wealth_refresh",
+    "custom_evidence_requirement",
 }
 OPERATIONAL_ITEM_TYPES = {
     "screening_refresh",

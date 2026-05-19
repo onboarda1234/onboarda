@@ -1001,6 +1001,49 @@ class TestRecordOutcome:
 
 
 class TestRequiredItemUpdates:
+    def test_officer_can_add_custom_evidence_requirement(self, review_db, audit_sink):
+        from periodic_review_engine import add_custom_required_item
+
+        rid = _insert_review(review_db, status="in_progress")
+        item = add_custom_required_item(
+            review_db,
+            rid,
+            label="Provide signed group structure chart",
+            rationale="Officer requested current ownership evidence.",
+            severity="high",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+
+        assert item["item_type"] == "custom_evidence_requirement"
+        assert item["severity"] == "high"
+        stored = json.loads(_review(review_db, rid)["required_items"])
+        assert any(it["id"] == item["id"] for it in stored)
+        assert any(
+            e["action"] == "periodic_review.required_item.added"
+            and e["target"] == f"periodic_review:{rid}"
+            for e in audit_sink.events
+        )
+
+    def test_custom_evidence_requirement_is_documentary_blocker(self, review_db, audit_sink):
+        from periodic_review_blockers import evaluate_review_readiness
+        from periodic_review_engine import add_custom_required_item
+
+        rid = _insert_review(review_db, status="in_progress")
+        add_custom_required_item(
+            review_db,
+            rid,
+            label="Provide refreshed trust deed",
+            rationale="Trust structure evidence is outdated.",
+            severity="high",
+            user=USER,
+            audit_writer=audit_sink,
+        )
+
+        readiness = evaluate_review_readiness(review_db, _review(review_db, rid))
+        labels = [item["label"] for item in readiness["operational_blockers"]]
+        assert "Provide refreshed trust deed" in labels
+
     def test_officer_can_clear_item(self, review_db, audit_sink):
         from periodic_review_engine import generate_required_items, update_required_item
         rid = _insert_review(review_db, status="in_progress")

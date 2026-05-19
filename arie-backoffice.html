@@ -9426,6 +9426,35 @@ var LIFECYCLE_RISK_CHANGE_REASONS = [
   { value: 'other', label: 'Other' }
 ];
 
+var LIFECYCLE_EVIDENCE_ITEM_TYPES = [
+  'kyc_refresh',
+  'ubo_confirmation',
+  'document_expired',
+  'document_expiring_soon',
+  'document_stale',
+  'document_expiry_missing',
+  'licensing_refresh',
+  'source_of_funds_refresh',
+  'source_of_wealth_refresh',
+  'custom_evidence_requirement'
+];
+
+var LIFECYCLE_UPLOAD_DOC_TYPES = [
+  { value: 'cert_inc', label: 'Certificate of Incorporation' },
+  { value: 'memarts', label: 'Memorandum & Articles' },
+  { value: 'cert_reg', label: 'Regulatory Certificate' },
+  { value: 'reg_sh', label: 'Register of Shareholders' },
+  { value: 'reg_dir', label: 'Register of Directors' },
+  { value: 'fin_stmt', label: 'Financial Statements' },
+  { value: 'board_res', label: 'Board Resolution' },
+  { value: 'structure_chart', label: 'Structure Chart' },
+  { value: 'poa', label: 'Proof of Address' },
+  { value: 'bankref', label: 'Bank Reference Letter' },
+  { value: 'source_wealth', label: 'Source of Wealth' },
+  { value: 'source_funds', label: 'Source of Funds' },
+  { value: 'supporting_document', label: 'Other Supporting Document' }
+];
+
 function lifecycleReviewIdentifier(review, fallbackItem) {
   if (review && review.id != null) return String(review.id);
   if (fallbackItem && fallbackItem.id != null) return String(fallbackItem.id);
@@ -9579,6 +9608,269 @@ function lifecycleRiskChangeControls(reviewId, reviewDetail, projection) {
     '</div>';
 }
 
+function lifecycleEvidenceItemType(item) {
+  return String((item && (item.item_type || item.code)) || '').trim();
+}
+
+function lifecycleRequirementIsEvidenceBacked(item) {
+  return LIFECYCLE_EVIDENCE_ITEM_TYPES.indexOf(lifecycleEvidenceItemType(item)) >= 0;
+}
+
+function lifecycleOpenEvidenceRequirements(items) {
+  return (Array.isArray(items) ? items : []).filter(function(item) {
+    if (!lifecycleRequirementIsEvidenceBacked(item)) return false;
+    var status = String((item && item.status) || '').toLowerCase();
+    return status !== 'cleared' && status !== 'not_applicable' && status !== 'satisfied' && status !== 'linked';
+  });
+}
+
+function lifecycleDomKey(value) {
+  return String(value || '').replace(/[^A-Za-z0-9_-]+/g, '_');
+}
+
+function lifecycleDocTypeOptionsHtml() {
+  return '<option value="">Select document type</option>' +
+    LIFECYCLE_UPLOAD_DOC_TYPES.map(function(option) {
+      return '<option value="' + escapeHtml(option.value) + '">' + escapeHtml(option.label) + '</option>';
+    }).join('');
+}
+
+function lifecycleDocumentLabel(doc) {
+  if (!doc) return 'Document';
+  return doc.doc_name || doc.name || doc.file_name || doc.doc_type || doc.id || 'Document';
+}
+
+function lifecycleLinkedEvidenceDocs(requirementId, evidenceLinks, documents) {
+  var reqId = String(requirementId || '');
+  var docsById = {};
+  (Array.isArray(documents) ? documents : []).forEach(function(doc) {
+    if (doc && doc.id != null) docsById[String(doc.id)] = doc;
+  });
+  return (Array.isArray(evidenceLinks) ? evidenceLinks : []).filter(function(link) {
+    return String((link && link.requirement_id) || '') === reqId;
+  }).map(function(link) {
+    var doc = docsById[String(link.document_id)] || null;
+    return { link: link, doc: doc };
+  });
+}
+
+function lifecycleEvidenceRequirementRow(reviewId, item, evidenceLinks, documents) {
+  var itemId = String((item && item.id) || '');
+  var domKey = lifecycleDomKey(itemId || (item && item.label) || 'requirement');
+  var linkedDocs = lifecycleLinkedEvidenceDocs(itemId, evidenceLinks, documents);
+  var status = String((item && item.status) || 'open').replace(/_/g, ' ');
+  var severity = String((item && item.severity) || 'medium');
+  var tone = severity === 'critical' || severity === 'high' ? 'red' : (severity === 'medium' ? 'amber' : 'slate');
+  var linkedHtml = linkedDocs.length
+    ? linkedDocs.map(function(entry) {
+        var doc = entry.doc || {};
+        return '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--border1);">' +
+          '<div>' +
+            '<div style="font-size:12px;font-weight:600;color:var(--text1);">' + escapeHtml(lifecycleDocumentLabel(doc)) + '</div>' +
+            '<div style="font-size:11px;color:var(--text3);margin-top:2px;">Document ID: ' + escapeHtml(String(entry.link.document_id || '')) + '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+            lifecycleDetailBadge('Linked', 'green') +
+            '<button class="btn btn-outline btn-sm" onclick="viewBackofficeDocument(' + JSON.stringify(entry.link.document_id) + ')">View document</button>' +
+          '</div>' +
+        '</div>';
+      }).join('')
+    : '<div style="font-size:11px;color:var(--text3);margin-top:8px;">No evidence document is linked to this requirement yet.</div>';
+  var documentOptions = (Array.isArray(documents) ? documents : []).length
+    ? '<option value="">Select application document</option>' + documents.map(function(doc) {
+        return '<option value="' + escapeHtml(String(doc.id || '')) + '">' + escapeHtml(lifecycleDocumentLabel(doc)) + '</option>';
+      }).join('')
+    : '<option value="">No application documents available</option>';
+  return '<div style="padding:14px 0;border-bottom:1px solid var(--border1);">' +
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap;">' +
+      '<div style="min-width:220px;">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--text1);">' + escapeHtml((item && item.label) || 'Evidence requirement') + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.45;">' + escapeHtml((item && item.rationale) || 'Canonical evidence requirement.') + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+        lifecycleDetailBadge(status, tone) +
+        lifecycleDetailBadge('Severity: ' + severity, 'slate') +
+      '</div>' +
+    '</div>' +
+    '<div style="margin-top:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--border1);background:var(--surface2);">' +
+      '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:8px;">Linked repository evidence</div>' +
+      linkedHtml +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end;margin-top:12px;">' +
+      '<div>' +
+        '<div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Link existing KYC document</div>' +
+        '<select id="lifecycle-evidence-doc-' + domKey + '" class="form-select">' + documentOptions + '</select>' +
+      '</div>' +
+      '<button class="btn btn-outline btn-sm" onclick="linkLifecycleEvidenceDocument(' + JSON.stringify(reviewId) + ',' + JSON.stringify(itemId) + ')">Link selected document</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderLifecycleRequiredEvidenceCard(reviewId, requiredItems, evidenceLinks, documents) {
+  var evidenceItems = (Array.isArray(requiredItems) ? requiredItems : []).filter(lifecycleRequirementIsEvidenceBacked);
+  var openItems = lifecycleOpenEvidenceRequirements(evidenceItems);
+  var openCount = openItems.length;
+  var reviewIdText = reviewId != null ? String(reviewId) : '';
+  var uploadRequirementOptions = openItems.length
+    ? '<option value="">Select evidence requirement</option>' + openItems.map(function(item) {
+        return '<option value="' + escapeHtml(String(item.id || '')) + '">' + escapeHtml(item.label || item.item_type || 'Requirement') + '</option>';
+      }).join('')
+    : '<option value="">No open evidence requirements</option>';
+  var requirementsHtml = evidenceItems.length
+    ? evidenceItems.map(function(item) {
+        return lifecycleEvidenceRequirementRow(reviewIdText, item, evidenceLinks, documents);
+      }).join('')
+    : '<div style="font-size:12px;color:var(--text2);">No evidence-backed requirements are projected for this review.</div>';
+  return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+      lifecycleDetailBadge('Evidence requirements: ' + String(evidenceItems.length), evidenceItems.length ? 'slate' : 'green') +
+      lifecycleDetailBadge('Open evidence blockers: ' + String(openCount), openCount ? 'amber' : 'green') +
+      lifecycleDetailBadge('Repository documents: ' + String((Array.isArray(documents) ? documents.length : 0)), 'slate') +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--text2);margin-bottom:14px;">Lifecycle links evidence to the existing KYC Documents repository only. It does not create a separate periodic-review document store.</div>' +
+    requirementsHtml +
+    '<div style="margin-top:16px;padding:14px;border:1px solid var(--border1);border-radius:12px;background:var(--surface2);">' +
+      '<div style="font-size:13px;font-weight:700;color:var(--text1);margin-bottom:8px;">Upload new evidence to KYC Documents and link it</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;align-items:end;">' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Requirement</div><select id="lifecycle-evidence-upload-requirement" class="form-select">' + uploadRequirementOptions + '</select></div>' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Document type</div><select id="lifecycle-evidence-upload-doc-type" class="form-select">' + lifecycleDocTypeOptionsHtml() + '</select></div>' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">File</div><input class="form-input" type="file" id="lifecycle-evidence-upload-file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" /></div>' +
+      '</div>' +
+      '<div style="margin-top:10px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Audit note (optional)</div><textarea id="lifecycle-evidence-upload-note" class="form-input" rows="2" placeholder="Optional context for the linked evidence upload."></textarea></div>' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
+        '<div style="font-size:11px;color:var(--text3);">Uploads go to the main application document repository, then the new document is linked back to this periodic review requirement.</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+          '<button class="btn btn-outline btn-sm" onclick="switchDetailTab(\'kyc-docs\')">Open KYC Documents tab</button>' +
+          '<button class="btn btn-primary btn-sm" onclick="submitLifecycleEvidenceUpload(' + JSON.stringify(reviewIdText) + ')">Upload and link evidence</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+    '<div style="margin-top:16px;padding:14px;border:1px solid var(--border1);border-radius:12px;background:#fffaf0;">' +
+      '<div style="font-size:13px;font-weight:700;color:var(--text1);margin-bottom:8px;">Add custom evidence requirement</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;align-items:end;">' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Requirement label</div><input id="lifecycle-custom-evidence-label" class="form-input" type="text" placeholder="e.g. Provide refreshed trust deed" /></div>' +
+        '<div><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Severity</div><select id="lifecycle-custom-evidence-severity" class="form-select"><option value="medium">Medium</option><option value="high" selected>High</option><option value="critical">Critical</option></select></div>' +
+      '</div>' +
+      '<div style="margin-top:10px;"><div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:6px;">Reason</div><textarea id="lifecycle-custom-evidence-rationale" class="form-input" rows="2" placeholder="Explain why this additional evidence is required for the current review."></textarea></div>' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
+        '<div style="font-size:11px;color:var(--text3);">This writes a canonical requirement onto the periodic review only. It does not create a separate change, screening, or client-portal workflow.</div>' +
+        '<button class="btn btn-outline btn-sm" onclick="addLifecycleCustomEvidenceRequirement(' + JSON.stringify(reviewIdText) + ')">Add custom requirement</button>' +
+      '</div>' +
+    '</div>';
+}
+
+async function linkLifecycleEvidenceDocument(reviewId, requirementId) {
+  var domKey = lifecycleDomKey(requirementId);
+  var select = document.getElementById('lifecycle-evidence-doc-' + domKey);
+  var documentId = select ? select.value : '';
+  if (!documentId) {
+    showToast('Select an application document before linking evidence.', 'error');
+    return;
+  }
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/evidence-links', {
+      requirement_id: requirementId,
+      document_id: documentId,
+      link_type: 'requirement_evidence'
+    });
+    showToast('Evidence linked to periodic review requirement');
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    showToast('Failed to link evidence: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+async function submitLifecycleEvidenceUpload(reviewId) {
+  if (!currentApp) {
+    showToast('No application selected', 'error');
+    return;
+  }
+  if (!BO_AUTH_TOKEN) {
+    showToast('Evidence upload requires a live authenticated backend session', 'error');
+    return;
+  }
+  var requirementEl = document.getElementById('lifecycle-evidence-upload-requirement');
+  var docTypeEl = document.getElementById('lifecycle-evidence-upload-doc-type');
+  var fileInput = document.getElementById('lifecycle-evidence-upload-file');
+  var noteEl = document.getElementById('lifecycle-evidence-upload-note');
+  var requirementId = requirementEl ? requirementEl.value : '';
+  var docType = docTypeEl ? docTypeEl.value : '';
+  var note = noteEl ? noteEl.value.trim() : '';
+  var file = fileInput && fileInput.files ? fileInput.files[0] : null;
+  if (!requirementId) {
+    showToast('Select the requirement this upload should satisfy.', 'error');
+    return;
+  }
+  if (!docType) {
+    showToast('Select a document type before uploading evidence.', 'error');
+    return;
+  }
+  if (!file) {
+    showToast('Select a file to upload.', 'error');
+    return;
+  }
+  if (file.size > boDocUploadMaxBytes()) {
+    showToast('File too large — maximum ' + boDocUploadMaxLabel(), 'error');
+    return;
+  }
+  try {
+    var appRef = currentApp.ref;
+    var formData = new FormData();
+    formData.append('file', file);
+    var resp = await boApiCall('POST', '/applications/' + (currentApp.id || currentApp.ref) + '/documents?doc_type=' + encodeURIComponent(docType), formData);
+    var uploadedDocId = resp && (resp.id || (resp.data && resp.data.id));
+    if (!uploadedDocId) {
+      throw new Error('Upload succeeded but no document id was returned');
+    }
+    try {
+      await boApiCall('POST', '/documents/' + uploadedDocId + '/verify');
+    } catch (verifyErr) {
+      console.warn('Lifecycle evidence verification failed:', verifyErr);
+    }
+    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/evidence-links', {
+      requirement_id: requirementId,
+      document_id: uploadedDocId,
+      link_type: 'requirement_evidence',
+      note: note
+    });
+    await loadFromAPI();
+    await openAppDetail(appRef, { initialTab: 'lifecycle' });
+    showToast('Evidence uploaded to KYC Documents and linked to the review.');
+  } catch (err) {
+    showToast('Failed to upload and link evidence: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
+async function addLifecycleCustomEvidenceRequirement(reviewId) {
+  var labelEl = document.getElementById('lifecycle-custom-evidence-label');
+  var severityEl = document.getElementById('lifecycle-custom-evidence-severity');
+  var rationaleEl = document.getElementById('lifecycle-custom-evidence-rationale');
+  var label = labelEl ? labelEl.value.trim() : '';
+  var severity = severityEl ? severityEl.value : 'high';
+  var rationale = rationaleEl ? rationaleEl.value.trim() : '';
+  if (!label) {
+    showToast('Enter a custom evidence requirement label.', 'error');
+    return;
+  }
+  if (!rationale) {
+    showToast('Enter the reason for the custom evidence requirement.', 'error');
+    return;
+  }
+  try {
+    await boApiCall('POST', '/monitoring/reviews/' + encodeURIComponent(reviewId) + '/required-items/custom', {
+      label: label,
+      severity: severity,
+      rationale: rationale
+    });
+    if (labelEl) labelEl.value = '';
+    if (rationaleEl) rationaleEl.value = '';
+    if (severityEl) severityEl.value = 'high';
+    showToast('Custom evidence requirement added');
+    await refreshLifecycleWorkspaceTab();
+  } catch (err) {
+    showToast('Failed to add custom evidence requirement: ' + (err.message || 'unknown error'), 'error');
+  }
+}
+
 function lifecycleDocumentsPanel(app, reviewDetail) {
   var documentReadiness = computeDocumentReadinessSummary(app || {});
   var docs = Array.isArray(app && app._documents) ? app._documents : [];
@@ -9599,7 +9891,7 @@ function lifecycleDocumentsPanel(app, reviewDetail) {
     '</div>' +
     (topDocs || '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">No KYC documents are attached to this client record yet.</div>') +
     '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;">' +
-      '<div style="font-size:11px;color:var(--text3);">This panel is derived from the canonical KYC Documents repository. Evidence linking and uploads arrive in PR 5.</div>' +
+      '<div style="font-size:11px;color:var(--text3);">This panel is derived from the canonical KYC Documents repository and remains the only document store used by Lifecycle.</div>' +
       '<button class="btn btn-outline btn-sm" onclick="switchDetailTab(\'kyc-docs\')">Open KYC Documents tab</button>' +
     '</div>';
 }
@@ -9695,18 +9987,6 @@ function lifecycleCurrentReviewWorkspaceBody(summary, reviewDetail, activeReview
         lifecycleWorkspaceSection('KYC Documents', 'System-derived document repository health and projected evidence readiness.', lifecycleDocumentsPanel(currentApp || {}, reviewDetail), '#0f766e') +
         lifecycleWorkspaceSection('Screening', 'System-derived screening freshness and provider state from the canonical screening surfaces.', lifecycleScreeningPanel(currentApp || {}, reviewDetail), '#2563eb') +
         lifecycleWorkspaceSection('Alerts / EDD / Changes', 'Linked owner-workflow signals without duplicating those workflows inside Lifecycle.', lifecycleSignalsPanel(summary, reviewDetail, activeReviewItem), '#6d28d9') +
-        lifecycleWorkspaceSection('Required Evidence Snapshot', 'Projected requirement state only. Evidence linking and uploads arrive in PR 5.', requiredItems.length ? requiredItems.slice(0, 6).map(function(item) {
-          var label = item && item.label ? item.label : (item && item.item_type ? String(item.item_type).replace(/_/g, ' ') : 'Requirement');
-          var status = item && item.status ? String(item.status).replace(/_/g, ' ') : 'open';
-          var severity = item && item.severity ? String(item.severity) : 'normal';
-          return '<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
-            '<div style="font-size:12px;color:var(--text2);font-weight:600;">' + escapeHtml(label) + '</div>' +
-            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
-              lifecycleDetailBadge(status.replace(/_/g, ' '), status === 'cleared' ? 'green' : (status === 'escalated' ? 'red' : 'amber')) +
-              lifecycleDetailBadge('Severity: ' + severity, 'slate') +
-            '</div>' +
-          '</div>';
-        }).join('') : '<div style="font-size:12px;color:var(--text2);">No required evidence items are projected for this review yet.</div>', '#0f766e') +
       '</div>' +
     '</div>';
 }
@@ -9800,6 +10080,8 @@ function renderLifecycleDetailTab(context) {
   var linkageEdges = ((summary.linkage || {}).edges) || [];
   var activeReview = context && context.reviewDetail;
   var requiredItems = Array.isArray(context && context.requiredItems) ? context.requiredItems : [];
+  var evidenceLinks = Array.isArray(activeReview && activeReview.evidence_links) ? activeReview.evidence_links : [];
+  var applicationDocuments = Array.isArray(currentApp && currentApp._documents) ? currentApp._documents : [];
   var activeReviewProjection = activeReview && activeReview.projection ? activeReview.projection : null;
   var activeReviewItem = context && context.activeReviewItem ? context.activeReviewItem : null;
   var currentReviewActive = !!activeReview;
@@ -9878,22 +10160,8 @@ function renderLifecycleDetailTab(context) {
     : '<div style="font-size:12px;color:var(--text2);">Completion readiness will appear here when a periodic review is active for this client.</div>';
 
   var requiredEvidenceBody = activeReview
-    ? (requiredItems.length
-      ? requiredItems.slice(0, 6).map(function(item) {
-          var label = item && item.label ? item.label : (item && item.item_type ? String(item.item_type).replace(/_/g, ' ') : 'Requirement');
-          var status = item && item.status ? String(item.status).replace(/_/g, ' ') : 'open';
-          var severity = item && item.severity ? String(item.severity) : 'normal';
-          var tone = severity === 'high' ? 'red' : (severity === 'medium' ? 'amber' : 'slate');
-          return '<div style="display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
-            '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Read-only in PR 3. Linking/upload lands in PR 5.</div></div>' +
-            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
-              lifecycleDetailBadge(status, tone) +
-              lifecycleDetailBadge('Severity: ' + severity, 'slate') +
-            '</div>' +
-          '</div>';
-        }).join('')
-      : '<div style="font-size:12px;color:var(--text2);">No required evidence items are currently projected for this review.</div>')
-    : '<div style="font-size:12px;color:var(--text2);">Evidence requirements will appear here for the active periodic review. PR 5 adds linking and upload controls.</div>';
+    ? renderLifecycleRequiredEvidenceCard(activeReview.id, requiredItems, evidenceLinks, applicationDocuments)
+    : '<div style="font-size:12px;color:var(--text2);">Evidence requirements will appear here for the active periodic review once Lifecycle has a current review context.</div>';
 
   var crossLinksBody = linkageEdges.length
     ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' + linkageEdges.map(lifecycleDetailEdgeChip).join('') + '</div>' +
@@ -9935,7 +10203,7 @@ function renderLifecycleDetailTab(context) {
       lifecycleDetailCard('Review Setup Summary', 'Canonical review ownership, counts, and current review context.', setupBody, '#7c3aed') +
       (currentReviewActive ? lifecycleDetailCard('Current Review Workspace', 'Officer controls and system-derived panels for the active periodic review.', workspaceBody, '#4f46e5') : lifecycleDetailCard('Active Work', 'Current lifecycle items projected for this client when no periodic review is active.', activeWorkBody, '#2563eb')) +
       lifecycleDetailCard('Completion Gate', 'Operational and completion blockers from the canonical review projection.', completionBody, '#f59e0b') +
-      lifecycleDetailCard('Required Evidence', 'Projected requirement snapshot only. PR 5 adds evidence-link controls.', requiredEvidenceBody, '#0f766e') +
+      lifecycleDetailCard('Required Evidence', 'Canonical evidence requirements linked to the existing KYC document repository.', requiredEvidenceBody, '#0f766e') +
       lifecycleDetailCard('Cross-module Links', 'Linked owner-workflow objects and typed lifecycle edges.', crossLinksBody, '#7c3aed') +
       lifecycleDetailCard('Memo Status', 'Periodic review memo state remains separate from onboarding memo state.', memoBody, '#6d28d9') +
       lifecycleDetailCard('History', 'Recent historical lifecycle review entries for this client.', historyBody, '#475569') +
