@@ -79,6 +79,14 @@ def _status_label(raw_status: str, blocker_count: int, linked_edd_case_id: Any) 
     return "Due"
 
 
+def _is_legacy_completed_review(review, raw_status: str) -> bool:
+    if raw_status != COMPLETED_REVIEW_STATE:
+        return False
+    if _row_get(review, "outcome"):
+        return False
+    return bool(_row_get(review, "decision"))
+
+
 def build_review_projection(db, review_row, *, evidence_links: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     review = dict(review_row)
     review_id = _row_get(review, "id")
@@ -98,6 +106,15 @@ def build_review_projection(db, review_row, *, evidence_links: Optional[List[Dic
     )
     blockers = readiness["operational_blockers"]
     raw_status = str(_row_get(review, "status") or "pending").strip().lower() or "pending"
+    completion_readiness_applicable = not _is_legacy_completed_review(review, raw_status)
+    if completion_readiness_applicable:
+        completion_blocker_count = readiness["completion_blocker_count"]
+        completion_blockers = readiness["completion_blockers"]
+        completion_ready = readiness["completion_ready"]
+    else:
+        completion_blocker_count = 0
+        completion_blockers = []
+        completion_ready = None
     return {
         "review_id": review_id,
         "application_id": app_id,
@@ -105,6 +122,7 @@ def build_review_projection(db, review_row, *, evidence_links: Optional[List[Dic
         "status": raw_status,
         "status_label": _status_label(raw_status, len(blockers), _row_get(review, "linked_edd_case_id")),
         "assigned_officer": _row_get(review, "assigned_officer"),
+        "linked_edd_case_id": _row_get(review, "linked_edd_case_id"),
         "due_date": _row_get(review, "due_date"),
         "priority": _row_get(review, "priority"),
         "trigger_source": _row_get(review, "trigger_source") or _row_get(review, "trigger_type"),
@@ -114,9 +132,10 @@ def build_review_projection(db, review_row, *, evidence_links: Optional[List[Dic
         "risk_level": _effective_risk_level(review) or _row_get(application, "final_risk_level") or _row_get(application, "risk_level"),
         "blocker_count": len(blockers),
         "blocker_summary": [blocker["label"] for blocker in blockers],
-        "completion_blocker_count": readiness["completion_blocker_count"],
-        "completion_blocker_summary": [blocker["label"] for blocker in readiness["completion_blockers"]],
-        "completion_ready": readiness["completion_ready"],
+        "completion_blocker_count": completion_blocker_count,
+        "completion_blocker_summary": [blocker["label"] for blocker in completion_blockers],
+        "completion_ready": completion_ready,
+        "completion_readiness_applicable": completion_readiness_applicable,
         "outcome": _row_get(review, "outcome"),
         "memo_status": _load_memo_status(db, review_id, review),
         "lifecycle_link": {
