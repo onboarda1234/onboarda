@@ -1120,6 +1120,7 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
     <button class="btn btn-outline btn-sm" id="tab-kyc-docs" onclick="switchDetailTab('kyc-docs')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">KYC Documents &amp; Verifications</button>
     <button class="btn btn-outline btn-sm" id="tab-screening" onclick="switchDetailTab('screening')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Screening Review</button>
     <button class="btn btn-outline btn-sm" id="tab-supervisor" onclick="switchDetailTab('supervisor')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">🛡️ Compliance Supervisor</button>
+    <button class="btn btn-outline btn-sm" id="tab-lifecycle" onclick="switchDetailTab('lifecycle')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Lifecycle</button>
     <button class="btn btn-outline btn-sm" id="tab-activity" onclick="switchDetailTab('activity')" style="border:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text3);padding:8px 20px;">Activity Log</button>
   </div>
 
@@ -1441,6 +1442,13 @@ body.role-admin .snav-item.role-enhanced-settings, body.role-sco .snav-item.role
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Tab: Lifecycle (hidden by default) -->
+  <div id="detail-tab-lifecycle" style="display:none;">
+    <div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);margin-bottom:16px;">
+      Loading lifecycle workspace…
     </div>
   </div>
 
@@ -6200,6 +6208,7 @@ function renderAuthoritativeAppDetail(app, options) {
   document.getElementById('topbar-title').textContent = 'Application Review — ' + app.ref;
   // PR-B AC5: load lifecycle linkage summary (alert→review→EDD edges)
   // for this application. Soft-fails if endpoint is unavailable.
+  window._detailLifecycleTabCache = null;
   try { loadLifecycleApplicationSummary(app.id); } catch (e) { console.warn('Lifecycle summary call failed:', e); }
 }
 
@@ -9305,6 +9314,245 @@ function renderLifecycleApplicationSummary(resp) {
     '</div>';
 }
 
+function lifecycleDetailBadge(text, tone) {
+  var map = {
+    blue: { bg: 'rgba(59,130,246,0.12)', color: '#1d4ed8' },
+    green: { bg: 'rgba(16,185,129,0.12)', color: '#047857' },
+    amber: { bg: 'rgba(245,158,11,0.14)', color: '#b45309' },
+    red: { bg: 'rgba(239,68,68,0.12)', color: '#b91c1c' },
+    purple: { bg: 'rgba(124,58,237,0.12)', color: '#6d28d9' },
+    slate: { bg: 'var(--surface2)', color: 'var(--text2)' }
+  };
+  var cfg = map[tone] || map.slate;
+  return '<span style="display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:' + cfg.bg + ';color:' + cfg.color + ';font-size:11px;font-weight:700;">' + escapeHtml(text || '—') + '</span>';
+}
+
+function lifecycleDetailMeta(label, value) {
+  return '<div style="min-width:140px;"><div style="font-size:11px;color:var(--text3);margin-bottom:4px;">' + escapeHtml(label) + '</div><div style="font-size:13px;color:var(--text1);font-weight:600;">' + escapeHtml(value || '—') + '</div></div>';
+}
+
+function lifecycleDetailCard(title, subtitle, body, accent) {
+  var border = accent || '#7c3aed';
+  return '<div class="card" style="border-left:4px solid ' + border + ';background:rgba(124,58,237,0.03);">' +
+    '<div class="card-header" style="align-items:flex-start;gap:12px;margin-bottom:12px;">' +
+      '<div>' +
+        '<div class="card-title">' + escapeHtml(title) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(subtitle || '') + '</div>' +
+      '</div>' +
+    '</div>' +
+    body +
+  '</div>';
+}
+
+function lifecycleDetailEdgeChip(edge) {
+  function side(obj) {
+    var type = String((obj && obj.type) || '').toLowerCase();
+    var label = type === 'review' ? 'Review' : (type === 'edd' ? 'EDD' : 'Alert');
+    var id = obj && obj.id != null ? String(obj.id) : '?';
+    return label + ' #' + id.slice(0, 8);
+  }
+  return '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--border1);background:var(--surface);font-size:11px;color:var(--text2);">' +
+    '<span>' + escapeHtml(side(edge.from)) + '</span>' +
+    '<span style="color:var(--text3);">→</span>' +
+    '<span>' + escapeHtml(side(edge.to)) + '</span>' +
+  '</span>';
+}
+
+function lifecycleDetailItemRow(item) {
+  var state = item && (item.status_label || item.state || item.status) ? String(item.status_label || item.state || item.status).replace(/_/g, ' ') : 'Unknown';
+  var owner = item && item.owner_name ? item.owner_name : (item && item.owner ? item.owner : 'Unassigned');
+  var nextAction = item && item.next_action ? item.next_action : 'Open in owner workflow';
+  var label = (item && item.type ? String(item.type).toUpperCase() : 'ITEM') + ' #' + String((item && item.id) || '').slice(0, 8);
+  return '<div style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
+    '<div style="min-width:220px;">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(label) + '</div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(nextAction) + '</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">' +
+      lifecycleDetailBadge(state, item && item.type === 'review' ? 'purple' : (item && item.type === 'edd' ? 'blue' : 'amber')) +
+      '<span style="font-size:11px;color:var(--text3);">Owner: ' + escapeHtml(owner) + '</span>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderLifecycleDetailTab(context) {
+  var container = document.getElementById('detail-tab-lifecycle');
+  if (!container) return;
+  var summary = (context && context.summary) || {};
+  var active = ((summary.active || {}).items) || [];
+  var historical = ((summary.historical || {}).items) || [];
+  var linkageEdges = ((summary.linkage || {}).edges) || [];
+  var activeReview = context && context.reviewDetail;
+  var requiredItems = Array.isArray(context && context.requiredItems) ? context.requiredItems : [];
+  var activeReviewProjection = activeReview && activeReview.projection ? activeReview.projection : null;
+  var activeReviewItem = context && context.activeReviewItem ? context.activeReviewItem : null;
+
+  var setupBody = '<div style="display:flex;flex-wrap:wrap;gap:16px;">' +
+    lifecycleDetailMeta('Lifecycle items', String((((summary.active || {}).counts) || {}).total || 0)) +
+    lifecycleDetailMeta('Historical items', String((((summary.historical || {}).counts) || {}).total || 0)) +
+    lifecycleDetailMeta('Linked objects', String(((summary.linkage || {}).count) || 0)) +
+    lifecycleDetailMeta('Current review', activeReview ? ('Review #' + String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) : 'No active review') +
+  '</div>';
+  if (activeReview) {
+    setupBody += '<div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;padding-top:14px;border-top:1px solid var(--border1);">' +
+      lifecycleDetailMeta('Status', activeReview.status_label || (activeReviewProjection && activeReviewProjection.status_label) || activeReview.status || '—') +
+      lifecycleDetailMeta('Assigned officer', activeReview.assigned_officer || (activeReviewProjection && activeReviewProjection.assigned_officer) || 'Unassigned') +
+      lifecycleDetailMeta('Risk level', activeReview.risk_level || (activeReviewProjection && activeReviewProjection.risk_level) || '—') +
+      lifecycleDetailMeta('Next review date', activeReview.next_review_date || (activeReviewProjection && activeReviewProjection.next_review_date) || activeReview.due_date || '—') +
+    '</div>';
+  } else {
+    setupBody += '<div style="font-size:12px;color:var(--text2);margin-top:14px;">This shell is live. PR 4 adds the working review surface inside this tab when a periodic review is active.</div>';
+  }
+
+  var activeWorkBody = active.length
+    ? active.map(lifecycleDetailItemRow).join('')
+    : '<div style="font-size:12px;color:var(--text2);">No active lifecycle work is currently linked to this client.</div>';
+
+  var workspaceBody = activeReview
+    ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' +
+        lifecycleDetailBadge((activeReviewProjection && activeReviewProjection.status_label) || activeReview.status_label || 'In Review', 'purple') +
+        lifecycleDetailBadge('Canonical source: periodic_reviews', 'slate') +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:10px;">This is the shell for the current periodic review workspace. PR 4 adds the attestation controls and system-derived review panels here.</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:16px;">' +
+        lifecycleDetailMeta('Review ID', String(activeReview.id || activeReviewItem.id || '').slice(0, 8)) +
+        lifecycleDetailMeta('Completion blockers', String(activeReview.completion_blocker_count || (activeReviewProjection && activeReviewProjection.completion_blocker_count) || 0)) +
+        lifecycleDetailMeta('Operational blockers', String(activeReview.blocker_count || (activeReviewProjection && activeReviewProjection.blocker_count) || 0)) +
+        lifecycleDetailMeta('Memo status', activeReview.memo_status || 'Not started') +
+      '</div>'
+    : '<div style="font-size:12px;color:var(--text2);">No active periodic review is open for this client yet. Active work remains visible above until PR 4 adds conditional workspace rendering.</div>';
+
+  var completionSummary = [];
+  if (activeReview && Array.isArray(activeReview.completion_blocker_summary) && activeReview.completion_blocker_summary.length) {
+    completionSummary = activeReview.completion_blocker_summary;
+  } else if (activeReviewProjection && Array.isArray(activeReviewProjection.completion_blocker_summary) && activeReviewProjection.completion_blocker_summary.length) {
+    completionSummary = activeReviewProjection.completion_blocker_summary;
+  }
+  var blockerSummary = [];
+  if (activeReview && Array.isArray(activeReview.blocker_summary) && activeReview.blocker_summary.length) {
+    blockerSummary = activeReview.blocker_summary;
+  } else if (activeReviewProjection && Array.isArray(activeReviewProjection.blocker_summary) && activeReviewProjection.blocker_summary.length) {
+    blockerSummary = activeReviewProjection.blocker_summary;
+  }
+  var completionBody = activeReview
+    ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        lifecycleDetailBadge('Completion blockers: ' + String(activeReview.completion_blocker_count || (activeReviewProjection && activeReviewProjection.completion_blocker_count) || 0), 'amber') +
+        lifecycleDetailBadge('Operational blockers: ' + String(activeReview.blocker_count || (activeReviewProjection && activeReviewProjection.blocker_count) || 0), blockerSummary.length ? 'red' : 'green') +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' +
+        '<div><div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Operational blockers</div>' +
+          (blockerSummary.length ? blockerSummary.map(function(label) { return '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">• ' + escapeHtml(label) + '</div>'; }).join('') : '<div style="font-size:12px;color:var(--text2);">No operational blockers projected.</div>') +
+        '</div>' +
+        '<div><div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Completion blockers</div>' +
+          (completionSummary.length ? completionSummary.map(function(label) { return '<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">• ' + escapeHtml(label) + '</div>'; }).join('') : '<div style="font-size:12px;color:var(--text2);">No completion blockers projected.</div>') +
+        '</div>' +
+      '</div>'
+    : '<div style="font-size:12px;color:var(--text2);">Completion readiness will appear here when a periodic review is active for this client.</div>';
+
+  var requiredEvidenceBody = activeReview
+    ? (requiredItems.length
+      ? requiredItems.slice(0, 6).map(function(item) {
+          var label = item && item.label ? item.label : (item && item.item_type ? String(item.item_type).replace(/_/g, ' ') : 'Requirement');
+          var status = item && item.status ? String(item.status).replace(/_/g, ' ') : 'open';
+          var severity = item && item.severity ? String(item.severity) : 'normal';
+          var tone = severity === 'high' ? 'red' : (severity === 'medium' ? 'amber' : 'slate');
+          return '<div style="display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
+            '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(label) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">Read-only in PR 3. Linking/upload lands in PR 5.</div></div>' +
+            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+              lifecycleDetailBadge(status, tone) +
+              lifecycleDetailBadge('Severity: ' + severity, 'slate') +
+            '</div>' +
+          '</div>';
+        }).join('')
+      : '<div style="font-size:12px;color:var(--text2);">No required evidence items are currently projected for this review.</div>')
+    : '<div style="font-size:12px;color:var(--text2);">Evidence requirements will appear here for the active periodic review. PR 5 adds linking and upload controls.</div>';
+
+  var crossLinksBody = linkageEdges.length
+    ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' + linkageEdges.map(lifecycleDetailEdgeChip).join('') + '</div>' +
+      '<div style="font-size:12px;color:var(--text2);">Lifecycle consumes these linked owner-workflow objects without duplicating Screening, EDD, Change Management, or KYC repository state.</div>'
+    : '<div style="font-size:12px;color:var(--text2);">No lifecycle linkage edges are currently projected for this client.</div>';
+
+  var memoBody = activeReview
+    ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        lifecycleDetailBadge(activeReview.memo_status || 'Not started', activeReview.memo_status === 'generated' ? 'green' : 'amber') +
+        lifecycleDetailBadge(activeReview.periodic_review_memo_id ? ('Memo #' + String(activeReview.periodic_review_memo_id)) : 'No memo ID yet', 'slate') +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text2);">This section is read-only in PR 3. PR 7 adds officer rationale, outcome, and memo gating controls without allowing AI-authored conclusions.</div>'
+    : '<div style="font-size:12px;color:var(--text2);">Memo status will appear once a current review is active. Onboarding memo behaviour remains unchanged.</div>';
+
+  var historyItems = historical.filter(function(item) { return item.type === 'review'; });
+  var historyBody = historyItems.length
+    ? historyItems.slice(0, 5).map(function(item) {
+        return '<div style="display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border1);flex-wrap:wrap;">' +
+          '<div><div style="font-size:13px;font-weight:600;color:var(--text1);">Review #' + escapeHtml(String(item.id || '').slice(0, 8)) + '</div><div style="font-size:11px;color:var(--text3);margin-top:2px;">' + escapeHtml(item.state || item.status || 'historical') + '</div></div>' +
+          '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+            lifecycleDetailBadge(item.status_label || item.state || 'Historical', 'slate') +
+            '<span style="font-size:11px;color:var(--text3);">Owner: ' + escapeHtml(item.owner_name || item.owner || '—') + '</span>' +
+          '</div>' +
+        '</div>';
+      }).join('')
+    : '<div style="font-size:12px;color:var(--text2);">Historical periodic reviews will appear here once review history exists for this client.</div>';
+
+  container.innerHTML =
+    '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-start;">' +
+      '<div>' +
+        '<div style="font-size:20px;font-weight:800;color:var(--text1);">Lifecycle</div>' +
+        '<div style="font-size:12px;color:var(--text3);margin-top:4px;max-width:760px;">Client-level periodic review workspace shell backed by canonical lifecycle and periodic review projections. This PR adds the tab structure only; no duplicate workflows or editing controls are introduced here.</div>' +
+      '</div>' +
+      '<button class="btn btn-outline btn-sm" onclick="loadLifecycleDetailTab(true)">⟳ Refresh Lifecycle</button>' +
+    '</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">' +
+      lifecycleDetailCard('Review Setup Summary', 'Canonical review ownership, counts, and current review context.', setupBody, '#7c3aed') +
+      lifecycleDetailCard('Active Work', 'Current lifecycle items projected for this client.', activeWorkBody, '#2563eb') +
+      lifecycleDetailCard('Current Review Workspace', 'Read-only workspace shell. PR 4 adds the working review controls here.', workspaceBody, '#4f46e5') +
+      lifecycleDetailCard('Completion Gate', 'Operational and completion blockers from the canonical review projection.', completionBody, '#f59e0b') +
+      lifecycleDetailCard('Required Evidence', 'Projected requirement snapshot only. PR 5 adds evidence-link controls.', requiredEvidenceBody, '#0f766e') +
+      lifecycleDetailCard('Cross-module Links', 'Linked owner-workflow objects and typed lifecycle edges.', crossLinksBody, '#7c3aed') +
+      lifecycleDetailCard('Memo Status', 'Periodic review memo state remains separate from onboarding memo state.', memoBody, '#6d28d9') +
+      lifecycleDetailCard('History', 'Recent historical lifecycle review entries for this client.', historyBody, '#475569') +
+    '</div>';
+}
+
+async function loadLifecycleDetailTab(force) {
+  var container = document.getElementById('detail-tab-lifecycle');
+  var app = currentApp;
+  if (!container) return;
+  if (!app || !app.id) {
+    container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Lifecycle detail is unavailable until an application is loaded.</div>';
+    return;
+  }
+  if (!force && window._detailLifecycleTabCache && window._detailLifecycleTabCache.applicationId === app.id) {
+    renderLifecycleDetailTab(window._detailLifecycleTabCache.data);
+    return;
+  }
+  container.innerHTML = '<div style="padding:16px;border:1px solid var(--border1);border-radius:10px;background:var(--surface2);font-size:12px;color:var(--text2);">Loading lifecycle workspace…</div>';
+  try {
+    var summary = await boApiCall('GET', '/lifecycle/applications/' + encodeURIComponent(app.id) + '/summary');
+    var activeItems = ((summary && summary.active) || {}).items || [];
+    var activeReviewItem = activeItems.find(function(item) { return item && item.type === 'review'; }) || null;
+    var reviewDetail = null;
+    var requiredItems = [];
+    if (activeReviewItem && activeReviewItem.id != null) {
+      reviewDetail = await boApiCall('GET', '/monitoring/reviews/' + encodeURIComponent(activeReviewItem.id));
+      requiredItems = Array.isArray(reviewDetail.required_items) ? reviewDetail.required_items : [];
+    }
+    var data = {
+      summary: summary,
+      activeReviewItem: activeReviewItem,
+      reviewDetail: reviewDetail,
+      requiredItems: requiredItems
+    };
+    window._detailLifecycleTabCache = {
+      applicationId: app.id,
+      data: data
+    };
+    renderLifecycleDetailTab(data);
+  } catch (err) {
+    console.warn('Lifecycle detail tab load failed:', err);
+    container.innerHTML = '<div style="padding:16px;border:1px solid rgba(239,68,68,0.25);border-radius:10px;background:rgba(239,68,68,0.05);font-size:12px;color:#991b1b;">Failed to load lifecycle workspace: ' + escapeHtml(err.message || 'Unknown error') + '</div>';
+  }
+}
+
 // ═══════════════════════════════════════════════════════════
 // PR-C — Per-detail operator actions & visibility
 // ═══════════════════════════════════════════════════════════
@@ -10854,20 +11102,19 @@ function switchCaseTab(tab, btn) {
 }
 
 function switchDetailTab(tab) {
-  var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'activity'];
+  var tabs = ['overview', 'kyc-docs', 'screening', 'supervisor', 'lifecycle', 'activity'];
   tabs.forEach(function(t) {
     var tabEl = document.getElementById('tab-' + t);
     var panelEl = document.getElementById('detail-tab-' + t);
     if (!tabEl || !panelEl) return;
-    if (t === tab) {
-      tabEl.style.borderBottomColor = 'var(--brand)'; tabEl.style.color = 'var(--brand)'; tabEl.style.fontWeight = '600';
-      panelEl.style.display = '';
-    } else {
-      tabEl.style.borderBottomColor = 'transparent'; tabEl.style.color = 'var(--text3)'; tabEl.style.fontWeight = '400';
-      panelEl.style.display = 'none';
-    }
+    var active = (t === tab);
+    tabEl.style.borderBottomColor = active ? 'var(--brand)' : 'transparent';
+    tabEl.style.color = active ? 'var(--brand)' : 'var(--text3)';
+    tabEl.style.fontWeight = active ? '600' : '400';
+    panelEl.style.display = active ? '' : 'none';
   });
   if (tab === 'supervisor') loadSupervisorForApp();
+  if (tab === 'lifecycle') loadLifecycleDetailTab();
   if (tab === 'activity') { loadDecisionRecords(); loadActivityLog(); loadNotes(); }
 }
 
