@@ -689,11 +689,26 @@ class TestPrePhaseSixBackofficeUX:
         assert "showView('applications')" in fn_region
         assert "openAppDetail" not in fn_region
 
-    def test_my_cases_filters_by_current_user_assignment(self):
+    def test_case_management_is_my_assigned_work_only(self):
+        html = self._read_backoffice()
+        case_view = html[html.index('<div class="view" id="view-cases">'):html.index('<!-- ═══════════════ SCREENING QUEUE', html.index('<div class="view" id="view-cases">'))]
+        assert "My Assigned Work" in case_view
+        assert "Unassigned</div>" not in case_view
+        assert "All Cases</div>" not in case_view
+        assert "Pre-Approval Queue" not in case_view
+        assert 'data-case-filter="applications"' in case_view
+        assert 'data-case-filter="periodic_reviews"' in case_view
+        assert "Case Management is an officer worklist only" in case_view
+
+    def test_case_management_projects_assigned_application_and_review_work(self):
         html = self._read_backoffice()
         assert "function isAssignedToCurrentUser(app)" in html
-        assert "activeCaseTab === 'my-cases' && !isAssignedToCurrentUser(app)" in html
-        assert "activeCaseTab === 'unassigned' && app.assignedId" in html
+        assert "function buildCaseWorkItems()" in html
+        assert "APPLICATIONS.forEach(function(app)" in html
+        assert "PERIODIC_REVIEWS.forEach(function(review)" in html
+        assert "isWorkAssignedToCurrentUser(review.assignedOfficerId, review.assignedOfficerName)" in html
+        assert "openCasePeriodicReview" in html
+        assert "periodic_reviews" in html
 
 
 # ═══════════════════════════════════════════════════════════
