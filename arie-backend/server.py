@@ -120,6 +120,10 @@ from verification_failure_taxonomy import (
     format_verification_failure_log_line,
     provider_failure_from_result,
 )
+from verification_jobs import (
+    enqueue_verification_job,
+    verification_status_for_document,
+)
 from screening_freshness_metadata import populate_screening_freshness_metadata
 
 # ── Sprint 2: Extracted modules ──────────────────────────
@@ -6710,6 +6714,30 @@ class DocumentVerifyHandler(BaseHandler):
             db.close()
             return self.error("Application not found for document", 404)
 
+        if flags.is_enabled("FF_ASYNC_VERIFY"):
+            job_result = enqueue_verification_job(
+                db,
+                doc,
+                app,
+                user,
+                request_id=self.request.headers.get("X-Request-ID", ""),
+                ip_address=self.get_client_ip(),
+            )
+            db.commit()
+            payload = verification_status_for_document(db, doc_id) or {
+                "doc_id": doc_id,
+                "verification_status": normalize_verification_state(doc.get("verification_status")),
+                **verification_state_payload(doc.get("verification_status")),
+                "verification_job": job_result["job"],
+            }
+            payload.update({
+                "status": "queued",
+                "async_verification": True,
+                "job_created": job_result["created"],
+                "verification_job": job_result["job"],
+            })
+            return self.success(payload, 202)
+
         # PR5: Synchronous verification has an explicit, auditable in-progress state.
         _initial_before = _document_verification_transition_state(doc)
         if _initial_before["verification_status"] != STATE_IN_PROGRESS:
@@ -7141,6 +7169,34 @@ class DocumentVerifyHandler(BaseHandler):
             "verification_results": layered_results,
             "verified_at": layered_results.get("verified_at"),
         })
+
+
+class DocumentVerificationStatusHandler(BaseHandler):
+    """GET /api/documents/:id/verification-status — async/sync status view."""
+    def get(self, doc_id):
+        user = self.require_auth()
+        if not user:
+            return
+
+        db = get_db()
+        try:
+            doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+            if not doc:
+                return self.error("Document not found", 404)
+            app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+            if not app:
+                return self.error("Application not found for document", 404)
+            if not self.check_app_ownership(user, app):
+                return
+            payload = verification_status_for_document(db, doc_id)
+            if not payload:
+                return self.error("Document not found", 404)
+            self.success(payload)
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 class DocumentReviewHandler(BaseHandler):
@@ -20531,6 +20587,7 @@ def make_app():
 
         # Documents
         (r"/api/documents/([^/]+)/download", DocumentDownloadHandler),
+        (r"/api/documents/([^/]+)/verification-status", DocumentVerificationStatusHandler),
         (r"/api/documents/([^/]+)/verify", DocumentVerifyHandler),
         (r"/api/documents/([^/]+)/review", DocumentReviewHandler),
         (r"/api/documents/ai-verify", DocumentAIVerifyHandler),

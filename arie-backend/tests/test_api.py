@@ -2033,6 +2033,65 @@ class TestDocumentVerificationRuntimeReliability:
         )
         assert me.status_code == 200, me.text
 
+    def test_async_verify_flag_enqueues_without_running_synchronous_verifier(self, api_server, monkeypatch):
+        """FF_ASYNC_VERIFY=true queues a job and does not run the sync verifier."""
+        import server
+        from auth import create_token
+        from db import get_db
+
+        uid = uuid.uuid4().hex[:8]
+        app_id = f"verify_async_{uid}"
+        doc_id = f"doc_async_{uid}"
+        _seed_document_verification_case(app_id, f"ARF-VERIFY-ASYNC-{uid}", doc_id)
+
+        original_is_enabled = server.flags.is_enabled
+        monkeypatch.setattr(
+            server.flags,
+            "is_enabled",
+            lambda flag: True if flag == "FF_ASYNC_VERIFY" else original_is_enabled(flag),
+        )
+        monkeypatch.setattr(server, "HAS_DOC_VERIFICATION", True)
+        monkeypatch.setattr(
+            server,
+            "verify_document_layered",
+            lambda **_: (_ for _ in ()).throw(AssertionError("sync verifier should not run")),
+        )
+
+        token = create_token("admin001", "admin", "Test Admin", "officer")
+        queued = http_requests.post(
+            f"{api_server}/api/documents/{doc_id}/verify",
+            headers={"Authorization": f"Bearer {token}", "X-Request-ID": f"req-{uid}"},
+            timeout=5,
+        )
+        assert queued.status_code == 202, queued.text
+        body = queued.json()
+        assert body["status"] == "queued"
+        assert body["async_verification"] is True
+        assert body["verification_status"] == "pending"
+        assert body["verification_job"]["status"] == "pending"
+
+        status = http_requests.get(
+            f"{api_server}/api/documents/{doc_id}/verification-status",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+        assert status.status_code == 200, status.text
+        status_body = status.json()
+        assert status_body["verification_status"] == "pending"
+        assert status_body["verification_job"]["id"] == body["verification_job"]["id"]
+
+        conn = get_db()
+        try:
+            stored = conn.execute("SELECT verification_status FROM documents WHERE id=?", (doc_id,)).fetchone()
+            job_count = conn.execute(
+                "SELECT COUNT(*) AS c FROM verification_jobs WHERE document_id=?",
+                (doc_id,),
+            ).fetchone()["c"]
+        finally:
+            conn.close()
+        assert stored["verification_status"] == "pending"
+        assert job_count == 1
+
     def test_multi_document_verification_does_not_exhaust_pool(self, api_server, monkeypatch):
         """Repeated malformed verifier payloads remain bounded and auth keeps working."""
         import server
