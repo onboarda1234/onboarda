@@ -41,3 +41,11 @@
 - ECS one-off task stdout can be checked in `/ecs/regmind-staging`; if output is
   hard to retrieve, use assert-only one-off commands and rely on container exit
   code `0` plus task definition/image SHA matching for runtime artifact proof.
+- The current GitHub OAuth credential cannot push changes to
+  `.github/workflows/*`; GitHub rejects workflow-file updates without `workflow`
+  scope. Use the GitHub UI/token with workflow scope for workflow changes, or
+  avoid workflow edits.
+- `FF_ASYNC_VERIFY=true` is unsafe with only the PR6 foundation because the API
+  queues `verification_jobs` but no ECS worker runtime is currently deployed to
+  claim and complete them. PR7 must not be retried until the worker is actually
+  running in staging.
