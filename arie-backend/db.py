@@ -492,6 +492,33 @@ def _get_postgres_schema() -> str:
         reviewed_at TIMESTAMP
     );
 
+    -- Async verification jobs (dark behind FF_ASYNC_VERIFY)
+    CREATE TABLE IF NOT EXISTS verification_jobs (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','retrying','succeeded','failed','cancelled')),
+        priority INTEGER NOT NULL DEFAULT 100,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 3,
+        run_after TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        locked_by TEXT,
+        locked_at TIMESTAMP,
+        last_error TEXT,
+        job_metadata JSONB DEFAULT '{}',
+        created_by TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_verification_jobs_status_run_after
+        ON verification_jobs(status, run_after, priority, created_at);
+    CREATE INDEX IF NOT EXISTS idx_verification_jobs_document
+        ON verification_jobs(document_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_jobs_active_document
+        ON verification_jobs(document_id)
+        WHERE status IN ('pending','retrying','in_progress');
+
     -- Compliance Resources
     CREATE TABLE IF NOT EXISTS compliance_resources (
         id TEXT PRIMARY KEY DEFAULT encode(gen_random_bytes(8), 'hex'),
@@ -1447,6 +1474,33 @@ def _get_sqlite_schema() -> str:
         verified_at TEXT,
         reviewed_at TEXT
     );
+
+    -- Async verification jobs (dark behind FF_ASYNC_VERIFY)
+    CREATE TABLE IF NOT EXISTS verification_jobs (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','in_progress','retrying','succeeded','failed','cancelled')),
+        priority INTEGER NOT NULL DEFAULT 100,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 3,
+        run_after TEXT DEFAULT (datetime('now')),
+        locked_by TEXT,
+        locked_at TEXT,
+        last_error TEXT,
+        job_metadata TEXT DEFAULT '{}',
+        created_by TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_verification_jobs_status_run_after
+        ON verification_jobs(status, run_after, priority, created_at);
+    CREATE INDEX IF NOT EXISTS idx_verification_jobs_document
+        ON verification_jobs(document_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_jobs_active_document
+        ON verification_jobs(document_id)
+        WHERE status IN ('pending','retrying','in_progress');
 
     -- Compliance Resources
     CREATE TABLE IF NOT EXISTS compliance_resources (
@@ -2765,6 +2819,68 @@ def _safe_table_exists(db: DBConnection, table: str) -> bool:
             return True
         except Exception:
             return False
+
+
+def _ensure_verification_jobs_schema(db: DBConnection) -> None:
+    """Create the PR6 async verification jobs table and claim indexes."""
+    if db.is_postgres:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS verification_jobs (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending','in_progress','retrying','succeeded','failed','cancelled')),
+                priority INTEGER NOT NULL DEFAULT 100,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                run_after TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                locked_by TEXT,
+                locked_at TIMESTAMP,
+                last_error TEXT,
+                job_metadata JSONB DEFAULT '{}',
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            )
+        """)
+    else:
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS verification_jobs (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending','in_progress','retrying','succeeded','failed','cancelled')),
+                priority INTEGER NOT NULL DEFAULT 100,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 3,
+                run_after TEXT DEFAULT (datetime('now')),
+                locked_by TEXT,
+                locked_at TEXT,
+                last_error TEXT,
+                job_metadata TEXT DEFAULT '{}',
+                created_by TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                completed_at TEXT
+            )
+        """)
+
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_verification_jobs_status_run_after
+        ON verification_jobs(status, run_after, priority, created_at)
+    """)
+    db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_verification_jobs_document
+        ON verification_jobs(document_id, created_at)
+    """)
+    db.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_jobs_active_document
+        ON verification_jobs(document_id)
+        WHERE status IN ('pending','retrying','in_progress')
+    """)
 
 
 def _ensure_periodic_review_phase1_schema(db: DBConnection):
@@ -5573,6 +5689,21 @@ def _run_migrations(db: DBConnection):
             db.rollback()
         except Exception:
             pass
+
+    # Migration v2.38: Async verification jobs foundation (dark behind
+    # FF_ASYNC_VERIFY).  This is schema-only and does not change active
+    # synchronous verification behaviour while the flag remains false.
+    try:
+        _ensure_verification_jobs_schema(db)
+        db.commit()
+        logger.info("Migration v2.38: Ensured async verification jobs schema")
+    except Exception as e:
+        logger.error("Migration v2.38 failed: %s", e, exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 def _repair_risk_config_shapes(db: 'DBConnection'):
     """Migration v2.16: Repair malformed risk_config scoring columns.

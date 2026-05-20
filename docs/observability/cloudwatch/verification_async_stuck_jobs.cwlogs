@@ -1,0 +1,13 @@
+fields @timestamp, @message
+| filter @message like /verification_async_job_health/
+| parse @message /stuck_jobs=(?<stuck_jobs>\d+)/
+| parse @message /failed_jobs=(?<failed_jobs>\d+)/
+| parse @message /max_pending_seconds=(?<max_pending_seconds>\d+)/
+| parse @message /max_in_progress_seconds=(?<max_in_progress_seconds>\d+)/
+| stats
+    max(stuck_jobs) as stuck_jobs,
+    max(failed_jobs) as failed_jobs,
+    max(max_pending_seconds) as max_pending_seconds,
+    max(max_in_progress_seconds) as max_in_progress_seconds
+  by bin(5m) as window
+| sort window desc
