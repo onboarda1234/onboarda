@@ -1,0 +1,11 @@
+fields @timestamp, @message
+| filter @message like /verification_provider_telemetry/
+| filter @message like /reason_code=claude_invalid_pdf/
+| parse @message /document_id=(?<document_id>\S+)/
+| parse @message /application_id=(?<application_id>\S+)/
+| parse @message /doc_type=(?<doc_type>\S+)/
+| parse @message /mime_type=(?<mime_type>\S+)/
+| parse @message /file_size_band=(?<file_size_band>\S+)/
+| parse @message /provider_status=(?<provider_status>\S+)/
+| sort @timestamp desc
+| limit 100

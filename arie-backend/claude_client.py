@@ -55,6 +55,11 @@ from config import (
     ARIE_MODEL_THOROUGH as _CFG_ARIE_MODEL_THOROUGH,
     AI_CONFIDENCE_THRESHOLD as _CFG_AI_CONFIDENCE_THRESHOLD,
 )
+from verification_failure_taxonomy import (
+    VerificationProviderError,
+    build_provider_failure_result,
+    classify_verification_provider_failure,
+)
 
 # C-03: Pydantic validation for AI outputs
 try:
@@ -164,6 +169,9 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
     Anthropic = None
+    APIError = Exception
+    APIConnectionError = Exception
+    APITimeoutError = TimeoutError
 
 # ── Setup Logging ───────────────────────────────────────────────
 logger = logging.getLogger("arie.claude")
@@ -816,12 +824,29 @@ class ClaudeClient:
         self.usage_tracker = UsageTracker(monthly_budget_usd)
         self.max_retries = 3
         self.timeout_seconds = 30
+        self.last_provider_failure = None
 
     def _check_fail_closed(self, method_name: str) -> Optional[Dict[str, Any]]:
         """Return an error result if the client is in fail-closed state (regulated env, no AI service).
         Returns None if the client is operational (real API or allowed mock mode)."""
         if getattr(self, '_fail_closed', False):
             logger.error(f"FAIL-CLOSED: {method_name} called but AI service is unavailable in {_CFG_ENVIRONMENT}")
+            if method_name == "verify_document":
+                result = build_provider_failure_result(
+                    RuntimeError(
+                        f"AI service unavailable in {_CFG_ENVIRONMENT}. "
+                        "Cannot produce mock results in regulated environment."
+                    ),
+                    provider="claude",
+                    operation="document_verification",
+                )
+                result.update({
+                    "_validated": False,
+                    "_rejected": True,
+                    "_fail_closed": True,
+                    "ai_source": "fail-closed",
+                })
+                return result
             return {
                 "status": "error",
                 "error": f"AI service unavailable in {_CFG_ENVIRONMENT}. Cannot produce mock results in regulated environment.",
@@ -1637,6 +1662,7 @@ CRITICAL REQUIREMENTS:
         fail_closed = self._check_fail_closed("extract_document_fields")
         if fail_closed is not None:
             return {}
+        self.last_provider_failure = None
 
         schema = self._EXTRACTION_SCHEMAS.get(doc_type, [])
         if not schema or not file_path:
@@ -1678,7 +1704,19 @@ CRITICAL REQUIREMENTS:
                 return {k: v for k, v in parsed.items() if v is not None}
             return {}
         except Exception as e:
-            logger.warning(f"extract_document_fields failed for {doc_type}: {e}")
+            failure = classify_verification_provider_failure(
+                e,
+                provider="claude",
+                operation="document_field_extraction",
+                model="claude-sonnet-4-6",
+            )
+            self.last_provider_failure = failure
+            logger.warning(
+                "extract_document_fields failed for %s classification=%s reason_code=%s",
+                doc_type,
+                failure.get("classification"),
+                failure.get("reason_code"),
+            )
             return {}
 
     def verify_document(
@@ -1731,6 +1769,7 @@ CRITICAL REQUIREMENTS:
         fail_result = self._check_fail_closed("verify_document")
         if fail_result:
             return fail_result
+        self.last_provider_failure = None
         if self.mock_mode:
             logger.info("Returning mock document verification (mock mode)")
             result = _mock_verify_document()
@@ -1873,20 +1912,21 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
             result["vision_enabled"] = has_vision
             return result
         except Exception as e:
-            logger.error(f"Document verification failed: {e} — returning flagged response")
-            # In non-mock mode, return flagged (not fake passes) when AI fails
-            return {
-                "checks": [
-                    {"label": "AI Verification", "type": "validity", "result": "warn", "message": f"AI verification unavailable: {str(e)[:100]}. Manual review required."},
-                    {"label": "Document Type Match", "type": "doc_type_match", "result": "warn", "message": "Could not verify — manual check required"},
-                ],
-                "overall": "flagged",
-                "confidence": 0.0,
-                "red_flags": ["AI verification failed — manual review required"],
-                "ai_source": "error",
-                "ai_error": str(e)[:200],
-                "vision_enabled": has_vision,
-            }
+            result = build_provider_failure_result(
+                e,
+                provider="claude",
+                operation="document_verification",
+                model="claude-sonnet-4-6",
+            )
+            self.last_provider_failure = result.get("verification_failure")
+            logger.error(
+                "Document verification provider failure classification=%s reason_code=%s retryable=%s",
+                self.last_provider_failure.get("classification") if self.last_provider_failure else "unknown",
+                self.last_provider_failure.get("reason_code") if self.last_provider_failure else "unknown",
+                self.last_provider_failure.get("retryable") if self.last_provider_failure else "unknown",
+            )
+            result["vision_enabled"] = has_vision
+            return result
 
     # ── Internal Helper Methods ─────────────────────────────────
 
@@ -2066,32 +2106,65 @@ Evaluate ONLY the {len(check_defs)} checks specified in your instructions. Retur
                 return text_content
 
             except APITimeoutError as e:
+                failure = classify_verification_provider_failure(
+                    e,
+                    provider="claude",
+                    operation="claude_messages_create",
+                    model=chosen_model,
+                )
                 logger.warning(
-                    f"Claude {chosen_model} request timeout (attempt {attempt + 1}/{self.max_retries}): {e}"
+                    "Claude %s request timeout (attempt %s/%s) classification=%s reason_code=%s",
+                    chosen_model,
+                    attempt + 1,
+                    self.max_retries,
+                    failure.get("classification"),
+                    failure.get("reason_code"),
                 )
                 if attempt == self.max_retries - 1:
-                    raise RuntimeError(f"Claude API timeout after {self.max_retries} retries") from e
+                    raise VerificationProviderError(failure) from e
                 # Exponential backoff with jitter: 2^attempt * (1 + random 0-0.5s)
                 backoff = (2 ** attempt) * (1 + random.uniform(0, 0.5))
                 logger.info(f"Retrying in {backoff:.1f}s after timeout...")
                 time.sleep(backoff)
 
             except APIConnectionError as e:
+                failure = classify_verification_provider_failure(
+                    e,
+                    provider="claude",
+                    operation="claude_messages_create",
+                    model=chosen_model,
+                )
                 logger.warning(
-                    f"Claude connection error (attempt {attempt + 1}/{self.max_retries}): {e}"
+                    "Claude connection error (attempt %s/%s) classification=%s reason_code=%s",
+                    attempt + 1,
+                    self.max_retries,
+                    failure.get("classification"),
+                    failure.get("reason_code"),
                 )
                 if attempt == self.max_retries - 1:
-                    raise RuntimeError(
-                        f"Claude API connection failed after {self.max_retries} retries"
-                    ) from e
+                    raise VerificationProviderError(failure) from e
                 backoff = (2 ** attempt) * (1 + random.uniform(0, 0.5))
                 logger.info(f"Retrying in {backoff:.1f}s after connection error...")
                 time.sleep(backoff)
 
             except APIError as e:
-                logger.error(f"Claude API error: {e}")
+                failure = classify_verification_provider_failure(
+                    e,
+                    provider="claude",
+                    operation="claude_messages_create",
+                    model=chosen_model,
+                )
+                logger.error(
+                    "Claude API error classification=%s reason_code=%s retryable=%s status=%s",
+                    failure.get("classification"),
+                    failure.get("reason_code"),
+                    failure.get("retryable"),
+                    failure.get("provider_status_code"),
+                )
+                if not failure.get("retryable"):
+                    raise VerificationProviderError(failure) from e
                 if attempt == self.max_retries - 1:
-                    raise RuntimeError(f"Claude API error: {e}") from e
+                    raise VerificationProviderError(failure) from e
                 # For rate-limit (429) errors, use longer backoff
                 backoff_base = 4 if getattr(e, 'status_code', 0) == 429 else 2
                 backoff = (backoff_base ** attempt) * (1 + random.uniform(0, 0.5))

@@ -50,6 +50,10 @@ from verification_matrix import (
     get_rule_checks_for_doc_type,
     is_licence_applicable,
 )
+from verification_failure_taxonomy import (
+    build_provider_failure_result,
+    provider_failure_from_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1319,6 +1323,7 @@ def verify_document_layered(
     Returns: aggregated result dict (backward-compatible with existing verify_document output)
     """
     all_results = []
+    provider_failure = None
 
     # ── Conditional gate: licence applicability ──────────────────
     if doc_type == "licence":
@@ -1364,16 +1369,39 @@ def verify_document_layered(
                 entity_name=entity_name,
                 person_name=person_name,
             )
+            extraction_failure = getattr(claude_client, "last_provider_failure", None)
+            if extraction_failure:
+                provider_failure = extraction_failure
+                failure_result = build_provider_failure_result(extraction_failure)
+                all_results.extend(failure_result.get("checks", []))
             logger.info(f"Extracted fields for {doc_type}: {list(extracted_fields.keys())}")
         except Exception as e:
-            logger.warning(f"Field extraction failed for {doc_type}: {e} — rules will use available data")
+            failure_result = build_provider_failure_result(
+                e,
+                provider="claude",
+                operation="document_field_extraction",
+            )
+            provider_failure = failure_result.get("verification_failure")
+            all_results.extend(failure_result.get("checks", []))
+            logger.warning(
+                "Field extraction provider failure for %s classification=%s reason_code=%s",
+                doc_type,
+                provider_failure.get("classification") if provider_failure else "unknown",
+                provider_failure.get("reason_code") if provider_failure else "unknown",
+            )
 
     # ── Layer 1: Rule-based checks ────────────────────────────────
     rule_results = run_rule_checks(doc_type, category, extracted_fields, prescreening_data, risk_level)
     all_results.extend(rule_results)
 
     # ── Layers 2+3: Hybrid and AI checks via Claude ────��──────────
-    if claude_client and not file_accessible:
+    if provider_failure:
+        logger.warning(
+            "[verify-layered] Skipping downstream AI checks for %s after provider failure reason_code=%s",
+            doc_type,
+            provider_failure.get("reason_code"),
+        )
+    elif claude_client and not file_accessible:
         # File not accessible — skip AI analysis, mark as system-level inconclusive
         all_results.append(_warn("SYS-FILE", "File Access", CheckClassification.RULE,
                                  "Document file is not accessible — AI verification skipped. "
@@ -1421,9 +1449,12 @@ def verify_document_layered(
                     ubos=ubos or [],
                     prescreening_context=ps_context,
                 )
+                provider_failure = provider_failure_from_result(ai_result)
 
                 # P0-2: Guard against rejected/invalid AI responses
-                if ai_result.get("_rejected") or ai_result.get("_validated") is False:
+                if provider_failure:
+                    all_results.extend(ai_result.get("checks", []))
+                elif ai_result.get("_rejected") or ai_result.get("_validated") is False:
                     all_results.append(_warn("AI-VAL", "AI Verification", CheckClassification.AI,
                                             "AI output failed validation — manual review required",
                                             source="ai"))
@@ -1442,10 +1473,19 @@ def verify_document_layered(
                         all_results.extend(ai_checks)
 
             except Exception as e:
-                logger.error(f"AI verification failed for {doc_type}: {e}")
-                all_results.append(_warn("AI-ERR", "AI Verification", CheckClassification.AI,
-                                         f"AI verification error: {str(e)[:100]}. Manual review required.",
-                                         source="ai_error"))
+                failure_result = build_provider_failure_result(
+                    e,
+                    provider="claude",
+                    operation="document_verification",
+                )
+                provider_failure = failure_result.get("verification_failure")
+                logger.error(
+                    "AI verification provider failure for %s classification=%s reason_code=%s",
+                    doc_type,
+                    provider_failure.get("classification") if provider_failure else "unknown",
+                    provider_failure.get("reason_code") if provider_failure else "unknown",
+                )
+                all_results.extend(failure_result.get("checks", []))
     else:
         # No AI client — add warn for hybrid/AI checks
         ai_hybrid = get_ai_checks_for_doc_type(doc_type, category)
@@ -1464,6 +1504,12 @@ def verify_document_layered(
             pass
 
     result = _aggregate(all_results, confidence=ai_confidence)
+    if provider_failure:
+        result["overall"] = "failed"
+        result["verification_failure"] = provider_failure
+        result["verification_failure_classification"] = provider_failure.get("classification")
+        result["provider_failure"] = True
+        result["retryable"] = bool(provider_failure.get("retryable"))
     result["extracted_fields"] = extracted_fields or {}
     return result
 
@@ -1488,4 +1534,9 @@ def to_legacy_result(layered_result: dict) -> dict:
         "red_flags": layered_result.get("red_flags", []),
         "engine_version": layered_result.get("engine_version", "layered_v1"),
         "warnings": layered_result.get("warnings", []),
+        "verification_failure": layered_result.get("verification_failure"),
+        "verification_failure_classification": layered_result.get("verification_failure_classification"),
+        "provider_failure": layered_result.get("provider_failure", False),
+        "retryable": layered_result.get("retryable", False),
+        "extracted_fields": layered_result.get("extracted_fields", {}),
     }

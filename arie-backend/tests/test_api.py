@@ -1886,6 +1886,7 @@ class TestDocumentVerificationRuntimeReliability:
         assert body["verification_status"] == "flagged"
         assert body["verification_state"] == "flagged"
         assert body["verification_success"] is False
+        assert body["verification_results"]["verification_failure_classification"] == "review_required_business"
         assert isinstance(body["checks"], list)
         assert isinstance(body["checks"][0], dict)
         assert "unstructured str check payload" in body["checks"][0]["message"]
@@ -1932,7 +1933,7 @@ class TestDocumentVerificationRuntimeReliability:
             timeout=5,
         )
         assert verify.status_code == 200, verify.text
-        assert verify.json()["verification_status"] == "flagged"
+        assert verify.json()["verification_status"] == "failed"
 
         login_email = f"verify-login-{uid}@example.test"
         login_password = "StrongPass123!"
