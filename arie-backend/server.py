@@ -6688,12 +6688,24 @@ class DocumentVerifyHandler(BaseHandler):
             except Exception:
                 pass
 
-    def _post_with_db(self, doc_id, user, db):
+    def _post_with_db(
+        self,
+        doc_id,
+        user,
+        db,
+        *,
+        force_sync: bool = False,
+        audit_actor_type: str = "user",
+        started_trigger: str = "verify_request_started",
+        completed_trigger: str = "verify_request_completed",
+        close_db: bool = True,
+    ):
 
         # P0-3: Check if Agent 1 (document verification) is enabled before executing
         agent1 = db.execute("SELECT enabled FROM ai_agents WHERE agent_number=1").fetchone()
         if agent1 and not agent1["enabled"]:
-            db.close()
+            if close_db:
+                db.close()
             self.log_audit(user, "Agent Skipped", "Agent 1", "Document verification skipped — agent disabled")
             self.success({
                 "status": "skipped",
@@ -6705,16 +6717,18 @@ class DocumentVerifyHandler(BaseHandler):
 
         doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         if not doc:
-            db.close()
+            if close_db:
+                db.close()
             return self.error("Document not found", 404)
 
         # Get the related application and person for screening
         app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
         if not app:
-            db.close()
+            if close_db:
+                db.close()
             return self.error("Application not found for document", 404)
 
-        if flags.is_enabled("FF_ASYNC_VERIFY"):
+        if flags.is_enabled("FF_ASYNC_VERIFY") and not force_sync:
             job_result = enqueue_verification_job(
                 db,
                 doc,
@@ -6754,8 +6768,8 @@ class DocumentVerifyHandler(BaseHandler):
                 doc,
                 _initial_before,
                 _in_progress_after,
-                actor_type="user",
-                trigger="verify_request_started",
+                actor_type=audit_actor_type,
+                trigger=started_trigger,
             )
             db.commit()
             doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
@@ -7116,8 +7130,8 @@ class DocumentVerifyHandler(BaseHandler):
             doc,
             _doc_before,
             _doc_after,
-            actor_type="user",
-            trigger="verify_request_completed",
+            actor_type=audit_actor_type,
+            trigger=completed_trigger,
         )
         self.log_audit(
             user,
@@ -7142,7 +7156,8 @@ class DocumentVerifyHandler(BaseHandler):
                 after_state=_doc_after,
             )
         db.commit()
-        db.close()
+        if close_db:
+            db.close()
 
         # Improvement 8: Log agent execution for traceability
         try:
