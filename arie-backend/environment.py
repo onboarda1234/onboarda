@@ -216,6 +216,15 @@ class FeatureFlags:
 flags = FeatureFlags()
 
 
+def get_backoffice_runtime_config() -> dict:
+    """Return safe runtime settings derived from backend-only flags."""
+    polling_slow = flags.is_enabled("FF_POLLING_SLOW")
+    return {
+        "applications_refresh_ms": 120000 if polling_slow else 30000,
+        "applications_stale_threshold_s": 180 if polling_slow else 60,
+    }
+
+
 # ══════════════════════════════════════════════════════════════
 # 3. SAFETY GUARDS — CRITICAL
 # ══════════════════════════════════════════════════════════════
@@ -501,6 +510,7 @@ def get_environment_info() -> dict:
         "is_production": is_production(),
         "features": flags.get_client_safe_flags(),
         "upload_latency_flags": flags.get_upload_latency_client_flags(),
+        "backoffice": get_backoffice_runtime_config(),
         "version": os.environ.get("APP_VERSION", "1.0.0-pilot"),
     }
     return info

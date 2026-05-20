@@ -1,0 +1,13 @@
+-- PR5 verification truthfulness state model marker.
+--
+-- Fresh schemas include the explicit in_progress document verification state.
+-- Existing PostgreSQL deployments are widened by the inline startup migration
+-- in db.py because CHECK constraint replacement is dialect-specific.
+--
+-- Backfill rule:
+-- - verified/pass/passed/approved -> verified
+-- - flagged/warn/warning/review/review_required/manual_review -> flagged
+-- - failed/fail/error -> failed
+-- - existing in_progress -> in_progress
+-- - null, blank, or unknown -> pending
+SELECT 1;

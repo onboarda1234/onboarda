@@ -482,7 +482,7 @@ def _get_postgres_schema() -> str:
         expiry_source TEXT,
         expiry_confidence REAL,
         expiry_extracted_at TIMESTAMP,
-        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
+        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','in_progress','verified','flagged','failed')),
         verification_results JSONB DEFAULT '{}',
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
         review_comment TEXT,
@@ -1438,7 +1438,7 @@ def _get_sqlite_schema() -> str:
         expiry_source TEXT,
         expiry_confidence REAL,
         expiry_extracted_at TEXT,
-        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','verified','flagged','failed')),
+        verification_status TEXT DEFAULT 'pending' CHECK(verification_status IN ('pending','in_progress','verified','flagged','failed')),
         verification_results TEXT DEFAULT '{}',
         review_status TEXT DEFAULT 'pending' CHECK(review_status IN ('pending','accepted','rejected','info_requested')),
         review_comment TEXT,
@@ -4061,6 +4061,55 @@ def _run_migrations(db: DBConnection):
                 db.conn.rollback()
             except Exception:
                 pass
+
+    # Migration v2.12a: Normalize document verification states and allow
+    # the explicit in_progress state used during synchronous verification.
+    try:
+        db.execute(
+            """
+            UPDATE documents
+            SET verification_status = CASE
+                WHEN LOWER(COALESCE(verification_status, '')) IN ('verified','pass','passed','approved')
+                    THEN 'verified'
+                WHEN LOWER(COALESCE(verification_status, '')) IN ('flagged','warn','warning','review','review_required','manual_review')
+                    THEN 'flagged'
+                WHEN LOWER(COALESCE(verification_status, '')) IN ('failed','fail','error')
+                    THEN 'failed'
+                WHEN LOWER(COALESCE(verification_status, '')) = 'in_progress'
+                    THEN 'in_progress'
+                ELSE 'pending'
+            END
+            WHERE verification_status IS NULL
+               OR LOWER(COALESCE(verification_status, '')) NOT IN (
+                    'pending','in_progress','verified','flagged','failed'
+               )
+            """
+        )
+        if USE_POSTGRESQL:
+            constraint_row = db.execute("""
+                SELECT pg_get_constraintdef(oid)
+                FROM pg_constraint
+                WHERE conname = 'documents_verification_status_check'
+                  AND conrelid = 'documents'::regclass
+            """).fetchone()
+            constraint_def = None
+            if constraint_row:
+                if isinstance(constraint_row, dict):
+                    constraint_def = constraint_row.get("pg_get_constraintdef")
+                else:
+                    constraint_def = constraint_row[0]
+            if not constraint_def or "'in_progress'" not in constraint_def:
+                db.execute("ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_verification_status_check")
+                db.execute("""ALTER TABLE documents ADD CONSTRAINT documents_verification_status_check
+                    CHECK(verification_status IN ('pending','in_progress','verified','flagged','failed'))""")
+        db.commit()
+        logger.info("Migration v2.12a: documents verification_status state model ready")
+    except Exception as e:
+        logger.debug("Migration v2.12a documents verification status update: %s", e)
+        try:
+            db.conn.rollback()
+        except Exception:
+            pass
 
     # Migration v2.13: Purge test/demo applications for "1947 OIL & GAS PLC".
     # These records were created during testing and must not persist in any environment.

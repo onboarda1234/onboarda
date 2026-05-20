@@ -18,7 +18,10 @@ from environment import (
     FeatureFlags,
     UPLOAD_LATENCY_FLAGS,
     _DEFAULT_FLAGS,
+    get_backoffice_runtime_config,
+    get_environment_info,
 )
+import environment
 
 # Flags that the frontend reads via FEATURE_FLAGS.<name>.
 # If a new flag is consumed by the frontend, add it here.
@@ -90,6 +93,33 @@ class TestClientSafeFlags:
         assert set(upload_flags) == set(CLIENT_SAFE_UPLOAD_LATENCY_FLAGS)
         backend_only = set(UPLOAD_LATENCY_FLAGS) - set(CLIENT_SAFE_UPLOAD_LATENCY_FLAGS)
         assert backend_only.isdisjoint(upload_flags)
+
+    def test_environment_info_upload_latency_allowlist_is_exact(self):
+        """The frontend environment response must contain exactly the client allowlist."""
+        info = get_environment_info()
+        exposed_upload_flags = {
+            key for key in info["features"]
+            if key in UPLOAD_LATENCY_FLAGS
+        }
+        assert exposed_upload_flags == set(CLIENT_SAFE_UPLOAD_LATENCY_FLAGS)
+        assert set(info["upload_latency_flags"]) == set(CLIENT_SAFE_UPLOAD_LATENCY_FLAGS)
+        assert "FF_POLLING_SLOW" not in info["features"]
+        assert "FF_POLLING_SLOW" not in info["upload_latency_flags"]
+
+    def test_backend_only_polling_flag_returns_config_not_flag_name(self, monkeypatch):
+        """FF_POLLING_SLOW gates BO timing without becoming a client-visible flag."""
+        monkeypatch.setenv("FF_POLLING_SLOW", "true")
+        monkeypatch.setattr(environment, "flags", FeatureFlags(env="staging"))
+        config = get_backoffice_runtime_config()
+        info = get_environment_info()
+
+        assert config == {
+            "applications_refresh_ms": 120000,
+            "applications_stale_threshold_s": 180,
+        }
+        assert info["backoffice"] == config
+        assert "FF_POLLING_SLOW" not in info["features"]
+        assert "FF_POLLING_SLOW" not in info["upload_latency_flags"]
 
 
 class TestDefaultFlagConsistency:
