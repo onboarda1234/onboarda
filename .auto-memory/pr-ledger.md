@@ -33,7 +33,7 @@
 | PR 5 | Truthful verification state model + coherent `submit-kyc` | Merged, deployed, staging-verified | PR #352. Merge SHA `2833e40f5608cbaeece06b89854788d78e8c66eb`. Adds backend-owned verification states, audited transitions, hard `submit-kyc` verified-doc gate, portal/BO truthful rendering, and server-driven BO polling config. |
 | PR 8 | Claude/provider reliability remediation | Merged, deployed, staging-verified | PR #354. Merge SHA `564ece3f0747774c95dce62302658ca0bcad698c`. Classifies provider/request-path failures, persists provider failures as `failed`, keeps business review outcomes `flagged`, and adds PII-safe telemetry/query material. |
 | PR 6 | Async verification foundation, dark | Merged, deployed, staging-verified | PR #357. Merge SHA `68d0804d795a1f4bae607ac24b9c461793571c35`. Adds `verification_jobs`, worker/job primitives, status endpoint, SLA/query material; `FF_ASYNC_VERIFY=false` and no screening-provider behavior changed. |
-| PR 7 | Async verify staging flag flip + soak | Planned after PR6 | Staging only, 72h minimum soak. |
+| PR 7 | Async verify staging flag flip + soak | Blocked before soak | 2026-05-20 staging-only flip was attempted via ECS task definition `regmind-staging:315`, then rolled back to `regmind-staging:314`. Blocker: `FF_ASYNC_VERIFY=true` queues jobs through the API, but no ECS worker process is wired to claim/complete `verification_jobs`. Do not re-enable until a worker runtime is deployed and smoke-tested. |
 | PR 9 | Duplicate detection redesign | Planned after PR7 | Stored hash + indexed lookup, safe legacy handling. |
 
 ## PR5 Deployment Verification
@@ -111,3 +111,28 @@
   flags remained limited to the intended allowlist.
 - CloudWatch deploy-window scan found no migration failures, connection pool
   exhaustion, or mock-mode fallback.
+
+## PR7 Blocker And Rollback
+
+- 2026-05-20: PR7 staging flag flip analysis found the explicit staging flag
+  path in `.github/workflows/deploy-staging.yml`, but pushing workflow changes
+  from the current OAuth credential failed because it lacks GitHub `workflow`
+  scope.
+- A runtime-only staging flip was attempted by registering ECS task definition
+  `regmind-staging:315` from `regmind-staging:314` with
+  `FF_ASYNC_VERIFY=true`. The service reached steady state and public smoke
+  checks passed.
+- Runtime checks confirmed `FF_ASYNC_VERIFY=true` was present in the ECS task
+  definition and remained backend-only: `/api/config/environment` did not expose
+  the flag.
+- Gate failed before soak: current deployed code has async job primitives and an
+  enqueue/status API path, but no running ECS worker process/entrypoint wired to
+  claim and complete `verification_jobs`.
+- Enabling the flag in that state would turn verification requests into queued
+  jobs with no consumer, so PR7 was stopped and staging was rolled back to
+  `regmind-staging:314`.
+- Rollback verification passed: ECS rollout `COMPLETED`, `FF_ASYNC_VERIFY`
+  absent from the active task definition, `/api/liveness`, `/api/health`,
+  `/api/config/environment`, `/portal`, and `/backoffice` all returned 200, and
+  CloudWatch showed no migration failures, connection pool exhaustion,
+  mock-mode fallback, or traceback events during the flip/rollback window.

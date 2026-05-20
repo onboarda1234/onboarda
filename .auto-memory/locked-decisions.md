@@ -131,3 +131,17 @@ telemetry, BO refresh behavior, size rejection, audit events, and error rates.
   rendering is allowed while a new verification is queued.
 - PR6 does not alter Sumsub provider selection, ComplyAdvantage activation, Mesh
   timing, or live screening workflow behavior.
+
+## 2026-05-20 PR7 Async Rollout Gate
+
+- Do not enable `FF_ASYNC_VERIFY` again until there is a deployed worker runtime
+  that claims `verification_jobs`, executes the verifier, writes compatibility
+  fields, emits system audit transitions, and exposes stuck-job/queue-depth
+  telemetry.
+- API enqueue support alone is not enough for PR7. A green PR7 gate requires at
+  least one controlled staging verification that moves from queued to terminal
+  `verified|flagged|failed` without manual intervention.
+- Rollback target after the failed PR7 attempt is `regmind-staging:314`, with
+  `FF_ASYNC_VERIFY` absent/false.
+- The next remediation step must be a PR6 follow-up or revised PR7 that deploys
+  the worker process before any 72-hour async soak begins.
