@@ -1,0 +1,14 @@
+fields @timestamp, @message
+| filter @message like /verification_provider_telemetry/
+| parse @message /event=(?<event>\S+)/
+| parse @message /provider=(?<provider>\S+)/
+| parse @message /classification=(?<classification>\S+)/
+| parse @message /reason_code=(?<reason_code>\S+)/
+| parse @message /retryable=(?<retryable>\S+)/
+| parse @message /provider_status=(?<provider_status>\S+)/
+| parse @message /provider_error_type=(?<provider_error_type>\S+)/
+| parse @message /doc_type=(?<doc_type>\S+)/
+| parse @message /mime_type=(?<mime_type>\S+)/
+| parse @message /file_size_band=(?<file_size_band>\S+)/
+| stats count(*) as failures by provider, classification, reason_code, retryable, provider_status, provider_error_type, doc_type, mime_type, file_size_band
+| sort failures desc

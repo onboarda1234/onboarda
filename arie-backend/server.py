@@ -114,6 +114,12 @@ from verification_state import (
     normalize_verification_state,
     verification_state_payload,
 )
+from verification_failure_taxonomy import (
+    FAILURE_REVIEW_REQUIRED_BUSINESS,
+    build_provider_failure_result,
+    format_verification_failure_log_line,
+    provider_failure_from_result,
+)
 from screening_freshness_metadata import populate_screening_freshness_metadata
 
 # ── Sprint 2: Extracted modules ──────────────────────────
@@ -6906,15 +6912,14 @@ class DocumentVerifyHandler(BaseHandler):
                 doc_id,
                 type(e).__name__,
             )
-            ai_result = _normalize_verification_result_payload({
-                "overall": "flagged",
-                "_rejected": True,
-                "error": str(e)[:200],
-                "checks": [{"label": "AI Verification", "type": "validity", "result": "warn",
-                           "message": f"Verification error: {str(e)[:100]}. Manual review required."}],
-            })
-            checks = [{"label": "AI Verification", "type": "validity", "result": "warn",
-                       "message": f"Verification error: {str(e)[:100]}. Manual review required."}]
+            ai_result = _normalize_verification_result_payload(
+                build_provider_failure_result(
+                    e,
+                    provider="verification_engine",
+                    operation="document_verification",
+                )
+            )
+            checks = ai_result.get("checks", [])
             all_passed = False
 
         # If it's an identity document, run sanctions/PEP screening
@@ -6967,8 +6972,6 @@ class DocumentVerifyHandler(BaseHandler):
                 })
                 all_passed = False
 
-        status = STATE_VERIFIED if all_passed else STATE_FLAGGED
-
         # Finding 9: Propagate ai_source so mock/degraded results are explicit
         ai_source = "live"
         if isinstance(ai_result, dict):
@@ -6985,7 +6988,12 @@ class DocumentVerifyHandler(BaseHandler):
         elif not verify_name and doc_category == "company":
             system_warning = "entity_context_missing"
 
-        normalized_ai_result = _normalize_verification_result_payload(ai_result or {"checks": checks, "overall": status})
+        normalized_ai_result = _normalize_verification_result_payload(ai_result or {"checks": checks})
+        verification_failure = provider_failure_from_result(normalized_ai_result)
+        if verification_failure and verification_failure.get("classification") != FAILURE_REVIEW_REQUIRED_BUSINESS:
+            status = STATE_FAILED
+        else:
+            status = STATE_VERIFIED if all_passed else STATE_FLAGGED
         try:
             layered_results = to_legacy_result(normalized_ai_result) if to_legacy_result else {
                 "checks": checks,
@@ -7013,6 +7021,25 @@ class DocumentVerifyHandler(BaseHandler):
             "subject_id": doc.get("person_id") or (app.get("id") if app else ""),
             "subject_type": verification_context["subject_type"],
         })
+        if verification_failure:
+            layered_results["verification_failure"] = verification_failure
+            layered_results["provider_failure"] = True
+            layered_results["retryable"] = bool(verification_failure.get("retryable"))
+            layered_results["verification_failure_classification"] = verification_failure.get("classification")
+            logger.warning(
+                format_verification_failure_log_line(
+                    verification_failure,
+                    environment=ENVIRONMENT,
+                    document_id=doc_id,
+                    application_id=doc.get("application_id", ""),
+                    doc_type=base_doc_type,
+                    mime_type=doc.get("mime_type") or "",
+                    file_size=doc.get("file_size") or 0,
+                    status=status,
+                )
+            )
+        elif status == STATE_FLAGGED:
+            layered_results["verification_failure_classification"] = FAILURE_REVIEW_REQUIRED_BUSINESS
         results = json.dumps(layered_results, default=str)
         extracted_fields = {}
         if isinstance(normalized_ai_result, dict):
@@ -7415,18 +7442,25 @@ class DocumentAIVerifyHandler(BaseHandler):
                 prescreening_context=prescreening_context or None,
             )
 
+            failure = provider_failure_from_result(result)
+            if failure:
+                result["overall"] = "failed"
             # P0-2: Guard against rejected/invalid AI responses
-            if result.get("_rejected") or result.get("_validated") is False:
+            elif result.get("_rejected") or result.get("_validated") is False:
                 logger.warning(f"AI verify rejected for {doc_type}/{file_name}: {result.get('error', 'schema validation failed')}")
                 result["checks"] = [{"label": "AI Verification", "type": "validity", "result": "fail",
                                      "message": "AI output failed validation — manual review required"}]
                 result["overall"] = "flagged"
 
             # P0-5: No pass without evidence — empty checks cannot be "verified"
-            if not result.get("checks"):
+            if not failure and not result.get("checks"):
                 result["checks"] = [{"label": "AI Verification", "type": "validity", "result": "warn",
                                      "message": "No verification checks returned — manual review required"}]
                 result["overall"] = "flagged"
+            if failure:
+                result["verification_failure_classification"] = failure.get("classification")
+            elif result.get("overall") == "flagged":
+                result["verification_failure_classification"] = FAILURE_REVIEW_REQUIRED_BUSINESS
 
             # /api/documents/ai-verify is helper-only; persisted /api/documents/:id/verify stays authoritative.
             result["authoritative"] = False
