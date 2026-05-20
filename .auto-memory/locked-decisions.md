@@ -145,3 +145,26 @@ telemetry, BO refresh behavior, size rejection, audit events, and error rates.
   `FF_ASYNC_VERIFY` absent/false.
 - The next remediation step must be a PR6 follow-up or revised PR7 that deploys
   the worker process before any 72-hour async soak begins.
+
+## 2026-05-20 PR7A Async Worker Runtime
+
+- The chosen ADR-002 worker runtime shape is a separate ECS Fargate service,
+  not an in-process callback and not `resilience/task_queue.py`.
+- Staging worker service name is `regmind-verification-worker`.
+- The worker uses the same backend image, cluster, network, task role, secrets,
+  and database access path as the API, but has no ALB and runs the command
+  `python verification_worker.py --poll-interval 5`.
+- Initial staging desired count is `1`; the worker ID is
+  `staging-worker-1`.
+- The worker is allowed to run while `FF_ASYNC_VERIFY` is absent/off so the
+  runtime exists before the PR7 flag flip. It should have no customer-facing
+  effect without queued jobs.
+- Worker/system verification transitions must audit `actor_type=system`,
+  `job_id`, and `worker_id` for reclaimed, started, completed, and failed
+  lifecycle events.
+- A PR7 flag flip may only begin after the deployed worker has proven one
+  queued job can reach a terminal state and one stale in-progress job can be
+  safely reclaimed/retried.
+- PR7A does not change screening-provider behavior, Sumsub selection/timing,
+  ComplyAdvantage activation, presigned upload design, PR9 duplicate-hash
+  redesign, API service scaling, or RDS sizing.
