@@ -49,3 +49,27 @@
   queues `verification_jobs` but no ECS worker runtime is currently deployed to
   claim and complete them. PR7 must not be retried until the worker is actually
   running in staging.
+- PR7A created the separate staging worker service
+  `regmind-verification-worker`; subsequent backend deploys update only the API
+  service unless worker deployment automation is added. Until then, manually
+  register/update the worker task definition from the deployed API task
+  definition so image SHA, task role, secrets, and networking stay aligned.
+- When deriving the worker task definition from the API task definition, remove
+  the API container health check, set the command to
+  `python verification_worker.py --poll-interval 5`, set log stream prefix to
+  `worker`, keep `VERIFICATION_WORKER_ID=staging-worker-1`, and keep
+  `FF_ASYNC_VERIFY` absent/off until PR7.
+- Staging PostgreSQL uses the real Postgres schema; do not assume local test
+  columns exist. `verification_jobs` has `last_error` and `run_after`, not
+  `error_code` or `next_run_at`; `documents` has `verification_status`,
+  `verification_results`, and `verified_at`; `audit_log` stores actor identity
+  in `user_id/user_name/user_role` plus JSON `detail`, not standalone
+  `actor_type` columns.
+- Controlled PR7A runtime probes intentionally used missing file paths, so
+  terminal `flagged` was the expected verification result. The runtime gate was
+  queue claim, document compatibility-field update, audit lifecycle, and stale
+  lock reclaim, not content-level document success.
+- Worker stale-lock recovery logs
+  `verification_async_job_health stuck_jobs=1 requeued_jobs=1 failed_jobs=0`
+  as a warning during the controlled reclaim test. Treat that specific event as
+  expected evidence for PR7A, not a production regression.

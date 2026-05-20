@@ -34,6 +34,7 @@
 | PR 8 | Claude/provider reliability remediation | Merged, deployed, staging-verified | PR #354. Merge SHA `564ece3f0747774c95dce62302658ca0bcad698c`. Classifies provider/request-path failures, persists provider failures as `failed`, keeps business review outcomes `flagged`, and adds PII-safe telemetry/query material. |
 | PR 6 | Async verification foundation, dark | Merged, deployed, staging-verified | PR #357. Merge SHA `68d0804d795a1f4bae607ac24b9c461793571c35`. Adds `verification_jobs`, worker/job primitives, status endpoint, SLA/query material; `FF_ASYNC_VERIFY=false` and no screening-provider behavior changed. |
 | PR 7 | Async verify staging flag flip + soak | Blocked before soak | 2026-05-20 staging-only flip was attempted via ECS task definition `regmind-staging:315`, then rolled back to `regmind-staging:314`. Blocker: `FF_ASYNC_VERIFY=true` queues jobs through the API, but no ECS worker process is wired to claim/complete `verification_jobs`. Do not re-enable until a worker runtime is deployed and smoke-tested. |
+| PR 7A | Async verification worker runtime | Merged, deployed, staging-verified | PR #360 plus audit-detail follow-up PR #361. Merge SHAs `82df577cff39a57f8e6925f5e458afe71ad2c1b7` and `8a0e8fc390c848b680b8206e6d4ca400683c14f8`. Staging worker service `regmind-verification-worker` is running separately from API, desired/running `1/1`, same image as API, no ALB, `FF_ASYNC_VERIFY` still absent/off. Controlled queued-job and stale-lock reclaim validations passed. |
 | PR 9 | Duplicate detection redesign | Planned after PR7 | Stored hash + indexed lookup, safe legacy handling. |
 
 ## PR5 Deployment Verification
@@ -136,3 +137,48 @@
   `/api/config/environment`, `/portal`, and `/backoffice` all returned 200, and
   CloudWatch showed no migration failures, connection pool exhaustion,
   mock-mode fallback, or traceback events during the flip/rollback window.
+
+## PR7A Worker Runtime Verification
+
+- 2026-05-20: PR #360 merged to `main` at
+  `82df577cff39a57f8e6925f5e458afe71ad2c1b7`. It added the real
+  `verification_worker.py` runtime entrypoint, reused PR6 job primitives, and
+  documented the separate ECS Fargate worker-service shape.
+- Initial staging runtime validation on PR #360 exposed an audit detail gap:
+  queued jobs reached a terminal state, but the completion audit entry did not
+  carry the async `job_id` and `worker_id`. PR #361 fixed this by passing
+  worker audit metadata through the synchronous verification handler.
+- 2026-05-20: PR #361 merged to `main` at
+  `8a0e8fc390c848b680b8206e6d4ca400683c14f8` and the Deploy to Staging run
+  `26177750399` passed.
+- API staging service `regmind-backend` is running task definition
+  `regmind-staging:319` with image/env SHA
+  `8a0e8fc390c848b680b8206e6d4ca400683c14f8`.
+- Worker staging service `regmind-verification-worker` is running task
+  definition `regmind-verification-worker:2`, desired/running `1/1`, same image
+  SHA as API, command `python verification_worker.py --poll-interval 5`, no
+  load balancer, no container health check inherited from API, and
+  `VERIFICATION_WORKER_ID=staging-worker-1`.
+- `FF_ASYNC_VERIFY` remains absent/off in API `/api/config/environment` and in
+  the worker task environment. PR7 soak has not started.
+- Public smoke checks passed after deploy: `/api/liveness` 200, `/api/health`
+  200, `/portal` 200, and `/backoffice` 200.
+- Controlled queued-job validation passed for job
+  `vjob_1b6c827cbb6b4f5683b9c17f37c8a984`: worker
+  `staging-worker-1` claimed the job, completed it terminally as `succeeded`,
+  updated document `doc_pr7a_runtime_0ac7397a78` to
+  `verification_status=flagged`, populated `verification_results`, and wrote
+  enqueue/start/complete audit entries with `actor_type=system`, `job_id`, and
+  `worker_id`.
+- Simulated killed-worker reclaim validation passed for stale job
+  `vjob_reclaim_0c47e3067c`: stale `in_progress` lock was requeued through
+  `async_verify_worker_reclaimed`, reclaimed by `staging-worker-1`, completed
+  terminally, advanced attempt count from `1` to `2`, updated document
+  `doc_pr7a_reclaim_0c47e3067c`, and wrote reclaim/start/complete audit entries
+  with `actor_type=system`, `job_id`, and `worker_id`.
+- Worker logs showed the expected `verification_worker_started` line on the new
+  task definition and the expected `verification_async_job_health stuck_jobs=1
+  requeued_jobs=1 failed_jobs=0` warning from the controlled stale-lock test.
+- Screening-provider behavior remained frozen: no `FF_ASYNC_VERIFY` flag flip,
+  no PR7 soak, no ComplyAdvantage activation, and no Sumsub provider-selection
+  or workflow-timing change observed.
