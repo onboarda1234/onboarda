@@ -9,7 +9,7 @@ import sqlite3
 import logging
 import hashlib
 from datetime import datetime, timedelta
-from typing import Any, Optional, Dict, List, Tuple
+from typing import Any, Optional, Dict, List, Tuple, Set
 import secrets
 import subprocess
 from pathlib import Path
@@ -2312,6 +2312,62 @@ def log_agent_execution(
                 pass
 
 
+_SQLITE_PREFLIGHT_COLUMN_REPAIRS = (
+    ("edd_cases", "linked_monitoring_alert_id", "INTEGER"),
+    ("periodic_reviews", "linked_monitoring_alert_id", "INTEGER"),
+)
+
+
+def _sqlite_table_exists(db: DBConnection, table: str) -> bool:
+    """Return True when a whitelisted SQLite table already exists."""
+    if db.is_postgres:
+        return False
+
+    row = db.conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _sqlite_column_names(db: DBConnection, table: str) -> Set[str]:
+    """Read column names for a whitelisted SQLite table."""
+    if db.is_postgres:
+        return set()
+
+    allowed_tables = {repair[0] for repair in _SQLITE_PREFLIGHT_COLUMN_REPAIRS}
+    if table not in allowed_tables:
+        raise ValueError(f"Unsupported SQLite preflight table: {table}")
+
+    rows = db.conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def _preflight_sqlite_column_repair(db: DBConnection) -> None:
+    """Repair known additive SQLite schema drift before schema DDL runs."""
+    if db.is_postgres:
+        return
+
+    repaired = False
+    for table, column, definition in _SQLITE_PREFLIGHT_COLUMN_REPAIRS:
+        if not _sqlite_table_exists(db, table):
+            continue
+        if column in _sqlite_column_names(db, table):
+            continue
+
+        logger.warning(
+            "startup: sqlite preflight adding missing column %s.%s",
+            table,
+            column,
+        )
+        db.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        repaired = True
+
+    if repaired:
+        db.commit()
+        logger.info("startup: sqlite preflight column repair committed")
+
+
 def init_db():
     """Initialize database schema (creates tables if they don't exist)."""
     logger.info("startup: entering init_db (schema + inline migrations)")
@@ -2321,6 +2377,9 @@ def init_db():
             schema = _get_postgres_schema()
         else:
             schema = _get_sqlite_schema()
+            logger.info("startup: entering sqlite preflight column repair")
+            _preflight_sqlite_column_repair(db)
+            logger.info("startup: completed sqlite preflight column repair")
         logger.info("startup: executing schema DDL (%d chars)…", len(schema))
         db.executescript(schema)
         db.commit()
