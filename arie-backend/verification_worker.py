@@ -159,6 +159,7 @@ def default_verification_executor(db, job: Dict[str, Any], worker_id: str) -> Di
         audit_actor_type="system",
         started_trigger="async_verify_worker_started",
         completed_trigger="async_verify_worker_completed",
+        audit_detail_extra={"job_id": job["id"], "worker_id": worker_id},
         close_db=False,
     )
     payload = handler.payload or {}

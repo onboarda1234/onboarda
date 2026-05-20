@@ -286,6 +286,10 @@ def test_default_executor_reuses_sync_handler_path_with_async_bypass(monkeypatch
     assert calls[0]["kwargs"]["force_sync"] is True
     assert calls[0]["kwargs"]["audit_actor_type"] == "system"
     assert calls[0]["kwargs"]["completed_trigger"] == "async_verify_worker_completed"
+    assert calls[0]["kwargs"]["audit_detail_extra"] == {
+        "job_id": "vjob_default",
+        "worker_id": "worker-pr7a-default",
+    }
     assert calls[0]["kwargs"]["close_db"] is False
 
 

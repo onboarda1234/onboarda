@@ -6582,7 +6582,8 @@ def _document_verification_transition_state(doc, status=None, **extra):
 
 
 def _log_document_verification_transition(handler, db, user, app, doc, before_state,
-                                          after_state, *, actor_type, trigger):
+                                          after_state, *, actor_type, trigger,
+                                          audit_detail_extra=None):
     detail = {
         "event": "document_verification_state_transition",
         "actor_type": actor_type,
@@ -6593,6 +6594,8 @@ def _log_document_verification_transition(handler, db, user, app, doc, before_st
         "from": before_state.get("verification_status"),
         "to": after_state.get("verification_status"),
     }
+    if audit_detail_extra:
+        detail.update(audit_detail_extra)
     handler.log_audit(
         user,
         "Document Verification State Changed",
@@ -6698,6 +6701,7 @@ class DocumentVerifyHandler(BaseHandler):
         audit_actor_type: str = "user",
         started_trigger: str = "verify_request_started",
         completed_trigger: str = "verify_request_completed",
+        audit_detail_extra=None,
         close_db: bool = True,
     ):
 
@@ -6770,6 +6774,7 @@ class DocumentVerifyHandler(BaseHandler):
                 _in_progress_after,
                 actor_type=audit_actor_type,
                 trigger=started_trigger,
+                audit_detail_extra=audit_detail_extra,
             )
             db.commit()
             doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
@@ -7132,6 +7137,7 @@ class DocumentVerifyHandler(BaseHandler):
             _doc_after,
             actor_type=audit_actor_type,
             trigger=completed_trigger,
+            audit_detail_extra=audit_detail_extra,
         )
         self.log_audit(
             user,
