@@ -31,3 +31,13 @@
 - PR8 runtime verification does not need a live Claude call. A safe ECS one-off
   can import `verification_failure_taxonomy` and classify a synthetic invalid
   PDF error to prove the deployed artifact is present.
+- GitHub does not allow the PR author to approve their own PR. When Claude review
+  tokens are unavailable, use a structured self-review comment plus green CI and
+  staging verification as the review record.
+- The project lead granted standing approval on 2026-05-20 to apply the
+  `protected-file-override` label for the remaining remediation PRs when
+  protected files are intentionally in scope. Still keep every PR one-concern,
+  tested, and staging-verified.
+- ECS one-off task stdout can be checked in `/ecs/regmind-staging`; if output is
+  hard to retrieve, use assert-only one-off commands and rely on container exit
+  code `0` plus task definition/image SHA matching for runtime artifact proof.

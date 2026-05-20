@@ -59,6 +59,10 @@ telemetry, BO refresh behavior, size rejection, audit events, and error rates.
   label can unblock the workflow only when explicit written project-lead approval
   is also present.
 - The override label is an audit mechanism, not standalone approval.
+- On 2026-05-20, the project lead approved using the override label for PR #357
+  and the remaining remediation PRs where protected files are intentionally in
+  scope. This does not relax CI, review, staging verification, or scope-control
+  gates.
 
 ## 2026-05-20 Verification Truthfulness Program Order
 
@@ -103,3 +107,27 @@ telemetry, BO refresh behavior, size rejection, audit events, and error rates.
   it is not treated as the Claude invalid-PDF root cause.
 - Screening-provider behavior remains frozen: no ComplyAdvantage activation, no
   Sumsub provider-selection or workflow-timing change.
+
+## 2026-05-20 PR6 Async Verification Foundation
+
+- `FF_ASYNC_VERIFY` defaults false and remains backend-only/dark until the PR7
+  staging flag flip.
+- Synchronous verify behavior remains the active path while
+  `FF_ASYNC_VERIFY=false`.
+- `documents.verification_status` and `documents.verification_results` remain
+  authoritative compatibility fields.
+- `verification_jobs` is the async foundation table; active jobs are unique per
+  document across `pending`, `retrying`, and `in_progress`.
+- Async job/system transitions must carry explicit system actor metadata,
+  including job and worker context where applicable.
+- Numeric async SLA values are locked for PR6: max pending 900 seconds, max
+  in-progress/stuck threshold 1200 seconds, retry backoff 120 seconds, maximum
+  attempts 3.
+- Alert routing is through the saved CloudWatch query
+  `verification_async_stuck_jobs` to compliance-ops on-call; manual recovery is
+  inspect root cause, resolve it, then requeue or rerun Back Office verification.
+- If async verify is later queued for a document that was previously terminal,
+  the document must move back to truthful `pending`; no stale verified-success
+  rendering is allowed while a new verification is queued.
+- PR6 does not alter Sumsub provider selection, ComplyAdvantage activation, Mesh
+  timing, or live screening workflow behavior.

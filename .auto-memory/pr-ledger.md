@@ -32,7 +32,7 @@
 | Step 0 | Internal impact assessment | Done | Findings: 314 active docs; 94 verified, 152 flagged, 68 pending; at least 157 active non-verified docs in false-success risk zone; provider-error-driven current docs `29/314 = 9.2%`; provider-error-driven flagged docs `29/152 = 19.1%`; recommended order changed to `PR5 -> PR8 -> PR6 -> PR7 -> PR9`. |
 | PR 5 | Truthful verification state model + coherent `submit-kyc` | Merged, deployed, staging-verified | PR #352. Merge SHA `2833e40f5608cbaeece06b89854788d78e8c66eb`. Adds backend-owned verification states, audited transitions, hard `submit-kyc` verified-doc gate, portal/BO truthful rendering, and server-driven BO polling config. |
 | PR 8 | Claude/provider reliability remediation | Merged, deployed, staging-verified | PR #354. Merge SHA `564ece3f0747774c95dce62302658ca0bcad698c`. Classifies provider/request-path failures, persists provider failures as `failed`, keeps business review outcomes `flagged`, and adds PII-safe telemetry/query material. |
-| PR 6 | Async verification foundation, dark | Planned after PR8 | `FF_ASYNC_VERIFY=false`; no staging flag flip in this PR. |
+| PR 6 | Async verification foundation, dark | Merged, deployed, staging-verified | PR #357. Merge SHA `68d0804d795a1f4bae607ac24b9c461793571c35`. Adds `verification_jobs`, worker/job primitives, status endpoint, SLA/query material; `FF_ASYNC_VERIFY=false` and no screening-provider behavior changed. |
 | PR 7 | Async verify staging flag flip + soak | Planned after PR6 | Staging only, 72h minimum soak. |
 | PR 9 | Duplicate detection redesign | Planned after PR7 | Stored hash + indexed lookup, safe legacy handling. |
 
@@ -87,3 +87,27 @@
   through ECS task definition image/env instead.
 - CloudWatch check over the deploy window found no `/ecs/regmind-staging` events
   matching `ERROR`, `connection pool exhausted`, or `falling back to mock mode`.
+
+## PR6 Deployment Verification
+
+- 2026-05-20: PR #357 merged to `main` at
+  `68d0804d795a1f4bae607ac24b9c461793571c35`.
+- Main CI passed before merge and the post-merge Deploy to Staging run
+  `26166398868` passed: `lint-and-test`, `pdf-tests`, `docker-validate`, and
+  ECS deploy.
+- ECS service `regmind-backend` on cluster `regmind-staging` is running task
+  definition `regmind-staging:313`, rollout `COMPLETED`, desired/running/pending
+  `1/1/0`.
+- Deployed image and task environment are SHA-pinned:
+  `782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:68d0804d795a1f4bae607ac24b9c461793571c35`;
+  `GIT_SHA` and `IMAGE_TAG` match the merge SHA.
+- Runtime artifact check passed with a one-off ECS task from
+  `regmind-staging:313`: `verification_jobs` table count `1`,
+  active-document unique index count `1`, `FF_ASYNC_VERIFY=false`, and async SLA
+  config present with `stuck_job_threshold_seconds=1200`.
+- Public staging checks passed: `/api/liveness` 200, `/api/health` 200,
+  `/api/config/environment` 200, `/portal` 200, `/backoffice` 200.
+- `/api/config/environment` did not expose `FF_ASYNC_VERIFY`; client-visible
+  flags remained limited to the intended allowlist.
+- CloudWatch deploy-window scan found no migration failures, connection pool
+  exhaustion, or mock-mode fallback.
