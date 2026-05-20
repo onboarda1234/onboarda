@@ -5402,6 +5402,88 @@ function normalizePepDisplay(value) {
   return 'Not verified yet';
 }
 
+function renderPepDeclarationDetailsHtml(person) {
+  var declaration = (person && person.pep_declaration && typeof person.pep_declaration === 'object') ? person.pep_declaration : {};
+  var source = String(person && (person.pep_verification_source || declaration.pep_verification_source) || '').toLowerCase();
+  var status = String(person && (person.pep_status || declaration.pep_status) || '').toLowerCase();
+  var screeningConfirmed = (source === 'screening_review' || source === 'screening_provider') && (status === 'confirmed_pep' || person.officer_verified_pep === true);
+  var rows = [
+    ['Client-declared PEP', person && person.client_declared_pep_display ? person.client_declared_pep_display : (declaration.client_declared_pep || declaration.declared_pep ? 'Client declared PEP' : 'Not captured')],
+    ['Officer-verified PEP', person && person.officer_verified_pep_display ? person.officer_verified_pep_display : 'Not verified yet'],
+    ['Screening-confirmed PEP', screeningConfirmed ? 'Yes' : 'No confirmed screening PEP'],
+    ['PEP role/type', declaration.pep_role_type || declaration.role_type || declaration.pep_type],
+    ['Position/title', declaration.position_title || declaration.public_function],
+    ['Country/jurisdiction', declaration.pep_country_jurisdiction || declaration.country_jurisdiction || declaration.jurisdiction],
+    ['Relationship type', declaration.relationship_type],
+    ['Related PEP name', declaration.related_pep_name],
+    ['Start date', declaration.start_date],
+    ['End date / current status', declaration.current_status ? 'Current' : declaration.end_date],
+    ['Source of wealth detail', declaration.source_of_wealth_detail || declaration.source_of_wealth_note],
+    ['Source of funds detail', declaration.source_of_funds_detail || declaration.source_of_funds_note],
+    ['Supporting evidence/reference', declaration.supporting_note_evidence || declaration.evidence_reference || declaration.supporting_evidence_reference],
+    ['Additional notes', declaration.notes]
+  ].filter(function(row) {
+    return normalizeDetailValue(row[1]) !== '—';
+  });
+  if (!rows.length) return '';
+  return '<div style="margin-top:8px;padding:8px 10px;background:#fffbeb;border:1px solid #fbbf24;border-radius:8px;">' +
+    '<div style="font-size:10px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Structured PEP declaration</div>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:6px;">' +
+      rows.map(function(row) {
+        return '<div><div style="font-size:9px;color:#92400e;text-transform:uppercase;font-weight:700;">' + escapeHtml(row[0]) + '</div>' +
+          '<div style="font-size:12px;color:var(--text1);word-break:break-word;">' + escapeHtml(normalizeDetailValue(row[1])) + '</div></div>';
+      }).join('') +
+    '</div>' +
+  '</div>';
+}
+
+function buildPrescreeningPartyFallback(items, personType) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter(function(item) {
+      return item && (
+        item.first_name || item.last_name || item.full_name || item.name ||
+        item.is_pep || item.pep_declaration || item.ownership_pct
+      );
+    })
+    .map(function(item, idx) {
+      var declaration = (item.pep_declaration && typeof item.pep_declaration === 'object') ? item.pep_declaration : {};
+      var declared = declaration.declared_pep === true || declaration.client_declared_pep === true || normalizePepDisplay(item.is_pep) === 'Yes';
+      var keyPrefix = personType === 'ubo' ? 'ubo' : 'dir';
+      var personKey = item.person_key || item.personKey || (keyPrefix + (idx + 1));
+      return {
+        id: '',
+        person_key: personKey,
+        name: item.full_name || item.name || [item.first_name || '', item.last_name || ''].join(' ').trim(),
+        first_name: item.first_name || '',
+        last_name: item.last_name || '',
+        nat: item.nationality || '',
+        dob: item.date_of_birth || '',
+        pct: item.ownership_pct || item.pct || 0,
+        pep: declared ? 'Yes' : normalizePepDisplay(item.is_pep),
+        pep_declaration: declaration,
+        declared_pep: declared,
+        verified_pep: false,
+        client_declared_pep: declared,
+        officer_verified_pep: false,
+        pep_status: declared ? 'declared_yes' : 'declared_no',
+        pep_verification_source: declaration.pep_verification_source || 'client_declaration',
+        client_declared_pep_display: declared ? 'Client declared PEP' : 'Client declared no PEP',
+        officer_verified_pep_display: 'Not verified yet',
+        pep_status_display: declared ? 'Client-declared PEP' : 'Not verified yet'
+      };
+    });
+}
+
+function personHasDeclaredOrVerifiedPep(person) {
+  if (!person) return false;
+  var declaration = (person.pep_declaration && typeof person.pep_declaration === 'object') ? person.pep_declaration : {};
+  if (person.client_declared_pep === true || person.declared_pep === true || person.officer_verified_pep === true) return true;
+  if (declaration.client_declared_pep === true || declaration.declared_pep === true) return true;
+  var label = String(person.pep_status_display || person.pep || person.pep_status || '').toLowerCase();
+  return label === 'yes' || label.indexOf('client-declared pep') >= 0 || label.indexOf('confirmed pep') >= 0 || label.indexOf('officer-verified pep') >= 0;
+}
+
 function buildPartyDisplayName(person) {
   if (!person) return 'Unnamed party';
   var combined = [person.first_name || '', person.last_name || ''].join(' ').trim();
@@ -5788,16 +5870,17 @@ async function fetchApplicationDetail(ref) {
       reviewed_at: doc.reviewed_at || ''
     };
   });
-  var directors = (detail.directors || []).map(function(d) {
+  var rawDirectors = (detail.directors && detail.directors.length) ? detail.directors : buildPrescreeningPartyFallback(psData.directors || [], 'director');
+  var directors = rawDirectors.map(function(d) {
     return {
       id: d.id || '',
       person_key: d.person_key || '',
-      name: d.full_name || '',
+      name: d.full_name || d.name || '',
       first_name: d.first_name || '',
       last_name: d.last_name || '',
-      nat: d.nationality || '',
+      nat: d.nationality || d.nat || '',
       dob: d.date_of_birth || '',
-      pep: d.pep_status_display || normalizePepDisplay(d.is_pep),
+      pep: d.pep_status_display || d.pep || normalizePepDisplay(d.is_pep),
       pep_declaration: d.pep_declaration || {},
       declared_pep: d.declared_pep,
       verified_pep: d.verified_pep,
@@ -5810,17 +5893,18 @@ async function fetchApplicationDetail(ref) {
       pep_status_display: d.pep_status_display || 'Not verified yet'
     };
   });
-  var ubos = (detail.ubos || []).map(function(u) {
+  var rawUbos = (detail.ubos && detail.ubos.length) ? detail.ubos : buildPrescreeningPartyFallback(psData.ubos || [], 'ubo');
+  var ubos = rawUbos.map(function(u) {
     return {
       id: u.id || '',
       person_key: u.person_key || '',
-      name: u.full_name || '',
+      name: u.full_name || u.name || '',
       first_name: u.first_name || '',
       last_name: u.last_name || '',
-      nat: u.nationality || '',
+      nat: u.nationality || u.nat || '',
       dob: u.date_of_birth || '',
-      pct: u.ownership_pct || 0,
-      pep: u.pep_status_display || normalizePepDisplay(u.is_pep),
+      pct: u.ownership_pct || u.pct || 0,
+      pep: u.pep_status_display || u.pep || normalizePepDisplay(u.is_pep),
       pep_declaration: u.pep_declaration || {},
       declared_pep: u.declared_pep,
       verified_pep: u.verified_pep,
@@ -5875,7 +5959,7 @@ async function fetchApplicationDetail(ref) {
     ubos: ubos,
     intermediaries: intermediaries,
     pepCount: (function() {
-      var declared = directors.filter(function(d) { return d.pep === 'Yes'; }).length + ubos.filter(function(u) { return u.pep === 'Yes'; }).length;
+      var declared = directors.filter(personHasDeclaredOrVerifiedPep).length + ubos.filter(personHasDeclaredOrVerifiedPep).length;
       if (declared > 0) return declared;
       var sr = (psData || {}).screening_report || {};
       var screeningPeps = (sr.director_screenings || []).filter(function(s) { return s.undeclared_pep; }).length +
@@ -6065,6 +6149,7 @@ function renderAuthoritativeAppDetail(app, options) {
     return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + escapeHtml(labels.join(' | ')) + '</div>' +
+      renderPepDeclarationDetailsHtml(d) +
     '</div>';
   }).join('') : '<div style="font-size:12px;color:var(--text3);">No directors persisted.</div>';
   personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">UBOs</div>';
@@ -6080,6 +6165,7 @@ function renderAuthoritativeAppDetail(app, options) {
     return '<div style="padding:10px 12px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border1);border-radius:8px;">' +
       '<div style="font-size:13px;font-weight:600;color:var(--text1);">' + escapeHtml(displayName) + '</div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:4px;">' + meta.join(' | ') + '</div>' +
+      renderPepDeclarationDetailsHtml(u) +
     '</div>';
   }).join('') : '<div style="font-size:12px;color:var(--text3);">No UBOs persisted.</div>';
   personsHtml += '<div style="font-size:12px;font-weight:600;margin:10px 0 6px;">Intermediary Shareholders</div>';

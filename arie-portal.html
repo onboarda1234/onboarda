@@ -2478,6 +2478,7 @@
             </table>
           </div>
           <button type="button" class="btn-add" onclick="addUBORow()">+ Add UBO</button>
+          <div id="pep-prescreening-panels" style="margin-top:16px;"></div>
 
           <!-- 7. Business -->
           <div class="section-title">Business Operations</div>
@@ -4963,6 +4964,7 @@ function resetPortalApplicationState() {
   addUBORow();
   _suppressKYCSync = false;
   syncDirectorsUBOsToKYC();
+  renderPrescreeningPepPanels();
   checkPEPAndShowDeclaration();
   resetPortalReviewState();
   syncConditionalFormState();
@@ -5559,6 +5561,7 @@ function addDirectorRow() {
   populateNationalitySelects();
   setDobMaxToday();
   syncDirectorsUBOsToKYC();
+  renderPrescreeningPepPanels();
 }
 function addUBORow() {
   const tbody = document.getElementById('ubos-body');
@@ -5580,6 +5583,7 @@ function addUBORow() {
   populateNationalitySelects();
   setDobMaxToday();
   syncDirectorsUBOsToKYC();
+  renderPrescreeningPepPanels();
 }
 
 function addIntermediaryRow() {
@@ -5602,6 +5606,7 @@ function addIntermediaryRow() {
 function removeRow(btn) {
   btn.closest('tr').remove();
   syncDirectorsUBOsToKYC();
+  renderPrescreeningPepPanels();
 }
 
 // ─── Build upload panel content based on person type ───────────
@@ -5662,6 +5667,63 @@ function buildUploadPanelHTML(p) {
       '</div>' +
     '</div>';
   }
+}
+
+function buildPepDeclarationPanelHTML(personId, visible) {
+  return '<div class="pep-declaration-panel' + (visible ? ' visible' : '') + '" id="pep-panel-' + personId + '">' +
+    '<h4>&#9888;&#65039; PEP Declaration Form</h4>' +
+    '<p style="font-size:12px;color:var(--text3);margin:0 0 12px 0;">This person has been declared as a Politically Exposed Person. Complete the structured declaration before submission.</p>' +
+    '<div class="pep-form-grid">' +
+      '<div><label>PEP role/type <span class="req">*</span></label><select id="pep-role-type-' + personId + '"><option value="">Select role/type</option><option value="domestic_pep">Domestic PEP</option><option value="foreign_pep">Foreign PEP</option><option value="international_organisation_pep">International organisation PEP</option><option value="family_member">Family member of a PEP</option><option value="close_associate">Close associate of a PEP</option></select></div>' +
+      '<div><label>Public function / position title <span class="req">*</span></label><input type="text" id="pep-position-title-' + personId + '" placeholder="e.g. Minister of Finance, Member of Parliament" /></div>' +
+      '<div><label>PEP country / jurisdiction <span class="req">*</span></label><input type="text" id="pep-country-jurisdiction-' + personId + '" placeholder="Country or jurisdiction connected to the PEP role" /></div>' +
+      '<div><label>Relationship to PEP</label><select id="pep-relationship-type-' + personId + '"><option value="self">Self</option><option value="family_member">Family member</option><option value="close_associate">Close associate</option><option value="business_associate">Business associate</option><option value="other">Other</option></select></div>' +
+      '<div><label>Related PEP name</label><input type="text" id="pep-related-name-' + personId + '" placeholder="Required for family member / close associate declarations" /></div>' +
+      '<div><label>Role start date <span class="req">*</span></label><input type="date" id="pep-start-date-' + personId + '" /></div>' +
+      '<div><label>Role end date / current status <span class="req">*</span></label><div style="display:flex;gap:8px;align-items:center;"><input type="date" id="pep-end-date-' + personId + '" style="flex:1;" /><label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);"><input type="checkbox" id="pep-current-' + personId + '" onchange="togglePepCurrentStatus(\'' + personId + '\')" /> Current</label></div></div>' +
+      '<div><label>Public function details <span class="req">*</span></label><textarea id="pep-function-' + personId + '" placeholder="Describe the public function, mandate, dates, and decision-making influence."></textarea></div>' +
+      '<div><label>Estimated Net Worth</label><table class="pep-net-worth-table"><tr><th>Category</th><th>Estimated Value (USD)</th></tr><tr><td>Assets (real estate, vehicles, securities, etc.)</td><td><input type="text" id="pep-assets-' + personId + '" placeholder="e.g. 500,000" style="border:none;background:transparent;" /></td></tr><tr><td>Liabilities</td><td><input type="text" id="pep-liabilities-' + personId + '" placeholder="e.g. 100,000" style="border:none;background:transparent;" /></td></tr></table></div>' +
+      '<div><label>Origin of Funds / Wealth (select all that apply)</label><div class="pep-sow-checklist"><label><input type="checkbox" value="business_operations" /> Business operations / profits</label><label><input type="checkbox" value="investment_returns" /> Returns on investments</label><label><input type="checkbox" value="salary_employment" /> Salaries / employment income</label><label><input type="checkbox" value="loans" /> Loans</label><label><input type="checkbox" value="inheritance" /> Inheritance</label><label><input type="checkbox" value="sale_of_property" /> Sale of property</label><label><input type="checkbox" value="lottery_gambling" /> Lottery / Gambling</label><label><input type="checkbox" value="divorce_settlement" /> Divorce settlement</label><label><input type="checkbox" value="retirement_income" /> Retirement income</label><label><input type="checkbox" value="gift" /> Gift</label></div></div>' +
+      '<div><label>Source of wealth detail <span class="req">*</span></label><textarea id="pep-sow-detail-' + personId + '" placeholder="Explain how the wealth was generated and identify supporting evidence."></textarea></div>' +
+      '<div><label>Source of funds detail</label><textarea id="pep-source-funds-detail-' + personId + '" placeholder="Explain the expected source of funds for this relationship, if different from source of wealth."></textarea></div>' +
+      '<div><label>Supporting note / evidence reference <span class="req">*</span></label><textarea id="pep-evidence-reference-' + personId + '" placeholder="Reference documents, links, public register entries, or officer notes supporting the declaration."></textarea></div>' +
+      '<div><label>Additional PEP notes</label><textarea id="pep-notes-' + personId + '" placeholder="Any additional context relevant to this PEP declaration."></textarea></div>' +
+      '<div><label>&#128206; Upload Supporting Documents</label><div class="doc-upload-area" onclick="document.getElementById(\'pep-docs-' + personId + '\').click()" style="margin-top:4px;"><span>&#128206;</span> <span id="pep-docs-lbl-' + personId + '">Click to upload supporting documents</span></div><input type="file" id="pep-docs-' + personId + '" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" multiple onchange="handlePEPUpload(\'' + personId + '\',this)" /></div>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderPrescreeningPepPanels() {
+  var container = document.getElementById('pep-prescreening-panels');
+  if (!container) return;
+  var previous = [];
+  document.querySelectorAll('#directors-body tr, #ubos-body tr').forEach(function(row) {
+    var key = row.dataset.personKey || row.dataset.personkey;
+    var pepSelect = row.querySelector('.pep-select');
+    if (key && pepSelect && pepSelect.value === 'Yes') {
+      previous.push({
+        person_key: key,
+        pep_declaration: collectPepDeclarationPayload(key, true, row.closest('#directors-body') ? 'director' : 'ubo')
+      });
+    }
+  });
+  var html = '';
+  document.querySelectorAll('#directors-body tr').forEach(function(row, index) {
+    var pepSelect = row.querySelector('.pep-select');
+    if (!pepSelect || pepSelect.value !== 'Yes') return;
+    var personKey = getOrAssignOwnershipPersonKey(row, 'dir', '#directors-body tr');
+    html += '<div style="margin:12px 0 8px;font-size:12px;font-weight:700;color:#92400e;">Director ' + (index + 1) + ' PEP declaration</div>' +
+      buildPepDeclarationPanelHTML(personKey, true);
+  });
+  document.querySelectorAll('#ubos-body tr').forEach(function(row, index) {
+    var pepSelect = row.querySelector('.pep-select');
+    if (!pepSelect || pepSelect.value !== 'Yes') return;
+    var personKey = getOrAssignOwnershipPersonKey(row, 'ubo', '#ubos-body tr');
+    html += '<div style="margin:12px 0 8px;font-size:12px;font-weight:700;color:#92400e;">UBO ' + (index + 1) + ' PEP declaration</div>' +
+      buildPepDeclarationPanelHTML(personKey, true);
+  });
+  container.innerHTML = html;
+  restorePepDeclarationList(previous);
 }
 
 // ─── Sync Directors/UBOs table to KYC Persons list ───────────
@@ -5770,17 +5832,7 @@ function syncDirectorsUBOsToKYC() {
       '<div class="kyc-upload-panel active" id="kyc-upload-' + p.id + '">' +
         buildUploadPanelHTML(p) +
       '</div>' +
-      '<div class="pep-declaration-panel' + (p.isPEP ? ' visible' : '') + '" id="pep-panel-' + p.id + '">' +
-        '<h4>&#9888;&#65039; PEP Declaration Form</h4>' +
-        '<p style="font-size:12px;color:var(--text3);margin:0 0 12px 0;">This person has been identified as a Politically Exposed Person. Please complete the declaration below.</p>' +
-        '<div class="pep-form-grid">' +
-          '<div><label>Public function held (current or past)</label><textarea id="pep-function-' + p.id + '" placeholder="Describe the public function, when it was held, and for how long..."></textarea></div>' +
-          '<div><label>Estimated Net Worth</label><table class="pep-net-worth-table"><tr><th>Category</th><th>Estimated Value (USD)</th></tr><tr><td>Assets (real estate, vehicles, securities, etc.)</td><td><input type="text" id="pep-assets-' + p.id + '" placeholder="e.g. 500,000" style="border:none;background:transparent;" /></td></tr><tr><td>Liabilities</td><td><input type="text" id="pep-liabilities-' + p.id + '" placeholder="e.g. 100,000" style="border:none;background:transparent;" /></td></tr></table></div>' +
-          '<div><label>Origin of Funds / Wealth (select all that apply)</label><div class="pep-sow-checklist"><label><input type="checkbox" /> Business operations / profits</label><label><input type="checkbox" /> Returns on investments</label><label><input type="checkbox" /> Salaries / employment income</label><label><input type="checkbox" /> Loans</label><label><input type="checkbox" /> Inheritance</label><label><input type="checkbox" /> Sale of property</label><label><input type="checkbox" /> Lottery / Gambling</label><label><input type="checkbox" /> Divorce settlement</label></div></div>' +
-          '<div><label>Additional details on origin of funds/wealth</label><textarea id="pep-sow-detail-' + p.id + '" placeholder="Please provide explanation and any supporting documentary evidence..."></textarea></div>' +
-          '<div><label>&#128206; Upload Supporting Documents</label><div class="doc-upload-area" onclick="document.getElementById(\'pep-docs-' + p.id + '\').click()" style="margin-top:4px;"><span>&#128206;</span> <span id="pep-docs-lbl-' + p.id + '">Click to upload supporting documents</span></div><input type="file" id="pep-docs-' + p.id + '" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" multiple onchange="handlePEPUpload(\'' + p.id + '\',this)" /></div>' +
-        '</div>' +
-      '</div>' +
+      (p.isPEP ? '<div class="pep-declaration-panel visible" id="pep-kyc-summary-' + p.id + '"><h4>&#9888;&#65039; PEP Declaration Captured</h4><p style="font-size:12px;color:var(--text3);margin:0;">Structured PEP details are captured in the pre-screening PEP declaration section and will be shown to officers in the back office and memo.</p></div>' : '') +
       (p.type !== 'intermediary'
         ? '<div class="kyc-link-panel" id="kyc-link-' + p.id + '">' +
             '<div class="kyc-link-form">' +
@@ -5804,6 +5856,172 @@ function getCheckboxValues(containerId) {
   if (!container) return [];
   return Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(function(c) {
     return c.value;
+  });
+}
+
+function getPepFieldValue(id) {
+  var el = document.getElementById(id);
+  if (!el) return '';
+  return typeof el.value === 'string' ? el.value.trim() : (el.value || '');
+}
+
+function togglePepCurrentStatus(personId) {
+  var current = document.getElementById('pep-current-' + personId);
+  var endDate = document.getElementById('pep-end-date-' + personId);
+  if (current && endDate) {
+    endDate.disabled = !!current.checked;
+    if (current.checked) endDate.value = '';
+  }
+}
+
+function collectPepSourceOfWealth(personId) {
+  var panel = document.getElementById('pep-panel-' + personId);
+  var values = [];
+  if (panel) {
+    panel.querySelectorAll('.pep-sow-checklist input:checked').forEach(function(cb) {
+      var text = (cb.parentElement.textContent || '').trim();
+      values.push(cb.value && cb.value !== 'on' ? cb.value : text);
+    });
+  }
+  return values;
+}
+
+function collectPepDeclarationPayload(personId, isPEP, personType) {
+  if (!isPEP) {
+    return {
+      person_type: personType || '',
+      person_key: personId,
+      declared_pep: false,
+      client_declared_pep: false,
+      pep_status: 'declared_no',
+      pep_schema_version: 'portal_pep_v2'
+    };
+  }
+  var pepDocs = document.getElementById('pep-docs-' + personId);
+  var roleType = getPepFieldValue('pep-role-type-' + personId);
+  var positionTitle = getPepFieldValue('pep-position-title-' + personId);
+  var publicFunction = getPepFieldValue('pep-function-' + personId);
+  var country = getPepFieldValue('pep-country-jurisdiction-' + personId);
+  var relationshipType = getPepFieldValue('pep-relationship-type-' + personId) || 'self';
+  var currentRole = !!(document.getElementById('pep-current-' + personId) || {}).checked;
+  var evidenceReference = getPepFieldValue('pep-evidence-reference-' + personId);
+  return {
+    person_type: personType || '',
+    person_key: personId,
+    declared_pep: true,
+    client_declared_pep: true,
+    pep_status: 'declared_yes',
+    pep_verification_source: 'client_declaration',
+    pep_schema_version: 'portal_pep_v2',
+    pep_role_type: roleType,
+    role_type: roleType,
+    public_function: publicFunction || positionTitle,
+    position_title: positionTitle || publicFunction,
+    pep_country_jurisdiction: country,
+    country_jurisdiction: country,
+    relationship_type: relationshipType,
+    related_pep_name: getPepFieldValue('pep-related-name-' + personId),
+    start_date: getPepFieldValue('pep-start-date-' + personId),
+    end_date: currentRole ? '' : getPepFieldValue('pep-end-date-' + personId),
+    current_status: currentRole,
+    estimated_assets_usd: getPepFieldValue('pep-assets-' + personId),
+    estimated_liabilities_usd: getPepFieldValue('pep-liabilities-' + personId),
+    source_of_wealth_categories: collectPepSourceOfWealth(personId),
+    source_of_wealth_detail: getPepFieldValue('pep-sow-detail-' + personId),
+    source_of_funds_detail: getPepFieldValue('pep-source-funds-detail-' + personId),
+    supporting_note_evidence: evidenceReference,
+    evidence_reference: evidenceReference,
+    notes: getPepFieldValue('pep-notes-' + personId),
+    supporting_document_names: pepDocs && pepDocs.files ? Array.from(pepDocs.files).map(function(file) { return file.name; }) : []
+  };
+}
+
+function getPepDeclarationMissingFields(personId) {
+  var missing = [];
+  var roleType = getPepFieldValue('pep-role-type-' + personId);
+  var relationshipType = getPepFieldValue('pep-relationship-type-' + personId) || 'self';
+  if (!roleType) missing.push('PEP role/type');
+  if (!getPepFieldValue('pep-position-title-' + personId) && !getPepFieldValue('pep-function-' + personId)) missing.push('position/title');
+  if (!getPepFieldValue('pep-country-jurisdiction-' + personId)) missing.push('country/jurisdiction');
+  if ((roleType === 'family_member' || roleType === 'close_associate' || relationshipType !== 'self') && !getPepFieldValue('pep-related-name-' + personId)) missing.push('related PEP name');
+  if (!getPepFieldValue('pep-start-date-' + personId)) missing.push('start date');
+  if (!((document.getElementById('pep-current-' + personId) || {}).checked) && !getPepFieldValue('pep-end-date-' + personId)) missing.push('end date or current status');
+  if (!getPepFieldValue('pep-sow-detail-' + personId) && !getPepFieldValue('pep-source-funds-detail-' + personId)) missing.push('source of wealth/funds detail');
+  if (!getPepFieldValue('pep-evidence-reference-' + personId) && !getPepFieldValue('pep-notes-' + personId)) missing.push('supporting evidence/reference');
+  return missing;
+}
+
+function isPepDeclarationComplete(personId) {
+  return getPepDeclarationMissingFields(personId).length === 0;
+}
+
+function validateAllPepDeclarations() {
+  renderPrescreeningPepPanels();
+  var rows = [];
+  document.querySelectorAll('#directors-body tr').forEach(function(row, index) {
+    rows.push({ row: row, type: 'director', label: 'Director ' + (index + 1), prefix: 'dir' });
+  });
+  document.querySelectorAll('#ubos-body tr').forEach(function(row, index) {
+    rows.push({ row: row, type: 'ubo', label: 'UBO ' + (index + 1), prefix: 'ubo' });
+  });
+  for (var i = 0; i < rows.length; i++) {
+    var pepSelect = rows[i].row.querySelector('.pep-select');
+    if (!pepSelect || pepSelect.value !== 'Yes') continue;
+    var personKey = getOrAssignOwnershipPersonKey(rows[i].row, rows[i].prefix, rows[i].type === 'director' ? '#directors-body tr' : '#ubos-body tr');
+    var missing = getPepDeclarationMissingFields(personKey);
+    if (missing.length) {
+      var firstField = document.getElementById('pep-role-type-' + personKey) || document.getElementById('pep-function-' + personKey);
+      if (firstField && typeof firstField.focus === 'function') firstField.focus();
+      return { valid: false, label: rows[i].label, missing: missing, person_key: personKey };
+    }
+  }
+  return { valid: true, missing: [] };
+}
+
+function restorePepDeclaration(personId, declaration) {
+  if (!personId || !declaration || typeof declaration !== 'object') return;
+  var values = {
+    'pep-role-type-': declaration.pep_role_type || declaration.role_type || declaration.pep_type || '',
+    'pep-position-title-': declaration.position_title || declaration.public_function || '',
+    'pep-country-jurisdiction-': declaration.pep_country_jurisdiction || declaration.country_jurisdiction || declaration.jurisdiction || '',
+    'pep-relationship-type-': declaration.relationship_type || 'self',
+    'pep-related-name-': declaration.related_pep_name || '',
+    'pep-start-date-': declaration.start_date || '',
+    'pep-end-date-': declaration.end_date || '',
+    'pep-function-': declaration.public_function || declaration.position_title || '',
+    'pep-assets-': declaration.estimated_assets_usd || '',
+    'pep-liabilities-': declaration.estimated_liabilities_usd || '',
+    'pep-sow-detail-': declaration.source_of_wealth_detail || declaration.source_of_wealth_note || '',
+    'pep-source-funds-detail-': declaration.source_of_funds_detail || declaration.source_of_funds_note || '',
+    'pep-evidence-reference-': declaration.supporting_note_evidence || declaration.evidence_reference || declaration.supporting_evidence_reference || '',
+    'pep-notes-': declaration.notes || ''
+  };
+  Object.keys(values).forEach(function(prefix) {
+    var el = document.getElementById(prefix + personId);
+    if (el) el.value = values[prefix] || '';
+  });
+  var current = document.getElementById('pep-current-' + personId);
+  if (current) current.checked = !!declaration.current_status || (!declaration.end_date && !!declaration.start_date);
+  togglePepCurrentStatus(personId);
+  var selectedSow = Array.isArray(declaration.source_of_wealth_categories) ? declaration.source_of_wealth_categories : [];
+  var panel = document.getElementById('pep-panel-' + personId);
+  if (panel) {
+    panel.querySelectorAll('.pep-sow-checklist input').forEach(function(cb) {
+      var text = (cb.parentElement.textContent || '').trim();
+      cb.checked = selectedSow.indexOf(cb.value) !== -1 || selectedSow.indexOf(text) !== -1;
+    });
+  }
+  var docsLabel = document.getElementById('pep-docs-lbl-' + personId);
+  if (docsLabel && Array.isArray(declaration.supporting_document_names) && declaration.supporting_document_names.length) {
+    docsLabel.textContent = declaration.supporting_document_names.length + ' supporting document(s) referenced';
+  }
+}
+
+function restorePepDeclarationList(parties) {
+  if (!Array.isArray(parties)) return;
+  parties.forEach(function(party) {
+    var personKey = party && (party.person_key || party.personKey);
+    if (personKey && party.pep_declaration) restorePepDeclaration(personKey, party.pep_declaration);
   });
 }
 
@@ -5832,24 +6050,8 @@ async function submitPrescreening(e) {
     return !!(el && el.checked);
   }
 
-  function collectPepDeclaration(personId, isPEP) {
-    if (!isPEP) return {};
-    var panel = document.getElementById('pep-panel-' + personId);
-    var pepDocs = document.getElementById('pep-docs-' + personId);
-    var sourceOfWealth = [];
-    if (panel) {
-      panel.querySelectorAll('.pep-sow-checklist input:checked').forEach(function(cb) {
-        sourceOfWealth.push((cb.parentElement.textContent || '').trim());
-      });
-    }
-    return {
-      public_function: getFieldValue('pep-function-' + personId),
-      estimated_assets_usd: getFieldValue('pep-assets-' + personId),
-      estimated_liabilities_usd: getFieldValue('pep-liabilities-' + personId),
-      source_of_wealth_categories: sourceOfWealth,
-      source_of_wealth_detail: getFieldValue('pep-sow-detail-' + personId),
-      supporting_document_names: pepDocs && pepDocs.files ? Array.from(pepDocs.files).map(function(file) { return file.name; }) : []
-    };
+  function collectPepDeclaration(personId, isPEP, personType) {
+    return collectPepDeclarationPayload(personId, isPEP, personType);
   }
 
   // Sanctions check
@@ -6008,6 +6210,13 @@ async function submitPrescreening(e) {
   var licenceDetailsEl = document.getElementById('f-licences');
   if (licenceDetailsEl) licenceDetailsEl.style.borderColor = '';
 
+  var pepValidation = validateAllPepDeclarations();
+  if (!pepValidation.valid) {
+    btn.disabled = false; btn.innerHTML = '🚀 Submit Pre-Screening';
+    showToast('error', 'PEP Declaration Required', pepValidation.label + ' is marked PEP. Complete: ' + pepValidation.missing.join(', ') + '.');
+    return;
+  }
+
   var dirRows = document.querySelectorAll('#directors-body tr');
   var directors = [];
   dirRows.forEach(function(row) {
@@ -6028,7 +6237,7 @@ async function submitPrescreening(e) {
         nationality: (row.querySelector('.nat-select') || {}).value || '',
         date_of_birth: dobInput ? dobInput.value : '',
         is_pep: isPep,
-        pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes')
+        pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes', 'director')
       });
     }
   });
@@ -6055,7 +6264,7 @@ async function submitPrescreening(e) {
         date_of_birth: dobInput ? dobInput.value : '',
         ownership_pct: ownershipInput ? (parseFloat(ownershipInput.value) || 0) : 0,
         is_pep: isPep,
-        pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes')
+        pep_declaration: collectPepDeclaration(personKey, isPep === 'Yes', 'ubo')
       });
     }
   });
@@ -7100,6 +7309,14 @@ document.addEventListener('change', function(e) {
     var btn2 = document.getElementById('btn-submit-docs');
     if (btn2) { btn2.disabled = !e.target.checked; btn2.style.opacity = e.target.checked ? '1' : '0.5'; btn2.style.cursor = e.target.checked ? 'pointer' : 'not-allowed'; }
   }
+  if (e.target.classList && e.target.classList.contains('pep-select')) {
+    syncDirectorsUBOsToKYC();
+    renderPrescreeningPepPanels();
+    checkPEPAndShowDeclaration();
+  }
+  if (e.target.id && e.target.id.indexOf('pep-current-') === 0) {
+    togglePepCurrentStatus(e.target.id.replace('pep-current-', ''));
+  }
 });
 
 // ─── Pre-screening consent validation ─────────────────────
@@ -7235,13 +7452,16 @@ function collectFormData() {
     var natSel = row.querySelector('select.nat-select');
     var pepSel = row.querySelector('select.pep-select');
     var dobInput = row.querySelector('.dob-input') || row.querySelector('input[type="date"]');
+    var personKey = row.dataset.personkey || row.dataset.personKey || getOrAssignOwnershipPersonKey(row, 'dir', '#directors-body tr');
+    var isPep = pepSel ? pepSel.value === 'Yes' : false;
     data.directors.push({
       first_name: texts[0] ? texts[0].value : '',
       last_name: texts[1] ? texts[1].value : '',
       nationality: natSel ? natSel.value : '',
       date_of_birth: dobInput ? dobInput.value : '',
       is_pep: pepSel ? pepSel.value : 'No',
-      person_key: row.dataset.personkey || row.dataset.personKey || ''
+      person_key: personKey,
+      pep_declaration: collectPepDeclarationPayload(personKey, isPep, 'director')
     });
   });
 
@@ -7253,6 +7473,8 @@ function collectFormData() {
     var pepSel = row.querySelector('select.pep-select');
     var numInput = row.querySelector('input[type="number"]');
     var dobInput = row.querySelector('.dob-input') || row.querySelector('input[type="date"]');
+    var personKey = row.dataset.personkey || row.dataset.personKey || getOrAssignOwnershipPersonKey(row, 'ubo', '#ubos-body tr');
+    var isPep = pepSel ? pepSel.value === 'Yes' : false;
     data.ubos.push({
       first_name: texts[0] ? texts[0].value : '',
       last_name: texts[1] ? texts[1].value : '',
@@ -7260,7 +7482,8 @@ function collectFormData() {
       date_of_birth: dobInput ? dobInput.value : '',
       ownership_pct: numInput ? numInput.value : '',
       is_pep: pepSel ? pepSel.value : 'No',
-      person_key: row.dataset.personkey || row.dataset.personKey || ''
+      person_key: personKey,
+      pep_declaration: collectPepDeclarationPayload(personKey, isPep, 'ubo')
     });
   });
 
@@ -7530,6 +7753,9 @@ function restoreDraftFromData(data, options) {
     if (typeof checkPEPAndShowDeclaration === 'function') {
       try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on restore:', e); }
     }
+    renderPrescreeningPepPanels();
+    restorePepDeclarationList(data.directors);
+    restorePepDeclarationList(data.ubos);
     syncConditionalFormState();
 
     // Recalculate auto-computed profit from restored revenue/cost values
@@ -7992,8 +8218,7 @@ function buildReviewScreen() {
     // Check PEP declaration
     var pepPanel = document.getElementById('pep-panel-' + personId);
     if (pepPanel && pepPanel.classList.contains('visible')) {
-      var pepFunc = document.getElementById('pep-function-' + personId);
-      var pepComplete = pepFunc && pepFunc.value.trim().length > 0;
+      var pepComplete = isPepDeclarationComplete(personId);
       sectionB.innerHTML += '<div class="review-item" style="padding-left:28px;"><span class="review-item-name">↳ PEP Declaration Form</span><span class="review-status ' + (pepComplete ? 'uploaded' : 'missing') + '">' + (pepComplete ? '✅ Completed' : '❌ Incomplete') + '</span></div>';
       if (!pepComplete) missingCount++;
     }
@@ -9864,48 +10089,7 @@ function addKYCPerson() {
         </div>
       </div>
     </div>
-    <div class="pep-declaration-panel" id="pep-panel-${id}">
-      <h4>⚠️ PEP Declaration Form</h4>
-      <p style="font-size:12px;color:var(--text3);margin:0 0 12px 0;">This person has been identified as a Politically Exposed Person. Please complete the declaration below.</p>
-      <div class="pep-form-grid">
-        <div>
-          <label>Public function held (current or past)</label>
-          <textarea id="pep-function-${id}" placeholder="Describe the public function, when it was held, and for how long..."></textarea>
-        </div>
-        <div>
-          <label>Estimated Net Worth</label>
-          <table class="pep-net-worth-table">
-            <tr><th>Category</th><th>Estimated Value (USD)</th></tr>
-            <tr><td>Assets (real estate, vehicles, securities, etc.)</td><td><input type="text" id="pep-assets-${id}" placeholder="e.g. 500,000" style="border:none;background:transparent;" /></td></tr>
-            <tr><td>Liabilities</td><td><input type="text" id="pep-liabilities-${id}" placeholder="e.g. 100,000" style="border:none;background:transparent;" /></td></tr>
-          </table>
-        </div>
-        <div>
-          <label>Origin of Funds / Wealth (select all that apply)</label>
-          <div class="pep-sow-checklist">
-            <label><input type="checkbox" /> Business operations / profits</label>
-            <label><input type="checkbox" /> Returns on investments</label>
-            <label><input type="checkbox" /> Salaries / employment income</label>
-            <label><input type="checkbox" /> Loans</label>
-            <label><input type="checkbox" /> Inheritance</label>
-            <label><input type="checkbox" /> Sale of property</label>
-            <label><input type="checkbox" /> Lottery / Gambling</label>
-            <label><input type="checkbox" /> Divorce settlement</label>
-          </div>
-        </div>
-        <div>
-          <label>Additional details on origin of funds/wealth</label>
-          <textarea id="pep-sow-detail-${id}" placeholder="Please provide explanation and any supporting documentary evidence..."></textarea>
-        </div>
-        <div>
-          <label>📎 Upload Supporting Documents</label>
-          <div class="doc-upload-area" onclick="document.getElementById('pep-docs-${id}').click()" style="margin-top:4px;">
-            <span>📎</span> <span id="pep-docs-lbl-${id}">Click to upload supporting documents</span>
-          </div>
-          <input type="file" id="pep-docs-${id}" style="display:none" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg" multiple onchange="handlePEPUpload('${id}',this)" />
-        </div>
-      </div>
-    </div>
+    ${buildPepDeclarationPanelHTML(id, false)}
         <div class="kyc-link-panel" id="kyc-link-${id}">
       <div class="kyc-link-form">
         <div class="kyc-link-input-row">
@@ -10142,13 +10326,13 @@ async function resumeApplication(ref, stage) {
 
       if (dirEmpty && Array.isArray(psDirs) && psDirs.length) {
         restorePartyRows('directors-body', psDirs.map(function(d) {
-          return { first_name: d.first_name || '', last_name: d.last_name || '', date_of_birth: d.date_of_birth || '', nationality: d.nationality || '', is_pep: d.is_pep || 'No', person_key: d.person_key || '' };
+          return { first_name: d.first_name || '', last_name: d.last_name || '', date_of_birth: d.date_of_birth || '', nationality: d.nationality || '', is_pep: d.is_pep || 'No', person_key: d.person_key || '', pep_declaration: d.pep_declaration || {} };
         }), 'director');
         restoredFields = true;
       }
       if (uboEmpty && Array.isArray(psUbos) && psUbos.length) {
         restorePartyRows('ubos-body', psUbos.map(function(u) {
-          return { first_name: u.first_name || '', last_name: u.last_name || '', date_of_birth: u.date_of_birth || '', nationality: u.nationality || '', ownership_pct: u.ownership_pct || '', is_pep: u.is_pep || 'No', person_key: u.person_key || '' };
+          return { first_name: u.first_name || '', last_name: u.last_name || '', date_of_birth: u.date_of_birth || '', nationality: u.nationality || '', ownership_pct: u.ownership_pct || '', is_pep: u.is_pep || 'No', person_key: u.person_key || '', pep_declaration: u.pep_declaration || {} };
         }), 'ubo');
         restoredFields = true;
       }
@@ -10169,6 +10353,9 @@ async function resumeApplication(ref, stage) {
       if (typeof checkPEPAndShowDeclaration === 'function') {
         try { checkPEPAndShowDeclaration(); } catch(e) { console.warn('checkPEPAndShowDeclaration on resume:', e); }
       }
+      renderPrescreeningPepPanels();
+      restorePepDeclarationList(psDirs);
+      restorePepDeclarationList(psUbos);
       syncPersistedApplicationDocuments(app);
       renderRMIRequests(app.rmi_requests || []);
       loadPortalEnhancedRequirements();
