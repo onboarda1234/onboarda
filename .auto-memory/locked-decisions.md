@@ -59,3 +59,30 @@ telemetry, BO refresh behavior, size rejection, audit events, and error rates.
   label can unblock the workflow only when explicit written project-lead approval
   is also present.
 - The override label is an audit mechanism, not standalone approval.
+
+## 2026-05-20 Verification Truthfulness Program Order
+
+- Step 0 changed the remediation order because provider-error-driven outcomes
+  were above threshold: `29 / 314 = 9.2%` of current documents and
+  `29 / 152 = 19.1%` of flagged current documents.
+- The locked order is now `PR5 -> PR8 -> PR6 -> PR7 -> PR9`.
+- Do not flip async verification before PR8 reliability remediation.
+- No pilot until PR5, PR8, PR6, and PR7 staging soak pass with no false-success
+  rendering, coherent `submit-kyc`, acceptable provider-error rate, defined/met
+  async SLA, and no screening-provider regression.
+
+## 2026-05-20 PR5 Truthfulness State Model
+
+- Backend-owned verification states are `pending`, `in_progress`, `verified`,
+  `flagged`, and `failed`.
+- Only `verified` may render success semantics. Portal and back office must
+  consume backend-owned verification state metadata instead of inventing local
+  success mappings.
+- New uploads begin as `pending`; synchronous verification transitions through
+  `in_progress` before final `verified|flagged|failed`.
+- `submit-kyc` is now a hard gate: required KYC documents must exist and be
+  `verified` before submission.
+- Document verification transitions and `submit-kyc` attestation/block events
+  must remain auditable.
+- `FF_POLLING_SLOW` remains backend-only; BO timing is driven through safe
+  server-provided runtime config.
