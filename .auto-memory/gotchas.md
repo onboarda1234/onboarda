@@ -25,3 +25,9 @@
   verification.
 - `/api/version` is auth-gated. Image/SHA verification can be done through ECS
   task definition metadata when no staging token is available.
+- PR8 intentionally touched protected verification files
+  `arie-backend/claude_client.py` and `arie-backend/document_verification.py`;
+  the override was approved and recorded on PR #354 before merge.
+- PR8 runtime verification does not need a live Claude call. A safe ECS one-off
+  can import `verification_failure_taxonomy` and classify a synthetic invalid
+  PDF error to prove the deployed artifact is present.

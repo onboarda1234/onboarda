@@ -86,3 +86,20 @@ telemetry, BO refresh behavior, size rejection, audit events, and error rates.
   must remain auditable.
 - `FF_POLLING_SLOW` remains backend-only; BO timing is driven through safe
   server-provided runtime config.
+
+## 2026-05-20 PR8 Verification Provider Reliability
+
+- Provider/request-path failures are operational verification failures, not
+  ordinary business-review findings.
+- Claude/provider invalid requests, including invalid-PDF 400s, are terminal
+  `terminal_invalid_request` failures and persist as document status `failed`.
+- Retryable provider/path failures are classified as `retryable_transient` and
+  persist as `failed` for the failed verification attempt.
+- Ordinary document/business concerns remain `flagged` with
+  `verification_failure_classification=review_required_business`.
+- Verification provider telemetry must stay PII-safe: no filenames, extracted
+  text, party names, document numbers, headers, or raw provider response bodies.
+- Known staging PII decryption noise may be marked as `pii_context_signal=true`;
+  it is not treated as the Claude invalid-PDF root cause.
+- Screening-provider behavior remains frozen: no ComplyAdvantage activation, no
+  Sumsub provider-selection or workflow-timing change.
