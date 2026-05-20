@@ -56,6 +56,7 @@ def test_portal_pep_fields_save_resume_and_submit_payload():
     assert "pep_declaration: collectPepDeclarationPayload(personKey, isPep, 'ubo')" in html
     assert "restorePepDeclarationList(data.directors)" in html
     assert "restorePepDeclarationList(data.ubos)" in html
+    assert "restorePepDeclarationFieldsFromPrescreening(prescreeningData)" in html
     assert "restorePepDeclarationList(psDirs)" in html
     assert "restorePepDeclarationList(psUbos)" in html
     for key in (

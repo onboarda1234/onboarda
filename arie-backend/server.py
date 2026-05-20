@@ -10424,15 +10424,7 @@ class SaveResumeHandler(BaseHandler):
 
     def _ensure_pre_submit_draft_application(self, db, client_id, form_data):
         """Create or reuse a draft application shell before first submit."""
-        normalized_from_session = normalize_saved_session_prescreening(form_data) or {}
-        normalized_prescreening = normalize_prescreening_data(form_data or {})
-        if normalized_from_session:
-            normalized_prescreening = normalize_prescreening_data(
-                {"prescreening_data": normalized_from_session},
-                existing=normalized_prescreening,
-            )
-        if not isinstance(normalized_prescreening, dict):
-            normalized_prescreening = {}
+        normalized_prescreening = SaveResumeHandler._draft_prescreening_from_form_data(form_data)
 
         company_name = resolve_application_company_name(form_data if isinstance(form_data, dict) else {}, normalized_prescreening)
         if not company_name:
@@ -10501,6 +10493,19 @@ class SaveResumeHandler(BaseHandler):
                 raise
         return {"id": app_id, "ref": ref, "company_name": company_name, "status": "draft"}
 
+    @staticmethod
+    def _draft_prescreening_from_form_data(form_data):
+        normalized_from_session = normalize_saved_session_prescreening(form_data) or {}
+        normalized_prescreening = normalize_prescreening_data(form_data or {})
+        if normalized_from_session:
+            normalized_prescreening = normalize_prescreening_data(
+                {"prescreening_data": normalized_from_session},
+                existing=normalized_prescreening,
+            )
+        if not isinstance(normalized_prescreening, dict):
+            normalized_prescreening = {}
+        return normalized_prescreening
+
     # ── HTTP methods ────────────────────────────────────────────
     def get(self):
         user = self._require_portal_client()
@@ -10554,6 +10559,31 @@ class SaveResumeHandler(BaseHandler):
             if not app_row:
                 return
             real_id = app_row["id"]
+            if (app_row.get("status") or "") == "draft":
+                normalized_prescreening = SaveResumeHandler._draft_prescreening_from_form_data(form_data)
+                company_name = resolve_application_company_name(
+                    form_data if isinstance(form_data, dict) else {},
+                    normalized_prescreening,
+                    fallback=app_row.get("company_name") or "",
+                )
+                db.execute(
+                    """
+                    UPDATE applications
+                    SET company_name=?, brn=?, country=?, sector=?,
+                        entity_type=?, ownership_structure=?, prescreening_data=?
+                    WHERE id=? AND status='draft'
+                    """,
+                    (
+                        company_name or app_row.get("company_name") or "",
+                        first_non_empty(normalized_prescreening.get("brn"), ""),
+                        first_non_empty(normalized_prescreening.get("country_of_incorporation"), ""),
+                        first_non_empty(normalized_prescreening.get("sector"), ""),
+                        first_non_empty(normalized_prescreening.get("entity_type"), ""),
+                        first_non_empty(normalized_prescreening.get("ownership_structure"), ""),
+                        json.dumps(normalized_prescreening),
+                        real_id,
+                    ),
+                )
             stored_form_data = encrypt_draft_form_data(form_data)
 
             existing = db.execute(

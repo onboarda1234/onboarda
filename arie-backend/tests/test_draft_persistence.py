@@ -1247,6 +1247,116 @@ def test_pre_submit_save_with_full_real_frontend_payload(api_server):
     assert resume_resp.json()["form_data"]["prescreening"]["f-biz-overview"] == "Updated overview"
 
 
+def test_save_resume_updates_draft_application_prescreening_pep_fields(api_server):
+    """Autosave must keep the draft application detail/back-office fallback in
+    sync with the latest structured portal PEP declaration.
+    """
+    from db import get_db
+
+    conn = get_db()
+    _ensure_client(conn, "draftuser_pep_sync", "draftpepsync@test.com")
+    conn.close()
+
+    token = _client_token("draftuser_pep_sync")
+    headers = {"Authorization": f"Bearer {token}"}
+    base_form_data = {
+        "appRef": "",
+        "uploadedDocs": [],
+        "timestamp": "2026-05-20T07:20:00.000Z",
+        "prescreening": {
+            "f-reg-name": "PEP Draft Sync Ltd",
+            "f-inc-country": "Mauritius",
+            "f-sector": "Software / SaaS",
+            "f-entity-type": "SME / Private Company",
+            "f-ownership-structure": "Simple — direct identifiable UBOs",
+            "pep-sow-detail-dir1": "Declared salary and investments.",
+            "pep-source-funds-detail-dir1": "",
+            "pep-evidence-reference-dir1": "",
+            "pep-notes-dir1": "",
+        },
+        "directors": [
+            {
+                "first_name": "Priya",
+                "last_name": "Minister",
+                "nationality": "Mauritius",
+                "date_of_birth": "1980-01-01",
+                "is_pep": "Yes",
+                "person_key": "dir1",
+                "pep_declaration": {
+                    "person_type": "director",
+                    "person_key": "dir1",
+                    "declared_pep": True,
+                    "client_declared_pep": True,
+                    "pep_role_type": "foreign_pep",
+                    "position_title": "Minister of Finance",
+                    "pep_country_jurisdiction": "Freedonia",
+                    "relationship_type": "self",
+                    "start_date": "2020-01-01",
+                    "current_status": True,
+                    "source_of_wealth_detail": "Declared salary and investments.",
+                    "source_of_funds_detail": "",
+                    "supporting_note_evidence": "",
+                    "notes": "",
+                },
+            }
+        ],
+        "ubos": [],
+        "intermediaries": [],
+        "servicesRequired": [],
+        "accountPurposes": [],
+        "currencies": [],
+        "countriesOfOperation": [],
+        "targetMarkets": [],
+    }
+
+    first_resp = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"form_data": base_form_data, "last_step": 0},
+        timeout=5,
+    )
+    assert first_resp.status_code == 200
+    app_id = first_resp.json()["application_id"]
+
+    updated_form_data = json.loads(json.dumps(base_form_data))
+    updated_decl = updated_form_data["directors"][0]["pep_declaration"]
+    updated_decl["source_of_funds_detail"] = "Operating funds from applicant company."
+    updated_decl["supporting_note_evidence"] = "Public register REF-STAGING-350"
+    updated_decl["evidence_reference"] = "Public register REF-STAGING-350"
+    updated_decl["notes"] = "Client declared PEP during portal intake."
+    updated_form_data["prescreening"]["pep-source-funds-detail-dir1"] = "Operating funds from applicant company."
+    updated_form_data["prescreening"]["pep-evidence-reference-dir1"] = "Public register REF-STAGING-350"
+    updated_form_data["prescreening"]["pep-notes-dir1"] = "Client declared PEP during portal intake."
+
+    update_resp = http_requests.post(
+        f"{api_server}/api/save-resume",
+        headers=headers,
+        json={"application_id": app_id, "form_data": updated_form_data, "last_step": 0},
+        timeout=5,
+    )
+    assert update_resp.status_code == 200
+
+    conn = get_db()
+    row = conn.execute("SELECT prescreening_data FROM applications WHERE id=?", (app_id,)).fetchone()
+    conn.close()
+    prescreening = json.loads(row["prescreening_data"])
+    declaration = prescreening["directors"][0]["pep_declaration"]
+    assert declaration["source_of_funds_detail"] == "Operating funds from applicant company."
+    assert declaration["supporting_note_evidence"] == "Public register REF-STAGING-350"
+    assert declaration["notes"] == "Client declared PEP during portal intake."
+
+    resume_resp = http_requests.get(
+        f"{api_server}/api/save-resume?application_id={app_id}",
+        headers=headers,
+        timeout=5,
+    )
+    assert resume_resp.status_code == 200
+    saved_decl = resume_resp.json()["form_data"]["directors"][0]["pep_declaration"]
+    assert saved_decl["source_of_funds_detail"] == declaration["source_of_funds_detail"]
+    assert saved_decl["supporting_note_evidence"] == declaration["supporting_note_evidence"]
+    assert saved_decl["notes"] == declaration["notes"]
+
+
 def test_pre_submit_save_reuses_same_draft_across_multiple_autosaves(api_server):
     """Repeated autosaves without application_id must reuse the same draft
     application shell — not create a new application on every tick."""

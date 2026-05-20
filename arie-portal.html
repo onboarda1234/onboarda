@@ -6025,6 +6025,17 @@ function restorePepDeclarationList(parties) {
   });
 }
 
+function restorePepDeclarationFieldsFromPrescreening(prescreeningData) {
+  if (!prescreeningData || typeof prescreeningData !== 'object') return;
+  Object.keys(prescreeningData).forEach(function(id) {
+    if (id.indexOf('pep-') !== 0) return;
+    var el = document.getElementById(id);
+    if (!el || el.type === 'file') return;
+    if (el.type === 'checkbox') el.checked = !!prescreeningData[id];
+    else el.value = prescreeningData[id] || '';
+  });
+}
+
 // ─── Pre-screening submit ─────────────────────────────────
 async function submitPrescreening(e) {
   e.preventDefault();
@@ -7756,6 +7767,7 @@ function restoreDraftFromData(data, options) {
     renderPrescreeningPepPanels();
     restorePepDeclarationList(data.directors);
     restorePepDeclarationList(data.ubos);
+    restorePepDeclarationFieldsFromPrescreening(prescreeningData);
     syncConditionalFormState();
 
     // Recalculate auto-computed profit from restored revenue/cost values
