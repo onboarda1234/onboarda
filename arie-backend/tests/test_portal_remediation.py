@@ -199,27 +199,79 @@ def _cleanup_application(db, app_id, ref):
     db.execute("DELETE FROM audit_log WHERE target=?", (f"application:{ref}",))
 
 
-def _insert_uploaded_document(db, app_id, *, doc_id=None):
+def _insert_uploaded_document(db, app_id, *, doc_id=None, doc_type="cert_inc",
+                              person_id=None, person_type=None,
+                              verification_status="flagged"):
+    from server import _document_slot_key
+
     temp_dir = tempfile.mkdtemp(prefix="portal-submit-")
-    file_path = os.path.join(temp_dir, f"{app_id}.pdf")
+    suffix = str(person_id or "entity").replace(":", "_")
+    file_path = os.path.join(temp_dir, f"{app_id}_{doc_type}_{suffix}.pdf")
     with open(file_path, "wb") as handle:
         handle.write(b"%PDF-1.4\n%EOF\n")
+    slot_key = _document_slot_key(doc_type, person_id, person_type=person_type)
     db.execute(
         """
         INSERT INTO documents
-        (id, application_id, doc_type, doc_name, file_path, verification_status, verification_results)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, application_id, person_id, doc_type, doc_name, file_path, slot_key,
+         is_current, verification_status, verification_results)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            doc_id or f"doc_{app_id}",
+            doc_id or f"doc_{app_id}_{doc_type}_{suffix}",
             app_id,
-            "cert_inc",
-            f"{app_id}.pdf",
+            person_id,
+            doc_type,
+            os.path.basename(file_path),
             file_path,
-            "flagged",
-            json.dumps({"warnings": ["Name mismatch"]}),
+            slot_key,
+            True,
+            verification_status,
+            json.dumps({"overall": verification_status}),
         ),
     )
+
+
+def _ensure_verified_document(db, app_id, *, doc_type, person_id=None, person_type=None):
+    from server import _document_slot_key
+
+    slot_key = _document_slot_key(doc_type, person_id, person_type=person_type)
+    existing = db.execute(
+        "SELECT id FROM documents WHERE application_id=? AND slot_key=? AND COALESCE(is_current, TRUE)=TRUE",
+        (app_id, slot_key),
+    ).fetchone()
+    if existing:
+        db.execute(
+            "UPDATE documents SET verification_status=?, verification_results=? WHERE id=?",
+            ("verified", json.dumps({"overall": "verified", "checks": [{"result": "pass"}]}), existing["id"]),
+        )
+        return
+    _insert_uploaded_document(
+        db,
+        app_id,
+        doc_type=doc_type,
+        person_id=person_id,
+        person_type=person_type,
+        verification_status="verified",
+    )
+
+
+def _ensure_verified_required_documents(db, app_id, *, include_bankref=False):
+    for doc_type in (
+        "cert_inc",
+        "memarts",
+        "reg_sh",
+        "reg_dir",
+        "fin_stmt",
+        "poa",
+        "board_res",
+        "structure_chart",
+    ):
+        _ensure_verified_document(db, app_id, doc_type=doc_type)
+    if include_bankref:
+        _ensure_verified_document(db, app_id, doc_type="bankref")
+    _ensure_verified_document(db, app_id, doc_type="passport", person_id="dir1", person_type="director")
+    _ensure_verified_document(db, app_id, doc_type="poa", person_id="dir1", person_type="director")
 
 
 def test_application_detail_ignores_other_application_saved_session(api_server):
@@ -426,9 +478,9 @@ def test_portal_license_toggle_and_review_summary_cleanup_are_present():
     assert 'id="licence-fields-group"' in src
     assert 'id="review-ai-summary"' not in src
     assert 'id="review-submit-note"' in src
-    assert "btn.textContent = '⚠️ Submit for Compliance Review';" in src
-    assert "Submitted for Review — Issues Visible" in src
-    assert "Incomplete / Warning-State Submission Logged" in src
+    assert "btn.textContent = 'Resolve Required Verification';" in src
+    assert "Submission Blocked — Verification Required" in src
+    assert "Verification Gate Active" in src
 
 
 def test_backoffice_incomplete_submission_banner_is_present():
@@ -441,7 +493,7 @@ def test_backoffice_incomplete_submission_banner_is_present():
     assert "This case is reviewable but should not be treated as clean." in src
 
 
-def test_kyc_submit_allows_incomplete_documents_with_at_least_one_upload(api_server):
+def test_kyc_submit_blocks_unverified_required_documents(api_server):
     from db import get_db
 
     conn = get_db()
@@ -461,15 +513,45 @@ def test_kyc_submit_allows_incomplete_documents_with_at_least_one_upload(api_ser
         headers={"Authorization": f"Bearer {token}"},
         timeout=3,
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "kyc_submitted"
-    assert body["documents_uploaded"] == 1
+    assert resp.status_code == 400
+    assert "required kyc documents" in resp.json()["error"].lower()
 
     conn = get_db()
     row = conn.execute("SELECT status FROM applications WHERE id=?", ("submit_incomplete",)).fetchone()
+    audit = conn.execute(
+        "SELECT action, detail FROM audit_log WHERE target=? ORDER BY timestamp DESC, id DESC LIMIT 1",
+        ("ARF-SUBMIT-INCOMPLETE",),
+    ).fetchone()
     conn.close()
-    assert row["status"] == "kyc_submitted"
+    assert row["status"] == "kyc_documents"
+    assert audit["action"] == "KYC Transition Blocked: required_documents_not_verified"
+    assert json.loads(audit["detail"])["reason_code"] == "required_documents_not_verified"
+
+
+@pytest.mark.parametrize("verification_status", ["pending", "in_progress", "flagged", "failed"])
+def test_kyc_submit_refuses_each_non_verified_required_document_state(api_server, verification_status):
+    from db import get_db
+
+    app_id = f"submit_state_{verification_status}"
+    ref = f"ARF-SUBMIT-{verification_status.replace('_', '-').upper()}"
+    conn = get_db()
+    _seed_kyc_application(conn, app_id=app_id, ref=ref, status="kyc_documents")
+    _ensure_verified_required_documents(conn, app_id)
+    conn.execute(
+        "UPDATE documents SET verification_status=? WHERE application_id=? AND doc_type='cert_inc'",
+        (verification_status, app_id),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = http_requests.post(
+        f"{api_server}/api/applications/{ref}/submit-kyc",
+        headers={"Authorization": f"Bearer {_portal_client_token()}"},
+        timeout=3,
+    )
+
+    assert resp.status_code == 400
+    assert "not verified: 1" in resp.json()["error"].lower()
 
 
 def test_kyc_submit_still_blocks_when_no_documents_uploaded(api_server):
@@ -700,6 +782,10 @@ def test_declared_pep_edd_required_still_allows_preapproval_decision(api_server)
         timeout=3,
     )
     assert upload.status_code == 201, upload.text
+    conn = get_db()
+    _ensure_verified_required_documents(conn, app_id, include_bankref=True)
+    conn.commit()
+    conn.close()
 
     submit = http_requests.post(
         f"{api_server}/api/applications/{ref}/submit-kyc",
@@ -722,6 +808,12 @@ def test_declared_pep_edd_required_still_allows_preapproval_decision(api_server)
         "SELECT COUNT(*) AS c FROM edd_cases WHERE application_id=?",
         (app_id,),
     ).fetchone()["c"] == 1
+    attestation = conn.execute(
+        "SELECT detail FROM audit_log WHERE target=? AND action='KYC Attestation Submitted' ORDER BY id DESC LIMIT 1",
+        (ref,),
+    ).fetchone()
+    assert attestation is not None
+    assert json.loads(attestation["detail"])["actor_type"] == "user"
     _cleanup_application(conn, app_id, ref)
     conn.commit()
     conn.close()
@@ -770,6 +862,10 @@ def test_crypto_edd_required_after_preapproval_can_upload_and_submit_kyc(api_ser
         timeout=3,
     )
     assert upload.status_code == 201, upload.text
+    conn = get_db()
+    _ensure_verified_required_documents(conn, app_id, include_bankref=True)
+    conn.commit()
+    conn.close()
 
     submit = http_requests.post(
         f"{api_server}/api/applications/{ref}/submit-kyc",

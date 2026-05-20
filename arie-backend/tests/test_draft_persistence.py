@@ -139,6 +139,42 @@ def _meaningful_form_data(seed="Acme"):
     }
 
 
+def _insert_verified_base_docs(db, app_id, tmp_path):
+    from server import _document_slot_key
+
+    for doc_type in (
+        "cert_inc",
+        "memarts",
+        "reg_sh",
+        "reg_dir",
+        "fin_stmt",
+        "poa",
+        "board_res",
+        "structure_chart",
+    ):
+        doc_path = tmp_path / f"{app_id}_{doc_type}.pdf"
+        doc_path.write_bytes(b"%PDF-1.4 minimal")
+        db.execute(
+            """
+            INSERT INTO documents (
+                id, application_id, doc_type, doc_name, file_path, slot_key,
+                is_current, verification_status, verification_results
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"doc_{app_id}_{doc_type}",
+                app_id,
+                doc_type,
+                f"{doc_type}.pdf",
+                str(doc_path),
+                _document_slot_key(doc_type),
+                True,
+                "verified",
+                json.dumps({"overall": "verified", "checks": [{"result": "pass"}]}),
+            ),
+        )
+
+
 # ── Tests ──────────────────────────────────────────────────────
 
 def test_save_creates_new_draft_then_update_in_place(api_server):
@@ -718,16 +754,7 @@ def test_kyc_submit_clears_active_draft(api_server, tmp_path):
         ("MEDIUM", 45, "draft_app_kyc"),
     )
 
-    # Need at least one document on the application for KYC submit to succeed
-    doc_path = tmp_path / "coi.pdf"
-    doc_path.write_bytes(b"%PDF-1.4 minimal")
-    conn.execute(
-        """
-        INSERT INTO documents (id, application_id, doc_type, doc_name, file_path)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        ("doc_kyc_clear", "draft_app_kyc", "cert_inc", "coi.pdf", str(doc_path)),
-    )
+    _insert_verified_base_docs(conn, "draft_app_kyc", tmp_path)
     conn.commit()
     conn.close()
 

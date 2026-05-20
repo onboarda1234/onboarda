@@ -3318,6 +3318,7 @@ var BO_AUTH_USER = null;
 // ─── Environment Detection ────────────────────────────────────
 var APP_ENV = 'production';
 var FEATURE_FLAGS = {};
+var BACKOFFICE_CONFIG = {};
 var BO_DOC_UPLOAD_LEGACY_MAX_MB = 25;
 var BO_DOC_UPLOAD_CLIENT_CAP_MB = 10;
 
@@ -3350,10 +3351,19 @@ async function loadEnvironment() {
     const data = await res.json();
     APP_ENV = data.environment || 'production';
     FEATURE_FLAGS = data.features || {};
+    BACKOFFICE_CONFIG = data.backoffice || {};
+    applyBackofficeRuntimeConfig();
     applyEnvironmentUI();
   } catch (e) {
     console.warn('Could not load environment config:', e);
   }
+}
+
+function applyBackofficeRuntimeConfig() {
+  var refreshMs = Number(BACKOFFICE_CONFIG.applications_refresh_ms);
+  var staleThreshold = Number(BACKOFFICE_CONFIG.applications_stale_threshold_s);
+  if (refreshMs >= 5000 && refreshMs <= 600000) _applicationsRefreshMs = refreshMs;
+  if (staleThreshold >= 10 && staleThreshold <= 3600) _STALE_THRESHOLD_S = staleThreshold;
 }
 
 function applyEnvironmentUI() {
@@ -3631,6 +3641,10 @@ function mapApplicationFromApi(a) {
       file_size: d.file_size,
       mime_type: d.mime_type,
       verification_status: d.verification_status,
+      verification_state: d.verification_state,
+      verification_status_label: d.verification_status_label,
+      verification_status_tone: d.verification_status_tone,
+      verification_success: d.verification_success === true,
       verification_results: d.verification_results,
       verified_at: d.verified_at,
       person_id: d.person_id
@@ -4029,9 +4043,9 @@ var pendingScreeningDisposition = null;
 var _applicationsLastRefreshed = null;   // timestamp of last successful refresh
 var _applicationsEtag = '';              // last ETag from /api/applications
 var _applicationsRefreshInterval = null; // setInterval handle
-var _applicationsRefreshMs = 120000;     // 2 minutes
+var _applicationsRefreshMs = 30000;      // default; server config may slow this
 var _stalenessTickInterval = null;       // 1-second UI tick for freshness display
-var _STALE_THRESHOLD_S = 180;            // show stale warning after 3 minutes
+var _STALE_THRESHOLD_S = 60;             // default; server config may slow this
 
 function _updateFreshnessIndicator() {
   var textEl = document.getElementById('applications-freshness-text');
@@ -5693,11 +5707,11 @@ function computeDocumentReadinessSummary(app) {
   });
 
   var issueDocs = docs.filter(function(doc) {
-    var verStatus = normalizeDetailValue(doc.verification_status).toLowerCase();
+    var verStatus = normalizeDetailValue(doc.verification_state || doc.verification_status).toLowerCase();
     var results = doc.verification_results || {};
     var warnings = Array.isArray(results.warnings) ? results.warnings : [];
     var overall = normalizeDetailValue(results.overall || results.status).toLowerCase();
-    return verStatus === 'flagged' || verStatus === 'failed' || overall === 'flagged' || overall === 'failed' || warnings.length > 0;
+    return verStatus !== 'verified' || overall === 'flagged' || overall === 'failed' || warnings.length > 0;
   });
 
   var pepIncomplete = (app.directors || []).concat(app.ubos || []).filter(function(person) {
@@ -5860,6 +5874,10 @@ async function fetchApplicationDetail(ref) {
       file_size: doc.file_size,
       mime_type: doc.mime_type || '',
       verification_status: doc.verification_status || 'pending',
+      verification_state: doc.verification_state || doc.verification_status || 'pending',
+      verification_status_label: doc.verification_status_label || '',
+      verification_status_tone: doc.verification_status_tone || 'pending',
+      verification_success: doc.verification_success === true,
       verification_results: doc.verification_results || {},
       verified_at: doc.verified_at || '',
       uploaded_at: doc.uploaded_at || '',
@@ -6269,8 +6287,10 @@ function renderAuthoritativeAppDetail(app, options) {
   var docsHtml = app._documents.length ? app._documents.map(function(doc) {
     var officerReview = normalizeDetailValue(doc.review_status || 'pending');
     var reviewBadgeColor = officerReview === 'accepted' ? '#16a34a' : officerReview === 'rejected' ? '#dc2626' : officerReview === 'info_requested' ? '#d97706' : '#6b7280';
-    var verStatus = normalizeDetailValue(doc.verification_status);
-    var verStatusColor = verStatus.toLowerCase() === 'verified' || verStatus.toLowerCase() === 'pass' ? '#16a34a' : verStatus.toLowerCase() === 'failed' || verStatus.toLowerCase() === 'fail' ? '#dc2626' : '#6b7280';
+    var verStatus = normalizeDetailValue(doc.verification_state || doc.verification_status);
+    var verLabel = normalizeDetailValue(doc.verification_status_label || verStatus);
+    var verTone = normalizeDetailValue(doc.verification_status_tone || '').toLowerCase();
+    var verStatusColor = doc.verification_success === true || verTone === 'success' ? '#16a34a' : verTone === 'error' || verStatus.toLowerCase() === 'failed' || verStatus.toLowerCase() === 'fail' ? '#dc2626' : verTone === 'warning' || verStatus.toLowerCase() === 'flagged' ? '#d97706' : '#6b7280';
     var reviewerLabel = normalizeDetailValue(doc.reviewed_by_name || doc.reviewed_by);
     var reviewMeta = reviewerLabel !== '—' || normalizeDetailValue(doc.reviewed_at) !== '—'
       ? '<div style="font-size:11px;color:var(--text3);margin-top:4px;">Reviewed by: ' + escapeHtml(reviewerLabel) + (normalizeDetailValue(doc.reviewed_at) !== '—' ? ' on ' + escapeHtml(normalizeDetailValue(doc.reviewed_at)) : '') + '</div>'
@@ -6286,7 +6306,7 @@ function renderAuthoritativeAppDetail(app, options) {
           '</div>' +
         '</div>' +
         '<div style="display:flex;gap:4px;align-items:center;flex-shrink:0;">' +
-          '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + verStatusColor + '18;color:' + verStatusColor + ';border:1px solid ' + verStatusColor + '44;font-weight:500;">' + escapeHtml(verStatus) + '</span>' +
+          '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + verStatusColor + '18;color:' + verStatusColor + ';border:1px solid ' + verStatusColor + '44;font-weight:500;">' + escapeHtml(verLabel) + '</span>' +
           '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + reviewBadgeColor + '18;color:' + reviewBadgeColor + ';border:1px solid ' + reviewBadgeColor + '44;font-weight:500;">Review: ' + escapeHtml(officerReview) + '</span>' +
         '</div>' +
       '</div>' +

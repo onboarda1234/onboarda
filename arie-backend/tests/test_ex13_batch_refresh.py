@@ -428,9 +428,14 @@ class TestFrontendIndicators:
         assert 'id="applications-freshness-dot"' in backoffice_html
         assert 'id="applications-freshness-text"' in backoffice_html
 
-    def test_refresh_interval_slowed_to_120s(self, backoffice_html):
+    def test_refresh_interval_defaults_to_30s_before_server_config(self, backoffice_html):
         m = re.search(r'_applicationsRefreshMs\s*=\s*(\d+)', backoffice_html)
-        assert m and int(m.group(1)) == 120000
+        assert m and int(m.group(1)) == 30000
+
+    def test_refresh_interval_can_be_slowed_by_server_config(self, backoffice_html):
+        assert "applyBackofficeRuntimeConfig()" in backoffice_html
+        assert "applications_refresh_ms" in backoffice_html
+        assert "_applicationsRefreshMs = refreshMs" in backoffice_html
 
     def test_auto_refresh_function(self, backoffice_html):
         assert 'async function _autoRefreshApplications' in backoffice_html
@@ -446,9 +451,13 @@ class TestFrontendIndicators:
     def test_304_handling(self, backoffice_html):
         assert 'res.status === 304' in backoffice_html
 
-    def test_stale_threshold_180s(self, backoffice_html):
+    def test_stale_threshold_defaults_to_60s_before_server_config(self, backoffice_html):
         m = re.search(r'_STALE_THRESHOLD_S\s*=\s*(\d+)', backoffice_html)
-        assert m and int(m.group(1)) == 180
+        assert m and int(m.group(1)) == 60
+
+    def test_stale_threshold_can_be_slowed_by_server_config(self, backoffice_html):
+        assert "applications_stale_threshold_s" in backoffice_html
+        assert "_STALE_THRESHOLD_S = staleThreshold" in backoffice_html
 
     def test_polling_slow_flag_not_exposed_to_frontend(self, backoffice_html):
         assert 'FF_POLLING_SLOW' not in backoffice_html

@@ -3838,7 +3838,7 @@
         <div class="review-stat"><div class="review-stat-num green" id="review-uploaded-count">0</div><div class="review-stat-label">Uploaded</div></div>
         <div class="review-stat"><div class="review-stat-num red" id="review-missing-count">0</div><div class="review-stat-label">Missing</div></div>
         <div class="review-stat"><div class="review-stat-num amber" id="review-warning-count">0</div><div class="review-stat-label">Warnings</div></div>
-        <div class="review-stat"><div class="review-stat-num blue" id="review-persons-count">0</div><div class="review-stat-label">Persons Verified</div></div>
+        <div class="review-stat"><div class="review-stat-num blue" id="review-persons-count">0</div><div class="review-stat-label">Persons Complete</div></div>
       </div>
 
       <!-- Section A Review -->
@@ -7125,14 +7125,22 @@ var KYC_PERSON_DOC_RULES = {
   }
 };
 
-function getVerificationSummary(status, results) {
+function getVerificationSummary(status, results, stateMeta) {
+  if (stateMeta && stateMeta.verification_status_label) {
+    var tone = String(stateMeta.verification_status_tone || 'pending').toLowerCase();
+    var icon = stateMeta.verification_success === true ? '✅ ' : tone === 'error' ? '❌ ' : tone === 'warning' ? '⚠️ ' : '⏳ ';
+    var color = tone === 'success' ? 'var(--green)' : tone === 'error' ? 'var(--red)' : tone === 'warning' ? '#d97706' : '#d97706';
+    return { color: color, text: icon + stateMeta.verification_status_label };
+  }
   var normalized = String(status || '').toLowerCase();
   if (normalized === 'verified') return { color: 'var(--green)', text: '✅ Verified' };
   var redFlags = Array.isArray(results && results.red_flags) ? results.red_flags.length : 0;
   var warnings = Array.isArray(results && results.warnings) ? results.warnings.length : 0;
+  if (normalized === 'failed') return { color: 'var(--red)', text: '❌ Verification failed' };
+  if (normalized === 'in_progress') return { color: '#d97706', text: '⏳ Verification in progress' };
   if (redFlags > 0) return { color: 'var(--red)', text: '❌ Review required' };
   if (warnings > 0 || normalized === 'flagged') return { color: '#d97706', text: '⚠️ Review required' };
-  return { color: 'var(--text2)', text: '⏳ Pending verification' };
+  return { color: '#d97706', text: '⏳ Pending verification' };
 }
 
 function ensureVerificationList(targetEl) {
@@ -7219,11 +7227,15 @@ function renderPersistedVerification(targetEl, documentRecord) {
 
   var results = documentRecord.verification_results || {};
   var checks = Array.isArray(results.checks) ? results.checks : [];
-  var summary = getVerificationSummary(documentRecord.verification_status, results);
+  var summary = getVerificationSummary(documentRecord.verification_status, results, documentRecord);
   var card = document.createElement('div');
+  var verificationSucceeded = documentRecord.verification_success === true ||
+    String(documentRecord.verification_state || documentRecord.verification_status || '').toLowerCase() === 'verified';
   card.className = 'doc-verify-results';
   card.setAttribute('data-doc-id', documentRecord.id);
   card.setAttribute('data-doc-slot', slotKey);
+  card.setAttribute('data-verification-success', verificationSucceeded ? 'true' : 'false');
+  card.setAttribute('data-verification-state', documentRecord.verification_state || documentRecord.verification_status || 'pending');
   card.style.cssText = 'padding:10px 12px;border-radius:8px;background:var(--surface3);font-size:12px;';
 
   var meta = '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap;">' +
@@ -7273,6 +7285,34 @@ function renderPersistedVerification(targetEl, documentRecord) {
   list.appendChild(card);
 }
 
+function slotVerificationIsSuccessful(targetEl, slotKey) {
+  if (!targetEl) return false;
+  var cards = targetEl.querySelectorAll('.doc-verify-results');
+  var expectedSlot = slotKey ? String(slotKey) : '';
+  for (var i = 0; i < cards.length; i++) {
+    var card = cards[i];
+    if (expectedSlot && card.getAttribute('data-doc-slot') !== expectedSlot) continue;
+    if (card.getAttribute('data-verification-success') === 'true') return true;
+  }
+  return false;
+}
+
+function kycDocumentVerificationState(personId, docKey, personType) {
+  var lbl = document.getElementById('kyc-' + docKey + '-lbl-' + personId);
+  var uploaded = !!(lbl && lbl.textContent !== 'Click to upload');
+  var area = document.getElementById('kyc-' + docKey + '-area-' + personId);
+  var canonicalDocType = String(docKey || '').replace(/-/g, '_');
+  var slotKey = getDocumentSlotKey({
+    doc_type: canonicalDocType,
+    person_id: personId,
+    person_type: personType || getKYCPersonType(personId)
+  });
+  return {
+    uploaded: uploaded,
+    verified: uploaded && slotVerificationIsSuccessful(area ? area.parentElement : null, slotKey)
+  };
+}
+
 function renderCompanyVerification(docId, verificationResponse) {
   var item = document.getElementById(docId);
   if (!item || !verificationResponse) return;
@@ -7285,6 +7325,10 @@ function renderCompanyVerification(docId, verificationResponse) {
     is_current: verificationResponse.is_current,
     version: verificationResponse.version,
     verification_status: verificationResponse.verification_status || verificationResponse.status,
+    verification_status_label: verificationResponse.verification_status_label,
+    verification_status_tone: verificationResponse.verification_status_tone,
+    verification_success: verificationResponse.verification_success === true,
+    verification_state: verificationResponse.verification_state,
     verification_results: verificationResponse.verification_results || {}
   });
 }
@@ -7303,6 +7347,10 @@ function renderPersonVerification(personId, docType, verificationResponse) {
     is_current: verificationResponse.is_current,
     version: verificationResponse.version,
     verification_status: verificationResponse.verification_status || verificationResponse.status,
+    verification_status_label: verificationResponse.verification_status_label,
+    verification_status_tone: verificationResponse.verification_status_tone,
+    verification_success: verificationResponse.verification_success === true,
+    verification_state: verificationResponse.verification_state,
     verification_results: verificationResponse.verification_results || {}
   });
 }
@@ -8132,12 +8180,12 @@ function updateDocsReviewMessaging(summary) {
   if (missingCount > 0 || warningCount > 0) {
     var parts = [];
     if (missingCount > 0) parts.push(missingCount + ' required item(s) are still missing');
-    if (warningCount > 0) parts.push(warningCount + ' uploaded document(s) still show warnings');
-    title.textContent = 'Submitted for Review — Issues Visible';
-    subtitle.textContent = 'Your application has been submitted for compliance review. The current missing items and warning-state documents remain visible to the compliance team and may trigger follow-up requests.';
-    cardTitle.textContent = 'Incomplete / Warning-State Submission Logged';
-    cardBody.textContent = 'This submission remains reviewable, but it is not treated as clean. ' + parts.join(' and ') + '. A compliance officer will review the case with these issues visible in the back office.';
-    cardFootnote.textContent = 'If we require additional information or missing documents, our team will contact you directly at the email address provided in your application.';
+    if (warningCount > 0) parts.push(warningCount + ' uploaded document(s) are not verified');
+    title.textContent = 'Submission Blocked — Verification Required';
+    subtitle.textContent = 'Required documents must be uploaded and verified before this application can be submitted.';
+    cardTitle.textContent = 'Verification Gate Active';
+    cardBody.textContent = parts.join(' and ') + '. Resolve these items before submitting the application.';
+    cardFootnote.textContent = 'Documents that are pending, in progress, flagged, or failed are not treated as verified.';
     return;
   }
 
@@ -8166,9 +8214,9 @@ function buildReviewScreen() {
     var isUploaded = uploadedDocs.has(doc.id);
     var hasWarning = false;
     var item = document.getElementById(doc.id);
-    if (item) {
-      var warnEls = item.querySelectorAll('[style*="d97706"], [style*="var(--red)"]');
-      if (warnEls.length > 0) hasWarning = true;
+    if (item && isUploaded) {
+      var docType = DOC_TYPE_MAP[doc.id] || doc.id;
+      hasWarning = !slotVerificationIsSuccessful(item, getDocumentSlotKey({ doc_type: docType }));
     }
 
     if (isUploaded) uploadedCount++;
@@ -8176,7 +8224,7 @@ function buildReviewScreen() {
     if (hasWarning && isUploaded) warningCount++;
 
     var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : (doc.required ? 'missing' : 'optional');
-    var statusText = isUploaded ? (hasWarning ? '⚠️ Uploaded — Warnings' : '✅ Uploaded') : (doc.required ? '❌ Missing' : '➖ Optional');
+    var statusText = isUploaded ? (hasWarning ? '⚠️ Stored — Not verified' : 'Stored') : (doc.required ? '❌ Missing' : '➖ Optional');
 
     sectionA.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(High Risk)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
@@ -8190,19 +8238,22 @@ function buildReviewScreen() {
     var personId = card.id.replace('kyc-person-','');
     var nameEl = card.querySelector('.kyc-person-name');
     var personName = nameEl ? nameEl.textContent : personId;
-    var badgeEl = card.querySelector('.kyc-status-badge');
-    var hasDocs = card.querySelector('[style*="var(--green)"]');
+    var personType = getKYCPersonType(personId);
 
-    var passportUploaded = card.querySelector('#kyc-passport-lbl-' + personId);
-    var poaUploaded = card.querySelector('#kyc-poa-lbl-' + personId);
-    var hasPassport = passportUploaded && passportUploaded.textContent !== 'Click to upload';
-    var hasPoa = poaUploaded && poaUploaded.textContent !== 'Click to upload';
+    var passportState = kycDocumentVerificationState(personId, 'passport', personType);
+    var poaState = kycDocumentVerificationState(personId, 'poa', personType);
+    var hasPassport = passportState.uploaded;
+    var hasPoa = poaState.uploaded;
+    var passportVerified = passportState.verified;
+    var poaVerified = poaState.verified;
 
-    if (hasPassport && hasPoa) personsVerified++;
+    if (passportVerified && poaVerified) personsVerified++;
     if (!hasPassport) missingCount++;
     if (!hasPoa) missingCount++;
     if (hasPassport) uploadedCount++;
     if (hasPoa) uploadedCount++;
+    if (hasPassport && !passportVerified) warningCount++;
+    if (hasPoa && !poaVerified) warningCount++;
 
     // Check if this is an intermediary (corporate docs) or individual (passport/PoA)
     var isInter = personId.startsWith('int');
@@ -8211,20 +8262,26 @@ function buildReviewScreen() {
       var interDocs = ['cert-inc', 'reg-dir', 'reg-sh', 'cert-gs', 'fin-stmt'];
       var interDocNames = ['Certificate of Incorporation', 'Register of Directors', 'Register of Shareholders', 'Certificate of Good Standing', 'Financial Statements'];
       var interUploaded = 0;
+      var interVerified = 0;
       interDocs.forEach(function(dKey, di) {
-        var lbl = document.getElementById('kyc-' + dKey + '-lbl-' + personId);
-        var isUp = lbl && lbl.textContent !== 'Click to upload';
+        var state = kycDocumentVerificationState(personId, dKey, personType);
+        var isUp = state.uploaded;
+        var isVerified = state.verified;
         if (isUp) { interUploaded++; uploadedCount++; }
         else missingCount++;
-        sectionB.innerHTML += '<div class="review-item" style="padding-left:28px;"><span class="review-item-name">↳ ' + escapeHtml(interDocNames[di]) + '</span><span class="review-status ' + (isUp ? 'uploaded' : 'missing') + '">' + (isUp ? '✅ Uploaded' : '❌ Missing') + '</span></div>';
+        if (isUp && !isVerified) warningCount++;
+        if (isVerified) interVerified++;
+        sectionB.innerHTML += '<div class="review-item" style="padding-left:28px;"><span class="review-item-name">↳ ' + escapeHtml(interDocNames[di]) + '</span><span class="review-status ' + (isUp ? (isVerified ? 'uploaded' : 'warning') : 'missing') + '">' + (isUp ? (isVerified ? 'Verified' : '⚠️ Stored — Not verified') : '❌ Missing') + '</span></div>';
       });
       sectionB.innerHTML = sectionB.innerHTML.replace(
         '</strong></span><span class="review-status ' + (hasPassport && hasPoa ? 'uploaded' : 'missing'),
-        '</strong> <em style="font-size:11px;color:var(--text3);">(Intermediary)</em></span><span class="review-status ' + (interUploaded >= 3 ? 'uploaded' : 'missing')
+        '</strong> <em style="font-size:11px;color:var(--text3);">(Intermediary)</em></span><span class="review-status ' + (interVerified === interDocs.length ? 'uploaded' : interUploaded ? 'warning' : 'missing')
       );
-      if (interUploaded >= 3) personsVerified++;
+      if (interVerified === interDocs.length) personsVerified++;
     } else {
-      sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong></span><span class="review-status ' + (hasPassport && hasPoa ? 'uploaded' : 'missing') + '">' + (hasPassport && hasPoa ? '✅ ID + PoA Uploaded' : '❌ Documents Missing') + '</span></div>';
+      var personDocsReady = passportVerified && poaVerified;
+      var personDocsStored = hasPassport && hasPoa;
+      sectionB.innerHTML += '<div class="review-item"><span class="review-item-name"><strong>' + escapeHtml(personName) + '</strong></span><span class="review-status ' + (personDocsReady ? 'uploaded' : personDocsStored ? 'warning' : 'missing') + '">' + (personDocsReady ? 'ID + PoA verified' : personDocsStored ? '⚠️ ID + PoA stored — Not verified' : '❌ Documents Missing') + '</span></div>';
     }
 
     // Check PEP declaration
@@ -8247,17 +8304,16 @@ function buildReviewScreen() {
     var isUploaded = uploadedDocs.has(doc.id);
     var hasWarning = false;
     var item = document.getElementById(doc.id);
-    if (item) {
-      var warnEls = item.querySelectorAll('[style*="d97706"], [style*="var(--red)"]');
-      if (warnEls.length > 0) hasWarning = true;
+    if (item && isUploaded) {
+      var optionalDocType = DOC_TYPE_MAP[doc.id] || doc.id;
+      hasWarning = !slotVerificationIsSuccessful(item, getDocumentSlotKey({ doc_type: optionalDocType }));
     }
 
     if (isUploaded) uploadedCount++;
     // Section C is fully optional — never increment missingCount
-    if (hasWarning && isUploaded) warningCount++;
 
     var statusClass = isUploaded ? (hasWarning ? 'warning' : 'uploaded') : 'optional';
-    var statusText = isUploaded ? (hasWarning ? '⚠️ Uploaded — Warnings' : '✅ Uploaded') : '➖ Optional';
+    var statusText = isUploaded ? (hasWarning ? '⚠️ Stored — Not verified' : 'Stored') : '➖ Optional';
 
     sectionC.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + (isConditional ? ' <em style="font-size:11px;color:var(--text3);">(Recommended for High Risk)</em>' : '') + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
   });
@@ -8273,7 +8329,7 @@ function buildReviewScreen() {
         var isUploaded = uploadedDocs.has(doc.id);
         if (isUploaded) uploadedCount++;
         var statusClass = isUploaded ? 'uploaded' : 'optional';
-        var statusText = isUploaded ? '✅ Uploaded' : '➖ Not Uploaded';
+        var statusText = isUploaded ? 'Stored' : '➖ Not Uploaded';
         sectionD.innerHTML += '<div class="review-item"><span class="review-item-name">' + escapeHtml(doc.name) + '</span><span class="review-status ' + statusClass + '">' + statusText + '</span></div>';
       });
     } else {
@@ -8294,26 +8350,26 @@ function buildReviewScreen() {
   };
   updateDocsReviewMessaging(lastReviewSummaryState);
 
-  // Keep missing/warning items visible, but allow submission for compliance review testing/workflow progression
   var btn = document.getElementById('btn-final-submit');
   var reviewSubmitNote = document.getElementById('review-submit-note');
+  var canSubmit = missingCount === 0 && warningCount === 0;
   if (btn) {
-    btn.disabled = false;
-    btn.style.opacity = '1';
-    btn.style.cursor = 'pointer';
-    if (missingCount > 0 || warningCount > 0) {
-      btn.textContent = '⚠️ Submit for Compliance Review';
+    btn.disabled = !canSubmit;
+    btn.style.opacity = canSubmit ? '1' : '0.55';
+    btn.style.cursor = canSubmit ? 'pointer' : 'not-allowed';
+    if (!canSubmit) {
+      btn.textContent = 'Resolve Required Verification';
     } else {
       btn.textContent = '🔒 Confirm & Submit Application';
     }
   }
   if (reviewSubmitNote) {
-    if (missingCount > 0 || warningCount > 0) {
+    if (!canSubmit) {
       var noteParts = [];
       if (missingCount > 0) noteParts.push(missingCount + ' required item(s) are still missing');
-      if (warningCount > 0) noteParts.push(warningCount + ' uploaded document(s) still show warnings');
+      if (warningCount > 0) noteParts.push(warningCount + ' uploaded document(s) are not verified');
       reviewSubmitNote.style.display = 'block';
-      reviewSubmitNote.innerHTML = '<strong>Incomplete / warning-state submission:</strong> ' + escapeHtml(noteParts.join(' and ')) + '. The application can still be submitted for compliance review, and these issues will remain visible to the back office.';
+      reviewSubmitNote.innerHTML = '<strong>Submission blocked:</strong> ' + escapeHtml(noteParts.join(' and ')) + '. Only verified required documents can be submitted.';
     } else {
       reviewSubmitNote.style.display = 'none';
       reviewSubmitNote.textContent = '';
@@ -8324,6 +8380,10 @@ function buildReviewScreen() {
 async function finalSubmitFromReview() {
   if (!AUTH_TOKEN || !currentApplicationId) {
     showToast('error', 'Session Required', 'Please sign in again before submitting your KYC documents.');
+    return;
+  }
+  if (lastReviewSummaryState && (Number(lastReviewSummaryState.missingCount || 0) > 0 || Number(lastReviewSummaryState.warningCount || 0) > 0)) {
+    showToast('error', 'Verification Required', 'All required documents must be verified before submission.');
     return;
   }
   _draftSubmitting = true;
@@ -8563,11 +8623,12 @@ function handleUpload(docId, input) {
       addClearButton(docId);
       if (latest) renderCompanyVerification(docId, latest);
       if (failures.length) {
-        showToast('warn', 'Partial Upload', successes.length + ' document(s) stored and verified, ' + failures.length + ' failed.');
-      } else if (successes.some(function(result) { return result.verify_error; })) {
-        showToast('warn', 'Verification Pending', 'Document stored. Verification will require review or retry.');
+        showToast('warn', 'Partial Upload', successes.length + ' document(s) stored, ' + failures.length + ' failed.');
+      } else if (successes.some(function(result) { return result.verify_error || result.verification_success !== true; })) {
+        var stateLabel = latest && latest.verification_status_label ? latest.verification_status_label : 'Pending verification';
+        showToast('warn', 'Verification Required', 'Document stored. Current status: ' + stateLabel + '.');
       } else {
-        showToast('success', 'File Uploaded', 'Stored and verified: ' + names);
+        showToast('success', 'File Uploaded', 'Verified: ' + names);
       }
     }).catch(function(err) {
       console.error('API upload failed for', docId, err);
@@ -9855,10 +9916,11 @@ function handleKYCUpload(personId, docType, input, personType) {
         updateKYCBadge(personId);
         clearVerificationForSlot(area ? area.parentElement : null, verification.slot_key);
         renderPersonVerification(personId, docType, verification);
-        if (verification.verify_error) {
-          showToast('warn', 'Verification Pending', 'Document stored. Verification will require review or retry.');
+        if (verification.verify_error || verification.verification_success !== true) {
+          var personStateLabel = verification.verification_status_label || 'Pending verification';
+          showToast('warn', 'Verification Required', 'Document stored. Current status: ' + personStateLabel + '.');
         } else {
-          showToast('success', 'Document Uploaded', 'Stored and verified: ' + fileName);
+          showToast('success', 'Document Uploaded', 'Verified: ' + fileName);
         }
       });
     }).catch(function(err) {
@@ -9868,7 +9930,7 @@ function handleKYCUpload(personId, docType, input, personType) {
       if (msg === 'Session expired') {
         // Already handled above
       } else {
-        showToast('error', 'Upload Failed', msg || 'Could not store and verify this document. Please try again.');
+        showToast('error', 'Upload Failed', msg || 'Could not store this document. Please try again.');
       }
     });
   } else {
@@ -10026,7 +10088,7 @@ function updateKYCBadge(personId) {
   const hasPassport = passport && passport.files && passport.files.length > 0;
   const hasPoa      = poa      && poa.files      && poa.files.length      > 0;
   if (hasPassport && hasPoa) {
-    badge.className = 'kyc-status-badge received'; badge.textContent = '✅ Docs Received';
+    badge.className = 'kyc-status-badge received'; badge.textContent = 'Docs Stored';
   } else if (hasPassport || hasPoa) {
     badge.className = 'kyc-status-badge sent'; badge.textContent = '📄 Partial Upload';
   }
@@ -10277,7 +10339,7 @@ function syncPersistedApplicationDocuments(app) {
     var personDocs = docsByPerson[personId];
     var hasFlagged = personDocs.some(function(doc) { return String(doc.verification_status || '').toLowerCase() !== 'verified'; });
     badge.className = 'kyc-status-badge ' + (hasFlagged ? 'warning' : 'uploaded');
-    badge.innerHTML = hasFlagged ? '⚠️ Review required' : '✅ Uploaded';
+    badge.innerHTML = hasFlagged ? '⚠️ Review required' : '✅ Verified';
   });
 
   updateProgress();

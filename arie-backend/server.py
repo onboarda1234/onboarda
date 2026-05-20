@@ -104,6 +104,16 @@ from environment import (
     enforce_startup_safety, get_environment_info,
     get_database_url, get_jwt_secret, get_cors_origin, get_s3_bucket
 )
+from verification_state import (
+    STATE_FAILED,
+    STATE_FLAGGED,
+    STATE_IN_PROGRESS,
+    STATE_PENDING,
+    STATE_VERIFIED,
+    decorate_document_verification_state,
+    normalize_verification_state,
+    verification_state_payload,
+)
 from screening_freshness_metadata import populate_screening_freshness_metadata
 
 # ── Sprint 2: Extracted modules ──────────────────────────
@@ -3019,7 +3029,10 @@ class ApplicationsHandler(BaseHandler):
                 app_ids,
             ).fetchall()
             for d in doc_rows:
-                docs_by_app.setdefault(d["application_id"], []).append(dict(d))
+                doc = dict(d)
+                doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
+                decorate_document_verification_state(doc)
+                docs_by_app.setdefault(d["application_id"], []).append(doc)
 
         rmi_by_app = _load_rmi_requests_for_apps(db, app_ids) if app_ids else {}
         enhanced_summaries = {}
@@ -3757,6 +3770,7 @@ class ApplicationDetailHandler(BaseHandler):
         for doc in result["documents"]:
             doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+            decorate_document_verification_state(doc)
         if include_history:
             result["document_history"] = [dict(d) for d in db.execute(
                 "SELECT * FROM documents WHERE application_id = ? ORDER BY uploaded_at DESC, id DESC",
@@ -3765,6 +3779,7 @@ class ApplicationDetailHandler(BaseHandler):
             for doc in result["document_history"]:
                 doc["verification_results"] = parse_json_field(doc.get("verification_results"), {})
                 doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+                decorate_document_verification_state(doc)
         result["rmi_requests"] = _load_rmi_requests(db, result["id"])
         result["monitoring_alerts"] = _load_application_monitoring_alerts(db, result["id"])
         result["periodic_review"] = _latest_periodic_review_projection(db, result["id"])
@@ -5485,6 +5500,137 @@ def _audit_blocked_kyc_transition(handler, db, user, app, *, attempted_action,
         )
 
 
+def _truthy_prescreening_value(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on", "licensed")
+
+
+def _party_requirement_key(person):
+    return (person or {}).get("person_key") or (person or {}).get("id")
+
+
+def _kyc_required_document_expectations(db, app):
+    """Return the required KYC document slots for the current application."""
+    app_dict = dict(app or {})
+    ps_data = safe_json_loads(app_dict.get("prescreening_data")) if app_dict.get("prescreening_data") else {}
+    if not isinstance(ps_data, dict):
+        ps_data = {}
+    risk_level = str(app_dict.get("final_risk_level") or app_dict.get("risk_level") or "").upper()
+    is_high_risk = risk_level in ("HIGH", "VERY_HIGH")
+    has_licence = (
+        _truthy_prescreening_value(ps_data.get("is_licensed"))
+        or _truthy_prescreening_value(ps_data.get("has_licence"))
+        or _truthy_prescreening_value(app_dict.get("is_licensed"))
+    )
+
+    expectations = [
+        {"doc_type": "cert_inc", "label": "Certificate of Incorporation", "person_id": None},
+        {"doc_type": "memarts", "label": "Memorandum of Association", "person_id": None},
+        {"doc_type": "reg_sh", "label": "Shareholder Register", "person_id": None},
+        {"doc_type": "reg_dir", "label": "Register of Directors", "person_id": None},
+        {"doc_type": "fin_stmt", "label": "Financial Statements / Management Accounts", "person_id": None},
+        {"doc_type": "poa", "label": "Proof of Registered Address", "person_id": None},
+        {"doc_type": "board_res", "label": "Board Resolution", "person_id": None},
+        {"doc_type": "structure_chart", "label": "Company Structure Chart", "person_id": None},
+    ]
+    if is_high_risk:
+        expectations.append({"doc_type": "bankref", "label": "Bank Reference Letter", "person_id": None})
+    if has_licence:
+        expectations.append({"doc_type": "licence", "label": "Regulatory Licence(s)", "person_id": None})
+
+    directors, ubos, intermediaries = get_application_parties(db, app_dict.get("id"))
+    for party_type, people in (("director", directors or []), ("ubo", ubos or [])):
+        for person in people:
+            person_id = _party_requirement_key(person)
+            if not person_id:
+                continue
+            owner = (person or {}).get("full_name") or person_id
+            expectations.append({
+                "doc_type": "passport",
+                "label": f"Passport / Government ID for {owner}",
+                "person_id": person_id,
+                "person_type": party_type,
+            })
+            expectations.append({
+                "doc_type": "poa",
+                "label": f"Proof of Address for {owner}",
+                "person_id": person_id,
+                "person_type": party_type,
+            })
+    for person in intermediaries or []:
+        person_id = _party_requirement_key(person)
+        if not person_id:
+            continue
+        owner = (person or {}).get("entity_name") or (person or {}).get("full_name") or person_id
+        for doc_type, label in (
+            ("cert_inc", "Certificate of Incorporation"),
+            ("reg_dir", "Register of Directors"),
+            ("reg_sh", "Register of Shareholders"),
+            ("cert_gs", "Certificate of Good Standing"),
+            ("fin_stmt", "Financial Statements"),
+        ):
+            expectations.append({
+                "doc_type": doc_type,
+                "label": f"{label} for {owner}",
+                "person_id": person_id,
+                "person_type": "intermediary",
+            })
+
+    for expectation in expectations:
+        expectation["doc_type"] = _normalize_document_type(expectation["doc_type"])
+        expectation["slot_key"] = _document_slot_key(
+            expectation["doc_type"],
+            expectation.get("person_id"),
+            person_type=expectation.get("person_type"),
+        )
+    return expectations
+
+
+def _kyc_verified_required_document_gate(db, app):
+    """Return a gate result for submit-kyc required verified documents."""
+    expectations = _kyc_required_document_expectations(db, app)
+    rows = [
+        dict(row) for row in db.execute(
+            f"SELECT id, doc_type, doc_name, person_id, slot_key, verification_status "
+            f"FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
+            (app["id"],),
+        ).fetchall()
+    ]
+    docs_by_slot = {}
+    for doc in rows:
+        slot_key = doc.get("slot_key") or _document_slot_key(doc.get("doc_type"), doc.get("person_id"))
+        docs_by_slot[slot_key] = doc
+
+    missing = []
+    not_verified = []
+    for expectation in expectations:
+        doc = docs_by_slot.get(expectation["slot_key"])
+        if not doc:
+            missing.append(expectation)
+            continue
+        status = normalize_verification_state(doc.get("verification_status"))
+        if status != STATE_VERIFIED:
+            not_verified.append({
+                "document_id": doc.get("id"),
+                "doc_name": doc.get("doc_name"),
+                "doc_type": doc.get("doc_type"),
+                "slot_key": expectation["slot_key"],
+                "label": expectation["label"],
+                "verification_status": status,
+            })
+    return {
+        "passed": not missing and not not_verified,
+        "required_count": len(expectations),
+        "uploaded_count": len(rows),
+        "verified_required_count": len(expectations) - len(missing) - len(not_verified),
+        "missing": missing,
+        "not_verified": not_verified,
+    }
+
+
 class KYCSubmitHandler(BaseHandler):
     """POST /api/applications/:id/submit-kyc — Submit KYC documents for compliance review"""
     def post(self, app_id):
@@ -5516,7 +5662,7 @@ class KYCSubmitHandler(BaseHandler):
 
         real_id = app["id"]
 
-        # Check that at least one document has been uploaded
+        # Fast reject empty submissions before recomputing risk.
         doc_count = db.execute(
             f"SELECT COUNT(*) as c FROM documents WHERE application_id=? AND {ACTIVE_DOCUMENT_SQL}",
             (real_id,),
@@ -5559,6 +5705,23 @@ class KYCSubmitHandler(BaseHandler):
             )
             db.close()
             return self.error(prerequisite_error, 409)
+        verification_gate = _kyc_verified_required_document_gate(db, refreshed_app or app)
+        if not verification_gate["passed"]:
+            missing_count = len(verification_gate["missing"])
+            not_verified_count = len(verification_gate["not_verified"])
+            message = (
+                "All required KYC documents must be uploaded and verified before submission. "
+                f"Missing: {missing_count}; not verified: {not_verified_count}."
+            )
+            _audit_blocked_kyc_transition(
+                self, db, user, refreshed_app or app,
+                attempted_action="submit_kyc",
+                reason_code="required_documents_not_verified",
+                message=message,
+                status_code=400,
+            )
+            db.close()
+            return self.error(message, 400)
         risk_app_for_submission = dict(refreshed_app or app)
         risk_app_for_submission["status"] = "kyc_submitted"
         risk_error = _application_risk_integrity_error(risk_app_for_submission, "submit KYC documents")
@@ -5606,13 +5769,30 @@ class KYCSubmitHandler(BaseHandler):
             db=db,
             commit=False,
         )
+        self.log_audit(
+            user,
+            "KYC Attestation Submitted",
+            app["ref"],
+            json.dumps({
+                "event": "kyc_attestation_submitted",
+                "actor_type": "user",
+                "application_id": real_id,
+                "application_ref": app["ref"],
+                "required_documents_verified": verification_gate["verified_required_count"],
+                "required_documents_total": verification_gate["required_count"],
+                "documents_uploaded": doc_count,
+            }, sort_keys=True),
+            db=db,
+            commit=False,
+        )
         db.commit()
         db.close()
 
         self.success({
             "status": "kyc_submitted",
             "message": "Your documents have been submitted for compliance review. An officer will review your application shortly.",
-            "documents_uploaded": doc_count
+            "documents_uploaded": doc_count,
+            "required_documents_verified": verification_gate["verified_required_count"],
         })
 
 
@@ -5890,6 +6070,7 @@ class DocumentUploadHandler(BaseHandler):
                 except (json.JSONDecodeError, TypeError):
                     pass
             doc["reviewed_by_name"] = resolve_user_display_name(db, doc.get("reviewed_by"))
+            decorate_document_verification_state(doc)
 
         db.close()
 
@@ -6121,11 +6302,13 @@ class DocumentUploadHandler(BaseHandler):
             db.execute("""
                 INSERT INTO documents
                 (id, application_id, person_id, doc_type, doc_name, file_path, s3_key,
-                 file_size, mime_type, slot_key, is_current, version)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 file_size, mime_type, slot_key, is_current, version, verification_status,
+                 verification_results)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 doc_id, app["id"], person_id, doc_type, filename, file_path, s3_key,
                 len(body), content_type, replacement["slot_key"], True, replacement["version"],
+                STATE_PENDING, "{}",
             ))
             _finalize_document_slot_replacement(db, app["id"], previous_documents, doc_id)
 
@@ -6375,6 +6558,99 @@ def _verification_check_flags(checks):
     return flags
 
 
+def _document_verification_transition_state(doc, status=None, **extra):
+    payload = {
+        "document_id": doc.get("id"),
+        "verification_status": normalize_verification_state(
+            status if status is not None else doc.get("verification_status")
+        ),
+        "doc_name": doc.get("doc_name"),
+        "doc_type": doc.get("doc_type"),
+    }
+    payload.update(extra)
+    return payload
+
+
+def _log_document_verification_transition(handler, db, user, app, doc, before_state,
+                                          after_state, *, actor_type, trigger):
+    detail = {
+        "event": "document_verification_state_transition",
+        "actor_type": actor_type,
+        "trigger": trigger,
+        "application_id": (app or {}).get("id"),
+        "application_ref": (app or {}).get("ref"),
+        "document_id": doc.get("id"),
+        "from": before_state.get("verification_status"),
+        "to": after_state.get("verification_status"),
+    }
+    handler.log_audit(
+        user,
+        "Document Verification State Changed",
+        (app or {}).get("ref") or doc.get("application_id") or doc.get("id"),
+        json.dumps(detail, sort_keys=True),
+        before_state=before_state,
+        after_state=after_state,
+        db=db,
+        commit=False,
+    )
+
+
+def _mark_document_verification_failed(handler, doc_id, user, error_message):
+    """Best-effort failed terminal transition for unexpected verify crashes."""
+    fail_db = None
+    try:
+        fail_db = get_db()
+        doc = fail_db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+        if not doc:
+            return
+        app = fail_db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
+        if not app:
+            return
+        before_state = _document_verification_transition_state(doc)
+        error_payload = {
+            "overall": STATE_FAILED,
+            "checks": [{
+                "label": "Verification runtime",
+                "type": "system",
+                "result": "fail",
+                "message": "Verification failed before a trustworthy result could be produced.",
+            }],
+            "system_warning": "verification_runtime_failed",
+            "error": str(error_message or "")[:300],
+            "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        after_state = _document_verification_transition_state(doc, STATE_FAILED)
+        fail_db.execute(
+            "UPDATE documents SET verification_status=?, verification_results=?, verified_at=datetime('now') WHERE id=?",
+            (STATE_FAILED, json.dumps(error_payload, sort_keys=True), doc_id),
+        )
+        _log_document_verification_transition(
+            handler,
+            fail_db,
+            user,
+            app,
+            doc,
+            before_state,
+            after_state,
+            actor_type="system",
+            trigger="verify_runtime_failure",
+        )
+        fail_db.commit()
+    except Exception:
+        logger.exception("Failed to persist verification failed state for doc=%s", doc_id)
+        try:
+            if fail_db:
+                fail_db.rollback()
+        except Exception:
+            pass
+    finally:
+        try:
+            if fail_db:
+                fail_db.close()
+        except Exception:
+            pass
+
+
 class DocumentVerifyHandler(BaseHandler):
     """POST /api/documents/:id/verify — trigger AI verification"""
     def post(self, doc_id):
@@ -6391,6 +6667,7 @@ class DocumentVerifyHandler(BaseHandler):
             except Exception:
                 pass
             logger.exception("Document verification request failed for doc=%s", doc_id)
+            _mark_document_verification_failed(self, doc_id, user, exc)
             return self.error(
                 "Document verification failed. The document requires manual review.",
                 500,
@@ -6421,15 +6698,36 @@ class DocumentVerifyHandler(BaseHandler):
             db.close()
             return self.error("Document not found", 404)
 
-        # EX-05: Capture before-state for audit trail (new audit event for document verification)
-        _doc_before = {"verification_status": doc.get("verification_status"),
-                       "doc_name": doc.get("doc_name"), "doc_type": doc.get("doc_type")}
-
         # Get the related application and person for screening
         app = db.execute("SELECT * FROM applications WHERE id=?", (doc["application_id"],)).fetchone()
         if not app:
             db.close()
             return self.error("Application not found for document", 404)
+
+        # PR5: Synchronous verification has an explicit, auditable in-progress state.
+        _initial_before = _document_verification_transition_state(doc)
+        if _initial_before["verification_status"] != STATE_IN_PROGRESS:
+            _in_progress_after = _document_verification_transition_state(doc, STATE_IN_PROGRESS)
+            db.execute(
+                "UPDATE documents SET verification_status=? WHERE id=?",
+                (STATE_IN_PROGRESS, doc_id),
+            )
+            _log_document_verification_transition(
+                self,
+                db,
+                user,
+                app,
+                doc,
+                _initial_before,
+                _in_progress_after,
+                actor_type="user",
+                trigger="verify_request_started",
+            )
+            db.commit()
+            doc = db.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
+
+        # EX-05: Capture before-state for final audit trail.
+        _doc_before = _document_verification_transition_state(doc)
 
         # ── AI Document Verification (real vision analysis) ──
         checks = []
@@ -6669,7 +6967,7 @@ class DocumentVerifyHandler(BaseHandler):
                 })
                 all_passed = False
 
-        status = "verified" if all_passed else "flagged"
+        status = STATE_VERIFIED if all_passed else STATE_FLAGGED
 
         # Finding 9: Propagate ai_source so mock/degraded results are explicit
         ai_source = "live"
@@ -6742,9 +7040,8 @@ class DocumentVerifyHandler(BaseHandler):
             else doc.get("valid_until")
         )
 
-        # EX-05: New audit event — log document verification with before/after state
-        _doc_after = {"verification_status": status, "checks_count": len(checks),
-                      "doc_name": doc.get("doc_name"), "doc_type": doc.get("doc_type")}
+        # EX-05/PR5: Log final document verification with before/after state.
+        _doc_after = _document_verification_transition_state(doc, status, checks_count=len(checks))
         db.execute(
             "UPDATE documents SET verification_status=?, verification_results=?, "
             "verified_at=datetime('now'), expiry_date=?, valid_until=? WHERE id=?",
@@ -6755,6 +7052,17 @@ class DocumentVerifyHandler(BaseHandler):
                 persisted_valid_until,
                 doc_id,
             ),
+        )
+        _log_document_verification_transition(
+            self,
+            db,
+            user,
+            app,
+            doc,
+            _doc_before,
+            _doc_after,
+            actor_type="user",
+            trigger="verify_request_completed",
         )
         self.log_audit(
             user,
@@ -6801,6 +7109,7 @@ class DocumentVerifyHandler(BaseHandler):
             "doc_id": doc_id,
             "status": status,
             "verification_status": status,
+            **verification_state_payload(status),
             "checks": checks,
             "verification_results": layered_results,
             "verified_at": layered_results.get("verified_at"),

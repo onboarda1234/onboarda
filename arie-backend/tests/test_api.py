@@ -1884,9 +1884,28 @@ class TestDocumentVerificationRuntimeReliability:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["verification_status"] == "flagged"
+        assert body["verification_state"] == "flagged"
+        assert body["verification_success"] is False
         assert isinstance(body["checks"], list)
         assert isinstance(body["checks"][0], dict)
         assert "unstructured str check payload" in body["checks"][0]["message"]
+
+        from db import get_db
+
+        conn = get_db()
+        transitions = conn.execute(
+            """
+            SELECT before_state, after_state
+            FROM audit_log
+            WHERE target=? AND action='Document Verification State Changed'
+            ORDER BY id ASC
+            """,
+            (f"ARF-VERIFY-STR-{uid}",),
+        ).fetchall()
+        conn.close()
+        assert len(transitions) >= 2
+        assert json.loads(transitions[0]["after_state"])["verification_status"] == "in_progress"
+        assert json.loads(transitions[-1]["after_state"])["verification_status"] == "flagged"
 
     def test_document_verification_failure_rolls_back_and_releases_db_connection(self, api_server, monkeypatch):
         """Forced verifier exceptions must not poison the next DB-backed auth request."""
