@@ -387,6 +387,7 @@ def mark_verification_job_succeeded(
     worker_id: str,
     verification_status: str,
     verification_results: Dict[str, Any],
+    transition_document: bool = True,
 ) -> Dict[str, Any]:
     status = normalize_verification_state(verification_status)
     if status not in ("verified", "flagged", "failed"):
@@ -408,14 +409,15 @@ def mark_verification_job_succeeded(
     )
     if not job:
         raise ValueError(f"Verification job not found: {job_id}")
-    _transition_document_for_job(
-        db,
-        job,
-        status,
-        worker_id=worker_id,
-        trigger="async_verify_worker_completed",
-        verification_results=verification_results,
-    )
+    if transition_document:
+        _transition_document_for_job(
+            db,
+            job,
+            status,
+            worker_id=worker_id,
+            trigger="async_verify_worker_completed",
+            verification_results=verification_results,
+        )
     return job
 
 
@@ -551,6 +553,104 @@ def mark_stuck_verification_jobs_failed(
     }
 
 
+def recover_stuck_verification_jobs(
+    db,
+    *,
+    worker_id: str,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Recover stale worker locks without silently losing jobs.
+
+    A worker killed mid-verification leaves the row ``in_progress`` with its
+    lock metadata.  The runtime worker uses this recovery path before claiming
+    new work: stale in-progress jobs are returned to ``retrying`` while they
+    still have attempts left, then terminally failed after attempts are
+    exhausted.  Stale never-claimed pending/retrying jobs retain PR6's
+    fail-safe terminal handling.
+    """
+    now = now or utc_now()
+    pending_cutoff = db_timestamp(now - timedelta(seconds=MAX_PENDING_SECONDS))
+    in_progress_cutoff = db_timestamp(now - timedelta(seconds=MAX_IN_PROGRESS_SECONDS))
+    in_progress_rows = db.execute(
+        """
+        SELECT * FROM verification_jobs
+        WHERE status='in_progress' AND locked_at IS NOT NULL AND locked_at < ?
+        ORDER BY created_at ASC, id ASC
+        """,
+        (in_progress_cutoff,),
+    ).fetchall()
+    pending_rows = db.execute(
+        """
+        SELECT * FROM verification_jobs
+        WHERE status IN ('pending','retrying') AND created_at < ?
+        ORDER BY created_at ASC, id ASC
+        """,
+        (pending_cutoff,),
+    ).fetchall()
+
+    requeued = []
+    failed = []
+    for row in in_progress_rows:
+        job = serialize_verification_job(row)
+        attempts = int(job.get("attempt_count") or 0)
+        max_attempts = int(job.get("max_attempts") or MAX_ATTEMPTS)
+        if attempts < max_attempts:
+            db.execute(
+                """
+                UPDATE verification_jobs
+                   SET status='retrying',
+                       run_after=datetime('now'),
+                       locked_by=NULL,
+                       locked_at=NULL,
+                       last_error=?,
+                       updated_at=datetime('now')
+                 WHERE id=? AND status='in_progress'
+                """,
+                ("async verification worker lock exceeded stuck threshold", job["id"]),
+            )
+            updated = serialize_verification_job(
+                db.execute("SELECT * FROM verification_jobs WHERE id=?", (job["id"],)).fetchone()
+            )
+            _transition_document_for_job(
+                db,
+                updated,
+                STATE_PENDING,
+                worker_id=worker_id,
+                trigger="async_verify_worker_reclaimed",
+            )
+            requeued.append(updated)
+        else:
+            failed.append(
+                mark_verification_job_failed(
+                    db,
+                    job["id"],
+                    worker_id=worker_id,
+                    error="async verification worker lock exceeded stuck threshold and attempts are exhausted",
+                    retryable=False,
+                )
+            )
+
+    for row in pending_rows:
+        job = serialize_verification_job(row)
+        failed.append(
+            mark_verification_job_failed(
+                db,
+                job["id"],
+                worker_id=worker_id,
+                error="async verification job exceeded pending stuck threshold",
+                retryable=False,
+            )
+        )
+
+    return {
+        "stuck_jobs": len(in_progress_rows) + len(pending_rows),
+        "requeued_jobs": len(requeued),
+        "failed_jobs": len(failed),
+        "jobs": requeued + failed,
+        "sla": async_verify_sla_config(),
+    }
+
+
 def verification_status_for_document(db, document_id: str) -> Optional[Dict[str, Any]]:
     doc = db.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
     if not doc:
@@ -572,6 +672,7 @@ def format_async_job_health_log_line(summary: Dict[str, Any]) -> str:
     return (
         "verification_async_job_health "
         f"stuck_jobs={int(summary.get('stuck_jobs') or 0)} "
+        f"requeued_jobs={int(summary.get('requeued_jobs') or 0)} "
         f"failed_jobs={int(summary.get('failed_jobs') or 0)} "
         f"max_pending_seconds={MAX_PENDING_SECONDS} "
         f"max_in_progress_seconds={MAX_IN_PROGRESS_SECONDS} "
