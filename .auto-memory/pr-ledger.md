@@ -31,7 +31,7 @@
 | --- | --- | --- | --- |
 | Step 0 | Internal impact assessment | Done | Findings: 314 active docs; 94 verified, 152 flagged, 68 pending; at least 157 active non-verified docs in false-success risk zone; provider-error-driven current docs `29/314 = 9.2%`; provider-error-driven flagged docs `29/152 = 19.1%`; recommended order changed to `PR5 -> PR8 -> PR6 -> PR7 -> PR9`. |
 | PR 5 | Truthful verification state model + coherent `submit-kyc` | Merged, deployed, staging-verified | PR #352. Merge SHA `2833e40f5608cbaeece06b89854788d78e8c66eb`. Adds backend-owned verification states, audited transitions, hard `submit-kyc` verified-doc gate, portal/BO truthful rendering, and server-driven BO polling config. |
-| PR 8 | Claude/provider reliability remediation | Next | Must land before async verification foundation/rollout. Focus: classify Claude/provider failures and stop provider errors flattening into ordinary business flags. |
+| PR 8 | Claude/provider reliability remediation | Merged, deployed, staging-verified | PR #354. Merge SHA `564ece3f0747774c95dce62302658ca0bcad698c`. Classifies provider/request-path failures, persists provider failures as `failed`, keeps business review outcomes `flagged`, and adds PII-safe telemetry/query material. |
 | PR 6 | Async verification foundation, dark | Planned after PR8 | `FF_ASYNC_VERIFY=false`; no staging flag flip in this PR. |
 | PR 7 | Async verify staging flag flip + soak | Planned after PR6 | Staging only, 72h minimum soak. |
 | PR 9 | Duplicate detection redesign | Planned after PR7 | Stored hash + indexed lookup, safe legacy handling. |
@@ -62,3 +62,28 @@
   `data-verification-success`, and `function kycDocumentVerificationState`.
 - Served backoffice artifact contains `BACKOFFICE_CONFIG` and
   `applyBackofficeRuntimeConfig`.
+
+## PR8 Deployment Verification
+
+- 2026-05-20: PR #354 merged to `main` at
+  `564ece3f0747774c95dce62302658ca0bcad698c`.
+- Main CI run `26160280967` passed: `lint-and-test`, `pdf-tests`, and
+  `docker-validate`.
+- Deploy to Staging run `26160281051` passed: CI gates, ECS deploy, deployment
+  health, portal, and backoffice checks.
+- ECS service `regmind-backend` on cluster `regmind-staging` is running task
+  definition `regmind-staging:311`, rollout `COMPLETED`, desired/running/pending
+  `1/1/0`.
+- Deployed image and task environment are SHA-pinned:
+  `782913119880.dkr.ecr.af-south-1.amazonaws.com/regmind-backend:564ece3f0747774c95dce62302658ca0bcad698c`;
+  `GIT_SHA` and `IMAGE_TAG` match the merge SHA.
+- Runtime artifact check passed with a one-off ECS task from
+  `regmind-staging:311`: imported `verification_failure_taxonomy`, classified a
+  Claude invalid-PDF error as `terminal_invalid_request` / `claude_invalid_pdf`,
+  and exited `0`. No live Claude or screening-provider call was made.
+- Public staging checks passed: `/api/liveness` 200, `/api/health` 200,
+  `/api/config/environment` 200, `/portal` 200, `/backoffice` 200.
+- `/api/version` returned 401 unauthenticated; build provenance was verified
+  through ECS task definition image/env instead.
+- CloudWatch check over the deploy window found no `/ecs/regmind-staging` events
+  matching `ERROR`, `connection pool exhausted`, or `falling back to mock mode`.
