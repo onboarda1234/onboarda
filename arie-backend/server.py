@@ -1421,6 +1421,87 @@ def _check_dob_not_future(dob_str):
             continue
 
 
+def _pep_declaration_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"yes", "true", "1", "y", "declared_yes", "confirmed_pep"}
+
+
+def normalize_pep_declaration(value, *, declared_pep=False, person_type="", person_key="", person_id=None):
+    """Normalize portal PEP declarations into the canonical structured JSON shape.
+
+    The database intentionally keeps this as JSON so legacy rows remain readable,
+    but the JSON now carries explicit fields for portal capture, back-office
+    display, memo wording, and officer corrections.
+    """
+    data = parse_json_field(value, {}) or {}
+    if not isinstance(data, dict):
+        data = {}
+
+    declared = _pep_declaration_bool(declared_pep) or _pep_declaration_bool(data.get("declared_pep")) or _pep_declaration_bool(data.get("client_declared_pep"))
+
+    def pick(*keys):
+        for key in keys:
+            val = data.get(key)
+            if val not in (None, "", []):
+                return val
+        return ""
+
+    role_type = pick("pep_role_type", "role_type", "pep_type")
+    public_function = pick("public_function", "position_title", "public_position")
+    position_title = pick("position_title", "public_function", "public_position")
+    country_jurisdiction = pick("pep_country_jurisdiction", "country_jurisdiction", "jurisdiction", "country")
+    evidence_reference = pick("supporting_note_evidence", "evidence_reference", "supporting_evidence_reference")
+
+    normalized = dict(data)
+    normalized.update({
+        "person_type": person_type or pick("person_type"),
+        "person_key": person_key or pick("person_key"),
+        "declared_pep": declared,
+        "client_declared_pep": declared,
+        "pep_status": pick("pep_status") or ("declared_yes" if declared else "declared_no"),
+        "pep_schema_version": "portal_pep_v2",
+        "pep_role_type": role_type,
+        "role_type": role_type,
+        "public_function": public_function,
+        "position_title": position_title,
+        "pep_country_jurisdiction": country_jurisdiction,
+        "country_jurisdiction": country_jurisdiction,
+        "relationship_type": pick("relationship_type") or "self",
+        "related_pep_name": pick("related_pep_name"),
+        "start_date": pick("start_date"),
+        "end_date": pick("end_date"),
+        "current_status": _pep_declaration_bool(pick("current_status")),
+        "source_of_wealth_detail": pick("source_of_wealth_detail", "source_of_wealth_note"),
+        "source_of_funds_detail": pick("source_of_funds_detail", "source_of_funds_note"),
+        "supporting_note_evidence": evidence_reference,
+        "evidence_reference": evidence_reference,
+        "notes": pick("notes"),
+        "supporting_document_names": data.get("supporting_document_names") if isinstance(data.get("supporting_document_names"), list) else [],
+    })
+    if person_id is not None:
+        normalized["person_id"] = person_id
+    if declared and not normalized.get("pep_verification_source"):
+        normalized["pep_verification_source"] = "client_declaration"
+    if not isinstance(normalized.get("source_of_wealth_categories"), list):
+        normalized["source_of_wealth_categories"] = []
+    return normalized
+
+
+def _pep_declaration_audit_subjects(directors=None, ubos=None):
+    subjects = []
+    for person_type, rows in (("director", directors or []), ("ubo", ubos or [])):
+        for row in rows or []:
+            is_declared = normalize_is_pep(row.get("is_pep", "No")) == "Yes"
+            if not is_declared:
+                continue
+            person_key = row.get("person_key") or f"{person_type}:{len(subjects) + 1}"
+            subjects.append(f"{person_type}:{person_key}")
+    return subjects
+
+
 def store_application_parties(db, application_id, directors=None, ubos=None, intermediaries=None):
     """Store party records with validation of DOB and ownership_pct."""
     if directors is not None:
@@ -1442,6 +1523,13 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                     director = dict(director)
                     director["nationality"] = canon
             encrypted = encrypt_pii_fields(director, PII_FIELDS_DIRECTORS)
+            normalized_pep = normalize_is_pep(director.get("is_pep", "No"))
+            pep_declaration = normalize_pep_declaration(
+                director.get("pep_declaration"),
+                declared_pep=normalized_pep == "Yes",
+                person_type="director",
+                person_key=director.get("person_key"),
+            )
             db.execute("""
                 INSERT INTO directors (
                     application_id, person_key, first_name, last_name, full_name,
@@ -1454,8 +1542,8 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 director.get("last_name", ""),
                 full_name,
                 encrypted.get("nationality", ""),
-                normalize_is_pep(director.get("is_pep", "No")),
-                json.dumps(parse_json_field(director.get("pep_declaration"), {})),
+                normalized_pep,
+                json.dumps(pep_declaration, default=str, sort_keys=True),
                 dob,
             ))
     if ubos is not None:
@@ -1484,6 +1572,13 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                     ubo = dict(ubo)
                     ubo["nationality"] = canon
             encrypted = encrypt_pii_fields(ubo, PII_FIELDS_UBOS)
+            normalized_pep = normalize_is_pep(ubo.get("is_pep", "No"))
+            pep_declaration = normalize_pep_declaration(
+                ubo.get("pep_declaration"),
+                declared_pep=normalized_pep == "Yes",
+                person_type="ubo",
+                person_key=ubo.get("person_key"),
+            )
             db.execute("""
                 INSERT INTO ubos (
                     application_id, person_key, first_name, last_name, full_name,
@@ -1497,8 +1592,8 @@ def store_application_parties(db, application_id, directors=None, ubos=None, int
                 full_name,
                 encrypted.get("nationality", ""),
                 pct_val,
-                normalize_is_pep(ubo.get("is_pep", "No")),
-                json.dumps(parse_json_field(ubo.get("pep_declaration"), {})),
+                normalized_pep,
+                json.dumps(pep_declaration, default=str, sort_keys=True),
                 dob,
             ))
     if intermediaries is not None:
@@ -3090,6 +3185,18 @@ class ApplicationsHandler(BaseHandler):
         db.close()
 
         self.log_audit(user, "Create", ref, f"New application created: {company_name}")
+        pep_subjects = _pep_declaration_audit_subjects(data.get("directors"), data.get("ubos"))
+        if pep_subjects:
+            self.log_audit(
+                user,
+                "PEP Declaration Recorded",
+                ref,
+                json.dumps({
+                    "source": "client_portal",
+                    "declared_pep_count": len(pep_subjects),
+                    "declared_pep_subjects": pep_subjects,
+                }, sort_keys=True),
+            )
         self.success({"id": app_id, "ref": ref, "status": "draft", "status_label": get_status_label("draft")}, 201)
 
 

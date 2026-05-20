@@ -549,6 +549,66 @@ def build_compliance_memo(app, directors, ubos, documents):
         if v is None:
             return False
         return str(v).strip().lower() in ("yes", "true", "1")
+
+    def _pep_declaration(person):
+        raw = person.get("pep_declaration") or {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _pep_detail_phrase(person):
+        declaration = _pep_declaration(person)
+
+        def pick(*keys):
+            for key in keys:
+                value = declaration.get(key)
+                if value not in (None, "", []):
+                    return str(value)
+            return ""
+
+        parts = []
+        role_type = pick("pep_role_type", "role_type", "pep_type")
+        position = pick("position_title", "public_function", "public_position")
+        jurisdiction = pick("pep_country_jurisdiction", "country_jurisdiction", "jurisdiction")
+        relationship = pick("relationship_type")
+        related_name = pick("related_pep_name")
+        start_date = pick("start_date")
+        end_date = "current" if declaration.get("current_status") else pick("end_date")
+        sow = pick("source_of_wealth_detail", "source_of_wealth_note")
+        sof = pick("source_of_funds_detail", "source_of_funds_note")
+        evidence = pick("supporting_note_evidence", "evidence_reference", "supporting_evidence_reference")
+        notes = pick("notes")
+        if role_type:
+            parts.append(f"role/type: {role_type.replace('_', ' ')}")
+        if position:
+            parts.append(f"position/title: {position}")
+        if jurisdiction:
+            parts.append(f"jurisdiction: {jurisdiction}")
+        if relationship and relationship != "self":
+            rel = relationship.replace("_", " ")
+            if related_name:
+                rel += f" to {related_name}"
+            parts.append(f"relationship: {rel}")
+        if start_date or end_date:
+            parts.append(f"role period: {start_date or 'not provided'} to {end_date or 'not provided'}")
+        if sow:
+            parts.append(f"source of wealth: {sow}")
+        if sof:
+            parts.append(f"source of funds: {sof}")
+        if evidence:
+            parts.append(f"evidence/reference: {evidence}")
+        if notes:
+            parts.append(f"notes: {notes}")
+        return "; ".join(parts)
+
+    def _pep_sentence(person, role_label):
+        details = _pep_detail_phrase(person)
+        base = f"{role_label}: {person.get('full_name', 'Unknown party')} identified as a client-declared PEP"
+        return base + (f" ({details})" if details else "")
+
     pep_directors = [d for d in directors if _is_declared_pep(d)]
     pep_ubos = [u for u in ubos if _is_declared_pep(u)]
     all_peps = pep_directors + pep_ubos
@@ -1391,13 +1451,13 @@ def build_compliance_memo(app, directors, ubos, documents):
                     f"The entity operates a {struct_complexity.lower()} corporate structure with {len(directors)} director(s) and {len(ubos)} UBO(s). "
                     + " ".join([
                         f"Director: {d['full_name']} ({d.get('nationality', 'nationality not provided')} national, DOB: {d.get('date_of_birth') or 'not provided'})"
-                        + (" — PEP declaration recorded. Enhanced due diligence required under FATF Recommendation 12." if _is_declared_pep(d) else " — PEP declaration not recorded.")
+                        + (f" — PEP declaration recorded: {_pep_detail_phrase(d)}. Enhanced due diligence required under FATF Recommendation 12." if _is_declared_pep(d) else " — PEP declaration not recorded.")
                         for d in directors
                     ]) + " "
                     + " ".join([
                         f"UBO: {u['full_name']} — {u.get('ownership_pct', 'Information not provided')}% direct ownership"
                         + f" ({u.get('nationality', 'nationality not provided')} national, DOB: {u.get('date_of_birth') or 'not provided'})"
-                        + (". PEP declaration recorded — this UBO exercises both ownership and potential political influence, significantly elevating risk." if _is_declared_pep(u) else ".")
+                        + (f". PEP declaration recorded: {_pep_detail_phrase(u)}. This UBO exercises both ownership and potential political influence, significantly elevating risk." if _is_declared_pep(u) else ".")
                         + (f" Ownership percentage information not provided — this represents a data gap that prevents full UBO analysis." if not u.get("ownership_pct") else "")
                         for u in ubos
                     ])
@@ -1489,7 +1549,7 @@ def build_compliance_memo(app, directors, ubos, documents):
                         + ("PEP matches identified — assessed as confirmed true positives based on verified identity data. " if all_peps else "")
                     )
                     + f"PEP Screening: {len(all_peps)} self-declared / detected match(es)"
-                    + (" — " + ". ".join([p["full_name"] + " identified as PEP. PEP declaration form and enhanced due diligence documentation requested." for p in all_peps]) if all_peps else " — no declared or detected matches.")
+                    + (" — " + ". ".join([_pep_sentence(p, "PEP") + ". PEP declaration form and enhanced due diligence documentation requested." for p in all_peps]) if all_peps else " — no declared or detected matches.")
                     + " " + adverse_media_context["phrase"] + " "
                     + screening_review_evidence
                     + f"Company Registry Verification: {app['company_name']} verified against registry records. "
