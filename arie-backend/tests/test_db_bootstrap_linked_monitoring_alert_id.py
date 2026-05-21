@@ -190,6 +190,15 @@ _MIGRATION_009_EXPECTED_COLUMNS = {
 }
 
 
+_MIGRATION_019_EXPECTED_COLUMNS = {
+    "monitoring_alerts": {
+        "discovered_via",
+        "discovered_at",
+        "backfill_run_id",
+    },
+}
+
+
 _MIGRATION_008_EXPECTED_INDEXES = {
     "idx_edd_cases_linked_alert",
     "idx_edd_cases_linked_review",
@@ -225,10 +234,16 @@ def test_init_db_repairs_legacy_sqlite_lifecycle_columns(tmp_path, monkeypatch):
             assert expected_columns.issubset(_column_names(conn, table))
         for table, expected_columns in _MIGRATION_009_EXPECTED_COLUMNS.items():
             assert expected_columns.issubset(_column_names(conn, table))
+        for table, expected_columns in _MIGRATION_019_EXPECTED_COLUMNS.items():
+            assert expected_columns.issubset(_column_names(conn, table))
 
         index_names = _index_names(conn)
         assert _MIGRATION_008_EXPECTED_INDEXES.issubset(index_names)
         assert _MIGRATION_009_EXPECTED_INDEXES.issubset(index_names)
+        conn.execute(
+            "SELECT discovered_at, discovered_via, backfill_run_id "
+            "FROM monitoring_alerts"
+        ).fetchall()
     finally:
         conn.close()
 
@@ -245,6 +260,8 @@ def test_init_db_fresh_install_is_idempotent_for_sqlite_preflight(tmp_path, monk
         for table, expected_columns in _MIGRATION_008_EXPECTED_COLUMNS.items():
             assert expected_columns.issubset(_column_names(conn, table))
         for table, expected_columns in _MIGRATION_009_EXPECTED_COLUMNS.items():
+            assert expected_columns.issubset(_column_names(conn, table))
+        for table, expected_columns in _MIGRATION_019_EXPECTED_COLUMNS.items():
             assert expected_columns.issubset(_column_names(conn, table))
     finally:
         conn.close()
