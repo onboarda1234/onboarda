@@ -2336,7 +2336,7 @@ _SQLITE_PREFLIGHT_COLUMN_REPAIRS = (
     ("periodic_reviews", "required_items_generated_at", "TIMESTAMP"),
     ("periodic_reviews", "state_changed_at", "TIMESTAMP"),
     ("monitoring_alerts", "discovered_via", "TEXT DEFAULT 'webhook_live'"),
-    ("monitoring_alerts", "discovered_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+    ("monitoring_alerts", "discovered_at", "TIMESTAMP"),
     ("monitoring_alerts", "backfill_run_id", "TEXT"),
     ("monitoring_alerts", "linked_periodic_review_id", "INTEGER"),
     ("monitoring_alerts", "linked_edd_case_id", "INTEGER"),
@@ -2376,7 +2376,7 @@ def _preflight_sqlite_column_repair(db: DBConnection) -> None:
     if db.is_postgres:
         return
 
-    repaired = False
+    mutated = False
     for table, column, definition in _SQLITE_PREFLIGHT_COLUMN_REPAIRS:
         if not _sqlite_table_exists(db, table):
             continue
@@ -2389,9 +2389,37 @@ def _preflight_sqlite_column_repair(db: DBConnection) -> None:
             column,
         )
         db.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-        repaired = True
+        mutated = True
 
-    if repaired:
+    if _sqlite_table_exists(db, "monitoring_alerts"):
+        monitoring_alert_columns = _sqlite_column_names(db, "monitoring_alerts")
+        created_at_expr = "created_at" if "created_at" in monitoring_alert_columns else "datetime('now')"
+
+        if "discovered_at" in monitoring_alert_columns:
+            before = db.conn.total_changes
+            db.conn.execute(
+                f"""
+                UPDATE monitoring_alerts
+                SET discovered_at = COALESCE(discovered_at, {created_at_expr}, datetime('now'))
+                WHERE discovered_at IS NULL
+                """
+            )
+            if db.conn.total_changes > before:
+                mutated = True
+
+        if "discovered_via" in monitoring_alert_columns:
+            before = db.conn.total_changes
+            db.conn.execute(
+                """
+                UPDATE monitoring_alerts
+                SET discovered_via = COALESCE(discovered_via, 'webhook_live')
+                WHERE discovered_via IS NULL
+                """
+            )
+            if db.conn.total_changes > before:
+                mutated = True
+
+    if mutated:
         db.commit()
         logger.info("startup: sqlite preflight column repair committed")
 

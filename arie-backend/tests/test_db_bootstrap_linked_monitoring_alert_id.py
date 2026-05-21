@@ -59,6 +59,12 @@ def _create_legacy_lifecycle_tables(conn):
     )
     conn.execute(
         """
+        INSERT INTO applications (id, client_id, status, assigned_to)
+        VALUES ('APP-LEGACY-001', 'CLIENT-001', 'in_review', 'admin001')
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE edd_cases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             application_id TEXT NOT NULL REFERENCES applications(id),
@@ -143,6 +149,20 @@ def _create_legacy_lifecycle_tables(conn):
             created_at TEXT DEFAULT (datetime('now'))
         )
         """
+    )
+    created_at = "2026-05-20 11:22:33"
+    conn.execute(
+        """
+        INSERT INTO monitoring_alerts (
+            application_id,
+            client_name,
+            alert_type,
+            severity,
+            status,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        ("APP-LEGACY-001", "Legacy Client", "pep_hit", "high", "open", created_at),
     )
     conn.commit()
 
@@ -240,10 +260,14 @@ def test_init_db_repairs_legacy_sqlite_lifecycle_columns(tmp_path, monkeypatch):
         index_names = _index_names(conn)
         assert _MIGRATION_008_EXPECTED_INDEXES.issubset(index_names)
         assert _MIGRATION_009_EXPECTED_INDEXES.issubset(index_names)
-        conn.execute(
+        rows = conn.execute(
             "SELECT discovered_at, discovered_via, backfill_run_id "
             "FROM monitoring_alerts"
         ).fetchall()
+        assert rows
+        assert rows[0]["discovered_via"] == "webhook_live"
+        assert rows[0]["discovered_at"] == "2026-05-20 11:22:33"
+        assert rows[0]["backfill_run_id"] is None
     finally:
         conn.close()
 
